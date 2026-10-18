@@ -8,8 +8,13 @@ was the spec's gate for the merge. The fence and the lane were checked live
 from inside `coord`. The first live check deployed a source-address lane,
 and it did not hold, because docker-proxy rewrites every client to
 192.168.48.1. The lane now uses a listener of its own (`CANOPY_COORD_PORT`).
-Task 8's live run, a real coordinator with three cards, has not been done
-yet. It needs an operate token on the mini.
+Task 8's live run passed on 2026-10-17 with two scratch repos:
+- three cards were proposed, one was edited, and they were started;
+- two landed and one was sent back by a gate that always fails;
+- each settle note reached the chat on its own idle turn, and a follow-up card was proposed;
+- stopping the coordinator dropped the queued card, revoked the token and removed the seed folder.
+
+From inside `coord`, the coordinator's own token got 403 on `repos/run`, `runs/say`, `coordinator/start`, `auth/approve` and `repos/diff`, and 200 on `tree` and `runs`. Shipped 2026-10-17.
 
 **Goal:** a `coordinate` run is a chat that proposes tasks through
 `POST /api/coordinator/plan`. Eric edits the cards and presses **start

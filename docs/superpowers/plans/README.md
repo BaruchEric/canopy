@@ -4,7 +4,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 
 | Plan | Status | Shipped | Spec |
 | --- | --- | --- | --- |
-| [The coordinator: one chat splits a goal into branch runs](2026-10-17-coordinator.md) | deployed, live run pending | | [coordinator](../specs/2026-10-16-coordinator-design.md) |
+| [The coordinator: one chat splits a goal into branch runs](2026-10-17-coordinator.md) | shipped | 2026-10-17 | [coordinator](../specs/2026-10-16-coordinator-design.md) |
 | [PR watch: a branch run opens a PR and keeps watching it](2026-10-16-pr-watch.md) | shipped | 2026-10-16 | [PR watch](../specs/2026-10-16-pr-watch-design.md) |
 | [Landing queue, plan 2: review rules and auto-land](2026-10-16-landing-queue-2.md) | shipped | 2026-10-16 | [landing queue](../specs/2026-10-15-landing-queue-design.md) |
 | [Landing queue, plan 1: branch runs and the queue](2026-10-15-landing-queue-1.md) | shipped | 2026-10-16 | [landing queue](../specs/2026-10-15-landing-queue-design.md) |

@@ -10,11 +10,6 @@ The cards area only gets what the dock leaves over: at least `--cards-min` (320p
 P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
 One long-lived agent per component (the mini's compose stack, peer sync, tailchan) reads that component's logs and health on a schedule and posts to the inbox when something looks off, catching the slow, odd drift a fixed alert misses. Reference: the "superfans" in https://www.anthropic.com/engineering/redesigning-source-control.
 
-### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
-P2 · added 2026-10-09 · source: Eric (Claude Code Projects video)
-One chat takes a goal, proposes the tasks, and starts a run per task, showing each as a card with a live one-line status. The coordinator gets its own model and effort (default low, since it mostly routes work), separate from the per-role settings the runs use. Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 1:52 and 3:24.
-Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md (2026-10-16); its plan follows FR-011, and a per-caller credential on the run routes ships before it (Eric, 2026-10-16). That credential's spec is docs/superpowers/specs/2026-10-16-caller-credential-design.md, with six calls open for Eric. Built on branch `callers` and shipped in `log` mode first. Both machines have run `enforce` since 2026-10-17 (docs/deploy.md, "Caller tokens"), so the coordinator can merge.
-
 ### FR-009 · Wider first columns on an ultrawide
 P3 · added 2026-10-07 · source: dock pass
 At 3440 wide the dock stays near 1300px and leaves about 1000px of cards. New columns could start wider when the room is there.
@@ -30,6 +25,11 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 ## In Progress
 
 ## Shipped
+
+### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
+P2 · added 2026-10-09 · source: Eric (Claude Code Projects video) · shipped 2026-10-17
+One chat takes a goal, proposes the tasks, and starts a run per task, showing each as a card with a live one-line status. The coordinator gets its own model and effort (default low, since it mostly routes work), separate from the per-role settings the runs use. Reference: https://www.youtube.com/watch?v=omihvjf0A2k at 1:52 and 3:24.
+Spec: docs/superpowers/specs/2026-10-16-coordinator-design.md; plan: docs/superpowers/plans/2026-10-17-coordinator.md. It runs only on the mini, in the fenced `coord` container, with a token that may read and post its own plan, and on a listener of its own. It needs `CANOPY_CALLERS=enforce`. Checked live on 2026-10-17: three cards proposed, edited and started; two landed, one was sent back by a red gate; each settle note reached the chat; a follow-up card was proposed; stopping dropped the queued card and revoked the token.
 
 ### FR-011 · A run keeps watching the PR it opened
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video) · shipped 2026-10-16
