@@ -117,7 +117,7 @@ fi
 if [ "$cmd" = status ]; then
   echo "checkout  $(git log -1 --format='%h %s' HEAD)"
   [ -f "$LOGS/deployed" ] && echo "deployed  $(cat "$LOGS/deployed")"
-  for c in canopy-shells-1 canopy-canopy-1 canopy-coord-1 canopy-tunnel-1; do
+  for c in canopy-shells-1 canopy-canopy-1 canopy-coord-1 canopy-coord-proxy-1 canopy-tunnel-1; do
     docker inspect -f "$c  {{.State.Status}} since {{.State.StartedAt}}" "$c" 2>/dev/null || echo "$c  missing"
   done
   # the shells also publish the coordinator bridge's gateway
