@@ -106,9 +106,8 @@ describe("Scrollback", () => {
 });
 
 describe("spawnOnPty", () => {
-  // The process on the pty is not its session's foreground group (a tmux
-  // client is not), so the kernel's SIGWINCH on a resize never reaches it
-  // and it keeps drawing at the size it started with.
+  // A resize reaches the process whether or not the kernel's SIGWINCH to
+  // the pty's foreground group does; it keeps drawing at the new size.
   test("a resize reaches the process on the pty", async () => {
     let out = "";
     const session = spawnOnPty(
@@ -126,6 +125,33 @@ describe("spawnOnPty", () => {
       expect(await until("41 132")).toBe(true);
     } finally {
       session.close();
+    }
+  });
+
+  // In canopy's process group, a shell's signal to its group (a job's
+  // hangup, ble.sh's cleanup) reached canopy itself, and here bun test.
+  test("the process leads a session of its own, on the pty", async () => {
+    let out = "";
+    let code: number | null | undefined;
+    const caught: string[] = [];
+    const onHup = () => caught.push("SIGHUP");
+    process.on("SIGHUP", onHup);
+    try {
+      spawnOnPty(
+        { argv: ["sh", "-c", 'echo "ids $$ $(ps -o pgid= -p $$) $(ps -o sid= -p $$) $(ps -o tty= -p $$)"; kill -HUP 0'] },
+        { cols: 80, rows: 24 },
+        { data: (chunk) => (out += new TextDecoder().decode(chunk)), exit: (c) => (code = c) },
+      );
+      for (let i = 0; i < 100 && code === undefined; i++) await Bun.sleep(20);
+      await Bun.sleep(100);
+      const [pid, pgid, sid, tty] = (/ids (.+)/.exec(out)?.[1] ?? "").trim().split(/\s+/);
+      expect(pid).toBeDefined();
+      expect(pgid).toBe(pid);
+      expect(sid).toBe(pid);
+      expect(tty).not.toBe("?");
+      expect(caught).toEqual([]);
+    } finally {
+      process.off("SIGHUP", onHup);
     }
   });
 });

@@ -189,17 +189,20 @@ export interface PtyProcess {
  *  terminal window gives it. */
 export function spawnOnPty(what: PtyProcess, size: TermSize, hooks: TermHooks): TermSession {
   let done = false;
-  const terminal = new Bun.Terminal({
-    cols: size.cols,
-    rows: size.rows,
-    data: (_t, chunk) => hooks.data(chunk),
+  // The terminal's options go to the spawn, not a Bun.Terminal made first:
+  // handed one, Bun leaves the child in canopy's process group with no
+  // controlling terminal, so a shell's signal to its group (a job's hangup,
+  // ble.sh's cleanup) reached canopy, and Ctrl-C reached nothing. This way
+  // the child leads a session of its own on the pty.
+  const proc = Bun.spawn(what.argv, {
+    cwd: what.cwd,
+    env: { ...termEnv(), ...what.env },
+    terminal: { cols: size.cols, rows: size.rows, data: (_t, chunk) => hooks.data(chunk) },
   });
-  let proc: ReturnType<typeof Bun.spawn>;
-  try {
-    proc = Bun.spawn(what.argv, { cwd: what.cwd, env: { ...termEnv(), ...what.env }, terminal });
-  } catch (err) {
-    terminal.close();
-    throw err;
+  const terminal = proc.terminal;
+  if (!terminal) {
+    proc.kill("SIGKILL");
+    throw new Error("the spawn gave no terminal");
   }
   void proc.exited.then((code) => {
     done = true;
@@ -220,9 +223,9 @@ export function spawnOnPty(what: PtyProcess, size: TermSize, hooks: TermHooks): 
     resize: ({ cols, rows }) => {
       if (done || terminal.closed) return;
       terminal.resize(cols, rows);
-      // The kernel signals a new size only to the pty's foreground group,
-      // which the process here is not (a tmux client never took the pty
-      // as its terminal), so it is told directly or it keeps its old size.
+      // The kernel signals a new size to the pty's foreground group. The
+      // process is told directly too, as it was when it never had the pty
+      // as its terminal; a second SIGWINCH costs a redraw at most.
       proc.kill("SIGWINCH");
     },
     close: () => {
