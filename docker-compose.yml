@@ -40,6 +40,14 @@ services:
       # with an open flag (`vite --open`) skips it instead of logging an
       # ENOENT stack trace
       - BROWSER=none
+      # the memory vault's client (`vault`, docker/vault), its code off the
+      # mounted tree, its config, token and cache on the config volume apart
+      # from the host's, since its lock tells a live holder by pid and pids
+      # differ across the container's edge. No config file there and every
+      # vault command does nothing; scripts/vault-setup.sh writes one
+      - VAULT_CLI=${DEV_ROOT:-/home/eric/dev}/infra/memory-gateway/src/client/cli.ts
+      - VAULT_CONFIG=/config/vault/config.json
+      - VAULT_HOME=/config/vault/data
     volumes:
       - ${DEV_ROOT:-/home/eric/dev}:${DEV_ROOT:-/home/eric/dev}
       - canopy-config:/config

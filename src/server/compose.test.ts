@@ -357,3 +357,21 @@ describe("the secrets image", () => {
     expect(stage).not.toMatch(/^USER /m);
   });
 });
+
+describe("the memory vault", () => {
+  test("the shells keep its config, token and cache on the config volume", () => {
+    const env = envOf(compose.services["shells"] ?? {});
+    expect(env).toContain("VAULT_CONFIG=/config/vault/config.json");
+    expect(env).toContain("VAULT_HOME=/config/vault/data");
+    expect(env.some((e) => e.startsWith("VAULT_CLI=") && e.endsWith("/infra/memory-gateway/src/client/cli.ts"))).toBe(true);
+    expect(compose.services["shells"]?.volumes ?? []).toContain("canopy-config:/config");
+  });
+
+  test("no stage or coordinator sees it", () => {
+    for (const name of ["stages", "coord"]) {
+      const s = compose.services[name] ?? {};
+      expect(envOf(s).filter((e) => e.startsWith("VAULT_"))).toEqual([]);
+      expect((s.volumes ?? []).some((v) => v.startsWith("canopy-config:"))).toBe(false);
+    }
+  });
+});

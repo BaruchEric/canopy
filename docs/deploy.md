@@ -1447,3 +1447,22 @@ Rollback: `docker compose stop secrets`. canopy shows the store as away; sinks k
 Nothing secret goes into canopy's environment: canopy shares the shells' pid namespace, and a shell can read `/proc/<canopy>/environ`. Host control (above) goes further: an agent in a shell can `ssh mini-host` and read the `secrets-data` volume, which holds the mini's age identity and signing key, and `docker compose logs secrets`, which prints the first-passkey code. On the mini the store keeps its values away from the API and out of every container's environment, but not away from an agent that sets out to read them. Eric chose that on 2026-10-14 so canopy would control the mini as a native install would. The store's keys stay in `secrets-data` with no passphrase, also by choice (2026-10-14): a passphrase unlocked after each start would keep them from an agent, but the store would stay shut after every restart until someone unlocked it.
 
 **MCP env files.** The `secrets` service mounts `${HOST_HOME}/.claude/mcp-env` at that host path and lists it in `CANOPY_SECRETS_SINK_ROOTS` beside `/opt/stacks`. `redeploy` makes the folder 0700 before `up`; the service runs as root and chowns each file to the folder's owner. dotclaude's `.gitignore` must ignore `mcp-env/` on every machine before the first `mcp-allow`, and canopy's relay refuses the act until it does. A rotation reaches a server only when a new agent session starts it; sessions already running keep the old value.
+
+## The memory vault
+
+A canopy shell reads and writes Eric's memory vault through `vault`, the client in `~/dev/infra/memory-gateway`, the same way the mini and the notebook do. The image carries a wrapper (`docker/vault`, in `/usr/local/bin`) that runs the mounted tree's checkout of the client (`VAULT_CLI`), so a client change needs no rebuild. Its config, token and cache live on the config volume under `/config/vault` (`VAULT_CONFIG`, `VAULT_HOME`), apart from the host's: the client's lock tells a live holder by pid, and pids do not carry across the container's edge, so sharing the host's `~/.local/share/vault` could let one side take the other's lock. Only the shells and the canopy server mount that volume; the stages and the coordinator do not, so no incubator agent or coordinator sees the token.
+
+With no config file every `vault` command does nothing and exits 0, and the SessionStart hook (`~/.claude/hooks/vault-pull-session-start.sh`) skips its pull, so a fresh deploy changes nothing until the setup below.
+
+**Setup, once.** The token is one of its own, named `canopy-mini`, with the `agent` scope: everything but `06 - Personal/` and the raw Claude history, and no writes under `07 - Archive/`. Issue it where an owner token lives (the Mac) and pipe it straight into the shells container, so it never lands in a file, an argument or a terminal:
+
+```sh
+auth() { printf 'header = "authorization: Bearer %s"\n' "$(cat "$1")"; }
+auth ~/.config/vault/token \
+  | curl -sS --fail -K - https://mem.beric.ca/tokens -H 'content-type: application/json' \
+      -d '{"name": "canopy-mini", "scopes": ["agent"]}' \
+  | jq -er .token \
+  | ssh macmini-ts docker exec -i canopy-shells-1 /home/eric/dev/dev-tools/canopy/scripts/vault-setup.sh
+```
+
+`scripts/vault-setup.sh` keeps the token at `/config/vault/token` (0600), writes the config and runs a first `vault pull` and `vault status`, which prove the token. Run again with a new token to rotate it; revoke the old one with `DELETE /tokens/canopy-mini` from an owner client. Rollback: `rm -r /config/vault` in a shell.

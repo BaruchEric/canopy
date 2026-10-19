@@ -1,0 +1,11 @@
+#!/bin/sh
+# vault, the memory vault's client, run off the mounted tree so a shell always
+# has the checkout's own (VAULT_CLI, set in docker-compose.yml). Its config,
+# token and cache are on the config volume (VAULT_CONFIG, VAULT_HOME); with no
+# config file every command does nothing and exits 0. scripts/vault-setup.sh
+# writes the config and token.
+[ -n "$VAULT_CLI" ] && [ -f "$VAULT_CLI" ] || {
+  echo "vault: no client at ${VAULT_CLI:-\$VAULT_CLI (unset)}; is ~/dev/infra/memory-gateway on the mounted tree?" >&2
+  exit 1
+}
+exec bun "$VAULT_CLI" "$@"

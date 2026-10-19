@@ -89,6 +89,10 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && apt-get update && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
+# vault, the memory vault's client: a wrapper that runs the mounted tree's
+# checkout of it (docker/vault; VAULT_* in docker-compose.yml)
+COPY docker/vault /usr/local/bin/vault
+
 USER bun
 ENV HOME=/home/bun
 # the shell the in-browser terminal runs: bash is what the image has, and a
