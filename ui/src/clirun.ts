@@ -9,7 +9,7 @@
 import { api } from "./api";
 import { backendOf, isHome } from "./registry";
 import { helperFor, takeWords, useStore } from "./store";
-import { CLI_PANEL, ENTRIES, findRepo, parseCommand, quoteWord, tokenize, underDir, type Command } from "./cli";
+import { CLI_PANEL, ENTRIES, findRepo, parseCommand, quoteWord, tokenize, underDir, type CliEntry, type Command } from "./cli";
 import { SPEC_TONE, SPEC_WORDS, specLines, treeLines, type Line, type Seg, type Tone } from "../../src/core/treelines";
 import { versionLine } from "../../src/core/version";
 import type { Repo } from "../../src/core/types";
@@ -345,17 +345,29 @@ export async function runLine(line: string): Promise<Outcome> {
   // the answer shows as it comes, unless the command goes somewhere else
   if (!goesElsewhere(cmd)) showTranscript();
   let out: Outcome;
+  let fix: CliEntry["fix"];
   if (cmd.kind === "error") out = fail(cmd.text, cmd.usage);
   else {
     try {
       out = await runInner(cmd);
     } catch (err) {
       out = fail(err instanceof Refused ? err.message : errText(err));
+      if (!(err instanceof Refused)) fix = fixFor(cmd, errText(err));
     }
   }
-  useStore.getState().cliPut({ id, line, at, status: out.ok ? "ok" : "error", out: out.lines });
+  useStore.getState().cliPut({ id, line, at, status: out.ok ? "ok" : "error", out: out.lines, ...(fix && { fix }) });
   if (!out.went) showTranscript();
   return out;
+}
+
+/** a push, pull or commit that git refused, for the agent to finish; a
+ *  refusal of canopy's own (no such repo, bad words) is not one */
+function fixFor(cmd: Command, text: string): CliEntry["fix"] {
+  if (cmd.kind !== "push" && cmd.kind !== "pull" && cmd.kind !== "commit") return undefined;
+  const got = findRepo(cmd.repo, useStore.getState().repos, { prefix: false });
+  if ("error" in got) return undefined;
+  const move = cmd.kind === "commit" ? (cmd.push ? "commit+push" : "commit") : cmd.kind;
+  return { repoId: got.repo.id, move, text };
 }
 
 /** to the repos' view, without a history entry when the page is on it */

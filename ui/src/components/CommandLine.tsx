@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { CLI_GLYPH, CLI_NAME, accept, complete, recall, type CliEntry, type Suggestion } from "../cli";
 import { runLine } from "../clirun";
+import { AgentFix } from "./AgentFix";
 import { useStore } from "../store";
 import { stateOf } from "../util";
 import type { Line } from "../../../src/core/treelines";
@@ -268,6 +269,11 @@ function Entry({ e, open }: { e: CliEntry; open: (id: string) => void }) {
           {e.out.map((l, i) => (
             <OutLine key={i} line={l} open={open} />
           ))}
+        </div>
+      )}
+      {e.fix && (
+        <div className="note-acts">
+          <AgentFix repoId={e.fix.repoId} move={e.fix.move} text={e.fix.text} />
         </div>
       )}
     </li>

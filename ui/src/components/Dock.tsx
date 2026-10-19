@@ -58,6 +58,8 @@ import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
+import { AgentFix } from "./AgentFix";
+import { fixMove, type FixMove } from "../fixit";
 import { ago, GLYPH, lockedIndex, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -129,7 +131,7 @@ function FileRow({
   cols: FileCol[];
   /** what the file cell says: the whole path, or the name under a folder heading */
   label: string;
-  onError: (message: string) => void;
+  onError: (message: string, move?: FixMove) => void;
 }) {
   const [diff, setDiff] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -162,7 +164,7 @@ function FileRow({
       const renamed = file.index === "R" || file.worktree === "R";
       await api.stage(repo.id, file.path, staged, renamed ? file.orig : undefined);
     } catch (err) {
-      onError(String(err instanceof Error ? err.message : err));
+      onError(String(err instanceof Error ? err.message : err), "stage");
     }
   };
 
@@ -236,7 +238,7 @@ function ChangesList({
 }: {
   repo: Repo;
   files: RepoFile[];
-  onError: (message: string) => void;
+  onError: (message: string, move?: FixMove) => void;
 }) {
   const cols = useStore((s) => s.settings.fileCols);
   const sort = useStore((s) => s.settings.fileSort);
@@ -680,7 +682,14 @@ function PeerWipList({ repo, paths = false }: { repo: Repo; paths?: boolean }) {
 
   return (
     <>
-      {error && <p className="panel-error">{error}</p>}
+      {error && (
+        <p className="panel-error">
+          {error}
+          <span className="note-acts">
+            <AgentFix repoId={repo.id} move="take" text={error} />
+          </span>
+        </p>
+      )}
       {took && <p className="panel-hint">{took}</p>}
       {wip.map((w) => {
         const listed = w.paths ?? [];
@@ -752,7 +761,7 @@ function PeersSection({ repo }: { repo: Repo }) {
   const openTerm = useStore((s) => s.openTerm);
   const openChat = useStore((s) => s.openChat);
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Note | null>(null);
 
   if (peerSync === "off" || !peerable(repo)) return null;
 
@@ -762,11 +771,12 @@ function PeersSection({ repo }: { repo: Repo }) {
   const peerOnly = st?.peerOnly ?? [];
   const count = wip.length + diverged.length + peerOnly.length;
 
-  const run = (label: string, fn: () => Promise<void>) => {
+  // a move the agent can finish offers it beside the error
+  const run = (label: string, fn: () => Promise<void>, move?: FixMove) => {
     setBusy(label);
     setError(null);
     fn()
-      .catch((err: unknown) => setError(String(err instanceof Error ? err.message : err)))
+      .catch((err: unknown) => setError({ kind: "err", text: String(err instanceof Error ? err.message : err), move }))
       .finally(() => setBusy(null));
   };
 
@@ -780,7 +790,16 @@ function PeersSection({ repo }: { repo: Repo }) {
       title="What this repo's peers have that this checkout does not"
     >
       <div className="peers-body">
-        {error && <p className="panel-error">{error}</p>}
+        {error && (
+          <p className="panel-error">
+            {error.text}
+            {error.move && (
+              <span className="note-acts">
+                <AgentFix repoId={repo.id} move={error.move} text={error.text} />
+              </span>
+            )}
+          </p>
+        )}
         {st === undefined ? (
           <p className="panel-clean">Not synced yet.</p>
         ) : count === 0 ? (
@@ -822,7 +841,7 @@ function PeersSection({ repo }: { repo: Repo }) {
                   type="button"
                   className="mini"
                   disabled={busy !== null}
-                  onClick={() => run(`track:${po.peer}:${po.branch}`, () => trackBranch(repo.id, po.peer, po.branch))}
+                  onClick={() => run(`track:${po.peer}:${po.branch}`, () => trackBranch(repo.id, po.peer, po.branch), "track")}
                 >
                   {busy === `track:${po.peer}:${po.branch}` ? "tracking…" : "track"}
                 </button>
@@ -835,7 +854,7 @@ function PeersSection({ repo }: { repo: Repo }) {
             type="button"
             className="mini"
             disabled={busy !== null}
-            onClick={() => run("sync", () => syncPeers(repo.id))}
+            onClick={() => run("sync", () => syncPeers(repo.id), "peer sync")}
           >
             {busy === "sync" ? "syncing…" : "sync now"}
           </button>
@@ -992,11 +1011,11 @@ function ChangesSection({ repo }: { repo: Repo }) {
   // the per-file checkboxes were used to exclude.
   const [stageAll, setStageAll] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
 
   useEffect(() => setNote(null), [id]);
 
-  const showError = (text: string) => setNote({ kind: "err", text });
+  const showError = (text: string, move?: FixMove) => setNote({ kind: "err", text, move });
 
   const run = async (label: string, fn: () => Promise<string | void>) => {
     setBusy(label);
@@ -1005,7 +1024,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       const out = await fn();
       if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
     } catch (err) {
-      showError(String(err instanceof Error ? err.message : err));
+      showError(String(err instanceof Error ? err.message : err), fixMove(label) ?? undefined);
     } finally {
       setBusy(null);
     }
@@ -1023,26 +1042,25 @@ function ChangesSection({ repo }: { repo: Repo }) {
   // commit + push is the one-click path: it fills in a blank message and an
   // empty stage instead of refusing. Plain commit stays strict, so the
   // checkboxes remain a way to commit exactly one thing.
-  const doCommit = (thenPush: boolean) =>
-    run(thenPush ? "commit+push" : "commit", async () => {
-      if (files.length === 0) throw new Error("nothing to commit");
+  const doCommit = (thenPush: boolean) => {
+    // the box's own checks, not git's refusals, so they offer no agent
+    if (files.length === 0) return showError("nothing to commit");
+    if (!thenPush && !message.trim()) return showError("write or suggest a message first");
+    // Only auto-stage when nothing is staged at all — an explicit checkbox
+    // selection must never be widened into `git add -A`.
+    const autoStage = !hasStaged && !stageAll;
+    if (autoStage && !thenPush) return showError("nothing staged — tick “stage everything”");
 
+    return run(thenPush ? "commit+push" : "commit", async () => {
       let msg = message.trim();
       let heuristic = false;
       if (!msg) {
-        if (!thenPush) throw new Error("write or suggest a message first");
         const s = await api.suggest(id);
         msg = s.message.trim();
         heuristic = s.source === "heuristic";
         if (!msg) throw new Error("could not generate a commit message");
         setMessage(msg);
       }
-
-      // Only auto-stage when nothing is staged at all — an explicit checkbox
-      // selection must never be widened into `git add -A`.
-      const autoStage = !hasStaged && !stageAll;
-      if (autoStage && !thenPush)
-        throw new Error("nothing staged — tick “stage everything”");
 
       await api.commit(id, msg, stageAll || autoStage);
       setMessage("");
@@ -1055,6 +1073,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       ].filter(Boolean);
       return extras.length ? `${done} (${extras.join("; ")})` : done;
     });
+  };
 
   const views: GearEntry[] = VIEWS.map((v) => ({
     type: "item",
@@ -1144,12 +1163,14 @@ function ChangesSection({ repo }: { repo: Repo }) {
   );
 }
 
-type Note = { kind: "ok" | "err"; text: string };
+/** a move's outcome; a failed one names the move when an agent can finish it */
+type Note = { kind: "ok" | "err"; text: string; move?: FixMove };
 
 /** A git move's note. When git refused over the index lock it offers to
  *  clear a stale one (the server refuses a lock young enough that git may
  *  still hold it), then runs `retry`, the move that hit it, when there is
- *  one, or says to try again. */
+ *  one, or says to try again. Any failed move an agent can finish offers
+ *  it the failure (`AgentFix`). */
 function GitNote({ id, note, setNote, retry }: { id: string; note: Note | null; setNote: (n: Note | null) => void; retry?: (() => void) | null }) {
   const [busy, setBusy] = useState(false);
   if (!note) return null;
@@ -1164,13 +1185,20 @@ function GitNote({ id, note, setNote, retry }: { id: string; note: Note | null; 
       .catch((err: unknown) => setNote({ kind: "err", text: String(err instanceof Error ? err.message : err) }))
       .finally(() => setBusy(false));
   };
+  const locked = note.kind === "err" && lockedIndex(note.text);
+  const fix = note.kind === "err" ? note.move : undefined;
   return (
     <p className={`note ${note.kind}`}>
       {note.text}
-      {note.kind === "err" && lockedIndex(note.text) && (
-        <button type="button" className="mini note-act" disabled={busy} title="Remove the lock if it is stale" onClick={unlock}>
-          {busy ? "clearing…" : retry ? "clear lock and retry" : "clear lock"}
-        </button>
+      {(locked || fix) && (
+        <span className="note-acts">
+          {locked && (
+            <button type="button" className="mini note-act" disabled={busy} title="Remove the lock if it is stale" onClick={unlock}>
+              {busy ? "clearing…" : retry ? "clear lock and retry" : "clear lock"}
+            </button>
+          )}
+          {fix && <AgentFix repoId={id} move={fix} text={note.text} />}
+        </span>
       )}
     </p>
   );
@@ -1193,7 +1221,7 @@ const SPEC_SAYS: Record<SpecState, string> = {
 function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
   const applyEvent = useStore((s) => s.applyEvent);
   const [busy, setBusy] = useState<string | null>(null);
-  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
   const sync = (key: string, halves: SpecHalf[] | null) => {
     setBusy(key);
     setNote(null);
@@ -1205,7 +1233,7 @@ function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
         const did = [got.written.length ? `Wrote ${got.written.join(", ")}` : "", removed.length ? `Removed ${removed.join(", ")}` : ""].filter(Boolean).join("; ");
         setNote({ kind: "ok", text: did ? `${did} (spec v${got.version}).` : `Already in sync with spec v${got.version}.` });
       })
-      .catch((err: unknown) => setNote({ kind: "err", text: String(err instanceof Error ? err.message : err) }))
+      .catch((err: unknown) => setNote({ kind: "err", text: String(err instanceof Error ? err.message : err), move: "spec sync" }))
       .finally(() => setBusy(null));
   };
   const adopted = state !== "not-adopted";
@@ -1233,7 +1261,7 @@ function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
             {busy === "visual" ? "syncing…" : adopted ? "with DESIGN.md" : "adopt with DESIGN.md"}
           </button>
         </div>
-        {note && <p className={`note ${note.kind}`}>{note.text}</p>}
+        <GitNote id={repo.id} note={note} setNote={setNote} />
       </div>
     </Section>
   );
@@ -2514,7 +2542,7 @@ export function RepoPanel({
   const [busy, setBusy] = useState<string | null>(null);
   // A pull or push says how it went under its own row; a commit's result
   // shows under the commit box, in the changes section.
-  const [note, setNote] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [note, setNote] = useState<Note | null>(null);
   const [placed, setPlaced] = useState<"normal" | "full">("normal");
   const wasTab = useWasTab(strip);
   const box = useRef<HTMLElement>(null);
@@ -2692,7 +2720,7 @@ export function RepoPanel({
       const out = await fn();
       if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
     } catch (err) {
-      showError(String(err instanceof Error ? err.message : err));
+      setNote({ kind: "err", text: String(err instanceof Error ? err.message : err), move: fixMove(label) ?? undefined });
     } finally {
       setBusy(null);
     }

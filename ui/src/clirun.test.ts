@@ -59,4 +59,24 @@ describe("workspace commands", () => {
     expect(message).toContain("home backend");
     expect(requests).toBe(0);
   });
+
+  test("a push git refused leaves the agent's hand-off on its entry", async () => {
+    const said = " ! [rejected]        main -> main (non-fast-forward)";
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: said }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const out = await runLine("push proj");
+
+    expect(out.ok).toBe(false);
+    expect(useStore.getState().cliLog.at(-1)?.fix).toEqual({ repoId: "proj", move: "push", text: said });
+  });
+
+  test("a refusal of canopy's own carries no hand-off", async () => {
+    const out = await runLine("push nosuch");
+
+    expect(out.ok).toBe(false);
+    expect(useStore.getState().cliLog.at(-1)?.fix).toBeUndefined();
+  });
 });

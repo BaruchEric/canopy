@@ -1413,13 +1413,18 @@ div.waiting-row {
   overflow-wrap: anywhere;
   white-space: pre-line;
 }
-.note .note-act {
-  display: block;
+/* the moves an error offers, under its words: clear the lock, fix with
+   the agent; a refusal of the hand-off sits on the same line */
+.note-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
   margin-top: 4px;
+  white-space: normal;
 }
-.waiting-err .mini {
-  display: block;
-  margin-top: 4px;
+.note-why {
+  font-size: 11.5px;
 }
 .waiting-empty {
   margin: 12px 14px;

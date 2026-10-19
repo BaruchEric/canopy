@@ -11,6 +11,7 @@ import { HEALTH_PANEL } from "../health";
 import { ATTENTION_WORD, WAITING_PANEL, WAITING_WORD, isUnpushed, type AttentionRow, type BehindRow, type WaitingGroup } from "../waiting";
 import { InboxRow, useNow } from "./Inbox";
 import { IdLabel } from "./IdLabel";
+import { AgentFix } from "./AgentFix";
 
 /** "4m ago" from unix ms */
 function agoMs(at: number, now: number): string {
@@ -113,10 +114,15 @@ function RepoRow({ repo, state, word, detail, act }: { repo: Repo; state: RepoSt
       {err && (
         <p className="waiting-err" role="alert">
           {err}
-          {act && lockedIndex(err) && (
-            <button type="button" className="mini" disabled={busy} title="Remove the lock if it is stale, then try again" onClick={() => unlock(act)}>
-              clear lock and retry
-            </button>
+          {act && (
+            <span className="note-acts">
+              {lockedIndex(err) && (
+                <button type="button" className="mini" disabled={busy} title="Remove the lock if it is stale, then try again" onClick={() => unlock(act)}>
+                  clear lock and retry
+                </button>
+              )}
+              <AgentFix repoId={repo.id} move={act.kind} text={err} />
+            </span>
           )}
         </p>
       )}

@@ -9,6 +9,7 @@
 import { HELP_TEXT } from "../../src/core/help";
 import { OPENER_IDS, type OpenerId, type Repo, type SpecHalf } from "../../src/core/types";
 import type { Line } from "../../src/core/treelines";
+import type { FixMove } from "./fixit";
 
 /** The transcript's id in the dock. Like "waiting on you" it is no repo's:
  *  a leading slash never starts a repo id, and with no `|` it reads as
@@ -585,6 +586,8 @@ export interface CliEntry {
   at: number;
   status: CliStatus;
   out: Line[];
+  /** a failed push, pull or commit: what "fix with the agent" under it hands over */
+  fix?: { repoId: string; move: FixMove; text: string };
 }
 
 /** how many commands the transcript keeps, newest last */
