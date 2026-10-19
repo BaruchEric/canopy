@@ -9,6 +9,8 @@ import { frontTask, markTime, STATUS_WORD, taskChip, taskWhen } from "../tasks";
 import { benchSolo, benchTask } from "../front";
 import type { TermTab } from "../term";
 import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
+import { lastRun, taskFixPrompt } from "../fixit";
+import { AgentFix } from "./AgentFix";
 import { Seg } from "./Seg";
 import { Section, SectionWindow, ShellSpotHere, useSectionClosed } from "./Surface";
 import { TermView } from "./TermDock";
@@ -17,6 +19,12 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
 
 /** how often a running task's log tail is read again while it shows */
 const TAIL_EVERY = 2000;
+
+/** a failed task's "fix with the agent": its last run, read when pressed */
+const fixTask = (repoId: string, t: TaskInfo) =>
+  (t.status === "failed" || t.status === "gave-up") && t.gone !== "repo" && (
+    <AgentFix repoId={repoId} short ask={async () => taskFixPrompt(t, lastRun((await api.taskLog(repoId, t.name)).lines))} />
+  );
 
 /** the glyphs after a task's name for the flags it has */
 function Flags({ t }: { t: TaskInfo }) {
@@ -130,6 +138,7 @@ export function TasksSection({ repo }: { repo: Repo }) {
           </button>
         )
       )}
+      {fixTask(repo.id, t)}
       {t.live && (
         <button type="button" className="mini" title="Open in a window" onClick={() => window.open(taskShellUrl(repo.id, t.termId, t.name), "_blank", "noopener")}>
           ↗
@@ -357,7 +366,8 @@ export function TaskChip({ repoId }: { repoId: string }) {
 }
 
 /** The top bar's ▶ n: every task that is not idle, on every shown backend,
- *  each with open, restart and stop. Nothing when none is. */
+ *  each with open, restart and stop, and fix for one that failed. Nothing
+ *  when none is. */
 export function TasksChip() {
   const all = useStore((s) => s.taskAll);
   const repos = useStore((s) => s.repos);
@@ -441,6 +451,7 @@ export function TasksChip() {
                       ■
                     </button>
                   )}
+                  {fixTask(t.repoId, t)}
                 </span>
               </li>
             ))}
