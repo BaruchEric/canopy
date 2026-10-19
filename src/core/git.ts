@@ -860,11 +860,13 @@ async function pushTargets(
 }
 
 export async function push(repoPath: string): Promise<string> {
-  const head = await git(repoPath, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  // Exit 1 is a detached HEAD. Any other failure (no such folder, not a
+  // repo) keeps git's own words, and a repo with no commits yet is on its
+  // branch, so the push says what is missing.
+  const head = await git(repoPath, ["symbolic-ref", "-q", "--short", "HEAD"]);
+  if (head.code === 1) throw new Error("detached HEAD — check out a branch first");
+  if (head.code !== 0) throw new Error(head.stderr.trim() || "git could not read HEAD");
   const branch = head.stdout.trim();
-  if (!branch || branch === "HEAD") {
-    throw new Error("detached HEAD — check out a branch first");
-  }
   const { tracked, ordered, fetchOnly } = await pushTargets(repoPath, branch);
   if (ordered.length === 0) {
     throw new Error(fetchOnly > 0 ? "no remote to push to: peer remotes are fetch-only" : "no remote configured");

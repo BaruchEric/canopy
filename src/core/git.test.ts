@@ -25,6 +25,7 @@ import {
   parseWorktreeList,
   NET_TIMEOUT_MS,
   netError,
+  push,
   readElsewhere,
   elsewhereDetail,
   stageFile,
@@ -624,6 +625,31 @@ describe("getLog unpushed", () => {
       await commit("two");
       await commit("three");
       expect(await flags()).toEqual([["three", true], ["two", true], ["one", false]]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("push before any remote", () => {
+  test("says what is wrong with the folder, the HEAD or the repo", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-push-"));
+    const dir = join(root, "work");
+    try {
+      const run = (...args: string[]) => exec(["git", "-C", dir, ...args]);
+      const refusal = (path: string) => push(path).then(() => "", (e: unknown) => (e as Error).message);
+      // a folder that is not there, then one that is not a repo, keep git's words
+      expect(await refusal(join(root, "missing"))).toContain("cannot change to");
+      await exec(["mkdir", dir]);
+      expect(await refusal(dir)).toContain("not a git repository");
+      // a repo with no commits is on a branch, just one with nothing on it
+      await exec(["git", "init", "-q", dir]);
+      expect(await refusal(dir)).toBe("no remote configured");
+      await writeFile(join(dir, "f.txt"), "one\n");
+      await run("add", "f.txt");
+      await run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one");
+      await run("checkout", "-q", "--detach");
+      expect(await refusal(dir)).toBe("detached HEAD — check out a branch first");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
