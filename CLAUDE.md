@@ -27,6 +27,7 @@ The per-module detail lives in `docs/architecture.md`, one section per area. Rea
 
 ## Conventions & gotchas
 
+- Tests run on the Mac (BSD tools) and on the mini (GNU tools, in Linux containers), so a test that shells out to `ps`, `stat`, `sed` or `date` must use flags both accept. `ps -o sid` is Linux-only; `ps -o stat`'s `s` marks a session leader on both. Run the gates on both machines when such a test changes.
 - `git status --porcelain=v2` paths are never quoted; fields split on single spaces with the path last (`splitN`). Rename entries carry `path\torig`.
 - Untracked-file diffs use `git diff --no-index /dev/null <file>`, which exits 1 on success — don't treat that as an error.
 - `unpack` attaches a dmg through a hard link without the `.dmg` extension (`Stub.image`), `-nobrowse` on a private mountpoint, and retries with `-imagekey diskimage-class=CRawDiskImage` when hdiutil says "image not recognized" (a raw image is only told apart by its extension). The link is what keeps "Install this app?" helpers quiet: Vorssaint's disk image installer on this Mac sees every mount, even `-nobrowse` ones, and offers to install the one app on any mount whose `hdiutil info` image path ends in `.dmg`. The launcher tests build their fixture image mount-free (`makehybrid`, then `convert` to UDZO) for the same reason, and unregister the stub app bundle the `open -W` test hands to Launch Services, since the entry outlives the scratch dir.

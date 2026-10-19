@@ -138,16 +138,18 @@ describe("spawnOnPty", () => {
     process.on("SIGHUP", onHup);
     try {
       spawnOnPty(
-        { argv: ["sh", "-c", 'echo "ids $$ $(ps -o pgid= -p $$) $(ps -o sid= -p $$) $(ps -o tty= -p $$)"; kill -HUP 0'] },
+        { argv: ["sh", "-c", 'echo "ids $$ $(ps -o pgid= -p $$) $(ps -o stat= -p $$) $(ps -o tty= -p $$)"; kill -HUP 0'] },
         { cols: 80, rows: 24 },
         { data: (chunk) => (out += new TextDecoder().decode(chunk)), exit: (c) => (code = c) },
       );
       for (let i = 0; i < 100 && code === undefined; i++) await Bun.sleep(20);
       await Bun.sleep(100);
-      const [pid, pgid, sid, tty] = (/ids (.+)/.exec(out)?.[1] ?? "").trim().split(/\s+/);
+      // stat's "s" marks a session leader. macOS ps has no sid column and its
+      // sess is always 0, so this is the check both systems answer.
+      const [pid, pgid, stat, tty] = (/ids (.+)/.exec(out)?.[1] ?? "").trim().split(/\s+/);
       expect(pid).toBeDefined();
       expect(pgid).toBe(pid);
-      expect(sid).toBe(pid);
+      expect(stat).toContain("s");
       expect(tty).not.toBe("?");
       expect(caught).toEqual([]);
     } finally {
