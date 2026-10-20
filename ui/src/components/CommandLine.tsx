@@ -273,7 +273,7 @@ function Entry({ e, open }: { e: CliEntry; open: (id: string) => void }) {
       )}
       {e.fix && (
         <div className="note-acts">
-          <AgentFix repoId={e.fix.repoId} move={e.fix.move} text={e.fix.text} />
+          <AgentFix repoId={e.fix.repoId} move={e.fix.move} text={e.fix.text} at={e.fix.at} />
         </div>
       )}
     </li>

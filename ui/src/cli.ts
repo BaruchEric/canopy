@@ -586,8 +586,9 @@ export interface CliEntry {
   at: number;
   status: CliStatus;
   out: Line[];
-  /** a failed push, pull or commit: what "fix with the agent" under it hands over */
-  fix?: { repoId: string; move: FixMove; text: string };
+  /** a failed push, pull or commit: what goes to the agent under it, and
+   *  when it failed (a transcript reopened later hands nothing over unasked) */
+  fix?: { repoId: string; move: FixMove; text: string; at: number };
 }
 
 /** how many commands the transcript keeps, newest last */

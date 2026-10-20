@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { fixMove, fixPrompt, lastRun, taskFixPrompt } from "./fixit";
+import { AUTO_FIX_MS, fixedNote, fixMove, fixPrompt, freshFailure, lastRun, moveDone, taskFixPrompt } from "./fixit";
+import type { RepoFile } from "../../src/core/types";
 
 describe("fixMove", () => {
   test("knows the moves an agent can finish", () => {
@@ -79,5 +80,50 @@ describe("taskFixPrompt", () => {
     expect(p).toContain("line 99");
     expect(p).toContain("line 40");
     expect(p).not.toContain("line 39\n");
+  });
+});
+
+describe("freshFailure", () => {
+  test("a failure just now goes to the agent by itself", () => {
+    expect(freshFailure(1_000, 1_000)).toBe(true);
+    expect(freshFailure(1_000, 1_000 + AUTO_FIX_MS - 1)).toBe(true);
+  });
+
+  test("an old one, or one from a clock ahead, waits for a press", () => {
+    expect(freshFailure(1_000, 1_000 + AUTO_FIX_MS)).toBe(false);
+    expect(freshFailure(2_000, 1_000)).toBe(false);
+  });
+});
+
+describe("moveDone", () => {
+  const file = (over: Partial<RepoFile> = {}): RepoFile => ({ path: "a.ts", index: ".", worktree: "M", untracked: false, conflicted: false, ...over });
+  const st = (ahead: number, behind: number, files: RepoFile[] = []) => ({ ahead, behind, files });
+
+  test("a push is done once nothing is ahead or behind", () => {
+    expect(moveDone("push", st(1, 3))).toBe(false);
+    expect(moveDone("push", st(0, 3))).toBe(false);
+    expect(moveDone("push", st(0, 0))).toBe(true);
+  });
+
+  test("a pull is done once nothing is behind, whatever is ahead", () => {
+    expect(moveDone("pull", st(1, 3))).toBe(false);
+    expect(moveDone("pull", st(2, 0))).toBe(true);
+  });
+
+  test("a commit is done once nothing is staged or conflicted; edits and new files may stay", () => {
+    expect(moveDone("commit", st(1, 0, [file({ index: "M" })]))).toBe(false);
+    expect(moveDone("commit", st(1, 0, [file({ conflicted: true, index: "U" })]))).toBe(false);
+    expect(moveDone("commit", st(1, 0, [file(), file({ path: "n.ts", index: "?", worktree: "?", untracked: true })]))).toBe(true);
+    expect(moveDone("commit+push", st(1, 0))).toBe(false);
+    expect(moveDone("commit+push", st(0, 0))).toBe(true);
+  });
+
+  test("a move the status cannot speak for", () => {
+    expect(moveDone("peer sync", st(0, 0))).toBeNull();
+    expect(moveDone("spec sync", st(0, 0))).toBeNull();
+  });
+
+  test("the note it turns into", () => {
+    expect(fixedNote("commit+push")).toBe("The agent finished the commit and push.");
   });
 });

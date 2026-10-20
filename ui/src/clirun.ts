@@ -367,7 +367,7 @@ function fixFor(cmd: Command, text: string): CliEntry["fix"] {
   const got = findRepo(cmd.repo, useStore.getState().repos, { prefix: false });
   if ("error" in got) return undefined;
   const move = cmd.kind === "commit" ? (cmd.push ? "commit+push" : "commit") : cmd.kind;
-  return { repoId: got.repo.id, move, text };
+  return { repoId: got.repo.id, move, text, at: Date.now() };
 }
 
 /** to the repos' view, without a history entry when the page is on it */

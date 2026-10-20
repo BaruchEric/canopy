@@ -1197,7 +1197,7 @@ function GitNote({ id, note, setNote, retry }: { id: string; note: Note | null; 
               {busy ? "clearing…" : retry ? "clear lock and retry" : "clear lock"}
             </button>
           )}
-          {fix && <AgentFix repoId={id} move={fix} text={note.text} />}
+          {fix && <AgentFix repoId={id} move={fix} text={note.text} onDone={(text) => setNote({ kind: "ok", text })} />}
         </span>
       )}
     </p>

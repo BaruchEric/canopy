@@ -1,4 +1,4 @@
-import type { TaskInfo, TaskLogLine } from "../../src/core/types";
+import type { RepoStatus, RunStatus, TaskInfo, TaskLogLine } from "../../src/core/types";
 
 /** The moves an agent can carry through when one fails, each with the
  *  words for it in the prompt. Moves left out are not an agent's to fix:
@@ -20,6 +20,41 @@ export type FixMove = keyof typeof DOING;
 
 /** a move whose failure goes to the agent, or null when it is not one */
 export const fixMove = (label: string): FixMove | null => (Object.hasOwn(DOING, label) ? (label as FixMove) : null);
+
+/** How long after a move fails the agent still takes it over unasked. A
+ *  note older than this (the command line's transcript reopened) waits for
+ *  a press instead, so nothing starts twice for one failure. */
+export const AUTO_FIX_MS = 15_000;
+
+/** whether a failure at `at` goes to the agent by itself at `now` */
+export const freshFailure = (at: number, now: number): boolean => now >= at && now - at < AUTO_FIX_MS;
+
+/** what the note says about the agent that has the failure */
+export const FIX_WATCH: Record<RunStatus, string> = {
+  working: "the agent is on it",
+  waiting: "the agent needs you",
+  idle: "the agent answered",
+  done: "the agent is done",
+  failed: "the agent failed",
+  stopped: "the agent was stopped",
+};
+
+/** Whether the repo's status shows the move finished, for the moves that
+ *  leave a mark there: nothing ahead or behind after a push, nothing
+ *  behind after a pull, nothing staged or conflicted after a commit. Null
+ *  for the rest, whose finish the status cannot tell. */
+export function moveDone(move: FixMove, st: Pick<RepoStatus, "ahead" | "behind" | "files">): boolean | null {
+  const committed = !st.files.some((f) => f.conflicted || (!f.untracked && f.index !== "."));
+  const level = st.ahead === 0 && st.behind === 0;
+  if (move === "push") return level;
+  if (move === "pull") return st.behind === 0;
+  if (move === "commit") return committed;
+  if (move === "commit+push") return committed && level;
+  return null;
+}
+
+/** what a failed move's note turns into once the agent finished it */
+export const fixedNote = (move: FixMove): string => `The agent finished the ${DOING[move]}.`;
 
 /** how much of git's answer the prompt quotes, from its end */
 const FIX_LINES = 40;

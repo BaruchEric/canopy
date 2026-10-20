@@ -70,7 +70,7 @@ describe("workspace commands", () => {
     const out = await runLine("push proj");
 
     expect(out.ok).toBe(false);
-    expect(useStore.getState().cliLog.at(-1)?.fix).toEqual({ repoId: "proj", move: "push", text: said });
+    expect(useStore.getState().cliLog.at(-1)?.fix).toEqual({ repoId: "proj", move: "push", text: said, at: expect.any(Number) });
   });
 
   test("a refusal of canopy's own carries no hand-off", async () => {
