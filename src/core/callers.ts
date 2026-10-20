@@ -66,6 +66,8 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["landing/*", "prs/*", "incubator/*"], right: "operate" },
   { methods: POST, paths: ["tailchan/send", "tailchan/put", "tailchan/notify"], right: "operate" },
   { methods: POST, paths: ["asks/answer", "presence", "presence/beat", "layouts/reset", "rescan", "preview"], right: "operate" },
+  // a voice session is billed by the minute on the backend's key
+  { methods: POST, paths: ["voice/session"], right: "operate" },
   {
     methods: POST,
     paths: ["terms/restore", "terms/paste", "terms/move/out", "terms/move/finish", "terms/move/undo", "repos/agent", "repos/movein"],

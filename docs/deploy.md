@@ -1398,6 +1398,18 @@ backend:
    machine chips, and clicking the non-home one should open that checkout's
    panel and, from there, a shell on the other machine.
 
+## Voice
+
+The mic in the top bar opens a spoken conversation with an Eleven Realtime model (`docs/architecture.md`, "Voice"). It shows only when the page's home backend has a key:
+
+- `CANOPY_VOICE_KEY`: an ElevenLabs API key whose workspace has Realtime models (minting answers 403 "Realtime models are not available for this workspace" otherwise). It needs the Agents (convai) permission; text to speech is not used. canopy deletes it from its own env once read, as with the transcribe key.
+- `CANOPY_VOICE_MODEL`: `eleven_realtime_v1_mini` (the default, cheapest and fastest) or `eleven_realtime_v1_max` (reasons before it answers).
+- `CANOPY_VOICE_VOICE`: an ElevenLabs voice name or id, default `brian`.
+
+On the mini these go in `.env` (`docker-compose.yml` passes each by name), then `bun run redeploy --restart`. On the Mac they are `EnvironmentVariables` entries in the launchd plist `ca.beric.canopy-server`, then reload the agent. Without a key the backend logs `voice: no CANOPY_VOICE_KEY, so the mic stays off` once at start.
+
+The page needs a secure context for the mic: https or `localhost`. A plain-http tailnet address shows the button disabled. Minting is `operate`, so a page must be signed in where caller tokens are enforced. Billing is ElevenLabs' per-minute Agents rate plus the model's tokens, and a session ends itself after ten minutes.
+
 ## Caller tokens
 
 Every call to the API carries a caller token (`docs/architecture.md`, "Callers and tokens"). `CANOPY_CALLERS` sets what the backend does about it: `off` checks nothing, `log` (the default, and what an empty or unknown value reads as) lets every call through and counts the ones `enforce` would refuse, `enforce` answers them 401 or 403. Set it where the backend's environment lives:

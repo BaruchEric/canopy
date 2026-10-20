@@ -74,6 +74,7 @@ canopy ui ~/dev
 - 2026-10-09: canopy takes only the doc half of the shared spec and keeps its design system in `ui/src/styles.css`, because its own palettes and tokens predate the shared DESIGN.md and differ from it.
 - 2026-10-16: Every API call carries a caller token with rights (read, plan, operate, shell, admin, helper), checked at the top of `route()`, because a bare `curl -X POST` from a run must not be able to start or stop a run. It ships in `log` first, then `enforce`.
 - 2026-10-14: Secrets live in one signed, age-sealed file in Forgejo, written only by a service on the mini behind passkeys, because a value must never sit in a container that shares the shells' namespaces or in a repo canopy syncs.
+- 2026-10-20: Voice runs on ElevenLabs' Realtime API with the browser on the socket and the server only minting a 60-second client secret, because audio then never passes through canopy and the key never reaches the page. Its tools only read and navigate, because a misheard word must not commit, push or answer an ask.
 
 ## Out of scope
 

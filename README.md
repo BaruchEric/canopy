@@ -127,6 +127,10 @@ canopy version                     # the version and commit (also --version, -V)
 
 Light and dark follow the OS unless the setting says otherwise, in whichever palette is picked; the shells and the Library follow both. Reduced motion respected.
 
+## Voice
+
+With `CANOPY_VOICE_KEY` (an ElevenLabs key) set on the backend, a mic shows in the top bar. Click it and talk: "what needs me?", "which repos have changes?", "open ripe". An Eleven Realtime model answers out loud and can look things up and open repos and views. Opening a repo does what clicking its card does, so a panel set to start its shell starts it; a name it only half heard is asked back first. It cannot commit, push, answer an ask or start a run. The browser streams straight to ElevenLabs, and the backend only mints a short-lived secret, so the key never reaches the page. It needs https or localhost for the mic. Settings are in `docs/deploy.md`, "Voice".
+
 ## Tasks
 
 A task is one of a repo's named processes (the dev server, tests, a typecheck, a build) that canopy runs and watches on the backend. Each one is a tmux session you can join and type into like a shell, with its output kept in a log on disk (`tasks/logs/` under the config dir, rotated when it grows) that stays searchable after the process ends.

@@ -414,6 +414,12 @@ services:
       - CANOPY_TRANSCRIBE_URL=${CANOPY_TRANSCRIBE_URL:-}
       - CANOPY_TRANSCRIBE_KEY=${CANOPY_TRANSCRIBE_KEY:-}
       - CANOPY_TRANSCRIBE_MODEL=${CANOPY_TRANSCRIBE_MODEL:-}
+      # the top bar's mic (docs/deploy.md, "Voice"): an ElevenLabs key that
+      # mints realtime client secrets, deleted from canopy's env once read
+      # like the transcribe key. Empty leaves the mic hidden.
+      - CANOPY_VOICE_KEY=${CANOPY_VOICE_KEY:-}
+      - CANOPY_VOICE_MODEL=${CANOPY_VOICE_MODEL:-}
+      - CANOPY_VOICE_VOICE=${CANOPY_VOICE_VOICE:-}
       # the incubator's deploy (docs/deploy.md): a Vercel token, scoped to
       # the one team the incubator's projects go to, and that team's slug
       # when it is not the token's own account. Readable through

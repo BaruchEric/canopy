@@ -11332,3 +11332,94 @@ button.trigger-title:hover {
   color: var(--ink-dim);
   text-transform: lowercase;
 }
+
+/* ---------- voice: the spoken conversation's card ---------- */
+.voice-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 38;
+  width: min(340px, calc(100vw - 32px));
+  max-height: min(420px, 60vh);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r-card);
+  background: var(--float);
+  box-shadow: 0 10px 30px var(--float-shadow);
+  color: var(--ink);
+  font-size: 13px;
+}
+.voice-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voice-panel > header > [role="status"] {
+  flex: 1;
+  color: var(--ink-dim);
+}
+.voice-dot {
+  --state: var(--ink-faint);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--state);
+}
+.voice-panel[data-phase="listening"] .voice-dot {
+  --state: var(--moss);
+}
+.voice-panel[data-phase="hearing"] .voice-dot {
+  --state: var(--lichen);
+}
+.voice-panel[data-phase="thinking"] .voice-dot,
+.voice-panel[data-phase="speaking"] .voice-dot {
+  --state: var(--sky);
+}
+.voice-panel ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.voice-panel li {
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.voice-you {
+  color: var(--ink-dim);
+}
+.voice-you::before {
+  content: "You: ";
+  color: var(--ink-faint);
+}
+.voice-tool {
+  color: var(--ink-faint);
+  font-size: 12px;
+  font-style: italic;
+}
+.voice-hint {
+  margin: 0;
+  color: var(--ink-faint);
+}
+.voice-error {
+  margin: 0;
+  color: var(--rust);
+}
+.voice-btn.on {
+  color: var(--moss);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .voice-panel {
+    animation: settle 140ms ease-out;
+  }
+  .voice-panel[data-phase="listening"] .voice-dot,
+  .voice-panel[data-phase="speaking"] .voice-dot {
+    animation: breathe-dot 1.6s ease-in-out infinite;
+  }
+}

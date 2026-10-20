@@ -28,6 +28,7 @@ import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
 import { RangerChip } from "./Ranger";
 import { TasksChip } from "./Tasks";
+import { VoiceButton } from "./Voice";
 import { SourcesMenu } from "./Sources";
 
 /** The three crowns and a trunk. `live` makes them breathe (loading screen). */
@@ -773,6 +774,7 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
         <Cluster label="This page">
           <BackendMenu />
           <SearchButton />
+          <VoiceButton />
           <SettingsMenu />
         </Cluster>
       </div>
@@ -849,6 +851,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <SearchButton />
             <CliButton />
             <FeedButton />
+            <VoiceButton />
           </Cluster>
           <Cluster label="Make">
             <NewProjectButton />

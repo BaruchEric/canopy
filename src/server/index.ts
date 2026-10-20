@@ -63,6 +63,8 @@ import { Incubator, IncubatorError, incubatorWorkflow, type NoteSink, type Trans
 import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
+import { voiceConfig, voiceMinter, type VoiceMinter } from "../core/voice";
+import type { VoiceInfo } from "../core/voicewire";
 import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
@@ -247,6 +249,8 @@ interface ServerState {
   harnessMissing: (h: Harness) => Promise<boolean>;
   /** which canopy this is, read once at start */
   about: About;
+  /** mints a voice conversation's client secret; null with no CANOPY_VOICE_KEY */
+  voice: VoiceMinter | null;
   /** why no coordinator may start here though its runner is set up: canopy
    *  not enforcing caller tokens, or the coordinator's own listener not up
    *  (`coordinatorRefusal`); null when one may */
@@ -2710,6 +2714,15 @@ async function handleApi(
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
   if (path === "/api/about" && method === "GET") return json(state.about);
+  if (path === "/api/voice" && method === "GET") return json({ model: state.voice?.model ?? null } satisfies VoiceInfo);
+  if (path === "/api/voice/session" && method === "POST") {
+    if (!state.voice) return json({ error: "voice is off: this backend has no CANOPY_VOICE_KEY" }, 503);
+    try {
+      return json(await state.voice.mint());
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+    }
+  }
   // what the backend knows of this browser, and the helpers dialled in
   if (path === "/api/client" && method === "GET") return json(clientInfo(state, key, here));
   if (path === "/api/helpers" && method === "GET") return json(helperList(state));
@@ -4100,6 +4113,8 @@ export async function startServer(opts: {
   agentLine?: (repo: Repo, agent: AgentSettings, env: AgentEnv) => Promise<string>;
   /** the harnesses the backend has, in place of looking on PATH; tests */
   harnesses?: Harness[];
+  /** the voice conversation's minter, in place of CANOPY_VOICE_KEY's (null for none); tests */
+  voice?: VoiceMinter | null;
   /** the agent registry's timings and scan; tests turn the scan on with a
    *  stand-in lister (it is off under `bun test` and `CANOPY_AGENT_SCAN=0`) */
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
@@ -4415,6 +4430,7 @@ export async function startServer(opts: {
   });
   const vault = vaultConfig();
   const speech = transcribeConfig();
+  const voice = opts.voice !== undefined ? opts.voice : voiceMinter(voiceConfig());
   const ship = shipConfig(process.env, runnerOpts.backend);
   // The configs hold what they read; the env keeps neither secret, so no
   // shell, run or tmux server started from here inherits them (`exec` and
@@ -4428,6 +4444,7 @@ export async function startServer(opts: {
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
     if (!ship.vercelToken) console.error("incubator: no VERCEL_TOKEN, so a built project parks before its deploy");
     if (!ship.firebaseToken) console.error("incubator: no FIREBASE_TOKEN, so a vercel+firebase project parks before its deploy");
+    if (!voice) console.error("voice: no CANOPY_VOICE_KEY, so the mic stays off");
   }
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
@@ -4444,6 +4461,7 @@ export async function startServer(opts: {
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
     harnesses,
     harnessMissing,
+    voice,
     about: {
       ...readBuild(),
       startedAt: Date.now(),
