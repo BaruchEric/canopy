@@ -890,6 +890,7 @@ export async function push(repoPath: string): Promise<string> {
       return remote === tracked ? out : `pushed to ${remote}\n${out}`;
     }
     lastErr = r.stderr.trim() || "git push failed";
+    if (remote === tracked && isBehind(lastErr)) return rebaseAndPush(repoPath, lastErr);
     if (!isAccessDenied(lastErr)) {
       lastErr = netError(lastErr, "push", Date.now() - t0).message;
       break;
@@ -915,6 +916,57 @@ export async function push(repoPath: string): Promise<string> {
     );
   }
   throw new Error(lastErr);
+}
+
+/** The remote rejected the ref because it has commits we lack: "fetch first"
+ *  when we never saw them, "non-fast-forward" when we fetched and are behind. */
+export function isBehind(stderr: string): boolean {
+  return /\[rejected\][^\n]*\((?:fetch first|non-fast-forward)\)/.test(stderr);
+}
+
+/** A push the tracked upstream turned down for being behind: fetch, rebase
+ *  the local commits onto the upstream and push once more. Several machines
+ *  commit to the same repos, so this is the common case, and the rebase drops
+ *  a local commit whose change is already upstream instead of pushing a copy.
+ *  Local merge commits stop it (a plain rebase would flatten them), and so
+ *  does a conflict, after which the branch is put back as it was. */
+async function rebaseAndPush(repoPath: string, rejected: string): Promise<string> {
+  const refuse = (why: string): never => {
+    throw new Error(`${rejected}\n\n${why}`);
+  };
+  const t0 = Date.now();
+  const fetched = await git(repoPath, ["fetch", "--quiet"], NET_TIMEOUT_MS);
+  if (fetched.code !== 0) throw netError(fetched.stderr, "fetch", Date.now() - t0);
+  const merges = await git(repoPath, ["rev-list", "--merges", "@{u}..HEAD"]);
+  if (merges.stdout.trim()) refuse("The branch is behind its upstream and has merge commits of its own, so canopy left the rebase to you.");
+  const rebased = await git(repoPath, ["rebase", "--autostash", "@{u}"], NET_TIMEOUT_MS);
+  if (rebased.code !== 0) {
+    const conflicts = await git(repoPath, ["diff", "--name-only", "--diff-filter=U"]);
+    await git(repoPath, ["rebase", "--abort"]);
+    const files = conflicts.stdout.trim().split("\n").filter(Boolean);
+    refuse(
+      files.length > 0
+        ? `Rebasing onto the upstream hit a conflict in ${files.join(", ")}. canopy put the branch back as it was.`
+        : `Rebasing onto the upstream failed, and canopy put the branch back as it was:\n${(rebased.stdout + rebased.stderr).trim()}`,
+    );
+  }
+  // A commit already upstream reads "skipped previously applied commit <hash>"
+  // when git spots it up front, "dropping <hash> ... already upstream" when it
+  // empties out mid-pick. An autostash that came back with conflicts says its
+  // changes are safe in the stash.
+  const said = (rebased.stdout + rebased.stderr).split(/[\r\n]/);
+  const dropped = said.flatMap((l) => /previously applied commit ([0-9a-f]+)|dropping ([0-9a-f]+) .*already upstream/.exec(l)?.slice(1).filter(Boolean) ?? []);
+  const notes = await Promise.all(
+    dropped.map(async (hash) => {
+      const named = await git(repoPath, ["log", "-1", "--format=%h %s", hash]);
+      return `dropped ${named.code === 0 ? named.stdout.trim() : hash.slice(0, 7)}: already upstream`;
+    }),
+  );
+  notes.push(...said.filter((l) => /safe in the stash/.test(l)).map((l) => l.trim()));
+  const t1 = Date.now();
+  const again = await git(repoPath, ["push"], NET_TIMEOUT_MS);
+  if (again.code !== 0) throw netError(again.stderr, "push", Date.now() - t1);
+  return ["rebased onto the upstream first", ...notes, (again.stdout + again.stderr).trim()].join("\n");
 }
 
 /** git wanted a username or password and had no terminal to ask on
