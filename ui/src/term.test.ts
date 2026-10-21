@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, cleanLabel, renameTab, swapTabs, LABEL_MAX, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -319,5 +319,37 @@ describe("panelShellStart", () => {
     expect(panelShellStart("advanced", "app")).toBeUndefined();
     expect(panelShellStart("intermediate", "_incubator/coin")).toBeUndefined();
     expect(panelShellStart("intermediate", "mini|_incubator/coin")).toBeUndefined();
+  });
+});
+
+describe("naming and ordering tabs by hand", () => {
+  const t = (id: string, over: Partial<TermTab> = {}): TermTab => ({ id, repoId: "app", name: "app", path: "/app", place: "strip", ...over });
+
+  test("a label is one trimmed line, capped; blank is none", () => {
+    expect(cleanLabel("  weapons\n and   loot ")).toBe("weapons and loot");
+    expect(cleanLabel("   ")).toBeUndefined();
+    expect(cleanLabel("x".repeat(LABEL_MAX + 9))).toHaveLength(LABEL_MAX);
+  });
+
+  test("renaming sets the label, blank puts the repo's name back, no change keeps the array", () => {
+    const tabs = [t("a"), t("b")];
+    const named = renameTab(tabs, "b", " loot ");
+    expect(named[1]?.label).toBe("loot");
+    expect(named[0]).toBe(tabs[0]);
+    expect(renameTab(named, "b", "loot")).toBe(named);
+    expect("label" in (renameTab(named, "b", "  ")[1] ?? {})).toBe(false);
+    expect(renameTab(tabs, "zz", "x")).toBe(tabs);
+  });
+
+  test("swapping trades two places; a missing tab changes nothing", () => {
+    const tabs = [t("a"), t("b"), t("c")];
+    expect(swapTabs(tabs, "a", "c").map((x) => x.id)).toEqual(["c", "b", "a"]);
+    expect(swapTabs(tabs, "a", "zz")).toBe(tabs);
+  });
+
+  test("a saved label comes back from the layout; a blank one does not", () => {
+    const back = loadTermTabs([t("a", { label: "loot" }), t("b", { label: " " })]);
+    expect(back[0]?.label).toBe("loot");
+    expect("label" in (back[1] ?? {})).toBe(false);
   });
 });

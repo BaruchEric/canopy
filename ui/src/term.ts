@@ -14,6 +14,8 @@ export interface TermTab {
   repoId: string;
   /** the repo's name, what the tab says */
   name: string;
+  /** a name given to the tab by hand, said in place of the repo's */
+  label?: string;
   /** the repo's locator; the socket lands there */
   path: string;
   /** the repo's panel, or the strip along the bottom */
@@ -81,12 +83,52 @@ export function loadTermTabs(v: unknown): TermTab[] {
   const out: TermTab[] = [];
   for (const t of v) {
     if (!t || typeof t !== "object") continue;
-    const { id, repoId, name, path, place, exit } = t as Record<string, unknown>;
+    const { id, repoId, name, path, place, exit, label } = t as Record<string, unknown>;
     if (typeof id !== "string" || typeof repoId !== "string" || typeof name !== "string") continue;
     if (typeof path !== "string" || !isPlace(place) || exit !== undefined) continue;
-    out.push({ id, repoId, name, path, place });
+    const given = typeof label === "string" ? cleanLabel(label) : undefined;
+    out.push({ id, repoId, name, path, place, ...(given ? { label: given } : {}) });
   }
   return out;
+}
+
+/** the longest name a tab takes by hand */
+export const LABEL_MAX = 40;
+
+/** A hand-given tab name as kept: trimmed, one line, at most `LABEL_MAX`
+ *  characters; undefined when nothing is left, which puts the repo's name
+ *  back. */
+export function cleanLabel(raw: string): string | undefined {
+  const one = raw.replace(/\s+/g, " ").trim().slice(0, LABEL_MAX).trim();
+  return one || undefined;
+}
+
+/** `tabs` with tab `id` named `label` by hand, or back to its repo's name
+ *  when the label is blank. The same array when nothing changes. */
+export function renameTab(tabs: TermTab[], id: string, label: string): TermTab[] {
+  const at = tabs.findIndex((t) => t.id === id);
+  const tab = tabs[at];
+  if (!tab) return tabs;
+  const given = cleanLabel(label);
+  if (given === tab.label) return tabs;
+  const { label: _, ...rest } = tab;
+  const next = [...tabs];
+  next[at] = given ? { ...rest, label: given } : rest;
+  return next;
+}
+
+/** `tabs` with tabs `a` and `b` in each other's places; the same array when
+ *  either is missing. */
+export function swapTabs(tabs: TermTab[], a: string, b: string): TermTab[] {
+  const i = tabs.findIndex((t) => t.id === a);
+  const j = tabs.findIndex((t) => t.id === b);
+  const ta = tabs[i];
+  const tb = tabs[j];
+  if (!ta || !tb || i === j) return tabs;
+  const next = [...tabs];
+  next[i] = tb;
+  next[j] = ta;
+  return next;
 }
 
 /** Whether a tab's socket only joins a shell and never starts one: after a

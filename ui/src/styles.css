@@ -5688,15 +5688,51 @@ button.landing-open:hover {
 }
 .ss-mhead {
   margin-top: 4px;
+  padding: 0 12px 0 4px;
+  align-items: center;
+  gap: 0;
   color: var(--ink-dim);
+  cursor: default;
 }
-.ss-mhead .dot {
-  margin-left: auto;
-  align-self: center;
+.ss-mhead.on {
+  box-shadow: inset 2px 0 0 var(--moss);
+}
+.ss-fold,
+.ss-mname,
+.ss-all {
+  padding: 3px 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 .ss-fold {
-  width: 10px;
+  width: 22px;
   color: var(--ink-faint);
+}
+.ss-mname {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+.ss-mname .dot {
+  margin-left: auto;
+}
+.ss-all {
+  padding: 0;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.ss-all.on {
+  color: var(--ink);
+}
+.ss-all:hover,
+.ss-mname:hover {
+  color: var(--ink);
 }
 .ss-repo,
 .ss-agent {
@@ -5799,6 +5835,85 @@ button.landing-open:hover {
 .ss-picked {
   gap: 8px;
   padding-right: 10px;
+  cursor: default;
+}
+.ss-scope {
+  align-self: center;
+  margin: 0 8px 4px 2px;
+  padding: 2px 8px;
+  border: 1px solid var(--hair2);
+  border-radius: var(--r);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+span.ss-scope {
+  border-color: transparent;
+  cursor: default;
+}
+button.ss-scope:hover {
+  border-color: var(--moss);
+}
+.term-rename {
+  width: auto;
+  min-width: 6ch;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px solid var(--moss);
+  background: none;
+  color: var(--ink);
+  font: inherit;
+}
+.term-rename:focus {
+  outline: none;
+}
+.ss-held {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-style: italic;
+}
+.ss-tabmenu {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 4px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--float);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--bark0) 50%, transparent);
+}
+.ss-tabmenu button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.ss-tabmenu button.t-rust {
+  color: var(--rust);
+}
+.ss-tabmenu button:hover:not(:disabled),
+.ss-tabmenu button:focus-visible {
+  background: var(--wash);
+  outline: none;
+}
+.ss-tabmenu button:disabled {
+  color: var(--ink-faint);
   cursor: default;
 }
 .ss-agent-pane {

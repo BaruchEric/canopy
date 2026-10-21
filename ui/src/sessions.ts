@@ -108,6 +108,30 @@ export function heldShellAt(repoId: string, shells: readonly TermInfo[], tabs: r
   return held[0] ?? null;
 }
 
+/** What the tab row shows: every tab, one machine's, or one repo's, picked
+ *  in the left column. */
+export type TabScope = { repo: string } | { machine: string } | null;
+
+/** The tabs in `scope`, in their order. */
+export function tabsIn<T extends { repoId: string }>(tabs: readonly T[], scope: TabScope, backendOf: (id: string) => string): T[] {
+  if (!scope) return [...tabs];
+  if ("repo" in scope) return tabs.filter((t) => t.repoId === scope.repo);
+  return tabs.filter((t) => backendOf(t.repoId) === scope.machine);
+}
+
+/** The tab to show once the scope changed: the one showing when it is still
+ *  in, else the last one in; null when the scope has none. */
+export function showingIn(tabs: readonly { id: string }[], active: string | null): string | null {
+  return tabs.some((t) => t.id === active) ? active : (tabs.at(-1)?.id ?? null);
+}
+
+/** The strip shells the backends hold that no tab here shows (hidden here,
+ *  or another device's), oldest first: what the tab row offers to bring
+ *  back. Panel shells stay with their panels. */
+export function untabbed(shells: readonly TermInfo[], tabs: readonly { id: string }[]): TermInfo[] {
+  return shells.filter((t) => isShell(t) && t.place === "strip" && !tabs.some((x) => x.id === t.id)).sort((a, b) => a.startedAt - b.startedAt);
+}
+
 /** The agents list: every live agent, waiting first, then working, idle;
  *  newest first within each. */
 export const agentRows = (cards: readonly AgentCard[]): AgentCard[] => orderCards(cards.filter(isLiveAgent));

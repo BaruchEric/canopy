@@ -36,7 +36,7 @@ import {
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { TERM_FONT, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, rowsPx, termId, type FocusSize, type TermTab } from "./term";
+import { TERM_FONT, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
 import { benchHolds, clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
@@ -1050,6 +1050,10 @@ export interface CanopyState {
    *  checkout, and the moved shell's tab in the old one's place */
   landMove: (oldTab: string, fromRepoId: string, toRepoId: string, info: TermInfo) => void;
   showTerm: (id: string) => void;
+  /** names a tab by hand; a blank label puts its repo's name back */
+  renameTerm: (id: string, label: string) => void;
+  /** trades two tabs' places in the row */
+  swapTerms: (a: string, b: string) => void;
   /** starts a kept shell again where it was, with what it had; `resume`
    *  also runs the line that picks its agent's conversation back up */
   restoreShell: (id: string, resume?: boolean) => Promise<void>;
@@ -3697,6 +3701,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     }));
   },
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
+  renameTerm: (id, label) => set((s) => ({ terms: renameTab(s.terms, id, label) })),
+  swapTerms: (a, b) => set((s) => ({ terms: swapTabs(s.terms, a, b) })),
   endTerm: (id, code) =>
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),
   setTermHeight: (px) => set({ termHeight: clamp(px, TERM.min, TERM.max) }),

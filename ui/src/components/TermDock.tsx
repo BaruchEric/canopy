@@ -21,7 +21,7 @@ import {
   type TermTab,
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
-import { TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
+import { LABEL_MAX, TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
 import { benchIs, benchSolo } from "../front";
 import { SPOT_WORD, flipMode, shellCopyOf, shellSpot, termFontIn, tidyLines, type CopyOut, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
@@ -949,10 +949,12 @@ function shellRoom(shells: HTMLElement | null): number {
   return term.offsetHeight + Math.max(0, body.offsetHeight - PANEL_BODY_MIN);
 }
 
-/** Two shells at one repo get numbered so their tabs can be told apart. */
+/** Two shells at one repo get numbered so their tabs can be told apart; a
+ *  tab named by hand says its own name and takes no number. */
 function tabLabels(terms: TermTab[]): string[] {
   const seen = new Map<string, number>();
   return terms.map((t) => {
+    if (t.label) return t.label;
     const n = (seen.get(t.repoId) ?? 0) + 1;
     seen.set(t.repoId, n);
     return n === 1 ? t.name : `${t.name} ${n}`;
@@ -966,24 +968,43 @@ export function TermTabs({
   active,
   onShow,
   caption,
+  lead,
   extra,
   end,
+  onMenu,
+  renaming,
+  onRenamed,
 }: {
   terms: TermTab[];
   active: string | null;
   onShow: (id: string) => void;
   caption: string;
+  /** before the tabs, after the caption */
+  lead?: React.ReactNode;
   extra?: React.ReactNode;
   end?: React.ReactNode;
+  /** a tab's own menu, asked for by a right-click or a double-click on it */
+  onMenu?: (id: string, at: DOMRect, rename: boolean) => void;
+  /** the tab whose name is being typed in place, and what to do with it */
+  renaming?: string | null;
+  onRenamed?: (id: string, label: string | null) => void;
 }) {
   const closeTerm = useStore((s) => s.closeTerm);
   const labels = tabLabels(terms);
   return (
     <div className="term-tabs" role="tablist" aria-label="Open shells">
       {caption && <span className="term-caption">{caption}</span>}
+      {lead}
       {terms.map((t, i) => {
         const label = labels[i] ?? t.name;
         const on = t.id === active;
+        if (renaming === t.id && onRenamed)
+          return (
+            <div key={t.id} role="tab" aria-selected={on} className={`term-tab${on ? " on" : ""}`}>
+              <span className={`dot ${t.exit === undefined ? "moss" : "faint"}`} aria-hidden="true" />
+              <RenameBox label={label} onDone={(v) => onRenamed(t.id, v)} />
+            </div>
+          );
         return (
           <div
             key={t.id}
@@ -993,10 +1014,21 @@ export function TermTabs({
             className={`term-tab${on ? " on" : ""}${t.exit !== undefined ? " exited" : ""}`}
             title={t.exit === undefined ? t.path : `${t.path} · exited`}
             onClick={() => onShow(t.id)}
+            onContextMenu={
+              onMenu &&
+              ((e) => {
+                e.preventDefault();
+                onMenu(t.id, e.currentTarget.getBoundingClientRect(), false);
+              })
+            }
+            onDoubleClick={onMenu && ((e) => onMenu(t.id, e.currentTarget.getBoundingClientRect(), true))}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
                 onShow(t.id);
+              } else if (onMenu && (e.key === "F2" || e.key === "ContextMenu")) {
+                e.preventDefault();
+                onMenu(t.id, e.currentTarget.getBoundingClientRect(), e.key === "F2");
               }
             }}
           >
@@ -1024,6 +1056,37 @@ export function TermTabs({
       {extra}
       {end}
     </div>
+  );
+}
+
+/** A tab's name typed in place: Enter or leaving keeps it, Escape keeps the
+ *  old one. A blank name puts the repo's back. */
+function RenameBox({ label, onDone }: { label: string; onDone: (label: string | null) => void }) {
+  const [v, setV] = useState(label);
+  const done = useRef(false);
+  const finish = (keep: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(keep ? v : null);
+  };
+  return (
+    <input
+      className="term-rename"
+      value={v}
+      autoFocus
+      maxLength={LABEL_MAX}
+      spellCheck={false}
+      aria-label="The tab's name"
+      size={Math.max(6, v.length + 1)}
+      onFocus={(e) => e.currentTarget.select()}
+      onChange={(e) => setV(e.target.value)}
+      onBlur={() => finish(true)}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finish(true);
+        else if (e.key === "Escape") finish(false);
+      }}
+    />
   );
 }
 

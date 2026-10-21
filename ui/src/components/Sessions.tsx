@@ -6,7 +6,7 @@ import { joinTarget, machineOf, stateWord } from "../agentcards";
 import { healthBadge } from "../badges";
 import { NARROW, useMedia } from "../media";
 import { backendOf, qual } from "../registry";
-import { agentRows, heldShellAt, machinesOf, nextWaitingRow, pickRepos, sessionsKey, stepTab, type Machine, type RepoTone } from "../sessions";
+import { agentRows, heldShellAt, machinesOf, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabScope } from "../sessions";
 import { useStore } from "../store";
 import { OVER_PAGE } from "../surface";
 import { viewKey, type TermTab } from "../term";
@@ -42,6 +42,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const showTerm = useStore((s) => s.showTerm);
   const openTerm = useStore((s) => s.openTerm);
   const joinTerm = useStore((s) => s.joinTerm);
+  const swapTerms = useStore((s) => s.swapTerms);
+  const renameTerm = useStore((s) => s.renameTerm);
   const repos = useStore((s) => s.repos);
   const shells = useStore((s) => s.shells);
   const home = useStore((s) => s.home);
@@ -63,7 +65,16 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   }, []);
 
   const strip = useMemo(() => terms.filter((t) => t.place === "strip"), [terms]);
-  const showing = strip.find((t) => t.id === activeTerm) ?? null;
+  // the tab row shows what the left column picked: a repo, a machine, or all
+  const [scope, setScope] = useState<TabScope>(() => {
+    const t = strip.find((x) => x.id === activeTerm);
+    return t ? { repo: t.repoId } : null;
+  });
+  const visible = useMemo(() => tabsIn(strip, scope, backendOf), [strip, scope]);
+  const held = useMemo(() => tabsIn(untabbed(shells, strip), scope, backendOf), [shells, strip, scope]);
+  const showing = visible.find((t) => t.id === activeTerm) ?? null;
+  const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
   const rows = useMemo(() => agentRows(cards), [cards]);
   const pickedCard = picked && "agent" in picked ? cards.find((c) => c.id === picked.agent) : undefined;
   const pickedInfo = picked && "shell" in picked ? shells.find((t) => t.id === picked.shell) : undefined;
@@ -75,20 +86,30 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const overTabs = pickedCard !== undefined || pickedShell !== null;
   // the agent showing: the one picked, or the one in the tab showing
   const currentAgent = pickedCard?.id ?? (overTabs || !activeTerm ? null : (rows.find((c) => joinTarget(c, shown, qual) === activeTerm)?.id ?? null));
-  const currentRepo = pickedShell ? pickedShell.repoId : overTabs ? null : (showing?.repoId ?? null);
+  const currentRepo = pickedShell ? pickedShell.repoId : overTabs ? null : (showing?.repoId ?? (scope && "repo" in scope ? scope.repo : null));
+
+  // a scope that leaves the showing tab out shows its last tab instead
+  useEffect(() => {
+    const want = showingIn(visible, activeTerm);
+    if (want && want !== activeTerm) showTerm(want);
+  }, [visible, activeTerm, showTerm]);
   const machines = useMemo(
     () => machinesOf({ home, shown, repos, shells, tabs: strip, cards, backendOf }, currentRepo ? [currentRepo] : []),
     [home, shown, repos, shells, strip, cards, currentRepo],
   );
 
   const showTab = (id: string) => {
+    // a press on the tab already showing leaves focus alone, so the second
+    // press of a double-click (rename) does not hand it to the shell
+    const moved = id !== activeTerm || overTabs;
     setPicked(null);
     showTerm(id);
     setDrawer(false);
-    refocus(main.current);
+    if (moved) refocus(main.current);
   };
   const openRepo = (repoId: string) => {
     setDrawer(false);
+    setScope({ repo: repoId });
     const last = strip.filter((t) => t.repoId === repoId).at(-1);
     if (last) return showTab(last.id);
     // a shell already running there comes up before a new one is started
@@ -107,7 +128,10 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     // an agent in one of the tabs' shells is that tab
     const target = joinTarget(c, shown, qual);
     const own = target ? strip.find((t) => t.id === target) : undefined;
-    if (own) showTab(own.id);
+    if (own) {
+      if (!visible.includes(own)) setScope({ repo: own.repoId });
+      showTab(own.id);
+    }
     else {
       setPicked({ agent: c.id });
       setDrawer(false);
@@ -122,8 +146,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   };
 
   // read inside the key handler, which is set up once
-  const live = useRef({ strip, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell });
-  live.current = { strip, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell };
+  const live = useRef({ visible, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell });
+  live.current = { visible, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector(OVER_PAGE)) return;
@@ -132,7 +156,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
       const l = live.current;
       e.preventDefault();
       if (k === "next-tab" || k === "prev-tab") {
-        const id = stepTab(l.strip, l.overTabs ? null : l.activeTerm, k === "next-tab" ? 1 : -1);
+        const id = stepTab(l.visible, l.overTabs ? null : l.activeTerm, k === "next-tab" ? 1 : -1);
         if (id) l.showTab(id);
       } else if (k === "new") l.newShell();
       else {
@@ -147,7 +171,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
 
   const side = (
     <aside className={`ss-side${narrow ? " drawer" : ""}`} aria-label="Machines and agents">
-      <Machines machines={machines} current={currentRepo} onRepo={openRepo} />
+      <Machines machines={machines} scope={scope} tabs={strip.length} onRepo={openRepo} onScope={setScope} />
       <NewShell box={newBox} home={home} onRepo={openRepo} />
       <section className="ss-agents" aria-label="Agents">
         <header className="ss-head">
@@ -190,10 +214,18 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
         {(!narrow || drawer) && side}
         <section className="ss-main" aria-label="Sessions">
           <TermTabs
-            terms={strip}
+            terms={visible}
             active={overTabs ? null : activeTerm}
             onShow={showTab}
             caption=""
+            lead={<ScopeChip scope={scope} names={repos} onClear={() => setScope(null)} />}
+            onMenu={(id, at, rename) => (rename ? setRenaming(id) : setMenu({ id, at }))}
+            renaming={renaming}
+            onRenamed={(id, label) => {
+              setRenaming(null);
+              if (label !== null) renameTerm(id, label);
+              refocus(main.current);
+            }}
             extra={
               <>
                 {narrow && (
@@ -213,6 +245,36 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                     {pickedShell.name} (panel)
                   </span>
                 )}
+                {held.map((t) => {
+                  const name = repos.find((r) => r.id === t.repoId)?.name ?? t.repoId;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      className="term-tab ss-held"
+                      title={`A shell at ${name} running with no tab here${t.viewers.length > 0 ? ` (open on ${t.viewers.join(", ")})` : ""}. Press to bring it back`}
+                      onClick={() => {
+                        setPicked(null);
+                        joinTerm(t.id);
+                        refocus(main.current);
+                      }}
+                    >
+                      <span className="dot hollow" aria-hidden="true" />
+                      {name}
+                    </button>
+                  );
+                })}
+                {showing && !overTabs && (
+                  <button
+                    type="button"
+                    className="mini ss-plus"
+                    aria-label="Tab actions"
+                    title="rename, move, hide or close this tab (or right-click a tab)"
+                    onClick={(e) => setMenu({ id: showing.id, at: e.currentTarget.getBoundingClientRect() })}
+                  >
+                    ⋯
+                  </button>
+                )}
                 <button type="button" className="mini ss-plus" aria-label="New shell" title="new shell (n)" onClick={newShell}>
                   +
                 </button>
@@ -229,16 +291,16 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                 <AgentScreen card={pickedCard} live active showing now={now} />
               </div>
             )}
-            {!overTabs && strip.length === 0 && (
+            {!overTabs && visible.length === 0 && (
               <div className="ss-blank">
-                <p>No shells open.</p>
-                <p className="ss-faint">Pick a repo on the left, or press n and type its name.</p>
+                <p>{scope ? `No shells open at ${scopeName(scope, repos)}.` : "No shells open."}</p>
+                <p className="ss-faint">{scope && "repo" in scope ? "Press + or n to open one." : "Pick a repo on the left, or press n and type its name."}</p>
               </div>
             )}
           </div>
           <footer className="ss-status">
             <span className="ss-keys">
-              <span className="ss-faint">[ ] tabs · n new shell · w next waiting</span>
+              <span className="ss-faint">[ ] tabs · n new shell · w next waiting · double-click a tab to rename</span>
               <SignInChips />
             </span>
             {warn && (
@@ -249,38 +311,160 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
           </footer>
         </section>
       </div>
+      {menu && (
+        <TabMenu
+          id={menu.id}
+          at={menu.at}
+          tabs={visible}
+          onClose={() => setMenu(null)}
+          onRename={(id) => setRenaming(id)}
+          onMove={(id, by) => {
+            const i = visible.findIndex((t) => t.id === id);
+            const other = visible[i + by];
+            if (other) swapTerms(id, other.id);
+          }}
+        />
+      )}
     </ShellSpotHere.Provider>
   );
 }
 
+/** what a scope is called: the repo's name or the machine's */
+function scopeName(scope: Exclude<TabScope, null>, repos: readonly { id: string; name: string }[]): string {
+  return "repo" in scope ? (repos.find((r) => r.id === scope.repo)?.name ?? scope.repo) : scope.machine;
+}
+
+/** The tab row's first word: the repo or machine its tabs are filtered to,
+ *  with an × back to every tab, or "all". */
+function ScopeChip({ scope, names, onClear }: { scope: TabScope; names: readonly { id: string; name: string }[]; onClear: () => void }) {
+  if (!scope) return <span className="ss-scope ss-faint">all</span>;
+  const name = scopeName(scope, names);
+  return (
+    <button type="button" className="ss-scope" title={`Showing the tabs at ${name}; press for every tab`} onClick={onClear}>
+      {name} <span aria-hidden="true">×</span>
+    </button>
+  );
+}
+
+/** A tab's menu: rename, a new shell beside it, move it along the row,
+ *  hide it (the shell runs on) or close it (the shell ends). */
+function TabMenu({
+  id,
+  at,
+  tabs,
+  onClose,
+  onRename,
+  onMove,
+}: {
+  id: string;
+  at: DOMRect;
+  tabs: readonly TermTab[];
+  onClose: () => void;
+  onRename: (id: string) => void;
+  onMove: (id: string, by: 1 | -1) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  // read by the listeners below, set up once
+  const close = useRef(onClose);
+  close.current = onClose;
+  const openTerm = useStore((s) => s.openTerm);
+  const hideTerm = useStore((s) => s.hideTerm);
+  const closeTerm = useStore((s) => s.closeTerm);
+  const tab = tabs.find((t) => t.id === id);
+  const i = tabs.findIndex((t) => t.id === id);
+  useEffect(() => {
+    box.current?.querySelector("button")?.focus();
+    const down = (e: PointerEvent) => {
+      if (!(e.target instanceof Node) || !box.current?.contains(e.target)) close.current();
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close.current();
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, []);
+  if (!tab) return null;
+  const act = (f: () => void) => () => {
+    onClose();
+    f();
+  };
+  const left = Math.max(8, Math.min(at.left, window.innerWidth - 200));
+  return (
+    <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The tab at ${tab.label ?? tab.name}`} style={{ top: at.bottom + 2, left }}>
+      <button type="button" role="menuitem" onClick={act(() => onRename(id))}>
+        rename <span className="ss-faint">F2</span>
+      </button>
+      <button type="button" role="menuitem" onClick={act(() => openTerm(tab.repoId, "strip"))}>
+        new shell at {tab.name}
+      </button>
+      <button type="button" role="menuitem" disabled={i <= 0} onClick={act(() => onMove(id, -1))}>
+        move left
+      </button>
+      <button type="button" role="menuitem" disabled={i < 0 || i >= tabs.length - 1} onClick={act(() => onMove(id, 1))}>
+        move right
+      </button>
+      <button type="button" role="menuitem" title="Takes the tab away here and leaves the shell running" onClick={act(() => hideTerm(id))}>
+        hide, keep running
+      </button>
+      <button type="button" role="menuitem" className="t-rust" title="Ends the shell on every device" onClick={act(() => closeTerm(id))}>
+        close and end the shell
+      </button>
+    </div>
+  );
+}
+
 /** The machines tree: each backend and the repos worth a row on it, a dot
- *  for the most pressing thing there and the branch under the name. */
-function Machines({ machines, current, onRepo }: { machines: Machine[]; current: string | null; onRepo: (id: string) => void }) {
+ *  for the most pressing thing there and the branch under the name. Picking
+ *  "machines", a machine or a repo filters the tab row to it. */
+function Machines({
+  machines,
+  scope,
+  tabs,
+  onRepo,
+  onScope,
+}: {
+  machines: Machine[];
+  scope: TabScope;
+  tabs: number;
+  onRepo: (id: string) => void;
+  onScope: (scope: TabScope) => void;
+}) {
   const [folded, setFolded] = useState<string[]>([]);
   const conns = useStore((s) => s.conns);
   return (
     <section className="ss-machines" aria-label="Machines">
       <header className="ss-head">
-        <span>machines</span>
+        <button type="button" className={`ss-all${scope ? "" : " on"}`} title="Show every tab" onClick={() => onScope(null)}>
+          machines
+        </button>
+        <span className="ss-faint">
+          {tabs} {tabs === 1 ? "tab" : "tabs"}
+        </span>
       </header>
       {machines.map((m) => {
         const closed = folded.includes(m.name);
         const state = conns[m.name]?.status.state ?? "connecting";
         return (
           <div key={m.name} className="ss-machine">
-            <button
-              type="button"
-              className="ss-mhead"
-              aria-expanded={!closed}
-              title={`${m.name}: ${state}`}
-              onClick={() => setFolded(closed ? folded.filter((n) => n !== m.name) : [...folded, m.name])}
-            >
-              <span className="ss-fold" aria-hidden="true">
+            <div className={`ss-mhead${scope && "machine" in scope && scope.machine === m.name ? " on" : ""}`}>
+              <button
+                type="button"
+                className="ss-fold"
+                aria-expanded={!closed}
+                aria-label={`${closed ? "Unfold" : "Fold"} ${m.name}`}
+                onClick={() => setFolded(closed ? folded.filter((n) => n !== m.name) : [...folded, m.name])}
+              >
                 {closed ? "▸" : "▾"}
-              </span>
-              <span className="ss-name">{m.home ? `${m.name} (here)` : m.name}</span>
-              <span className={`dot ${state === "online" ? TONE_DOT[m.tone] : "faint"}`} aria-hidden="true" />
-            </button>
+              </button>
+              <button type="button" className="ss-mname" title={`${m.name}: ${state}. Show this machine's tabs`} onClick={() => onScope({ machine: m.name })}>
+                <span className="ss-name">{m.home ? `${m.name} (here)` : m.name}</span>
+                <span className={`dot ${state === "online" ? TONE_DOT[m.tone] : "faint"}`} aria-hidden="true" />
+              </button>
+            </div>
             {!closed && (
               <ul className="ss-list">
                 {m.repos.length === 0 && <li className="ss-empty">{state === "online" ? "no shells or agents" : state}</li>}
@@ -288,7 +472,7 @@ function Machines({ machines, current, onRepo }: { machines: Machine[]; current:
                   <li key={r.id}>
                     <button
                       type="button"
-                      className={`ss-repo${r.id === current ? " on" : ""}`}
+                      className={`ss-repo${scope && "repo" in scope && scope.repo === r.id ? " on" : ""}`}
                       title={`${r.shells} ${r.shells === 1 ? "shell" : "shells"}, ${r.agents} ${r.agents === 1 ? "agent" : "agents"}`}
                       onClick={() => onRepo(r.id)}
                     >

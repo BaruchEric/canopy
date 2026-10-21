@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, Repo, RepoStatus, TermInfo } from "../../src/core/types";
 import { split, type Reg } from "./backends";
-import { agentRows, heldShellAt, machinesOf, nextWaitingRow, pickRepos, sessionsKey, stepTab } from "./sessions";
+import { agentRows, heldShellAt, machinesOf, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed } from "./sessions";
 import type { TermTab } from "./term";
 
 const reg: Reg = { home: "mac", names: ["mac", "mini"] };
@@ -173,5 +173,37 @@ describe("tabs and keys", () => {
     const list = [repo("a", "/x/canopy"), repo("b", "/x/scan"), repo("c", "/x/tally"), repo("d", "/x/canary", { forge: {} as never })];
     expect(pickRepos(list, "can").map((r) => r.name)).toEqual(["canopy", "scan"]);
     expect(pickRepos(list, "  ")).toEqual([]);
+  });
+});
+
+describe("the tab row's scope", () => {
+  const tabs = [tab("a", "app"), tab("b", "mini|app"), tab("c", "notes"), tab("d", "app")];
+
+  test("every tab, one machine's, or one repo's, in order", () => {
+    expect(tabsIn(tabs, null, backendOf).map((t) => t.id)).toEqual(["a", "b", "c", "d"]);
+    expect(tabsIn(tabs, { repo: "app" }, backendOf).map((t) => t.id)).toEqual(["a", "d"]);
+    expect(tabsIn(tabs, { machine: "mac" }, backendOf).map((t) => t.id)).toEqual(["a", "c", "d"]);
+    expect(tabsIn(tabs, { machine: "mini" }, backendOf).map((t) => t.id)).toEqual(["b"]);
+  });
+
+  test("the showing tab stays when it is in; else the last one in", () => {
+    const app = tabsIn(tabs, { repo: "app" }, backendOf);
+    expect(showingIn(app, "a")).toBe("a");
+    expect(showingIn(app, "c")).toBe("d");
+    expect(showingIn([], "c")).toBeNull();
+  });
+});
+
+describe("shells with no tab here", () => {
+  test("strip shells only, never a tab's, a task's or the ranger's; oldest first", () => {
+    const shells = [
+      shell("b", "app", { startedAt: 5 }),
+      shell("a", "app", { startedAt: 1 }),
+      shell("p", "app", { place: "panel" }),
+      shell("t", "app", { task: "dev" }),
+      shell("r", "app", { ranger: true }),
+      shell("x", "app"),
+    ];
+    expect(untabbed(shells, [{ id: "x" }]).map((t) => t.id)).toEqual(["a", "b"]);
   });
 });
