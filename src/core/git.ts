@@ -890,7 +890,9 @@ export async function push(repoPath: string): Promise<string> {
       return remote === tracked ? out : `pushed to ${remote}\n${out}`;
     }
     lastErr = r.stderr.trim() || "git push failed";
-    if (remote === tracked && isBehind(lastErr)) return rebaseAndPush(repoPath, lastErr);
+    if (remote === tracked && isBehind(lastErr) && await canRebaseRejectedPush(repoPath)) {
+      return rebaseAndPush(repoPath, lastErr);
+    }
     if (!isAccessDenied(lastErr)) {
       lastErr = netError(lastErr, "push", Date.now() - t0).message;
       break;
@@ -924,6 +926,59 @@ export function isBehind(stderr: string): boolean {
   return /\[rejected\][^\n]*\((?:fetch first|non-fast-forward)\)/.test(stderr);
 }
 
+/** Bare `git push` can use a different remote, branch, or set of refspecs from
+ *  the configured upstream. Only recover when Git resolves that push back to
+ *  the exact upstream and its config describes one ordinary branch push. */
+async function canRebaseRejectedPush(repoPath: string): Promise<boolean> {
+  const [upstream, push, pushDefault] = await Promise.all([
+    git(repoPath, ["rev-parse", "--symbolic-full-name", "@{u}"]),
+    git(repoPath, ["rev-parse", "--symbolic-full-name", "@{push}"]),
+    git(repoPath, ["config", "--get", "push.default"]),
+  ]);
+  if (upstream.code !== 0 || push.code !== 0) return false;
+  const upstreamRef = upstream.stdout.trim();
+  const pushRef = push.stdout.trim();
+  if (upstreamRef !== pushRef || !upstreamRef.startsWith("refs/remotes/")) {
+    return false;
+  }
+  if (pushDefault.code !== 0 && pushDefault.code !== 1) return false;
+  // Git's unset default is `simple`; all three modes below can push only the
+  // current branch, provided @{push} resolved to @{u} above. `matching` can
+  // reject some other branch while leaving this branch untouched.
+  const mode = pushDefault.code === 0 ? pushDefault.stdout.trim() : "simple";
+  if (!["simple", "upstream", "current"].includes(mode)) return false;
+
+  const listed = await git(repoPath, ["remote"]);
+  if (listed.code !== 0) return false;
+  const remotes = listed.stdout.split("\n").map((name) => name.trim()).filter(Boolean);
+  // Remote names may contain slashes, so choose the longest exact prefix.
+  const remote = remotes
+    .filter((name) => upstreamRef.startsWith(`refs/remotes/${name}/`))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!remote) return false;
+
+  const [refspec, mirror, pushFollowTags, remoteFollowTags, recurseSubmodules, fetchUrls, pushUrls] = await Promise.all([
+    git(repoPath, ["config", "--get-all", `remote.${remote}.push`]),
+    git(repoPath, ["config", "--bool", "--get", `remote.${remote}.mirror`]),
+    git(repoPath, ["config", "--bool", "--get", "push.followTags"]),
+    git(repoPath, ["config", "--bool", "--get", `remote.${remote}.followTags`]),
+    git(repoPath, ["config", "--get", "push.recurseSubmodules"]),
+    git(repoPath, ["remote", "get-url", "--all", remote]),
+    git(repoPath, ["remote", "get-url", "--push", "--all", remote]),
+  ]);
+  // A configured refspec can push other branches; a mirror can push every
+  // ref. Either can make a rejection unrelated to the current branch.
+  if (refspec.code !== 1) return false;
+  const isUnsetOrFalse = (result: typeof mirror): boolean =>
+    result.code === 1 || (result.code === 0 && result.stdout.trim() === "false");
+  if (!isUnsetOrFalse(mirror) || !isUnsetOrFalse(pushFollowTags) || !isUnsetOrFalse(remoteFollowTags)) return false;
+  if (recurseSubmodules.code !== 1 && !(recurseSubmodules.code === 0 && recurseSubmodules.stdout.trim() === "no")) return false;
+  if (fetchUrls.code !== 0 || pushUrls.code !== 0) return false;
+  const fetchList = fetchUrls.stdout.split("\n").map((url) => url.trim()).filter(Boolean);
+  const pushList = pushUrls.stdout.split("\n").map((url) => url.trim()).filter(Boolean);
+  return fetchList.length === 1 && pushList.length === 1 && fetchList[0] === pushList[0];
+}
+
 /** A push the tracked upstream turned down for being behind: fetch, rebase
  *  the local commits onto the upstream and push once more. Several machines
  *  commit to the same repos, so this is the common case, and the rebase drops
@@ -934,6 +989,12 @@ async function rebaseAndPush(repoPath: string, rejected: string): Promise<string
   const refuse = (why: string): never => {
     throw new Error(`${rejected}\n\n${why}`);
   };
+  // `rebase --autostash` can restore partially staged work with a different
+  // index/worktree split. Leave the branch and index alone when anything is
+  // staged; the user can commit or unstage it before retrying.
+  const staged = await git(repoPath, ["diff", "--cached", "--quiet"]);
+  if (staged.code === 1) refuse("The index has staged changes, so canopy left the rebase to you. Commit or unstage them, then retry.");
+  if (staged.code !== 0) refuse("Canopy could not confirm that the index is clean, so it left the rebase to you.");
   const t0 = Date.now();
   const fetched = await git(repoPath, ["fetch", "--quiet"], NET_TIMEOUT_MS);
   if (fetched.code !== 0) throw netError(fetched.stderr, "fetch", Date.now() - t0);

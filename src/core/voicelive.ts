@@ -9,7 +9,7 @@
  * `bun test`.
  */
 
-import { LIVE_BACKEND_INSTRUCTIONS, LIVE_INSTRUCTIONS, VOICE_TOOLS, type LiveAnswer, type VoiceTool } from "./voicewire";
+import { LIVE_BACKEND_INSTRUCTIONS, LIVE_INSTRUCTIONS, VOICE_TOOLS, voiceContextInstructions, type LiveAnswer, type VoiceContext, type VoiceTool } from "./voicewire";
 
 export interface LiveConfig {
   key: string;
@@ -38,18 +38,18 @@ export function liveConfig(env: Record<string, string | undefined> = process.env
   };
 }
 
-export function liveSessionBody(cfg: LiveConfig, sdp: string, tools: VoiceTool[] = VOICE_TOOLS): unknown {
+export function liveSessionBody(cfg: LiveConfig, sdp: string, tools: VoiceTool[] = VOICE_TOOLS, context?: VoiceContext): unknown {
   return {
     session: {
       model: cfg.model,
-      instructions: LIVE_INSTRUCTIONS,
+      instructions: LIVE_INSTRUCTIONS + voiceContextInstructions(context),
       // WebRTC settles the audio format itself, so none is named here
       audio: { output: { voice: cfg.voice } },
       delegation: {
         type: "responses",
         responses: {
           model: cfg.backend,
-          instructions: LIVE_BACKEND_INSTRUCTIONS,
+          instructions: LIVE_BACKEND_INSTRUCTIONS + voiceContextInstructions(context),
           tools,
           tool_choice: "auto",
           // one call per response, so each answer goes straight back
@@ -65,11 +65,11 @@ export function liveSessionBody(cfg: LiveConfig, sdp: string, tools: VoiceTool[]
 
 const ERR_CAP = 200;
 
-export async function openLiveSession(cfg: LiveConfig, sdp: string, fetcher: typeof fetch = fetch): Promise<LiveAnswer> {
+export async function openLiveSession(cfg: LiveConfig, sdp: string, fetcher: typeof fetch = fetch, context?: VoiceContext): Promise<LiveAnswer> {
   const res = await fetcher(`${cfg.api}/v1/live/sessions`, {
     method: "POST",
     headers: { authorization: `Bearer ${cfg.key}`, "content-type": "application/json" },
-    body: JSON.stringify(liveSessionBody(cfg, sdp)),
+    body: JSON.stringify(liveSessionBody(cfg, sdp, VOICE_TOOLS, context)),
     signal: AbortSignal.timeout(20_000),
   });
   const text = await res.text();
@@ -108,7 +108,7 @@ function reason(text: string): string {
 /** what the server calls to start a conversation */
 export interface LiveOpener {
   model: string;
-  open: (sdp: string) => Promise<LiveAnswer>;
+  open: (sdp: string, context?: VoiceContext) => Promise<LiveAnswer>;
 }
 
 /** the opener as the server holds it; the key stays inside the closure,
@@ -116,5 +116,5 @@ export interface LiveOpener {
 export const liveOpener = (cfg: LiveConfig | null): LiveOpener | null => {
   if (!cfg) return null;
   const held: LiveConfig = { ...cfg };
-  return { model: held.model, open: (sdp) => openLiveSession(held, sdp) };
+  return { model: held.model, open: (sdp, context) => openLiveSession(held, sdp, fetch, context) };
 };

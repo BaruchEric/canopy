@@ -54,6 +54,8 @@ export class VoiceCall {
   private nextAt = 0;
   /** a tool answered during this response, so it needs a reply */
   private answered = false;
+  private toolWork: Promise<void> = Promise.resolve();
+  private seenCalls = new Set<string>();
   private hangAfter = false;
   private done = false;
   private state: VoiceState = VOICE_START;
@@ -148,18 +150,32 @@ export class VoiceCall {
         this.flush();
         return;
       case "response.function_call_arguments.done": {
-        const out = runVoiceTool(e.name ?? "", e.arguments ?? "", this.hooks.world(), { ...this.hooks.acts, hangUp: () => (this.hangAfter = true) });
-        this.send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: e.call_id, output: JSON.stringify(out) } });
-        this.answered = true;
+        if (!e.call_id || this.seenCalls.has(e.call_id) || this.done) return;
+        this.seenCalls.add(e.call_id);
+        this.toolWork = this.toolWork.then(async () => {
+          if (this.done) return;
+          let out: unknown;
+          try {
+            out = await runVoiceTool(e.name ?? "", e.arguments ?? "", this.hooks.world(), { ...this.hooks.acts, hangUp: () => (this.hangAfter = true) });
+          } catch (err) {
+            out = { error: err instanceof Error ? err.message : String(err) };
+          }
+          if (this.done) return;
+          this.send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: e.call_id, output: JSON.stringify(out) } });
+          this.answered = true;
+        });
         return;
       }
       case "response.done":
-        if (this.hangAfter) {
-          // let the goodbye finish playing
-          const left = Math.max(0, this.nextAt - this.ctx.currentTime);
-          setTimeout(() => this.end(null), left * 1000 + 250);
-        } else if (this.answered) this.send({ type: "response.create" });
-        this.answered = false;
+        void this.toolWork.then(() => {
+          if (this.done) return;
+          if (this.hangAfter) {
+            // let the goodbye finish playing
+            const left = Math.max(0, this.nextAt - this.ctx.currentTime);
+            setTimeout(() => this.end(null), left * 1000 + 250);
+          } else if (this.answered) this.send({ type: "response.create" });
+          this.answered = false;
+        });
         return;
     }
   }

@@ -65,7 +65,7 @@ import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
 import { voiceConfig, voiceMinter, type VoiceMinter } from "../core/voice";
 import { liveConfig, liveOpener, type LiveOpener } from "../core/voicelive";
-import { DICTATE_MAX, LIVE_OFFER_MAX, dictationName, type Dictation, type VoiceInfo } from "../core/voicewire";
+import { DICTATE_MAX, LIVE_OFFER_MAX, dictationName, parseVoiceContext, type Dictation, type VoiceContext, type VoiceInfo } from "../core/voicewire";
 import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
@@ -2742,15 +2742,21 @@ async function handleApi(
     const text = await req.text();
     if (text.length > LIVE_OFFER_MAX) return json(tooBig, 413);
     let sdp: unknown;
+    let context: VoiceContext | undefined;
     try {
       const body: unknown = JSON.parse(text);
       sdp = typeof body === "object" && body !== null && "sdp" in body ? body.sdp : undefined;
+      if (typeof body === "object" && body !== null && "context" in body) {
+        const parsed = parseVoiceContext(body.context);
+        if (!parsed) return json({ error: "invalid voice context" }, 400);
+        context = parsed;
+      }
     } catch {
       sdp = undefined;
     }
     if (typeof sdp !== "string" || !sdp.trim()) return json({ error: "an SDP offer is required" }, 400);
     try {
-      return json(await state.live.open(sdp));
+      return json(await state.live.open(sdp, context));
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : String(e) }, 502);
     }

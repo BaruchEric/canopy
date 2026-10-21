@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { VoiceContext } from "../../../src/core/voicewire";
 import { api } from "../api";
 import { leadOf } from "../checkouts";
 import { openView } from "../clirun";
@@ -8,6 +9,7 @@ import { LiveCall } from "../livecall";
 import type { VoicePhase, VoiceState } from "../voice";
 import { VoiceCall, type CallHooks } from "../voicecall";
 import { keepEngine, pickEngine, type VoiceEngine } from "../voicelive";
+import { captureVoiceContext, sendVoicePrompt } from "../voicecontext";
 import { MicIcon } from "./Dictate";
 
 const PHASE_WORDS: Record<VoicePhase, string> = {
@@ -30,7 +32,7 @@ const micReason = (engine: VoiceEngine): string | null => {
 
 /** One checkout per repo, the one its card shows: with peer sync most repos
  *  sit on two backends, and the model must not count or name them twice. */
-const oneEach = (s: CanopyState) => allCards(s).map((card) => leadOf(card, s.checkoutPref[card.key], (b) => isOnline(s, b), backendOf));
+const oneEach = (s: CanopyState, invokedRepo: string | null) => allCards(s).map((card) => card.checkouts.find((r) => r.id === invokedRepo) ?? leadOf(card, s.checkoutPref[card.key], (b) => isOnline(s, b), backendOf));
 
 const ENGINE_NAME: Record<VoiceEngine, string> = { eleven: "Eleven", live: "GPT-Live" };
 
@@ -44,7 +46,21 @@ export function VoiceButton() {
   const [models, setModels] = useState<Record<VoiceEngine, string | null>>({ eleven: null, live: null });
   const [engine, setEngine] = useState<VoiceEngine | null>(null);
   const [state, setState] = useState<VoiceState | null>(null);
+  const [context, setContext] = useState<VoiceContext | null>(null);
   const call = useRef<VoiceCall | LiveCall | null>(null);
+  const focusedRun = useRef<string | null>(null);
+  useEffect(() => {
+    const remember = (e: Event) => {
+      if (!(e.target instanceof Element) || e.target.closest(".voice-btn, .voice-panel")) return;
+      focusedRun.current = e.target.closest<HTMLElement>("[data-voice-run]")?.dataset.voiceRun ?? null;
+    };
+    document.addEventListener("focusin", remember);
+    document.addEventListener("pointerdown", remember);
+    return () => {
+      document.removeEventListener("focusin", remember);
+      document.removeEventListener("pointerdown", remember);
+    };
+  }, []);
   // asked again when the home backend comes back, so a restart does not hide the mic for good
   const homeUp = useStore((s) => homeConn(s).status.state === "online");
 
@@ -84,10 +100,12 @@ export function VoiceButton() {
   const on = state !== null && state.phase !== "ended";
   const other: VoiceEngine | null = engine === "eleven" ? (models.live ? "live" : null) : models.eleven ? "eleven" : null;
 
-  const start = (use: VoiceEngine = engine) => {
+  const start = (use: VoiceEngine = engine, within?: VoiceContext) => {
     // a call is going on while its panel shows a phase other than ended;
     // a closed panel means the last call is over
     if (call.current && state !== null && state.phase !== "ended") return;
+    const invoked = within ?? captureVoiceContext(useStore.getState(), new URLSearchParams(location.search), focusedRun.current);
+    setContext(invoked);
     // a call switched away from keeps closing on its own, unheard
     let mine: VoiceCall | LiveCall | null = null;
     const hooks: CallHooks = {
@@ -96,7 +114,7 @@ export function VoiceButton() {
       },
       world: () => {
         const s = useStore.getState();
-        return { repos: oneEach(s), asks: Object.values(s.asks), runs: Object.values(s.runs), jobs: Object.values(s.jobs), now: Date.now() };
+        return { repos: oneEach(s, invoked.kind === "global" ? null : invoked.repo.id), asks: Object.values(s.asks), runs: Object.values(s.runs), jobs: Object.values(s.jobs), now: Date.now(), context: invoked };
       },
       acts: {
         openRepo: (id) => {
@@ -104,6 +122,7 @@ export function VoiceButton() {
           useStore.getState().openPanel(id);
         },
         openView,
+        orchestrate: (target, prompt) => sendVoicePrompt(target, prompt, useStore.getState()),
       },
     };
     const c = use === "live" ? new LiveCall(hooks) : new VoiceCall(hooks);
@@ -121,7 +140,7 @@ export function VoiceButton() {
     const c = call.current;
     call.current = null;
     c?.stop();
-    start(next);
+    start(next, context ?? undefined);
   };
 
   return (
@@ -141,6 +160,7 @@ export function VoiceButton() {
         <VoicePanel
           state={state}
           engine={ENGINE_NAME[engine]}
+          context={context}
           other={other && { name: ENGINE_NAME[other], model: spoken(models[other] ?? ""), go: () => switchTo(other) }}
           onHangUp={hangUp}
           onClose={() => setState(null)}
@@ -156,7 +176,7 @@ interface OtherEngine {
   go: () => void;
 }
 
-function VoicePanel({ state, engine, other, onHangUp, onClose }: { state: VoiceState; engine: string; other: OtherEngine | null; onHangUp: () => void; onClose: () => void }) {
+function VoicePanel({ state, engine, context, other, onHangUp, onClose }: { state: VoiceState; engine: string; context: VoiceContext | null; other: OtherEngine | null; onHangUp: () => void; onClose: () => void }) {
   const list = useRef<HTMLOListElement | null>(null);
   useEffect(() => {
     const el = list.current;
@@ -170,6 +190,7 @@ function VoicePanel({ state, engine, other, onHangUp, onClose }: { state: VoiceS
         <span role="status">
           {PHASE_WORDS[state.phase]}
           <span className="voice-engine"> · {engine}</span>
+          {context && context.kind !== "global" && <span className="voice-engine" title={context.repo.path}> · {context.repo.name}{context.kind === "chat" ? " chat" : ""}</span>}
         </span>
         {other && (
           <button type="button" className="mini" title={`Talk through ${other.model} instead`} onClick={other.go}>
@@ -195,7 +216,7 @@ function VoicePanel({ state, engine, other, onHangUp, onClose }: { state: VoiceS
           ))}
         </ol>
       )}
-      {state.lines.length === 0 && !ended && <p className="voice-hint">Ask what needs you, which repos have changes, or to open one.</p>}
+      {state.lines.length === 0 && !ended && <p className="voice-hint">{context && context.kind !== "global" ? "Ask about this repo or tell canopy what to do next." : "Ask what needs you, which repos have changes, or to open one."}</p>}
       {state.error && (
         <p className="voice-error" role="alert">
           {state.error}

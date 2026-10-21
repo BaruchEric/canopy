@@ -18,6 +18,9 @@ export interface Recorder {
   start: () => Promise<void>;
   /** ends the recording; the clip goes to `onClip` */
   stop: () => void;
+  /** ends the recording without handing its clip to `onClip`; a pending
+   *  permission request is stopped as soon as it answers */
+  cancel: () => void;
 }
 
 /** One microphone recording at a time, handed to `onClip` as a file once it
@@ -31,6 +34,9 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
   // one start at a time: a second click while the permission prompt is up
   // would make a second stream the first recorder's stop never reaches
   const starting = useRef(false);
+  // Every start owns a generation. Cancel invalidates it, so a permission
+  // prompt that resolves later can release its stream without recording.
+  const generation = useRef(0);
   // the latest callbacks, so a recording started under old ones ends in the new
   const clip = useRef(onClip);
   const told = useRef(onRecording);
@@ -43,6 +49,8 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
     alive.current = true;
     return () => {
       alive.current = false;
+      generation.current++;
+      starting.current = false;
       const r = rec.current;
       if (!r) return;
       r.onstop = null;
@@ -53,13 +61,14 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
 
   const start = useCallback(async () => {
     if (starting.current || rec.current) return;
+    const attempt = ++generation.current;
     starting.current = true;
     setPending(true);
     setErr(null);
     let stream: MediaStream | null = null;
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!alive.current) {
+      if (!alive.current || attempt !== generation.current) {
         for (const t of stream.getTracks()) t.stop();
         return;
       }
@@ -73,6 +82,7 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
       };
       r.onstop = () => {
         for (const t of live.getTracks()) t.stop();
+        if (attempt !== generation.current) return;
         rec.current = null;
         setRecording(false);
         told.current?.(false);
@@ -84,6 +94,7 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
         // the recorder died: let go of the microphone and say so
         for (const t of live.getTracks()) t.stop();
         r.onstop = null;
+        if (attempt !== generation.current) return;
         rec.current = null;
         setRecording(false);
         told.current?.(false);
@@ -96,11 +107,15 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
     } catch (e) {
       // a recorder that failed to make or start leaves the microphone on
       if (stream) for (const t of stream.getTracks()) t.stop();
-      rec.current = null;
-      if (alive.current) setErr(errText(e));
+      if (attempt === generation.current) {
+        rec.current = null;
+        if (alive.current) setErr(errText(e));
+      }
     } finally {
-      starting.current = false;
-      if (alive.current) setPending(false);
+      if (attempt === generation.current) {
+        starting.current = false;
+        if (alive.current) setPending(false);
+      }
     }
   }, []);
 
@@ -109,5 +124,24 @@ export function useRecorder(onClip: (file: File) => void, onRecording?: (on: boo
     if (r && r.state !== "inactive") r.stop();
   }, []);
 
-  return { recording, pending, err, start, stop };
+  const cancel = useCallback(() => {
+    generation.current++;
+    // Let a new target start even if the browser has not resolved the old
+    // permission prompt yet. That stale prompt releases its stream on arrival.
+    starting.current = false;
+    const r = rec.current;
+    rec.current = null;
+    if (r) {
+      r.onstop = null;
+      r.onerror = null;
+      if (r.state !== "inactive") r.stop();
+      for (const track of r.stream.getTracks()) track.stop();
+    }
+    setPending(false);
+    setRecording(false);
+    setErr(null);
+    told.current?.(false);
+  }, []);
+
+  return { recording, pending, err, start, stop, cancel };
 }

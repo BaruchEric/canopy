@@ -1,4 +1,4 @@
-import type { RepoStatus, RunStatus, TaskInfo, TaskLogLine } from "../../src/core/types";
+import type { RepoStatus, Run, RunStatus, TaskInfo, TaskLogLine } from "../../src/core/types";
 
 /** The moves an agent can carry through when one fails, each with the
  *  words for it in the prompt. Moves left out are not an agent's to fix:
@@ -51,6 +51,43 @@ export function moveDone(move: FixMove, st: Pick<RepoStatus, "ahead" | "behind" 
   if (move === "commit") return committed;
   if (move === "commit+push") return committed && level;
   return null;
+}
+
+export type RepairStatus = Pick<RepoStatus, "ahead" | "behind" | "files">;
+export type RepairRun = Pick<Run, "id" | "status" | "error" | "result" | "steps">;
+
+/** Keep the baseline small and detached from the store's later snapshots. */
+export function repairStatusSnapshot(status: RepairStatus | null | undefined): RepairStatus | null {
+  return status ? { ahead: status.ahead, behind: status.behind, files: status.files.map((file) => ({ ...file })) } : null;
+}
+
+/** A useful completion needs a successful idle/done status, a result and a
+ *  text step. The step id distinguishes repeated replies with identical text
+ *  on the same chat run. */
+export function repairTurnIdentity(run: RepairRun): string | null {
+  if ((run.status !== "idle" && run.status !== "done") || run.error || !run.result?.text.trim()) return null;
+  const textStep = run.steps.findLast((step) => step.kind === "text" && step.text?.trim());
+  return textStep ? `${run.id}\0${textStep.id}\0${textStep.at}` : null;
+}
+
+/** A move is confirmed only after a new successful reply and a fresh rescan
+ *  observes the move's status change from unfinished to finished. */
+export function repairConfirmed(
+  move: FixMove,
+  run: RepairRun,
+  before: RepairStatus | null,
+  freshStatus: RepairStatus | null,
+  previousTurn: string | null,
+): boolean {
+  const turn = repairTurnIdentity(run);
+  return (
+    turn !== null &&
+    turn !== previousTurn &&
+    before !== null &&
+    freshStatus !== null &&
+    moveDone(move, before) === false &&
+    moveDone(move, freshStatus) === true
+  );
 }
 
 /** what a failed move's note turns into once the agent finished it */

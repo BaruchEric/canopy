@@ -714,7 +714,7 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
     return runConsoleAction(fn, setError, propagate);
   };
   return (
-    <div className="run-pane">
+    <div className="run-pane" data-voice-run={run.id}>
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
       {run.chat && isRunActive(run) && (
         <Composer

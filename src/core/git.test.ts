@@ -46,6 +46,57 @@ const SAMPLE = [
   "? untracked file.md",
 ].join("\n");
 
+async function gitOk(cwd: string, ...args: string[]) {
+  const result = await exec(["git", "-C", cwd, ...args]);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || `git ${args.join(" ")} failed`);
+  return result;
+}
+
+async function makeDivergedPushFixture(root: string, options: { fork?: boolean } = {}) {
+  const seed = join(root, "seed");
+  const origin = join(root, "origin.git");
+  const work = join(root, "work");
+  const originWriter = join(root, "origin-writer");
+  const fork = join(root, "fork.git");
+  const forkWriter = join(root, "fork-writer");
+  const commitFile = async (cwd: string, path: string, contents: string, message: string) => {
+    await writeFile(join(cwd, path), contents);
+    await gitOk(cwd, "add", "--", path);
+    await gitOk(cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", message);
+  };
+
+  await exec(["git", "init", "-q", "-b", "main", seed]);
+  await writeFile(join(seed, "tracked.txt"), "alpha\nbeta\ngamma\n");
+  await gitOk(seed, "add", "tracked.txt");
+  await gitOk(seed, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "base");
+  await exec(["git", "init", "-q", "--bare", "--initial-branch=main", origin]);
+  await gitOk(seed, "remote", "add", "origin", origin);
+  await gitOk(seed, "push", "-q", "-u", "origin", "main");
+  if (options.fork) {
+    await exec(["git", "init", "-q", "--bare", "--initial-branch=main", fork]);
+    await gitOk(seed, "remote", "add", "fork", fork);
+    await gitOk(seed, "push", "-q", "-u", "fork", "main");
+  }
+
+  await exec(["git", "clone", "-q", origin, work]);
+  await gitOk(work, "config", "user.name", "t");
+  await gitOk(work, "config", "user.email", "t@t");
+  await exec(["git", "clone", "-q", origin, originWriter]);
+  await commitFile(originWriter, "origin-only.txt", "origin\n", "origin change");
+  await gitOk(originWriter, "push", "-q", "origin", "main");
+
+  if (options.fork) {
+    await gitOk(work, "remote", "add", "fork", fork);
+    await gitOk(work, "fetch", "-q", "fork");
+    await exec(["git", "clone", "-q", fork, forkWriter]);
+    await commitFile(forkWriter, "fork-only.txt", "fork\n", "fork change");
+    await gitOk(forkWriter, "push", "-q", "origin", "main");
+  }
+
+  await commitFile(work, "local-only.txt", "local\n", "local change");
+  return { work, origin, fork };
+}
+
 describe("parseRemoteTip", () => {
   const line = (ref: string, symref = "") => [ref, "0e1d6fd", "1790000000", "tailcat: the pieces", symref].join("\0");
   test("the first real branch, newest first as git sorted them", () => {
@@ -650,6 +701,138 @@ describe("push before any remote", () => {
       await run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one");
       await run("checkout", "-q", "--detach");
       expect(await refusal(dir)).toBe("detached HEAD — check out a branch first");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("automatic rebase after a rejected push", () => {
+  test("still rebases and pushes when the destination is the tracked upstream", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-push-upstream-"));
+    try {
+      const { work } = await makeDivergedPushFixture(root);
+      const output = await push(work);
+
+      expect(output).toContain("rebased onto the upstream first");
+      expect((await gitOk(work, "rev-parse", "HEAD")).stdout.trim()).toBe(
+        (await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim(),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("refuses before fetching when staged and unstaged changes are mixed", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-push-staged-"));
+    try {
+      const { work } = await makeDivergedPushFixture(root);
+      await writeFile(join(work, "tracked.txt"), "alpha\nstaged\nbeta\ngamma\n");
+      await gitOk(work, "add", "tracked.txt");
+      await writeFile(join(work, "tracked.txt"), "alpha\nstaged\nbeta\nunstaged\ngamma\n");
+
+      const beforeHead = (await gitOk(work, "rev-parse", "HEAD")).stdout.trim();
+      const beforeUpstream = (await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim();
+      const beforeCached = (await gitOk(work, "diff", "--cached", "--", "tracked.txt")).stdout;
+      const beforeWorktree = (await gitOk(work, "diff", "--", "tracked.txt")).stdout;
+      const beforeIndex = await readFile(join(work, ".git", "index"));
+      const message = await push(work).then(
+        () => "",
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toMatch(/\[rejected\].*(fetch first|non-fast-forward)/s);
+      expect(message).toContain("The index has staged changes, so canopy left the rebase to you.");
+      expect((await gitOk(work, "rev-parse", "HEAD")).stdout.trim()).toBe(beforeHead);
+      expect((await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim()).toBe(beforeUpstream);
+      expect(Buffer.compare(await readFile(join(work, ".git", "index")), beforeIndex)).toBe(0);
+      expect((await gitOk(work, "diff", "--cached", "--", "tracked.txt")).stdout).toBe(beforeCached);
+      expect((await gitOk(work, "diff", "--", "tracked.txt")).stdout).toBe(beforeWorktree);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  for (const setting of ["branch.main.pushRemote", "remote.pushDefault"]) {
+    test(`does not rebase when ${setting} sends the bare push away from the upstream`, async () => {
+      const root = await mkdtemp(join(tmpdir(), "canopy-push-override-"));
+      try {
+        const { work } = await makeDivergedPushFixture(root, { fork: true });
+        await gitOk(work, "config", setting, "fork");
+
+        const beforeHead = (await gitOk(work, "rev-parse", "HEAD")).stdout.trim();
+        const beforeUpstream = (await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim();
+        const beforeFork = (await gitOk(work, "rev-parse", "refs/remotes/fork/main")).stdout.trim();
+        const message = await push(work).then(
+          () => "",
+          (error: unknown) => error instanceof Error ? error.message : String(error),
+        );
+
+        expect(message).toMatch(/\[rejected\].*(fetch first|non-fast-forward)/s);
+        expect((await gitOk(work, "rev-parse", "HEAD")).stdout.trim()).toBe(beforeHead);
+        expect((await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim()).toBe(beforeUpstream);
+        expect((await gitOk(work, "rev-parse", "refs/remotes/fork/main")).stdout.trim()).toBe(beforeFork);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const destination of ["different push URL", "multiple URLs"]) {
+    test(`does not rebase an upstream remote with ${destination}`, async () => {
+      const root = await mkdtemp(join(tmpdir(), "canopy-push-url-"));
+      try {
+        const { work, fork } = await makeDivergedPushFixture(root, { fork: true });
+        if (destination === "different push URL") await gitOk(work, "config", "remote.origin.pushurl", fork);
+        else await gitOk(work, "config", "--add", "remote.origin.url", fork);
+        const beforeHead = (await gitOk(work, "rev-parse", "HEAD")).stdout.trim();
+        const beforeUpstream = (await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim();
+        await expect(push(work)).rejects.toThrow(/\[rejected\].*(fetch first|non-fast-forward)/s);
+        expect((await gitOk(work, "rev-parse", "HEAD")).stdout.trim()).toBe(beforeHead);
+        expect((await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim()).toBe(beforeUpstream);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("does not rebase a matching-mode push that can reject other branches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-push-matching-"));
+    try {
+      const { work } = await makeDivergedPushFixture(root);
+      await gitOk(work, "config", "push.default", "matching");
+      const beforeHead = (await gitOk(work, "rev-parse", "HEAD")).stdout.trim();
+      const beforeUpstream = (await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim();
+      const message = await push(work).then(
+        () => "",
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toMatch(/\[rejected\].*(fetch first|non-fast-forward)/s);
+      expect((await gitOk(work, "rev-parse", "HEAD")).stdout.trim()).toBe(beforeHead);
+      expect((await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim()).toBe(beforeUpstream);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("does not rebase a push controlled by a configured refspec", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-push-refspec-"));
+    try {
+      const { work } = await makeDivergedPushFixture(root);
+      await gitOk(work, "checkout", "-q", "-b", "side");
+      await gitOk(work, "config", "remote.origin.push", "refs/heads/side:refs/heads/main");
+      await gitOk(work, "checkout", "-q", "main");
+      const beforeHead = (await gitOk(work, "rev-parse", "HEAD")).stdout.trim();
+      const beforeUpstream = (await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim();
+      const message = await push(work).then(
+        () => "",
+        (error: unknown) => error instanceof Error ? error.message : String(error),
+      );
+
+      expect(message).toMatch(/\[rejected\].*(fetch first|non-fast-forward)/s);
+      expect((await gitOk(work, "rev-parse", "HEAD")).stdout.trim()).toBe(beforeHead);
+      expect((await gitOk(work, "rev-parse", "refs/remotes/origin/main")).stdout.trim()).toBe(beforeUpstream);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

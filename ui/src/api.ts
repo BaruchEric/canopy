@@ -1,4 +1,4 @@
-import type { Dictation, LiveAnswer, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
+import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type {
   HealthCheck,
   KitAction,
@@ -568,7 +568,7 @@ export const api = {
   /** a client secret for one conversation, minted by the home backend */
   voiceSession: () => req<VoiceSession>(homeName(), "/api/voice/session", { method: "POST", body: "{}" }),
   /** a GPT-Live session for this page's WebRTC offer, started by the home backend with its key */
-  voiceLive: (sdp: string) => req<LiveAnswer>(homeName(), "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp }) }),
+  voiceLive: (sdp: string, context?: VoiceContext) => req<LiveAnswer>(homeName(), "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp, context }) }),
   /** the broker's asks as the home backend follows them, and presence; a
    *  503 without a broker */
   asks: () => req<AsksInfo>(homeName(), "/api/asks"),

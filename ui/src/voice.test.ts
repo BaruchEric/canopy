@@ -161,12 +161,20 @@ describe("runVoiceTool", () => {
     expect(runVoiceTool("open_repo", JSON.stringify({ name: "rype" }), world(), a)).toEqual({ opened: null, did_you_mean: ["ripe"], ask_the_user_first: true });
     expect(runVoiceTool("open_repo", JSON.stringify({ name: "Arch Sketch" }), world(), a)).toMatchObject({ did_you_mean: ["ArchiSketch"] });
     expect(seen).toEqual(["repo dev/ArchiSketch", "repo dev/canopy"]);
-    // the same repo checked out on two backends is one repo
-    const both = world({ repos: [repo("ripe"), repo("ripe", 0, 0, 0, { id: "mini:dev/ripe" })] });
-    expect(runVoiceTool("open_repo", JSON.stringify({ name: "ripe" }), both, a)).toEqual({ opened: "ripe" });
     const none = runVoiceTool("open_repo", JSON.stringify({ name: "tallies app" }), world(), a) as { closest: string[] };
     expect(none.closest[0]).toBe("tally");
     expect(runVoiceTool("open_repo", JSON.stringify({ name: "old" }), world(), a)).toMatchObject({ opened: null });
+  });
+  test("same display names remain ambiguous and a path resolves the choice", () => {
+    const { a, seen } = acts();
+    const both = world({ repos: [
+      repo("api", 0, 0, 0, { id: "client-a/api", path: "/r/client-a/api" }),
+      repo("api", 0, 0, 0, { id: "client-b/api", path: "/r/client-b/api" }),
+    ] });
+    expect(runVoiceTool("open_repo", '{"name":"api"}', both, a)).toMatchObject({ opened: null, which_one: ["/r/client-a/api", "/r/client-b/api"] });
+    expect(seen).toEqual([]);
+    expect(runVoiceTool("open_repo", '{"name":"client-b/api"}', both, a)).toEqual({ opened: "api" });
+    expect(seen).toEqual(["repo client-b/api"]);
   });
   test("open_view takes only a real view; end_conversation hangs up", () => {
     const { a, seen } = acts();

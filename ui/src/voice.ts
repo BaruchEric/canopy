@@ -6,7 +6,8 @@
  * voicecall.ts.
  */
 import type { Ask, Job, Repo, Run } from "../../src/core/types";
-import { VOICE_VIEWS, isVoiceTool, type VoiceView } from "../../src/core/voicewire";
+import { VOICE_VIEWS, isVoiceTool, type VoiceContext, type VoiceView } from "../../src/core/voicewire";
+import { voiceChat } from "./voicecontext";
 
 /** Linear resampling that carries its place across chunks, so a stream cut
  *  into 128-sample blocks comes out as one continuous signal. */
@@ -145,6 +146,8 @@ export const TOOL_WORDS: Record<string, string> = {
   open_repo: "opened a repo",
   open_view: "switched the view",
   end_conversation: "hung up",
+  current_context: "checked the current repository and chat",
+  orchestrate: "handed work to the chat",
 };
 
 export function voiceReduce(v: VoiceState, e: VoiceEvent): VoiceState {
@@ -185,6 +188,7 @@ export interface VoiceWorld {
   jobs: Job[];
   /** unix ms */
   now: number;
+  context?: VoiceContext;
 }
 
 export interface VoiceActs {
@@ -192,6 +196,7 @@ export interface VoiceActs {
   openView: (view: VoiceView) => void;
   /** after the goodbye in flight has played */
   hangUp: () => void;
+  orchestrate?: (context: VoiceContext, prompt: string) => Promise<void>;
 }
 
 const LIST_CAP = 15;
@@ -250,6 +255,8 @@ export function matchRepos(repos: Repo[], said: string): RepoMatch {
   if (!s) return { how: "none", repos: [] };
   const exact = repos.filter((r) => squash(r.name) === s);
   if (exact.length) return { how: "exact", repos: exact };
+  const located = repos.filter((r) => squash(r.id) === s || squash(r.path) === s || (s.length > squash(r.name).length && squash(r.path).endsWith(s)));
+  if (located.length) return { how: "exact", repos: located };
   const within = repos.filter((r) => {
     const n = squash(r.name);
     return n.includes(s) || (n.length >= 3 && s.includes(n));
@@ -270,6 +277,38 @@ export function runVoiceTool(name: string, raw: string, world: VoiceWorld, acts:
   const waiting = world.runs.filter((r) => r.status === "waiting");
   const working = world.runs.filter((r) => r.status === "working");
   switch (name) {
+    case "current_context": {
+      const context = world.context ?? { kind: "global", view: "git" };
+      if (context.kind === "global") return context;
+      const repo = world.repos.find((r) => r.id === context.repo.id);
+      const git = repo?.status ? { branch: repo.status.branch, ahead: repo.status.ahead, behind: repo.status.behind, changed_files: changedOf(repo) } : null;
+      if (context.kind === "repo") return {
+        ...context, git,
+        runs: world.runs.filter((r) => r.repoId === context.repo.id).slice(-LIST_CAP).map((r) => ({ id: r.id, doing: r.verb, status: r.status, ...(r.error ? { error: r.error } : {}) })),
+      };
+      const run = world.runs.find((r) => r.id === context.chat.id && r.repoId === context.repo.id);
+      return run ? { ...context, git, chat: voiceChat(run), ...(run.error ? { error: run.error } : {}) } : { ...context, error: "The invoked chat is no longer available" };
+    }
+    case "orchestrate": {
+      const prompt = str(a["prompt"]);
+      if (!prompt || prompt.length > 8000) return { accepted: false, error: "A work request of 1 to 8000 characters is required" };
+      let context: VoiceContext = world.context ?? { kind: "global", view: "git" };
+      const named = str(a["name"]);
+      if (named) {
+        const m = matchRepos(repos, named);
+        const first = m.repos[0];
+        if (!first || m.repos.length !== 1 || m.how === "near") return { accepted: false, ask_the_user_first: true, which_one: m.repos.map((r) => r.path).slice(0, 5) };
+        // Naming the invocation repo still continues its exact chat.
+        if (context.kind === "global" || context.repo.id !== first.id) context = { kind: "repo", view: context.view, repo: { id: first.id, name: first.name, path: first.path } };
+      }
+      if (context.kind === "global") return { accepted: false, ask_the_user_first: true, error: "Which repository should handle this work?" };
+      if (!acts.orchestrate) return { accepted: false, error: "Chat orchestration is unavailable" };
+      const target = context;
+      return acts.orchestrate(target, prompt).then(
+        () => ({ accepted: true, repo: target.repo.name, ...(target.kind === "chat" ? { chat_id: target.chat.id } : {}), status: "handed to the chat; check progress before claiming completion" }),
+        (e: unknown) => ({ accepted: false, error: e instanceof Error ? e.message : String(e) }),
+      );
+    }
     case "overview":
       return {
         repos: repos.length,
@@ -330,12 +369,12 @@ export function runVoiceTool(name: string, raw: string, world: VoiceWorld, acts:
     case "open_repo": {
       const said = str(a["name"]) ?? "";
       const m = matchRepos(repos, said);
-      const names = [...new Set(m.repos.map((r) => r.name))];
+      const names = m.repos.map((r) => m.repos.some((other) => other.id !== r.id && other.name === r.name) ? r.path : r.name);
       const first = m.repos[0];
       // opening a panel can start its shell, so a guess is put back to the
-      // user rather than acted on; two checkouts of one name are one repo
+      // user rather than acted on; shared checkouts were deduplicated by the caller
       if (m.how === "near") return { opened: null, did_you_mean: names.slice(0, 3), ask_the_user_first: true };
-      if (names.length === 1 && first) {
+      if (m.repos.length === 1 && first) {
         acts.openRepo(first.id);
         return { opened: first.name };
       }

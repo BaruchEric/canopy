@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { VoiceMinter } from "../core/voice";
 import type { LiveOpener } from "../core/voicelive";
-import { VOICE_SOCKET } from "../core/voicewire";
+import { VOICE_SOCKET, type VoiceContext } from "../core/voicewire";
 import { startServer } from "./index";
 
 let scratch: string;
@@ -20,6 +20,7 @@ let off: { port: number; stop: () => void };
 let refuse = false;
 /** the offer the stand-in GPT-Live opener was handed last */
 let offered: string | null = null;
+let invoked: VoiceContext | undefined;
 /** what the stand-in speech model was handed last */
 let heard: { size: number; name: string; type: string } | null = null;
 
@@ -43,8 +44,9 @@ const minter: VoiceMinter = {
 
 const live: LiveOpener = {
   model: "gpt-live-1",
-  open: async (sdp) => {
+  open: async (sdp, context) => {
     offered = sdp;
+    invoked = context;
     if (refuse) throw new Error("OpenAI answered 403: no access to gpt-live-1");
     return { id: "live_123", sdp: "v=0 answer" };
   },
@@ -120,6 +122,16 @@ test("POST /api/voice/live takes the offer to GPT-Live and hands the answer back
   expect(r.status).toBe(200);
   expect(await r.json()).toEqual({ id: "live_123", sdp: "v=0 answer" });
   expect(offered).toBe("v=0 offer");
+});
+
+test("POST /api/voice/live forwards invocation context and rejects malformed context", async () => {
+  const context = { kind: "repo", view: "git", repo: { id: "dev/api", name: "api", path: "/r/api" } } satisfies VoiceContext;
+  const r = await at(on, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "v=0", context }) });
+  expect(r.status).toBe(200);
+  expect(invoked).toEqual(context);
+  for (const invalid of [null, [], { kind: "chat", view: "git", repo: context.repo }, { ...context, repo: { name: "api" } }]) {
+    expect((await at(on, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "v=0", context: invalid }) })).status).toBe(400);
+  }
 });
 
 test("a GPT-Live offer: none is a 400, a huge one a 413, OpenAI refusing a 502, and no key a 503", async () => {

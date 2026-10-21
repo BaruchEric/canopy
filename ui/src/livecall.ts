@@ -32,6 +32,7 @@ export class LiveCall {
   private hangAfter = false;
   private done = false;
   private state: VoiceState = VOICE_START;
+  private answered = new Set<string>();
 
   /** Build it inside the click: Safari lets a media element made in a user
    *  gesture play sound. */
@@ -68,7 +69,7 @@ export class LiveCall {
       const offer = pc.localDescription?.sdp;
       if (!offer) throw new Error("the browser made no offer");
       if (this.done) return this.release();
-      const answer = await api.voiceLive(offer);
+      const answer = await api.voiceLive(offer, this.hooks.world().context);
       if (this.done) return this.release();
       await pc.setRemoteDescription({ type: "answer", sdp: answer.sdp });
     } catch (e) {
@@ -99,7 +100,7 @@ export class LiveCall {
 
   private onEvent(raw: string): void {
     const e = parseLiveEvent(raw);
-    if (!e) return;
+    if (!e || this.done || (e.call && this.answered.has(e.call.id))) return;
     this.apply(e);
     switch (e.type) {
       case "session.started":
@@ -114,18 +115,22 @@ export class LiveCall {
         return;
       case "response.event": {
         if (!e.call) return;
-        const out = runVoiceTool(e.call.name, e.call.arguments, this.hooks.world(), {
+        const call = e.call;
+        if (this.answered.has(call.id) || this.done) return;
+        this.answered.add(call.id);
+        void Promise.resolve().then(() => runVoiceTool(call.name, call.arguments, this.hooks.world(), {
           ...this.hooks.acts,
           hangUp: () => {
             this.hangAfter = true;
             // the goodbye is spoken after this answer; if it never is, go anyway
             setTimeout(() => this.stop(), GOODBYE_MS);
           },
+        })).catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) })).then((out) => {
+          if (this.done) return;
+          // Continue only once the chat has accepted or refused the request.
+          this.send({ type: "response.item.create", item: { type: "function_call_output", call_id: call.id, output: JSON.stringify(out) } });
+          this.send({ type: "response.create" });
         });
-        // one call per response (parallel_tool_calls off), so each answer
-        // goes back and the backend goes on at once
-        this.send({ type: "response.item.create", item: { type: "function_call_output", call_id: e.call.id, output: JSON.stringify(out) } });
-        this.send({ type: "response.create" });
         return;
       }
     }

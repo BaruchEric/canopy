@@ -1,13 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { isSeedId } from "../../../src/core/sprout";
 import { isRunActive } from "../../../src/core/types";
-import { FIX_WATCH, fixedNote, fixPrompt, freshFailure, moveDone, type FixMove } from "../fixit";
+import { api } from "../api";
+import {
+  FIX_WATCH,
+  fixedNote,
+  fixPrompt,
+  freshFailure,
+  repairConfirmed,
+  repairStatusSnapshot,
+  repairTurnIdentity,
+  type FixMove,
+  type RepairStatus,
+} from "../fixit";
+import { backendOf } from "../registry";
 import { activeRunFor, useStore } from "../store";
 
 /** what failed: a move, git's answer and when it came (the mount, unless
  *  the caller kept it), or a prompt read when pressed (a failed task's,
  *  whose log is fetched then) */
 type What = { move: FixMove; text: string; at?: number } | { ask: () => Promise<string> };
+type RepairAttempt = { runId: string; before: RepairStatus | null; previousTurn: string | null };
 
 /** the failures already handed over unasked, so a remount starts nothing */
 const handed = new Set<string>();
@@ -21,10 +34,10 @@ const handed = new Set<string>();
  *  takes it as its next turn; a run still busy refuses, and the refusal
  *  shows beside the button. Once handed over, the note follows the run
  *  (`FIX_WATCH`) with a way back to the chat, and offers the button again
- *  when the run failed, stopped or was dismissed. When the repo's status
- *  shows the move finished (`moveDone`), `onDone` gets the words for it,
- *  for the note to stop showing a failure that is no longer one. A seed's
- *  agents run through the incubator, so a seed gets none. */
+ *  when the run failed, stopped or was dismissed. A fresh rescan after a
+ *  new successful turn must show the failed status move changing to done
+ *  before `onDone` gets the words for it. A seed's agents run through the
+ *  incubator, so a seed gets none. */
 export function AgentFix({ repoId, short, onDone, ...what }: { repoId: string; short?: boolean; onDone?: (text: string) => void } & What) {
   const openChat = useStore((s) => s.openChat);
   const showRun = useStore((s) => s.showRun);
@@ -32,17 +45,36 @@ export function AgentFix({ repoId, short, onDone, ...what }: { repoId: string; s
   const [err, setErr] = useState<string | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const run = useStore((s) => (runId ? s.runs[runId] : undefined));
-  const status = useStore((s) => s.repos.find((r) => r.id === repoId)?.status);
+  const [attempt, setAttempt] = useState<RepairAttempt | null>(null);
+  const attemptRef = useRef<RepairAttempt | null>(null);
+  const checkedTurns = useRef(new Set<string>());
+  const checkingTurns = useRef(new Set<string>());
+  const mountedRef = useRef(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   const [mounted] = useState(() => Date.now());
   const seed = isSeedId(repoId);
 
   const go = () => {
+    const beforeState = useStore.getState();
+    const previousRun = activeRunFor(beforeState, repoId);
+    const previousTurn = previousRun ? repairTurnIdentity(previousRun) : null;
+    const before = "move" in what ? repairStatusSnapshot(beforeState.repos.find((repo) => repo.id === repoId)?.status) : null;
+    // A retry supersedes any rescan still completing for the prior attempt.
+    attemptRef.current = null;
+    setAttempt(null);
     setBusy(true);
     setErr(null);
     const prompt = "ask" in what ? what.ask() : Promise.resolve(fixPrompt(what.move, what.text));
     prompt
       .then((p) => openChat(repoId, p))
-      .then(() => setRunId(activeRunFor(useStore.getState(), repoId)?.id ?? null))
+      .then(() => {
+        const current = activeRunFor(useStore.getState(), repoId);
+        const next = current ? { runId: current.id, before, previousTurn } : null;
+        attemptRef.current = next;
+        setAttempt(next);
+        setRunId(current?.id ?? null);
+      })
       .catch((e: unknown) => setErr(String(e instanceof Error ? e.message : e)))
       .finally(() => setBusy(false));
   };
@@ -58,10 +90,36 @@ export function AgentFix({ repoId, short, onDone, ...what }: { repoId: string; s
   }, [key]);
 
   const move = "move" in what ? what.move : null;
-  const done = run !== undefined && move !== null && !!status && moveDone(move, status) === true;
+  const currentAttempt = attempt?.runId === run?.id ? attempt : null;
+  const turn = currentAttempt && run ? repairTurnIdentity(run) : null;
+  const completionKey = turn && turn !== currentAttempt?.previousTurn ? `${run?.id}\0${turn}` : null;
   useEffect(() => {
-    if (done && move) onDone?.(fixedNote(move));
-  }, [done, move, onDone]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (seed || !completionKey || !turn || !run || !currentAttempt || !move) return;
+    if (checkedTurns.current.has(completionKey) || checkingTurns.current.has(completionKey)) return;
+    checkingTurns.current.add(completionKey);
+    // GET /api/tree is cached. POST /api/rescan runs a new scan, and the
+    // baseline makes an already-clear cached status insufficient evidence.
+    void api
+      .rescan(backendOf(repoId))
+      .then(({ repos }) => {
+        checkedTurns.current.add(completionKey);
+        if (!mountedRef.current || attemptRef.current !== currentAttempt) return;
+        const latest = useStore.getState().runs[currentAttempt.runId];
+        if (!latest || repairTurnIdentity(latest) !== turn) return;
+        const freshStatus = repos.find((repo) => repo.id === repoId)?.status ?? null;
+        if (repairConfirmed(move, latest, currentAttempt.before, freshStatus, currentAttempt.previousTurn)) {
+          onDoneRef.current?.(fixedNote(move));
+        }
+      })
+      .catch(() => {})
+      .finally(() => checkingTurns.current.delete(completionKey));
+  }, [completionKey, currentAttempt, move, repoId, run, seed, turn]);
 
   if (seed) return null;
   const again = !run || (!isRunActive(run) && run.status !== "done");

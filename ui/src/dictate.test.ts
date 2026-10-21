@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dictatable, dictationText, type FieldLike } from "./dictate";
+import { DictatorDiscovery, dictatable, dictationText, type FieldLike } from "./dictate";
 
 const field = (tagName: string, more: Partial<FieldLike> & { inside?: boolean } = {}): FieldLike => ({
   tagName,
@@ -47,5 +47,41 @@ describe("dictationText", () => {
 
   test("nothing heard puts nothing in", () => {
     expect(dictationText("fix", "   ", "it")).toBe("");
+  });
+});
+
+describe("DictatorDiscovery", () => {
+  test("shares an in-flight capability lookup across simultaneous mics", async () => {
+    const discovery = new DictatorDiscovery();
+    let calls = 0;
+    let answer: ((value: boolean) => void) | undefined;
+    const canDictate = () => {
+      calls++;
+      return new Promise<boolean>((resolve) => {
+        answer = resolve;
+      });
+    };
+    const first = discovery.find(["home"], "home:online", canDictate);
+    const second = discovery.find(["home"], "home:online", canDictate);
+    expect(second).toBe(first);
+    expect(calls).toBe(1);
+    answer?.(false);
+    await expect(first).resolves.toBeNull();
+  });
+
+  test("rechecks a cached negative after a secondary backend disconnects and returns", async () => {
+    const discovery = new DictatorDiscovery();
+    let miniSupportsDictation = false;
+    let calls = 0;
+    const canDictate = async (backend: string) => {
+      calls++;
+      return backend === "mini" && miniSupportsDictation;
+    };
+
+    await expect(discovery.find(["home", "mini"], "home:online|mini:online", canDictate)).resolves.toBeNull();
+    await expect(discovery.find(["home"], "home:online|mini:offline", canDictate)).resolves.toBeNull();
+    miniSupportsDictation = true;
+    await expect(discovery.find(["home", "mini"], "home:online|mini:online", canDictate)).resolves.toBe("mini");
+    expect(calls).toBe(5);
   });
 });

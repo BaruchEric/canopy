@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { liveConfig, liveOpener, liveSessionBody, openLiveSession, type LiveConfig } from "./voicelive";
-import { LIVE_BACKEND_INSTRUCTIONS, LIVE_INSTRUCTIONS, VOICE_TOOL_NAMES } from "./voicewire";
+import { LIVE_BACKEND_INSTRUCTIONS, LIVE_INSTRUCTIONS, VOICE_TOOL_NAMES, type VoiceContext } from "./voicewire";
 
 let server: ReturnType<typeof Bun.serve>;
 let answer: () => Response = () => Response.json({ session: { id: "live_123" }, transport: { type: "webrtc", sdp: "v=0 answer" } }, { status: 201 });
@@ -66,6 +66,11 @@ describe("openLiveSession", () => {
     expect(r.instructions).toBe(LIVE_BACKEND_INSTRUCTIONS);
     expect(r.tools.map((t) => t.name)).toEqual([...VOICE_TOOL_NAMES]);
     expect(r.parallel_tool_calls).toBe(false);
+  });
+  test("the invoked chat and conversation reach both live and delegated instructions", async () => {
+    const context = { kind: "chat", view: "git", repo: { id: "dev/api", name: "api", path: "/r/api" }, chat: { id: "chat-7", verb: "Chat", status: "idle", note: "Fix uploads", messages: [{ who: "user", text: "Keep the API" }] } } satisfies VoiceContext;
+    await openLiveSession(cfg(), "v=0 offer", fetch, context);
+    expect(seen?.body).toMatchObject({ session: { instructions: expect.stringContaining("chat-7"), delegation: { responses: { instructions: expect.stringContaining("Keep the API") } } } });
   });
   test("an error status names OpenAI's message; no JSON or no SDP throws", async () => {
     answer = () => Response.json({ error: { message: "You do not have access to gpt-live-1.", type: "invalid_request_error" } }, { status: 403 });

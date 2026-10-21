@@ -22,6 +22,34 @@ const WORD_TYPES: ReadonlySet<string> = new Set(["text", "search", "url", "email
  *  which `components/Dictate.tsx` handles apart. */
 export const NO_DICTATE = "[data-no-dictate], [data-mic], .xterm";
 
+/** One capability lookup shared by every mic. A backend's answer is cached
+ *  only while the whole connection state stays the same. */
+export class DictatorDiscovery {
+  private connectionState: string | null = null;
+  private asked: { key: string; answer: Promise<string | null> } | null = null;
+
+  find(order: readonly string[], connectionState: string, canDictate: (backend: string) => Promise<boolean>): Promise<string | null> {
+    if (this.connectionState !== connectionState) {
+      this.connectionState = connectionState;
+      this.asked = null;
+    }
+    const key = order.join("\0");
+    if (this.asked?.key === key) return this.asked.answer;
+    const answer = (async () => {
+      for (const backend of order) {
+        try {
+          if (await canDictate(backend)) return backend;
+        } catch {
+          // An older backend, or one that went away, is not a candidate.
+        }
+      }
+      return null;
+    })();
+    this.asked = { key, answer };
+    return answer;
+  }
+}
+
 export function dictatable(el: FieldLike | null): boolean {
   if (!el || el.readOnly || el.disabled) return false;
   const tag = el.tagName.toUpperCase();
