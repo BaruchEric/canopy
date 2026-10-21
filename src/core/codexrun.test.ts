@@ -732,6 +732,7 @@ describe("a Codex run", () => {
       durationMs: 1234,
       turns: 1,
       tokens: { input: 100, cachedInput: 40, output: 20, reasoning: 5, total: 120 },
+      model: "fake-model",
     });
     expect(run.steps.map((s) => (s.kind === "tool" ? `${s.tool?.name}:${s.tool?.title}:${s.tool?.status}` : `${s.kind}:${s.text}`))).toEqual([
       "text:Looking first.",

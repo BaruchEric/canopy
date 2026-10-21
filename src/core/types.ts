@@ -1076,6 +1076,8 @@ export interface RunResult {
   turns: number;
   /** tokens spent, where the harness reports them (Codex) */
   tokens?: RunTokens;
+  /** the model the harness said it runs, where it said one */
+  model?: string;
 }
 
 /** A run that spans a workspace: it works in the primary and may read and

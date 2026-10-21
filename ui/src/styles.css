@@ -11333,6 +11333,110 @@ button.trigger-title:hover {
   text-transform: lowercase;
 }
 
+/* ---------- costs: what each service spent, by service, repo and run ---------- */
+.costs-view {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.cost-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.cost-total {
+  font-size: 15px;
+  color: var(--ink-dim);
+}
+.cost-total b {
+  font-size: 20px;
+  color: var(--ink);
+}
+.cost-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cost-group .panel-label {
+  margin: 0 0 2px;
+  padding: 0;
+}
+.cost-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: baseline;
+  gap: 2px 14px;
+  padding: 7px 0;
+  font-size: 12px;
+}
+.cost-row + .cost-row {
+  border-top: 1px solid var(--hair);
+}
+.cost-name {
+  display: grid;
+  min-width: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.cost-name small {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.cost-usage {
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cost-amt {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  min-width: 7ch;
+  color: var(--ink-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.cost-amt b {
+  color: var(--ink);
+}
+.cost-none {
+  color: var(--ink-faint);
+}
+.cost-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-faint);
+  line-height: 1.45;
+}
+.cost-note.rust {
+  color: var(--rust);
+}
+.cost-example {
+  margin: 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  font-size: 11px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark1);
+  color: var(--ink-dim);
+}
+.cost-group > .mini {
+  margin-top: 4px;
+}
+@media (max-width: 560px) {
+  .cost-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .cost-usage {
+    grid-column: 1;
+    grid-row: 2;
+  }
+}
+
 /* ---------- voice: the spoken conversation's card ---------- */
 .voice-panel {
   position: fixed;
@@ -11364,6 +11468,10 @@ button.trigger-title:hover {
 .voice-engine {
   color: var(--ink-faint);
   white-space: nowrap;
+}
+.voice-panel .voice-pick {
+  width: auto;
+  padding: 2px 6px;
 }
 .voice-dot {
   --state: var(--ink-faint);

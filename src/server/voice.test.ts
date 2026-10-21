@@ -144,3 +144,24 @@ test("a GPT-Live offer: none is a 400, a huge one a 413, OpenAI refusing a 502, 
   expect(((await r.json()) as { error: string }).error).toContain("403");
   expect((await at(off, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "v=0" }) })).status).toBe(503);
 });
+
+test("a call's end and a dictated clip are written to the cost ledger, which GET /api/costs serves", async () => {
+  const context = { kind: "chat", view: "git", repo: { id: "dev/api", name: "api", path: "/r/api" }, chat: { id: "run-7", verb: "chat", status: "idle", note: "", messages: [] } } satisfies VoiceContext;
+  expect((await at(on, "/api/voice/ended", { method: "POST", body: JSON.stringify({ engine: "live", seconds: 95.04, context }) })).status).toBe(200);
+  for (const body of ["{}", JSON.stringify({ engine: "eleven" }), JSON.stringify({ engine: "eleven", seconds: -3 }), JSON.stringify({ engine: "other", seconds: 3 })]) {
+    expect((await at(on, "/api/voice/ended", { method: "POST", body })).status).toBe(400);
+  }
+  expect((await at(on, "/api/voice/dictate?seconds=4.2", { method: "POST", body: new Blob([new Uint8Array(16)], { type: "audio/webm" }) })).status).toBe(200);
+  // the ledger is appended without waiting on the answer
+  let report: { rows: { service: string; provider: string; model: string | null; repo: string | null; run: string | null; seconds: number | null; usd: number | null; estUsd: number | null }[]; priced: boolean } = { rows: [], priced: true };
+  const ready = () => report.rows.some((r) => r.service === "voice") && report.rows.some((r) => r.seconds === 4.2);
+  for (let i = 0; i < 50 && !ready(); i++) {
+    report = (await (await at(on, "/api/costs?days=1")).json()) as typeof report;
+    if (!ready()) await Bun.sleep(20);
+  }
+  const call = report.rows.find((r) => r.service === "voice");
+  expect(call).toMatchObject({ provider: "openai", model: "gpt-live-1", repo: "/r/api", run: "run-7", seconds: 95, usd: null, estUsd: null });
+  // the earlier dictation tests sent no length; this one is the newest
+  expect(report.rows.filter((r) => r.service === "speech").at(-1)).toMatchObject({ provider: "speech", model: "transcribe", seconds: 4.2, repo: null });
+  expect(report.priced).toBe(false);
+});

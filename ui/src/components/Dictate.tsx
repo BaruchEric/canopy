@@ -157,13 +157,16 @@ function useDictation(dictator: string | null) {
   useEffect(() => () => { generation.current++; }, []);
   const [writing, setWriting] = useState<HTMLElement | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const rec = useRecorder((clip) => {
+  // when the recording began, so the clip's length goes to the cost ledger
+  const began = useRef(0);
+  const rec = useRecorder(
+    (clip) => {
     const el = target.current;
     const b = destination.current;
     const attempt = generation.current;
     if (!el || !b) return;
     setWriting(el);
-    api.dictate(b, clip).then(
+    api.dictate(b, clip, (Date.now() - began.current) / 1000).then(
       ({ text }) => {
         if (attempt !== generation.current) return;
         target.current = null;
@@ -182,7 +185,11 @@ function useDictation(dictator: string | null) {
         setErr(e instanceof Error ? e.message : String(e));
       },
     );
-  });
+    },
+    (on) => {
+      if (on) began.current = Date.now();
+    },
+  );
   const shown = rec.err ?? err;
   // an error is read, then goes
   useEffect(() => {

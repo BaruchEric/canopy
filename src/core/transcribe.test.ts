@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { transcribe, transcribeConfig, transcriber, type TranscribeConfig } from "./transcribe";
+import { hear, transcribe, transcribeConfig, transcriber, type TranscribeConfig } from "./transcribe";
 
 let server: ReturnType<typeof Bun.serve>;
-let answer: () => Response = () => Response.json({ text: " hello there " });
+let answer: (format: string) => Response = () => Response.json({ text: " hello there " });
+/** the response_format of every request, in order */
+const formats: string[] = [];
 let seen: { model: string; name: string; type: string; size: number; auth: string | null } | null = null;
 
 beforeAll(() => {
@@ -16,6 +18,8 @@ beforeAll(() => {
       const sent = /Content-Type: ([^\r\n]+)/i.exec(raw)?.[1] ?? "";
       const form = await req.formData();
       const file = form.get("file");
+      const format = String(form.get("response_format"));
+      formats.push(format);
       seen = {
         model: String(form.get("model")),
         name: typeof file === "string" || !file ? "" : file.name,
@@ -23,7 +27,7 @@ beforeAll(() => {
         size: typeof file === "string" || !file ? 0 : file.size,
         auth: req.headers.get("authorization"),
       };
-      return answer();
+      return answer(format);
     },
   });
 });
@@ -65,6 +69,23 @@ describe("transcribe", () => {
     expect(t).not.toBeNull();
     expect(Bun.inspect(t)).not.toContain(secret);
     expect(String(JSON.stringify({ t }))).not.toContain(secret);
+  });
+});
+
+describe("hear", () => {
+  test("asks for verbose_json and keeps the clip's length", async () => {
+    answer = () => Response.json({ text: " hi ", duration: 2.71, segments: [] });
+    formats.length = 0;
+    expect(await hear(cfg(), audio, "v.webm", "audio/webm")).toEqual({ text: "hi", seconds: 2.71 });
+    expect(formats).toEqual(["verbose_json"]);
+  });
+
+  test("a server that refuses verbose_json is asked again for json, and its length is unknown", async () => {
+    answer = (format) => (format === "verbose_json" ? new Response("response_format not supported", { status: 400 }) : Response.json({ text: "hi" }));
+    formats.length = 0;
+    expect(await hear(cfg(), audio, "v.webm", "audio/webm")).toEqual({ text: "hi", seconds: null });
+    expect(formats).toEqual(["verbose_json", "json"]);
+    answer = () => Response.json({ text: " hello there " });
   });
 });
 

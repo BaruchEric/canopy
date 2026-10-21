@@ -67,8 +67,9 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["tailchan/send", "tailchan/put", "tailchan/notify"], right: "operate" },
   { methods: POST, paths: ["asks/answer", "presence", "presence/beat", "layouts/reset", "rescan", "preview"], right: "operate" },
   // a voice session is billed by the minute on the backend's key, and a
-  // dictated clip goes to the backend's speech model
-  { methods: POST, paths: ["voice/session", "voice/live", "voice/dictate"], right: "operate" },
+  // dictated clip goes to the backend's speech model; a call's end writes
+  // its minutes to the cost ledger
+  { methods: POST, paths: ["voice/session", "voice/live", "voice/dictate", "voice/ended"], right: "operate" },
   {
     methods: POST,
     paths: ["terms/restore", "terms/paste", "terms/move/out", "terms/move/finish", "terms/move/undo", "repos/agent", "repos/movein"],

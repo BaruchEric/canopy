@@ -1,4 +1,6 @@
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
+import type { CostReport } from "../../src/core/costs";
+import type { VoiceEngine } from "./voicelive";
 import type {
   HealthCheck,
   KitAction,
@@ -564,7 +566,12 @@ export const api = {
   /** the models a spoken conversation would use, each null when the home backend has no key for it */
   voice: (b: string = homeName()) => req<VoiceInfo>(b, "/api/voice"),
   /** a field's recorded clip as text, from a backend whose /api/voice says it can */
-  dictate: (b: string, clip: Blob) => req<Dictation>(b, "/api/voice/dictate", { method: "POST", body: clip }),
+  dictate: (b: string, clip: Blob, seconds: number) => req<Dictation>(b, `/api/voice/dictate?seconds=${seconds.toFixed(1)}`, { method: "POST", body: clip }),
+  /** a call's length once it ends, for the cost ledger on the backend that billed it */
+  voiceEnded: (engine: VoiceEngine, seconds: number, context: VoiceContext) =>
+    req<{ ok: true }>(homeName(), "/api/voice/ended", { method: "POST", body: JSON.stringify({ engine, seconds, context }) }),
+  /** a backend's cost ledger over the last `days` local days */
+  costs: (days: number, b: string) => req<CostReport>(b, `/api/costs?days=${days}`),
   /** a client secret for one conversation, minted by the home backend */
   voiceSession: () => req<VoiceSession>(homeName(), "/api/voice/session", { method: "POST", body: "{}" }),
   /** a GPT-Live session for this page's WebRTC offer, started by the home backend with its key */

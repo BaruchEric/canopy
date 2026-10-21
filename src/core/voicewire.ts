@@ -121,7 +121,7 @@ export interface VoiceTool {
 }
 
 /** the views a spoken "open" may land on, as App.tsx names them */
-export const VOICE_VIEWS = ["git", "agents", "incubator", "library", "ports", "triggers", "kit", "health", "secrets"] as const;
+export const VOICE_VIEWS = ["git", "agents", "incubator", "library", "ports", "triggers", "kit", "health", "costs", "secrets"] as const;
 export type VoiceView = (typeof VOICE_VIEWS)[number];
 
 export const VOICE_TOOL_NAMES = ["current_context", "orchestrate", "overview", "list_repos", "needs_me", "list_runs", "open_repo", "open_view", "end_conversation"] as const;

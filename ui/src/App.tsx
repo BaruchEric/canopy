@@ -1,4 +1,5 @@
 import { HealthView } from "./components/Health";
+import { CostsView } from "./components/Costs";
 import { KitView } from "./components/Kit";
 import { SecretsView } from "./components/Secrets";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -69,6 +70,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
     label: "system",
     views: [
       { key: "health", label: "health", what: "What is broken on each backend, and what canopy is fixing" },
+      { key: "costs", label: "costs", what: "What Claude, Codex, voice and dictation cost, by service, repo and run" },
       { key: "secrets", label: "secrets", what: "Names, sinks and imports; values only behind a passkey on the mini's page" },
     ],
   },
@@ -77,7 +79,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "triggers", "kit", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "costs", "triggers", "kit", "secrets"];
 
 /** A view tab's live count, or null where its view has nothing waiting. */
 function badgeOf(s: CanopyState, key: string): Badge | null {
@@ -482,6 +484,8 @@ export function App() {
         <IncubatorView onGit={() => navigate("git")} />
       ) : view === "health" ? (
         <HealthView />
+      ) : view === "costs" ? (
+        <CostsView />
       ) : view === "triggers" ? (
         <TriggersView />
       ) : view === "kit" ? (

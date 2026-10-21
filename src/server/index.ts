@@ -62,7 +62,7 @@ import { selfName } from "../core/backends";
 import { Incubator, IncubatorError, incubatorWorkflow, type NoteSink, type Transcriber } from "../core/incubator";
 import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
-import { transcribeConfig, transcriber } from "../core/transcribe";
+import { hearer, transcribeConfig, transcriber } from "../core/transcribe";
 import { voiceConfig, voiceMinter, type VoiceMinter } from "../core/voice";
 import { liveConfig, liveOpener, type LiveOpener } from "../core/voicelive";
 import { DICTATE_MAX, LIVE_OFFER_MAX, dictationName, parseVoiceContext, type Dictation, type VoiceContext, type VoiceInfo } from "../core/voicewire";
@@ -219,6 +219,8 @@ import type { TaskTimings } from "../core/tasks";
 import { shellHandle } from "../core/tailchan";
 import { loadChanConfig, type ChanConfig } from "../core/chan";
 import type { ServerWebSocket } from "bun";
+import { saneSeconds, type CostEntry, type CostReport } from "../core/costs";
+import { RunCosts, appendCost, hostOf, loadPrices, readCosts, servedRows, sessionSeen, sinceDays } from "../core/costledger";
 
 /** One scanned folder as the server runs it: the source, its watcher when
  *  it is local, and the guard against rescanning for the same new .git. */
@@ -257,6 +259,12 @@ interface ServerState {
   /** the speech model a field's mic sends its clip to (CANOPY_TRANSCRIBE_URL's,
    *  the incubator's own); null with none */
   dictate: Transcriber | null;
+  /** who and what the field's mic transcribes with, for the cost ledger */
+  speech: { provider: string; model: string } | null;
+  /** the cost ledger's run half: a row per reply that spent something */
+  costs: RunCosts;
+  /** appends one row to the cost ledger; a failed write is logged, never thrown */
+  recordCost: (e: CostEntry) => void;
   /** why no coordinator may start here though its runner is set up: canopy
    *  not enforcing caller tokens, or the coordinator's own listener not up
    *  (`coordinatorRefusal`); null when one may */
@@ -2730,7 +2738,24 @@ async function handleApi(
     if (data.length === 0) return json({ error: "the clip is empty" }, 400);
     const type = req.headers.get("content-type") ?? "audio/webm";
     try {
-      return json({ text: await state.dictate(data, dictationName(type), type) } satisfies Dictation);
+      const text = await state.dictate(data, dictationName(type), type);
+      if (state.speech) {
+        state.recordCost({
+          at: Date.now(),
+          service: "speech",
+          provider: state.speech.provider,
+          model: state.speech.model,
+          repo: null,
+          repoName: null,
+          run: null,
+          label: "dictation",
+          session: null,
+          usd: null,
+          tokens: null,
+          seconds: saneSeconds(Number(url.searchParams.get("seconds"))),
+        });
+      }
+      return json({ text } satisfies Dictation);
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : String(e) }, 502);
     }
@@ -2760,6 +2785,39 @@ async function handleApi(
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : String(e) }, 502);
     }
+  }
+  // the page says how long a call ran when it ends; the minutes are billed
+  // on this backend's key, so the row is written here
+  if (path === "/api/voice/ended" && method === "POST") {
+    const body: unknown = await req.json().catch(() => null);
+    if (typeof body !== "object" || body === null || !("engine" in body) || (body.engine !== "eleven" && body.engine !== "live")) return json({ error: "engine is eleven or live" }, 400);
+    const seconds = saneSeconds("seconds" in body ? body.seconds : null);
+    if (seconds === null) return json({ error: "seconds is a call's length" }, 400);
+    const context = "context" in body ? parseVoiceContext(body.context) : null;
+    const live = body.engine === "live";
+    const repo = context && context.kind !== "global" ? context.repo : null;
+    state.recordCost({
+      at: Date.now(),
+      service: "voice",
+      provider: live ? "openai" : "elevenlabs",
+      model: (live ? state.live?.model : state.voice?.model) ?? null,
+      repo: repo?.path ?? null,
+      repoName: repo?.name ?? null,
+      run: context?.kind === "chat" ? context.chat.id : null,
+      label: "voice call",
+      session: null,
+      usd: null,
+      tokens: null,
+      seconds,
+    });
+    return json({ ok: true });
+  }
+  if (path === "/api/costs" && method === "GET") {
+    const days = Math.min(400, Math.max(1, Math.floor(Number(url.searchParams.get("days") ?? 30)) || 30));
+    const since = sinceDays(days, Date.now());
+    const [rows, prices] = await Promise.all([readCosts(since), loadPrices()]);
+    const idOf = (p: string): string | null => repoAtPath(state.result.repos, p)?.id ?? null;
+    return json({ since, rows: servedRows(rows, prices, idOf), priced: prices !== null } satisfies CostReport);
   }
   if (path === "/api/voice/session" && method === "POST") {
     if (!state.voice) return json({ error: "voice is off: this backend has no CANOPY_VOICE_KEY" }, 503);
@@ -4354,6 +4412,7 @@ export async function startServer(opts: {
   const runner = new Runner({
     onChange: (run) => {
       broadcast(state, { type: "run", run });
+      state.costs.onRun(run);
       state.flows.onRun(run);
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
@@ -4479,6 +4538,18 @@ export async function startServer(opts: {
   const vault = vaultConfig();
   const speech = transcribeConfig();
   const transcribe = opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech);
+  // the incubator's memos write their own ledger rows, with the length the
+  // speech model heard; the field's mic writes its row in its route
+  const heard = opts.incubator?.transcribe !== undefined ? null : hearer(speech);
+  const memos: Transcriber | null = heard
+    ? async (data, name, type) => {
+        const h = await heard(data, name, type);
+        if (speech) {
+          recordCost({ at: Date.now(), service: "speech", provider: hostOf(speech.url), model: speech.model, repo: null, repoName: null, run: null, label: "voice memo", session: null, usd: null, tokens: null, seconds: saneSeconds(h.seconds) });
+        }
+        return h.text;
+      }
+    : transcribe;
   const voice = opts.voice !== undefined ? opts.voice : voiceMinter(voiceConfig());
   const live = opts.live !== undefined ? opts.live : liveOpener(liveConfig());
   const ship = shipConfig(process.env, runnerOpts.backend);
@@ -4506,6 +4577,13 @@ export async function startServer(opts: {
     onGaveUp: (c) => state.chan.onHealthGaveUp(c),
   });
   const callers = new CallerBook();
+  // a test server that never pointed CANOPY_CONFIG_DIR at a scratch folder
+  // must not write the real ledger
+  const ledgerOff = process.env["NODE_ENV"] === "test" && !process.env["CANOPY_CONFIG_DIR"];
+  const recordCost = (e: CostEntry): void => {
+    if (ledgerOff) return;
+    appendCost(e).catch((err: unknown) => console.error(`costs: could not write the ledger: ${err instanceof Error ? err.message : String(err)}`));
+  };
   const state: ServerState = {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
@@ -4514,6 +4592,18 @@ export async function startServer(opts: {
     voice,
     live,
     dictate: transcribe,
+    // a speech model handed in (a test's) has no url to name it by
+    speech: speech ? { provider: hostOf(speech.url), model: speech.model } : transcribe ? { provider: "speech", model: "transcribe" } : null,
+    costs: new RunCosts(
+      (e) => recordCost(e),
+      (id) => {
+        const repo = state.result.repos.find((r) => r.id === id);
+        return repo ? { path: repo.path, name: repo.name } : null;
+      },
+      // a resumed session's rows from the last 90 days; older ones are let go
+      async (session) => (ledgerOff ? null : sessionSeen(await readCosts(sinceDays(90, Date.now())), session)),
+    ),
+    recordCost,
     about: {
       ...readBuild(),
       startedAt: Date.now(),
@@ -4701,7 +4791,7 @@ export async function startServer(opts: {
           broadcast(state, { type: "scan", result: state.result });
         },
         repo: (id) => state.result.repos.find((r) => r.id === id),
-        transcribe,
+        transcribe: memos,
         notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
         ship: opts.incubator?.ship !== undefined ? opts.incubator.ship : shipper(ship),
         // a renovate or extend seed is rebuilt in this process; the mirror syncs after, as for a commit

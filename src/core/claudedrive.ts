@@ -227,6 +227,8 @@ export class ClaudeDriver implements RunDriver {
    *  CLI counts per result: the run's own result adds them back. Null when
    *  nothing was held, so a plain result keeps the CLI's own numbers. */
   private heldTurns: number | null = null;
+  /** the model the CLI's init named, for the cost ledger */
+  private model = "";
   /** when the message that began this turn went down stdin, for the time
    *  of a result after a hold (the CLI times its last turn alone) */
   private turnStart = Date.now();
@@ -330,6 +332,7 @@ export class ClaudeDriver implements RunDriver {
       await this.send(userMessage(message));
 
       for await (const m of lines(proc.stdout)) {
+        if (m["type"] === "system" && str(m, "subtype") === "init") this.model = str(m, "model") || this.model;
         const session = str(m, "session_id");
         if (session && !this.sessionSeen) {
           this.sessionSeen = true;
@@ -663,7 +666,7 @@ export class ClaudeDriver implements RunDriver {
       // A job ends with it; a chat's result ends one reply, not the
       // conversation, and a reply that failed is said in the timeline.
       ctx.result(
-        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns },
+        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns, ...(this.model ? { model: this.model } : {}) },
         failure ?? (ok ? null : problem),
       );
     }

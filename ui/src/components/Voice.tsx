@@ -35,13 +35,15 @@ const micReason = (engine: VoiceEngine): string | null => {
 const oneEach = (s: CanopyState, invokedRepo: string | null) => allCards(s).map((card) => card.checkouts.find((r) => r.id === invokedRepo) ?? leadOf(card, s.checkoutPref[card.key], (b) => isOnline(s, b), backendOf));
 
 const ENGINE_NAME: Record<VoiceEngine, string> = { eleven: "Eleven", live: "GPT-Live" };
+const ENGINES: VoiceEngine[] = ["eleven", "live"];
 
 /** the model as the mic's title says it */
 const spoken = (model: string): string => model.replace(/^eleven_realtime_/, "").replace(/_/g, " ");
 
 /** The mic in the top bar: talk to canopy through an Eleven Realtime model
  *  or GPT-Live, whichever the home backend has a key for; with both, the
- *  panel switches between them and this browser keeps the pick. */
+ *  panel's provider menu switches between them and this browser keeps the
+ *  pick. */
 export function VoiceButton() {
   const [models, setModels] = useState<Record<VoiceEngine, string | null>>({ eleven: null, live: null });
   const [engine, setEngine] = useState<VoiceEngine | null>(null);
@@ -98,7 +100,10 @@ export function VoiceButton() {
   if (!engine || !model) return null;
   const why = micReason(engine);
   const on = state !== null && state.phase !== "ended";
-  const other: VoiceEngine | null = engine === "eleven" ? (models.live ? "live" : null) : models.eleven ? "eleven" : null;
+  const engines = ENGINES.flatMap((id) => {
+    const m = models[id];
+    return m ? [{ id, name: ENGINE_NAME[id], model: spoken(m) }] : [];
+  });
 
   const start = (use: VoiceEngine = engine, within?: VoiceContext) => {
     // a call is going on while its panel shows a phase other than ended;
@@ -108,8 +113,19 @@ export function VoiceButton() {
     setContext(invoked);
     // a call switched away from keeps closing on its own, unheard
     let mine: VoiceCall | LiveCall | null = null;
+    // billed from the moment the session answers, whether or not the panel
+    // still shows this call, so its length is said once it ends
+    let openedAt: number | null = null;
+    let told = false;
     const hooks: CallHooks = {
       onState: (s) => {
+        if (openedAt === null && s.phase !== "connecting" && s.phase !== "ended") openedAt = Date.now();
+        if (s.phase === "ended" && openedAt !== null && !told) {
+          told = true;
+          const seconds = (Date.now() - openedAt) / 1000;
+          const context = invoked.kind === "chat" ? { ...invoked, chat: { ...invoked.chat, messages: [] } } : invoked;
+          api.voiceEnded(use, seconds, context).catch(() => {});
+        }
         if (call.current === mine) setState(s);
       },
       world: () => {
@@ -159,9 +175,12 @@ export function VoiceButton() {
       {state && (
         <VoicePanel
           state={state}
-          engine={ENGINE_NAME[engine]}
+          engine={engine}
+          engines={engines}
           context={context}
-          other={other && { name: ENGINE_NAME[other], model: spoken(models[other] ?? ""), go: () => switchTo(other) }}
+          onPick={(next) => {
+            if (next !== engine) switchTo(next);
+          }}
           onHangUp={hangUp}
           onClose={() => setState(null)}
         />
@@ -170,13 +189,13 @@ export function VoiceButton() {
   );
 }
 
-interface OtherEngine {
+interface EngineChoice {
+  id: VoiceEngine;
   name: string;
   model: string;
-  go: () => void;
 }
 
-function VoicePanel({ state, engine, context, other, onHangUp, onClose }: { state: VoiceState; engine: string; context: VoiceContext | null; other: OtherEngine | null; onHangUp: () => void; onClose: () => void }) {
+function VoicePanel({ state, engine, engines, context, onPick, onHangUp, onClose }: { state: VoiceState; engine: VoiceEngine; engines: EngineChoice[]; context: VoiceContext | null; onPick: (engine: VoiceEngine) => void; onHangUp: () => void; onClose: () => void }) {
   const list = useRef<HTMLOListElement | null>(null);
   useEffect(() => {
     const el = list.current;
@@ -189,13 +208,17 @@ function VoicePanel({ state, engine, context, other, onHangUp, onClose }: { stat
         <span className="voice-dot" aria-hidden="true" />
         <span role="status">
           {PHASE_WORDS[state.phase]}
-          <span className="voice-engine"> · {engine}</span>
+          {engines.length < 2 && <span className="voice-engine"> · {ENGINE_NAME[engine]}</span>}
           {context && context.kind !== "global" && <span className="voice-engine" title={context.repo.path}> · {context.repo.name}{context.kind === "chat" ? " chat" : ""}</span>}
         </span>
-        {other && (
-          <button type="button" className="mini" title={`Talk through ${other.model} instead`} onClick={other.go}>
-            {other.name}
-          </button>
+        {engines.length > 1 && (
+          <select className="settings-input voice-pick" value={engine} aria-label="Voice provider" title={engines.find((e) => e.id === engine)?.model} onChange={(e) => onPick(e.target.value === "live" ? "live" : "eleven")}>
+            {engines.map((e) => (
+              <option key={e.id} value={e.id}>
+                {e.name}
+              </option>
+            ))}
+          </select>
         )}
         {ended ? (
           <button type="button" className="mini" onClick={onClose}>

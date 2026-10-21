@@ -824,6 +824,8 @@ export class CodexDriver implements RunDriver {
   private finalText = "";
   private lastText = "";
   private tokens: DriveTokens | undefined;
+  /** the model thread/start answered with, for the cost ledger */
+  private model = "";
   /** item id → its tool step */
   private steps = new Map<string, RunStep>();
   /** item id → the last item seen under it, for approvals about it */
@@ -947,6 +949,7 @@ export class CodexDriver implements RunDriver {
       const id = str(rec(started["thread"]), "id");
       if (!id) throw new Error("codex started a thread without an id");
       this.thread = id;
+      this.model = str(started, "model");
       ctx.session(id);
       if (this.interrupting) {
         rpc.kill();
@@ -1157,6 +1160,7 @@ export class CodexDriver implements RunDriver {
       this.tokens,
       Date.now() - this.turnAt,
     );
+    if (this.model) result.model = this.model;
     // canopy's own interrupt at the limit says why, rather than "interrupted"
     ctx.result(result, problem && this.capped ? this.capped : problem);
     // a job is one turn; a chat keeps the thread for the next message
