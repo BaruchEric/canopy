@@ -11523,6 +11523,21 @@ button.trigger-title:hover {
   margin: 0;
   color: var(--rust);
 }
+/* twice an icon-btn, the icon with it */
+.voice-btn {
+  width: 56px;
+  height: 56px;
+}
+.voice-btn > svg {
+  width: 2.9em;
+  height: 2.9em;
+}
+@media (pointer: coarse) {
+  .voice-btn {
+    width: 68px;
+    height: 68px;
+  }
+}
 .voice-btn.on {
   color: var(--moss);
 }
