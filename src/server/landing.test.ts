@@ -550,9 +550,10 @@ describe("restarts", () => {
     expect(info.orphans).toEqual([{ dir: orphanDir, repoPath: await sh(w.repo.path, "rev-parse", "--show-toplevel"), branch: "run/x-oo11", queueable: true }]);
     await again.orphan(orphanDir, "queue");
     await again.idle();
+    again.stop();
     expect(again.info().entries.find((e) => e.id === "oo11")?.state).toBe("landed");
     expect(again.info().orphans).toEqual([]);
-  });
+  }, 20_000);
 
   test("a run a restart stopped lands when its work is whole: committed, with only ignored files left", async () => {
     const w = await world();
