@@ -536,7 +536,7 @@ function ReloadChip() {
  *  the chip shows the code to match where it is approved, and a box for the
  *  first sign-in code from the server's log, for when no page is signed in
  *  to approve it. */
-function SignInChips() {
+export function SignInChips() {
   const names = useStore(useShallow((s) => s.backendOrder.filter((n) => wantsSignIn(s.authByBackend[n]) || s.signIns[n]?.state === "waiting")));
   return (
     <>

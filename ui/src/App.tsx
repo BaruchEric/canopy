@@ -6,6 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { CSSProperties } from "react";
 import { Library } from "./components/Library";
 import { AgentsView } from "./components/AgentsView";
+import { SessionsView } from "./components/Sessions";
 import { IncubatorView } from "./components/Incubator";
 import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
@@ -60,6 +61,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
   {
     label: "agents",
     views: [
+      { key: "sessions", label: "sessions", what: "Every shell and agent on every machine, in one screen" },
       { key: "agents", label: "agents", what: "Which harness starts for what, per repo and role" },
       { key: "incubator", label: "incubator", what: "New projects from an idea, clarified and researched before anything is built" },
       { key: "triggers", label: "triggers", what: "Sentry issues that start a fix on a branch with nobody typing, and what became of each" },
@@ -79,7 +81,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "agents", "incubator", "health", "costs", "triggers", "kit", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "kit", "secrets"];
 
 /** A view tab's live count, or null where its view has nothing waiting. */
 function badgeOf(s: CanopyState, key: string): Badge | null {
@@ -478,7 +480,9 @@ export function App() {
         <Wordmark />
         {nav}
       </header>
-      {view === "agents" ? (
+      {view === "sessions" ? (
+        <SessionsView onView={navigate} />
+      ) : view === "agents" ? (
         <AgentsView onGit={() => navigate("git")} />
       ) : view === "incubator" ? (
         <IncubatorView onGit={() => navigate("git")} />
@@ -530,7 +534,7 @@ export function App() {
       <SelectBar />
       </>}
       <FeedDock />
-      <TermDock />
+      {view !== "sessions" && <TermDock />}
       <RunSheet />
       <CommandPop />
       <DictationFloat />

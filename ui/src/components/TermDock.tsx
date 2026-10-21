@@ -961,7 +961,7 @@ function tabLabels(terms: TermTab[]): string[] {
 
 /** The row of tabs over a set of shells, with what comes before and after
  *  them (a caption, a "new" button) passed in, and `end` at the far right. */
-function TermTabs({
+export function TermTabs({
   terms,
   active,
   onShow,

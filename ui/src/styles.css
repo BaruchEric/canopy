@@ -5600,6 +5600,253 @@ button.landing-open:hover {
   background: var(--bark0) !important;
 }
 
+/* the sessions view: a multiplexer's screen. The machines tree over the
+   agents list down the left, the shells as tabs across the top, the one
+   showing under them, a status line along the foot */
+.sessions {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  background: var(--bark0);
+}
+.sessions.narrow {
+  grid-template-columns: minmax(0, 1fr);
+}
+.ss-side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--hair);
+  background: var(--bark0);
+}
+.ss-side.drawer {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 34;
+  width: min(300px, 86vw);
+  padding-top: env(safe-area-inset-top);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--bark0) 60%, transparent);
+}
+.ss-machines {
+  flex: 1 1 50%;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+.ss-agents {
+  flex: 1 1 50%;
+  min-height: 0;
+  overflow-y: auto;
+  border-top: 1px solid var(--hair);
+}
+.ss-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: lowercase;
+  color: var(--ink-faint);
+  background: var(--bark0);
+}
+.ss-faint {
+  color: var(--ink-faint);
+}
+.ss-empty {
+  margin: 0;
+  padding: 2px 12px 6px 30px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.ss-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ss-mhead,
+.ss-repo,
+.ss-agent {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 12px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.ss-mhead {
+  margin-top: 4px;
+  color: var(--ink-dim);
+}
+.ss-mhead .dot {
+  margin-left: auto;
+  align-self: center;
+}
+.ss-fold {
+  width: 10px;
+  color: var(--ink-faint);
+}
+.ss-repo,
+.ss-agent {
+  padding-left: 20px;
+}
+.ss-repo .dot,
+.ss-agent .dot {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+.ss-mhead:hover,
+.ss-repo:hover,
+.ss-agent:hover {
+  background: var(--wash);
+}
+.ss-repo.on,
+.ss-agent.on {
+  background: var(--wash);
+  box-shadow: inset 2px 0 0 var(--moss);
+}
+.ss-mhead:focus-visible,
+.ss-repo:focus-visible,
+.ss-agent:focus-visible {
+  outline: 1px solid var(--moss);
+  outline-offset: -1px;
+}
+.ss-lines {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.ss-line,
+.ss-name,
+.ss-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ss-sub {
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.ss-answer {
+  padding: 0 12px 4px 35px;
+}
+.sessions .dot.hollow {
+  background: none;
+  box-shadow: inset 0 0 0 1px var(--ink-faint);
+}
+.ss-new {
+  flex: none;
+  border-top: 1px solid var(--hair);
+  padding: 6px 0;
+}
+.ss-new-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+.ss-new-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 4px;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.ss-new-input:focus {
+  outline: none;
+  border-bottom-color: var(--moss);
+}
+.ss-new-input::placeholder {
+  color: var(--ink-faint);
+}
+.ss-hits .ss-repo {
+  justify-content: space-between;
+}
+.ss-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ss-main > .term-tabs {
+  padding-top: 6px;
+}
+.ss-plus {
+  align-self: center;
+  margin: 0 4px 4px;
+}
+.ss-menu {
+  order: -1;
+  align-self: center;
+  margin: 0 6px 4px 0;
+}
+.ss-picked {
+  gap: 8px;
+  padding-right: 10px;
+  cursor: default;
+}
+.ss-agent-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.ss-blank {
+  display: grid;
+  place-content: center;
+  height: 100%;
+  text-align: center;
+  color: var(--ink-dim);
+}
+.ss-blank p {
+  margin: 2px 0;
+}
+.ss-status {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px;
+  padding-bottom: max(4px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--hair);
+  font-size: 12px;
+}
+.ss-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+}
+.ss-warn {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+}
+.ss-warn:hover {
+  text-decoration: underline;
+}
+
 /* the shells at the foot of a panel: a fold header over a resizable body,
    pinned below the scrolling part so they stay in view whatever it shows;
    the grip rides the top edge, the one with room to pull */
