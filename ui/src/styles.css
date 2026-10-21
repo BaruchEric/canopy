@@ -11423,3 +11423,69 @@ button.trigger-title:hover {
     animation: breathe-dot 1.6s ease-in-out infinite;
   }
 }
+
+/* ---------- dictation: the mic beside a text field or a shell ---------- */
+.dictate {
+  position: relative;
+  display: inline-flex;
+  align-self: flex-end;
+}
+.dictate-float {
+  position: fixed;
+  z-index: 50;
+}
+.dictate-btn {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--r);
+  color: var(--ink-faint);
+  background: var(--float);
+}
+.composer .dictate-btn,
+.kept-acts .dictate-btn {
+  width: 28px;
+  height: 28px;
+}
+.dictate-btn:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--wash);
+}
+.dictate-btn:disabled {
+  opacity: 0.5;
+}
+.dictate-btn[data-phase="listening"] {
+  color: var(--rust);
+  opacity: 1;
+}
+.dictate-btn[data-phase="writing"],
+.dictate-btn[data-phase="starting"] {
+  color: var(--sky);
+  opacity: 1;
+}
+.dictate-err {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  width: max-content;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 4px 8px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--float);
+  box-shadow: 0 6px 18px var(--float-shadow);
+  color: var(--rust);
+  font-size: 12px;
+  line-height: 1.35;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dictate-btn[data-phase="listening"] {
+    animation: dictate-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes dictate-pulse {
+    50% {
+      background: color-mix(in srgb, var(--rust) 18%, var(--float));
+    }
+  }
+}

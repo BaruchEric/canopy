@@ -5,6 +5,7 @@ import { convName, convOf, convOrder, latestClip, messageText } from "../chan";
 import { useFitPop } from "../pop";
 import { canReadClipboard, copyText, readText } from "../share";
 import { useStore } from "../store";
+import { DictateButton } from "./Dictate";
 import type { ChanMessage } from "../../../src/core/types";
 
 /** "now", "4m", "3h", "2d" since a unix ms time */
@@ -63,6 +64,7 @@ export function ChanChip() {
   const [now, setNow] = useState(() => Date.now());
   const ref = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
+  const draftBox = useRef<HTMLTextAreaElement>(null);
   const file = useRef<HTMLInputElement>(null);
   useFitPop(ref, open);
 
@@ -175,6 +177,8 @@ export function ChanChip() {
                 ))}
               </ul>
               <textarea
+                ref={draftBox}
+                data-mic
                 className="settings-input chan-draft"
                 rows={2}
                 placeholder={`to ${target}; Enter sends, Shift+Enter a new line`}
@@ -188,6 +192,7 @@ export function ChanChip() {
                 }}
               />
               <div className="kept-acts">
+                <DictateButton target={draftBox} />
                 <button type="button" className="mini strong" disabled={!draft.trim()} onClick={send}>
                   send
                 </button>

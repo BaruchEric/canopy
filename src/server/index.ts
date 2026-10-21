@@ -64,7 +64,7 @@ import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
 import { voiceConfig, voiceMinter, type VoiceMinter } from "../core/voice";
-import type { VoiceInfo } from "../core/voicewire";
+import { DICTATE_MAX, dictationName, type Dictation, type VoiceInfo } from "../core/voicewire";
 import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
@@ -251,6 +251,9 @@ interface ServerState {
   about: About;
   /** mints a voice conversation's client secret; null with no CANOPY_VOICE_KEY */
   voice: VoiceMinter | null;
+  /** the speech model a field's mic sends its clip to (CANOPY_TRANSCRIBE_URL's,
+   *  the incubator's own); null with none */
+  dictate: Transcriber | null;
   /** why no coordinator may start here though its runner is set up: canopy
    *  not enforcing caller tokens, or the coordinator's own listener not up
    *  (`coordinatorRefusal`); null when one may */
@@ -2714,7 +2717,21 @@ async function handleApi(
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
   if (path === "/api/about" && method === "GET") return json(state.about);
-  if (path === "/api/voice" && method === "GET") return json({ model: state.voice?.model ?? null } satisfies VoiceInfo);
+  if (path === "/api/voice" && method === "GET") return json({ model: state.voice?.model ?? null, dictate: state.dictate !== null } satisfies VoiceInfo);
+  if (path === "/api/voice/dictate" && method === "POST") {
+    if (!state.dictate) return json({ error: "dictation is off: this backend has no CANOPY_TRANSCRIBE_URL" }, 503);
+    const tooBig = { error: `a clip over ${DICTATE_MAX / 1024 / 1024} MB` };
+    if (Number(req.headers.get("content-length") ?? 0) > DICTATE_MAX) return json(tooBig, 413);
+    const data = new Uint8Array(await req.arrayBuffer());
+    if (data.length > DICTATE_MAX) return json(tooBig, 413);
+    if (data.length === 0) return json({ error: "the clip is empty" }, 400);
+    const type = req.headers.get("content-type") ?? "audio/webm";
+    try {
+      return json({ text: await state.dictate(data, dictationName(type), type) } satisfies Dictation);
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+    }
+  }
   if (path === "/api/voice/session" && method === "POST") {
     if (!state.voice) return json({ error: "voice is off: this backend has no CANOPY_VOICE_KEY" }, 503);
     try {
@@ -4430,6 +4447,7 @@ export async function startServer(opts: {
   });
   const vault = vaultConfig();
   const speech = transcribeConfig();
+  const transcribe = opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech);
   const voice = opts.voice !== undefined ? opts.voice : voiceMinter(voiceConfig());
   const ship = shipConfig(process.env, runnerOpts.backend);
   // The configs hold what they read; the env keeps neither secret, so no
@@ -4441,7 +4459,7 @@ export async function startServer(opts: {
   const triggerSecrets = takeTriggerSecrets(process.env);
   if (process.env["NODE_ENV"] !== "test") {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
-    if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed");
+    if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed and the fields' mics stay off");
     if (!ship.vercelToken) console.error("incubator: no VERCEL_TOKEN, so a built project parks before its deploy");
     if (!ship.firebaseToken) console.error("incubator: no FIREBASE_TOKEN, so a vercel+firebase project parks before its deploy");
     if (!voice) console.error("voice: no CANOPY_VOICE_KEY, so the mic stays off");
@@ -4462,6 +4480,7 @@ export async function startServer(opts: {
     harnesses,
     harnessMissing,
     voice,
+    dictate: transcribe,
     about: {
       ...readBuild(),
       startedAt: Date.now(),
@@ -4649,7 +4668,7 @@ export async function startServer(opts: {
           broadcast(state, { type: "scan", result: state.result });
         },
         repo: (id) => state.result.repos.find((r) => r.id === id),
-        transcribe: opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech),
+        transcribe,
         notes: opts.incubator?.notes !== undefined ? opts.incubator.notes : vaultNotes(vault),
         ship: opts.incubator?.ship !== undefined ? opts.incubator.ship : shipper(ship),
         // a renovate or extend seed is rebuilt in this process; the mirror syncs after, as for a commit

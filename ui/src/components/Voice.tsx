@@ -6,6 +6,7 @@ import { backendOf } from "../registry";
 import { allCards, homeConn, isOnline, useStore, type CanopyState } from "../store";
 import type { VoicePhase, VoiceState } from "../voice";
 import { VoiceCall } from "../voicecall";
+import { MicIcon } from "./Dictate";
 
 const PHASE_WORDS: Record<VoicePhase, string> = {
   connecting: "Connecting…",
@@ -92,11 +93,7 @@ export function VoiceButton() {
         disabled={why !== null && !on}
         onClick={on ? hangUp : start}
       >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <rect x="9" y="3" width="6" height="11" rx="3" />
-          <path d="M5 11a7 7 0 0 0 14 0" />
-          <path d="M12 18v3" />
-        </svg>
+        <MicIcon />
       </button>
       {state && <VoicePanel state={state} onHangUp={hangUp} onClose={() => setState(null)} />}
     </>

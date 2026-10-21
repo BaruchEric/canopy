@@ -77,6 +77,7 @@ describe("needs", () => {
     expect(needs("POST", "/api/prs/merge")).toBe("operate");
     expect(needs("DELETE", "/api/incubator")).toBe("operate");
     expect(needs("POST", "/api/voice/session")).toBe("operate");
+    expect(needs("POST", "/api/voice/dictate")).toBe("operate");
     expect(needs("GET", "/api/voice")).toBe("read");
     expect(needs("POST", "/api/ranger/wakes")).toBe("operate");
     expect(needs("POST", "/api/tailchan/send")).toBe("operate");

@@ -14,9 +14,27 @@ export const VOICE_SOCKET = "wss://api.elevenlabs.io/v1/convai/realtime";
 export const VOICE_RATE = 24_000;
 
 /** GET /api/voice: the model a conversation would use, null when this
- *  backend has no key */
+ *  backend has no key, and whether it turns speech into text for a field
+ *  (`CANOPY_TRANSCRIBE_URL` set) */
 export interface VoiceInfo {
   model: VoiceModel | null;
+  dictate: boolean;
+}
+
+/** POST /api/voice/dictate: what was said in the clip the page recorded */
+export interface Dictation {
+  text: string;
+}
+
+/** a dictated clip past this is refused (413); OpenAI-style servers take 25 MB */
+export const DICTATE_MAX = 25 * 1024 * 1024;
+
+/** the file name a clip goes to the speech model under: Whisper-style
+ *  servers read the format off the extension, not the type */
+export function dictationName(type: string): string {
+  const t = type.split(";")[0]?.trim().toLowerCase() ?? "";
+  const ext: Record<string, string> = { "audio/webm": "webm", "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/ogg": "ogg", "audio/wav": "wav", "audio/mpeg": "mp3" };
+  return `dictation.${ext[t] ?? "webm"}`;
 }
 
 /** POST /api/voice/session: the model and the secret to open it with */

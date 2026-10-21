@@ -14,6 +14,7 @@ import { ApproveSheet } from "./Landing";
 import { SearchSheet } from "./Search";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
+import { DictateButton } from "./Dictate";
 import { CoordTasks, ParentLine } from "./CoordTasks";
 import { coordView, isCoordinator, type CoordView } from "../coord";
 import { PHONE, useMedia } from "../media";
@@ -797,7 +798,9 @@ function Composer({
           }
         }}
         aria-label="Your message"
+        data-mic
       />
+      <DictateButton target={box} />
       <button
         type="button"
         className="mini strong"

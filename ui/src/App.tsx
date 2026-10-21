@@ -32,6 +32,7 @@ import { PickMenu, type PickGroup } from "./components/PickMenu";
 import { WAITING_PANEL } from "./waiting";
 import { bindNavigate } from "./clirun";
 import { CommandPop } from "./components/CommandLine";
+import { DictationFloat } from "./components/Dictate";
 
 const route = parseRoute(window.location.search);
 
@@ -450,10 +451,23 @@ export function App() {
       </div>
     );
   }
-  if (route.agent) return <AgentSolo card={route.agent.card} follow={route.agent.follow} />;
-  if (route.solo && route.repo) return <Solo id={route.repo} />;
-  if (route.shell && route.repo) return <ShellSolo id={route.repo} />;
-  if (route.section && route.repo) return <SectionSolo id={route.repo} section={route.section} />;
+  // a window of one thing keeps the mic that follows focus
+  const solo = route.agent ? (
+    <AgentSolo card={route.agent.card} follow={route.agent.follow} />
+  ) : route.solo && route.repo ? (
+    <Solo id={route.repo} />
+  ) : route.shell && route.repo ? (
+    <ShellSolo id={route.repo} />
+  ) : route.section && route.repo ? (
+    <SectionSolo id={route.repo} section={route.section} />
+  ) : null;
+  if (solo)
+    return (
+      <>
+        {solo}
+        <DictationFloat />
+      </>
+    );
   const nav = <ViewMenu view={view} navigate={navigate} />;
   return (
     <div className="app">
@@ -515,6 +529,7 @@ export function App() {
       <TermDock />
       <RunSheet />
       <CommandPop />
+      <DictationFloat />
     </div>
   );
 }

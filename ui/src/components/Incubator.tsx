@@ -14,6 +14,7 @@ import { dropSproutHere, sproutHere } from "../routes";
 import { backendOf, plainOf } from "../registry";
 import { INPUT_GLYPH, STAGES, branchHref, sortSprouts, sproutActivity, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
 import { isOnline, multi, useStore } from "../store";
+import { recorderBlocked, useRecorder } from "../recorder";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
 import { Questions } from "./Prompts";
@@ -185,29 +186,9 @@ export function IncubatorView({ onGit }: { onGit?: () => void }) {
  *  own recorder. `onRecording` says when a recording starts and ends, so the
  *  form can hold its submit until the memo is a file. */
 function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; onRecording: (on: boolean) => void }) {
-  const can = window.isSecureContext && typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia);
-  const rec = useRef<MediaRecorder | null>(null);
-  // false once the form is gone: a permission prompt answered after that
-  // must not leave the microphone on with nothing to stop it
-  const alive = useRef(true);
+  const can = recorderBlocked() === null;
   const pick = useRef<HTMLInputElement>(null);
-  // one start at a time: a second click while the permission prompt is up
-  // would make a second stream the first recorder's stop never reaches
-  const starting = useRef(false);
-  const [pending, setPending] = useState(false);
-  const [recording, setRecording] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-      const r = rec.current;
-      if (!r) return;
-      r.onstop = null;
-      if (r.state !== "inactive") r.stop();
-      for (const t of r.stream.getTracks()) t.stop();
-    };
-  }, []);
+  const { recording, pending, err, start, stop } = useRecorder((file) => onFiles([file]), onRecording);
   if (!can) {
     return (
       <>
@@ -232,62 +213,10 @@ function Recorder({ onFiles, onRecording }: { onFiles: (files: File[]) => void; 
       </>
     );
   }
-  const start = async () => {
-    if (starting.current || rec.current) return;
-    starting.current = true;
-    setPending(true);
-    setErr(null);
-    let stream: MediaStream | null = null;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (!alive.current) {
-        for (const t of stream.getTracks()) t.stop();
-        return;
-      }
-      const live = stream;
-      // Safari records mp4 only
-      const type = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4";
-      const r = new MediaRecorder(live, { mimeType: type });
-      const chunks: Blob[] = [];
-      r.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
-      };
-      r.onstop = () => {
-        for (const t of live.getTracks()) t.stop();
-        rec.current = null;
-        setRecording(false);
-        onRecording(false);
-        if (chunks.length === 0) return;
-        const ext = type === "audio/webm" ? "webm" : "m4a";
-        onFiles([new File(chunks, `voice-${Date.now()}.${ext}`, { type: r.mimeType || type })]);
-      };
-      r.onerror = () => {
-        // the recorder died: let go of the microphone and say so
-        for (const t of live.getTracks()) t.stop();
-        r.onstop = null;
-        rec.current = null;
-        setRecording(false);
-        onRecording(false);
-        if (alive.current) setErr("the recording failed");
-      };
-      r.start();
-      rec.current = r;
-      setRecording(true);
-      onRecording(true);
-    } catch (e) {
-      // a recorder that failed to make or start leaves the microphone on
-      if (stream) for (const t of stream.getTracks()) t.stop();
-      rec.current = null;
-      if (alive.current) setErr(errText(e));
-    } finally {
-      starting.current = false;
-      if (alive.current) setPending(false);
-    }
-  };
   return (
     <>
       {recording ? (
-        <button type="button" className="mini strong recording" onClick={() => rec.current?.stop()}>
+        <button type="button" className="mini strong recording" onClick={stop}>
           ■ stop recording
         </button>
       ) : (

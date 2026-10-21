@@ -100,7 +100,7 @@ export function SecretsView() {
   const info = all[home];
   if (!info) {
     return (
-      <main className="secrets-view">
+      <main className="secrets-view" data-no-dictate>
         <p className="secrets-note">Reading the secret store…</p>
       </main>
     );
@@ -111,7 +111,7 @@ export function SecretsView() {
   const tabs: Tab[] = here ? ["secrets", "sinks", "import", "passkeys"] : ["secrets", "sinks", "import"];
   const shown = tabs.includes(tab) ? tab : "secrets";
   return (
-    <main className="secrets-view">
+    <main className="secrets-view" data-no-dictate>
       <div className="secrets-bar">
         <span className="secrets-head">
           {info.role === "writer" ? "the mini's store" : `${info.backend}'s pulled copy`} · {info.head ?? "no commit yet"} · {info.secrets.length} secrets
