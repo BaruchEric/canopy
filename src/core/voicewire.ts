@@ -13,13 +13,31 @@ export const VOICE_SOCKET = "wss://api.elevenlabs.io/v1/convai/realtime";
 /** the audio both ways: 16-bit little-endian mono PCM at this rate */
 export const VOICE_RATE = 24_000;
 
-/** GET /api/voice: the model a conversation would use, null when this
- *  backend has no key, and whether it turns speech into text for a field
+/** GET /api/voice: the Eleven model a conversation would use, null when
+ *  this backend has no key; the GPT-Live model, null with no
+ *  `CANOPY_LIVE_KEY`; and whether it turns speech into text for a field
  *  (`CANOPY_TRANSCRIBE_URL` set) */
 export interface VoiceInfo {
   model: VoiceModel | null;
+  live: string | null;
   dictate: boolean;
 }
+
+/** POST /api/voice/live: the page's WebRTC offer, which the backend takes
+ *  to OpenAI with its key, since GPT-Live has no client secret a page could
+ *  open a session with */
+export interface LiveOffer {
+  sdp: string;
+}
+
+/** the answer to set as the peer connection's remote description */
+export interface LiveAnswer {
+  id: string;
+  sdp: string;
+}
+
+/** an offer past this is refused (413); a real one is a few KB */
+export const LIVE_OFFER_MAX = 64 * 1024;
 
 /** POST /api/voice/dictate: what was said in the clip the page recorded */
 export interface Dictation {
@@ -127,4 +145,23 @@ export const VOICE_INSTRUCTIONS = [
   "Use the tools for anything about repos, runs or what is waiting; never guess state you have not looked up.",
   "You can look things up and open repos and views on the screen. You cannot commit, push, answer an ask or start or stop a run;",
   "when asked to, say that it has to be done in canopy by hand, and offer to open the right place.",
+].join(" ");
+
+// GPT-Live splits the work: the live model talks and hands anything that
+// needs a lookup to a backend model, which holds the tools. Each gets its
+// half of the rules above.
+
+export const LIVE_INSTRUCTIONS = [
+  "You are the voice of canopy, a cockpit for one developer's git repos and the Claude agents working in them.",
+  "Answer in one to three short spoken sentences, with no lists, paths or ids. Round numbers and name repos the way a person would say them.",
+  "You know nothing about the repos, runs or asks yourself: delegate every question about them, every request to open a repo or a view, and the goodbye when the user is done.",
+  "While the backend works, say a few words at most. Never guess what it will find.",
+].join(" ");
+
+export const LIVE_BACKEND_INSTRUCTIONS = [
+  "You answer for canopy's voice, which speaks your result aloud, so return one to three plain sentences with no lists, markdown, paths or ids.",
+  "Use the tools for anything about repos, runs or what is waiting; never guess state you have not looked up.",
+  "You can look things up and open repos and views on the screen. You cannot commit, push, answer an ask or start or stop a run;",
+  "when asked to, say that it has to be done in canopy by hand, and offer to open the right place.",
+  "When the user says goodbye or that they are done, call end_conversation and return a short goodbye.",
 ].join(" ");

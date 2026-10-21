@@ -1,13 +1,15 @@
 /**
  * The voice routes on a real server, with a stand-in minter and speech
  * model: what the page reads before it shows the mic, a minted session,
- * ElevenLabs refusing, a dictated clip, and a backend with neither.
+ * ElevenLabs refusing, a GPT-Live offer, a dictated clip, and a backend
+ * with none of them.
  */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import type { VoiceMinter } from "../core/voice";
+import type { LiveOpener } from "../core/voicelive";
 import { VOICE_SOCKET } from "../core/voicewire";
 import { startServer } from "./index";
 
@@ -16,6 +18,8 @@ let previous: string | undefined;
 let on: { port: number; stop: () => void };
 let off: { port: number; stop: () => void };
 let refuse = false;
+/** the offer the stand-in GPT-Live opener was handed last */
+let offered: string | null = null;
 /** what the stand-in speech model was handed last */
 let heard: { size: number; name: string; type: string } | null = null;
 
@@ -37,6 +41,15 @@ const minter: VoiceMinter = {
   },
 };
 
+const live: LiveOpener = {
+  model: "gpt-live-1",
+  open: async (sdp) => {
+    offered = sdp;
+    if (refuse) throw new Error("OpenAI answered 403: no access to gpt-live-1");
+    return { id: "live_123", sdp: "v=0 answer" };
+  },
+};
+
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "canopy-voice-"));
   previous = process.env["CANOPY_CONFIG_DIR"];
@@ -50,8 +63,8 @@ beforeAll(async () => {
     if (refuse) throw new Error("the speech model answered 500: down");
     return "check the failing tests";
   };
-  on = await scratchServer({ ...base, voice: minter, incubator: { ...incubator, transcribe } });
-  off = await scratchServer({ ...base, voice: null, incubator: { ...incubator, transcribe: null } });
+  on = await scratchServer({ ...base, voice: minter, live, incubator: { ...incubator, transcribe } });
+  off = await scratchServer({ ...base, voice: null, live: null, incubator: { ...incubator, transcribe: null } });
 });
 
 afterAll(async () => {
@@ -64,9 +77,9 @@ afterAll(async () => {
 
 const at = (s: { port: number }, p: string, init?: RequestInit) => fetch(`http://127.0.0.1:${s.port}${p}`, init);
 
-test("GET /api/voice names the model, or null with no key", async () => {
-  expect(await (await at(on, "/api/voice")).json()).toEqual({ model: "eleven_realtime_v1_mini", dictate: true });
-  expect(await (await at(off, "/api/voice")).json()).toEqual({ model: null, dictate: false });
+test("GET /api/voice names the models, or null with no key", async () => {
+  expect(await (await at(on, "/api/voice")).json()).toEqual({ model: "eleven_realtime_v1_mini", live: "gpt-live-1", dictate: true });
+  expect(await (await at(off, "/api/voice")).json()).toEqual({ model: null, live: null, dictate: false });
 });
 
 test("POST /api/voice/session hands back the minted secret", async () => {
@@ -100,4 +113,22 @@ test("a dictated clip: empty is a 400, the model failing a 502, and no model a 5
   expect(r.status).toBe(502);
   expect(((await r.json()) as { error: string }).error).toContain("500");
   expect((await at(off, "/api/voice/dictate", { method: "POST", body: new Blob([new Uint8Array(8)], { type: "audio/webm" }) })).status).toBe(503);
+});
+
+test("POST /api/voice/live takes the offer to GPT-Live and hands the answer back", async () => {
+  const r = await at(on, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "v=0 offer" }) });
+  expect(r.status).toBe(200);
+  expect(await r.json()).toEqual({ id: "live_123", sdp: "v=0 answer" });
+  expect(offered).toBe("v=0 offer");
+});
+
+test("a GPT-Live offer: none is a 400, a huge one a 413, OpenAI refusing a 502, and no key a 503", async () => {
+  for (const body of ["{}", '{"sdp":"  "}', "not json"]) expect((await at(on, "/api/voice/live", { method: "POST", body })).status).toBe(400);
+  expect((await at(on, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "x".repeat(70_000) }) })).status).toBe(413);
+  refuse = true;
+  const r = await at(on, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "v=0" }) });
+  refuse = false;
+  expect(r.status).toBe(502);
+  expect(((await r.json()) as { error: string }).error).toContain("403");
+  expect((await at(off, "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp: "v=0" }) })).status).toBe(503);
 });

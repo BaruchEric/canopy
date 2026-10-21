@@ -3,9 +3,9 @@
  */
 
 /** the incubator's secrets (vault token, transcribe key, Vercel and Firebase
- *  tokens) and the voice key: read once at start into their own configs,
+ *  tokens) and the voice keys: read once at start into their own configs,
  *  then deleted from canopy's env */
-export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN", "FIREBASE_TOKEN", "CANOPY_VOICE_KEY"] as const;
+export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN", "FIREBASE_TOKEN", "CANOPY_VOICE_KEY", "CANOPY_LIVE_KEY"] as const;
 
 /** A trigger rule's secrets (a Sentry hook secret, a token that resolves
  *  issues) must carry this prefix. The server takes every such variable at

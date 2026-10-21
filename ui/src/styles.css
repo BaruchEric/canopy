@@ -11361,6 +11361,10 @@ button.trigger-title:hover {
   flex: 1;
   color: var(--ink-dim);
 }
+.voice-engine {
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
 .voice-dot {
   --state: var(--ink-faint);
   width: 9px;

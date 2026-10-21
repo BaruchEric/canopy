@@ -420,6 +420,12 @@ services:
       - CANOPY_VOICE_KEY=${CANOPY_VOICE_KEY:-}
       - CANOPY_VOICE_MODEL=${CANOPY_VOICE_MODEL:-}
       - CANOPY_VOICE_VOICE=${CANOPY_VOICE_VOICE:-}
+      # the same mic through GPT-Live: an OpenAI key the backend starts each
+      # session with, deleted from canopy's env once read. Empty leaves it off.
+      - CANOPY_LIVE_KEY=${CANOPY_LIVE_KEY:-}
+      - CANOPY_LIVE_MODEL=${CANOPY_LIVE_MODEL:-}
+      - CANOPY_LIVE_VOICE=${CANOPY_LIVE_VOICE:-}
+      - CANOPY_LIVE_BACKEND=${CANOPY_LIVE_BACKEND:-}
       # the incubator's deploy (docs/deploy.md): a Vercel token, scoped to
       # the one team the incubator's projects go to, and that team's slug
       # when it is not the token's own account. Readable through

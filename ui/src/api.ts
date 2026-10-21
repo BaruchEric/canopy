@@ -1,4 +1,4 @@
-import type { Dictation, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
+import type { Dictation, LiveAnswer, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type {
   HealthCheck,
   KitAction,
@@ -561,12 +561,14 @@ export const api = {
    *  backend `b` on the machine it ran on; a 404 when the file is not there */
   agentActivity: (b: string, harness: Harness, session: string, cwd: string) =>
     req<AgentActivity>(b, `/api/agents/activity?harness=${harness}&session=${encodeURIComponent(session)}&cwd=${encodeURIComponent(cwd)}`),
-  /** the model a spoken conversation would use, null when the home backend has no key */
+  /** the models a spoken conversation would use, each null when the home backend has no key for it */
   voice: (b: string = homeName()) => req<VoiceInfo>(b, "/api/voice"),
   /** a field's recorded clip as text, from a backend whose /api/voice says it can */
   dictate: (b: string, clip: Blob) => req<Dictation>(b, "/api/voice/dictate", { method: "POST", body: clip }),
   /** a client secret for one conversation, minted by the home backend */
   voiceSession: () => req<VoiceSession>(homeName(), "/api/voice/session", { method: "POST", body: "{}" }),
+  /** a GPT-Live session for this page's WebRTC offer, started by the home backend with its key */
+  voiceLive: (sdp: string) => req<LiveAnswer>(homeName(), "/api/voice/live", { method: "POST", body: JSON.stringify({ sdp }) }),
   /** the broker's asks as the home backend follows them, and presence; a
    *  503 without a broker */
   asks: () => req<AsksInfo>(homeName(), "/api/asks"),

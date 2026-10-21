@@ -64,7 +64,8 @@ import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { transcribeConfig, transcriber } from "../core/transcribe";
 import { voiceConfig, voiceMinter, type VoiceMinter } from "../core/voice";
-import { DICTATE_MAX, dictationName, type Dictation, type VoiceInfo } from "../core/voicewire";
+import { liveConfig, liveOpener, type LiveOpener } from "../core/voicelive";
+import { DICTATE_MAX, LIVE_OFFER_MAX, dictationName, type Dictation, type VoiceInfo } from "../core/voicewire";
 import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
@@ -251,6 +252,8 @@ interface ServerState {
   about: About;
   /** mints a voice conversation's client secret; null with no CANOPY_VOICE_KEY */
   voice: VoiceMinter | null;
+  /** takes a page's WebRTC offer to GPT-Live; null with no CANOPY_LIVE_KEY */
+  live: LiveOpener | null;
   /** the speech model a field's mic sends its clip to (CANOPY_TRANSCRIBE_URL's,
    *  the incubator's own); null with none */
   dictate: Transcriber | null;
@@ -2717,7 +2720,7 @@ async function handleApi(
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
   if (path === "/api/about" && method === "GET") return json(state.about);
-  if (path === "/api/voice" && method === "GET") return json({ model: state.voice?.model ?? null, dictate: state.dictate !== null } satisfies VoiceInfo);
+  if (path === "/api/voice" && method === "GET") return json({ model: state.voice?.model ?? null, live: state.live?.model ?? null, dictate: state.dictate !== null } satisfies VoiceInfo);
   if (path === "/api/voice/dictate" && method === "POST") {
     if (!state.dictate) return json({ error: "dictation is off: this backend has no CANOPY_TRANSCRIBE_URL" }, 503);
     const tooBig = { error: `a clip over ${DICTATE_MAX / 1024 / 1024} MB` };
@@ -2728,6 +2731,26 @@ async function handleApi(
     const type = req.headers.get("content-type") ?? "audio/webm";
     try {
       return json({ text: await state.dictate(data, dictationName(type), type) } satisfies Dictation);
+    } catch (e) {
+      return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+    }
+  }
+  if (path === "/api/voice/live" && method === "POST") {
+    if (!state.live) return json({ error: "GPT-Live is off: this backend has no CANOPY_LIVE_KEY" }, 503);
+    const tooBig = { error: `an offer over ${LIVE_OFFER_MAX / 1024} KB` };
+    if (Number(req.headers.get("content-length") ?? 0) > LIVE_OFFER_MAX) return json(tooBig, 413);
+    const text = await req.text();
+    if (text.length > LIVE_OFFER_MAX) return json(tooBig, 413);
+    let sdp: unknown;
+    try {
+      const body: unknown = JSON.parse(text);
+      sdp = typeof body === "object" && body !== null && "sdp" in body ? body.sdp : undefined;
+    } catch {
+      sdp = undefined;
+    }
+    if (typeof sdp !== "string" || !sdp.trim()) return json({ error: "an SDP offer is required" }, 400);
+    try {
+      return json(await state.live.open(sdp));
     } catch (e) {
       return json({ error: e instanceof Error ? e.message : String(e) }, 502);
     }
@@ -4132,6 +4155,8 @@ export async function startServer(opts: {
   harnesses?: Harness[];
   /** the voice conversation's minter, in place of CANOPY_VOICE_KEY's (null for none); tests */
   voice?: VoiceMinter | null;
+  /** GPT-Live's opener, in place of CANOPY_LIVE_KEY's (null for none); tests */
+  live?: LiveOpener | null;
   /** the agent registry's timings and scan; tests turn the scan on with a
    *  stand-in lister (it is off under `bun test` and `CANOPY_AGENT_SCAN=0`) */
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
@@ -4449,6 +4474,7 @@ export async function startServer(opts: {
   const speech = transcribeConfig();
   const transcribe = opts.incubator?.transcribe !== undefined ? opts.incubator.transcribe : transcriber(speech);
   const voice = opts.voice !== undefined ? opts.voice : voiceMinter(voiceConfig());
+  const live = opts.live !== undefined ? opts.live : liveOpener(liveConfig());
   const ship = shipConfig(process.env, runnerOpts.backend);
   // The configs hold what they read; the env keeps neither secret, so no
   // shell, run or tmux server started from here inherits them (`exec` and
@@ -4462,7 +4488,7 @@ export async function startServer(opts: {
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed and the fields' mics stay off");
     if (!ship.vercelToken) console.error("incubator: no VERCEL_TOKEN, so a built project parks before its deploy");
     if (!ship.firebaseToken) console.error("incubator: no FIREBASE_TOKEN, so a vercel+firebase project parks before its deploy");
-    if (!voice) console.error("voice: no CANOPY_VOICE_KEY, so the mic stays off");
+    if (!voice && !live) console.error("voice: no CANOPY_VOICE_KEY or CANOPY_LIVE_KEY, so the mic stays off");
   }
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
@@ -4480,6 +4506,7 @@ export async function startServer(opts: {
     harnesses,
     harnessMissing,
     voice,
+    live,
     dictate: transcribe,
     about: {
       ...readBuild(),

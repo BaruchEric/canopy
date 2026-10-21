@@ -1400,15 +1400,22 @@ backend:
 
 ## Voice
 
-The mic in the top bar opens a spoken conversation with an Eleven Realtime model (`docs/architecture.md`, "Voice"). It shows only when the page's home backend has a key:
+The mic in the top bar opens a spoken conversation with an Eleven Realtime model or GPT-Live (`docs/architecture.md`, "Voice"). It shows only when the page's home backend has a key for one of them. Eleven's:
 
 - `CANOPY_VOICE_KEY`: an ElevenLabs API key whose workspace has Realtime models (minting answers 403 "Realtime models are not available for this workspace" otherwise). It needs the Agents (convai) permission; text to speech is not used. canopy deletes it from its own env once read, as with the transcribe key.
 - `CANOPY_VOICE_MODEL`: `eleven_realtime_v1_mini` (the default, cheapest and fastest) or `eleven_realtime_v1_max` (reasons before it answers).
 - `CANOPY_VOICE_VOICE`: an ElevenLabs voice name or id, default `brian`.
 
-On the mini these go in `.env` (`docker-compose.yml` passes each by name), then `bun run redeploy --restart`. On the Mac they are `EnvironmentVariables` entries in the launchd plist `ca.beric.canopy-server`, then reload the agent. Without a key the backend logs `voice: no CANOPY_VOICE_KEY, so the mic stays off` once at start.
+GPT-Live's:
 
-The page needs a secure context for the mic: https or `localhost`. A plain-http tailnet address shows the button disabled. Minting is `operate`, so a page must be signed in where caller tokens are enforced. Billing is ElevenLabs' per-minute Agents rate plus the model's tokens, and a session ends itself after ten minutes.
+- `CANOPY_LIVE_KEY`: an OpenAI project key with access to `gpt-live-1` (the Free tier has none). The backend starts each session with it and deletes it from its own env once read. It is a separate name from `OPENAI_API_KEY` on purpose, since codex runs may read that one.
+- `CANOPY_LIVE_MODEL`: default `gpt-live-1`.
+- `CANOPY_LIVE_VOICE`: a GPT-Live voice, default `marin`.
+- `CANOPY_LIVE_BACKEND`: the Responses model the live one delegates lookups to, default `gpt-6-luna`.
+
+With both keys set, the panel offers the other engine and the browser keeps the pick. On the mini these go in `.env` (`docker-compose.yml` passes each by name), then `bun run redeploy --restart`. On the Mac they are `EnvironmentVariables` entries in the launchd plist `ca.beric.canopy-server`, then reload the agent. With neither key the backend logs `voice: no CANOPY_VOICE_KEY or CANOPY_LIVE_KEY, so the mic stays off` once at start.
+
+The page needs a secure context for the mic: https or `localhost`. A plain-http tailnet address shows the button disabled. Minting is `operate`, so a page must be signed in where caller tokens are enforced. Billing is ElevenLabs' per-minute Agents rate plus the model's tokens, and a session ends itself after ten minutes. GPT-Live bills $0.05 a minute of session plus the backend model's tokens, and each start bills 15 seconds up front, credited once the session runs.
 
 ## Caller tokens
 
