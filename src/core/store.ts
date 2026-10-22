@@ -18,6 +18,7 @@ import { normalizeChecks } from "./repohealth";
 import { normalizeTaskPatch } from "./tasks";
 import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
 import { normalizeRanger } from "./ranger";
+import { normalizeSweep } from "./sweep";
 import {
   DEFAULT_LAUNCH,
   LAUNCH_SOURCE,
@@ -30,6 +31,7 @@ import {
   type RepoAgent,
   type LaunchSettings,
   type RangerSettings,
+  type SweepSettings,
   type SourceInput,
   type StoredSource,
   type RepoCheckDef,
@@ -69,6 +71,7 @@ const defaults = (): CanopyConfig => ({
   backends: [],
   extendOwners: [],
   ranger: normalizeRanger(undefined),
+  sweep: normalizeSweep(undefined),
 });
 
 /** The launch settings the same way: only repos that differ from the defaults. */
@@ -187,6 +190,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
       (o, i, all): o is string => typeof o === "string" && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(o) && all.indexOf(o) === i,
     ),
     ranger: normalizeRanger(cfg.ranger),
+    sweep: normalizeSweep(cfg.sweep),
   };
 }
 
@@ -428,6 +432,13 @@ export async function setKeepShells(on: boolean): Promise<void> {
 export async function setRanger(settings: RangerSettings): Promise<void> {
   await withConfig((cfg) => {
     cfg.ranger = normalizeRanger(settings);
+  });
+}
+
+/** Stores the sweep's settings whole (core/sweep patches them first). */
+export async function setSweep(settings: SweepSettings): Promise<void> {
+  await withConfig((cfg) => {
+    cfg.sweep = normalizeSweep(settings);
   });
 }
 

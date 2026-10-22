@@ -46,7 +46,7 @@ import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, setLabel, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, snapshot, tmuxBase } from "../core/tmux";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -170,6 +170,7 @@ import {
   type SpecHalf,
   type RunAction,
   type Run,
+  type SweptChat,
   type LandEntry,
   type LandingRun,
   type WorkspaceScope,
@@ -186,7 +187,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { cleanLabel, isFlowActive, isRunActive } from "../core/types";
+import { cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -198,6 +199,8 @@ import { ScreenLayouts } from "./layouts";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./ranger";
+import { SweepHub } from "./sweep";
+import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
@@ -323,6 +326,8 @@ interface ServerState {
   landing: LandingHub;
   /** the PRs branch runs opened and the watch on them (server/prs) */
   prs: PrHub;
+  /** what went idle, offered for closing, and the close (server/sweep) */
+  sweep: SweepHub;
   /** outside events (Sentry) that start branch runs, and what became of each (server/triggers) */
   triggers: TriggerHub;
   /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
@@ -441,6 +446,10 @@ interface LiveTerm {
   /** set once the sweep's end has written its record, so a client's exit,
    *  which forgets an ended shell's record, leaves this one */
   kept?: boolean;
+  /** the sweep's end while it runs, true once it kept and ended the shell:
+   *  a plain end that comes meanwhile waits for it, so the record it forgets
+   *  is never written back after */
+  keepEnd?: Promise<boolean>;
   /** when a browser last typed into it (a keystroke frame, not a
    *  terminal's own reply), for `/api/terms/watched` */
   lastInput?: number;
@@ -698,37 +707,139 @@ async function endTerm(state: ServerState, id: string, opts: { keep?: true } = {
   if (opts.keep) {
     // ending already, under some other end that forgets the record
     if (!live || live.ending) return false;
-    // ending from here on, so a pass that comes to it now leaves it alone;
-    // one already writing its plain record is waited out, so the swept
-    // record is the one that lands
+    // ending from here on, so a pass that comes to it now leaves it alone
     live.ending = true;
-    await state.keeping;
-    if (!(await keepOne(state, live, { swept: true }))) {
-      live.ending = false;
-      return false;
-    }
-    live.kept = true;
-  } else {
-    if (!live && !(await hasSession(state.tmux, id))) return false;
-    if (live) live.ending = true;
+    const ended = keepEnd(state, live);
+    live.keepEnd = ended;
+    return ended;
   }
-  await killSession(state.tmux, id);
+  const sweeping = live?.keepEnd;
+  if (sweeping) {
+    // The sweep is keeping it: wait that out rather than kill the shell
+    // under its snapshot, or forget a record its write then puts back.
+    // Once it has kept and ended the shell, this end forgets the record,
+    // since the user asked for the shell gone; if it kept nothing, the
+    // shell is still running and this end goes on as any other.
+    if (await sweeping) {
+      await forgetKept(id);
+      await refreshKept(state);
+      tellTerms(state);
+      return true;
+    }
+    if (live.ending) return false;
+  }
+  if (!live && !(await hasSession(state.tmux, id))) return false;
+  if (live) live.ending = true;
+  await dropShell(state, state.tmux, id);
+  // a snapshot pass that had this shell in hand may still be writing its
+  // record; forgetting after it is done is what makes the forget stick
+  await state.keeping;
+  await forgetKept(id);
+  tellTerms(state);
+  return true;
+}
+
+/** The sweep's end of a shell whose `ending` it has set: its history is
+ *  written out as a swept record, then the session ends and the record goes
+ *  on offer. False, with the shell left running, when the record could not
+ *  be written. */
+async function keepEnd(state: ServerState, live: LiveTerm): Promise<boolean> {
+  const tmux = state.tmux;
+  if (!tmux) return false;
+  // one pass already writing its plain record is waited out, so the swept
+  // record is the one that lands
+  await state.keeping;
+  if (!(await keepOne(state, live, { swept: true }))) {
+    live.ending = false;
+    return false;
+  }
+  live.kept = true;
+  await dropShell(state, tmux, live.info.id);
+  // the record is the point: it goes on offer now, not at the next pass
+  await refreshKept(state);
+  tellTerms(state);
+  return true;
+}
+
+/** Kills a shell's session and lets go of it here. */
+async function dropShell(state: ServerState, tmux: string[], id: string): Promise<void> {
+  await killSession(tmux, id);
   state.terms.delete(id);
   dropTermToken(state, id);
   // a move it was in the middle of is over: out sees it called off, and the
   // next shell under this name starts with no record to refuse it
   state.moving.delete(id);
-  if (opts.keep) {
-    // the record is the point: it goes on offer now, not at the next pass
-    await refreshKept(state);
-  } else {
-    // a snapshot pass that had this shell in hand may still be writing its
-    // record; forgetting after it is done is what makes the forget stick
-    await state.keeping;
-    await forgetKept(id);
+}
+
+/* ---------- the sweep's view of this backend (server/sweep) ---------- */
+
+/**
+ * What the sweep plans from: every shell held here with tmux's last output
+ * for it, its last keystroke and the agent its registry card says runs in
+ * it; the runs; the runs a landing record, an active flow or a running
+ * coordinator still holds; and the registry's cards. `shells` is null when
+ * there is no tmux, or tmux did not answer or has no server: the shells
+ * cannot be read then, and a shell that cannot be read is never idle.
+ */
+async function sweepFacts(state: ServerState, serverStart: number): Promise<PlanInputs> {
+  const cards = state.registry.list();
+  let shells: ShellFacts[] | null = null;
+  if (state.tmux) {
+    const seen = await listActivity(state.tmux).catch(() => null);
+    if (seen && seen.size > 0) {
+      shells = [];
+      for (const [id, t] of state.terms) {
+        const lastOutput = seen.get(sessionName(id));
+        // tmux does not hold it (ended, or a plain pty's): nothing to close
+        if (t.ending || lastOutput === undefined) continue;
+        // the newest live card naming this shell on this backend; an ended
+        // card says nothing, and a lost one still counts, the safe side
+        const card = cards.find((c) => c.where.canopy?.term === id && c.where.canopy.backend === state.backendName && (LIVE_AGENT_STATES.includes(c.state) || c.state === "lost"));
+        shells.push({
+          id,
+          repoId: t.info.repoId,
+          ...(t.info.label ? { label: t.info.label } : {}),
+          ...(t.info.task || state.tasks.knows(id) ? { task: true } : {}),
+          ...(t.info.ranger || state.ranger.knows(id) ? { ranger: true } : {}),
+          ...(state.moving.has(id) ? { moving: true } : {}),
+          startedAt: t.info.startedAt,
+          lastOutput,
+          ...(t.lastInput !== undefined ? { lastInput: t.lastInput } : {}),
+          agent: card ? { state: card.state, session: card.session } : null,
+        });
+      }
+    }
   }
-  tellTerms(state);
-  return true;
+  // the coordinator is never swept, and neither are the incubator's seeds
+  const seeds = new Set(state.result.repos.filter((r) => isSeedPath(state.root, r.path)).map((r) => r.id));
+  const all = state.runner.list();
+  const runs = all.filter((r) => r.action !== "coordinate" && !seeds.has(r.repoId));
+  const heldRuns = new Set<string>();
+  for (const r of state.landing.info().runs) {
+    heldRuns.add(r.id);
+    heldRuns.add(r.runId);
+  }
+  for (const f of state.flows.list()) {
+    if (!isFlowActive(f)) continue;
+    for (const st of f.steps) if (st.runId) heldRuns.add(st.runId);
+  }
+  // a coordinator's children while it runs: its cards follow them
+  const coordinating = new Set(all.filter((r) => r.action === "coordinate" && isRunActive(r)).map((r) => r.id));
+  for (const r of all) if (r.parent && coordinating.has(r.parent)) heldRuns.add(r.id);
+  return { serverStart, shells, runs, heldRuns, outside: cards };
+}
+
+/** Starts a chat on the session the sweep stopped one on, as a chat started
+ *  from the page is started, and with the harness the record names. */
+async function startSweptChat(state: ServerState, c: SweptChat): Promise<Run> {
+  const repo = state.result.repos.find((r) => r.id === c.repoId);
+  if (!repo) throw new HttpError(404, `${c.repoId} is not here any more`);
+  if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
+  const busy = state.runner.activeFor(repo.id);
+  if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
+  const agent = agentFor(await loadConfig(), repo.path, "chat", { harness: c.harness });
+  await needHarness(state, agent.harness, repo.path);
+  return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, { resume: c.session });
 }
 
 /* ---------- what a shell leaves behind (core/keep) ---------- */
@@ -2906,6 +3017,8 @@ async function handleApi(
   if (landingRes) return landingRes;
   const prsRes = await state.prs.handle(req, url);
   if (prsRes) return prsRes;
+  const sweepRes = await state.sweep.handle(req, url);
+  if (sweepRes) return sweepRes;
   const triggersRes = await state.triggers.handle(req, url);
   if (triggersRes) return triggersRes;
   const coordRes = await state.coordinator.handle(req, url, caller);
@@ -4334,6 +4447,9 @@ export async function startServer(opts: {
    *  passes its own */
   callersLog?: (line: string) => void;
 }): Promise<{ port: number; coordPort: number | null; endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>; stop: () => Promise<void> }> {
+  // what the sweep counts a shell's idle from at the latest: keystrokes
+  // before it were held in memory and are gone
+  const serverStart = Date.now();
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
   // canopy's git in a seed goes through the guard (seedgit.ts)
@@ -4949,6 +5065,15 @@ export async function startServer(opts: {
       // a run a restart took is unknown here, which counts as not finished
       runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
+    }),
+    sweep: new SweepHub({
+      broadcast: (ev) => broadcast(state, ev),
+      facts: () => sweepFacts(state, serverStart),
+      endShell: (id) => endTerm(state, id, { keep: true }),
+      stopChat: (id) => state.runner.stop(id),
+      dismissRun: (id) => state.runner.dismiss(id),
+      startChat: (c) => startSweptChat(state, c),
+      keptSwept: async () => state.kept.filter((k) => k.swept),
     }),
     triggers: new TriggerHub({
       broadcast: (ev) => broadcast(state, ev),
@@ -5602,6 +5727,7 @@ export async function startServer(opts: {
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
+  void state.sweep.start().catch((err) => console.error("canopy: sweep", err));
   if (process.env["NODE_ENV"] !== "test") state.triggers.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket
@@ -5638,6 +5764,7 @@ export async function startServer(opts: {
       state.kit.stop();
       state.landing.stop();
       state.prs.stop();
+      state.sweep.stop();
       state.triggers.stop();
       state.secrets.stop();
       state.tasks.stop();

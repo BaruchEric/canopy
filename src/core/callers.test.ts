@@ -136,6 +136,19 @@ describe("needs", () => {
     for (const a of ["fire", "resume", "retry", "stop"]) expect(needs("POST", `/api/triggers/${a}`)).toBe("operate");
     expect(needs("DELETE", "/api/triggers/events")).toBe("operate");
   });
+
+  test("sweep routes need admin", () => {
+    // reads too: the plan names every shell and chat on the backend
+    for (const m of ["GET", "POST"]) {
+      for (const p of ["/api/sweep", "/api/sweep/", "/api/sweep/settings", "/api/sweep/resume"]) expect([m, p, needs(m, p)]).toEqual([m, p, "admin"]);
+    }
+    expect(allows("shell", needs("GET", "/api/sweep"))).toBe(false);
+    expect(allows("shell", needs("POST", "/api/sweep"))).toBe(false);
+    expect(allows("ranger", needs("POST", "/api/sweep"))).toBe(false);
+    expect(allows("cli", needs("POST", "/api/sweep"))).toBe(true);
+    // a neighbour's name is not caught by the prefix
+    expect(needs("GET", "/api/sweeping")).toBe("read");
+  });
 });
 
 describe("the coordinator's routes", () => {

@@ -608,6 +608,8 @@ export interface CanopyConfig {
   extendOwners: string[];
   /** the ranger, canopy's always-on agent on this backend; off by default */
   ranger: RangerSettings;
+  /** the sweep: what went idle and is offered for closing; its schedule is off by default */
+  sweep: SweepSettings;
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */

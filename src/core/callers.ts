@@ -3,7 +3,8 @@
  *  `needs(method, path)` against `allows(kind, right)` at the top of route().
  *
  *  The default denies: a route that is not a GET and not in the table needs
- *  `admin`, so a new route is safe until someone files it here. */
+ *  `admin`, so a new route is safe until someone files it here. A GET reads
+ *  unless the table names it (the sweep's do). */
 
 export type Right = "read" | "plan" | "operate" | "shell" | "admin" | "helper";
 export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "helper" | "none";
@@ -82,6 +83,9 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["sources/rescan", "kit/*", "secrets/*", "ranger", "ranger/restart", "ranger/fresh"], right: "admin" },
   { methods: POST, paths: ["auth/approve", "auth/deny", "auth/revoke"], right: "admin" },
   { methods: ["PUT"], paths: ["guards"], right: "admin" },
+  // the sweep's reads too: its plan names every shell and chat here, and an
+  // agent in a shell (which holds operate) must never close the rest
+  { methods: ["GET", "POST"], paths: ["sweep", "sweep/*"], right: "admin" },
   {
     methods: POST,
     paths: ["repos/archive", "repos/open", "repos/openfile", "repos/launch", "repos/halt", "repos/install", "repos/uninstall", "repos/build", "repos/launcher"],
@@ -99,6 +103,10 @@ for (const r of RULES) {
     }
   }
 }
+
+/** the table's right for a path written without `/api/`, if it has one */
+const ruled = (method: string, rel: string): Right | "open" | undefined =>
+  exact.get(`${method} ${rel}`) ?? prefixes.find((p) => p.method === method && rel.startsWith(p.prefix))?.right;
 
 /** The Library GETs that only read: the dashboard and its ports page (the
  *  Library view's iframe loads both, and a frame's load carries no token),
@@ -144,11 +152,9 @@ export function needs(method: string, path: string): Right | "open" {
   if (method === "GET") {
     if (clean === "/api/term") return "shell";
     if (clean === "/api/helper") return "helper";
-    return "read";
+    // a GET reads unless the table says more
+    return (clean.startsWith("/api/") ? ruled(method, clean.slice("/api/".length)) : undefined) ?? "read";
   }
   if (!clean.startsWith("/api/")) return "admin";
-  const rel = clean.slice("/api/".length);
-  const hit = exact.get(`${method} ${rel}`);
-  if (hit) return hit;
-  return prefixes.find((p) => p.method === method && rel.startsWith(p.prefix))?.right ?? "admin";
+  return ruled(method, clean.slice("/api/".length)) ?? "admin";
 }
