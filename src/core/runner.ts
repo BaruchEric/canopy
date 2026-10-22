@@ -73,6 +73,9 @@ export interface StartExtras {
   /** where the run's process starts, in place of the repo's checkout: a
    *  coordinator's own folder under its runner's seeds */
   cwd?: string;
+  /** a Claude session to resume, for a chat the sweep stopped; a branch's own
+   *  `resume` wins when both are set */
+  resume?: string;
 }
 
 export { claudeBinary, cliArgs } from "./claudedrive";
@@ -346,7 +349,8 @@ export class Runner {
     // nor does a coordinator's, which runs with its permissions bypassed in
     // a folder no rule was kept for
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
-    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(branch?.resume ? { resume: branch.resume } : {}) };
+    const resume = branch?.resume ?? extras.resume;
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume } : {}) };
     const ctx = new RunCtx(
       run,
       {

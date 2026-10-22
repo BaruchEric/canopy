@@ -169,6 +169,19 @@ describe("a branch run", () => {
     expect(made[0]?.ctx?.spec.resume).toBe("sess-2");
   });
 
+  test("a chat started with extras.resume hands the session to the driver", () => {
+    const { runner, made } = setup();
+    const run = runner.start(repo("a"), "chat", ACTIONS.chat, "", DEFAULT_AGENT, undefined, undefined, undefined, { resume: "s1" });
+    runner.say(run.id, "carry on");
+    expect(made[0]?.ctx?.spec.resume).toBe("s1");
+  });
+
+  test("a branch's resume wins over extras.resume", () => {
+    const { runner, made } = setup();
+    runner.start(repo("a"), "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined, branchOf("a", { resume: "b1", message: "go" }), { resume: "s1" });
+    expect(made[0]?.ctx?.spec.resume).toBe("b1");
+  });
+
   test("a fix-it run resumes the session with its own first message", () => {
     const { runner, made } = setup();
     runner.start(repo("a"), "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined, branchOf("a", { resume: "sess-1", message: "the queue sent it back" }));
