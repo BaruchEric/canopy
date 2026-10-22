@@ -1125,7 +1125,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
               disabled={busy !== null}
               onClick={() => void suggest()}
             >
-              {busy === "suggest" ? "thinking…" : "suggest"}
+              {busy === "suggest" ? <span className="shimmer">thinking…</span> : "suggest"}
             </button>
             <label className="toggle">
               <input
@@ -1151,7 +1151,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
               title="Suggests a message and stages everything if you left either blank"
               onClick={() => void doCommit(true)}
             >
-              {busy === "commit+push" ? "working…" : "commit + push"}
+              {busy === "commit+push" ? <span className="shimmer">working…</span> : "commit + push"}
             </button>
           </div>
         </div>

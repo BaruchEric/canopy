@@ -364,7 +364,7 @@ export function Timeline({
         </details>
       )}
       {todos.length > 0 && (
-        <ol className="todos" aria-label="The agent's checklist">
+        <ol className={run.status === "working" ? "todos live" : "todos"} aria-label="The agent's checklist">
           {todos.map((t) => (
             <li key={t.id} className={`todo t-${t.status}`}>
               <span className="todo-mark" aria-hidden="true" />
@@ -378,15 +378,15 @@ export function Timeline({
           <Step key={n.step.id} step={n.step} kids={n.kids} />
         ))}
         {run.status === "working" && run.steps.length === 0 && (
-          <li className="step k-note">
+          <li className="step k-note thinking">
             <span className="node" />
-            <span className="step-text">starting {AGENT_NAME[harness]} in {repo?.path ?? idText(run.repoId)}…</span>
+            <span className="step-text shimmer">starting {AGENT_NAME[harness]} in {repo?.path ?? idText(run.repoId)}…</span>
           </li>
         )}
         {run.status === "working" && run.steps.length > 0 && (
           <li className="step k-note thinking">
             <span className="node" />
-            <span className="step-text">thinking…</span>
+            <span className="step-text shimmer">thinking…</span>
           </li>
         )}
         {chat && run.status === "idle" && run.steps.length === 0 && (

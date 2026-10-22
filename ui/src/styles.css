@@ -5107,7 +5107,8 @@ button.landing-open:hover {
   top: 9px;
   background: var(--hair2);
 }
-.k-tool.st-running .node {
+.k-tool.st-running .node,
+.thinking .node {
   background: var(--sky);
 }
 .k-tool.st-ok .node {
@@ -5511,7 +5512,8 @@ button.landing-open:hover {
   }
   .st-working .dot,
   .dot.live,
-  .k-tool.st-running .node {
+  .k-tool.st-running .node,
+  .thinking .node {
     animation: breathe-dot 1.4s ease-in-out infinite;
   }
   @keyframes breathe-dot {
@@ -5519,6 +5521,36 @@ button.landing-open:hover {
       transform: scale(1.35);
       opacity: 0.7;
     }
+  }
+  /* words for an agent at work ("thinking…"): a light runs along them.
+     The text fill goes clear rather than the colour, so currentColor in
+     the gradient is still the text's own. */
+  .shimmer {
+    background: linear-gradient(90deg, currentColor 40%, var(--ink) 50%, currentColor 60%) 100% 0 / 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: shimmer 1.8s linear infinite;
+  }
+  @keyframes shimmer {
+    to {
+      background-position: 0 0;
+    }
+  }
+  /* a step rises in as it arrives; the ones already there when the console
+     opens come in together */
+  .console .step {
+    animation: step-in 220ms var(--ease) backwards;
+  }
+  @keyframes step-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+  /* the checklist item the agent is on turns while the run works */
+  .todos.live .t-in_progress .todo-mark {
+    animation: spin 2.4s linear infinite;
   }
   .menu {
     animation: settle 120ms ease-out;
