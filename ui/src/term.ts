@@ -4,7 +4,9 @@
  *  shell height read from here, so they agree on what a row is. */
 
 import { isSeedId } from "../../src/core/sprout";
-import type { Harness, Repo, ShellPlace, TermInfo } from "../../src/core/types";
+import { cleanLabel, type Harness, type Repo, type ShellPlace, type TermInfo } from "../../src/core/types";
+
+export { cleanLabel, LABEL_MAX } from "../../src/core/types";
 
 /** One shell tab, in the strip along the bottom or in its repo's panel. */
 export interface TermTab {
@@ -92,17 +94,6 @@ export function loadTermTabs(v: unknown): TermTab[] {
   return out;
 }
 
-/** the longest name a tab takes by hand */
-export const LABEL_MAX = 40;
-
-/** A hand-given tab name as kept: trimmed, one line, at most `LABEL_MAX`
- *  characters; undefined when nothing is left, which puts the repo's name
- *  back. */
-export function cleanLabel(raw: string): string | undefined {
-  const one = raw.replace(/\s+/g, " ").trim().slice(0, LABEL_MAX).trim();
-  return one || undefined;
-}
-
 /** `tabs` with tab `id` named `label` by hand, or back to its repo's name
  *  when the label is blank. The same array when nothing changes. */
 export function renameTab(tabs: TermTab[], id: string, label: string): TermTab[] {
@@ -115,6 +106,24 @@ export function renameTab(tabs: TermTab[], id: string, label: string): TermTab[]
   const next = [...tabs];
   next[at] = given ? { ...rest, label: given } : rest;
   return next;
+}
+
+/** `tabs` with the names their shells carry on the backend, so a rename or
+ *  a cleared name on another device reaches this one and a shell brought
+ *  back keeps its name. `keeps` says whether a tab's backend keeps names at
+ *  all: on one older than that a shell never has one, so its tab keeps its
+ *  own. A tab whose shell is not listed is left alone. The same array when
+ *  nothing changes. */
+export function adoptLabels(tabs: TermTab[], shells: readonly Pick<TermInfo, "id" | "label">[], keeps: (tabId: string) => boolean): TermTab[] {
+  let next: TermTab[] | null = null;
+  tabs.forEach((t, i) => {
+    const shell = shells.find((x) => x.id === t.id);
+    if (!shell || shell.label === t.label || (shell.label === undefined && !keeps(t.id))) return;
+    next ??= [...tabs];
+    const { label: _, ...rest } = t;
+    next[i] = shell.label === undefined ? rest : { ...rest, label: shell.label };
+  });
+  return next ?? tabs;
 }
 
 /** `tabs` with tabs `a` and `b` in each other's places; the same array when

@@ -31,6 +31,8 @@ export interface TmuxMeta {
   place: ShellPlace;
   /** the tailchan handle the shell runs under (`TAILCHAN_AS`), when it has one */
   handle?: string;
+  /** the name a tab gave the shell by hand (`@canopy_label`) */
+  label?: string;
   /** more of the session's environment: the `CANOPY_*` a shell's agent
    *  reads to say where it runs */
   env?: Record<string, string>;
@@ -98,8 +100,13 @@ export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, c
     "@canopy_path",
     meta.path,
     ...(meta.handle ? [";", "set-option", "-t", name, "@canopy_handle", meta.handle] : []),
+    ...(meta.label ? [";", "set-option", "-t", name, "@canopy_label", meta.label] : []),
   ];
 }
+
+/** names a session's shell by hand, or takes the name off when `label` is empty */
+export const labelArgs = (base: string[], id: string, label: string): string[] =>
+  label ? [...base, "set-option", "-t", sessionName(id), "@canopy_label", label] : [...base, "set-option", "-u", "-t", sessionName(id), "@canopy_label"];
 
 export const attachArgs = (base: string[], id: string): string[] => [...base, "attach-session", "-t", sessionName(id)];
 
@@ -385,8 +392,8 @@ export function primeText(captured: string, rows: number): string {
   return lines.split("\n").join("\r\n") + "\x1b[0m" + "\r\n".repeat(Math.max(1, rows));
 }
 
-/** one line per session: name, repo, place, created (unix seconds), path, handle, task */
-export const LIST_FORMAT = "#{session_name}\t#{@canopy_repo}\t#{@canopy_place}\t#{session_created}\t#{@canopy_path}\t#{@canopy_handle}\t#{@canopy_task}";
+/** one line per session: name, repo, place, created (unix seconds), path, handle, task, label */
+export const LIST_FORMAT = "#{session_name}\t#{@canopy_repo}\t#{@canopy_place}\t#{session_created}\t#{@canopy_path}\t#{@canopy_handle}\t#{@canopy_task}\t#{@canopy_label}";
 
 export const listArgs = (base: string[]): string[] => [...base, "list-sessions", "-F", LIST_FORMAT];
 
@@ -404,7 +411,7 @@ export function parseSessions(out: string): TmuxSession[] {
   const sessions: TmuxSession[] = [];
   for (const line of out.split("\n")) {
     if (!line) continue;
-    const [name = "", repoId = "", place, created = "", path = "", handle = "", task = ""] = line.split("\t");
+    const [name = "", repoId = "", place, created = "", path = "", handle = "", task = "", label = ""] = line.split("\t");
     const id = sessionId(name);
     if (!id || !repoId || !path) continue;
     const secs = Number(created);
@@ -416,6 +423,7 @@ export function parseSessions(out: string): TmuxSession[] {
       createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
       ...(handle ? { handle } : {}),
       ...(task ? { task } : {}),
+      ...(label ? { label } : {}),
     });
   }
   return sessions;
@@ -492,6 +500,12 @@ export async function hasSession(base: string[], id: string): Promise<boolean> {
 /** ends a shell's session; the clients on it exit on their own */
 export async function killSession(base: string[], id: string): Promise<void> {
   await exec(killArgs(base, id), { timeoutMs: 10_000 });
+}
+
+/** names a session's shell by hand (empty takes the name off); false when
+ *  tmux refused, as for a session that is gone */
+export async function setLabel(base: string[], id: string, label: string): Promise<boolean> {
+  return (await exec(labelArgs(base, id, label), { timeoutMs: 10_000 })).code === 0;
 }
 
 /** How much the session has scrolled off its screen; 0 for one that has not

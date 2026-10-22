@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, Repo, RepoStatus, TermInfo } from "../../src/core/types";
 import { split, type Reg } from "./backends";
-import { agentRows, heldShellAt, machinesOf, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed } from "./sessions";
+import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed } from "./sessions";
 import type { TermTab } from "./term";
 
 const reg: Reg = { home: "mac", names: ["mac", "mini"] };
@@ -205,5 +205,17 @@ describe("shells with no tab here", () => {
       shell("x", "app"),
     ];
     expect(untabbed(shells, [{ id: "x" }]).map((t) => t.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("the new-tab box's keys", () => {
+  const k = (key: string, over: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; isComposing: boolean }> = {}) => ({ key, metaKey: false, ctrlKey: false, altKey: false, ...over });
+  test("Enter opens, Escape cancels, Ctrl+C clears; anything else types", () => {
+    expect(newTabKey(k("Enter"))).toBe("open");
+    expect(newTabKey(k("Escape"))).toBe("cancel");
+    expect(newTabKey(k("c", { ctrlKey: true }))).toBe("clear");
+    expect(newTabKey(k("c"))).toBeNull();
+    expect(newTabKey(k("c", { metaKey: true }))).toBeNull();
+    expect(newTabKey(k("Enter", { isComposing: true }))).toBeNull();
   });
 });

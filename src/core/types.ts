@@ -269,6 +269,10 @@ export interface Backend {
    *  out one a machine lacks; absent from a backend older than harnesses,
    *  which only ever started claude */
   harnesses?: Harness[];
+  /** the backend keeps the name a tab gives its shell (`TermInfo.label`),
+   *  so a shell's having none means the name was taken off; absent from a
+   *  backend older than that, whose shells never carry one */
+  labels?: true;
 }
 
 /** A helper: `canopy helper` running on a client machine, dialled in to the
@@ -2417,6 +2421,21 @@ export interface TermInfo {
   /** the ranger's own session (server/ranger.ts): never a shell or a task,
    *  joined only with `attach=1` and passed over by every shell list */
   ranger?: true;
+  /** the name a tab gave the shell by hand, kept with the shell so every
+   *  device's tab says it and a hidden shell keeps it */
+  label?: string;
+}
+
+/** the longest name a shell takes by hand */
+export const LABEL_MAX = 40;
+
+/** A hand-given shell name as kept: one line with no control characters,
+ *  trimmed, at most `LABEL_MAX` characters; undefined when nothing is left,
+ *  which puts the repo's name back. */
+export function cleanLabel(raw: string): string | undefined {
+  // eslint-disable-next-line no-control-regex
+  const one = raw.replace(/[\s\x00-\x1f\x7f]+/g, " ").trim().slice(0, LABEL_MAX).trim();
+  return one || undefined;
 }
 
 /* ---------- tasks: a repo's named processes (core/tasks, server/tasks) ---------- */
@@ -2556,6 +2575,8 @@ export interface KeptShell {
   lines: number;
   /** what was running in it when it was last looked at, when canopy could tell */
   agent: AgentKind | null;
+  /** the name its tab gave it by hand, which a restore puts back */
+  label?: string;
 }
 
 /** A port something listens on at the backend's loopback, as the preview

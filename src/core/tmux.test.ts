@@ -6,6 +6,7 @@ import {
   historySizeArgs,
   isDuplicate,
   killArgs,
+  labelArgs,
   listArgs,
   LIST_FORMAT,
   newSessionArgs,
@@ -167,6 +168,20 @@ describe("a shell's tailchan handle", () => {
     const rest = newSessionArgs([], { id: ID, repoId: "app", path: "/app", place: "strip" }, { cols: 80, rows: 24 }, ["/bin/bash"]);
     expect(rest).not.toContain("-e");
     expect(rest).not.toContain("@canopy_handle");
+  });
+});
+
+describe("a shell's hand-given name", () => {
+  test("set at the start, read back from the list", () => {
+    const rest = newSessionArgs([], { id: ID, repoId: "app", path: "/app", place: "strip", label: "loot" }, { cols: 80, rows: 24 }, ["/bin/bash"]);
+    expect(rest.slice(-6)).toEqual([";", "set-option", "-t", `canopy-${ID}`, "@canopy_label", "loot"]);
+    const [s] = parseSessions(`canopy-${ID}\tapp\tstrip\t1790000000\t/app\t\t\tWeapons and loot`);
+    expect(s?.label).toBe("Weapons and loot");
+    expect(parseSessions(`canopy-${ID}\tapp\tstrip\t1790000000\t/app\t\t\t`)[0]?.label).toBeUndefined();
+  });
+  test("renamed later, or taken off with an empty name", () => {
+    expect(labelArgs(base, ID, "maps")).toEqual([...base, "set-option", "-t", `canopy-${ID}`, "@canopy_label", "maps"]);
+    expect(labelArgs(base, ID, "")).toEqual([...base, "set-option", "-u", "-t", `canopy-${ID}`, "@canopy_label"]);
   });
 });
 

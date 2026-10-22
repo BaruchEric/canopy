@@ -46,7 +46,7 @@ import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, setLabel, snapshot, tmuxBase } from "../core/tmux";
 import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -186,7 +186,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { isFlowActive, isRunActive } from "../core/types";
+import { cleanLabel, isFlowActive, isRunActive } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -463,6 +463,9 @@ interface TermSocket {
   refused: string | null;
   /** the first message for the agent, its argument on that line; empty for none */
   prompt: string;
+  /** the name the tab gave the shell by hand, kept on it if this socket
+   *  starts it; empty for none */
+  label: string;
   cols: number;
   rows: number;
   /** the device this socket belongs to, by its stream's id, for `viewers` */
@@ -656,7 +659,7 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
       seen.add(s.id);
       if (state.terms.has(s.id)) continue;
       state.terms.set(s.id, {
-        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt, ...(s.handle ? { handle: s.handle } : {}), ...(s.task ? { task: s.task } : {}) },
+        info: { id: s.id, repoId: s.repoId, path: s.path, place: s.place, attached: false, viewers: [], startedAt: s.createdAt, ...(s.handle ? { handle: s.handle } : {}), ...(s.task ? { task: s.task } : {}), ...(s.label ? { label: s.label } : {}) },
         pty: null,
         sockets: new Set(),
       });
@@ -709,7 +712,7 @@ async function snapshotShells(state: ServerState): Promise<void> {
   if (!tmux) return;
   for (const live of state.terms.values()) {
     if (live.info.task || live.info.ranger) continue;
-    const { id, repoId, path, place, startedAt } = live.info;
+    const { id, repoId, path, place, startedAt, label } = live.info;
     try {
       const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
       // tmux would not say: the session or its whole server is gone (the
@@ -721,7 +724,7 @@ async function snapshotShells(state: ServerState): Promise<void> {
       if (live.ending || state.terms.get(id) !== live) continue;
       const history = clip(text);
       const agent = await paneAgent(pane);
-      const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent };
+      const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent, ...(label ? { label } : {}) };
       await writeKept(rec, history);
     } catch {
       // a shell that ended while the pass was running; the next one is right
@@ -1214,7 +1217,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   try {
     await newSession(
       tmux,
-      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), env: sessionEnv(state, rec.repoId, rec.path, id) },
+      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), ...(rec.label ? { label: rec.label } : {}), env: sessionEnv(state, rec.repoId, rec.path, id) },
       size,
       command,
     );
@@ -1226,7 +1229,7 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   }
   const at = Date.now();
   const live: LiveTerm = {
-    info: { id, repoId: rec.repoId, path: rec.path, place: rec.place, attached: false, viewers: [], startedAt: at, restoredAt: at, ...handleOf(state, rec.repoId, rec.path, id) },
+    info: { id, repoId: rec.repoId, path: rec.path, place: rec.place, attached: false, viewers: [], startedAt: at, restoredAt: at, ...handleOf(state, rec.repoId, rec.path, id), ...(rec.label ? { label: rec.label } : {}) },
     pty: null,
     sockets: new Set(),
   };
@@ -1278,7 +1281,7 @@ async function resumeTerm(
     await Bun.sleep(400);
     await sendLine(tmux, id, line);
   } else {
-    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, refused: null, prompt: "", device: null, caller: null, ...size }, size);
+    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, refused: null, prompt: "", label: "", device: null, caller: null, ...size }, size);
     await Bun.sleep(400);
     live.pty?.session.write(`${line}\r`);
   }
@@ -1552,7 +1555,7 @@ function handleOf(state: ServerState, repoId: string, path: string, id: string):
  *  to them all. Throws when the spawn fails (a folder that is gone, a shell
  *  that is not there). */
 function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): LiveTerm {
-  const { repo, id, place } = data;
+  const { repo, id, place, label } = data;
   const scrollback = new Scrollback();
   const sockets = new Set<ServerWebSocket<TermSocket>>();
   const env = shellEnv(state, repo.id, repo.path, id);
@@ -1578,7 +1581,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
     },
   }, Object.keys(env).length ? env : undefined);
   const live: LiveTerm = {
-    info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
+    info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id), ...(label ? { label } : {}) },
     pty: { session, scrollback },
     sockets,
   };
@@ -1593,13 +1596,14 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
  *  terminal while the browser is there to answer. A session that turns out
  *  gone (the shell exited with no one watching) is told so. */
 async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSocket<TermSocket>): Promise<void> {
-  const { repo, id, place, cols, rows } = ws.data;
+  const { repo, id, place, label, cols, rows } = ws.data;
   const size = { cols, rows };
   let live = state.terms.get(id);
   if (!live) {
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), env: sessionEnv(state, repo.id, repo.path, id) }, size);
+    const named = label ? { label } : {};
+    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), ...named, env: sessionEnv(state, repo.id, repo.path, id) }, size);
     live = {
-      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id) },
+      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id), ...named },
       pty: null,
       sockets: new Set(),
     };
@@ -3271,6 +3275,18 @@ async function handleApi(
     if (!state.tmux) return json({ text: null });
     const text = await paneScreen(state.tmux, term);
     return text === null ? json({ error: "tmux did not answer" }, 502) : json({ text });
+  }
+  if (path === "/api/terms/label" && method === "POST") {
+    const b = (await req.json()) as { term?: unknown; label?: unknown };
+    if (typeof b.term !== "string" || typeof b.label !== "string") return json({ error: "a shell in term and its name in label" }, 400);
+    const live = state.terms.get(b.term);
+    if (!live || live.ending || live.info.task || live.info.ranger) return json({ error: "no such shell" }, 404);
+    const label = cleanLabel(b.label);
+    if (state.tmux && !(await setLabel(state.tmux, b.term, label ?? ""))) return json({ error: "tmux would not name that shell" }, 502);
+    if (label) live.info.label = label;
+    else delete live.info.label;
+    tellTerms(state);
+    return json({ ok: true, ...(label ? { label } : {}) });
   }
   if (path === "/api/terms" && method === "DELETE") {
     const term = url.searchParams.get("term") ?? "";
@@ -5114,7 +5130,7 @@ export async function startServer(opts: {
         const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
         const dev = url.searchParams.get("client") ?? "";
         const repo = { id: "", name: "ranger", path: root } as Repo;
-        const data: Socket = { kind: "term", repo, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, caller, ...size };
+        const data: Socket = { kind: "term", repo, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", label: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, caller, ...size };
         if (srv.upgrade(req, { data })) return undefined;
         return json({ error: "a websocket is expected here" }, 426);
       }
@@ -5145,7 +5161,8 @@ export async function startServer(opts: {
       const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
       const dev = url.searchParams.get("client") ?? "";
       const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
-      const data: Socket = { kind: "term", repo, id, place, attach, start, refused, prompt, device, caller, ...size };
+      const label = attach ? "" : (cleanLabel(url.searchParams.get("label") ?? "") ?? "");
+      const data: Socket = { kind: "term", repo, id, place, attach, start, refused, prompt, label, device, caller, ...size };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }

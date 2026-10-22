@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, cleanLabel, renameTab, swapTabs, LABEL_MAX, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, adoptLabels, cleanLabel, renameTab, swapTabs, LABEL_MAX, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -329,6 +329,25 @@ describe("naming and ordering tabs by hand", () => {
     expect(cleanLabel("  weapons\n and   loot ")).toBe("weapons and loot");
     expect(cleanLabel("   ")).toBeUndefined();
     expect(cleanLabel("x".repeat(LABEL_MAX + 9))).toHaveLength(LABEL_MAX);
+    expect(cleanLabel("loot\x1b[31m\x00")).toBe("loot [31m");
+  });
+
+  test("a tab takes the name its shell carries, none included, where the backend keeps names", () => {
+    const tabs = [t("a", { label: "old" }), t("b", { label: "mine" }), t("c"), t("d", { label: "unlisted" })];
+    const shells = [{ id: "a", label: "maps" }, { id: "b" }, { id: "c", label: "loot" }];
+    const got = adoptLabels(tabs, shells, () => true);
+    expect(got.map((x) => x.label)).toEqual(["maps", undefined, "loot", "unlisted"]);
+    expect("label" in (got[1] ?? {})).toBe(false);
+    expect(got[3]).toBe(tabs[3]);
+    expect(adoptLabels(got, shells, () => true)).toBe(got);
+    expect(adoptLabels(tabs, [], () => true)).toBe(tabs);
+  });
+
+  test("on a backend that keeps no names, a shell with none leaves the tab's", () => {
+    const tabs = [t("a", { label: "mine" }), t("b")];
+    const got = adoptLabels(tabs, [{ id: "a" }, { id: "b", label: "loot" }], () => false);
+    expect(got.map((x) => x.label)).toEqual(["mine", "loot"]);
+    expect(got[0]).toBe(tabs[0]);
   });
 
   test("renaming sets the label, blank puts the repo's name back, no change keeps the array", () => {

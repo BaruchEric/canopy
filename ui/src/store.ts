@@ -36,7 +36,7 @@ import {
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
-import { TERM_FONT, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
+import { TERM_FONT, PANEL_TERM_ROWS, adoptLabels, adoptPoppedTerms, adoptTerms, cleanLabel, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
 import { benchHolds, clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
@@ -1035,7 +1035,7 @@ export interface CanopyState {
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
-  openTerm: (repoId: string, place?: ShellPlace, start?: "agent", prompt?: string, pick?: LaunchPick) => void;
+  openTerm: (repoId: string, place?: ShellPlace, start?: "agent", prompt?: string, pick?: LaunchPick, label?: string) => void;
   closeTerm: (id: string) => void;
   /** puts a shell's tab down here and leaves the shell running for the
    *  other devices, and for picking back up from the shells list */
@@ -1050,7 +1050,8 @@ export interface CanopyState {
    *  checkout, and the moved shell's tab in the old one's place */
   landMove: (oldTab: string, fromRepoId: string, toRepoId: string, info: TermInfo) => void;
   showTerm: (id: string) => void;
-  /** names a tab by hand; a blank label puts its repo's name back */
+  /** names a tab by hand, and its shell on the backend so every device's
+   *  tab says it; a blank label puts its repo's name back */
   renameTerm: (id: string, label: string) => void;
   /** trades two tabs' places in the row */
   swapTerms: (a: string, b: string) => void;
@@ -2987,7 +2988,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         return {
           shells,
           hiddenTerms,
-          terms: adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)),
+          terms: adoptLabels(adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)), shells, (id) => connOf(s, backendOf(id)).backend.labels === true),
         };
       });
     }
@@ -3035,7 +3036,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveSettings(settings);
       return { settings };
     }),
-  openTerm: (repoId, place, start, prompt, pick) => {
+  openTerm: (repoId, place, start, prompt, pick, label) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo || repo.forge) return;
@@ -3049,12 +3050,14 @@ export const useStore = create<CanopyState>((set, get) => ({
       openShellElsewhere(repoId, where);
       return;
     }
+    const given = label === undefined ? undefined : cleanLabel(label);
     const tab: TermTab = {
       id: qual(backendOf(repoId), termId()),
       repoId,
       name: repo.name,
       path: repo.path,
       place: where,
+      ...(given ? { label: given } : {}),
       ...(start ? { start, ...(prompt ? { prompt } : {}), ...pickFields(pick) } : {}),
     };
     // A panel shell shows only inside its repo's panel and only while that
@@ -3079,7 +3082,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a tab still showing the shell that went (its socket was told the
     // shell exited) is replaced, with a new generation so its view starts
     // over instead of staying ended
-    const tab: TermTab = { id, repoId: repo.id, name: repo.name, path: repo.path, place: rec.place };
+    const tab: TermTab = { id, repoId: repo.id, name: repo.name, path: repo.path, place: rec.place, ...(rec.label ? { label: rec.label } : {}) };
     endedShells.delete(id);
     set((now) => ({
       kept: now.kept.filter((k) => k.id !== id),
@@ -3654,6 +3657,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       name: repo.name,
       path: repo.path,
       place: info.place,
+      ...(info.label ? { label: info.label } : {}),
     };
     set({
       terms: s.terms.some((t) => t.id === id) ? s.terms : [...s.terms, tab],
@@ -3694,14 +3698,26 @@ export const useStore = create<CanopyState>((set, get) => ({
     get().switchCheckout(fromRepoId, toRepoId);
     const repo = get().repos.find((r) => r.id === toRepoId);
     if (!repo) return;
-    const tab: TermTab = { id: info.id, repoId: repo.id, name: repo.name, path: repo.path, place: info.place };
+    // the name the tab had goes with the shell to its new backend
+    const label = info.label ?? get().terms.find((t) => t.id === oldTab)?.label;
+    if (label && !info.label) void api.labelTerm(info.id, label).catch(() => {});
+    const tab: TermTab = { id: info.id, repoId: repo.id, name: repo.name, path: repo.path, place: info.place, ...(label ? { label } : {}) };
     set((now) => ({
       terms: [...now.terms.filter((t) => t.id !== oldTab && t.id !== info.id), tab],
       ...(info.place === "panel" ? { ...dockPanel(now, toRepoId), closedSections: unfoldIn(now.closedSections, toRepoId, "shell") } : { activeTerm: info.id }),
     }));
   },
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
-  renameTerm: (id, label) => set((s) => ({ terms: renameTab(s.terms, id, label) })),
+  renameTerm: (id, label) => {
+    const before = get().terms;
+    const terms = renameTab(before, id, label);
+    if (terms === before) return;
+    set({ terms });
+    // a task's and the ranger's sessions have names of their own; a shell
+    // not started yet takes the name from its socket
+    const tab = terms.find((t) => t.id === id);
+    if (tab && !tab.task && !tab.ranger && get().shells.some((x) => x.id === id)) void api.labelTerm(id, tab.label ?? "").catch(() => {});
+  },
   swapTerms: (a, b) => set((s) => ({ terms: swapTabs(s.terms, a, b) })),
   endTerm: (id, code) =>
     set((s) => ({ terms: s.terms.map((t) => (t.id === id ? { ...t, exit: code } : t)) })),

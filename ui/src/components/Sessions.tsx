@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { AgentCard } from "../../../src/core/types";
+import { HARNESSES, type AgentCard } from "../../../src/core/types";
 import { agentName } from "../allagents";
 import { joinTarget, machineOf, stateWord } from "../agentcards";
 import { healthBadge } from "../badges";
 import { NARROW, useMedia } from "../media";
 import { backendOf, qual } from "../registry";
-import { agentRows, heldShellAt, machinesOf, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabScope } from "../sessions";
-import { useStore } from "../store";
+import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
+import { connOf, useStore } from "../store";
 import { OVER_PAGE } from "../surface";
-import { viewKey, type TermTab } from "../term";
+import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { ShellSpotHere } from "./Surface";
 import { TermTabs, TermView } from "./TermDock";
@@ -23,9 +23,15 @@ const TONE_DOT: Record<RepoTone, string> = { waiting: "rust", working: "moss liv
 
 const STATE_DOT: Record<AgentCard["state"], string> = { waiting: "rust", working: "moss live", idle: "moss", lost: "faint", ended: "faint" };
 
-/** the textarea of the shell showing, once the layout has settled */
+/** the textarea of the shell showing, once the layout has settled; never
+ *  taken from a field typed in meanwhile, such as a rename the second
+ *  press of a double-click opened */
 const refocus = (box: Element | null) =>
-  requestAnimationFrame(() => box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus());
+  requestAnimationFrame(() => {
+    const at = document.activeElement;
+    if (at instanceof HTMLInputElement) return;
+    box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus();
+  });
 
 /**
  * The sessions view: every shell and agent in one screen, laid out like a
@@ -75,6 +81,9 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const showing = visible.find((t) => t.id === activeTerm) ?? null;
   const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  // the repo the new-tab box is open for, and what the last new tab ran
+  const [newTab, setNewTab] = useState<string | null>(null);
+  const [kind, setKind] = useState<TabKind>("shell");
   const rows = useMemo(() => agentRows(cards), [cards]);
   const pickedCard = picked && "agent" in picked ? cards.find((c) => c.id === picked.agent) : undefined;
   const pickedInfo = picked && "shell" in picked ? shells.find((t) => t.id === picked.shell) : undefined;
@@ -138,7 +147,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     }
   };
   const newShell = () => {
-    if (currentRepo) openTerm(currentRepo, "strip");
+    if (currentRepo) setNewTab(currentRepo);
     else {
       if (narrow) setDrawer(true);
       requestAnimationFrame(() => newBox.current?.focus());
@@ -148,6 +157,15 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   // read inside the key handler, which is set up once
   const live = useRef({ visible, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell });
   live.current = { visible, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell };
+  const startTab = (repoId: string, name: string, run: TabKind) => {
+    setNewTab(null);
+    setKind(run);
+    setPicked(null);
+    if (scope && !tabsIn([{ repoId }], scope, backendOf).length) setScope({ repo: repoId });
+    if (run === "shell") openTerm(repoId, "strip", undefined, undefined, undefined, name);
+    else openTerm(repoId, "strip", "agent", undefined, { harness: run }, name);
+    refocus(main.current);
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector(OVER_PAGE)) return;
@@ -246,7 +264,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                   </span>
                 )}
                 {held.map((t) => {
-                  const name = repos.find((r) => r.id === t.repoId)?.name ?? t.repoId;
+                  const name = t.label ?? repos.find((r) => r.id === t.repoId)?.name ?? t.repoId;
                   return (
                     <button
                       key={t.id}
@@ -275,7 +293,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                     ⋯
                   </button>
                 )}
-                <button type="button" className="mini ss-plus" aria-label="New shell" title="new shell (n)" onClick={newShell}>
+                <button type="button" className="mini ss-plus" aria-label="New tab" title="new tab (n)" onClick={newShell}>
                   +
                 </button>
               </>
@@ -291,6 +309,17 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                 <AgentScreen card={pickedCard} live active showing now={now} />
               </div>
             )}
+            {newTab && (
+              <NewTab
+                repo={repos.find((r) => r.id === newTab)}
+                kind={kind}
+                onOpen={(name, run) => startTab(newTab, name, run)}
+                onCancel={() => {
+                  setNewTab(null);
+                  refocus(main.current);
+                }}
+              />
+            )}
             {!overTabs && visible.length === 0 && (
               <div className="ss-blank">
                 <p>{scope ? `No shells open at ${scopeName(scope, repos)}.` : "No shells open."}</p>
@@ -300,7 +329,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
           </div>
           <footer className="ss-status">
             <span className="ss-keys">
-              <span className="ss-faint">[ ] tabs · n new shell · w next waiting · double-click a tab to rename</span>
+              <span className="ss-faint">[ ] tabs · n new tab · w next waiting · double-click a tab to rename</span>
               <SignInChips />
             </span>
             {warn && (
@@ -318,6 +347,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
           tabs={visible}
           onClose={() => setMenu(null)}
           onRename={(id) => setRenaming(id)}
+          onNew={setNewTab}
           onMove={(id, by) => {
             const i = visible.findIndex((t) => t.id === id);
             const other = visible[i + by];
@@ -354,6 +384,7 @@ function TabMenu({
   tabs,
   onClose,
   onRename,
+  onNew,
   onMove,
 }: {
   id: string;
@@ -361,13 +392,13 @@ function TabMenu({
   tabs: readonly TermTab[];
   onClose: () => void;
   onRename: (id: string) => void;
+  onNew: (repoId: string) => void;
   onMove: (id: string, by: 1 | -1) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   // read by the listeners below, set up once
   const close = useRef(onClose);
   close.current = onClose;
-  const openTerm = useStore((s) => s.openTerm);
   const hideTerm = useStore((s) => s.hideTerm);
   const closeTerm = useStore((s) => s.closeTerm);
   const tab = tabs.find((t) => t.id === id);
@@ -398,8 +429,8 @@ function TabMenu({
       <button type="button" role="menuitem" onClick={act(() => onRename(id))}>
         rename <span className="ss-faint">F2</span>
       </button>
-      <button type="button" role="menuitem" onClick={act(() => openTerm(tab.repoId, "strip"))}>
-        new shell at {tab.name}
+      <button type="button" role="menuitem" onClick={act(() => onNew(tab.repoId))}>
+        new tab at {tab.name}…
       </button>
       <button type="button" role="menuitem" disabled={i <= 0} onClick={act(() => onMove(id, -1))}>
         move left
@@ -413,6 +444,97 @@ function TabMenu({
       <button type="button" role="menuitem" className="t-rust" title="Ends the shell on every device" onClick={act(() => closeTerm(id))}>
         close and end the shell
       </button>
+    </div>
+  );
+}
+
+const KINDS: readonly TabKind[] = ["shell", ...HARNESSES];
+
+/** The new-tab box over the main pane: a name for the tab (the repo's when
+ *  left blank) and what it runs, a plain shell or an agent. Enter opens it,
+ *  Escape cancels, Ctrl+C clears the name. A harness the repo's machine
+ *  lacks is greyed out. */
+function NewTab({ repo, kind, onOpen, onCancel }: { repo: { id: string; name: string } | undefined; kind: TabKind; onOpen: (name: string, run: TabKind) => void; onCancel: () => void }) {
+  const [name, setName] = useState("");
+  const have = useStore((s) => (repo ? connOf(s, backendOf(repo.id)).backend.harnesses : undefined));
+  const usable = (k: TabKind) => k === "shell" || !have || have.includes(k);
+  const [run, setRun] = useState<TabKind>(usable(kind) ? kind : "shell");
+  const field = useRef<HTMLInputElement>(null);
+  // read by the listener below, set up once
+  const cancel = useRef(onCancel);
+  cancel.current = onCancel;
+  useEffect(() => {
+    field.current?.focus();
+    const inBox = (t: EventTarget | null) => t instanceof Node && field.current?.closest(".ss-newtab")?.contains(t) === true;
+    // Escape from anywhere in the box, not only the name field; a press
+    // outside it cancels too
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && inBox(e.target)) {
+        e.preventDefault();
+        cancel.current();
+      }
+    };
+    const down = (e: PointerEvent) => {
+      if (!inBox(e.target)) cancel.current();
+    };
+    window.addEventListener("keydown", key, true);
+    window.addEventListener("pointerdown", down, true);
+    return () => {
+      window.removeEventListener("keydown", key, true);
+      window.removeEventListener("pointerdown", down, true);
+    };
+  }, []);
+  if (!repo) return null;
+  return (
+    <div className="ss-newtab" role="dialog" aria-modal="true" aria-label={`New tab at ${repo.name}`}>
+      <label className="ss-newtab-name">
+        <span className="ss-faint">new tab at {repo.name}</span>
+        <input
+          ref={field}
+          value={name}
+          maxLength={LABEL_MAX}
+          placeholder={repo.name}
+          aria-label="Tab name"
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            const k = newTabKey(e.nativeEvent);
+            if (!k) return;
+            e.preventDefault();
+            if (k === "open") onOpen(name, run);
+            else if (k === "clear") setName("");
+          }}
+        />
+      </label>
+      <div className="ss-newtab-runs" role="radiogroup" aria-label="What the tab runs">
+        {KINDS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            role="radio"
+            aria-checked={run === k}
+            className={run === k ? "on" : ""}
+            disabled={!usable(k)}
+            title={usable(k) ? (k === "shell" ? "a plain shell" : `a shell with ${k} started in it`) : `${k} is not installed on this machine`}
+            onClick={() => {
+              setRun(k);
+              field.current?.focus();
+            }}
+          >
+            {k}
+          </button>
+        ))}
+      </div>
+      <div className="ss-newtab-keys">
+        <button type="button" className="on" onClick={() => onOpen(name, run)}>
+          ↵ open
+        </button>
+        <button type="button" onClick={() => setName("")}>
+          ^c clear
+        </button>
+        <button type="button" onClick={onCancel}>
+          esc cancel
+        </button>
+      </div>
     </div>
   );
 }

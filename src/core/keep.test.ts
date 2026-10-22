@@ -136,6 +136,13 @@ describe("parseKept", () => {
     expect(parseKept(JSON.stringify(shell({ agent: "claude" })))).toEqual(shell({ agent: "claude" }));
   });
 
+  test("a hand-given name reads back cleaned; a blank one is none", () => {
+    expect(parseKept(JSON.stringify(shell({ label: "loot" })))?.label).toBe("loot");
+    expect(parseKept(JSON.stringify({ ...shell(), label: "  maps\n " }))?.label).toBe("maps");
+    expect("label" in (parseKept(JSON.stringify({ ...shell(), label: "  " })) ?? {})).toBe(false);
+    expect("label" in (parseKept(JSON.stringify({ ...shell(), label: 7 })) ?? {})).toBe(false);
+  });
+
   test("an unknown place is the strip, a missing start is when it was saved", () => {
     const raw = JSON.stringify({ ...shell(), place: "nowhere", startedAt: undefined, agent: "emacs" });
     expect(parseKept(raw)).toEqual(shell({ place: "strip", startedAt: 2_000, agent: null }));

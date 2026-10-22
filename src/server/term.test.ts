@@ -164,6 +164,31 @@ describe("a shell behind the socket", () => {
     expect(res.status).toBe(404);
   });
 
+  test("a shell keeps the name its tab gave it, renamed or taken off later", async () => {
+    const id = "abcdefabcdefabcdefabcdefabcdef0a";
+    const label = (name: string, term = id) =>
+      fetch(`http://127.0.0.1:${server.port}/api/terms/label`, { method: "POST", body: JSON.stringify({ term, label: name }) });
+    const c = connect({ term: id, label: "  loot\tand  weapons " });
+    await c.opened;
+    c.ws.send(new TextEncoder().encode("printf 'named-%s\\n' one\n"));
+    await until(() => c.text().includes("named-one"), "the shell's first line");
+    expect((await terms()).find((t) => t.id === id)?.label).toBe("loot and weapons");
+
+    expect((await label("maps")).status).toBe(200);
+    expect((await terms()).find((t) => t.id === id)?.label).toBe("maps");
+    // tmux holds it, so a server started over reads it back
+    const base = tmuxBase();
+    if (tmux && base) expect((await listSessions(base)).find((x) => x.id === id)?.label).toBe("maps");
+
+    expect((await label("   ")).status).toBe(200);
+    expect((await terms()).find((t) => t.id === id)?.label).toBeUndefined();
+    if (tmux && base) expect((await listSessions(base)).find((x) => x.id === id)?.label).toBeUndefined();
+
+    expect((await label("x", "ffffffffffffffffffffffffffffffff")).status).toBe(404);
+    await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    await c.closed;
+  });
+
   test("a pasted image lands under the config dir and comes back as a path to type", async () => {
     const id = "3333333333333333cccccccccccccccc";
     const c = connect({ term: id });

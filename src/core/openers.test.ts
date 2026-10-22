@@ -77,6 +77,7 @@ describe("agent launch", () => {
 
   test("the caps name the harnesses, and a missing one is refused in plain words", () => {
     expect(backendCaps(["codex"]).harnesses).toEqual(["codex"]);
+    expect(backendCaps(["codex"]).labels).toBe(true);
     expect(missingHarness("codex", "mini")).toBe("codex is not installed on mini");
   });
 

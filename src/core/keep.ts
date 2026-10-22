@@ -21,7 +21,7 @@ import { continueArgv, type AgentEnv } from "./harness";
 import { shellLine, shellQuote } from "./host";
 import { configDir } from "./store";
 import { isTermId, termPlace } from "./term";
-import type { AgentKind, AgentSettings, KeptShell } from "./types";
+import { cleanLabel, type AgentKind, type AgentSettings, type KeptShell } from "./types";
 
 /** how often a held shell's history is written out */
 export const KEEP_EVERY = 60_000;
@@ -144,6 +144,7 @@ export function parseKept(raw: string): KeptShell | null {
   const num = (x: unknown, fallback: number): number => (typeof x === "number" && Number.isFinite(x) ? x : fallback);
   const agent = o.agent === "claude" || o.agent === "codex" ? o.agent : null;
   const savedAt = num(o.savedAt, 0);
+  const label = typeof o.label === "string" ? cleanLabel(o.label) : undefined;
   return {
     id,
     repoId,
@@ -153,6 +154,7 @@ export function parseKept(raw: string): KeptShell | null {
     savedAt,
     lines: Math.max(0, Math.trunc(num(o.lines, 0))),
     agent,
+    ...(label ? { label } : {}),
   };
 }
 

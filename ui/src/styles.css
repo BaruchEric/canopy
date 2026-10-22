@@ -5916,6 +5916,77 @@ button.ss-scope:hover {
   color: var(--ink-faint);
   cursor: default;
 }
+.ss-newtab {
+  position: absolute;
+  z-index: 5;
+  top: 22%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(420px, calc(100% - 32px));
+  padding: 10px 12px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--float);
+  box-shadow: 0 6px 24px color-mix(in srgb, var(--bark0) 50%, transparent);
+  transform: translateX(-50%);
+  font-size: 12px;
+}
+.ss-newtab-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ss-newtab-name input {
+  padding: 4px 6px;
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+  background: var(--wash);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+.ss-newtab-name input:focus {
+  outline: none;
+  border-color: var(--moss);
+}
+.ss-newtab-name input::placeholder {
+  color: var(--ink-faint);
+}
+.ss-newtab-runs,
+.ss-newtab-keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ss-newtab-keys {
+  justify-content: flex-end;
+}
+.ss-newtab-runs button,
+.ss-newtab-keys button {
+  padding: 2px 8px;
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.ss-newtab-runs button.on,
+.ss-newtab-keys button.on {
+  border-color: var(--moss);
+  background: color-mix(in srgb, var(--moss) 18%, transparent);
+  color: var(--ink);
+}
+.ss-newtab-runs button:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+.ss-newtab button:focus-visible {
+  outline: 1px solid var(--moss);
+  outline-offset: 1px;
+}
 .ss-agent-pane {
   position: absolute;
   inset: 0;

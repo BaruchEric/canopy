@@ -155,13 +155,17 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean, ti
     client: clientId(),
   });
   if (joinsOnly(tab, rejoin)) q.set("attach", "1");
-  else if (tab.start) {
-    // a backend older than harnesses reports none and knows only start=claude
-    const legacy = !connOf(useStore.getState(), backendOf(tab.id)).backend.harnesses;
-    q.set("start", legacy ? "claude" : tab.start);
-    if (tab.profile) q.set("profile", tab.profile);
-    else if (tab.harness) q.set("harness", tab.harness);
-    if (tab.prompt) q.set("prompt", tab.prompt);
+  else {
+    // the name goes on the shell this socket starts; a shell already there keeps its own
+    if (tab.label) q.set("label", tab.label);
+    if (tab.start) {
+      // a backend older than harnesses reports none and knows only start=claude
+      const legacy = !connOf(useStore.getState(), backendOf(tab.id)).backend.harnesses;
+      q.set("start", legacy ? "claude" : tab.start);
+      if (tab.profile) q.set("profile", tab.profile);
+      else if (tab.harness) q.set("harness", tab.harness);
+      if (tab.prompt) q.set("prompt", tab.prompt);
+    }
   }
   if (ticket) q.set("ticket", ticket);
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);
@@ -1067,7 +1071,9 @@ function RenameBox({ label, onDone }: { label: string; onDone: (label: string | 
   const finish = (keep: boolean) => {
     if (done.current) return;
     done.current = true;
-    onDone(keep ? v : null);
+    // the name left as it was is no rename: a blur before any typing never
+    // turns the repo's numbered name into a label
+    onDone(keep && v !== label ? v : null);
   };
   return (
     <input

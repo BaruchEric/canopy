@@ -721,4 +721,5 @@ export const backendCaps = (harnesses: Harness[] = availableHarnesses()): Backen
   openers: hostOpeners(),
   sshHost: process.env.CANOPY_SSH_HOST || null,
   harnesses,
+  labels: true,
 });

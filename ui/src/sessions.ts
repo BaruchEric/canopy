@@ -1,4 +1,4 @@
-import type { AgentCard, Repo, TermInfo } from "../../src/core/types";
+import type { AgentCard, Harness, Repo, TermInfo } from "../../src/core/types";
 import { isLiveAgent } from "../../src/core/types";
 import { orderCards, repoOfCard } from "./agentcards";
 import type { TermTab } from "./term";
@@ -171,6 +171,19 @@ export function sessionsKey(e: { key: string; metaKey: boolean; ctrlKey: boolean
     default:
       return null;
   }
+}
+
+/** What a new tab runs: a plain shell, or a shell with that harness typed in. */
+export type TabKind = "shell" | Harness;
+
+export type NewTabKey = "open" | "cancel" | "clear";
+
+/** The new-tab box's keys in its name field: Enter opens, Escape cancels,
+ *  Ctrl+C clears the name, as a terminal would. */
+export function newTabKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean; isComposing?: boolean }): NewTabKey | null {
+  if (e.isComposing || e.metaKey || e.altKey) return null;
+  if (e.ctrlKey) return e.key === "c" ? "clear" : null;
+  return e.key === "Enter" ? "open" : e.key === "Escape" ? "cancel" : null;
 }
 
 /** Repos for the "new shell" picker: names containing `q`, those starting
