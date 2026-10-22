@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { capsFor, connOf, multi, useStore } from "../store";
@@ -111,6 +111,50 @@ const KEYS = [
   ["esc", "clear the filter"],
 ] as const;
 
+/** A tab down Settings' rail. The first group holds this browser's own
+ *  choices, the second the backend the picker names. */
+type Tab = "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "ranger" | "about";
+
+const BROWSER_TABS: readonly { tab: Tab; label: string }[] = [
+  { tab: "look", label: "look" },
+  { tab: "layout", label: "layout" },
+  { tab: "opening", label: "opening" },
+  { tab: "device", label: "this device" },
+  { tab: "keys", label: "keys" },
+];
+
+const BACKEND_TABS: readonly { tab: Tab; label: string }[] = [
+  { tab: "desktop", label: "desktop" },
+  { tab: "signed", label: "signed in" },
+  { tab: "shells", label: "shell history" },
+  { tab: "ranger", label: "ranger" },
+  { tab: "about", label: "about" },
+];
+
+/** A backend's about, fetched each time Settings opens on it. */
+function useAbout(name: string, open: boolean): { about: About | null; error: string | null } {
+  const [about, setAbout] = useState<About | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setAbout(null);
+    setError(null);
+    api.about(name).then(
+      (a) => {
+        if (live) setAbout(a);
+      },
+      (e: unknown) => {
+        if (live) setError(String(e instanceof Error ? e.message : e));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [name, open]);
+  return { about, error };
+}
+
 export function SettingsMenu() {
   const settings = useStore((s) => s.settings);
   const setSetting = useStore((s) => s.setSetting);
@@ -118,7 +162,7 @@ export function SettingsMenu() {
   const home = useStore((s) => s.home);
   const backendOrder = useStore((s) => s.backendOrder);
   const isMulti = useStore(multi);
-  // which backend the rows below scope to; falls back to home when the
+  // which backend the second group scopes to; falls back to home when the
   // picked one is hidden or gone, or when nothing has been picked yet
   const [picked, setPicked] = useState<string | null>(null);
   const scope = picked && backendOrder.includes(picked) ? picked : home;
@@ -128,10 +172,15 @@ export function SettingsMenu() {
   const caps = useStore(useShallow((s) => capsFor(s, scope)));
   const keeping = useStore((s) => connOf(s, scope).keeping);
   const setKeeping = useStore((s) => s.setKeeping);
+  const auth = useStore((s) => s.authByBackend[scope]);
+  const ranger = useStore((s) => s.rangers[scope]);
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("look");
+  const { about, error } = useAbout(scope, open);
   // read as the menu renders: it opens on the screen the window is on now
   const screen = open ? screenNow() : null;
   const ref = useRef<HTMLDivElement>(null);
+  const id = useId();
   useFitPop(ref, open);
 
   useEffect(() => {
@@ -150,94 +199,190 @@ export function SettingsMenu() {
     };
   }, [open]);
 
-  return (
-    <div className="settings" ref={ref}>
+  // a caller that claimed its token since the last read shows when Settings opens
+  useEffect(() => {
+    if (open) void useStore.getState().loadAuth(scope);
+  }, [open, scope]);
+
+  // a tab with nothing to show on this backend is left off the rail, and a
+  // picked tab that went away falls back to the first
+  const shown = [...BROWSER_TABS, ...BACKEND_TABS.filter((t) => (t.tab !== "signed" || auth) && (t.tab !== "ranger" || ranger))];
+  const current = shown.some((t) => t.tab === tab) ? tab : "look";
+  const stale = !!about && !!PAGE_BUILD && !sameBuild(PAGE_BUILD, about);
+
+  const values: Partial<Record<Tab, string>> = open
+    ? {
+        look: PALETTE.find((p) => p.value === settings.palette)?.label,
+        layout: settings.level,
+        opening: settings.openIn,
+        device: settings.device || deviceName(navigator.userAgent),
+        desktop: caps.via === "backend" ? scope : (caps.helper?.name ?? "none"),
+        signed: auth?.mode,
+        shells: keeping ? "kept" : "off",
+        ranger: ranger && (ranger.settings.on ? ranger.state : "off"),
+        about: about?.version,
+      }
+    : {};
+
+  const step = (e: ReactKeyboardEvent) => {
+    if (!(e.target instanceof HTMLElement) || e.target.getAttribute("role") !== "tab") return;
+    const order = shown.map((t) => t.tab);
+    const i = order.indexOf(current);
+    const n = order.length;
+    const next =
+      e.key === "ArrowDown" || e.key === "ArrowRight"
+        ? order[(i + 1) % n]
+        : e.key === "ArrowUp" || e.key === "ArrowLeft"
+          ? order[(i - 1 + n) % n]
+          : e.key === "Home"
+            ? order[0]
+            : e.key === "End"
+              ? order[n - 1]
+              : undefined;
+    if (!next) return;
+    e.preventDefault();
+    setTab(next);
+    document.getElementById(`${id}-tab-${next}`)?.focus();
+  };
+
+  const tabButton = (t: { tab: Tab; label: string }) => {
+    const on = t.tab === current;
+    return (
       <button
+        key={t.tab}
         type="button"
-        className={open ? "icon-btn on" : "icon-btn"}
-        aria-label="Settings"
-        aria-expanded={open}
-        title="Settings"
-        onClick={() => setOpen(!open)}
+        role="tab"
+        id={`${id}-tab-${t.tab}`}
+        className="prefs-tab"
+        aria-selected={on}
+        aria-controls={`${id}-panel`}
+        tabIndex={on ? 0 : -1}
+        onClick={() => setTab(t.tab)}
       >
-        <GearIcon size={15} />
+        <span className="prefs-tab-name">{t.label}</span>
+        {values[t.tab] && <span className="prefs-tab-value">{values[t.tab]}</span>}
+        {t.tab === "about" && stale && <span className="prefs-tab-mark" title="another build than this page" />}
       </button>
-      {open && (
-        <div className="settings-pop" role="dialog" aria-label="Settings">
-          {isMulti && (
+    );
+  };
+
+  const body = () => {
+    switch (current) {
+      case "look":
+        return (
+          <>
             <section className="settings-row">
-              <h3 className="panel-label">backend</h3>
-              <Seg
-                label="Which backend the rows below show"
-                value={scope}
-                options={backendOrder.map((n) => ({ value: n, label: n }))}
-                onChange={setPicked}
-              />
+              <h3 className="panel-label">theme</h3>
+              <Seg label="Theme" value={settings.theme} options={THEME} onChange={(v) => setSetting("theme", v)} />
+              <PalettePick value={settings.palette} onChange={(v) => setSetting("palette", v)} />
+              <label className="settings-line">
+                <input type="checkbox" checked={settings.moreContrast} onChange={(e) => setSetting("moreContrast", e.target.checked)} />
+                more contrast: starker text, lines and grounds, whichever palette
+              </label>
             </section>
-          )}
-          <section className="settings-row">
-            <h3 className="panel-label">repo panel</h3>
-            <Seg label="How much a repo's panel shows" value={settings.level} options={LEVEL} onChange={(v) => setSetting("level", v)} />
-            <button type="button" className="mini" onClick={() => setSetting("onboarded", false)}>
-              show the tour again
-            </button>
-            <label className="settings-line">
-              <input type="checkbox" checked={settings.panelClose} onChange={(e) => setSetting("panelClose", e.target.checked)} />
-              close buttons: a docked panel's ✕, its tab's × and a middle click on the tab
-            </label>
-            {screen && (
+            <section className="settings-row">
+              <h3 className="panel-label">density</h3>
+              <Seg label="Card density" value={settings.density} options={DENSITY} onChange={(v) => setSetting("density", v)} />
+            </section>
+          </>
+        );
+      case "layout":
+        return (
+          <>
+            <section className="settings-row">
+              <h3 className="panel-label">repo panel</h3>
+              <Seg label="How much a repo's panel shows" value={settings.level} options={LEVEL} onChange={(v) => setSetting("level", v)} />
+              <button type="button" className="mini" onClick={() => setSetting("onboarded", false)}>
+                show the tour again
+              </button>
+              <label className="settings-line">
+                <input type="checkbox" checked={settings.panelClose} onChange={(e) => setSetting("panelClose", e.target.checked)} />
+                close buttons: a docked panel's ✕, its tab's × and a middle click on the tab
+              </label>
+              {screen && (
+                <p className="settings-hint">
+                  Widths, heights, zoom, font sizes and what each gear sets are kept by device, by kind of screen (phone, tablet,
+                  laptop, desktop, wide, ultra HD) and by kind of window. This browser keeps its own; this screen counts as{" "}
+                  {/^[aeiou]/.test(screenWord(screen.cls)) ? "an" : "a"} {screenWord(screen.cls)} ({screen.w}×{screen.h}), and this is the{" "}
+                  {windowWord(windowNow())}.
+                </p>
+              )}
+            </section>
+            <ScreenLayoutsRow />
+          </>
+        );
+      case "opening":
+        return (
+          <>
+            <section className="settings-row">
+              <h3 className="panel-label">open a repo</h3>
+              <Seg
+                label="Where a clicked repo opens"
+                value={settings.openIn}
+                options={OPEN_IN}
+                // side by side and tabs put the open panels in that
+                // arrangement, as the panel gear's entries do
+                onChange={(v) => (v === "dock" || v === "tabs" ? arrangeDock(v === "tabs" ? "tabs" : "columns") : setSetting("openIn", v))}
+              />
+              <p className="settings-hint">Cmd-click always opens a tab, shift-click a window.</p>
+            </section>
+            <section className="settings-row">
+              <h3 className="panel-label">shell in canopy</h3>
+              <Seg label="Where a shell opened from a card lands" value={settings.shell} options={SHELL} onChange={(v) => setSetting("shell", v)} />
               <p className="settings-hint">
-                Widths, heights, zoom, font sizes and what each gear sets are kept by device, by kind of screen (phone, tablet,
-                laptop, desktop, wide, ultra HD) and by kind of window. This browser keeps its own; this screen counts as{" "}
-                {/^[aeiou]/.test(screenWord(screen.cls)) ? "an" : "a"} {screenWord(screen.cls)} ({screen.w}×{screen.h}), and this is the{" "}
-                {windowWord(windowNow())}.
+                Auto puts the shell in the repo's panel when one is open and in the strip along the bottom otherwise. A shell in a
+                panel ends when you close the panel; a strip shell lives until you close it or the page.
               </p>
-            )}
-          </section>
-          <ScreenLayoutsRow />
+            </section>
+            <section className="settings-row">
+              <h3 className="panel-label">kitty and Terminal</h3>
+              <Seg label="How the terminal openers place a repo" value={settings.terminal} options={TERMINAL} onChange={(v) => setSetting("terminal", v)} />
+              <p className="settings-hint">
+                For "open in" and the agent. kitty tabs go to the kitty canopy runs, its own instance; a Terminal tab presses cmd-t,
+                which needs Accessibility access for the server.
+              </p>
+            </section>
+          </>
+        );
+      case "device":
+        return (
+          <>
+            <section className="settings-row">
+              <h3 className="panel-label">this device</h3>
+              <input
+                className="settings-input"
+                type="text"
+                maxLength={40}
+                placeholder={deviceName(navigator.userAgent)}
+                value={settings.device}
+                aria-label="What this browser is called in the devices list"
+                onChange={(e) => setSetting("device", e.target.value)}
+              />
+              <p className="settings-hint">
+                How this browser appears to your other devices, and who a shell says is looking at it. Takes effect on the next reload.
+              </p>
+            </section>
+            <AnswerKeyRow />
+          </>
+        );
+      case "keys":
+        return (
           <section className="settings-row">
-            <h3 className="panel-label">open a repo</h3>
-            <Seg
-              label="Where a clicked repo opens"
-              value={settings.openIn}
-              options={OPEN_IN}
-              // side by side and tabs put the open panels in that
-              // arrangement, as the panel gear's entries do
-              onChange={(v) => (v === "dock" || v === "tabs" ? arrangeDock(v === "tabs" ? "tabs" : "columns") : setSetting("openIn", v))}
-            />
-            <p className="settings-hint">
-              Cmd-click always opens a tab, shift-click a window.
-            </p>
+            <h3 className="panel-label">keys</h3>
+            <dl className="keys">
+              {KEYS.map(([key, what]) => (
+                <div key={key}>
+                  <dt>
+                    <kbd>{key}</kbd>
+                  </dt>
+                  <dd>{what}</dd>
+                </div>
+              ))}
+            </dl>
           </section>
-          <section className="settings-row">
-            <h3 className="panel-label">kitty and Terminal</h3>
-            <Seg
-              label="How the terminal openers place a repo"
-              value={settings.terminal}
-              options={TERMINAL}
-              onChange={(v) => setSetting("terminal", v)}
-            />
-            <p className="settings-hint">
-              For "open in" and the agent. kitty tabs go to the kitty canopy
-              runs, its own instance; a Terminal tab presses cmd-t, which needs
-              Accessibility access for the server.
-            </p>
-          </section>
-          <section className="settings-row">
-            <h3 className="panel-label">shell in canopy</h3>
-            <Seg
-              label="Where a shell opened from a card lands"
-              value={settings.shell}
-              options={SHELL}
-              onChange={(v) => setSetting("shell", v)}
-            />
-            <p className="settings-hint">
-              Auto puts the shell in the repo's panel when one is open and in
-              the strip along the bottom otherwise. A shell in a panel ends when
-              you close the panel; a strip shell lives until you close it or the
-              page.
-            </p>
-          </section>
+        );
+      case "desktop":
+        return (
           <section className="settings-row">
             <h3 className="panel-label">desktop openers</h3>
             {helpers.length > 0 && (
@@ -264,23 +409,11 @@ export function SettingsMenu() {
               {client.address && ` This browser is seen as ${client.address}.`}
             </p>
           </section>
-          <section className="settings-row">
-            <h3 className="panel-label">this device</h3>
-            <input
-              className="settings-input"
-              type="text"
-              maxLength={40}
-              placeholder={deviceName(navigator.userAgent)}
-              value={settings.device}
-              aria-label="What this browser is called in the devices list"
-              onChange={(e) => setSetting("device", e.target.value)}
-            />
-            <p className="settings-hint">
-              How this browser appears to your other devices, and who a shell says is looking at it. Takes effect on the next reload.
-            </p>
-          </section>
-          <AnswerKeyRow />
-          <SignedInRow name={scope} />
+        );
+      case "signed":
+        return <SignedInRow name={scope} />;
+      case "shells":
+        return (
           <section className="settings-row">
             <h3 className="panel-label">keep shell history</h3>
             <label className="settings-line">
@@ -294,44 +427,71 @@ export function SettingsMenu() {
               its continue (<code>claude --continue</code>, <code>codex resume --last</code>) instead.
             </p>
           </section>
-          <RangerRow backend={scope} />
-          <section className="settings-row">
-            <h3 className="panel-label">theme</h3>
-            <Seg
-              label="Theme"
-              value={settings.theme}
-              options={THEME}
-              onChange={(v) => setSetting("theme", v)}
-            />
-            <PalettePick value={settings.palette} onChange={(v) => setSetting("palette", v)} />
-            <label className="settings-line">
-              <input type="checkbox" checked={settings.moreContrast} onChange={(e) => setSetting("moreContrast", e.target.checked)} />
-              more contrast: starker text, lines and grounds, whichever palette
-            </label>
-          </section>
-          <section className="settings-row">
-            <h3 className="panel-label">density</h3>
-            <Seg
-              label="Card density"
-              value={settings.density}
-              options={DENSITY}
-              onChange={(v) => setSetting("density", v)}
-            />
-          </section>
-          <section className="settings-row">
-            <h3 className="panel-label">keys</h3>
-            <dl className="keys">
-              {KEYS.map(([key, what]) => (
-                <div key={key}>
-                  <dt>
-                    <kbd>{key}</kbd>
-                  </dt>
-                  <dd>{what}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-          <AboutRow name={scope} isHome={scope === home} />
+        );
+      case "ranger":
+        return <RangerRow backend={scope} />;
+      case "about":
+        return <AboutRow name={scope} isHome={scope === home} about={about} error={error} />;
+    }
+  };
+
+  return (
+    <div className="settings" ref={ref}>
+      <button
+        type="button"
+        className={open ? "icon-btn on" : "icon-btn"}
+        aria-label="Settings"
+        aria-expanded={open}
+        title="Settings"
+        onClick={() => setOpen(!open)}
+      >
+        <GearIcon size={15} />
+      </button>
+      {open && (
+        <div className="settings-pop prefs" role="dialog" aria-label="Settings">
+          <nav className="prefs-rail" aria-label="Settings sections" onKeyDown={step}>
+            <div className="prefs-group">
+              <p className="prefs-root" id={`${id}-browser`}>
+                this browser
+              </p>
+              <div className="prefs-tabs" role="tablist" aria-orientation="vertical" aria-labelledby={`${id}-browser`}>
+                {BROWSER_TABS.map(tabButton)}
+              </div>
+            </div>
+            <div className="prefs-group">
+              {isMulti ? (
+                <Seg
+                  label="Which backend the tabs under it show"
+                  value={scope}
+                  options={backendOrder.map((n) => ({ value: n, label: n }))}
+                  onChange={setPicked}
+                />
+              ) : (
+                <p className="prefs-root">{home}</p>
+              )}
+              <div className="prefs-tabs" role="tablist" aria-orientation="vertical" aria-label={`Kept on ${scope}`}>
+                {shown.filter((t) => BACKEND_TABS.includes(t)).map(tabButton)}
+              </div>
+            </div>
+            {stale && scope === home && (
+              <p className="prefs-stale">
+                This page is from another build than the server.{" "}
+                <button type="button" className="mini" onClick={() => location.reload()}>
+                  reload
+                </button>
+              </p>
+            )}
+          </nav>
+          <div
+            key={current}
+            className="prefs-panel"
+            role="tabpanel"
+            id={`${id}-panel`}
+            aria-labelledby={`${id}-tab-${current}`}
+            tabIndex={0}
+          >
+            {body()}
+          </div>
         </div>
       )}
     </div>
@@ -424,10 +584,6 @@ function SignedInRow({ name }: { name: string }) {
   const auth = useStore((s) => s.authByBackend[name]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // a caller that claimed its token since the last read shows when Settings opens
-  useEffect(() => {
-    void useStore.getState().loadAuth(name);
-  }, [name]);
   if (!auth) return null;
   const revoke = (id: string) => {
     setBusy(id);
@@ -475,28 +631,9 @@ function SignedInRow({ name }: { name: string }) {
  *  when it runs, and whether this page was bundled from the same build (a
  *  page left open across a redeploy, or a dist/web older than the server).
  *  `isHome` is whether `name` is the backend that actually served this page:
- *  only there does a stale build mean reloading fixes it. */
-function AboutRow({ name, isHome }: { name: string; isHome: boolean }) {
-  const [about, setAbout] = useState<About | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-    setAbout(null);
-    setError(null);
-    api.about(name).then(
-      (a) => {
-        if (live) setAbout(a);
-      },
-      (e: unknown) => {
-        if (live) setError(String(e instanceof Error ? e.message : e));
-      },
-    );
-    return () => {
-      live = false;
-    };
-  }, [name]);
-
+ *  only there does a stale build mean reloading fixes it. The menu fetches
+ *  `about`, since its rail marks a stale build too. */
+function AboutRow({ name, isHome, about, error }: { name: string; isHome: boolean; about: About | null; error: string | null }) {
   const committed = about?.committedAt ? Date.parse(about.committedAt) / 1000 : undefined;
   const commitUrl = about?.homepage && about.commit ? `${about.homepage}/commit/${about.commit}` : null;
   const stale = about && PAGE_BUILD && !sameBuild(PAGE_BUILD, about);
@@ -504,6 +641,7 @@ function AboutRow({ name, isHome }: { name: string; isHome: boolean }) {
   return (
     <section className="settings-row">
       <h3 className="panel-label">about</h3>
+      {!about && !error && <p className="settings-hint">asking {name}…</p>}
       {error && <p className="settings-hint error">{error}</p>}
       {about && (
         <dl className="about">
