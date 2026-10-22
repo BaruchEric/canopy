@@ -8,10 +8,10 @@
  * Needs tmux; without it there is nothing to outlive anything.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeKept } from "../core/keep";
+import { keepDir, writeKept } from "../core/keep";
 import { killServer, killSession, snapshot, tmuxBase } from "../core/tmux";
 import type { KeptShell, TermInfo } from "../core/types";
 import { startServer } from "./index";
@@ -262,6 +262,25 @@ describe("keeping shells", () => {
   test.if(tmux)("a keep-end of a shell tmux does not hold kills nothing and says so", async () => {
     expect(await server.endTerm("fffffffffffffffffffffffffffffff2", { keep: true })).toBe(false);
   });
+
+  test.if(tmux)("a keep-end whose snapshot cannot be written kills nothing and says so", async () => {
+    const id = "fffffffffffffffffffffffffffffff3";
+    await post("/api/keep", { on: false });
+    await shellWith(id, "marker-unwritable");
+    // a folder where the record goes: the write throws, on any machine and as any user
+    const blocker = join(keepDir(), `${id}.json`);
+    await mkdir(blocker, { recursive: true });
+    try {
+      expect(await server.endTerm(id, { keep: true })).toBe(false);
+      // the session is still there, with what it had, and listed again
+      expect(await pane(id)).toContain("marker-unwritable");
+      const terms = (await (await fetch(api("/api/terms"))).json()) as TermInfo[];
+      expect(terms.some((t) => t.id === id)).toBe(true);
+    } finally {
+      await rm(blocker, { recursive: true, force: true });
+    }
+    expect((await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" })).status).toBe(200);
+  }, 60_000);
 
   test.if(tmux)("restore resumes the shell's own session", async () => {
     const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2";
