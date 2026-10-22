@@ -24,6 +24,10 @@ function parseKinds(text: string): SweepKind[] | string {
   return out.length > 0 ? out : "--kind needs at least one kind";
 }
 
+/** How long the closing POST may take: the server closes items one at a
+ *  time and snapshots each shell first, so it scales with the keys. */
+export const sweepTimeoutMs = (keys: number): number => Math.min(10 * 60_000, 30_000 + 15_000 * keys);
+
 /** The plan, a kind at a time: `kind  where  idle  why`, with a mark for
  *  what --yes would close. */
 export function planLines(items: readonly SweepItem[], now: number = Date.now()): string[] {
@@ -64,7 +68,7 @@ export async function sweepCommand(argv: string[], { fail }: { fail: (msg: strin
   }
   const keys = sweepKeys(info.items, kinds);
   if (keys.length === 0) return console.log("nothing to close");
-  const { outcomes } = await ask<{ outcomes: SweepOutcome[] }>(target, "POST", "/api/sweep", { keys }).catch(failed);
+  const { outcomes } = await ask<{ outcomes: SweepOutcome[] }>(target, "POST", "/api/sweep", { keys }, sweepTimeoutMs(keys.length)).catch(failed);
   const byKey = new Map(info.items.map((i) => [i.key, i]));
   for (const o of outcomes) {
     const i = byKey.get(o.key);

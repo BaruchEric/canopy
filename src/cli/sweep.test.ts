@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SweepItem } from "../core/types";
-import { sweepKeys } from "./sweep";
+import { sweepKeys, sweepTimeoutMs } from "./sweep";
 
 const item = (key: string, kind: SweepItem["kind"], over: Partial<SweepItem> = {}): SweepItem => ({
   key,
@@ -36,5 +36,21 @@ describe("sweepKeys", () => {
   test("drafts and listed-only items are never swept", () => {
     expect(sweepKeys(items, ["shell", "chat"])).not.toContain("s2");
     expect(sweepKeys(items, ["chat"])).not.toContain("c2");
+  });
+});
+
+describe("sweepKeys, outside items", () => {
+  test("an outside item that is not closable is never posted", () => {
+    const outside = item("o1", "outside", { closable: false });
+    expect(sweepKeys([outside], undefined)).toEqual([]);
+    expect(sweepKeys([outside], ["outside"])).toEqual([]);
+  });
+});
+
+describe("sweepTimeoutMs", () => {
+  test("30 s plus 15 s per key, capped at 10 minutes", () => {
+    expect(sweepTimeoutMs(1)).toBe(45_000);
+    expect(sweepTimeoutMs(10)).toBe(180_000);
+    expect(sweepTimeoutMs(1000)).toBe(600_000);
   });
 });

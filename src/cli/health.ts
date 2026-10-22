@@ -196,7 +196,7 @@ export const errText = (err: unknown): string => (err instanceof Error ? err.mes
 
 /** One request to a backend at the first of its addresses that answers;
  *  a refusal by the backend is the answer, not a reason to try the next. */
-export async function ask<T>(t: Target, method: string, path: string, body?: unknown): Promise<T> {
+export async function ask<T>(t: Target, method: string, path: string, body?: unknown, timeoutMs = 8_000): Promise<T> {
   const tried: string[] = [];
   for (const url of t.urls) {
     let res: Response;
@@ -204,7 +204,7 @@ export async function ask<T>(t: Target, method: string, path: string, body?: unk
       res = await fetch(`${url}${path}`, {
         method,
         redirect: "manual",
-        signal: AbortSignal.timeout(8_000),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: callerHeaders(url, undefined, body !== undefined ? { "content-type": "application/json" } : undefined),
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       });
