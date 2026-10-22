@@ -54,6 +54,7 @@ import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } fr
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
 import { prCommand } from "./pr";
+import { sweepCommand } from "./sweep";
 import { secretsCommand } from "./secrets";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
@@ -98,6 +99,7 @@ const COMMANDS = new Set([
   "new",
   "incubator",
   "ranger",
+  "sweep",
   "health",
   "kit",
   "land",
@@ -850,6 +852,8 @@ export async function main(argv: string[]): Promise<void> {
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });
+    case "sweep":
+      return sweepCommand(args, { fail });
     case "secrets":
       return secretsCommand(args, { fail });
     case "version":

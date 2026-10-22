@@ -61,6 +61,9 @@ usage:
   canopy ranger wake <when> "prompt" wake it later: in 30m, 14:00, an ISO time
     --cron "0 8 * * *" | --run <id>  on a cron line instead, or when a run ends
   canopy ranger unwake <id>          remove a wake
+  canopy sweep                       idle shells, chats and runs a backend offers for closing
+  canopy sweep --yes [--kind shell,chat,run]   close the ticked ones (all kinds but pr unless named)
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy health [--bad] [--repo R] [--canopy] [--json]
                                      every check on every backend the home one lists; exit 1 while one is down
     --on NAME                        only that backend (checks, add and rm speak to it too)
