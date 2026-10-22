@@ -50,6 +50,8 @@ interface Facts {
   tmuxDown: boolean;
   /** a started chat's stop ends it only when its process exits, later */
   chatEndsLater: boolean;
+  /** runs once the facts are read: a change that lands after the recheck */
+  afterFacts: (() => void) | null;
   settings: SweepSettings;
   events: ServerEvent[];
   calls: { endShell: string[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[] };
@@ -62,26 +64,32 @@ function world(): Facts & { deps: SweepDeps } {
     runs: [],
     tmuxDown: false,
     chatEndsLater: false,
+    afterFacts: null,
     settings: { ...DEFAULT_SWEEP, spans: { ...DEFAULT_SWEEP.spans }, auto: [...DEFAULT_SWEEP.auto] },
     events: [],
     calls: { endShell: [], stopChat: [], dismiss: [], startChat: [] },
   };
   const deps: SweepDeps = {
     broadcast: (ev) => w.events.push(ev),
-    facts: async (): Promise<PlanInputs> => ({
-      serverStart: NOW - 10 * 24 * H,
-      shells: w.tmuxDown ? null : w.shells.map((s) => ({ ...s })),
-      runs: w.runs.map((r) => ({ ...r })),
-      heldRuns: new Set<string>(),
-      outside: [],
-    }),
+    facts: async (): Promise<PlanInputs> => {
+      const read: PlanInputs = {
+        serverStart: NOW - 10 * 24 * H,
+        shells: w.tmuxDown ? null : w.shells.map((s) => ({ ...s })),
+        runs: w.runs.map((r) => ({ ...r })),
+        heldRuns: new Set<string>(),
+        outside: [],
+      };
+      w.afterFacts?.();
+      return read;
+    },
     endShell: async (id) => {
       w.calls.endShell.push(id);
       // a beat, so a second close that did not wait would see the shell still there
       await Bun.sleep(20);
       w.shells = w.shells.filter((s) => s.id !== id);
-      return true;
+      return "closed";
     },
+    runStatus: (id) => w.runs.find((r) => r.id === id)?.status,
     stopChat: (id) => {
       w.calls.stopChat.push(id);
       const r = w.runs.find((x) => x.id === id);
@@ -216,6 +224,31 @@ describe("the sweep hub", () => {
     expect(w.calls.stopChat).toEqual(["c1"]);
     // nor is it offered again while it winds down
     expect((await hub.info()).items).toEqual([]);
+  });
+
+  test("a chat that starts a turn after the recheck is in use now, not stopped, and keeps no record", async () => {
+    const w = world();
+    w.runs = [idleChat("c1")];
+    // a message arrives while the swept-chat record is being written
+    w.afterFacts = () => {
+      const r = w.runs.find((x) => x.id === "c1");
+      if (r) r.status = "working";
+    };
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["chat:c1"], "eric")).toEqual([{ key: "chat:c1", result: "in use now" }]);
+    expect(w.calls.stopChat).toEqual([]);
+    expect(await readSweptChats()).toEqual([]);
+  });
+
+  test("a shell typed into while it is being kept is in use now", async () => {
+    const w = world();
+    w.shells = [shell()];
+    w.deps.endShell = async (id) => {
+      w.calls.endShell.push(id);
+      return "in use now";
+    };
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["shell:t1"], "eric")).toEqual([{ key: "shell:t1", result: "in use now" }]);
   });
 
   test("tmux down: facts.shells null gives no shell items", async () => {

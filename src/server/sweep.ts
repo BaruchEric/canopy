@@ -17,9 +17,12 @@ export interface SweepDeps {
   broadcast(ev: ServerEvent): void;
   /** the shells, runs and cards as they are now */
   facts(): Promise<PlanInputs>;
-  /** ends a shell, keeping its history as a swept record first; false when
-   *  the record could not be written, and then nothing was ended */
-  endShell(id: string): Promise<boolean>;
+  /** ends a shell, keeping its history as a swept record first: "in use
+   *  now" when it was typed into while being kept, "failed" when the record
+   *  could not be written; either way it is left running */
+  endShell(id: string): Promise<"closed" | "in use now" | "failed">;
+  /** a run's status as it is this moment, for the last look before a stop */
+  runStatus(runId: string): Run["status"] | undefined;
   /** stops a chat between turns; throws for a run it does not know */
   stopChat(runId: string): Run;
   /** forgets a finished run */
@@ -157,13 +160,21 @@ export class SweepHub {
   private async closeOne(item: SweepItem, facts: PlanInputs): Promise<SweepOutcome> {
     const { key, id } = item;
     switch (item.kind) {
-      case "shell":
-        return (await this.deps.endShell(id)) ? { key, result: "closed" } : { key, result: "failed", why: "its history could not be kept, so it was left running" };
+      case "shell": {
+        const how = await this.deps.endShell(id);
+        return how === "failed" ? { key, result: "failed", why: "its history could not be kept, so it was left running" } : { key, result: how };
+      }
       case "chat": {
         const run = facts.runs.find((r) => r.id === id);
         if (!run?.session) return { key, result: "failed", why: "it has no session to resume" };
         // the record goes first, so a stopped chat can always be resumed
         await addSweptChat({ runId: id, repoId: run.repoId, harness: run.harness, session: run.session, title: item.title, sweptAt: this.now() });
+        // the record's write gave a message time to start a turn: a chat
+        // that is not idle this moment is in use, and a stop would cut it off
+        if (this.deps.runStatus(id) !== "idle") {
+          await takeSweptChat(id);
+          return { key, result: "in use now" };
+        }
         try {
           this.deps.stopChat(id);
         } catch (err) {

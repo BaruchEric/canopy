@@ -68,7 +68,12 @@ const broker = Bun.serve({
 
 let scratch: string;
 let previous: string | undefined;
-let server: { port: number; stop: () => Promise<void>; endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean> };
+let server: {
+  port: number;
+  stop: () => Promise<void>;
+  endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>;
+  sweepShell: (id: string) => Promise<"ended" | "in use" | "unkept">;
+};
 
 const api = (path: string) => `http://127.0.0.1:${server.port}${path}`;
 const keptList = async (): Promise<KeptShell[]> => ((await (await fetch(api("/api/terms/kept"))).json()) as { kept: KeptShell[] }).kept;
@@ -202,6 +207,44 @@ describe("the sweep's end of a shell", () => {
     } finally {
       await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
       for (const id of [quiet, agent]) await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" });
+    }
+  }, 60_000);
+
+  test.if(tmux)("a shell typed into while the sweep keeps it stays, and its swept record goes", async () => {
+    const id = "dddddddddddddddddddddddddddddd07";
+    const q = new URLSearchParams({ id: "app", cols: "80", rows: "24", place: "strip", term: id });
+    const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/term?${q}`);
+    ws.binaryType = "arraybuffer";
+    const out: string[] = [];
+    ws.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
+      if (typeof e.data !== "string") out.push(dec.decode(new Uint8Array(e.data)));
+    };
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error("the socket failed"));
+    });
+    try {
+      await Bun.sleep(700);
+      let typed = 0;
+      await until(() => {
+        if (out.join("").includes("marker-typed")) return true;
+        if (Date.now() - typed > 2_000) {
+          ws.send(new TextEncoder().encode("echo marker-typed\n"));
+          typed = Date.now();
+        }
+        return false;
+      }, "the shell to print", 30_000);
+      // the sweep starts on it, and a keystroke lands while it snapshots
+      const how = server.sweepShell(id);
+      ws.send(new TextEncoder().encode("x"));
+      expect(await how).toBe("in use");
+      const terms = (await (await fetch(api("/api/terms"))).json()) as { id: string }[];
+      expect(terms.some((t) => t.id === id)).toBe(true);
+      expect(await onDisk(id)).toBe(false);
+      expect((await keptList()).some((k) => k.id === id)).toBe(false);
+    } finally {
+      ws.close();
+      await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" });
     }
   }, 60_000);
 

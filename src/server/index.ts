@@ -449,7 +449,7 @@ interface LiveTerm {
   /** the sweep's end while it runs, true once it kept and ended the shell:
    *  a plain end that comes meanwhile waits for it, so the record it forgets
    *  is never written back after */
-  keepEnd?: Promise<boolean>;
+  keepEnd?: Promise<"ended" | "in use" | "unkept">;
   /** when a browser last typed into it (a keystroke frame, not a
    *  terminal's own reply), for `/api/terms/watched` */
   lastInput?: number;
@@ -704,15 +704,7 @@ async function endTerm(state: ServerState, id: string, opts: { keep?: true } = {
     live.pty.session.close();
     return true;
   }
-  if (opts.keep) {
-    // ending already, under some other end that forgets the record
-    if (!live || live.ending) return false;
-    // ending from here on, so a pass that comes to it now leaves it alone
-    live.ending = true;
-    const ended = keepEnd(state, live);
-    live.keepEnd = ended;
-    return ended;
-  }
+  if (opts.keep) return (await sweepShell(state, id)) === "ended";
   const sweeping = live?.keepEnd;
   if (sweeping) {
     // The sweep is keeping it: wait that out rather than kill the shell
@@ -720,7 +712,7 @@ async function endTerm(state: ServerState, id: string, opts: { keep?: true } = {
     // Once it has kept and ended the shell, this end forgets the record,
     // since the user asked for the shell gone; if it kept nothing, the
     // shell is still running and this end goes on as any other.
-    if (await sweeping) {
+    if ((await sweeping) === "ended") {
       await forgetKept(id);
       await refreshKept(state);
       tellTerms(state);
@@ -739,26 +731,51 @@ async function endTerm(state: ServerState, id: string, opts: { keep?: true } = {
   return true;
 }
 
+/** How the sweep's end of a shell went: kept and ended; typed into while it
+ *  was being kept, so left running; or not kept (none held, ending already,
+ *  or the record could not be written), so left as it was. */
+type SweepEnd = "ended" | "in use" | "unkept";
+
+/** The sweep's end of a shell (`endTerm` with `keep`, and the hub's). */
+async function sweepShell(state: ServerState, id: string): Promise<SweepEnd> {
+  const live = state.terms.get(id);
+  // ending already, under some other end that forgets the record
+  if (!state.tmux || !live || live.ending) return "unkept";
+  // ending from here on, so a pass that comes to it now leaves it alone
+  live.ending = true;
+  const ended = keepEnd(state, live, Date.now());
+  live.keepEnd = ended;
+  return ended;
+}
+
 /** The sweep's end of a shell whose `ending` it has set: its history is
  *  written out as a swept record, then the session ends and the record goes
- *  on offer. False, with the shell left running, when the record could not
- *  be written. */
-async function keepEnd(state: ServerState, live: LiveTerm): Promise<boolean> {
+ *  on offer. A keystroke from `began` on means someone is at it: the shell
+ *  stays and the record goes, since a swept record would outlive it as an
+ *  offer. When the record could not be written the shell stays too. */
+async function keepEnd(state: ServerState, live: LiveTerm, began: number): Promise<SweepEnd> {
   const tmux = state.tmux;
-  if (!tmux) return false;
+  if (!tmux) return "unkept";
   // one pass already writing its plain record is waited out, so the swept
   // record is the one that lands
   await state.keeping;
   if (!(await keepOne(state, live, { swept: true }))) {
     live.ending = false;
-    return false;
+    return "unkept";
+  }
+  // the hub's recheck saw it quiet, but the keep takes a while; a keystroke
+  // in that time is the user back at it
+  if ((live.lastInput ?? 0) >= began) {
+    live.ending = false;
+    await forgetKept(live.info.id);
+    return "in use";
   }
   live.kept = true;
   await dropShell(state, tmux, live.info.id);
   // the record is the point: it goes on offer now, not at the next pass
   await refreshKept(state);
   tellTerms(state);
-  return true;
+  return "ended";
 }
 
 /** Kills a shell's session and lets go of it here. */
@@ -4460,7 +4477,13 @@ export async function startServer(opts: {
    *  would-refuse lines): stdout, or nowhere under `bun test` unless a test
    *  passes its own */
   callersLog?: (line: string) => void;
-}): Promise<{ port: number; coordPort: number | null; endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>; stop: () => Promise<void> }> {
+}): Promise<{
+  port: number;
+  coordPort: number | null;
+  endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>;
+  sweepShell: (id: string) => Promise<"ended" | "in use" | "unkept">;
+  stop: () => Promise<void>;
+}> {
   // what the sweep counts a shell's idle from at the latest: keystrokes
   // before it were held in memory and are gone
   const serverStart = Date.now();
@@ -5083,7 +5106,11 @@ export async function startServer(opts: {
     sweep: new SweepHub({
       broadcast: (ev) => broadcast(state, ev),
       facts: () => sweepFacts(state, serverStart),
-      endShell: (id) => endTerm(state, id, { keep: true }),
+      endShell: async (id) => {
+        const how = await sweepShell(state, id);
+        return how === "ended" ? "closed" : how === "in use" ? "in use now" : "failed";
+      },
+      runStatus: (id) => state.runner.get(id)?.status,
       stopChat: (id) => state.runner.stop(id),
       dismissRun: (id) => state.runner.dismiss(id),
       startChat: (c) => startSweptChat(state, c),
@@ -5771,6 +5798,8 @@ export async function startServer(opts: {
     coordPort: coordServer?.port ?? null,
     /** a shell ended as the sweep ends it, or plainly; tests */
     endTerm: (id: string, opts?: { keep?: true }) => endTerm(state, id, opts),
+    /** the sweep's end of a shell, with how it went; tests */
+    sweepShell: (id: string) => sweepShell(state, id),
     stop: () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);
