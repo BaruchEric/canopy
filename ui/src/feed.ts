@@ -32,6 +32,7 @@ import { peerLines } from "./peers";
 import { sproutLines } from "./sprouts";
 import { taskLines } from "./tasks";
 import { agentWord, harnessOf } from "./runs";
+import { freshEntry, sweepSummary } from "./sweep";
 
 export type FeedKind =
   | "git"
@@ -48,7 +49,8 @@ export type FeedKind =
   | "task"
   | "registry"
   | "ask"
-  | "incubator";
+  | "incubator"
+  | "sweep";
 
 export interface FeedEntry {
   id: number;
@@ -103,6 +105,9 @@ export interface FeedSnapshot {
   asks?: Record<string, Ask>;
   /** the human's presence as last heard */
   presence?: Presence | null;
+  /** when the sweep's last close ran, null for none; absent while the page
+   *  has not read the sweep */
+  sweepAt?: number | null;
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -515,13 +520,18 @@ export function describeEvent(
     case "incubator":
     case "incubator-gone":
       return sproutLines(ev, prev, at);
+    // one line per close; the hub sends the same last close again on a
+    // resume or a settings change, which says nothing new
+    case "sweep": {
+      const entry = freshEntry(prev.sweepAt, ev.sweep.lastRun, at);
+      if (!entry || entry.outcomes.length === 0) return [];
+      return [{ at, kind: "sweep", source: "", text: `sweep ${sweepSummary(entry.outcomes)}${entry.by === "schedule" ? " (on its schedule)" : ""}`, quiet: false }];
+    }
     // the incubator view and the inbox say these; the feed has no line for them
     case "stages":
     case "advice":
     // the ranger's chip says what it is doing
     case "ranger":
-    // the sweep has its own sheet
-    case "sweep":
     // health has its own chip, panel and page
     case "health":
     // a run's own timeline says what a remembered rule let through

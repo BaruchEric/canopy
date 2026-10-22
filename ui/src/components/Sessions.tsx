@@ -12,6 +12,7 @@ import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { ShellSpotHere } from "./Surface";
+import { SweepButton } from "./Sweep";
 import { TermTabs, TermView } from "./TermDock";
 import { SignInChips } from "./TopBar";
 
@@ -332,6 +333,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
               <span className="ss-faint">[ ] tabs · n new tab · w next waiting · double-click a tab to rename</span>
               <SignInChips />
             </span>
+            <SweepButton className="ss-sweep" />
             {warn && (
               <button type="button" className={`ss-warn t-${warn.tone}`} title={warn.title} onClick={() => onView("health")}>
                 ⚠ {warn.text} {warn.text === "1" ? "warning" : "warnings"}

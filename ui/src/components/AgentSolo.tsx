@@ -22,7 +22,15 @@ export function AgentSolo({ card: first, follow }: { card: string | null; follow
   const card = useAgentCard(id);
   const ready = useStore((s) => s.registryReady || s.repos.length > 0);
   const now = useNow(15_000);
+  const sweptAway = useStore((s) => id !== null && s.sweepEnded.includes(id));
   const following = follow && typeof BroadcastChannel !== "undefined";
+
+  // a sweep ended this agent (its shell or chat closed): the window goes
+  // with it, as its dock panel does; the board's focus pane follows the
+  // board instead, which picks another
+  useEffect(() => {
+    if (sweptAway && !follow) window.close();
+  }, [sweptAway, follow]);
   const chanRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {

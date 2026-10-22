@@ -496,3 +496,34 @@ describe("words", () => {
     expect(clock(new Date(2026, 0, 1, 9, 5, 7).getTime())).toBe("09:05:07");
   });
 });
+
+describe("the sweep", () => {
+  const info = (lastRun: { at: number; by?: "eric" | "schedule" } | null): ServerEvent => ({
+    type: "sweep",
+    sweep: {
+      items: [],
+      settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [] },
+      lastRun: lastRun && {
+        at: lastRun.at,
+        by: lastRun.by ?? "eric",
+        items: [],
+        outcomes: [
+          { key: "shell:a", result: "closed" },
+          { key: "run:b", result: "closed" },
+        ],
+      },
+      swept: { shells: [], chats: [] },
+      ask: null,
+    },
+  });
+
+  test("a new close is one line", () => {
+    expect(describeEvent(info({ at: 10 }), snap({ sweepAt: 5 }), 20)).toEqual([{ at: 20, kind: "sweep", source: "", text: "sweep closed 1 shell, dismissed 1 run", quiet: false }]);
+    expect(describeEvent(info({ at: 10, by: "schedule" }), snap({ sweepAt: null }), 20)[0]?.text).toBe("sweep closed 1 shell, dismissed 1 run (on its schedule)");
+  });
+
+  test("the same close again, or none, is no line", () => {
+    expect(describeEvent(info({ at: 10 }), snap({ sweepAt: 10 }), 20)).toEqual([]);
+    expect(describeEvent(info(null), snap({ sweepAt: null }), 20)).toEqual([]);
+  });
+});

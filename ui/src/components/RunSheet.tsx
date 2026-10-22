@@ -11,6 +11,7 @@ import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPic
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { ApproveSheet } from "./Landing";
+import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
@@ -91,9 +92,11 @@ export function RunSheet() {
     };
     window.addEventListener("keydown", onKey);
     // Focus lands inside, so the keyboard user is in the dialog, not behind
-    // it. Never on a coordinator's cards, where one Enter would start them.
+    // it. Never on a coordinator's cards, where one Enter would start them,
+    // nor on anything marked no-autofocus (the sweep's rows and its Close N,
+    // where one Enter would close or restore something).
     [...(ref.current?.querySelectorAll<HTMLElement>("input[type=search], textarea, button:not(.close)") ?? [])]
-      .find((el) => !el.closest(".coord-tasks"))
+      .find((el) => !el.closest(".coord-tasks") && !el.closest(".no-autofocus"))
       ?.focus();
     return () => window.removeEventListener("keydown", onKey);
   }, [sheet, close]);
@@ -155,6 +158,7 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "fleet-plan") return <FleetPlan key={sheet.workflow} workflow={sheet.workflow} />;
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
   if (sheet.kind === "approve") return <ApproveSheet key={sheet.id} id={sheet.id} />;
+  if (sheet.kind === "sweep") return <SweepSheet />;
   if (!run) return <Missing what="That run is gone." onClose={close} />;
   // keyed, so a coordinator's view and fold never carry over to the next run shown
   return <Console key={run.id} run={run} repo={repo} />;

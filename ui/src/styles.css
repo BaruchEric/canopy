@@ -4976,6 +4976,182 @@ button.landing-open:hover {
   margin: 0;
 }
 
+/* the sweep sheet: what went idle, a kind at a time, each row with its box,
+   where, how long idle and why; a close's outcome sits in place of the why */
+.sweep-body {
+  display: grid;
+  gap: 12px;
+}
+.sweep-summary {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--moss);
+}
+.sweep-last {
+  flex: none;
+}
+.sweep-none {
+  margin: 0;
+  color: var(--ink-dim);
+}
+.sweep-group {
+  display: grid;
+  gap: 4px;
+}
+.sweep-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+.sweep-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.sweep-n {
+  font-variant-numeric: tabular-nums;
+}
+.sweep-note {
+  flex-basis: 100%;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.sweep-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.sweep-pick {
+  display: grid;
+  grid-template-columns: 18px minmax(0, max-content) minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 10px;
+  padding: 4px 6px;
+  border-radius: var(--r);
+  font-size: 12px;
+}
+label.sweep-pick {
+  cursor: pointer;
+}
+label.sweep-pick:hover {
+  background: var(--wash);
+}
+.sweep-pick input,
+.sweep-head input {
+  margin: 0;
+  accent-color: var(--moss);
+}
+.sweep-nobox {
+  width: 13px;
+}
+.sweep-where {
+  grid-column: 2;
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sweep-title {
+  grid-column: 3;
+  min-width: 0;
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sweep-idle {
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: end;
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.sweep-why,
+.sweep-out {
+  grid-column: 2 / -1;
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.sweep-out {
+  font-weight: 700;
+}
+.sweep-out.t-moss {
+  color: var(--moss);
+}
+.sweep-out.t-lichen {
+  color: var(--lichen);
+}
+.sweep-out.t-rust {
+  color: var(--rust);
+}
+.sweep-out.t-dim {
+  color: var(--ink-dim);
+}
+.sweep-row.o-closed .sweep-where,
+.sweep-row.o-gone .sweep-where {
+  color: var(--ink-dim);
+}
+.sweep-act {
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: end;
+}
+.sweep-swept {
+  border-top: 1px solid var(--hair);
+  padding-top: 10px;
+}
+.sweep-swept > summary {
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+  margin-bottom: 4px;
+}
+/* the broom on the sessions status line and the board's bar */
+.sweep-btn {
+  gap: 5px;
+}
+.sweep-btn .broom {
+  flex: none;
+}
+.sweep-count {
+  min-width: 1.4em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--lichen) 16%, transparent);
+  color: var(--lichen);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.ss-sweep {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-dim);
+  font: inherit;
+  cursor: pointer;
+}
+.ss-sweep:hover {
+  color: var(--ink);
+}
+
 /* moving a shell's session to another backend: what it carries, then its steps */
 .move-sheet .move-prompt {
   margin: 0 0 6px;

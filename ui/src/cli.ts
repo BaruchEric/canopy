@@ -149,6 +149,8 @@ export type Command =
   | { kind: "clear" }
   /** `sprout` is `new`'s words, for the new project form to start from */
   | { kind: "view"; view: "library" | "incubator" | "health" | "kit" | "secrets"; sprout: SproutDraft | null }
+  /** the sweep sheet: what went idle, to pick from and close */
+  | { kind: "sweep" }
   /** a command that belongs in a terminal on the machine, not in a page */
   | { kind: "terminal"; why: string };
 
@@ -367,6 +369,10 @@ export function parseCommand(input: string[]): Parsed {
       return { kind: "terminal", why: "canopy helper runs on the machine whose desktop it lends: start it in a terminal there" };
     case "ranger":
       return { kind: "terminal", why: "the ranger has its own chip in the top bar (✦ ranger), and Settings has its switch; canopy ranger is for a terminal" };
+    // the sheet is the page's plan and its --yes: it starts ticked as
+    // --yes would close, and closes what is ticked
+    case "sweep":
+      return { kind: "sweep" };
   }
   return { kind: "error", text: `unknown command: ${verb}`, usage: "canopy help" };
 }

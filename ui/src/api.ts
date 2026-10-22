@@ -18,6 +18,8 @@ import type {
   RepoCheckDef,
   RepoHealthInfo,
   RangerInfo,
+  SweepInfo,
+  SweepOutcome,
   RangerWake,
   TermScreen,
   AgentActivity,
@@ -670,6 +672,12 @@ export const api = {
   addRangerWake: (b: string, wake: { prompt: string; cron?: string; when?: string }) =>
     req<RangerWake>(b, "/api/ranger/wakes", { method: "POST", body: JSON.stringify({ ...wake, by: "eric" }) }),
   removeRangerWake: (b: string, id: string) => req<RangerInfo>(b, `/api/ranger/wakes?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
+  /** the sweep: what went idle on the home backend, offered for closing */
+  sweep: () => req<SweepInfo>(homeName(), "/api/sweep"),
+  /** closes the items named, each after a fresh look; an outcome per key */
+  closeSweep: async (keys: string[]) => (await req<{ outcomes: SweepOutcome[] }>(homeName(), "/api/sweep", { method: "POST", body: JSON.stringify({ keys }) })).outcomes,
+  /** starts a chat on a swept chat's session; it waits idle for a message */
+  resumeSwept: (runId: string) => req<Run>(homeName(), "/api/sweep/resume", { method: "POST", body: JSON.stringify({ runId }) }),
   /** the retro lessons on offer */
   advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
   /** accepts or dismisses one; a chat it opened is named by the page's ids */

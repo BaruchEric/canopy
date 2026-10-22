@@ -47,7 +47,9 @@ import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from
 import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
+import { endedCards, freshEntry } from "./sweep";
+import { cardOfPanel } from "./agentpanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
@@ -731,6 +733,13 @@ export interface CanopyState {
   stages: Record<string, IncubatorStages>;
   /** the ranger on each backend that has said, by backend name (server/ranger) */
   rangers: Record<string, RangerInfo>;
+  /** the home backend's sweep (server/sweep): what went idle, its settings,
+   *  the last close and what it swept; null until read, and on a backend
+   *  older than the sweep or a page without the admin right */
+  sweep: SweepInfo | null;
+  /** the agent cards the newest close ended, so an agent window showing one
+   *  of them closes; set only by an event that brings a new close */
+  sweepEnded: string[];
   /** each backend's health checks, by backend name; an older backend that
    *  has none is missing (server/health) */
   health: Record<string, HealthCheck[]>;
@@ -1084,6 +1093,14 @@ export interface CanopyState {
   loadSprouts: (backend?: string) => Promise<void>;
   /** reads one backend's ranger, home by default; an older backend has none */
   loadRanger: (backend?: string) => Promise<void>;
+  /** reads the home backend's sweep; an older backend has none */
+  loadSweep: () => Promise<void>;
+  /** opens the sweep sheet, which reads the sweep afresh */
+  openSweep: () => void;
+  /** closes the items named, each looked at again first; how each went */
+  closeSweep: (keys: string[]) => Promise<SweepOutcome[]>;
+  /** starts a chat on a swept chat's session and opens it, waiting for a message */
+  resumeSwept: (runId: string) => Promise<void>;
   /** reads one backend's health checks, home by default */
   loadHealth: (backend?: string) => Promise<void>;
   /** reads one backend's kit, home by default */
@@ -1340,7 +1357,9 @@ export type Sheet =
   | { kind: "fleet-plan"; workflow: string }
   | { kind: "fleet"; fleetId: string }
   /** a branch run's sensitive files and their diffs, then "approve and land" */
-  | { kind: "approve"; id: string };
+  | { kind: "approve"; id: string }
+  /** what went idle, to pick from and close (FR-018) */
+  | { kind: "sweep" };
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -1475,6 +1494,9 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     asks: s.asks,
     presence: s.presence,
     sprouts: s.sprouts,
+    // the `at` of the close the page has seen: null for none, left out
+    // while the sweep is unread
+    ...(s.sweep ? { sweepAt: s.sweep.lastRun?.at ?? null } : {}),
   };
 }
 
@@ -1582,6 +1604,8 @@ const sproutLoads = new Map<string, number>();
 const stagesEvents = new Map<string, number>();
 /* and each backend's ranger events, the same */
 const rangerEvents = new Map<string, number>();
+/* and the home backend's sweep events */
+let sweepEvents = 0;
 /* and each backend's health events, the same way */
 const healthEvents = new Map<string, number>();
 /* and each backend's kit events, the same way */
@@ -1688,6 +1712,12 @@ function openSavedPanels(
  *  in to it. A 401 to a call that carried one means the backend no longer
  *  knows it (revoked, or a month unused), so it is forgotten here, unless a
  *  sign-in has kept a new one since that call went out. */
+/** Whether this page holds a token for a backend. The sweep is read at start
+ *  only then: its routes need the admin right, and a refusal would mark the
+ *  backend as wanting a sign-in that nothing else on the page asked for. The
+ *  sheet reads it on open whatever, where a refusal is the right answer. */
+const signedIn = (b: string): boolean => readToken(originOf(baseOf(b))) !== null;
+
 function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, sent: string | null): void {
   const origin = originOf(baseOf(b));
   const deadToken = sent !== null && readToken(origin) === sent;
@@ -1726,6 +1756,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
     void readAbout(get, set, b);
     void get().loadRegistry();
     void get().loadAsks();
+    if (signedIn(b)) void get().loadSweep();
   }
   // every backend's incubator, which may have moved on too
   void get().loadSprouts(b);
@@ -1907,6 +1938,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   sproutsReady: false,
   stages: {},
   rangers: {},
+  sweep: null,
+  sweepEnded: [],
   health: {},
   kit: {},
   landing: {},
@@ -2120,6 +2153,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadAsks();
     void get().loadSprouts();
     void get().loadRanger();
+    if (signedIn(home)) void get().loadSweep();
     void get().loadHealth();
     void get().loadKit();
     void get().loadLanding();
@@ -2795,6 +2829,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a message already held (a reconnect's replay, a post heard twice) is
     // neither a feed line nor unread
     if (ev.type === "chan" && before.chanMsgs[ev.message.channel]?.some((m) => m.id === ev.message.id)) return;
+    // the sweep is the home backend's alone: another backend's plan names
+    // its own shells and runs by ids this page reads as home's
+    if (ev.type === "sweep" && b !== before.home) return;
     const lines = describeEvent(ev, feedView(before, b), Date.now(), before.agents[b] ?? NO_ROUTES);
     if (lines.length) {
       set((s) => {
@@ -2834,6 +2871,21 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "ranger") {
       rangerEvents.set(b, (rangerEvents.get(b) ?? 0) + 1);
       set((st) => ({ rangers: { ...st.rangers, [b]: ev.ranger } }));
+      return;
+    }
+    if (ev.type === "sweep") {
+      sweepEvents += 1;
+      // A close the page has not seen ends agents: their dock panels close
+      // here, and an agent window showing one closes itself on sweepEnded.
+      // The hub sends the same last close again on a resume or a settings
+      // change, and a restored shell keeps its id, so only a newer one counts.
+      const entry = freshEntry(before.sweep ? (before.sweep.lastRun?.at ?? null) : undefined, ev.sweep.lastRun, Date.now());
+      const ended = entry ? endedCards(entry, Object.values(before.registry), before.home) : new Set<string>();
+      set({ sweep: ev.sweep, ...(entry ? { sweepEnded: [...ended] } : {}) });
+      for (const p of get().panels) {
+        const card = cardOfPanel(p);
+        if (card && ended.has(card)) get().closePanel(p);
+      }
       return;
     }
     if (ev.type === "kit") {
@@ -3166,6 +3218,28 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // an older backend has no ranger; nothing shows for it
     }
+  },
+  loadSweep: async () => {
+    const mark = sweepEvents;
+    try {
+      const sweep = await api.sweep();
+      if (sweepEvents === mark) set({ sweep });
+    } catch {
+      // an older backend has no sweep, and a page without the admin right
+      // cannot read it; the sheet says so
+    }
+  },
+  // the sheet reads the sweep afresh as it opens
+  openSweep: () => set({ sheet: { kind: "sweep" } }),
+  closeSweep: async (keys) => {
+    const outcomes = await api.closeSweep(keys);
+    // the event usually comes first; a stream that is down still gets the new plan
+    void get().loadSweep();
+    return outcomes;
+  },
+  resumeSwept: async (runId) => {
+    const run = await api.resumeSwept(runId);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run }, sheet: { kind: "run", runId: run.id } }));
   },
   loadHealth: async (backend) => {
     const b = backend ?? get().home;

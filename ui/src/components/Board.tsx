@@ -42,6 +42,7 @@ import { OVER_PAGE } from "../surface";
 import { AgentScreen, AskHere, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { AgentActions, Summary, glyphOf, harnessWord, useNow } from "./Registry";
 import { Seg } from "./Seg";
+import { SweepButton } from "./Sweep";
 
 const LAYOUT_OPTIONS = BOARD_LAYOUTS.map((l) => ({ value: l, label: LAYOUT_WORD[l], title: LAYOUT_TITLE[l] }));
 
@@ -285,6 +286,7 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
         <Seg label="Board layout" value={layout} options={LAYOUT_OPTIONS} onChange={setLayout} className="board-layouts" />
         <Seg label="Group the board" value={grouping} options={GROUPING_OPTIONS} onChange={(g) => moveTiles(() => setSetting("agentsGrouping", g))} />
         <span className="spacer" />
+        <SweepButton />
         <button
           type="button"
           className="mini"

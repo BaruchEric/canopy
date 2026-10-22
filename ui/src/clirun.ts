@@ -309,6 +309,10 @@ async function runInner(cmd: Command): Promise<Outcome> {
       if (cmd.sprout) st.draftSprout(cmd.sprout);
       return went(cmd.sprout ? "the new project form is open" : `the ${cmd.view} is open`);
     }
+    case "sweep": {
+      st.openSweep();
+      return went("the sweep is open");
+    }
     case "terminal":
       return { ok: false, lines: [say(cmd.why, "lichen")] };
   }
@@ -384,4 +388,4 @@ function showTranscript(): void {
 /** whether a command, once parsed, takes the user to a place of its own
  *  rather than printing an answer */
 const goesElsewhere = (cmd: ReturnType<typeof parseCommand>): boolean =>
-  (cmd.kind === "open" && cmd.app === null) || cmd.kind === "view" || (cmd.kind === "launch" && cmd.more.length > 0);
+  (cmd.kind === "open" && cmd.app === null) || cmd.kind === "view" || cmd.kind === "sweep" || (cmd.kind === "launch" && cmd.more.length > 0);
