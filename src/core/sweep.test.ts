@@ -70,3 +70,13 @@ test("normalizeSweep drops a negative span and an unknown auto kind to defaults"
 test("patchSweep refuses a cron parseCron rejects", () => {
   expect(typeof patchSweep(DEFAULT_SWEEP, { cron: "every day" })).toBe("string");
 });
+test("normalizeSweep turns the schedule off for a cron that does not read", () => {
+  expect(normalizeSweep({ on: true, cron: "nope" })).toMatchObject({ on: false, cron: "0 4 * * *" });
+  expect(normalizeSweep({ on: true, cron: "0 5 * * *" })).toMatchObject({ on: true, cron: "0 5 * * *" });
+});
+test("a finished chat is a run item; the same chat idle is a chat item", () => {
+  const ended = run({ id: "c1", chat: true, status: "done", session: "s", endedAt: now - 4 * 24 * H });
+  expect(planSweep({ ...base, runs: [ended] }, DEFAULT_SWEEP, now)).toMatchObject([{ key: "run:c1", kind: "run", closable: true, checked: true }]);
+  const idle = run({ id: "c1", chat: true, status: "idle", session: "s", startedAt: now - 4 * 24 * H });
+  expect(planSweep({ ...base, runs: [idle] }, DEFAULT_SWEEP, now)).toMatchObject([{ key: "chat:c1", kind: "chat" }]);
+});

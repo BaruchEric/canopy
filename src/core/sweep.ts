@@ -6,7 +6,7 @@
  * server/sweep.ts. Browser-safe.
  */
 
-import { CRON_MAX, parseCron } from "./cron";
+import { CRON_MAX, isCron, parseCron } from "./cron";
 import { SWEEP_KINDS } from "./types";
 import type { AgentCard, AgentState, Run, SweepItem, SweepKind, SweepSettings } from "./types";
 
@@ -35,7 +35,11 @@ export function normalizeSweep(raw: unknown): SweepSettings {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
   const r = raw as Record<string, unknown>;
   out.on = r["on"] === true;
-  if (typeof r["cron"] === "string" && r["cron"].length <= CRON_MAX && !("error" in parseCron(r["cron"]))) out.cron = r["cron"];
+  if ("cron" in r) {
+    // a stored cron that does not read leaves the schedule off, not firing at the default time
+    if (isCron(r["cron"])) out.cron = r["cron"];
+    else out.on = false;
+  }
   const spans = r["spans"];
   if (spans && typeof spans === "object" && !Array.isArray(spans)) {
     for (const k of SWEEP_KINDS) {
