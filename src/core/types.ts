@@ -2579,6 +2579,11 @@ export interface KeptShell {
   agent: AgentKind | null;
   /** the name its tab gave it by hand, which a restore puts back */
   label?: string;
+  /** the agent's conversation, off the registry card that named this shell,
+   *  so a restore resumes that one rather than the folder's newest */
+  session?: string;
+  /** ended by the sweep rather than lost, which keeps it longer (`SWEPT_DAYS`) */
+  swept?: true;
 }
 
 /** A port something listens on at the backend's loopback, as the preview

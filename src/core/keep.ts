@@ -9,19 +9,25 @@
  * the old history ahead of it and a banner saying so.
  *
  * This restores the terminal, not the processes that were in it. For a shell
- * that had an agent running, `continueLine` is the line canopy offers to run
- * in the restored shell, which picks the conversation back up rather than
- * resuming a process that is gone.
+ * that had an agent running, `resumeLine` (the record's own conversation,
+ * when the registry named one) or else `continueLine` is the line canopy
+ * offers to run in the restored shell, which picks the conversation back up
+ * rather than resuming a process that is gone.
+ *
+ * The sweep ends idle shells through the same records: it snapshots one with
+ * `swept` set, whatever `keepShells` says, and a swept record is offered for
+ * `SWEPT_DAYS` rather than `KEEP_DAYS`.
  *
  * Everything but the four fs calls at the end is pure and tested.
  */
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { continueArgv, type AgentEnv } from "./harness";
+import { continueArgv, resumeKindArgv, type AgentEnv } from "./harness";
 import { shellLine, shellQuote } from "./host";
+import { isSessionId } from "./sessions";
 import { configDir } from "./store";
 import { isTermId, termPlace } from "./term";
-import { cleanLabel, type AgentKind, type AgentSettings, type KeptShell } from "./types";
+import { cleanLabel, type AgentCard, type AgentKind, type AgentSettings, type KeptShell } from "./types";
 
 /** how often a held shell's history is written out */
 export const KEEP_EVERY = 60_000;
@@ -31,6 +37,9 @@ export const KEEP_LINES = 2000;
 export const KEEP_BYTES = 256 * 1024;
 /** how long a record is offered before it is dropped */
 export const KEEP_DAYS = 7;
+/** how long a shell the sweep ended is offered: longer, since nobody lost
+ *  it by accident and nobody is told it went beyond the sweep's own log */
+export const SWEPT_DAYS = 14;
 
 const SHELL_COMMANDS = ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "login"];
 
@@ -87,6 +96,23 @@ export function agentIn(command: string, title: string, argvs: readonly (readonl
  *  always takes; null for a shell that had no agent in it. */
 export const continueLine = (agent: AgentKind | null, settings?: AgentSettings, env: AgentEnv = {}): string | null =>
   agent ? shellLine(continueArgv(agent, settings, env)) : null;
+
+/** The line for a restored shell whose record names its conversation:
+ *  `claude --resume <id>` or `codex resume <id>`, so three agent shells from
+ *  one folder come back on their own three conversations rather than all on
+ *  the newest. Flags as `continueLine` takes them. */
+export const resumeLine = (agent: AgentKind, session: string, settings?: AgentSettings, env: AgentEnv = {}): string =>
+  shellLine(resumeKindArgv(agent, session, settings, env));
+
+/** The conversation running in shell `term`, off the registry's cards (the
+ *  newest first, as the registry lists them): the card whose
+ *  `where.canopy.term` names the shell, of the harness seen in the pane when
+ *  one was. The card comes off the broker and its session ends up typed into
+ *  a shell, so only a real session id is taken. */
+export function cardSession(cards: readonly AgentCard[], term: string, agent: AgentKind | null): string | undefined {
+  const card = cards.find((c) => c.where.canopy?.term === term && isSessionId(c.session) && (agent === null || c.harness === agent));
+  return card?.session ?? undefined;
+}
 
 /** the line that opens a restored shell's history, so nobody mistakes it for
  *  a shell that never stopped */
@@ -145,6 +171,7 @@ export function parseKept(raw: string): KeptShell | null {
   const agent = o.agent === "claude" || o.agent === "codex" ? o.agent : null;
   const savedAt = num(o.savedAt, 0);
   const label = typeof o.label === "string" ? cleanLabel(o.label) : undefined;
+  const session = typeof o.session === "string" && o.session !== "" ? o.session : undefined;
   return {
     id,
     repoId,
@@ -155,6 +182,8 @@ export function parseKept(raw: string): KeptShell | null {
     lines: Math.max(0, Math.trunc(num(o.lines, 0))),
     agent,
     ...(label ? { label } : {}),
+    ...(session ? { session } : {}),
+    ...(o.swept === true ? { swept: true as const } : {}),
   };
 }
 
@@ -165,10 +194,11 @@ export function lostShells(kept: KeptShell[], live: Iterable<string>): KeptShell
   return kept.filter((k) => !held.has(k.id)).sort((a, b) => b.savedAt - a.savedAt);
 }
 
-/** the ids past the retention window, which a sweep drops */
+/** the ids past the retention window, which a refresh drops: `days` for a
+ *  kept record, `SWEPT_DAYS` for one the sweep left */
 export function expiredShells(kept: KeptShell[], now: number, days = KEEP_DAYS): string[] {
-  const cutoff = now - days * 24 * 60 * 60 * 1000;
-  return kept.filter((k) => k.savedAt < cutoff).map((k) => k.id);
+  const day = 24 * 60 * 60 * 1000;
+  return kept.filter((k) => k.savedAt < now - (k.swept ? SWEPT_DAYS : days) * day).map((k) => k.id);
 }
 
 /* ---------- Bun-only: the records on disk ---------- */

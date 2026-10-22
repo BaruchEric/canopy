@@ -18,7 +18,7 @@ import { startServer } from "./index";
 
 let scratch: string;
 let previous: string | undefined;
-let server: { port: number; stop: () => void };
+let server: { port: number; stop: () => Promise<void>; endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean> };
 let root: string;
 
 const tmux = Bun.which("tmux") !== null;
@@ -220,6 +220,60 @@ describe("keeping shells", () => {
     const kept = (await keptList()).kept.find((k) => k.id === id);
     expect(kept?.lines).toBeGreaterThan(0);
     expect(await pane(id)).toBe("");
+  }, 60_000);
+
+  test.if(tmux)("a swept shell is kept with keepShells off and offered for restore", async () => {
+    const id = "fffffffffffffffffffffffffffffff0";
+    await post("/api/keep", { on: false });
+    await shellWith(id, "marker-swept-shell");
+    expect(await server.endTerm(id, { keep: true })).toBe(true);
+    // the session is gone and the record it left is on offer, marked swept
+    expect(await pane(id)).toBe("");
+    const kept = (await keptList()).kept.find((k) => k.id === id);
+    expect(kept?.swept).toBe(true);
+    expect(kept?.lines).toBeGreaterThan(0);
+    // and a pass with the switch off leaves it where it is
+    await post("/api/keep", { on: false });
+    expect((await keptList()).kept.find((k) => k.id === id)?.swept).toBe(true);
+
+    const res = await post("/api/terms/restore", { term: id, cols: 80, rows: 24 });
+    expect(res.status).toBe(200);
+    await until(async () => (await pane(id)).includes("marker-swept-shell"), "the swept history in the restored shell");
+  }, 60_000);
+
+  test.if(tmux)("a swept shell with a browser still on it keeps its record when the client goes", async () => {
+    const id = "fffffffffffffffffffffffffffffff1";
+    await post("/api/keep", { on: false });
+    const client = connect(id);
+    const closed = new Promise<void>((resolve) => client.ws.addEventListener("close", () => resolve()));
+    await client.opened;
+    await Bun.sleep(700);
+    client.ws.send(new TextEncoder().encode("echo marker-swept-watched\n"));
+    await until(() => client.text().includes("marker-swept-watched"), "the shell to print");
+    expect(await server.endTerm(id, { keep: true })).toBe(true);
+    // the attached client exits 0 as its session ends, which for a plain end
+    // is what forgets the record
+    await closed;
+    await Bun.sleep(500);
+    await post("/api/keep", { on: false });
+    expect((await keptList()).kept.find((k) => k.id === id)?.swept).toBe(true);
+  }, 60_000);
+
+  test.if(tmux)("a keep-end of a shell tmux does not hold kills nothing and says so", async () => {
+    expect(await server.endTerm("fffffffffffffffffffffffffffffff2", { keep: true })).toBe(false);
+  });
+
+  test.if(tmux)("restore resumes the shell's own session", async () => {
+    const id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2";
+    await writeKept(
+      { id, repoId: "app", path: join(root, "app"), place: "strip", startedAt: Date.now() - 5_000, savedAt: Date.now(), lines: 1, agent: "claude", session: "abc" },
+      "what the agent had said\n",
+    );
+    await until(async () => (await keptList()).kept.some((k) => k.id === id), "the hand-written record to be offered");
+    const res = await post("/api/terms/restore", { term: id, cols: 80, rows: 24, resume: true });
+    expect(res.status).toBe(200);
+    await until(async () => (await pane(id)).includes("claude --dangerously-skip-permissions --resume abc"), "the resume line in the pane");
+    expect(await pane(id)).not.toContain("--continue");
   }, 60_000);
 
   // last in the file: it takes the tmux server down with it

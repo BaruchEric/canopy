@@ -5,8 +5,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AGENT } from "./types";
-import { agentIn, clip, continueLine, countLines, expiredShells, KEEP_DAYS, lostShells, parseKept, replayCommand, restoredBanner } from "./keep";
-import type { KeptShell } from "./types";
+import { agentIn, cardSession, clip, continueLine, countLines, expiredShells, KEEP_DAYS, lostShells, parseKept, replayCommand, restoredBanner, resumeLine, SWEPT_DAYS } from "./keep";
+import type { AgentCard, KeptShell } from "./types";
 
 const shell = (over: Partial<KeptShell> = {}): KeptShell => ({
   id: "0123456789abcdef0123456789abcdef",
@@ -91,6 +91,46 @@ describe("continueLine", () => {
   });
 });
 
+describe("resumeLine", () => {
+  test("picks the shell's own conversation back up, not the folder's newest", () => {
+    expect(resumeLine("claude", "abc")).toBe("claude --resume abc");
+    expect(resumeLine("codex", "abc")).toBe("codex resume --no-daemon abc");
+  });
+
+  test("the repo's settings ride along when they are the same harness's", () => {
+    expect(resumeLine("claude", "abc", DEFAULT_AGENT)).toBe("claude --dangerously-skip-permissions --resume abc");
+    expect(resumeLine("codex", "abc", DEFAULT_AGENT)).toBe("codex resume --no-daemon abc");
+  });
+});
+
+describe("cardSession", () => {
+  const S1 = "0b1c2d3e-4f50-4617-8899-aabbccddeeff";
+  const S2 = "1b1c2d3e-4f50-4617-8899-aabbccddeeff";
+  const term = "0123456789abcdef0123456789abcdef";
+  const card = (over: Partial<AgentCard> = {}): AgentCard => ({
+    id: `claude:${S1}`, handle: "h", node: "mac", harness: "claude", session: S1, origin: "canopy-shell", cwd: "/x", repo: null, branch: null, model: null,
+    mode: null, state: "idle", waiting: null, caps: [], offers: [], notifyIdle: false,
+    where: { os: "darwin", container: false, pid: 1, term: null, canopy: { backend: "mac", term } }, transcript: null, startedAt: 1, seenAt: 2, endedAt: null, ...over,
+  });
+
+  test("the conversation of the card that names the shell, the newest first", () => {
+    expect(cardSession([card({ session: S2 }), card()], term, "claude")).toBe(S2);
+    expect(cardSession([card()], term, null)).toBe(S1);
+  });
+
+  test("none from another shell, another harness, or a session that is not a session id", () => {
+    expect(cardSession([card()], "f".repeat(32), "claude")).toBeUndefined();
+    expect(cardSession([card({ where: { os: "darwin", container: false, pid: 1, term: null, canopy: null } })], term, "claude")).toBeUndefined();
+    expect(cardSession([card()], term, "codex")).toBeUndefined();
+    expect(cardSession([card({ session: null })], term, "claude")).toBeUndefined();
+    expect(cardSession([card({ session: "abc; rm -rf ~" })], term, "claude")).toBeUndefined();
+  });
+
+  test("a card of the shell's own harness wins over a newer one of another", () => {
+    expect(cardSession([card({ harness: "codex", session: S2 }), card()], term, "claude")).toBe(S1);
+  });
+});
+
 describe("replayCommand", () => {
   test("prints the banner and the history, drops the file, then becomes the shell", () => {
     const cmd = replayCommand("/cfg/shells/a.replay.txt", "[restored]", ["/bin/zsh", "-l", "-i"]);
@@ -148,6 +188,16 @@ describe("parseKept", () => {
     expect(parseKept(raw)).toEqual(shell({ place: "strip", startedAt: 2_000, agent: null }));
   });
 
+  test("parseKept keeps session and swept", () => {
+    const rec = shell({ agent: "claude", session: "abc", swept: true });
+    expect(parseKept(JSON.stringify(rec))).toEqual(rec);
+    // anything else under those names is none, and leaves no key behind
+    const odd = parseKept(JSON.stringify({ ...shell(), session: "", swept: "yes" }));
+    expect(odd).toEqual(shell());
+    expect("session" in (odd ?? {})).toBe(false);
+    expect("swept" in (odd ?? {})).toBe(false);
+  });
+
   test("null for anything that is not a record", () => {
     expect(parseKept("{")).toBeNull();
     expect(parseKept("[]")).toBeNull();
@@ -176,6 +226,17 @@ describe("expiredShells", () => {
     const fresh = shell({ id: "b".repeat(32), savedAt: now - 60_000 });
     expect(expiredShells([old, fresh], now)).toEqual([old.id]);
     expect(expiredShells([old, fresh], now, 365)).toEqual([]);
+  });
+
+  test("a swept record lives 14 days, a kept one 7", () => {
+    const now = 100 * 24 * 60 * 60 * 1000;
+    const tenDays = now - 10 * 24 * 60 * 60 * 1000;
+    const kept = shell({ id: "a".repeat(32), savedAt: tenDays });
+    const swept = shell({ id: "b".repeat(32), savedAt: tenDays, swept: true });
+    expect(SWEPT_DAYS).toBe(14);
+    expect(expiredShells([kept, swept], now)).toEqual([kept.id]);
+    const old = shell({ id: "c".repeat(32), savedAt: now - (SWEPT_DAYS + 1) * 24 * 60 * 60 * 1000, swept: true });
+    expect(expiredShells([old], now)).toEqual([old.id]);
   });
 });
 

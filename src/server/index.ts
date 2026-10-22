@@ -47,7 +47,7 @@ import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, setLabel, snapshot, tmuxBase } from "../core/tmux";
-import { clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, writeKept } from "../core/keep";
+import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, toLocator, TOKEN_REF } from "../core/host";
@@ -438,6 +438,9 @@ interface LiveTerm {
   sockets: Set<ServerWebSocket<TermSocket>>;
   /** set once DELETE has asked tmux to end it, so a client's exit is told apart from the shell's own */
   ending?: boolean;
+  /** set once the sweep's end has written its record, so a client's exit,
+   *  which forgets an ended shell's record, leaves this one */
+  kept?: boolean;
   /** when a browser last typed into it (a keystroke frame, not a
    *  terminal's own reply), for `/api/terms/watched` */
   lastInput?: number;
@@ -678,57 +681,109 @@ async function listTerms(state: ServerState): Promise<TermInfo[]> {
 }
 
 /** Ends a shell by id; false when there is none. On a pty the exit hook
- *  drops it; on tmux the session is killed and its clients follow. */
-async function endTerm(state: ServerState, id: string): Promise<boolean> {
+ *  drops it; on tmux the session is killed and its clients follow.
+ *
+ *  With `keep` (the sweep's end) the shell's history is written out first,
+ *  as a swept record, whatever `keepShells` says, and the record stays to be
+ *  restored. Only a shell this server holds on tmux can be kept, and when
+ *  the snapshot fails nothing is killed and the answer is false: ending it
+ *  then would lose what it had. */
+async function endTerm(state: ServerState, id: string, opts: { keep?: true } = {}): Promise<boolean> {
   const live = state.terms.get(id);
   if (!state.tmux) {
-    if (!live?.pty) return false;
+    if (opts.keep || !live?.pty) return false;
     live.pty.session.close();
     return true;
   }
-  if (!live && !(await hasSession(state.tmux, id))) return false;
-  if (live) live.ending = true;
+  if (opts.keep) {
+    // ending already, under some other end that forgets the record
+    if (!live || live.ending) return false;
+    // ending from here on, so a pass that comes to it now leaves it alone;
+    // one already writing its plain record is waited out, so the swept
+    // record is the one that lands
+    live.ending = true;
+    await state.keeping;
+    if (!(await keepOne(state, live, { swept: true }))) {
+      live.ending = false;
+      return false;
+    }
+    live.kept = true;
+  } else {
+    if (!live && !(await hasSession(state.tmux, id))) return false;
+    if (live) live.ending = true;
+  }
   await killSession(state.tmux, id);
   state.terms.delete(id);
   dropTermToken(state, id);
   // a move it was in the middle of is over: out sees it called off, and the
   // next shell under this name starts with no record to refuse it
   state.moving.delete(id);
-  // a snapshot pass that had this shell in hand may still be writing its
-  // record; forgetting after it is done is what makes the forget stick
-  await state.keeping;
-  await forgetKept(id);
+  if (opts.keep) {
+    // the record is the point: it goes on offer now, not at the next pass
+    await refreshKept(state);
+  } else {
+    // a snapshot pass that had this shell in hand may still be writing its
+    // record; forgetting after it is done is what makes the forget stick
+    await state.keeping;
+    await forgetKept(id);
+  }
   tellTerms(state);
   return true;
 }
 
 /* ---------- what a shell leaves behind (core/keep) ---------- */
 
-/** Writes out what every shell the server holds has on its screen and in
- *  its history. Only while `keepShells` is on: this is whatever the shell
- *  printed, and it lands in a file that outlives the process. */
-async function snapshotShells(state: ServerState): Promise<void> {
+/** Writes out what one shell has on its screen and in its history, with
+ *  the conversation its registry card names; true once the record is on
+ *  disk. Whatever `keepShells` says: a pass checks the switch, and the
+ *  sweep's end keeps a shell with the switch off. `swept` marks the record
+ *  as the sweep's, which is the one caller that has already set `ending`. */
+async function keepOne(state: ServerState, live: LiveTerm, opts: { swept?: true } = {}): Promise<boolean> {
   const tmux = state.tmux;
-  if (!tmux) return;
+  if (!tmux) return false;
+  const { id, repoId, path, place, startedAt, label } = live.info;
+  try {
+    const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
+    // tmux would not say: the session or its whole server is gone (the
+    // shells container restarted under this server), and the record the
+    // last good pass wrote is exactly what a restore wants, so it stays
+    if (text === null || pane === null) return false;
+    // ended while this pass was on it: the end forgets the record, and
+    // writing it now would put it back on offer
+    if ((live.ending && !opts.swept) || state.terms.get(id) !== live) return false;
+    const history = clip(text);
+    const agent = await paneAgent(pane);
+    const session = cardSession(state.registry.list(), id, agent);
+    const rec: KeptShell = {
+      id,
+      repoId,
+      path,
+      place,
+      startedAt,
+      savedAt: Date.now(),
+      lines: countLines(history),
+      agent,
+      ...(label ? { label } : {}),
+      ...(session ? { session } : {}),
+      ...(opts.swept ? { swept: true as const } : {}),
+    };
+    await writeKept(rec, history);
+    return true;
+  } catch {
+    // a shell that ended while the pass was running; the next one is right
+    return false;
+  }
+}
+
+/** Writes out what every shell the server holds has on its screen and in
+ *  its history. Only while `keepShells` is on (`keepPass` checks): this is
+ *  whatever the shell printed, and it lands in a file that outlives the
+ *  process. */
+async function snapshotShells(state: ServerState): Promise<void> {
+  if (!state.tmux) return;
   for (const live of state.terms.values()) {
     if (live.info.task || live.info.ranger) continue;
-    const { id, repoId, path, place, startedAt, label } = live.info;
-    try {
-      const [text, pane] = await Promise.all([snapshot(tmux, id), paneInfo(tmux, id)]);
-      // tmux would not say: the session or its whole server is gone (the
-      // shells container restarted under this server), and the record the
-      // last good pass wrote is exactly what a restore wants, so it stays
-      if (text === null || pane === null) continue;
-      // ended while this pass was on it: the end forgets the record, and
-      // writing it now would put it back on offer
-      if (live.ending || state.terms.get(id) !== live) continue;
-      const history = clip(text);
-      const agent = await paneAgent(pane);
-      const rec: KeptShell = { id, repoId, path, place, startedAt, savedAt: Date.now(), lines: countLines(history), agent, ...(label ? { label } : {}) };
-      await writeKept(rec, history);
-    } catch {
-      // a shell that ended while the pass was running; the next one is right
-    }
+    await keepOne(state, live);
   }
 }
 
@@ -1202,7 +1257,9 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
     if (isSeedPath(state.root, rec.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
     await needHarness(state, rec.agent, rec.path);
     const env = lineEnv(state, rec.repoId, rec.path, id);
-    line = continueLine(rec.agent, agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent }), env);
+    const settings = agentFor(await loadConfig(), rec.path, "shell", { harness: rec.agent });
+    // its own conversation when the record names one, else the folder's newest
+    line = rec.session ? resumeKeptLine(rec.agent, rec.session, settings, env) : continueLine(rec.agent, settings, env);
   }
   // The replay runs in the pane, ahead of the shell, so what the lost shell
   // had becomes this session's own tmux history: every client that attaches,
@@ -1649,8 +1706,10 @@ async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSoc
             // includes the last shell on a Mac's tmux server, where the
             // server then exits with it (`exit-empty on`) and asking it
             // afterwards finds nothing; it exits 1 when the server went.
+            // The sweep's end kept the record on purpose, and it is what a
+            // restore wants.
             void (code === 0 ? Promise.resolve(true) : serverUp(tmux)).then(async (exited) => {
-              if (!exited) return;
+              if (!exited || held.kept) return;
               await state.keeping;
               await forgetKept(id);
             });
@@ -4274,7 +4333,7 @@ export async function startServer(opts: {
    *  would-refuse lines): stdout, or nowhere under `bun test` unless a test
    *  passes its own */
   callersLog?: (line: string) => void;
-}): Promise<{ port: number; coordPort: number | null; stop: () => Promise<void> }> {
+}): Promise<{ port: number; coordPort: number | null; endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>; stop: () => Promise<void> }> {
   const cfg = await loadConfig();
   const root = await realpath(opts.root);
   // canopy's git in a seed goes through the guard (seedgit.ts)
@@ -5570,6 +5629,8 @@ export async function startServer(opts: {
   return {
     port: server.port ?? port,
     coordPort: coordServer?.port ?? null,
+    /** a shell ended as the sweep ends it, or plainly; tests */
+    endTerm: (id: string, opts?: { keep?: true }) => endTerm(state, id, opts),
     stop: () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);

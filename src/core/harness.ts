@@ -203,13 +203,24 @@ export const resumeArgv = (a: AgentSettings, session: string, env: AgentEnv = {}
   return [h.binary, ...h.resume(agentArgs(a, env), session)];
 };
 
-/** The argv that picks the folder's last conversation back up: with the
- *  settings' flags when they are this harness's, else only what the
- *  harness always takes (a restored shell whose settings are not known). */
+/** a harness's flags: the settings' when they are this harness's, else only
+ *  what the harness always takes (a restored shell whose settings are not known) */
+const flagsFor = (kind: Harness, a: AgentSettings | undefined, env: AgentEnv): string[] =>
+  a && a.harness === kind ? agentArgs(a, env) : [...HARNESS[kind].always, ...HARNESS[kind].envArgs(env)];
+
+/** The argv that picks the folder's last conversation back up, with
+ *  `flagsFor`'s flags. */
 export function continueArgv(kind: Harness, a?: AgentSettings, env: AgentEnv = {}): string[] {
   const h = HARNESS[kind];
-  const flags = a && a.harness === kind ? agentArgs(a, env) : [...h.always, ...h.envArgs(env)];
-  return [h.binary, ...h.continue(flags)];
+  return [h.binary, ...h.continue(flagsFor(kind, a, env))];
+}
+
+/** The argv that picks conversation `session` of harness `kind` back up,
+ *  with `flagsFor`'s flags: `resumeArgv` for a shell whose settings may be
+ *  another harness's or not known at all. */
+export function resumeKindArgv(kind: Harness, session: string, a?: AgentSettings, env: AgentEnv = {}): string[] {
+  const h = HARNESS[kind];
+  return [h.binary, ...h.resume(flagsFor(kind, a, env), session)];
 }
 
 /** Which harnesses have a binary, given how to look one up. */
