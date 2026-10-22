@@ -3232,10 +3232,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   // the sheet reads the sweep afresh as it opens
   openSweep: () => set({ sheet: { kind: "sweep" } }),
   closeSweep: async (keys) => {
-    const outcomes = await api.closeSweep(keys);
-    // the event usually comes first; a stream that is down still gets the new plan
-    void get().loadSweep();
-    return outcomes;
+    // No read after it: the hub sends its event before it answers, but on
+    // another connection, and a read that landed first would hold the new
+    // close as seen, so the event would end no panel and add no feed line.
+    // A stream that was down reads the sweep again on its reconnect.
+    return api.closeSweep(keys);
   },
   resumeSwept: async (runId) => {
     const run = await api.resumeSwept(runId);

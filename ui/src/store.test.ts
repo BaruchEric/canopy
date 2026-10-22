@@ -58,6 +58,8 @@ import {
   type ScanResult,
   type SourceState,
   type Sprout,
+  type SweepInfo,
+  type SweepLogEntry,
   type TaskInfo,
   type TermInfo,
 } from "../../src/core/types";
@@ -2601,5 +2603,32 @@ describe("flowFor", () => {
     expect(activeFlowFor(s, "app")).toBeUndefined();
     const both = { ...s, flows: { t: flow("t", { branch, startedAt: 2 }), c: flow("c", { status: "done" }) } } as unknown as typeof s;
     expect(flowFor(both, "app")?.id).toBe("c");
+  });
+});
+
+describe("a sweep event", () => {
+  const pristine = useStore.getState();
+  afterEach(() => useStore.setState(pristine, true));
+
+  const info = (lastRun: SweepLogEntry | null): SweepInfo => ({
+    items: [],
+    settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [] },
+    lastRun,
+    swept: { shells: [], chats: [] },
+    ask: null,
+  });
+  const entry = (at: number): SweepLogEntry => ({ at, by: "eric", items: [], outcomes: [{ key: "shell:s1", result: "closed" }] });
+
+  test("a newer close ends its agents' panels once; the same close again ends nothing", () => {
+    useStore.setState({ sweep: info({ ...entry(1), outcomes: [] }), panels: ["/agent/shell:s1", "/agent/run:other"], sweepEnded: [] });
+    useStore.getState().applyEvent({ type: "sweep", sweep: info(entry(2)) });
+    expect(useStore.getState().panels).toEqual(["/agent/run:other"]);
+    expect(useStore.getState().sweepEnded).toEqual(["shell:s1"]);
+    // a restored shell keeps its id: its panel opened again must survive the
+    // same close arriving again with a resume or a settings change
+    useStore.setState({ panels: ["/agent/shell:s1", "/agent/run:other"], sweepEnded: [] });
+    useStore.getState().applyEvent({ type: "sweep", sweep: info(entry(2)) });
+    expect(useStore.getState().panels).toEqual(["/agent/shell:s1", "/agent/run:other"]);
+    expect(useStore.getState().sweepEnded).toEqual([]);
   });
 });
