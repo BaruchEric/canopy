@@ -1517,6 +1517,8 @@ export type ServerEvent =
   | { type: "asks"; asks: Ask[]; gone?: string[]; presence?: Presence }
   /** the ranger, whole, whenever anything about it changes (server/ranger.ts) */
   | { type: "ranger"; ranger: RangerInfo }
+  /** the sweep, whole, whenever its plan, settings or log change */
+  | { type: "sweep"; sweep: SweepInfo }
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
   | { type: "kit"; kit: KitInfo }
@@ -2953,6 +2955,78 @@ export interface RangerWake {
   created: number;
   /** when it next fires, for a time or a cron; absent for a run */
   next?: number;
+}
+
+/* ---------- the sweep: idle shells, chats, runs and agents offered for closing ---------- */
+
+export const SWEEP_KINDS = ["shell", "chat", "run", "pr", "outside"] as const;
+export type SweepKind = (typeof SWEEP_KINDS)[number];
+
+/** The sweep's settings as stored: whether the schedule is on, its cron
+ *  line, how long each kind sits idle before it is offered (ms), and the
+ *  kinds the schedule closes without asking. */
+export interface SweepSettings {
+  on: boolean;
+  cron: string;
+  spans: Record<SweepKind, number>;
+  auto: SweepKind[];
+}
+
+/** One thing the sweep offers to close. `key` is `${kind}:${id}`. */
+export interface SweepItem {
+  key: string;
+  kind: SweepKind;
+  id: string;
+  repoId: string | null;
+  /** where it lives, in words for the row */
+  where: string;
+  title: string;
+  /** unix ms */
+  idleSince: number;
+  /** why it is offered, e.g. "no input or output for 30h" */
+  why: string;
+  /** false for items that are listed only */
+  closable: boolean;
+  /** whether the sheet starts with it ticked */
+  checked: boolean;
+  /** whether the schedule closes it without asking */
+  auto: boolean;
+}
+
+/** How closing one item went. */
+export interface SweepOutcome {
+  key: string;
+  result: "closed" | "in use now" | "gone" | "failed";
+  why?: string;
+}
+
+/** A chat the sweep stopped, kept so it can be resumed. */
+export interface SweptChat {
+  runId: string;
+  repoId: string;
+  harness: Harness;
+  session: string;
+  title: string;
+  /** unix ms */
+  sweptAt: number;
+}
+
+export interface SweepLogEntry {
+  /** unix ms */
+  at: number;
+  by: "eric" | "schedule";
+  outcomes: SweepOutcome[];
+  items: SweepItem[];
+}
+
+/** `GET /api/sweep` and the `sweep` event. */
+export interface SweepInfo {
+  items: SweepItem[];
+  settings: SweepSettings;
+  lastRun: SweepLogEntry | null;
+  swept: { shells: KeptShell[]; chats: SweptChat[] };
+  /** the scheduled fire's pending question: what it held back */
+  ask: SweepItem[] | null;
 }
 
 /** `GET /api/ranger` and the `ranger` event. */

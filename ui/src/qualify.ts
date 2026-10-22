@@ -180,6 +180,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "advice":
     // the ranger's ids are its backend's own; the store qualifies its tab
     case "ranger":
+    // the sweep is the home backend's alone, like the ranger
+    case "sweep":
       return ev;
     case "health":
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
