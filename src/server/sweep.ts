@@ -55,6 +55,9 @@ export class SweepHub {
   private serial: Promise<unknown> = Promise.resolve();
   /** settings changes, one at a time, so two saves in flight never lose one */
   private patching: Promise<unknown> = Promise.resolve();
+  /** keys this hub closed that the facts still show: a chat's stop ends it
+   *  only once its process exits, and until then it still reads as idle */
+  private closed = new Set<string>();
 
   constructor(private readonly deps: SweepDeps) {}
 
@@ -76,6 +79,14 @@ export class SweepHub {
     return (await loadConfig()).sweep;
   }
 
+  /** The plan less what this hub has closed already. A closed key the plan
+   *  no longer has is let go of: whatever it was has ended. */
+  private plan(facts: PlanInputs, settings: SweepSettings): SweepItem[] {
+    const items = planSweep(facts, settings, this.now());
+    for (const k of this.closed) if (!items.some((i) => i.key === k)) this.closed.delete(k);
+    return items.filter((i) => !this.closed.has(i.key));
+  }
+
   /** Nothing runs on its own yet; the routes are the whole hub. */
   async start(): Promise<void> {}
 
@@ -84,7 +95,7 @@ export class SweepHub {
   async info(): Promise<SweepInfo> {
     const [facts, settings, log, shells, chats] = await Promise.all([this.deps.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats()]);
     return {
-      items: planSweep(facts, settings, this.now()),
+      items: this.plan(facts, settings),
       settings,
       lastRun: log.at(-1) ?? null,
       swept: { shells, chats },
@@ -115,9 +126,9 @@ export class SweepHub {
       const items: SweepItem[] = [];
       for (const key of wanted) {
         const facts = await this.deps.facts();
-        const item = planSweep(facts, settings, this.now()).find((i) => i.key === key);
+        const item = this.plan(facts, settings).find((i) => i.key === key);
         if (!item) {
-          outcomes.push(missing(key, facts));
+          outcomes.push(this.closed.has(key) ? { key, result: "gone" } : missing(key, facts));
           continue;
         }
         items.push(item);
@@ -126,7 +137,9 @@ export class SweepHub {
           continue;
         }
         try {
-          outcomes.push(await this.closeOne(item, facts));
+          const out = await this.closeOne(item, facts);
+          if (out.result === "closed") this.closed.add(key);
+          outcomes.push(out);
         } catch (err) {
           outcomes.push({ key, result: "failed", why: errText(err) });
         }

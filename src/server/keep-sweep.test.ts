@@ -8,7 +8,7 @@
  * Needs tmux. The tmux server lives on a socket under the scratch config dir.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keepDir } from "../core/keep";
@@ -82,8 +82,9 @@ async function until(pred: () => boolean | Promise<boolean>, what: string, ms = 
   }
 }
 
-/** a shell with a line of its own on screen, its name */
-async function shellWith(id: string, marker: string): Promise<void> {
+/** a shell with a line of its own on screen, its name, and then `after`
+ *  typed into it when given */
+async function shellWith(id: string, marker: string, after?: string): Promise<void> {
   const q = new URLSearchParams({ id: "app", cols: "80", rows: "24", place: "strip", term: id });
   const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/term?${q}`);
   ws.binaryType = "arraybuffer";
@@ -105,6 +106,10 @@ async function shellWith(id: string, marker: string): Promise<void> {
     }
     return false;
   }, `the shell to print ${marker}`, 30_000);
+  if (after) {
+    ws.send(new TextEncoder().encode(`${after}\n`));
+    await Bun.sleep(500);
+  }
   ws.close();
   await Bun.sleep(200);
 }
@@ -170,6 +175,33 @@ describe("the sweep's end of a shell", () => {
       expect(info.lastRun?.outcomes).toEqual([{ key: `shell:${id}`, result: "closed" }]);
     } finally {
       await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
+    }
+  }, 60_000);
+
+  test.if(tmux)("with no card to say, a shell the pane shows an agent in is never offered", async () => {
+    const quiet = "dddddddddddddddddddddddddddddd05";
+    const agent = "dddddddddddddddddddddddddddddd06";
+    // a program called claude that waits as an agent at a permission does,
+    // with no output and no input (a copy of sleep is killed on a Mac)
+    const bin = join(scratch, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, "claude"), `#!${process.execPath}\nsetTimeout(() => {}, 300_000);\n`, { mode: 0o755 });
+    // the agent's shell first, so by the time the control is offered the
+    // agent's has been quiet longer
+    await shellWith(agent, "marker-agent", `${join(bin, "claude")} 300`);
+    await shellWith(quiet, "marker-control");
+    const set = await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 1_000 } }) });
+    expect(set.status).toBe(200);
+    try {
+      let info: SweepInfo | null = null;
+      await until(async () => {
+        info = (await (await fetch(api("/api/sweep"))).json()) as SweepInfo;
+        return info.items.some((i) => i.key === `shell:${quiet}`);
+      }, "the quiet shell to be offered");
+      expect((info as SweepInfo | null)?.items.some((i) => i.key === `shell:${agent}`)).toBe(false);
+    } finally {
+      await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
+      for (const id of [quiet, agent]) await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" });
     }
   }, 60_000);
 

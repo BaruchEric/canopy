@@ -808,6 +808,20 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Plan
           agent: card ? { state: card.state, session: card.session } : null,
         });
       }
+      // No card names these (no broker, or the registry has not listed
+      // yet), so whether an agent waits on a permission in one cannot be
+      // read; one the pane shows an agent in counts as waiting, which keeps
+      // it, the safe side. A pane tmux will not describe is left out.
+      const tmux = state.tmux;
+      const probed = await Promise.all(
+        shells.map(async (sh) => {
+          if (sh.agent || sh.task || sh.ranger) return sh;
+          const pane = await paneInfo(tmux, sh.id).catch(() => null);
+          if (!pane) return null;
+          return (await paneAgent(pane)) ? { ...sh, agent: { state: "waiting" as const, session: null } } : sh;
+        }),
+      );
+      shells = probed.filter((sh): sh is ShellFacts => sh !== null);
     }
   }
   // the coordinator is never swept, and neither are the incubator's seeds

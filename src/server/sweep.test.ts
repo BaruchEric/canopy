@@ -48,6 +48,8 @@ interface Facts {
   shells: ShellFacts[];
   runs: Run[];
   tmuxDown: boolean;
+  /** a started chat's stop ends it only when its process exits, later */
+  chatEndsLater: boolean;
   settings: SweepSettings;
   events: ServerEvent[];
   calls: { endShell: string[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[] };
@@ -59,6 +61,7 @@ function world(): Facts & { deps: SweepDeps } {
     shells: [],
     runs: [],
     tmuxDown: false,
+    chatEndsLater: false,
     settings: { ...DEFAULT_SWEEP, spans: { ...DEFAULT_SWEEP.spans }, auto: [...DEFAULT_SWEEP.auto] },
     events: [],
     calls: { endShell: [], stopChat: [], dismiss: [], startChat: [] },
@@ -83,6 +86,7 @@ function world(): Facts & { deps: SweepDeps } {
       w.calls.stopChat.push(id);
       const r = w.runs.find((x) => x.id === id);
       if (!r) throw new Error(`unknown run: ${id}`);
+      if (w.chatEndsLater) return { ...r };
       r.status = "done";
       r.endedAt = NOW;
       return { ...r };
@@ -199,6 +203,19 @@ describe("the sweep hub", () => {
     expect(a).toEqual([{ key: "shell:t1", result: "closed" }]);
     expect(b).toEqual([{ key: "shell:t1", result: "gone" }]);
     expect(w.calls.endShell).toEqual(["t1"]);
+  });
+
+  test("two closes of a chat whose stop lands later: the second reports gone, and it is stopped once", async () => {
+    const w = world();
+    w.runs = [idleChat("c1")];
+    w.chatEndsLater = true;
+    const hub = new SweepHub(w.deps);
+    const [a, b] = await Promise.all([hub.close(["chat:c1"], "eric"), hub.close(["chat:c1"], "eric")]);
+    expect(a).toEqual([{ key: "chat:c1", result: "closed" }]);
+    expect(b).toEqual([{ key: "chat:c1", result: "gone" }]);
+    expect(w.calls.stopChat).toEqual(["c1"]);
+    // nor is it offered again while it winds down
+    expect((await hub.info()).items).toEqual([]);
   });
 
   test("tmux down: facts.shells null gives no shell items", async () => {
