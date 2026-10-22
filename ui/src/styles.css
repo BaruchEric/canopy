@@ -1160,6 +1160,28 @@ body.resizing iframe {
 .prefs-tab-name {
   flex: none;
 }
+/* while finding: the tabs holding a match keep their ink and a moss twig,
+   the rest fade */
+.prefs-tab.hit {
+  color: var(--ink);
+}
+.prefs-tab.hit::after {
+  border-top-color: var(--moss);
+}
+.prefs-tab.miss {
+  opacity: 0.45;
+}
+.prefs-find {
+  flex: none;
+  margin-left: -4px;
+  width: calc(100% + 4px);
+}
+.prefs-none {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
 .prefs-tab-value {
   flex: 0 1 auto;
   min-width: 0;
@@ -8476,6 +8498,10 @@ button.machine:hover {
     flex: none;
     margin: 0;
     white-space: nowrap;
+  }
+  .prefs-find {
+    width: 12em;
+    margin: 0;
   }
   .prefs-panel {
     overflow: visible;

@@ -1,4 +1,4 @@
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useRef, useState } from "react";
+import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { capsFor, connOf, multi, useStore } from "../store";
@@ -176,6 +176,7 @@ export function SettingsMenu() {
   const ranger = useStore((s) => s.rangers[scope]);
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("look");
+  const [query, setQuery] = useState("");
   const { about, error } = useAbout(scope, open);
   // read as the menu renders: it opens on the screen the window is on now
   const screen = open ? screenNow() : null;
@@ -203,6 +204,11 @@ export function SettingsMenu() {
   useEffect(() => {
     if (open) void useStore.getState().loadAuth(scope);
   }, [open, scope]);
+
+  // a find is for this opening; the menu comes back on its tab
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
 
   // a tab with nothing to show on this backend is left off the rail, and a
   // picked tab that went away falls back to the first
@@ -247,17 +253,22 @@ export function SettingsMenu() {
 
   const tabButton = (t: { tab: Tab; label: string }) => {
     const on = t.tab === current;
+    // while finding, no tab is open; the ones holding a match stay lit
+    const lit = found ? (hits.has(t.tab) ? " hit" : " miss") : "";
     return (
       <button
         key={t.tab}
         type="button"
         role="tab"
         id={`${id}-tab-${t.tab}`}
-        className="prefs-tab"
-        aria-selected={on}
+        className={`prefs-tab${lit}`}
+        aria-selected={on && !found}
         aria-controls={`${id}-panel`}
         tabIndex={on ? 0 : -1}
-        onClick={() => setTab(t.tab)}
+        onClick={() => {
+          setQuery("");
+          setTab(t.tab);
+        }}
       >
         <span className="prefs-tab-name">{t.label}</span>
         {values[t.tab] && <span className="prefs-tab-value">{values[t.tab]}</span>}
@@ -266,11 +277,16 @@ export function SettingsMenu() {
     );
   };
 
-  const body = () => {
-    switch (current) {
-      case "look":
-        return (
-          <>
+  // every section in the order the tabs show them, with the words the find
+  // box matches: its heading, its choices, and what people call the thing
+  const sections: { tab: Tab; key: string; words: string; node: ReactNode }[] = !open
+    ? []
+    : [
+        {
+          tab: "look",
+          key: "theme",
+          words: `theme system dark light colour color palette more contrast ${PALETTE.map((p) => p.label).join(" ")}`,
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">theme</h3>
               <Seg label="Theme" value={settings.theme} options={THEME} onChange={(v) => setSetting("theme", v)} />
@@ -280,15 +296,24 @@ export function SettingsMenu() {
                 more contrast: starker text, lines and grounds, whichever palette
               </label>
             </section>
+          ),
+        },
+        {
+          tab: "look",
+          key: "density",
+          words: "density cozy compact cards columns",
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">density</h3>
               <Seg label="Card density" value={settings.density} options={DENSITY} onChange={(v) => setSetting("density", v)} />
             </section>
-          </>
-        );
-      case "layout":
-        return (
-          <>
+          ),
+        },
+        {
+          tab: "layout",
+          key: "panel",
+          words: "repo panel intermediate advanced tour close buttons middle click screen width height zoom font size window",
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">repo panel</h3>
               <Seg label="How much a repo's panel shows" value={settings.level} options={LEVEL} onChange={(v) => setSetting("level", v)} />
@@ -308,12 +333,19 @@ export function SettingsMenu() {
                 </p>
               )}
             </section>
-            <ScreenLayoutsRow />
-          </>
-        );
-      case "opening":
-        return (
-          <>
+          ),
+        },
+        {
+          tab: "layout",
+          key: "screens",
+          words: "screen layouts profile preset apply detect monitor display 4k ultra",
+          node: <ScreenLayoutsRow />,
+        },
+        {
+          tab: "opening",
+          key: "open",
+          words: "open a repo dock tabs new tab new window cmd-click shift-click",
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">open a repo</h3>
               <Seg
@@ -326,6 +358,13 @@ export function SettingsMenu() {
               />
               <p className="settings-hint">Cmd-click always opens a tab, shift-click a window.</p>
             </section>
+          ),
+        },
+        {
+          tab: "opening",
+          key: "shell",
+          words: "shell in canopy terminal auto panel strip tab window",
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">shell in canopy</h3>
               <Seg label="Where a shell opened from a card lands" value={settings.shell} options={SHELL} onChange={(v) => setSetting("shell", v)} />
@@ -334,6 +373,13 @@ export function SettingsMenu() {
                 panel ends when you close the panel; a strip shell lives until you close it or the page.
               </p>
             </section>
+          ),
+        },
+        {
+          tab: "opening",
+          key: "terminal",
+          words: "kitty and terminal new window tab open in agent accessibility",
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">kitty and Terminal</h3>
               <Seg label="How the terminal openers place a repo" value={settings.terminal} options={TERMINAL} onChange={(v) => setSetting("terminal", v)} />
@@ -342,11 +388,13 @@ export function SettingsMenu() {
                 which needs Accessibility access for the server.
               </p>
             </section>
-          </>
-        );
-      case "device":
-        return (
-          <>
+          ),
+        },
+        {
+          tab: "device",
+          key: "name",
+          words: "this device name devices browser presence",
+          node: (
             <section className="settings-row">
               <h3 className="panel-label">this device</h3>
               <input
@@ -362,78 +410,116 @@ export function SettingsMenu() {
                 How this browser appears to your other devices, and who a shell says is looking at it. Takes effect on the next reload.
               </p>
             </section>
-            <AnswerKeyRow />
-          </>
-        );
-      case "keys":
-        return (
-          <section className="settings-row">
-            <h3 className="panel-label">keys</h3>
-            <dl className="keys">
-              {KEYS.map(([key, what]) => (
-                <div key={key}>
-                  <dt>
-                    <kbd>{key}</kbd>
-                  </dt>
-                  <dd>{what}</dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-        );
-      case "desktop":
-        return (
-          <section className="settings-row">
-            <h3 className="panel-label">desktop openers</h3>
-            {helpers.length > 0 && (
-              <Seg
-                label="Which machine the desktop openers run on"
-                value={settings.helper ?? "auto"}
-                options={[
-                  { value: "auto", label: "auto", title: "The helper at this browser's address, else this Mac when it runs the backend" },
-                  ...helpers.map((h) => ({ value: h.name, label: h.name, title: `${h.platform}, from ${h.address}: ${h.openers.join(", ") || "no openers"}` })),
-                ]}
-                onChange={(v) => setSetting("helper", v === "auto" ? null : v)}
-              />
-            )}
-            <p className="settings-hint">
-              {caps.via === "backend"
-                ? scope === home
-                  ? "Through this Mac, which runs the backend."
-                  : `Through ${scope}'s own desktop, which runs its backend.`
-                : caps.helper
-                  ? `Through the helper ${caps.helper.name} on ${caps.helper.platform}: ${caps.helper.openers.join(", ") || "no openers"}.`
-                  : helpers.length > 0
-                    ? "None picked. The helpers above are attached to the backend now, one per machine; pick the one that is this machine. Picking another sends this browser's clicks to that machine's desktop."
-                    : `None. Run canopy helper --backend ${scope === home ? "<this url>" : base || scope} on that machine to open kitty, VS Code and the rest there.`}
-              {client.address && ` This browser is seen as ${client.address}.`}
-            </p>
-          </section>
-        );
-      case "signed":
-        return <SignedInRow name={scope} />;
-      case "shells":
-        return (
-          <section className="settings-row">
-            <h3 className="panel-label">keep shell history</h3>
-            <label className="settings-line">
-              <input type="checkbox" checked={keeping} onChange={(e) => void setKeeping(e.target.checked, scope)} />
-              write each shell out, so a reboot does not take it
-            </label>
-            <p className="settings-hint">
-              A backend setting, not this browser's. Off, the shells go with the machine. On, the backend writes every shell's screen and last 2000
-              lines to disk each minute, which is whatever the shell printed, secrets included, and forgets a record a week later. What comes back is a
-              new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had an agent in it is offered
-              its continue (<code>claude --continue</code>, <code>codex resume --last</code>) instead.
-            </p>
-          </section>
-        );
-      case "ranger":
-        return <RangerRow backend={scope} />;
-      case "about":
-        return <AboutRow name={scope} isHome={scope === home} about={about} error={error} />;
-    }
-  };
+          ),
+        },
+        {
+          tab: "device",
+          key: "answer",
+          words: "answer key secret token tailchan broker ask guards presence",
+          node: <AnswerKeyRow />,
+        },
+        {
+          tab: "keys",
+          key: "keys",
+          words: `keys keyboard shortcuts ${KEYS.map(([key, what]) => `${key} ${what}`).join(" ")}`,
+          node: (
+            <section className="settings-row">
+              <h3 className="panel-label">keys</h3>
+              <dl className="keys">
+                {KEYS.map(([key, what]) => (
+                  <div key={key}>
+                    <dt>
+                      <kbd>{key}</kbd>
+                    </dt>
+                    <dd>{what}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          ),
+        },
+        {
+          tab: "desktop",
+          key: "openers",
+          words: "desktop openers helper machine kitty terminal vs code finder agent",
+          node: (
+            <section className="settings-row">
+              <h3 className="panel-label">desktop openers</h3>
+              {helpers.length > 0 && (
+                <Seg
+                  label="Which machine the desktop openers run on"
+                  value={settings.helper ?? "auto"}
+                  options={[
+                    { value: "auto", label: "auto", title: "The helper at this browser's address, else this Mac when it runs the backend" },
+                    ...helpers.map((h) => ({ value: h.name, label: h.name, title: `${h.platform}, from ${h.address}: ${h.openers.join(", ") || "no openers"}` })),
+                  ]}
+                  onChange={(v) => setSetting("helper", v === "auto" ? null : v)}
+                />
+              )}
+              <p className="settings-hint">
+                {caps.via === "backend"
+                  ? scope === home
+                    ? "Through this Mac, which runs the backend."
+                    : `Through ${scope}'s own desktop, which runs its backend.`
+                  : caps.helper
+                    ? `Through the helper ${caps.helper.name} on ${caps.helper.platform}: ${caps.helper.openers.join(", ") || "no openers"}.`
+                    : helpers.length > 0
+                      ? "None picked. The helpers above are attached to the backend now, one per machine; pick the one that is this machine. Picking another sends this browser's clicks to that machine's desktop."
+                      : `None. Run canopy helper --backend ${scope === home ? "<this url>" : base || scope} on that machine to open kitty, VS Code and the rest there.`}
+                {client.address && ` This browser is seen as ${client.address}.`}
+              </p>
+            </section>
+          ),
+        },
+        {
+          tab: "signed",
+          key: "signed",
+          words: "signed in sign callers tokens revoke enforce log page cli helper",
+          node: <SignedInRow name={scope} />,
+        },
+        {
+          tab: "shells",
+          key: "keeping",
+          words: "keep shell history reboot scrollback disk continue resume",
+          node: (
+            <section className="settings-row">
+              <h3 className="panel-label">keep shell history</h3>
+              <label className="settings-line">
+                <input type="checkbox" checked={keeping} onChange={(e) => void setKeeping(e.target.checked, scope)} />
+                write each shell out, so a reboot does not take it
+              </label>
+              <p className="settings-hint">
+                A backend setting, not this browser's. Off, the shells go with the machine. On, the backend writes every shell's screen and last 2000
+                lines to disk each minute, which is whatever the shell printed, secrets included, and forgets a record a week later. What comes back is a
+                new shell at the same repo with the old history ahead of it: the processes are gone, so a shell that had an agent in it is offered
+                its continue (<code>claude --continue</code>, <code>codex resume --last</code>) instead.
+              </p>
+            </section>
+          ),
+        },
+        {
+          tab: "ranger",
+          key: "ranger",
+          words: "ranger always-on agent crons cron wake telegram profile",
+          node: <RangerRow backend={scope} />,
+        },
+        {
+          tab: "about",
+          key: "about",
+          words: "about version commit build server runtime bun root source reload",
+          node: <AboutRow name={scope} isHome={scope === home} about={about} error={error} />,
+        },
+      ];
+
+  const shownTabs = new Set(shown.map((t) => t.tab));
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const labelOf = (tab: Tab) => shown.find((t) => t.tab === tab)?.label ?? "";
+  const found =
+    terms.length > 0
+      ? sections.filter((s) => shownTabs.has(s.tab) && terms.every((t) => `${labelOf(s.tab)} ${s.words}`.includes(t)))
+      : null;
+  const hits = new Set(found?.map((s) => s.tab));
+  const showing = found ?? sections.filter((s) => s.tab === current);
 
   return (
     <div className="settings" ref={ref}>
@@ -450,6 +536,25 @@ export function SettingsMenu() {
       {open && (
         <div className="settings-pop prefs" role="dialog" aria-label="Settings">
           <nav className="prefs-rail" aria-label="Settings sections" onKeyDown={step}>
+            <input
+              className="settings-input prefs-find"
+              type="search"
+              id={`${id}-find`}
+              placeholder="find a setting"
+              value={query}
+              spellCheck={false}
+              aria-label="Find a setting"
+              aria-controls={`${id}-panel`}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                // the first Escape clears the box, the next closes Settings
+                if (e.key === "Escape" && query) {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setQuery("");
+                }
+              }}
+            />
             <div className="prefs-group">
               <p className="prefs-root" id={`${id}-browser`}>
                 this browser
@@ -483,14 +588,21 @@ export function SettingsMenu() {
             )}
           </nav>
           <div
-            key={current}
+            key={found ? "find" : current}
             className="prefs-panel"
             role="tabpanel"
             id={`${id}-panel`}
-            aria-labelledby={`${id}-tab-${current}`}
+            aria-labelledby={found ? `${id}-find` : `${id}-tab-${current}`}
             tabIndex={0}
           >
-            {body()}
+            {showing.map((s) => (
+              <Fragment key={s.key}>{s.node}</Fragment>
+            ))}
+            {found?.length === 0 && (
+              <p className="prefs-none">
+                No setting matches "{query.trim()}". Try a word from a heading or a choice, like palette, kitty or token.
+              </p>
+            )}
           </div>
         </div>
       )}
