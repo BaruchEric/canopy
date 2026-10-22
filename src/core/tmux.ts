@@ -459,6 +459,33 @@ export function tmuxBase(): string[] | null {
   return bin ? tmuxArgv(bin, join(configDir(), "tmux.sock"), TMUX_CONF) : null;
 }
 
+/** one line per session: its name and the time of its last window activity,
+ *  which tmux counts in seconds since the epoch */
+export const ACTIVITY_FORMAT = "#{session_name}\t#{window_activity}";
+
+/** session name to last activity in ms; a line with no numeric time is skipped */
+export function parseActivity(out: string): Map<string, number> {
+  const seen = new Map<string, number>();
+  for (const line of out.split("\n")) {
+    const [name, secs] = line.split("\t");
+    if (!name || !secs || !/^\d+$/.test(secs)) continue;
+    seen.set(name, Number(secs) * 1000);
+  }
+  return seen;
+}
+
+/** each session's last activity; empty when the server is not running, and
+ *  a throw when tmux fails for any other reason, so a caller can tell "no
+ *  shells" from "tmux did not answer" */
+export async function listActivity(base: string[]): Promise<Map<string, number>> {
+  const r = await exec([...base, "list-sessions", "-F", ACTIVITY_FORMAT], { timeoutMs: 10_000 });
+  if (r.code !== 0) {
+    if (noServer(r.stderr)) return new Map();
+    throw new Error(r.stderr.trim() || "tmux could not list session activity");
+  }
+  return parseActivity(r.stdout);
+}
+
 /** the sessions canopy's server holds; none when it is not running */
 export async function listSessions(base: string[]): Promise<TmuxSession[]> {
   const r = await exec(listArgs(base), { timeoutMs: 10_000 });

@@ -11,6 +11,7 @@ import {
   LIST_FORMAT,
   newSessionArgs,
   noServer,
+  parseActivity,
   parseSessions,
   primeText,
   sessionId,
@@ -331,4 +332,10 @@ test("keysArgs: named keys as they are, literal text after -l", () => {
   const base = ["tmux", "-S", "/s"];
   expect(keysArgs(base, "ab", ["Escape"])).toEqual([...base, "send-keys", "-t", sessionName("ab"), "Escape"]);
   expect(keysArgs(base, "ab", ["/exit"], true)).toEqual([...base, "send-keys", "-t", sessionName("ab"), "-l", "/exit"]);
+});
+
+describe("parseActivity", () => {
+  test("parseActivity reads seconds into ms and skips junk", () => {
+    expect(parseActivity("abc\t1729598400\nbad\tx\n")).toEqual(new Map([["abc", 1729598400000]]));
+  });
 });
