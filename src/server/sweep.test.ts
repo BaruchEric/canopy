@@ -5,7 +5,7 @@
  * records and the log are real files under a scratch config dir.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SWEEP, type PlanInputs, type ShellFacts } from "../core/sweep";
@@ -156,6 +156,20 @@ async function call(hub: SweepHub, path: string, init?: { method?: string; body?
 }
 
 describe("the sweep hub", () => {
+  test("a hand-broken chats or log file does not take the routes down", async () => {
+    const w = world();
+    w.shells = [shell()];
+    await mkdir(sweepDir(), { recursive: true });
+    await writeFile(join(sweepDir(), "chats.json"), "[null]");
+    await writeFile(join(sweepDir(), "log.json"), JSON.stringify([{ at: 1, by: "eric", items: [] }]));
+    const hub = new SweepHub(w.deps);
+    const got = await call(hub, "/api/sweep");
+    expect(got.status).toBe(200);
+    expect((got.body as SweepInfo).lastRun).toBeNull();
+    expect(await hub.close(["shell:t1"], "eric")).toEqual([{ key: "shell:t1", result: "closed" }]);
+    expect((await readLog()).map((e) => e.outcomes)).toEqual([[{ key: "shell:t1", result: "closed" }]]);
+  });
+
   test("GET plans from the facts", async () => {
     const w = world();
     w.shells = [shell({ id: "old" }), shell({ id: "new", lastOutput: NOW - 1 * H })];

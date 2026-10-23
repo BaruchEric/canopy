@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SWEPT_DAYS } from "./keep";
-import { addSweptChat, appendLog, readLog, readSweptChats, takeSweptChat } from "./sweepstore";
+import { addSweptChat, appendLog, readLog, readSweptChats, sweepDir, takeSweptChat } from "./sweepstore";
 import type { SweepLogEntry, SweptChat } from "./types";
 
 /* The sweep's small store: chats it stopped (so a resume can start from the
@@ -58,4 +58,37 @@ test("the log keeps the newest 50", async () => {
   expect(log).toHaveLength(50);
   expect(log[0]?.at).toBe(6);
   expect(log[49]?.at).toBe(55);
+});
+
+const put = async (name: string, data: unknown) => {
+  await mkdir(sweepDir(), { recursive: true });
+  await writeFile(join(sweepDir(), name), typeof data === "string" ? data : JSON.stringify(data));
+};
+
+test("a malformed swept chat is dropped on read; the good ones stay and can be taken", async () => {
+  const good = chat("ok");
+  await put("chats.json", [null, 7, "x", { ...chat("nosession"), session: 3 }, { ...chat("badharness"), harness: "gpt" }, { ...chat("nan"), sweptAt: "soon" }, good]);
+  expect(await readSweptChats()).toEqual([good]);
+  expect((await takeSweptChat("ok"))?.session).toBe("s-ok");
+  await addSweptChat(chat("next"));
+  expect((await readSweptChats()).map((c) => c.runId)).toEqual(["next"]);
+});
+
+test("a chats file that is not a list reads as none", async () => {
+  await put("chats.json", { runId: "a" });
+  expect(await readSweptChats()).toEqual([]);
+});
+
+test("a log entry without outcomes or items is dropped; a bad outcome or item inside a good entry is left out", async () => {
+  const item = { key: "shell:t", kind: "shell", id: "t", repoId: "r", where: "r", title: "shell", idleSince: 1, why: "w", closable: true, checked: true, auto: true };
+  await put("log.json", [
+    null,
+    { at: 1, by: "eric", items: [] },
+    { at: 2, by: "eric", outcomes: "closed", items: [] },
+    { at: 3, by: "someone", outcomes: [], items: [] },
+    { at: 4, by: "schedule", outcomes: [{ key: "shell:t", result: "closed" }, { key: 5, result: "closed" }, { key: "run:r", result: "exploded" }, null], items: [item, { key: "x" }, null] },
+  ]);
+  expect(await readLog()).toEqual([{ at: 4, by: "schedule", outcomes: [{ key: "shell:t", result: "closed" }], items: [item] } as SweepLogEntry]);
+  await appendLog(entry(5));
+  expect((await readLog()).map((e) => e.at)).toEqual([4, 5]);
 });

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SWEPT_DAYS } from "./keep";
 import { configDir } from "./store";
-import type { SweepLogEntry, SweptChat } from "./types";
+import { isHarness, SWEEP_KINDS, type SweepItem, type SweepLogEntry, type SweepOutcome, type SweptChat } from "./types";
 
 /* What the sweep keeps on disk: the chats it stopped, so a resume can start
  * from their session, and a short log of its passes. */
@@ -16,13 +16,70 @@ export const sweepDir = (): string => join(configDir(), "sweep");
 /** tells one write's temporary file from another's in the same process */
 let writes = 0;
 
-async function readList<T>(name: string): Promise<T[]> {
+/** A list file, each entry through `parse`: an entry that does not read
+ *  (a hand edit, a file from another version) is left out rather than
+ *  failing every route that reads the list. */
+async function readList<T>(name: string, parse: (v: unknown) => T | null): Promise<T[]> {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(await readFile(join(sweepDir(), name), "utf8"));
-    return Array.isArray(parsed) ? (parsed as T[]) : [];
+    parsed = JSON.parse(await readFile(join(sweepDir(), name), "utf8"));
   } catch {
     return [];
   }
+  return Array.isArray(parsed) ? each(parsed, parse) : [];
+}
+
+/** the entries of `list` that `parse` reads */
+const each = <T>(list: readonly unknown[], parse: (v: unknown) => T | null): T[] =>
+  list.flatMap((v) => {
+    const got = parse(v);
+    return got === null ? [] : [got];
+  });
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const isStr = (v: unknown): v is string => typeof v === "string";
+const isTime = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isBool = (v: unknown): v is boolean => typeof v === "boolean";
+const RESULTS: readonly unknown[] = ["closed", "in use now", "gone", "failed"] satisfies SweepOutcome["result"][];
+
+function parseChat(v: unknown): SweptChat | null {
+  if (!isObj(v)) return null;
+  const { runId, repoId, harness, session, title, sweptAt } = v;
+  if (!isStr(runId) || !isStr(repoId) || !isHarness(harness) || !isStr(session) || !isStr(title) || !isTime(sweptAt)) return null;
+  return { runId, repoId, harness, session, title, sweptAt };
+}
+
+function parseOutcome(v: unknown): SweepOutcome | null {
+  if (!isObj(v) || !isStr(v["key"]) || !RESULTS.includes(v["result"])) return null;
+  const why = v["why"];
+  if (why !== undefined && !isStr(why)) return null;
+  return v as unknown as SweepOutcome;
+}
+
+function parseItem(v: unknown): SweepItem | null {
+  if (!isObj(v)) return null;
+  const ok =
+    isStr(v["key"]) &&
+    (SWEEP_KINDS as readonly unknown[]).includes(v["kind"]) &&
+    isStr(v["id"]) &&
+    (v["repoId"] === null || isStr(v["repoId"])) &&
+    isStr(v["where"]) &&
+    isStr(v["title"]) &&
+    isTime(v["idleSince"]) &&
+    isStr(v["why"]) &&
+    isBool(v["closable"]) &&
+    isBool(v["checked"]) &&
+    isBool(v["auto"]);
+  return ok ? (v as unknown as SweepItem) : null;
+}
+
+/** A log entry needs its time, who ran it and its outcomes; an outcome or
+ *  item inside it that does not read is left out on its own. */
+function parseEntry(v: unknown): SweepLogEntry | null {
+  if (!isObj(v)) return null;
+  const { at, by, outcomes, items } = v;
+  if (!isTime(at) || (by !== "eric" && by !== "schedule") || !Array.isArray(outcomes)) return null;
+  return { at, by, outcomes: each(outcomes, parseOutcome), items: Array.isArray(items) ? each(items, parseItem) : [] };
 }
 
 // Write-then-rename, as the config does: a crash mid-write leaves the old
@@ -47,7 +104,7 @@ function locked<T>(fn: () => Promise<T>): Promise<T> {
 const fresh = (c: SweptChat): boolean => c.sweptAt >= Date.now() - SWEPT_DAYS * DAY;
 
 export async function readSweptChats(): Promise<SweptChat[]> {
-  return (await readList<SweptChat>("chats.json")).filter(fresh);
+  return (await readList("chats.json", parseChat)).filter(fresh);
 }
 
 export function addSweptChat(c: SweptChat): Promise<void> {
@@ -76,5 +133,5 @@ export function appendLog(e: SweepLogEntry): Promise<void> {
 }
 
 export function readLog(): Promise<SweepLogEntry[]> {
-  return readList<SweepLogEntry>("log.json");
+  return readList("log.json", parseEntry);
 }
