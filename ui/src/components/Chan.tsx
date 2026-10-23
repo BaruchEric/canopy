@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { chanBlobUrl } from "../api";
 import { convName, convOf, convOrder, latestClip, messageText } from "../chan";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { canReadClipboard, copyText, readText } from "../share";
 import { useStore } from "../store";
@@ -74,7 +74,7 @@ export function ChanChip() {
     setNow(Date.now());
     const tick = setInterval(() => setNow(Date.now()), 30_000);
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) closeChan();
+      if (leavesPop(e.target, ref)) closeChan();
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => closeChan());
@@ -249,7 +249,7 @@ export function ChanChip() {
             </label>
             {err && <p className="settings-hint error">{err}</p>}
           </section>
-          <PopGrip name="chan" anchor={HANGS_RIGHT} />
+          <PopGrip name="chan" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

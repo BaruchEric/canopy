@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { multi, useStore } from "../store";
 import { ericsCrons, rangerCard, rangerLine, rangerTone, shownRangers, sizeWord, wakeWhen, worstTone } from "../ranger";
@@ -140,7 +140,7 @@ export function RangerChip({ compact = false }: { compact?: boolean }) {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -177,7 +177,7 @@ export function RangerChip({ compact = false }: { compact?: boolean }) {
           {shown.map(([b, r]) => (
             <RangerBlock key={b} backend={b} info={r} close={() => setOpen(false)} showBackend={several} />
           ))}
-          <PopGrip name="ranger" anchor={HANGS_RIGHT} />
+          <PopGrip name="ranger" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

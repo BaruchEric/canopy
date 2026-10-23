@@ -10,7 +10,7 @@ import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { pairAsk } from "../callerToken";
 import { HANGS_RIGHT, useFitPop } from "../pop";
-import { PopGrip } from "./PopGrip";
+import { PopGrip, usePopEntries } from "./PopGrip";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
 import { canAnswer as canAnswerHere, inboxItems, prsAll, useStore } from "../store";
@@ -483,7 +483,8 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   // a waiting run's or gate's age more slowly
   const now = useNow(open, inboxTick(items));
   const { zoom, entry: zoomEntry } = useZoom("inbox");
-  const gear = useInboxGear(zoomEntry);
+  const size = usePopEntries(INBOX_POP, () => ref.current?.querySelector<HTMLElement>(".inbox-pop") ?? null, false);
+  const gear = useInboxGear([zoomEntry, ...size]);
   useFitPop(ref, open, zoom);
 
   useEffect(() => {
@@ -543,7 +544,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
             <h3 className="panel-label">inbox</h3>
             <Gear
               label="the inbox"
-              hint="Zoom, the command's text, and the rules you remembered"
+              hint="Zoom, size, the command's text, and the rules you remembered"
               groups={gear}
               keptElse="the rules are the backend's, for every screen"
             />
@@ -611,7 +612,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
             </section>
           )}
           </div>
-          <PopGrip name="inbox" anchor={HANGS_RIGHT} />
+          <PopGrip {...INBOX_POP} />
         </div>
       )}
     </div>
@@ -620,7 +621,10 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
 
 /** The inbox's gear: its zoom; the raw command's text size, wrap and fold;
  *  and every shown backend's remembered rules, each with a forget. */
-function useInboxGear(zoom: GearEntry): GearGroup[] {
+/** the inbox as a popup, for its grip and the size lines in its gear */
+const INBOX_POP = { name: "inbox", anchor: HANGS_RIGHT };
+
+function useInboxGear(view: GearEntry[]): GearGroup[] {
   const { text, wrap, fold } = useCommandView();
   const setSetting = useStore((s) => s.setSetting);
   const remembered = useStore((s) => s.remembered);
@@ -639,7 +643,7 @@ function useInboxGear(zoom: GearEntry): GearGroup[] {
     ),
   );
   return [
-    { label: "inbox", entries: [zoom] },
+    { label: "inbox", entries: view },
     {
       label: "the command",
       entries: [

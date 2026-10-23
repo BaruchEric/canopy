@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import { api } from "../api";
 import { backendOf } from "../registry";
 import { multi, useStore } from "../store";
-import { HANGS_LEFT, useFitPop } from "../pop";
+import { HANGS_LEFT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import type { Listing, SourceState } from "../../../src/core/types";
 import { Seg } from "./Seg";
@@ -446,7 +446,7 @@ export function SourcesMenu() {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -540,7 +540,7 @@ export function SourcesMenu() {
             <h3 className="panel-label">add a folder</h3>
             <AddSourceForm onAdded={() => {}} backendOrder={backendOrder} isMulti={isMulti} />
           </section>
-          <PopGrip name="sources" anchor={HANGS_LEFT} />
+          <PopGrip name="sources" anchor={HANGS_LEFT} gear />
         </div>
       )}
     </div>

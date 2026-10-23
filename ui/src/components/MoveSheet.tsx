@@ -7,7 +7,10 @@ import { closeUndoes, MOVE_STEPS, offersResume, runMove, statusOf, type MoveOutc
 import { cardOf, useStore } from "../store";
 import { termId, type TermTab } from "../term";
 import { CENTERED } from "../pop";
-import { PopGrip } from "./PopGrip";
+import { PopGear, PopGrip } from "./PopGrip";
+
+/** the move sheet as a popup, for its grip and its gear */
+const MOVE_POP = { name: "sheet move", anchor: CENTERED, gap: 24 };
 
 const STEP_TEXT: Record<MoveStep, string> = {
   check: "the target can take it",
@@ -272,6 +275,7 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
             </div>
             <h2 className="sheet-title">move this session</h2>
           </div>
+          <PopGear spec={MOVE_POP} />
           <button type="button" className="mini close" onClick={finish} disabled={running || busy} aria-label="Close">
             ✕
           </button>
@@ -361,7 +365,7 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
             </button>
           )}
         </footer>
-        <PopGrip name="sheet move" anchor={CENTERED} gap={24} />
+        <PopGrip {...MOVE_POP} />
       </div>
     </div>
   );

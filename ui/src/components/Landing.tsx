@@ -8,6 +8,7 @@ import { keepKeys } from "../surface";
 import { ago } from "../util";
 import { DiffView } from "./DiffView";
 import { Section } from "./Surface";
+import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -354,6 +355,7 @@ export function ApproveSheet({ id }: { id: string }) {
           <div className="eyebrow">needs your approval · {idText(rec.repoId)}</div>
           <h2 className="sheet-title">{rec.branch}</h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>

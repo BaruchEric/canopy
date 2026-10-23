@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
+import { PHONE, useMedia } from "../media";
 import { useStore } from "../store";
 import { type PopAnchor, type PopSize, gripSize, popRoom } from "../pop";
-
-/** the width below which popups are sheets off the bottom edge, unsized */
-const PHONE = "(max-width: 760px)";
+import { ZOOM_MAX, ZOOM_MIN, zoomStep, zoomWord } from "../surface";
+import { Gear, type GearEntry } from "./Gear";
 
 const KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 
@@ -26,25 +26,44 @@ function paint(pop: HTMLElement, size: PopSize | null): void {
   pop.style.setProperty("--pop-h", `${size.h}px`);
 }
 
-interface PopGripProps {
-  /** the key its size is saved under, one per kind of popup */
+/** Saves a popup's size, or drops it so the stylesheet's applies. */
+function saveSize(name: string, size: PopSize | null): void {
+  const { settings, setSetting } = useStore.getState();
+  const { [name]: _, ...rest } = settings.popSizes;
+  setSetting("popSizes", size ? { ...rest, [name]: size } : rest);
+}
+
+/** Saves a popup's zoom; back at 1 the entry goes. */
+function saveZoom(name: string, z: number): void {
+  const { settings, setSetting } = useStore.getState();
+  const { [name]: _, ...rest } = settings.popZooms;
+  setSetting("popZooms", Math.abs(z - 1) < 0.001 ? rest : { ...rest, [name]: z });
+}
+
+/** A popup: the key its size and zoom are saved under, one per kind of
+ *  popup, which edges hold as it grows, and the gap it keeps from the
+ *  window's edges in px. */
+export interface PopSpec {
   name: string;
-  /** which edges hold as it grows; the grip sits on the corner that moves */
   anchor: PopAnchor;
-  /** the gap it keeps from the window's edges, px */
   gap?: number;
 }
+
+/** The popup a sheet's parts sit in, for the gear in its head. */
+export const PopHere = createContext<PopSpec | null>(null);
 
 /**
  * A corner grip that sizes the popup it sits in, the last child of the
  * popup's own element. A drag takes it as far as the window has room for,
  * and the size is saved per popup and per kind of screen; a double-click
  * hands the popup back to the stylesheet. Like the Resizer, a drag writes to
- * the DOM and only saves on release.
+ * the DOM and only saves on release. It also paints the popup's zoom, and
+ * with `gear` puts the popup's gear in its top corner, for a popover with
+ * no head to hold one.
  */
-export function PopGrip({ name, anchor, gap = 8 }: PopGripProps) {
+export function PopGrip({ name, anchor, gap = 8, gear = false }: PopSpec & { gear?: boolean }) {
   const saved = useStore((s) => s.settings.popSizes[name]);
-  const setSetting = useStore((s) => s.setSetting);
+  const zoom = useStore((s) => s.settings.popZooms[name] ?? 1);
   const ref = useRef<HTMLDivElement>(null);
   const ending = useRef<(() => void) | null>(null);
 
@@ -61,6 +80,20 @@ export function PopGrip({ name, anchor, gap = 8 }: PopGripProps) {
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, [saved, anchor, gap]);
+
+  // the zoom goes on everything in the popup but its head and its controls,
+  // so the gear stays under the pointer as it steps
+  useLayoutEffect(() => {
+    const pop = ref.current?.parentElement;
+    if (!pop) return;
+    if (zoom === 1) {
+      pop.removeAttribute("data-zoomed");
+      pop.style.removeProperty("--pop-zoom");
+    } else {
+      pop.setAttribute("data-zoomed", "");
+      pop.style.setProperty("--pop-zoom", String(zoom));
+    }
+  }, [zoom]);
 
   // In a popup that scrolls, an absolute box rides along with the content,
   // so the grip is moved back down by however far it has scrolled.
@@ -84,10 +117,7 @@ export function PopGrip({ name, anchor, gap = 8 }: PopGripProps) {
     [],
   );
 
-  const save = (size: PopSize | null) => {
-    const { [name]: _, ...rest } = useStore.getState().settings.popSizes;
-    setSetting("popSizes", size ? { ...rest, [name]: size } : rest);
-  };
+  const save = (size: PopSize | null) => saveSize(name, size);
 
   const cursor = anchor.x === "end" ? "resizing-nesw" : "resizing-nwse";
 
@@ -146,16 +176,83 @@ export function PopGrip({ name, anchor, gap = 8 }: PopGripProps) {
   };
 
   return (
-    <div
-      ref={ref}
-      className={`pop-grip${anchor.x === "end" ? " at-left" : ""}`}
-      role="button"
-      tabIndex={0}
-      aria-label="Resize"
-      title="Drag to resize, double-click to reset"
-      onPointerDown={onPointerDown}
-      onKeyDown={onKeyDown}
-      onDoubleClick={() => save(null)}
-    />
+    <>
+      <div
+        ref={ref}
+        className={`pop-grip${anchor.x === "end" ? " at-left" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-label="Resize"
+        title="Drag to resize, double-click to reset"
+        onPointerDown={onPointerDown}
+        onKeyDown={onKeyDown}
+        onDoubleClick={() => save(null)}
+      />
+      {gear && <PopGear spec={{ name, anchor, gap }} corner />}
+    </>
+  );
+}
+
+/**
+ * The lines a popup's gear holds for the popup itself: its zoom, unless it
+ * keeps one of its own (the inbox), and its size, the window's whole room
+ * or its own. `pop` finds the popup's element when a line runs.
+ */
+export function usePopEntries({ name, anchor, gap = 8 }: PopSpec, pop: () => HTMLElement | null, zoomed = true): GearEntry[] {
+  const sized = useStore((s) => s.settings.popSizes[name] !== undefined);
+  const zoom = useStore((s) => s.settings.popZooms[name] ?? 1);
+  const phone = useMedia(PHONE);
+  const off = phone ? "A phone's popups take its width" : undefined;
+  const size: GearEntry[] = [
+    {
+      type: "item",
+      label: "fill the window",
+      title: "As big as the window has room for",
+      ...(off ? { off } : {}),
+      run: () => {
+        const el = pop();
+        if (el) saveSize(name, roomOf(el, anchor, gap));
+      },
+    },
+    {
+      type: "item",
+      label: "its own size",
+      title: "The size it opens at, before any drag",
+      ...(off || !sized ? { off: off ?? "It is at its own size" } : {}),
+      run: () => saveSize(name, null),
+    },
+  ];
+  if (!zoomed) return size;
+  return [
+    {
+      type: "zoom",
+      label: "zoom",
+      value: zoomWord(zoom),
+      less: zoom > ZOOM_MIN ? () => saveZoom(name, zoomStep(zoom, -1)) : null,
+      more: zoom < ZOOM_MAX ? () => saveZoom(name, zoomStep(zoom, 1)) : null,
+      reset: zoom !== 1 ? () => saveZoom(name, 1) : null,
+    },
+    ...size,
+  ];
+}
+
+/**
+ * A popup's gear: in a sheet's head beside its close, off the sheet the
+ * head sits in (`PopHere`), or in a popover's top corner (`corner`), off
+ * the grip that puts it there. Nothing outside a popup.
+ */
+export function PopGear({ spec, corner = false }: { spec?: PopSpec; corner?: boolean }) {
+  const here = useContext(PopHere);
+  const of = spec ?? here;
+  return of ? <PopGearOf spec={of} corner={corner} /> : null;
+}
+
+function PopGearOf({ spec, corner }: { spec: PopSpec; corner: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const entries = usePopEntries(spec, () => ref.current?.closest<HTMLElement>(".sheet, .settings-pop") ?? null);
+  return (
+    <span ref={ref} className={`pop-gear${corner ? " corner" : ""}`}>
+      <Gear label="this popup" hint="Zoom and size" groups={[{ label: "this popup", entries }]} />
+    </span>
   );
 }

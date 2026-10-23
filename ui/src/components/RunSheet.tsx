@@ -37,7 +37,7 @@ import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
-import { PopGrip } from "./PopGrip";
+import { PopGear, PopGrip, PopHere } from "./PopGrip";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -104,6 +104,7 @@ export function RunSheet() {
   }, [sheet, close]);
 
   if (!sheet) return null;
+  const pop = { name: `sheet ${sheet.kind}`, anchor: CENTERED, gap: 24 };
   return (
     <div className="sheet-back" onPointerDown={(e) => {
       if (e.target === e.currentTarget) close();
@@ -114,8 +115,10 @@ export function RunSheet() {
         role="dialog"
         aria-modal="true"
       >
-        <Body sheet={sheet} />
-        <PopGrip name={`sheet ${sheet.kind}`} anchor={CENTERED} gap={24} />
+        <PopHere.Provider value={pop}>
+          <Body sheet={sheet} />
+          <PopGrip {...pop} />
+        </PopHere.Provider>
       </div>
     </div>
   );
@@ -232,6 +235,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             {spec.verb} <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>
@@ -503,6 +507,7 @@ export function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
         <span className="clock" title="elapsed">
           {mmss(elapsed)}
         </span>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>
@@ -933,6 +938,7 @@ function RepoAgentSheet({ repo }: { repo: Repo }) {
             agent routing <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>
@@ -1097,6 +1103,7 @@ function TaskForm({ repo, name }: { repo: Repo; name: string | null }) {
             {name ? `edit ${name}` : "add a task"} <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>
@@ -1180,6 +1187,7 @@ function LaunchForm({ repo }: { repo: Repo }) {
             launch settings <span className="sheet-repo">{idText(repo.id)}</span>
           </h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>

@@ -15,7 +15,7 @@ import { termFontSize } from "./touch";
 import { PREVIEW_H, previewHeightOf } from "./preview";
 import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
 import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
-import { popSizesOf, type PopSizes } from "./pop";
+import { popSizesOf, popZoomsOf, type PopSizes, type PopZooms } from "./pop";
 import { BOARD_GROUPINGS, BOARD_LAYOUTS, type BoardGrouping, type BoardLayout } from "./board";
 import {
   SECTION_KEYS,
@@ -141,6 +141,8 @@ export interface Settings {
   /** each popup's size off its corner grip, by name; one with none keeps
    *  the size the stylesheet gives it */
   popSizes: PopSizes;
+  /** each popup's zoom off its gear, by name */
+  popZooms: PopZooms;
   /** the bench's rail in px, null for the width the stylesheet picks */
   benchRail: number | null;
   /** the shells' and the log's share of the bench's height */
@@ -213,6 +215,7 @@ export const DEFAULT_SETTINGS: Settings = {
   termFonts: {},
   previewHeight: PREVIEW_H.initial,
   popSizes: {},
+  popZooms: {},
   benchRail: null,
   benchDock: BENCH_DOCK.initial,
   benchSplit: BENCH_SPLIT.initial,
@@ -327,6 +330,7 @@ export const SCREEN_SETTINGS = [
   "termFonts",
   "previewHeight",
   "popSizes",
+  "popZooms",
   "benchRail",
   "benchDock",
   "benchSplit",
@@ -384,6 +388,7 @@ export function loadSettings(): Settings {
       termFonts: normalizeTermFonts(saved.termFonts),
       previewHeight: previewHeightOf(saved.previewHeight),
       popSizes: popSizesOf(saved.popSizes),
+      popZooms: popZoomsOf(saved.popZooms),
       benchRail: benchRailOf(saved.benchRail),
       benchDock: shareOf(saved.benchDock, BENCH_DOCK),
       benchSplit: shareOf(saved.benchSplit, BENCH_SPLIT),

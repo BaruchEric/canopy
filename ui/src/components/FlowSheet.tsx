@@ -10,6 +10,7 @@ import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
 import { AGENT_NAME, harnessOf } from "../runs";
 import { Timeline } from "./RunSheet";
+import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -61,6 +62,7 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
           <div className="eyebrow">with {name} · {w.source === "bundled" ? "built in" : w.source === "user" ? "your workflow" : "this repo's workflow"}</div>
           <h2 className="sheet-title">{w.verb} <span className="sheet-repo">{idText(repo.id)}</span></h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
       </header>
       <div className="sheet-body plan">
@@ -271,6 +273,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
           {flowWord(flow, true)}
         </span>
         <span className="clock" title="elapsed">{mmss(elapsed)}</span>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
       </header>
       <StepStrip flow={flow} shown={shown} onPick={(i) => setPicked(i === flow.current ? null : i)} />
@@ -362,6 +365,7 @@ export function FleetPlan({ workflow }: { workflow: string }) {
           <div className="eyebrow">fleet</div>
           <h2 className="sheet-title">{w?.verb ?? workflow} <span className="sheet-repo">{running.length} of {repos.length} repos</span></h2>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
       </header>
       <div className="sheet-body plan">
@@ -437,6 +441,7 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
             ? `${counts.active} running, ${counts.pending} to go${counts.needsYou ? `, ${counts.needsYou} need${counts.needsYou === 1 ? "s" : ""} you` : ""}`
             : `${counts.done} done, ${counts.failed} failed, ${counts.skipped} skipped`}
         </span>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
       </header>
       <div className="sheet-body console">

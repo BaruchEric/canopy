@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { homeConn, idParts, useStore } from "../store";
 import { registry } from "../registry";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { eachOf, keptByBackend, newestFirst, restorePlan, stillPicked } from "../kept";
 
@@ -51,7 +51,7 @@ export function KeptShells() {
     setNow(Date.now());
     const tick = setInterval(() => setNow(Date.now()), 30_000);
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -289,7 +289,7 @@ export function KeptShells() {
               {!keeping && " Recording is off, so nothing new is being kept; settings has the switch."}
             </p>
           </section>
-          <PopGrip name="kept" anchor={HANGS_RIGHT} />
+          <PopGrip name="kept" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

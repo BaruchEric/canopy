@@ -12577,3 +12577,29 @@ body.resizing-nesw {
     display: none;
   }
 }
+
+/* A popup's gear: in a sheet's head, just before its close, or in a
+   popover's top corner, where the popover's first row keeps clear of it.
+   Its menu comes up over the sheets' veil. */
+.pop-gear {
+  display: contents;
+}
+.pop-gear.corner {
+  display: block;
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 3;
+}
+.settings-pop:has(> .pop-gear.corner):not(.prefs) > :first-child {
+  padding-right: 34px;
+}
+.gear-pop {
+  z-index: 50;
+}
+/* the zoom off a popup's gear: everything in it but its head and its own
+   controls, so the gear stays under the pointer as it steps */
+.sheet[data-zoomed] > :not(.sheet-head, .pop-grip, .pop-gear),
+.settings-pop[data-zoomed] > :not(.pop-grip, .pop-gear) {
+  zoom: var(--pop-zoom);
+}

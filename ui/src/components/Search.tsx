@@ -6,6 +6,7 @@ import { helperFor, idText, useStore, visibleRepos } from "../store";
 import { backendOf } from "../registry";
 import { Section } from "./Surface";
 import type { GrepHit, GrepRepoResult, GrepResult, Repo } from "../../../src/core/types";
+import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -252,6 +253,7 @@ export function SearchSheet() {
           <h2 className="sheet-title">search files</h2>
           <p className="sheet-hint">{scope}</p>
         </div>
+        <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">
           ✕
         </button>

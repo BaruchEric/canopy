@@ -5,7 +5,7 @@ import type { HealthCheck, Repo, RepoCheckKind, RepoHealMode, RepoHealthInfo } f
 import { api } from "../api";
 import { openView } from "../clirun";
 import { HEALTH_PANEL, STATE_TONE, STATE_WORD, groupRows, healthRows, healthSummary, repoChecks, repoWord, type HealthGroup, type HealthRow } from "../health";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { useStore } from "../store";
 import { escapeCloses, keepKeys } from "../surface";
@@ -154,7 +154,7 @@ export function HealthChip() {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => escapeCloses(e, () => setOpen(false));
     document.addEventListener("pointerdown", onDown);
@@ -207,7 +207,7 @@ export function HealthChip() {
             </button>
           </div>
           <HealthList />
-          <PopGrip name="health" anchor={HANGS_RIGHT} />
+          <PopGrip name="health" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

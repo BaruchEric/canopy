@@ -20,6 +20,7 @@ import { InboxChip } from "./Inbox";
 import { Questions } from "./Prompts";
 import { WidgetGear, shareEntries, useZoom, zoomStyle } from "./Surface";
 import type { SproutDraft } from "../cli";
+import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 /** the HTTP status `api` puts on its errors, when there is one */
@@ -426,6 +427,7 @@ function SheetHead({ eyebrow, title, sub }: { eyebrow: string; title: string; su
           {title} {sub && <span className="sheet-repo">{sub}</span>}
         </h2>
       </div>
+      <PopGear />
       <button type="button" className="mini close" onClick={close} aria-label="Close">
         ✕
       </button>

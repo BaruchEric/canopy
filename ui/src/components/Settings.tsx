@@ -2,7 +2,7 @@ import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, use
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { capsFor, connOf, multi, useStore } from "../store";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
@@ -188,7 +188,7 @@ export function SettingsMenu() {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -605,7 +605,7 @@ export function SettingsMenu() {
               </p>
             )}
           </div>
-          <PopGrip name="settings" anchor={HANGS_RIGHT} />
+          <PopGrip name="settings" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { type RefObject, useLayoutEffect } from "react";
+import { ZOOM_MAX, ZOOM_MIN } from "./surface";
 import { clamp } from "./util";
 
 /** the gap a popover keeps from either edge of the window */
@@ -114,3 +115,29 @@ export function gripSize(start: PopSize, dx: number, dy: number, anchor: PopAnch
     h: Math.round(clamp(start.h + dy * sy, POP_MIN.h, room.h)),
   };
 }
+
+/** each popup's zoom off its gear, by name; one with none is at 1 */
+export type PopZooms = Record<string, number>;
+
+/** Saved zooms held to the zoom's range, with a zoom of 1 left out, since
+ *  that is what no entry means. */
+export function popZoomsOf(v: unknown): PopZooms {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: PopZooms = {};
+  for (const [name, z] of Object.entries(v)) {
+    if (typeof z !== "number" || !Number.isFinite(z)) continue;
+    const held = clamp(z, ZOOM_MIN, ZOOM_MAX);
+    if (Math.abs(held - 1) > 0.001) out[name] = held;
+  }
+  return out;
+}
+
+/** Whether a pointerdown at `t` leaves the popover under `ref`, which
+ *  closes it: outside it, and outside a gear's menu, which sits in a
+ *  portal of its own. */
+export function leavesPop(t: EventTarget | null, ref: RefObject<HTMLElement | null>): boolean {
+  if (!(t instanceof Node)) return true;
+  if (t instanceof Element && t.closest(".gear-pop")) return false;
+  return !ref.current?.contains(t);
+}
+

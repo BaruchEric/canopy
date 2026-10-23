@@ -4,6 +4,7 @@ import { durationWord } from "../agentcards";
 import { useStore } from "../store";
 import { defaultPicks, dropPicks, groupItems, KIND_HEAD, outcomesOf, sheetRows, sweepSummary } from "../sweep";
 import { useNow } from "./Registry";
+import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
@@ -87,6 +88,7 @@ export function SweepSheet() {
         <div className="eyebrow">sweep</div>
         <h2 className="sheet-title">What went idle</h2>
       </div>
+      <PopGear />
       <button type="button" className="mini close" onClick={close} aria-label="Close">
         ✕
       </button>

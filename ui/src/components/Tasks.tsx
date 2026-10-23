@@ -2,7 +2,7 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { keepKeys, escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
@@ -385,7 +385,7 @@ export function TasksChip() {
     setNow(Date.now());
     const tick = setInterval(() => setNow(Date.now()), 1000);
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -458,7 +458,7 @@ export function TasksChip() {
             ))}
           </ul>
           {error && <p className="note err">{error}</p>}
-          <PopGrip name="tasks" anchor={HANGS_RIGHT} />
+          <PopGrip name="tasks" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

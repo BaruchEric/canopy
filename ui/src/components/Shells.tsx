@@ -3,7 +3,7 @@ import { escapeCloses } from "../surface";
 import { api } from "../api";
 import { clientId } from "../client";
 import { dockless, idText, useStore } from "../store";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { eachOf, stillPicked, unwatched } from "../kept";
 import { BackendWord } from "./IdLabel";
@@ -73,7 +73,7 @@ export function ShellsChip() {
     setRepoId((id) => (local.some((r) => r.id === id) ? id : local.some((r) => r.id === activePanel) ? activePanel! : (local[0]?.id ?? "")));
     const tick = setInterval(() => setNow(Date.now()), 30_000);
     const onDown = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -416,7 +416,7 @@ export function ShellsChip() {
               live there, not here.
             </p>
           </section>
-          <PopGrip name="shells" anchor={HANGS_RIGHT} />
+          <PopGrip name="shells" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>

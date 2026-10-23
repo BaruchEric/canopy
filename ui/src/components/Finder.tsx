@@ -32,7 +32,10 @@ import { Section } from "./Surface";
 import { fileKind, type FileKind } from "../../../src/core/filekind";
 import type { DirEntry, Repo, RepoFiles } from "../../../src/core/types";
 import { CENTERED } from "../pop";
-import { PopGrip } from "./PopGrip";
+import { PopGear, PopGrip } from "./PopGrip";
+
+/** the file viewer as a popup, for its grip and its gear */
+const VIEWER_POP = { name: "sheet viewer", anchor: CENTERED, gap: 24 };
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -361,6 +364,7 @@ function Viewer({
             ›
           </button>
           <FileActions repo={repo} path={path} onError={setError} />
+          <PopGear spec={VIEWER_POP} />
           <button type="button" className="mini close" onClick={onClose} aria-label="Close">
             ✕
           </button>
@@ -369,7 +373,7 @@ function Viewer({
         <div className="finder-viewer-body">
           <FileBody repoId={repo.id} path={path} stamp={stamp(path)} big onOpen={onOpen} />
         </div>
-        <PopGrip name="sheet viewer" anchor={CENTERED} gap={24} />
+        <PopGrip {...VIEWER_POP} />
       </div>
     </div>,
     document.body,

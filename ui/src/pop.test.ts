@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CENTERED, HANGS_LEFT, HANGS_RIGHT, POP_MIN, fitShift, gripSize, popRoom, popSizesOf } from "./pop";
+import { CENTERED, HANGS_LEFT, HANGS_RIGHT, POP_MIN, fitShift, gripSize, popRoom, popSizesOf, popZoomsOf } from "./pop";
 
 describe("fitShift", () => {
   test("a box inside the window stays put", () => {
@@ -60,6 +60,18 @@ describe("gripSize", () => {
   test("held to the room and to the minimum", () => {
     expect(gripSize(start, 2000, 2000, HANGS_LEFT, room)).toEqual(room);
     expect(gripSize(start, -2000, -2000, HANGS_LEFT, room)).toEqual(POP_MIN);
+  });
+});
+
+describe("popZoomsOf", () => {
+  test("keeps a zoom in range and leaves out 1, which no entry means", () => {
+    expect(popZoomsOf({ inbox: 1.25, "sheet run": 1, chan: "big" })).toEqual({ inbox: 1.25 });
+  });
+  test("a zoom out of range comes back to its end", () => {
+    expect(popZoomsOf({ a: 9, b: 0.1 })).toEqual({ a: 2, b: 0.5 });
+  });
+  test("anything but an object is no zooms", () => {
+    expect(popZoomsOf(null)).toEqual({});
   });
 });
 

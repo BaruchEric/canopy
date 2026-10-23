@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { HANGS_LEFT, useFitPop } from "../pop";
+import { HANGS_LEFT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { escapeCloses } from "../surface";
 
@@ -68,7 +68,7 @@ export function PickMenu({
     const on = ref.current?.querySelector<HTMLButtonElement>('[role="radio"][aria-checked="true"]');
     (on ?? list?.[0])?.focus({ preventScroll: true });
     const onDown = (e: PointerEvent) => {
-      if (!(e.target instanceof Node) || !ref.current?.contains(e.target)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => {
@@ -136,7 +136,7 @@ export function PickMenu({
             </section>
           ))}
           {hint && <p className="settings-hint pick-hint">{hint}</p>}
-          <PopGrip name={`pick ${label}`} anchor={HANGS_LEFT} />
+          <PopGrip name={`pick ${label}`} anchor={HANGS_LEFT} gear />
         </div>
       )}
     </div>

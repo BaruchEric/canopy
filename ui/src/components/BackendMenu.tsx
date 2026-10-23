@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { hasOtherBackend } from "../backends";
 import { onBeat } from "../live";
 import { seenWord } from "../peers";
-import { HANGS_RIGHT, useFitPop } from "../pop";
+import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { homeConn, useStore } from "../store";
 import { escapeCloses } from "../surface";
@@ -67,7 +67,7 @@ export function BackendMenu() {
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (!(e.target instanceof Node) || !ref.current?.contains(e.target)) setOpen(false);
+      if (leavesPop(e.target, ref)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       escapeCloses(e, () => setOpen(false));
@@ -128,7 +128,7 @@ export function BackendMenu() {
             </section>
           )}
           <DevicesSection />
-          <PopGrip name="backend" anchor={HANGS_RIGHT} />
+          <PopGrip name="backend" anchor={HANGS_RIGHT} gear />
         </div>
       )}
     </div>
