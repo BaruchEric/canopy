@@ -18,9 +18,10 @@ export interface SweepDeps {
   /** the shells, runs and cards as they are now */
   facts(): Promise<PlanInputs>;
   /** ends a shell, keeping its history as a swept record first: "in use
-   *  now" when it was typed into while being kept, "failed" when the record
-   *  could not be written; either way it is left running */
-  endShell(id: string): Promise<"closed" | "in use now" | "failed">;
+   *  now" when it was typed into after `seen`, the last keystroke the plan
+   *  saw for it (0 for none), "failed" when the record could not be
+   *  written; either way it is left running */
+  endShell(id: string, seen: number): Promise<"closed" | "in use now" | "failed">;
   /** a run's status as it is this moment, for the last look before a stop */
   runStatus(runId: string): Run["status"] | undefined;
   /** stops a chat between turns; throws for a run it does not know */
@@ -161,7 +162,10 @@ export class SweepHub {
     const { key, id } = item;
     switch (item.kind) {
       case "shell": {
-        const how = await this.deps.endShell(id);
+        // a keystroke after the one the plan saw is someone back at it, even
+        // one that landed while the facts were read or the plan made
+        const seen = facts.shells?.find((s) => s.id === id)?.lastInput ?? 0;
+        const how = await this.deps.endShell(id, seen);
         return how === "failed" ? { key, result: "failed", why: "its history could not be kept, so it was left running" } : { key, result: how };
       }
       case "chat": {

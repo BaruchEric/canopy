@@ -736,24 +736,31 @@ async function endTerm(state: ServerState, id: string, opts: { keep?: true } = {
  *  or the record could not be written), so left as it was. */
 type SweepEnd = "ended" | "in use" | "unkept";
 
-/** The sweep's end of a shell (`endTerm` with `keep`, and the hub's). */
-async function sweepShell(state: ServerState, id: string): Promise<SweepEnd> {
+/** The sweep's end of a shell (`endTerm` with `keep`, and the hub's).
+ *  `seen` is the last keystroke the hub's plan saw for it (0 for none): a
+ *  keystroke after it, even one that landed while the facts were read or
+ *  the plan made, is someone back at it. With no plan (`endTerm`), only a
+ *  keystroke from this call on counts. */
+async function sweepShell(state: ServerState, id: string, seen?: number): Promise<SweepEnd> {
   const live = state.terms.get(id);
   // ending already, under some other end that forgets the record
   if (!state.tmux || !live || live.ending) return "unkept";
+  // a keystroke in the plan's own window: in use, and nothing to keep
+  const typedAfter = seen ?? Date.now() - 1;
+  if ((live.lastInput ?? 0) > typedAfter) return "in use";
   // ending from here on, so a pass that comes to it now leaves it alone
   live.ending = true;
-  const ended = keepEnd(state, live, Date.now());
+  const ended = keepEnd(state, live, typedAfter);
   live.keepEnd = ended;
   return ended;
 }
 
 /** The sweep's end of a shell whose `ending` it has set: its history is
  *  written out as a swept record, then the session ends and the record goes
- *  on offer. A keystroke from `began` on means someone is at it: the shell
- *  stays and the record goes, since a swept record would outlive it as an
- *  offer. When the record could not be written the shell stays too. */
-async function keepEnd(state: ServerState, live: LiveTerm, began: number): Promise<SweepEnd> {
+ *  on offer. A keystroke after `typedAfter` means someone is at it: the
+ *  shell stays and the record goes, since a swept record would outlive it
+ *  as an offer. When the record could not be written the shell stays too. */
+async function keepEnd(state: ServerState, live: LiveTerm, typedAfter: number): Promise<SweepEnd> {
   const tmux = state.tmux;
   if (!tmux) return "unkept";
   // one pass already writing its plain record is waited out, so the swept
@@ -764,8 +771,8 @@ async function keepEnd(state: ServerState, live: LiveTerm, began: number): Promi
     return "unkept";
   }
   // the hub's recheck saw it quiet, but the keep takes a while; a keystroke
-  // in that time is the user back at it
-  if ((live.lastInput ?? 0) >= began) {
+  // in that time, or since the plan read it, is the user back at it
+  if ((live.lastInput ?? 0) > typedAfter) {
     live.ending = false;
     await forgetKept(live.info.id);
     return "in use";
@@ -4483,7 +4490,7 @@ export async function startServer(opts: {
   port: number;
   coordPort: number | null;
   endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>;
-  sweepShell: (id: string) => Promise<"ended" | "in use" | "unkept">;
+  sweepShell: (id: string, seen?: number) => Promise<"ended" | "in use" | "unkept">;
   stop: () => Promise<void>;
 }> {
   // what the sweep counts a shell's idle from at the latest: keystrokes
@@ -5108,8 +5115,8 @@ export async function startServer(opts: {
     sweep: new SweepHub({
       broadcast: (ev) => broadcast(state, ev),
       facts: () => sweepFacts(state, serverStart),
-      endShell: async (id) => {
-        const how = await sweepShell(state, id);
+      endShell: async (id, seen) => {
+        const how = await sweepShell(state, id, seen);
         return how === "ended" ? "closed" : how === "in use" ? "in use now" : "failed";
       },
       runStatus: (id) => state.runner.get(id)?.status,
@@ -5801,7 +5808,7 @@ export async function startServer(opts: {
     /** a shell ended as the sweep ends it, or plainly; tests */
     endTerm: (id: string, opts?: { keep?: true }) => endTerm(state, id, opts),
     /** the sweep's end of a shell, with how it went; tests */
-    sweepShell: (id: string) => sweepShell(state, id),
+    sweepShell: (id: string, seen?: number) => sweepShell(state, id, seen),
     stop: () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);

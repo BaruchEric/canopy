@@ -54,7 +54,7 @@ interface Facts {
   afterFacts: (() => void) | null;
   settings: SweepSettings;
   events: ServerEvent[];
-  calls: { endShell: string[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[] };
+  calls: { endShell: string[]; seen: number[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[] };
 }
 
 /** what the stand-in deps read and write, and the deps over it */
@@ -67,7 +67,7 @@ function world(): Facts & { deps: SweepDeps } {
     afterFacts: null,
     settings: { ...DEFAULT_SWEEP, spans: { ...DEFAULT_SWEEP.spans }, auto: [...DEFAULT_SWEEP.auto] },
     events: [],
-    calls: { endShell: [], stopChat: [], dismiss: [], startChat: [] },
+    calls: { endShell: [], seen: [], stopChat: [], dismiss: [], startChat: [] },
   };
   const deps: SweepDeps = {
     broadcast: (ev) => w.events.push(ev),
@@ -82,8 +82,13 @@ function world(): Facts & { deps: SweepDeps } {
       w.afterFacts?.();
       return read;
     },
-    endShell: async (id) => {
+    endShell: async (id, seen) => {
       w.calls.endShell.push(id);
+      w.calls.seen.push(seen);
+      // as the server's keep-end: a keystroke newer than the one the plan
+      // saw is someone back at it, and the shell stays
+      const typed = w.shells.find((s) => s.id === id)?.lastInput;
+      if (typed !== undefined && typed > seen) return "in use now";
       // a beat, so a second close that did not wait would see the shell still there
       await Bun.sleep(20);
       w.shells = w.shells.filter((s) => s.id !== id);
@@ -238,6 +243,42 @@ describe("the sweep hub", () => {
     expect(await hub.close(["chat:c1"], "eric")).toEqual([{ key: "chat:c1", result: "in use now" }]);
     expect(w.calls.stopChat).toEqual([]);
     expect(await readSweptChats()).toEqual([]);
+  });
+
+  test("a keystroke after the facts are read and before the close: the shell stays, in use now", async () => {
+    const w = world();
+    // never typed into since the server started, so the plan saw no keystroke
+    w.shells = [shell()];
+    w.afterFacts = () => {
+      w.afterFacts = null;
+      const sh = w.shells.find((s) => s.id === "t1");
+      if (sh) sh.lastInput = NOW - 1_000;
+    };
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["shell:t1"], "eric")).toEqual([{ key: "shell:t1", result: "in use now" }]);
+    expect(w.calls.seen).toEqual([0]);
+    expect(w.shells.map((s) => s.id)).toEqual(["t1"]);
+  });
+
+  test("the keystroke the plan saw is handed on, and only a newer one keeps the shell", async () => {
+    const w = world();
+    const old = NOW - 26 * H;
+    w.shells = [shell({ id: "a", lastInput: old }), shell({ id: "b", lastInput: old })];
+    // a keystroke lands in b after its facts are read
+    w.afterFacts = () => {
+      const b = w.shells.find((s) => s.id === "b");
+      if (b && w.calls.endShell.includes("a")) {
+        w.afterFacts = null;
+        b.lastInput = NOW - 1_000;
+      }
+    };
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["shell:a", "shell:b"], "eric")).toEqual([
+      { key: "shell:a", result: "closed" },
+      { key: "shell:b", result: "in use now" },
+    ]);
+    expect(w.calls.seen).toEqual([old, old]);
+    expect(w.shells.map((s) => s.id)).toEqual(["b"]);
   });
 
   test("a shell typed into while it is being kept is in use now", async () => {
