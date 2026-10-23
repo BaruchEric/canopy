@@ -36,6 +36,14 @@ test.each([
 ])("a %s shell is never offered", (_n, over) => {
   expect(planSweep({ ...base, shells: [shell(over as Partial<ShellFacts>)] }, DEFAULT_SWEEP, now)).toEqual([]);
 });
+test("a shell running a quiet program is listed unticked, saying what runs", () => {
+  const [it] = planSweep({ ...base, shells: [shell({ command: "vim" })] }, DEFAULT_SWEEP, now);
+  expect(it).toMatchObject({ key: "shell:t1", closable: true, checked: false, auto: false, why: "running vim, no input or output for 30h" });
+});
+test.each(["zsh", "-zsh", "bash", "-bash", "sh", "fish", "dash", "ksh", "tcsh", "nu"])("a shell at its %s prompt is still ticked", (command) => {
+  const [it] = planSweep({ ...base, shells: [shell({ command })] }, DEFAULT_SWEEP, now);
+  expect(it).toMatchObject({ key: "shell:t1", checked: true, auto: true, why: "no input or output for 30h" });
+});
 test("an idle agent at its prompt goes with its shell", () => {
   expect(planSweep({ ...base, shells: [shell({ agent: { state: "idle", session: "s" } })] }, DEFAULT_SWEEP, now)).toHaveLength(1);
 });

@@ -248,6 +248,30 @@ describe("the sweep's end of a shell", () => {
     }
   }, 60_000);
 
+  test.if(tmux)("a shell running a quiet program is offered unticked, naming the program", async () => {
+    const id = "dddddddddddddddddddddddddddddd09";
+    // a program that sits quiet, as a dev server or an editor does
+    const bin = join(scratch, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, "devserver"), `#!${process.execPath}\nsetTimeout(() => {}, 300_000);\n`, { mode: 0o755 });
+    await shellWith(id, "marker-busy", join(bin, "devserver"));
+    const set = await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 1_000 } }) });
+    expect(set.status).toBe(200);
+    try {
+      let info: SweepInfo | null = null;
+      await until(async () => {
+        info = (await (await fetch(api("/api/sweep"))).json()) as SweepInfo;
+        return info.items.some((i) => i.key === `shell:${id}`);
+      }, "the busy shell to be offered");
+      const item = (info as SweepInfo | null)?.items.find((i) => i.key === `shell:${id}`);
+      expect(item).toMatchObject({ closable: true, checked: false, auto: false });
+      expect(item?.why).toMatch(/^running \S+, no input or output for /);
+    } finally {
+      await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
+      await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" });
+    }
+  }, 60_000);
+
   test.if(tmux)("a plain end during a keep-end waits for it, then forgets the record", async () => {
     const id = "dddddddddddddddddddddddddddddd02";
     await shellWith(id, "marker-race");

@@ -7,6 +7,7 @@
  */
 
 import { CRON_MAX, isCron, parseCron } from "./cron";
+import { isShellCommand } from "./shellname";
 import { SWEEP_KINDS } from "./types";
 import type { AgentCard, AgentState, Run, SweepItem, SweepKind, SweepSettings } from "./types";
 
@@ -103,6 +104,10 @@ export interface ShellFacts {
   lastOutput: number | null;
   /** the last keystroke from any device; in memory only */
   lastInput?: number;
+  /** the pane's foreground command, when it was read: a shell's own name at
+   *  its prompt, else the program running in it (a dev server, an editor,
+   *  ssh, a REPL), which may sit quiet for days while still in use */
+  command?: string;
   agent: { state: AgentState; session: string | null } | null;
 }
 
@@ -129,23 +134,29 @@ const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
  * The things idle past their kind's span, sorted by kind and then oldest
  * first. Shells with a name, a task, the ranger, a move under way, or an
  * agent that is working or waiting are never offered; an agent idle at its
- * prompt goes with its shell. Chats are listed always, and closable only
+ * prompt goes with its shell. A shell running some other program in the
+ * foreground is offered unticked and left out of the schedule's closes,
+ * with the program named. Chats are listed always, and closable only
  * when they are Claude's with a session to resume. Agents canopy did not
  * start are listed, never closable.
  */
 export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): SweepItem[] {
   const items: SweepItem[] = [];
-  const add = (kind: SweepKind, id: string, repoId: string | null, where: string, title: string, idleSince: number, why: (idle: number) => string, closable: boolean) => {
+  // `ask`: offered, but only by hand: never ticked, never closed unasked
+  const add = (kind: SweepKind, id: string, repoId: string | null, where: string, title: string, idleSince: number, why: (idle: number) => string, closable: boolean, ask = false) => {
     const idle = now - idleSince;
     if (idle < s.spans[kind]) return;
-    items.push({ key: `${kind}:${id}`, kind, id, repoId, where, title, idleSince, why: why(idle), closable, checked: closable && kind !== "pr", auto: s.auto.includes(kind) });
+    items.push({ key: `${kind}:${id}`, kind, id, repoId, where, title, idleSince, why: why(idle), closable, checked: closable && kind !== "pr" && !ask, auto: s.auto.includes(kind) && !ask });
   };
 
   for (const sh of inputs.shells ?? []) {
     if (sh.label || sh.task || sh.ranger || sh.moving) continue;
     if (sh.agent && sh.agent.state !== "idle") continue;
     const since = Math.max(inputs.serverStart, sh.lastOutput ?? sh.startedAt, sh.lastInput ?? 0);
-    add("shell", sh.id, sh.repoId, sh.repoId, sh.agent ? "shell with an idle agent" : "shell", since, (i) => `no input or output for ${ago(i)}`, true);
+    // a program in the foreground that is not an agent: quiet is not idle
+    const running = !sh.agent && sh.command !== undefined && !isShellCommand(sh.command) ? sh.command.trim() : null;
+    const title = sh.agent ? "shell with an idle agent" : "shell";
+    add("shell", sh.id, sh.repoId, sh.repoId, title, since, (i) => `${running ? `running ${running}, ` : ""}no input or output for ${ago(i)}`, true, running !== null);
   }
 
   for (const r of inputs.runs) {

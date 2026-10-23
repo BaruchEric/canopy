@@ -9,7 +9,8 @@
  */
 import { readdir, readFile, readlink } from "node:fs/promises";
 import { exec } from "./exec";
-import { agentIn, isShellCommand } from "./keep";
+import { agentIn } from "./keep";
+import { isShellCommand } from "./shellname";
 import type { PaneInfo } from "./tmux";
 import type { AgentKind } from "./types";
 

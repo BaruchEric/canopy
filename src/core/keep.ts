@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { continueArgv, resumeKindArgv, type AgentEnv } from "./harness";
 import { shellLine, shellQuote } from "./host";
 import { isSessionId } from "./sessions";
+import { isShellCommand } from "./shellname";
 import { configDir } from "./store";
 import { isTermId, termPlace } from "./term";
 import { cleanLabel, type AgentCard, type AgentKind, type AgentSettings, type KeptShell } from "./types";
@@ -40,14 +41,6 @@ export const KEEP_DAYS = 7;
 /** how long a shell the sweep ended is offered: longer, since nobody lost
  *  it by accident and nobody is told it went beyond the sweep's own log */
 export const SWEPT_DAYS = 14;
-
-const SHELL_COMMANDS = ["sh", "bash", "zsh", "fish", "dash", "ksh", "tcsh", "csh", "login"];
-
-/** whether a pane's command is a shell at its prompt, which runs no agent */
-export const isShellCommand = (command: string): boolean => {
-  const name = command.trim().toLowerCase().replace(/^-/, "");
-  return name === "" || SHELL_COMMANDS.includes(name);
-};
 
 /** The harness an argv is, off its program and, for an interpreter, its
  *  script: a bun- or npm-installed codex runs as `node …/@openai/codex/bin/

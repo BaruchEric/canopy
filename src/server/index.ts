@@ -828,14 +828,16 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Plan
       // No card names these (no broker, or the registry has not listed
       // yet), so whether an agent waits on a permission in one cannot be
       // read; one the pane shows an agent in counts as waiting, which keeps
-      // it, the safe side. A pane tmux will not describe is left out.
+      // it, the safe side. Any other pane's command goes to the planner,
+      // which tells a shell at its prompt from a program running quietly.
+      // A pane tmux will not describe is left out.
       const tmux = state.tmux;
       const probed = await Promise.all(
         shells.map(async (sh) => {
           if (sh.agent || sh.task || sh.ranger) return sh;
           const pane = await paneInfo(tmux, sh.id).catch(() => null);
           if (!pane) return null;
-          return (await paneAgent(pane)) ? { ...sh, agent: { state: "waiting" as const, session: null } } : sh;
+          return (await paneAgent(pane)) ? { ...sh, agent: { state: "waiting" as const, session: null } } : { ...sh, command: pane.command };
         }),
       );
       shells = probed.filter((sh): sh is ShellFacts => sh !== null);
