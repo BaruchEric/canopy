@@ -529,20 +529,157 @@ describe("the schedule", () => {
     expect(lastSweep(w)?.ask).toBeNull();
   });
 
-  test("a fire missed while down runs once at start", async () => {
+  test("a Mac asleep through a slot fires once on waking, with the sleep counted as idle", async () => {
     const w = world();
     on(w, { cron: "0 4 * * *" });
-    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
-    // two 4 am fires went by while the server was down
-    await writeLastFire(NOW - 2 * DAY);
+    let clock = NOW;
+    w.deps.now = () => clock;
+    // a live server: the shell went quiet an hour before the lid closed
+    w.shells = [shell({ id: "t1", lastOutput: NOW - H })];
+    await writeLastFire(NOW);
     const hub = new SweepHub(w.deps);
     await hub.start();
     hub.stop();
+    expect(await scheduled()).toEqual([]);
+    // asleep for 30 hours, past at least one 4 am slot; the first tick on waking fires
+    clock = NOW + 30 * H;
+    await hub.tick(clock);
+    expect(w.calls.endShell).toEqual(["t1"]);
     expect(await scheduled()).toHaveLength(1);
-    expect(w.calls.dismiss).toEqual(["d1"]);
+    expect(await readLastFire()).toBe(clock);
+    // the slots slept through fire once, not once each
+    clock += MIN;
+    await hub.tick(clock);
+    expect(await scheduled()).toHaveLength(1);
+  });
+
+  test("start arms the minute timer before its catch-up, and a stop during the catch-up leaves none", async () => {
+    const w = world();
+    on(w);
+    let release = (): void => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const load = w.deps.loadSettings;
+    w.deps.loadSettings = async () => {
+      await held;
+      return load ? load() : w.settings;
+    };
+    w.deps.timer = true;
+    const hub = new SweepHub(w.deps);
+    const started = hub.start();
+    await Bun.sleep(5);
+    // a catch-up that hangs (tmux not answering) does not keep the schedule off
+    expect(hub.armed).toBe(true);
+    hub.stop();
+    release();
+    await started;
+    expect(hub.armed).toBe(false);
+  });
+
+  test("a fire stops closing once the schedule is switched off mid-fire; the keys left get no outcome", async () => {
+    const w = world();
+    on(w);
+    w.shells = [shell({ id: "t1" }), shell({ id: "t2" })];
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    const end = w.deps.endShell;
+    w.deps.endShell = async (id, seen) => {
+      // Eric switches the schedule off while the first shell is being kept
+      w.settings = { ...w.settings, on: false };
+      return end(id, seen);
+    };
+    await writeLastFire(NOW - 2 * MIN);
+    await new SweepHub(w.deps).tick(NOW);
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.calls.dismiss).toEqual([]);
+    expect((await scheduled())[0]?.outcomes).toEqual([{ key: "shell:t1", result: "closed" }]);
+    expect(await readAsk()).toBeNull();
+  });
+
+  test("a kind taken out of auto mid-fire is not closed; it goes to the ask", async () => {
+    const w = world();
+    on(w);
+    w.shells = [shell({ id: "t1" })];
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    const end = w.deps.endShell;
+    w.deps.endShell = async (id, seen) => {
+      w.settings = { ...w.settings, auto: ["shell", "chat"] };
+      return end(id, seen);
+    };
+    await writeLastFire(NOW - 2 * MIN);
+    await new SweepHub(w.deps).tick(NOW);
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.calls.dismiss).toEqual([]);
+    expect((await scheduled())[0]?.outcomes).toEqual([{ key: "shell:t1", result: "closed" }]);
+    expect(keys(await readAsk())).toEqual(["run:d1"]);
+  });
+
+  test("a fire while tmux does not answer keeps the ask's shells", async () => {
+    const w = world();
+    on(w, { auto: [] });
+    w.shells = [shell({ id: "t1" })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
     await hub.tick(NOW);
-    expect(await scheduled()).toHaveLength(1);
-    expect(await readLastFire()).toBe(NOW);
+    expect(keys(await readAsk())).toEqual(["shell:t1"]);
+    w.tmuxDown = true;
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await hub.tick(NOW + 2 * MIN);
+    expect(keys(await readAsk())).toEqual(["shell:t1", "run:d1"]);
+    // and a close while it is down does not prune them either
+    await hub.close(["run:d1"], "eric");
+    expect(keys(await readAsk())).toEqual(["shell:t1"]);
+  });
+
+  test("a fire whose ask cannot be written still sends the event for its closes", async () => {
+    const w = world();
+    on(w, { auto: ["shell"] });
+    w.shells = [shell({ id: "t1" })];
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    // a directory where the ask file goes: its write fails
+    await mkdir(join(sweepDir(), "ask.json"), { recursive: true });
+    await writeLastFire(NOW - 2 * MIN);
+    const said = console.error;
+    console.error = () => {};
+    try {
+      await new SweepHub(w.deps).tick(NOW);
+    } finally {
+      console.error = said;
+    }
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(keys(lastSweep(w)?.items)).toEqual(["run:d1"]);
+  });
+
+  test("switching the schedule off clears the ask", async () => {
+    const w = world();
+    on(w, { auto: ["shell"] });
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(keys(await readAsk())).toEqual(["run:d1"]);
+    await hub.patch({ cron: "0 5 * * *" });
+    expect(keys(await readAsk())).toEqual(["run:d1"]);
+    await hub.patch({ on: false });
+    expect(await readAsk()).toBeNull();
+    expect(lastSweep(w)?.ask).toBeNull();
+  });
+
+  test("a close from the sheet drops what it closed from the ask, and the ask once none is left", async () => {
+    const w = world();
+    on(w, { auto: ["shell"] });
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY }), run({ id: "d2", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(keys(await readAsk())).toEqual(["run:d1", "run:d2"]);
+    await hub.close(["run:d1"], "eric");
+    expect(keys(await readAsk())).toEqual(["run:d2"]);
+    await hub.close(["run:d2"], "eric");
+    expect(await readAsk()).toBeNull();
+    // a run by the same id back later is not in an ask Eric thought was gone
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    expect((await hub.info()).ask).toBeNull();
   });
 
   test("a catch-up that throws at start is logged, not thrown, and the next tick still fires", async () => {

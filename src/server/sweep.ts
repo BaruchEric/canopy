@@ -10,9 +10,10 @@
  *
  *  The schedule: `tick` runs once a minute (from `start`, never under
  *  `bun test`) and fires when the cron's next time after the last fire has
- *  come, so a fire missed while the server was down runs once at start. A
- *  fire closes what it may close on its own and keeps the rest that is
- *  closable as the pending ask, which Eric answers or dismisses. */
+ *  come, so the slots a sleeping Mac missed fire once, within a minute of
+ *  waking. A fire closes what it may close on its own and keeps the rest a
+ *  close may take unticked (`mayClose`) as the pending ask, which Eric
+ *  answers or dismisses. */
 
 import { nextFire, parseCron } from "../core/cron";
 import { loadConfig, setSweep } from "../core/store";
@@ -43,6 +44,8 @@ export interface SweepDeps {
   /** the settings' read and write, in place of the config's; tests */
   loadSettings?: () => Promise<SweepSettings>;
   saveSettings?: (s: SweepSettings) => Promise<void>;
+  /** arms the minute timer under `bun test` too; tests of `start` */
+  timer?: boolean;
 }
 
 /** a refusal with the status its route answers */
@@ -81,6 +84,8 @@ export class SweepHub {
   private timer: ReturnType<typeof setInterval> | null = null;
   /** a tick under way, so a slow fire is never run twice over */
   private ticking = false;
+  /** set by `stop`, so a `start` whose catch-up outlives it stays stopped */
+  private stopped = false;
 
   constructor(private readonly deps: SweepDeps) {}
 
@@ -110,22 +115,33 @@ export class SweepHub {
     return items.filter((i) => !this.closed.has(i.key));
   }
 
-  /** Runs a fire missed while the server was down, then looks at the cron
-   *  once a minute; the timer stays off under `bun test`, whose tests call
-   *  `tick` themselves. */
+  /** Arms the minute timer, then runs a catch-up tick at once. The timer
+   *  goes first, so a catch-up that hangs (tmux not answering) never
+   *  leaves the schedule off until the next restart; `ticking` keeps the
+   *  two from overlapping. The timer stays off under `bun test`, whose
+   *  tests call `tick` themselves. */
   async start(): Promise<void> {
-    // a catch-up that fails is logged, and the timer still starts: one bad
-    // read at boot must not leave the schedule off until the next restart
+    this.stopped = false;
+    if (!this.timer && (process.env["NODE_ENV"] !== "test" || this.deps.timer)) {
+      this.timer = setInterval(() => {
+        this.tick(this.now()).catch((err) => console.error("canopy: sweep: the schedule:", errText(err)));
+      }, TICK_MS);
+    }
+    // a catch-up that fails is logged; the timer is already set
     await this.tick(this.now()).catch((err) => console.error("canopy: sweep: the schedule:", errText(err)));
-    if (process.env["NODE_ENV"] === "test" || this.timer) return;
-    this.timer = setInterval(() => {
-      this.tick(this.now()).catch((err) => console.error("canopy: sweep: the schedule:", errText(err)));
-    }, TICK_MS);
+    // a stop while the catch-up ran stays a stop
+    if (this.stopped) this.stop();
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /** whether the minute timer is set */
+  get armed(): boolean {
+    return this.timer !== null;
   }
 
   /**
@@ -160,25 +176,63 @@ export class SweepHub {
     }
   }
 
-  /** Closes what the schedule may close and holds the closable rest as the
-   *  ask, replacing any ask not yet answered. One log entry, even for a
-   *  fire that found nothing. */
+  /** Closes what the schedule may close and holds the rest a close may
+   *  take unticked as the ask, replacing any ask not yet answered. One log
+   *  entry, even for a fire that found nothing. */
   private fire(): Promise<void> {
     return this.queue(async () => {
       // read again on the queue: a close ahead of this fire may have taken
       // long enough for Eric to switch the schedule off or change its kinds
       const settings = await this.settings();
       if (!settings.on) return;
-      const items = this.plan(await this.deps.facts(), settings);
+      const facts = await this.deps.facts();
+      const items = this.plan(facts, settings);
       // a draft PR joins neither the close nor the ask once PRs are swept (Task 10)
       const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
-      // a busy shell is left for the sheet, out of the ask as well
-      const rest = items.filter((i) => mayClose(i) && !auto.includes(i.key));
-      if (auto.length > 0) await this.closeKeys(auto, "schedule");
-      else await this.log({ at: this.now(), by: "schedule", outcomes: [], items: [] });
-      await writeAsk(rest);
-      await this.publish();
+      try {
+        const outcomes = auto.length > 0 ? await this.closeKeys(auto, "schedule") : [];
+        if (auto.length === 0) await this.log({ at: this.now(), by: "schedule", outcomes: [], items: [] });
+        // switched off during the closes: the switch-off cleared the ask, and this fire writes none
+        if (!(await this.settings()).on) return;
+        // a busy shell is left for the sheet, out of the ask as well; a key
+        // the schedule skipped because its kind left auto mid-fire is asked about
+        const tried = new Set(outcomes.map((o) => o.key));
+        const rest = items.filter((i) => mayClose(i) && !tried.has(i.key));
+        // tmux not answering is no news about the shells: the ask keeps the ones it held
+        const kept = facts.shells === null ? ((await readAsk()) ?? []).filter((i) => i.kind === "shell") : [];
+        await this.keepAsk([...kept, ...rest]);
+      } finally {
+        await this.publish();
+      }
     });
+  }
+
+  /** writes the ask, logging a failure as the log's own write does, so the
+   *  event for closes already made still goes out */
+  private async keepAsk(items: SweepItem[] | null): Promise<void> {
+    try {
+      await writeAsk(items);
+    } catch (err) {
+      console.error("canopy: sweep: the ask could not be written:", errText(err));
+    }
+  }
+
+  /** Drops from the ask the keys the plan no longer has (closed, or gone),
+   *  and the ask itself once none is left, so a restored shell that goes
+   *  idle again under its old id is not in an ask Eric saw closed. A shell
+   *  key stays while tmux does not answer. On the queue, never from a GET,
+   *  so it cannot race a fire's write. */
+  private async pruneAsk(): Promise<void> {
+    try {
+      const ask = await readAsk();
+      if (!ask) return;
+      const facts = await this.deps.facts();
+      const items = this.plan(facts, await this.settings());
+      const left = ask.filter((a) => items.some((i) => i.key === a.key) || (facts.shells === null && a.kind === "shell"));
+      if (left.length < ask.length) await writeAsk(left);
+    } catch (err) {
+      console.error("canopy: sweep: the ask could not be pruned:", errText(err));
+    }
   }
 
   async info(): Promise<SweepInfo> {
@@ -213,7 +267,10 @@ export class SweepHub {
   close(keys: string[], by: "eric" | "schedule"): Promise<SweepOutcome[]> {
     return this.queue(async () => {
       const outcomes = await this.closeKeys(keys, by);
-      if (outcomes.length > 0) await this.publish();
+      if (outcomes.length > 0) {
+        await this.pruneAsk();
+        await this.publish();
+      }
       return outcomes;
     });
   }
@@ -222,14 +279,22 @@ export class SweepHub {
    *  queue. The schedule closes a key only when the fresh plan still lets
    *  it close on its own, and an answer to the ask (`asked`) only when the
    *  fresh plan lets an unticked close take it (`mayClose`): a shell that
-   *  has started a program since is "in use now" to both. */
+   *  has started a program since is "in use now" to both. The schedule
+   *  reads the settings again before each key: once the schedule is off
+   *  it stops, and a key whose kind has left the auto kinds is skipped;
+   *  either way such keys get no outcome, since nothing looked at them. */
   private async closeKeys(keys: string[], by: "eric" | "schedule", asked = false): Promise<SweepOutcome[]> {
     const wanted = [...new Set(keys)];
     if (wanted.length === 0) return [];
-    const settings = await this.settings();
+    let settings = await this.settings();
     const outcomes: SweepOutcome[] = [];
     const items: SweepItem[] = [];
     for (const key of wanted) {
+      if (by === "schedule") {
+        settings = await this.settings();
+        if (!settings.on) break;
+        if (!(settings.auto as readonly string[]).includes(key.slice(0, key.indexOf(":")))) continue;
+      }
       const facts = await this.deps.facts();
       const item = this.plan(facts, settings).find((i) => i.key === key);
       if (!item) {
@@ -351,6 +416,8 @@ export class SweepHub {
       if (next.on && (!cur.on || next.cron !== cur.cron)) await writeLastFire(this.now());
       if (this.deps.saveSettings) await this.deps.saveSettings(next);
       else await setSweep(next);
+      // a schedule switched off has no question pending
+      if (cur.on && !next.on) await writeAsk(null);
       await this.publish();
       return next;
     });
