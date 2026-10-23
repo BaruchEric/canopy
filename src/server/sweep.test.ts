@@ -8,9 +8,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SWEEP, type PlanInputs, type ShellFacts } from "../core/sweep";
-import { addSweptChat, readLog, readSweptChats, sweepDir } from "../core/sweepstore";
-import type { Run, ServerEvent, SweepInfo, SweepSettings, SweptChat } from "../core/types";
+import { DEFAULT_SWEEP, normalizeSweep, type PlanInputs, type ShellFacts } from "../core/sweep";
+import { addSweptChat, readAsk, readLastFire, readLog, readSweptChats, sweepDir, writeAsk, writeLastFire } from "../core/sweepstore";
+import type { AgentCard, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
 import { SweepHub, type SweepDeps } from "./sweep";
 
 const H = 3_600_000;
@@ -42,11 +42,36 @@ const run = (over: Partial<Run> = {}): Run => ({
   prompt: null,
   ...over,
 });
+const card = (over: Partial<AgentCard> = {}): AgentCard => ({
+  id: "claude:s1",
+  handle: "h",
+  node: "mac",
+  harness: "claude",
+  session: "s1",
+  origin: "elsewhere",
+  cwd: "/x",
+  repo: null,
+  branch: null,
+  model: null,
+  mode: null,
+  state: "idle",
+  waiting: null,
+  caps: [],
+  offers: [],
+  notifyIdle: false,
+  where: { os: "darwin", container: false, pid: 1, term: "kitty", canopy: null },
+  transcript: null,
+  startedAt: NOW - 30 * H,
+  seenAt: NOW - 25 * H,
+  endedAt: null,
+  ...over,
+});
 const idleChat = (id: string): Run => run({ id, chat: true, status: "idle", session: `sess-${id}`, steps: [{ id: "1", at: NOW - 13 * H, kind: "text" }] });
 
 interface Facts {
   shells: ShellFacts[];
   runs: Run[];
+  outside: AgentCard[];
   tmuxDown: boolean;
   /** a started chat's stop ends it only when its process exits, later */
   chatEndsLater: boolean;
@@ -62,6 +87,7 @@ function world(): Facts & { deps: SweepDeps } {
   const w: Facts = {
     shells: [],
     runs: [],
+    outside: [],
     tmuxDown: false,
     chatEndsLater: false,
     afterFacts: null,
@@ -77,7 +103,7 @@ function world(): Facts & { deps: SweepDeps } {
         shells: w.tmuxDown ? null : w.shells.map((s) => ({ ...s })),
         runs: w.runs.map((r) => ({ ...r })),
         heldRuns: new Set<string>(),
-        outside: [],
+        outside: w.outside.map((c) => ({ ...c })),
       };
       w.afterFacts?.();
       return read;
@@ -375,5 +401,223 @@ describe("the sweep hub", () => {
     const hub = new SweepHub(world().deps);
     const { request, url } = req("/api/sweeping");
     expect(await hub.handle(request, url)).toBeNull();
+  });
+});
+
+describe("the schedule", () => {
+  const MIN = 60_000;
+  const DAY = 24 * H;
+  /** the schedule on, firing every minute */
+  const on = (w: Facts, over: Partial<SweepSettings> = {}): void => {
+    w.settings = { ...w.settings, on: true, cron: "* * * * *", ...over };
+  };
+  const scheduled = async () => (await readLog()).filter((e) => e.by === "schedule");
+  const keys = (items: { key: string }[] | null | undefined): string[] | null => items?.map((i) => i.key) ?? null;
+  const lastSweep = (w: Facts): SweepInfo | undefined => w.events.filter((e): e is Extract<ServerEvent, { type: "sweep" }> => e.type === "sweep").at(-1)?.sweep;
+
+  test("off: a due cron does nothing", async () => {
+    const w = world();
+    w.settings.cron = "* * * * *";
+    w.shells = [shell()];
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * DAY);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(w.calls.endShell).toEqual([]);
+    expect(w.calls.dismiss).toEqual([]);
+    expect(await readLog()).toEqual([]);
+    expect(await readAsk()).toBeNull();
+    expect(await readLastFire()).toBe(NOW - 2 * DAY);
+    expect(w.events).toEqual([]);
+  });
+
+  test("a fire closes the auto kinds and holds the rest as the ask", async () => {
+    const w = world();
+    on(w);
+    // an idle shell, one running vim (offered unticked), an idle Claude
+    // chat, a finished run and an agent canopy did not start
+    w.shells = [shell({ id: "t1" }), shell({ id: "t2", command: "vim" })];
+    w.runs = [idleChat("c1"), run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    w.outside = [card()];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.calls.stopChat).toEqual(["c1"]);
+    expect(w.calls.dismiss).toEqual(["d1"]);
+    // the busy shell is asked about, never closed; the outside agent is in neither
+    expect(keys(await readAsk())).toEqual(["shell:t2"]);
+    const log = await scheduled();
+    expect(log).toHaveLength(1);
+    expect(log[0]?.outcomes).toEqual([
+      { key: "shell:t1", result: "closed" },
+      { key: "chat:c1", result: "closed" },
+      { key: "run:d1", result: "closed" },
+    ]);
+    expect(await readLastFire()).toBe(NOW);
+    expect(keys(lastSweep(w)?.ask)).toEqual(["shell:t2"]);
+    const info = await hub.info();
+    expect(keys(info.ask)).toEqual(["shell:t2"]);
+    expect(keys(info.items)).toEqual(["shell:t2", "outside:claude:s1"]);
+  });
+
+  test("a kind left out of auto goes to the ask, not the close", async () => {
+    const w = world();
+    on(w, { auto: ["shell"] });
+    w.shells = [shell({ id: "t1" })];
+    w.runs = [idleChat("c1"), run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * MIN);
+    await new SweepHub(w.deps).tick(NOW);
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.calls.stopChat).toEqual([]);
+    expect(w.calls.dismiss).toEqual([]);
+    expect(keys(await readAsk())).toEqual(["chat:c1", "run:d1"]);
+  });
+
+  test("a shell that starts a program after the fire's plan is left running", async () => {
+    const w = world();
+    on(w);
+    w.shells = [shell({ id: "t1" })];
+    // the fire planned from a quiet shell; by the recheck vim is up in it
+    w.afterFacts = () => {
+      w.afterFacts = null;
+      const sh = w.shells.find((s) => s.id === "t1");
+      if (sh) sh.command = "vim";
+    };
+    await writeLastFire(NOW - 2 * MIN);
+    await new SweepHub(w.deps).tick(NOW);
+    expect(w.calls.endShell).toEqual([]);
+    expect((await scheduled())[0]?.outcomes).toEqual([{ key: "shell:t1", result: "in use now" }]);
+  });
+
+  test("a newer fire replaces an unanswered ask", async () => {
+    const w = world();
+    on(w);
+    w.shells = [shell({ id: "t2", command: "vim" })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(keys(await readAsk())).toEqual(["shell:t2"]);
+    w.shells = [shell({ id: "t3", command: "htop" })];
+    await hub.tick(NOW + 2 * MIN);
+    expect(keys(await readAsk())).toEqual(["shell:t3"]);
+    expect(await scheduled()).toHaveLength(2);
+  });
+
+  test("a fire that finds nothing writes a log line and no ask", async () => {
+    const w = world();
+    on(w);
+    await writeAsk([{ key: "shell:old", kind: "shell", id: "old", repoId: "app", where: "app", title: "shell", idleSince: 1, why: "w", closable: true, checked: false, auto: false }]);
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(await scheduled()).toEqual([{ at: NOW, by: "schedule", outcomes: [], items: [] }]);
+    expect(await readAsk()).toBeNull();
+    expect(lastSweep(w)?.ask).toBeNull();
+  });
+
+  test("a fire missed while down runs once at start", async () => {
+    const w = world();
+    on(w, { cron: "0 4 * * *" });
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    // two 4 am fires went by while the server was down
+    await writeLastFire(NOW - 2 * DAY);
+    const hub = new SweepHub(w.deps);
+    await hub.start();
+    hub.stop();
+    expect(await scheduled()).toHaveLength(1);
+    expect(w.calls.dismiss).toEqual(["d1"]);
+    await hub.tick(NOW);
+    expect(await scheduled()).toHaveLength(1);
+    expect(await readLastFire()).toBe(NOW);
+  });
+
+  test("a bad cron in config never fires", async () => {
+    const w = world();
+    w.shells = [shell()];
+    await writeLastFire(NOW - 2 * DAY);
+    const hub = new SweepHub(w.deps);
+    // as the config reads it: a cron that does not parse turns the schedule off
+    w.settings = normalizeSweep({ on: true, cron: "61 * * * *" });
+    expect(w.settings.on).toBe(false);
+    await hub.tick(NOW);
+    // and one that reaches the hub on anyway
+    w.settings = { ...w.settings, on: true, cron: "61 * * * *" };
+    await hub.tick(NOW);
+    w.settings = { ...w.settings, cron: "0 0 31 2 *" };
+    await hub.tick(NOW);
+    expect(w.calls.endShell).toEqual([]);
+    expect(await readLog()).toEqual([]);
+    expect(await readLastFire()).toBe(NOW - 2 * DAY);
+  });
+
+  test("answering the ask closes those keys after a recheck", async () => {
+    const w = world();
+    on(w, { auto: ["shell"] });
+    w.shells = [shell({ id: "t1" }), shell({ id: "t2", command: "vim" })];
+    w.runs = [idleChat("c1")];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(keys(await readAsk())).toEqual(["shell:t2", "chat:c1"]);
+    // Eric is back at t2 before he answers
+    const t2 = w.shells.find((s) => s.id === "t2");
+    if (t2) t2.lastInput = NOW - 1_000;
+    const got = await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t2", "chat:c1"] } });
+    expect(got.status).toBe(200);
+    expect((got.body as { outcomes: SweepOutcome[] }).outcomes).toEqual([
+      { key: "shell:t2", result: "in use now" },
+      { key: "chat:c1", result: "closed" },
+    ]);
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.calls.stopChat).toEqual(["c1"]);
+    expect(await readAsk()).toBeNull();
+    expect((await hub.info()).ask).toBeNull();
+    expect(lastSweep(w)?.ask).toBeNull();
+    expect((await readLog()).at(-1)?.by).toBe("eric");
+  });
+
+  test("the ask's routes: only its own keys, a 404 with none, and a dismiss that closes nothing", async () => {
+    const w = world();
+    on(w);
+    w.shells = [shell({ id: "t1" }), shell({ id: "t2", command: "vim" })];
+    const hub = new SweepHub(w.deps);
+    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t2"] } })).status).toBe(404);
+    await writeLastFire(NOW - 2 * MIN);
+    await hub.tick(NOW);
+    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: "shell:t2" } })).status).toBe(400);
+    // t1 was the fire's to close, not the ask's
+    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t1"] } })).status).toBe(400);
+    const gone = await call(hub, "/api/sweep/ask", { method: "DELETE" });
+    expect(gone.status).toBe(200);
+    expect(await readAsk()).toBeNull();
+    expect(lastSweep(w)?.ask).toBeNull();
+    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.shells.map((s) => s.id)).toEqual(["t2"]);
+  });
+
+  test("turning the schedule on counts from then, not from an old fire", async () => {
+    const w = world();
+    w.settings.cron = "* * * * *";
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * DAY);
+    const hub = new SweepHub(w.deps);
+    await hub.patch({ on: true });
+    expect(await readLastFire()).toBe(NOW);
+    await hub.tick(NOW);
+    expect(w.calls.dismiss).toEqual([]);
+    // the next minute is due
+    await hub.tick(NOW + 2 * MIN);
+    expect(w.calls.dismiss).toEqual(["d1"]);
+  });
+
+  test("with no fire on record the first tick only starts the count", async () => {
+    const w = world();
+    on(w);
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(w.calls.dismiss).toEqual([]);
+    expect(await readLastFire()).toBe(NOW);
   });
 });

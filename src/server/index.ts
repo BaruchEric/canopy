@@ -5777,7 +5777,8 @@ export async function startServer(opts: {
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
-  void state.sweep.start().catch((err) => console.error("canopy: sweep", err));
+  // a test server never fires the schedule on whatever config it finds
+  if (process.env["NODE_ENV"] !== "test") void state.sweep.start().catch((err) => console.error("canopy: sweep", err));
   if (process.env["NODE_ENV"] !== "test") state.triggers.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket

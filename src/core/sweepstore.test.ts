@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SWEPT_DAYS } from "./keep";
-import { addSweptChat, appendLog, readLog, readSweptChats, sweepDir, takeSweptChat } from "./sweepstore";
-import type { SweepLogEntry, SweptChat } from "./types";
+import { addSweptChat, appendLog, readAsk, readLastFire, readLog, readSweptChats, sweepDir, takeSweptChat, writeAsk, writeLastFire } from "./sweepstore";
+import type { SweepItem, SweepLogEntry, SweptChat } from "./types";
 
 /* The sweep's small store: chats it stopped (so a resume can start from the
  * session) and a short log of its passes. */
@@ -91,4 +91,35 @@ test("a log entry without outcomes or items is dropped; a bad outcome or item in
   expect(await readLog()).toEqual([{ at: 4, by: "schedule", outcomes: [{ key: "shell:t", result: "closed" }], items: [item] } as SweepLogEntry]);
   await appendLog(entry(5));
   expect((await readLog()).map((e) => e.at)).toEqual([4, 5]);
+});
+
+const askItem = (id: string): SweepItem => ({ key: `shell:${id}`, kind: "shell", id, repoId: "r", where: "r", title: "shell", idleSince: 1, why: "running vim, no input or output for 30h", closable: true, checked: false, auto: false });
+
+test("the ask is stored, read back and cleared", async () => {
+  expect(await readAsk()).toBeNull();
+  await writeAsk([askItem("a"), askItem("b")]);
+  expect(await readAsk()).toEqual([askItem("a"), askItem("b")]);
+  await writeAsk(null);
+  expect(await readAsk()).toBeNull();
+});
+
+test("a malformed ask entry is dropped; an ask with none left, or not a list, reads as none", async () => {
+  await put("ask.json", [null, { key: "x" }, { ...askItem("bad"), closable: "yes" }, askItem("ok")]);
+  expect(await readAsk()).toEqual([askItem("ok")]);
+  await put("ask.json", [null, 3]);
+  expect(await readAsk()).toBeNull();
+  await put("ask.json", { key: "shell:a" });
+  expect(await readAsk()).toBeNull();
+  await put("ask.json", "not json");
+  expect(await readAsk()).toBeNull();
+});
+
+test("the last fire is stored and read back; a state file that does not read has none", async () => {
+  expect(await readLastFire()).toBeNull();
+  await writeLastFire(1234);
+  expect(await readLastFire()).toBe(1234);
+  for (const bad of [null, [], { lastFire: "soon" }, { lastFire: Number.NaN }, "{"]) {
+    await put("state.json", bad === null ? "null" : bad);
+    expect(await readLastFire()).toBeNull();
+  }
 });

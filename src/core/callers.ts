@@ -85,7 +85,7 @@ const RULES: readonly Rule[] = [
   { methods: ["PUT"], paths: ["guards"], right: "admin" },
   // the sweep's reads too: its plan names every shell and chat here, and an
   // agent in a shell (which holds operate) must never close the rest
-  { methods: ["GET", "POST"], paths: ["sweep", "sweep/*"], right: "admin" },
+  { methods: ["GET", "POST", "DELETE"], paths: ["sweep", "sweep/*"], right: "admin" },
   {
     methods: POST,
     paths: ["repos/archive", "repos/open", "repos/openfile", "repos/launch", "repos/halt", "repos/install", "repos/uninstall", "repos/build", "repos/launcher"],

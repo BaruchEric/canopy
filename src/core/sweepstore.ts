@@ -5,7 +5,8 @@ import { configDir } from "./store";
 import { isHarness, SWEEP_KINDS, type SweepItem, type SweepLogEntry, type SweepOutcome, type SweptChat } from "./types";
 
 /* What the sweep keeps on disk: the chats it stopped, so a resume can start
- * from their session, and a short log of its passes. */
+ * from their session, a short log of its passes, the scheduled fire's
+ * pending ask and when the schedule last fired. */
 
 const DAY = 24 * 60 * 60 * 1000;
 /** passes the log remembers */
@@ -16,16 +17,20 @@ export const sweepDir = (): string => join(configDir(), "sweep");
 /** tells one write's temporary file from another's in the same process */
 let writes = 0;
 
+/** a file's JSON, or undefined when it is missing or does not parse */
+async function readJson(name: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(join(sweepDir(), name), "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
 /** A list file, each entry through `parse`: an entry that does not read
  *  (a hand edit, a file from another version) is left out rather than
  *  failing every route that reads the list. */
 async function readList<T>(name: string, parse: (v: unknown) => T | null): Promise<T[]> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(join(sweepDir(), name), "utf8"));
-  } catch {
-    return [];
-  }
+  const parsed = await readJson(name);
   return Array.isArray(parsed) ? each(parsed, parse) : [];
 }
 
@@ -84,11 +89,11 @@ function parseEntry(v: unknown): SweepLogEntry | null {
 
 // Write-then-rename, as the config does: a crash mid-write leaves the old
 // file whole.
-async function writeList(name: string, list: unknown[]): Promise<void> {
+async function writeJson(name: string, data: unknown): Promise<void> {
   await mkdir(sweepDir(), { recursive: true });
   const file = join(sweepDir(), name);
   const tmp = `${file}.tmp-${process.pid}-${++writes}`;
-  await writeFile(tmp, JSON.stringify(list, null, 2) + "\n");
+  await writeFile(tmp, JSON.stringify(data, null, 2) + "\n");
   await rename(tmp, file);
 }
 
@@ -110,7 +115,7 @@ export async function readSweptChats(): Promise<SweptChat[]> {
 export function addSweptChat(c: SweptChat): Promise<void> {
   return locked(async () => {
     const rest = (await readSweptChats()).filter((x) => x.runId !== c.runId);
-    await writeList("chats.json", [...rest, c]);
+    await writeJson("chats.json", [...rest, c]);
   });
 }
 
@@ -120,7 +125,7 @@ export function takeSweptChat(runId: string): Promise<SweptChat | null> {
     const all = await readSweptChats();
     const hit = all.find((x) => x.runId === runId);
     if (!hit) return null;
-    await writeList("chats.json", all.filter((x) => x.runId !== runId));
+    await writeJson("chats.json", all.filter((x) => x.runId !== runId));
     return hit;
   });
 }
@@ -128,10 +133,34 @@ export function takeSweptChat(runId: string): Promise<SweptChat | null> {
 export function appendLog(e: SweepLogEntry): Promise<void> {
   return locked(async () => {
     const log = await readLog();
-    await writeList("log.json", [...log, e].slice(-LOG_KEEP));
+    await writeJson("log.json", [...log, e].slice(-LOG_KEEP));
   });
 }
 
 export function readLog(): Promise<SweepLogEntry[]> {
   return readList("log.json", parseEntry);
+}
+
+/** The scheduled fire's pending ask: what it found closable and left for
+ *  Eric. Null when there is none, including a file whose entries all fail
+ *  to read. */
+export async function readAsk(): Promise<SweepItem[] | null> {
+  const items = await readList("ask.json", parseItem);
+  return items.length > 0 ? items : null;
+}
+
+/** Replaces the ask; null (or an empty list) clears it. */
+export function writeAsk(items: SweepItem[] | null): Promise<void> {
+  return locked(() => writeJson("ask.json", items && items.length > 0 ? items : null));
+}
+
+/** When the schedule last fired (unix ms), or null when it never has or
+ *  the state file does not read. */
+export async function readLastFire(): Promise<number | null> {
+  const state = await readJson("state.json");
+  return isObj(state) && isTime(state["lastFire"]) ? state["lastFire"] : null;
+}
+
+export function writeLastFire(at: number): Promise<void> {
+  return locked(() => writeJson("state.json", { lastFire: at }));
 }

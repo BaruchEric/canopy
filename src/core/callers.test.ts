@@ -140,8 +140,9 @@ describe("needs", () => {
   test("sweep routes need admin", () => {
     // reads too: the plan names every shell and chat on the backend
     for (const m of ["GET", "POST"]) {
-      for (const p of ["/api/sweep", "/api/sweep/", "/api/sweep/settings", "/api/sweep/resume"]) expect([m, p, needs(m, p)]).toEqual([m, p, "admin"]);
+      for (const p of ["/api/sweep", "/api/sweep/", "/api/sweep/settings", "/api/sweep/resume", "/api/sweep/ask"]) expect([m, p, needs(m, p)]).toEqual([m, p, "admin"]);
     }
+    expect(needs("DELETE", "/api/sweep/ask")).toBe("admin");
     expect(allows("shell", needs("GET", "/api/sweep"))).toBe(false);
     expect(allows("shell", needs("POST", "/api/sweep"))).toBe(false);
     expect(allows("ranger", needs("POST", "/api/sweep"))).toBe(false);

@@ -6,12 +6,19 @@
  *  Closes run one at a time through one queue, and each item is planned
  *  again from fresh facts just before it is closed, so a shell typed into
  *  since the preview is left alone ("in use now") and a second device
- *  pressing close on the same items finds them "gone". */
+ *  pressing close on the same items finds them "gone".
+ *
+ *  The schedule: `tick` runs once a minute (from `start`, never under
+ *  `bun test`) and fires when the cron's next time after the last fire has
+ *  come, so a fire missed while the server was down runs once at start. A
+ *  fire closes what it may close on its own and keeps the rest that is
+ *  closable as the pending ask, which Eric answers or dismisses. */
 
+import { nextFire, parseCron } from "../core/cron";
 import { loadConfig, setSweep } from "../core/store";
 import { patchSweep, planSweep, type PlanInputs } from "../core/sweep";
-import { addSweptChat, appendLog, readLog, readSweptChats, takeSweptChat } from "../core/sweepstore";
-import { SWEEP_KINDS, type KeptShell, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
+import { addSweptChat, appendLog, readAsk, readLastFire, readLog, readSweptChats, takeSweptChat, writeAsk, writeLastFire } from "../core/sweepstore";
+import { SWEEP_KINDS, type KeptShell, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
 
 export interface SweepDeps {
   broadcast(ev: ServerEvent): void;
@@ -54,6 +61,14 @@ const errText = (err: unknown): string => String(err instanceof Error ? err.mess
 
 const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
 
+/** how often the schedule looks at its cron */
+const TICK_MS = 60_000;
+
+/** Whether the schedule may close an item with no one looking: its kind is
+ *  one Eric let close on its own, and the plan ticks it and may close it.
+ *  A shell running a program in the foreground is never one. */
+const autoCloses = (item: SweepItem, settings: SweepSettings): boolean => settings.auto.includes(item.kind) && item.auto && item.checked && item.closable;
+
 export class SweepHub {
   /** closes and resumes, one at a time */
   private serial: Promise<unknown> = Promise.resolve();
@@ -62,6 +77,9 @@ export class SweepHub {
   /** keys this hub closed that the facts still show: a chat's stop ends it
    *  only once its process exits, and until then it still reads as idle */
   private closed = new Set<string>();
+  private timer: ReturnType<typeof setInterval> | null = null;
+  /** a tick under way, so a slow fire is never run twice over */
+  private ticking = false;
 
   constructor(private readonly deps: SweepDeps) {}
 
@@ -91,19 +109,78 @@ export class SweepHub {
     return items.filter((i) => !this.closed.has(i.key));
   }
 
-  /** Nothing runs on its own yet; the routes are the whole hub. */
-  async start(): Promise<void> {}
+  /** Runs a fire missed while the server was down, then looks at the cron
+   *  once a minute; the timer stays off under `bun test`, whose tests call
+   *  `tick` themselves. */
+  async start(): Promise<void> {
+    await this.tick(this.now());
+    if (process.env["NODE_ENV"] === "test" || this.timer) return;
+    this.timer = setInterval(() => {
+      this.tick(this.now()).catch((err) => console.error("canopy: sweep: the schedule:", errText(err)));
+    }, TICK_MS);
+  }
 
-  stop(): void {}
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+  }
+
+  /**
+   * Fires the schedule when it is on, its cron reads and the cron's next
+   * time after the last fire has come. Only one fire for any number of
+   * missed times. With no fire on record the count starts now. The fire's
+   * time is written before it runs, so a crash in the middle never fires
+   * it again.
+   */
+  async tick(now: number): Promise<void> {
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      const settings = await this.settings();
+      if (!settings.on) return;
+      const cron = parseCron(settings.cron);
+      if ("error" in cron) return;
+      const last = await readLastFire();
+      if (last === null) {
+        await writeLastFire(now);
+        return;
+      }
+      const due = nextFire(cron, last);
+      if (due === null || due > now) return;
+      await writeLastFire(now);
+      await this.fire(settings);
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  /** Closes what the schedule may close and holds the closable rest as the
+   *  ask, replacing any ask not yet answered. One log entry, even for a
+   *  fire that found nothing. */
+  private fire(settings: SweepSettings): Promise<void> {
+    return this.queue(async () => {
+      const items = this.plan(await this.deps.facts(), settings);
+      // a draft PR joins neither the close nor the ask once PRs are swept (Task 10)
+      const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
+      const rest = items.filter((i) => i.closable && !auto.includes(i.key));
+      if (auto.length > 0) await this.closeKeys(auto, "schedule");
+      else await this.log({ at: this.now(), by: "schedule", outcomes: [], items: [] });
+      await writeAsk(rest);
+      await this.publish();
+    });
+  }
 
   async info(): Promise<SweepInfo> {
-    const [facts, settings, log, shells, chats] = await Promise.all([this.deps.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats()]);
+    const [facts, settings, log, shells, chats, ask] = await Promise.all([this.deps.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
+    const items = this.plan(facts, settings);
+    // what the ask held that has since closed or come back into use drops out of it
+    const still = ask?.filter((a) => items.some((i) => i.key === a.key)) ?? [];
     return {
-      items: this.plan(facts, settings),
+      items,
       settings,
       lastRun: log.at(-1) ?? null,
       swept: { shells, chats },
-      ask: null,
+      ask: still.length > 0 ? still : null,
     };
   }
 
@@ -123,38 +200,79 @@ export class SweepHub {
    */
   close(keys: string[], by: "eric" | "schedule"): Promise<SweepOutcome[]> {
     return this.queue(async () => {
-      const wanted = [...new Set(keys)];
-      if (wanted.length === 0) return [];
-      const settings = await this.settings();
-      const outcomes: SweepOutcome[] = [];
-      const items: SweepItem[] = [];
-      for (const key of wanted) {
-        const facts = await this.deps.facts();
-        const item = this.plan(facts, settings).find((i) => i.key === key);
-        if (!item) {
-          outcomes.push(this.closed.has(key) ? { key, result: "gone" } : missing(key, facts));
-          continue;
-        }
-        items.push(item);
-        if (!item.closable) {
-          outcomes.push({ key, result: "failed", why: "it is listed only; the sweep does not close it" });
-          continue;
-        }
-        try {
-          const out = await this.closeOne(item, facts);
-          if (out.result === "closed") this.closed.add(key);
-          outcomes.push(out);
-        } catch (err) {
-          outcomes.push({ key, result: "failed", why: errText(err) });
-        }
+      const outcomes = await this.closeKeys(keys, by);
+      if (outcomes.length > 0) await this.publish();
+      return outcomes;
+    });
+  }
+
+  /** `close` without the queue or the event, for callers already on the
+   *  queue. The schedule closes a key only when the fresh plan still lets
+   *  it close on its own: a shell that has started a program since is
+   *  "in use now". */
+  private async closeKeys(keys: string[], by: "eric" | "schedule"): Promise<SweepOutcome[]> {
+    const wanted = [...new Set(keys)];
+    if (wanted.length === 0) return [];
+    const settings = await this.settings();
+    const outcomes: SweepOutcome[] = [];
+    const items: SweepItem[] = [];
+    for (const key of wanted) {
+      const facts = await this.deps.facts();
+      const item = this.plan(facts, settings).find((i) => i.key === key);
+      if (!item) {
+        outcomes.push(this.closed.has(key) ? { key, result: "gone" } : missing(key, facts));
+        continue;
+      }
+      items.push(item);
+      if (!item.closable) {
+        outcomes.push({ key, result: "failed", why: "it is listed only; the sweep does not close it" });
+        continue;
+      }
+      if (by === "schedule" && !autoCloses(item, settings)) {
+        outcomes.push({ key, result: "in use now" });
+        continue;
       }
       try {
-        await appendLog({ at: this.now(), by, outcomes, items });
+        const out = await this.closeOne(item, facts);
+        if (out.result === "closed") this.closed.add(key);
+        outcomes.push(out);
       } catch (err) {
-        console.error("canopy: sweep: the log could not be written:", errText(err));
+        outcomes.push({ key, result: "failed", why: errText(err) });
       }
+    }
+    await this.log({ at: this.now(), by, outcomes, items });
+    return outcomes;
+  }
+
+  private async log(entry: SweepLogEntry): Promise<void> {
+    try {
+      await appendLog(entry);
+    } catch (err) {
+      console.error("canopy: sweep: the log could not be written:", errText(err));
+    }
+  }
+
+  /** Answers the ask: closes those of its keys named, each after a recheck
+   *  as any close, and clears it. 404 with no ask, 400 for a key it does
+   *  not hold. */
+  answer(keys: string[]): Promise<SweepOutcome[]> {
+    return this.queue(async () => {
+      const ask = await readAsk();
+      if (!ask) throw new SweepError(404, "there is no pending ask");
+      const stray = keys.find((k) => !ask.some((i) => i.key === k));
+      if (stray !== undefined) throw new SweepError(400, `${stray} is not in the ask`);
+      await writeAsk(null);
+      const outcomes = await this.closeKeys(keys, "eric");
       await this.publish();
       return outcomes;
+    });
+  }
+
+  /** Drops the ask, closing nothing. */
+  dismiss(): Promise<void> {
+    return this.queue(async () => {
+      await writeAsk(null);
+      await this.publish();
     });
   }
 
@@ -211,8 +329,13 @@ export class SweepHub {
   /** applies a settings change through patchSweep; its refusal is a 400 */
   patch(body: unknown): Promise<SweepSettings> {
     const run = this.patching.then(async () => {
-      const next = patchSweep(await this.settings(), body);
+      const cur = await this.settings();
+      const next = patchSweep(cur, body);
       if (typeof next === "string") throw new SweepError(400, next);
+      // a schedule turned on or moved counts from now, so an old last fire
+      // does not set it off the minute Eric touches it; written first, so a
+      // tick between the two writes never sees the new setting with the old fire
+      if (next.on && (!cur.on || next.cron !== cur.cron)) await writeLastFire(this.now());
       if (this.deps.saveSettings) await this.deps.saveSettings(next);
       else await setSweep(next);
       await this.publish();
@@ -236,6 +359,16 @@ export class SweepHub {
         const keys = isRecord(b) ? b["keys"] : undefined;
         if (!Array.isArray(keys) || !keys.every((k): k is string => typeof k === "string")) return json({ error: "keys is a list of item keys" }, 400);
         return json({ outcomes: await this.close(keys, "eric") });
+      }
+      if (path === "/api/sweep/ask" && method === "POST") {
+        const b = await body();
+        const keys = isRecord(b) ? b["keys"] : undefined;
+        if (!Array.isArray(keys) || !keys.every((k): k is string => typeof k === "string")) return json({ error: "keys is a list of item keys" }, 400);
+        return json({ outcomes: await this.answer(keys) });
+      }
+      if (path === "/api/sweep/ask" && method === "DELETE") {
+        await this.dismiss();
+        return json({ ok: true });
       }
       if (path === "/api/sweep/resume" && method === "POST") {
         const b = await body();
