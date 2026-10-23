@@ -33,8 +33,6 @@ export interface SweepDeps {
   /** the swept shells on offer to restore */
   keptSwept(): Promise<KeptShell[]>;
   now?: () => number;
-  /** waits between looks at a stopping chat; tests */
-  sleep?: (ms: number) => Promise<void>;
   /** the settings' read and write, in place of the config's; tests */
   loadSettings?: () => Promise<SweepSettings>;
   saveSettings?: (s: SweepSettings) => Promise<void>;
@@ -55,10 +53,6 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
 const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
-/** how long a resume waits for the chat the sweep stopped to end, and how
- *  often it looks: a stopped chat exits once its hooks are done */
-const RESUME_WAIT = 30_000;
-const RESUME_LOOK = 250;
 
 export class SweepHub {
   /** closes and resumes, one at a time */
@@ -207,27 +201,11 @@ export class SweepHub {
     return this.queue(async () => {
       const rec = (await readSweptChats()).find((c) => c.runId === runId);
       if (!rec) throw new SweepError(404, "no swept chat by that id");
-      // Until the stopped chat exits it holds the repo, and a second
-      // process on its session would run beside it.
-      await this.stopped(runId);
       const run = await this.deps.startChat(rec);
       await takeSweptChat(runId);
       await this.publish();
       return run;
     });
-  }
-
-  /** waits for a run the sweep stopped to end; 409 when it has not ended
-   *  after RESUME_WAIT */
-  private async stopped(runId: string): Promise<void> {
-    const sleep = this.deps.sleep ?? Bun.sleep;
-    const until = this.now() + RESUME_WAIT;
-    for (;;) {
-      const status = this.deps.runStatus(runId);
-      if (status === undefined || ENDED.has(status)) return;
-      if (this.now() >= until) throw new SweepError(409, "the chat is still stopping; try again in a moment");
-      await sleep(RESUME_LOOK);
-    }
   }
 
   /** applies a settings change through patchSweep; its refusal is a 400 */

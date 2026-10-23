@@ -215,11 +215,13 @@ export class Runner {
 
   /** The run going in the repo's checkout. A branch run works in its own
    *  worktree, shares nothing with the checkout, and is not counted; nor is
-   *  a coordinator, which has no checkout at all. */
+   *  a coordinator, which has no checkout at all; nor a chat ended between
+   *  turns, which takes no more turns and may be a long while exiting (its
+   *  async hooks run first). */
   activeFor(repoId: string): Run | undefined {
     for (const l of this.live.values()) {
       const r = l.ctx.run;
-      if (r.repoId === repoId && !r.branch && !isCoordinate(r) && isRunActive(r)) return r;
+      if (r.repoId === repoId && !r.branch && !isCoordinate(r) && !l.ctx.ending && isRunActive(r)) return r;
     }
     return undefined;
   }

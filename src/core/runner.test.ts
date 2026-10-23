@@ -122,3 +122,88 @@ describe("a run asked two things at once", () => {
     }
   }, 30_000);
 });
+
+/* A chat whose process lingers after its stdin closes, as one does while
+ * an async hook (tailchan's --wake waiter) runs: it answers each message,
+ * and exits a while after the end. */
+const LINGERING_CHAT = `
+const out = (o) => process.stdout.write(JSON.stringify(o) + "\\n");
+const dec = new TextDecoder();
+let buf = "";
+setTimeout(() => process.exit(3), 8000);
+for await (const chunk of Bun.stdin.stream()) {
+  buf += dec.decode(chunk, { stream: true });
+  let i;
+  while ((i = buf.indexOf("\\n")) >= 0) {
+    const m = JSON.parse(buf.slice(0, i));
+    buf = buf.slice(i + 1);
+    if (m.type === "user") out({ type: "result", subtype: "success", is_error: false, result: "ok", num_turns: 1, total_cost_usd: 0, duration_ms: 1, session_id: "s-linger" });
+  }
+}
+await Bun.sleep(1500);
+process.exit(0);
+`;
+
+const ENDED_CHAT_HARNESS = (root: string) => `
+import { Runner, claudeBinary } from ${JSON.stringify(join(root, "src/core/runner.ts"))};
+import { ACTIONS } from ${JSON.stringify(join(root, "src/core/actions.ts"))};
+import { DEFAULT_AGENT } from ${JSON.stringify(join(root, "src/core/types.ts"))};
+if (claudeBinary() !== process.env.FAKE_CLAUDE) {
+  console.log(JSON.stringify({ abort: claudeBinary() }));
+  process.exit(1);
+}
+const runner = new Runner({ onChange: () => {}, onGone: () => {} });
+const repo = { id: "fx", name: "fx", path: process.env.FAKE_REPO, status: null };
+const until = async (id, pred) => {
+  for (let i = 0; i < 100; i++) {
+    const r = runner.get(id);
+    if (pred(r)) return r;
+    await Bun.sleep(50);
+  }
+  return runner.get(id);
+};
+const first = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT);
+runner.say(first.id, "hi");
+await until(first.id, (r) => r.status === "idle" && r.steps.length > 0);
+runner.stop(first.id);
+const lingering = runner.get(first.id).status;
+const holder = runner.activeFor(repo.id)?.id ?? null;
+let second = null;
+try {
+  second = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT).id;
+} catch (err) {
+  second = "refused: " + err.message;
+}
+const end = await until(first.id, (r) => r.status !== "idle");
+console.log(JSON.stringify({ lingering, holder, second, firstEnd: end.status }));
+process.exit(0);
+`;
+
+describe("a chat ended between turns", () => {
+  test("frees its repo at once, while its process still runs its exit hooks", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-runner-"));
+    try {
+      const bin = join(dir, "bin");
+      await Bun.$`mkdir -p ${bin} ${join(dir, "repo")}`.quiet();
+      const fake = join(bin, "claude");
+      await writeFile(fake, `#!${process.execPath}\n${LINGERING_CHAT}`);
+      await chmod(fake, 0o755);
+      await writeFile(join(dir, "harness.ts"), ENDED_CHAT_HARNESS(join(import.meta.dir, "../..")));
+      const proc = Bun.spawn([process.execPath, join(dir, "harness.ts")], {
+        env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}`, FAKE_CLAUDE: fake, FAKE_REPO: join(dir, "repo") },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+      const result = JSON.parse(out.trim().split("\n").at(-1) ?? "{}") as { abort?: string; lingering?: string; holder?: string | null; second?: string; firstEnd?: string };
+      expect(result.abort).toBeUndefined();
+      // still exiting, so still shown as a run, but no longer the repo's
+      expect(result.lingering).toBe("idle");
+      expect(result.holder).toBeNull();
+      expect(result.second).not.toStartWith("refused");
+      expect(result.firstEnd).toBe("done");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
