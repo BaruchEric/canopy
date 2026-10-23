@@ -26,6 +26,15 @@ export function defaultPicks(items: readonly SweepItem[]): Set<string> {
   return new Set(items.filter((i) => i.checked && i.closable).map((i) => i.key));
 }
 
+/** What a close picked is no longer picked once the close is back: the
+ *  picks as they stand (the defaults over `items` when none were changed)
+ *  less the keys it sent, so a second close does not count them again. */
+export function dropPicks(picks: ReadonlySet<string> | null, items: readonly SweepItem[], sent: readonly string[]): Set<string> {
+  const next = new Set(picks ?? defaultPicks(items));
+  for (const k of sent) next.delete(k);
+  return next;
+}
+
 /** A log entry's outcomes, read as data from a file a hand may have
  *  edited: an entry with no list has none, and an outcome with no key is
  *  left out. */

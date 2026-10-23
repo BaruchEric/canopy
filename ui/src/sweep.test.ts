@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { defaultPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, sweepSummary } from "./sweep";
+import { defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, sweepSummary } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -150,5 +150,16 @@ describe("a log entry from a broken log", () => {
 
   test("endedCards finds nothing in it", () => {
     expect([...endedCards(broken, [])]).toEqual([]);
+  });
+});
+
+describe("dropPicks", () => {
+  test("what a close sent is no longer picked; the rest stays as it was", () => {
+    expect([...dropPicks(new Set(["shell:a", "shell:b", "run:c"]), [], ["shell:a", "run:c"])]).toEqual(["shell:b"]);
+  });
+
+  test("with the defaults still in force, they are what it drops from", () => {
+    const items = [item("shell:a"), item("shell:b"), item("chat:c", { checked: false })];
+    expect([...dropPicks(null, items, ["shell:a"])]).toEqual(["shell:b"]);
   });
 });
