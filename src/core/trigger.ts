@@ -1,15 +1,18 @@
-/** Triggers: an outside event (a Sentry issue) starts a workflow on a branch
- *  run of its own, with nobody typing. The rules, the event records, the
- *  Sentry payload reader, dedupe, and the event's state read off its run and
- *  its PR. Browser-safe and pure; the hub in server/triggers.ts keeps the
- *  records and starts the runs. */
+/** Triggers: an outside event (a Sentry issue, a labeled Linear issue)
+ *  starts a workflow on a branch run of its own, with nobody typing. The
+ *  rules, the event records, the Sentry and Linear payload readers, dedupe,
+ *  and the event's state read off its run and its PR. Browser-safe and pure;
+ *  the hub in server/triggers.ts keeps the records and starts the runs. */
 
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { fence } from "./pr";
 import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
 
-export const TRIGGER_SOURCES = ["sentry"] as const;
+export const TRIGGER_SOURCES = ["sentry", "linear"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
+
+/** The service's name as the page and the run's note say it. */
+export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear" };
 
 /** One line of `<config dir>/triggers.json`: where an event comes from,
  *  which repo it is about and which workflow fixes it. Secrets are named by
@@ -22,21 +25,25 @@ export interface TriggerRule {
   repo: string;
   /** a one-step workflow, run on a branch that opens a PR */
   workflow: string;
-  /** the env var holding the Sentry integration's client secret, which signs
-   *  each hook; it starts with `CANOPY_TRIGGER_`, which the server takes out of
-   *  its env at start */
+  /** the env var holding the secret that signs each hook (the Sentry
+   *  integration's client secret, the Linear webhook's signing secret); it
+   *  starts with `CANOPY_TRIGGER_`, which the server takes out of its env at start */
   secretEnv: string;
-  /** the Sentry project slugs this rule takes; empty takes every one */
+  /** the Sentry project slugs, or the Linear team keys, this rule takes; empty takes every one */
   projects: string[];
-  /** the levels this rule takes */
+  /** the Sentry levels this rule takes; a Linear rule takes none, and its issues carry none */
   levels: string[];
+  /** Linear: the labels, by name or id, whose adding starts work */
+  labels: string[];
   /** an event whose title holds one of these is recorded as ignored */
   ignore: string[];
-  /** the env var holding a Sentry token that may resolve issues; unset leaves them open */
+  /** the env var holding a token that writes back: a Sentry token resolves
+   *  the issue on merge, a Linear API key comments the PR's link and moves the
+   *  issue to done; unset leaves the issue as it is */
   tokenEnv?: string;
   /** the Sentry organisation slug, for the resolve call */
   org?: string;
-  /** Sentry's address, for the resolve call */
+  /** the service's API address, for the calls that write back */
   api: string;
 }
 
@@ -79,9 +86,12 @@ export interface TriggerEvent {
   id: string;
   rule: string;
   source: TriggerSource | "manual";
+  /** the rule's service, so a test fire still names it; absent on an event
+   *  written while Sentry was the only one */
+  service?: TriggerSource;
   /** the outside issue's id: one event, so one PR, per issue */
   key: string;
-  /** Sentry's short id, PROJECT-1A */
+  /** the id people read: Sentry's PROJECT-1A, Linear's ENG-123 */
   short?: string;
   title: string;
   culprit?: string;
@@ -112,6 +122,8 @@ export interface TriggerEvent {
   pr?: { number: number; url: string };
   /** set once the merge marked the issue resolved where it came from, or why that failed */
   resolved?: { at: number } | { error: string };
+  /** Linear: set once the PR's link was commented on the issue, or why that failed */
+  linked?: { at: number } | { error: string };
   endedAt?: number;
 }
 
@@ -140,16 +152,29 @@ export interface Incoming {
   level?: string;
   project?: string;
   link?: string;
-  /** the exception's type and message, the file and function Sentry names */
+  /** the exception's type and message, the file and function Sentry names;
+   *  a Linear issue's state, priority and labels */
   detail: string[];
   /** in-app stack frames, innermost last */
   frames: string[];
+  /** a Linear issue's description, cut to `MAX_DESCRIPTION` */
+  description?: string;
+  /** a Linear issue's state type: triage, backlog, unstarted, started, completed or canceled */
+  stateType?: string;
 }
 
 export const KEEP_EVENTS = 200;
+/** the most of a Linear issue's description the run's note carries */
+export const MAX_DESCRIPTION = 6000;
+/** how far a Linear delivery's `webhookTimestamp` may sit from canopy's clock */
+export const LINEAR_SKEW = 60_000;
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const ENV = /^[A-Z_][A-Z0-9_]*$/;
 const DEFAULT_LEVELS = ["error", "fatal"];
+const DEFAULTS: Record<TriggerSource, { workflow: string; api: string; labels: string[]; levels: string[] }> = {
+  sentry: { workflow: "sentry-fix", api: "https://sentry.io", labels: [], levels: DEFAULT_LEVELS },
+  linear: { workflow: "linear-issue", api: "https://api.linear.app", labels: ["canopy"], levels: [] },
+};
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (o: Record<string, unknown>, k: string): string | undefined => {
@@ -192,11 +217,13 @@ function parseRule(item: unknown): TriggerRule {
   if (!isRecord(item)) throw new Error("must be an object");
   const name = str(item, "name") ?? "";
   if (!NAME.test(name)) throw new Error(`name must be lowercase letters, digits and -, not ${name || "empty"}`);
-  const source = str(item, "source") ?? "sentry";
-  if (!(TRIGGER_SOURCES as readonly string[]).includes(source)) throw new Error(`source must be one of ${TRIGGER_SOURCES.join(", ")}, not ${source}`);
+  const raw = str(item, "source") ?? "sentry";
+  if (!(TRIGGER_SOURCES as readonly string[]).includes(raw)) throw new Error(`source must be one of ${TRIGGER_SOURCES.join(", ")}, not ${raw}`);
+  const source = raw as TriggerSource;
+  const defaults = DEFAULTS[source];
   const repo = str(item, "repo");
   if (!repo) throw new Error("repo is required: the repo's id or absolute path");
-  const workflow = str(item, "workflow") ?? "sentry-fix";
+  const workflow = str(item, "workflow") ?? defaults.workflow;
   const secretEnv = str(item, "secretEnv");
   if (!secretEnv || !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
   if (!secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
@@ -204,17 +231,20 @@ function parseRule(item: unknown): TriggerRule {
   if (tokenEnv !== undefined && !ENV.test(tokenEnv)) throw new Error(`tokenEnv must name an environment variable, not ${tokenEnv}`);
   if (tokenEnv !== undefined && !tokenEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`tokenEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${tokenEnv}`);
   const levels = strings(item["levels"], "levels").map((l) => l.toLowerCase());
+  const labels = strings(item["labels"], "labels");
+  if (labels.length && source !== "linear") throw new Error("labels is for a linear rule");
   const org = str(item, "org");
-  const api = (str(item, "api") ?? "https://sentry.io").replace(/\/+$/, "");
+  const api = (str(item, "api") ?? defaults.api).replace(/\/+$/, "");
   if (!/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
   return {
     name,
-    source: source as TriggerSource,
+    source,
     repo,
     workflow,
     secretEnv,
     projects: strings(item["projects"], "projects"),
-    levels: levels.length ? levels : DEFAULT_LEVELS,
+    levels: levels.length ? levels : defaults.levels,
+    labels: labels.length ? labels : defaults.labels,
     ignore: strings(item["ignore"], "ignore"),
     ...(tokenEnv ? { tokenEnv } : {}),
     ...(org ? { org } : {}),
@@ -293,11 +323,69 @@ function framesOf(o: Record<string, unknown>): string[] {
   return [];
 }
 
+/** A Linear webhook's body as an issue, when one of `labels` is new on it:
+ *  the issue was created with it, or an update added it. A label matches by
+ *  name, ignoring case, or by id, since a body may carry `labelIds` alone.
+ *  Anything else (another type, a removal, an update that leaves the labels
+ *  alone) is null. */
+export function parseLinear(body: unknown, labels: readonly string[]): Incoming | null {
+  if (!isRecord(body) || str(body, "type") !== "Issue") return null;
+  const action = str(body, "action");
+  const data = isRecord(body["data"]) ? body["data"] : null;
+  if (!data || (action !== "create" && action !== "update")) return null;
+  const key = str(data, "id");
+  if (!key) return null;
+  const want = new Set(labels.map((l) => l.toLowerCase()));
+  const named = Array.isArray(data["labels"]) ? data["labels"].filter(isRecord) : [];
+  const ids = new Set([...idsOf(data["labelIds"]), ...named.map((l) => str(l, "id")).filter((x): x is string => x !== undefined)]);
+  const hits = [...ids].filter((id) => want.has(id.toLowerCase()) || named.some((l) => str(l, "id") === id && want.has((str(l, "name") ?? "").toLowerCase())));
+  if (action === "update") {
+    const from = isRecord(body["updatedFrom"]) ? body["updatedFrom"] : null;
+    if (!from || !Array.isArray(from["labelIds"])) return null;
+    const before = new Set(idsOf(from["labelIds"]));
+    if (!hits.some((id) => !before.has(id))) return null;
+  } else if (!hits.length) return null;
+  const short = str(data, "identifier");
+  const team = isRecord(data["team"]) ? data["team"] : {};
+  const state = isRecord(data["state"]) ? data["state"] : {};
+  const project = str(team, "key") ?? short?.split("-")[0];
+  const link = str(body, "url") ?? str(data, "url");
+  const description = str(data, "description")?.slice(0, MAX_DESCRIPTION);
+  const stateType = str(state, "type");
+  const names = named.map((l) => str(l, "name")).filter((x): x is string => x !== undefined);
+  const detail = [
+    str(state, "name") ? `state: ${str(state, "name")}` : undefined,
+    str(data, "priorityLabel") ? `priority: ${str(data, "priorityLabel")}` : undefined,
+    names.length ? `labels: ${names.join(", ")}` : undefined,
+  ].filter((x): x is string => x !== undefined);
+  return {
+    key,
+    title: (str(data, "title") ?? "an untitled Linear issue").slice(0, 300),
+    ...(short ? { short } : {}),
+    ...(project ? { project } : {}),
+    ...(link && /^https?:\/\//.test(link) ? { link } : {}),
+    detail,
+    frames: [],
+    ...(description ? { description } : {}),
+    ...(stateType ? { stateType } : {}),
+  };
+}
+
+const idsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+
+/** Whether a Linear delivery was sent within `LINEAR_SKEW` of now, by its
+ *  `webhookTimestamp`: an old signed body replayed is refused. */
+export function linearFresh(body: unknown, now: number): boolean {
+  const at = isRecord(body) ? body["webhookTimestamp"] : undefined;
+  return typeof at === "number" && Math.abs(now - at) <= LINEAR_SKEW;
+}
+
 /** Why a rule passes this issue over, or null when it takes it. */
 export function ignoreReason(rule: TriggerRule, inc: Incoming): string | null {
   if (rule.projects.length && (!inc.project || !rule.projects.includes(inc.project))) {
-    return `project ${inc.project ?? "unknown"} is not one this rule takes`;
+    return `${rule.source === "linear" ? "team" : "project"} ${inc.project ?? "unknown"} is not one this rule takes`;
   }
+  if (inc.stateType === "completed" || inc.stateType === "canceled") return `the issue is already ${inc.stateType}`;
   if (inc.level && !rule.levels.includes(inc.level)) return `level ${inc.level} is not one this rule takes`;
   const hit = rule.ignore.find((w) => inc.title.toLowerCase().includes(w.toLowerCase()));
   return hit ? `the title holds "${hit}", on the rule's ignore list` : null;
@@ -315,21 +403,24 @@ export function existing(events: readonly TriggerEvent[], rule: string, key: str
 }
 
 /** The run's first message after the workflow's task: the issue, fenced as
- *  data, since anyone who can make the app throw chooses its words. */
-export function noteFor(inc: Incoming, source: TriggerEvent["source"]): string {
+ *  data, since anyone who can make the app throw, or write in the Linear
+ *  workspace, chooses its words. */
+export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: TriggerSource = "sentry"): string {
   const lines = [
     `title: ${inc.title}`,
     inc.short ? `id: ${inc.short}` : "",
     inc.culprit ? `culprit: ${inc.culprit}` : "",
     inc.level ? `level: ${inc.level}` : "",
-    inc.project ? `project: ${inc.project}` : "",
+    inc.project ? `${service === "linear" ? "team" : "project"}: ${inc.project}` : "",
     inc.link ? `link: ${inc.link}` : "",
     ...inc.detail,
     inc.frames.length ? `stack, innermost last:\n${inc.frames.map((f) => `  ${f}`).join("\n")}` : "",
+    inc.description ? `description:\n${inc.description}` : "",
   ].filter(Boolean);
-  // the first words name the branch (run/<slug>-<id>), so they lead with the id
+  // the first words name the branch (run/<slug>-<id>), so they lead with the
+  // id; Linear's GitHub integration links a PR to the issue its branch names
   const id = inc.short ?? inc.key;
-  const from = source === "manual" ? `Trigger test ${id}, fired by hand to try the trigger.` : `Sentry issue ${id} came in.`;
+  const from = source === "manual" ? `Trigger test ${id}, fired by hand to try the trigger.` : `${SERVICE_NAME[service]} issue ${id} came in.`;
   return `${from} ${fence("The issue", lines.join("\n"))}`;
 }
 
@@ -339,6 +430,7 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
     id: crypto.randomUUID().slice(0, 8),
     rule: rule.name,
     source,
+    service: rule.source,
     key: inc.key,
     ...(inc.short ? { short: inc.short } : {}),
     title: inc.title,
@@ -346,7 +438,7 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
     ...(inc.level ? { level: inc.level } : {}),
     ...(inc.project ? { project: inc.project } : {}),
     ...(inc.link ? { link: inc.link } : {}),
-    note: noteFor(inc, source),
+    note: noteFor(inc, source, rule.source),
     repoId,
     workflow: rule.workflow,
     status: ignored ? "ignored" : "queued",
@@ -491,13 +583,19 @@ export function pruneEvents(events: TriggerEvent[]): TriggerEvent[] {
   return sorted.filter((e, i) => i < KEEP_EVENTS || e.status === "queued" || eventLive(e));
 }
 
-/** A made-up issue for "try it": the hub fires it as if Sentry had. */
-export function sampleIncoming(title: string, now: number): Incoming {
+/** The title a test fire takes when none is typed. */
+export const SAMPLE_TITLE: Record<TriggerSource, string> = {
+  sentry: "TypeError: Cannot read properties of undefined (reading 'percent')",
+  linear: "Show the last sync time on the settings page",
+};
+
+/** A made-up issue for "try it": the hub fires it as if the service had. */
+export function sampleIncoming(title: string, now: number, service: TriggerSource = "sentry"): Incoming {
   return {
     key: `manual-${now.toString(36)}`,
     short: "MANUAL",
-    title: title.trim().slice(0, 300) || "TypeError: Cannot read properties of undefined (reading 'percent')",
-    level: "error",
+    title: title.trim().slice(0, 300) || SAMPLE_TITLE[service],
+    ...(service === "sentry" ? { level: "error" } : {}),
     detail: ["fired by hand from canopy"],
     frames: [],
   };

@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { TriggerRuleInfo, TriggersInfo } from "../../../src/core/trigger";
+import { SAMPLE_TITLE, SERVICE_NAME, type TriggerRuleInfo, type TriggersInfo } from "../../../src/core/trigger";
 import { baseOf } from "../registry";
 import { copyText } from "../share";
 import { useStore } from "../store";
-import { STATUS_TONE, STATUS_WORD, eventActs, hookAddress, outcomeLine, triggerSections, type TriggerRow } from "../triggers";
+import { STATUS_TONE, STATUS_WORD, eventActs, hookAddress, outcomeLine, serviceOf, triggerSections, type TriggerRow } from "../triggers";
 import { ago } from "../util";
 
 type Call = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; error: string };
@@ -30,6 +30,7 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
   const repo = useRepoName(e.repoId);
   const [call, setCall] = useState<Call>({ kind: "idle" });
   const outcome = outcomeLine(e);
+  const service = serviceOf(e);
   const act = (a: "stop" | "resume" | "retry" | "dismiss") => {
     setCall({ kind: "busy" });
     (a === "dismiss" ? dismissTrigger(e.id) : triggerAct(e.id, a)).then(
@@ -60,11 +61,11 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
         <span>{repo}</span>
         {many && <span>on {backend}</span>}
         <span title={new Date(e.lastAt).toLocaleString()}>{ago(e.lastAt / 1000)}</span>
-        {e.count > 1 && <span title="times Sentry sent this issue">×{e.count}</span>}
+        {e.count > 1 && <span title={`times ${service} sent this issue`}>×{e.count}</span>}
         {e.source === "manual" && <span>test fire</span>}
         {e.link && (
           <a href={e.link} target="_blank" rel="noreferrer">
-            Sentry
+            {service}
           </a>
         )}
         <span className="trigger-acts">
@@ -107,8 +108,8 @@ function FireForm({ backend, rule }: { backend: string; rule: TriggerRuleInfo })
       <input
         type="text"
         value={title}
-        placeholder="TypeError: Cannot read properties of undefined (reading 'percent')"
-        aria-label={`Error title for a test fire of ${rule.name}`}
+        placeholder={SAMPLE_TITLE[rule.source]}
+        aria-label={`Issue title for a test fire of ${rule.name}`}
         onChange={(ev) => setTitle(ev.target.value)}
       />
       <button type="submit" className="mini" disabled={call.kind === "busy" || Boolean(rule.problem)} title="Fire a made-up issue through this rule: a real branch run starts on the repo">
@@ -128,6 +129,9 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
   const repo = useRepoName(rule.repo);
   const address = hookAddress(origin, rule.hook);
   const [copied, setCopied] = useState(false);
+  const name = SERVICE_NAME[rule.source];
+  const writesBack =
+    rule.source === "linear" ? "A Linear API key lets canopy comment the PR's link on the issue and move it to done once the fix merges" : "A Sentry token lets canopy mark the issue resolved once the fix merges";
   return (
     <li className="trigger-rule">
       <div className="trigger-main">
@@ -136,10 +140,11 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
           <span>
             {rule.source} → {repo}
           </span>
+          {rule.source === "linear" && <span title="Adding one of these labels to an issue starts the run">on label {rule.labels.join(", ")}</span>}
           <span>runs {rule.workflow}</span>
           <span className={rule.secretSet ? "moss" : "rust"}>{rule.secretSet ? "secret set" : `${rule.secretEnv} not set`}</span>
-          <span className={rule.tokenSet ? "moss" : "faint"} title="A Sentry token lets canopy mark the issue resolved once the fix merges">
-            {rule.tokenSet ? "resolves in Sentry" : "leaves issues open"}
+          <span className={rule.tokenSet ? "moss" : "faint"} title={writesBack}>
+            {rule.tokenSet ? (rule.source === "linear" ? "writes back to Linear" : "resolves in Sentry") : `leaves issues open in ${name}`}
           </span>
         </span>
       </div>
@@ -202,8 +207,9 @@ export function TriggersView() {
         <section className="trigger-group">
           <h3 className="panel-label">Rules</h3>
           <p className="trigger-note">
-            No trigger rules yet. Add one to <code>triggers.json</code> in canopy's config folder, naming the repo, the Sentry secret's environment variable and a one-step workflow
-            (<code>sentry-fix</code> ships with canopy). Then point a Sentry internal integration's webhook at the address this page shows.
+            No trigger rules yet. Add one to <code>triggers.json</code> in canopy's config folder, naming the source (<code>sentry</code> or <code>linear</code>), the repo and the environment
+            variable holding the hook's secret. canopy ships <code>sentry-fix</code> and <code>linear-issue</code> as their workflows. Then point a Sentry internal integration's webhook, or a
+            Linear webhook for issues, at the address this page shows.
           </p>
         </section>
       )}

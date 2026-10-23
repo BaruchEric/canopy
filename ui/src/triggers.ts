@@ -1,7 +1,7 @@
 /** The triggers view's model: every shown backend's events in sections, the
  *  words for each state, and the tab's count. Pure; Triggers.tsx draws it. */
 
-import { eventLive, resumable, retryable, type TriggerEvent, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
+import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
 import type { Badge } from "./badges";
 
 export interface TriggerRow {
@@ -76,13 +76,20 @@ export function triggerSections(triggers: Readonly<Record<string, TriggersInfo>>
   return SECTIONS.map((s) => ({ ...s, rows: rows.filter((r) => SECTION_OF[r.event.status] === s.key) })).filter((s) => s.rows.length > 0);
 }
 
+/** The service an event came from: an event written while Sentry was the only one names none. */
+export const serviceOf = (e: Pick<TriggerEvent, "service">): string => SERVICE_NAME[e.service ?? "sentry"];
+
 /** The line under an event's title: what became of it past its state. */
 export function outcomeLine(e: TriggerEvent): string | null {
+  const name = serviceOf(e);
+  const linear = e.service === "linear";
   if (e.status === "merged") {
-    if (e.source === "manual") return "a test fire, so Sentry was not told";
-    if (!e.resolved) return "merged; the rule holds no token, so the issue stays open in Sentry";
-    return "at" in e.resolved ? "Resolved in Sentry" : `merged, but Sentry refused the resolve: ${e.resolved.error}`;
+    if (e.source === "manual") return `a test fire, so ${name} was not told`;
+    if (!e.resolved) return `merged; the rule holds no token, so the issue stays open in ${name}`;
+    if ("at" in e.resolved) return linear ? "Moved to done in Linear" : "Resolved in Sentry";
+    return `merged, but ${name} refused ${linear ? "the move to done" : "the resolve"}: ${e.resolved.error}`;
   }
+  if (e.status === "review" && e.linked && "error" in e.linked) return `Linear refused the PR's link: ${e.linked.error}`;
   return e.reason ?? null;
 }
 
@@ -108,5 +115,5 @@ export function triggersBadge(triggers: Readonly<Record<string, Pick<TriggersInf
   return { text: String(going.length), tone: "sky", title: `${going.length} ${going.length === 1 ? "fix" : "fixes"} going` };
 }
 
-/** The address to paste into Sentry's integration: the backend's own origin and the hook's path. */
+/** The address to paste into Sentry's integration or Linear's webhook: the backend's own origin and the hook's path. */
 export const hookAddress = (origin: string, hook: string): string => `${origin.replace(/\/+$/, "")}${hook}`;

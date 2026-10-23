@@ -64,7 +64,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
       { key: "sessions", label: "sessions", what: "Every shell and agent on every machine, in one screen" },
       { key: "agents", label: "agents", what: "Which harness starts for what, per repo and role" },
       { key: "incubator", label: "incubator", what: "New projects from an idea, clarified and researched before anything is built" },
-      { key: "triggers", label: "triggers", what: "Sentry issues that start a fix on a branch with nobody typing, and what became of each" },
+      { key: "triggers", label: "triggers", what: "Sentry issues and labeled Linear issues that start work on a branch with nobody typing, and what became of each" },
       { key: "kit", label: "kit", what: "The skills every agent has on every machine" },
     ],
   },

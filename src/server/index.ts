@@ -331,7 +331,7 @@ interface ServerState {
   prs: PrHub;
   /** what went idle, offered for closing, and the close (server/sweep) */
   sweep: SweepHub;
-  /** outside events (Sentry) that start branch runs, and what became of each (server/triggers) */
+  /** outside events (Sentry, Linear) that start branch runs, and what became of each (server/triggers) */
   triggers: TriggerHub;
   /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
   coordinator: CoordinatorHub;

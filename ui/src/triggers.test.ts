@@ -47,6 +47,15 @@ describe("outcomeLine", () => {
     expect(outcomeLine(ev({ status: "merged", resolved: { error: "Sentry answered 403" } }))).toContain("403");
     expect(outcomeLine(ev({ status: "merged", source: "manual" }))).toContain("test fire");
   });
+  test("a Linear event names Linear, its move to done and a refused link", () => {
+    const lin = (over: Partial<TriggerEvent>) => ev({ source: "linear", service: "linear", short: "ENG-7", ...over });
+    expect(outcomeLine(lin({ status: "merged", resolved: { at: 3 } }))).toBe("Moved to done in Linear");
+    expect(outcomeLine(lin({ status: "merged" }))).toBe("merged; the rule holds no token, so the issue stays open in Linear");
+    expect(outcomeLine(lin({ status: "merged", resolved: { error: "Linear answered 401" } }))).toBe("merged, but Linear refused the move to done: Linear answered 401");
+    expect(outcomeLine(lin({ status: "merged", source: "manual" }))).toBe("a test fire, so Linear was not told");
+    expect(outcomeLine(lin({ status: "review", linked: { error: "Linear answered 401" } }))).toBe("Linear refused the PR's link: Linear answered 401");
+    expect(outcomeLine(lin({ status: "review", linked: { at: 3 } }))).toBeNull();
+  });
   test("otherwise the reason, or nothing", () => {
     expect(outcomeLine(ev({ status: "stopped", reason: "a restart cut the run short" }))).toBe("a restart cut the run short");
     expect(outcomeLine(ev({ status: "working" }))).toBeNull();

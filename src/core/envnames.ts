@@ -7,8 +7,8 @@
  *  then deleted from canopy's env */
 export const SECRET_ENV = ["CANOPY_VAULT_TOKEN", "CANOPY_TRANSCRIBE_KEY", "VERCEL_TOKEN", "FIREBASE_TOKEN", "CANOPY_VOICE_KEY", "CANOPY_LIVE_KEY"] as const;
 
-/** A trigger rule's secrets (a Sentry hook secret, a token that resolves
- *  issues) must carry this prefix. The server takes every such variable at
+/** A trigger rule's secrets (a Sentry or Linear hook secret, a token that
+ *  writes back to the issue) must carry this prefix. The server takes every such variable at
  *  start (`takeTriggerSecrets`) and deletes it from its own env, so no run,
  *  shell or gate inherits it: a trigger's run reads error text anyone can
  *  shape, and must not hold the token that answers for it. */

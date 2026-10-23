@@ -46,7 +46,7 @@ const RULES: readonly Rule[] = [
   // auth/ticket is open here because its route checks the right the ticket is
   // for (shell or helper); a helper token has no read right to pass this table with
   { methods: POST, paths: ["auth/pair", "auth/claim", "auth/first", "auth/ticket"], right: "open" },
-  // a trigger's hook comes from Sentry, which sends no token; the hub checks
+  // a trigger's hook comes from Sentry or Linear, which send no token; the hub checks
   // the delivery's signature against the rule's secret before it reads a word
   { methods: POST, paths: ["hooks/*"], right: "open" },
   { methods: POST, paths: ["triggers/*"], right: "operate" },

@@ -1,4 +1,4 @@
-/** Triggers' server half: the hook Sentry posts to, the event records, the
+/** Triggers' server half: the hooks Sentry and Linear post to, the event records, the
  *  queue of events waiting for a branch run slot, and the event's state as
  *  its run and its PR move. The model is `core/trigger.ts`; the branch run
  *  and its PR are the landing queue's and the PR watch's.
@@ -23,7 +23,9 @@ import {
   fromPr,
   fromRun,
   ignoreReason,
+  linearFresh,
   newEvent,
+  parseLinear,
   parseRules,
   parseSentry,
   pruneEvents,
@@ -39,12 +41,13 @@ import {
   type TriggersInfo,
 } from "../core/trigger";
 import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
+import { linearComment, linearDone } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
 export const triggersDir = (): string => join(configDir(), "triggers");
 /** how often the queue is tried again, for a slot freed while nothing told the hub */
 export const TICK_EVERY = 30_000;
-/** the largest hook body read; Sentry's are a few kilobytes */
+/** the largest hook body read; Sentry's and Linear's are a few kilobytes */
 export const MAX_BODY = 1024 * 1024;
 
 export class TriggerError extends Error {
@@ -82,8 +85,11 @@ export interface TriggerDeps {
   /** a trigger secret's value: the `CANOPY_TRIGGER_` variables the server
    *  took out of its env at start (`takeTriggerSecrets`) */
   env: (name: string) => string | undefined;
-  /** marks an outside issue resolved; Sentry's API unless a test says otherwise */
+  /** marks an outside issue resolved once its PR merges; the rule's service's
+   *  API unless a test says otherwise */
   resolve?: (rule: TriggerRule, event: TriggerEvent, token: string) => Promise<void>;
+  /** tells a Linear issue its PR opened; Linear's API unless a test says otherwise */
+  link?: (rule: TriggerRule, event: TriggerEvent, token: string) => Promise<void>;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -95,7 +101,8 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
 /** Whether `signature` is the hex HMAC-SHA256 of `body` under `secret`,
- *  compared in constant time: Sentry's `Sentry-Hook-Signature`. */
+ *  compared in constant time: Sentry's `Sentry-Hook-Signature` and Linear's
+ *  `Linear-Signature` are both that. */
 export function signatureOk(body: string, signature: string | null, secret: string): boolean {
   if (!signature || !secret) return false;
   const want = createHmac("sha256", secret).update(body, "utf8").digest();
@@ -372,8 +379,9 @@ export class TriggerHub {
     if (flow.status === "done" || flow.status === "failed" || flow.status === "stopped") void this.pump();
   }
 
-  /** The PR watch's every change: an event follows its branch's PR, and a
-   *  merge marks the outside issue resolved when the rule holds a token. */
+  /** The PR watch's every change: an event follows its branch's PR, a
+   *  Linear issue hears of its PR, and a merge marks the outside issue
+   *  resolved, when the rule holds a token. */
   onPrs(prs: PrWatch[]): void {
     for (const w of prs) {
       for (const e of this.events.values()) {
@@ -381,7 +389,10 @@ export class TriggerHub {
         const next = fromPr(e, w, this.now());
         if (next === e) continue;
         this.set(next);
-        if (next.status === "merged" && !next.resolved && this.keeping) void this.resolveIssue(next.id);
+        if (!this.keeping) continue;
+        // queued in this order, so the link lands before the move to done
+        if (next.service === "linear" && next.pr && !next.linked) void this.linkIssue(next.id);
+        if (next.status === "merged" && !next.resolved) void this.resolveIssue(next.id);
       }
     }
   }
@@ -394,19 +405,49 @@ export class TriggerHub {
     }
   }
 
+  /** The rule and its token, for a call that writes back to the service. */
+  private async writer(e: TriggerEvent): Promise<{ rule: TriggerRule; token: string } | null> {
+    if (e.source === "manual") return null;
+    await this.loadRules();
+    const rule = this.rule(e.rule);
+    const token = rule?.tokenEnv ? this.env(rule.tokenEnv) : undefined;
+    return rule && token ? { rule, token } : null;
+  }
+
+  /** Sets one field on the event as it is now: the PR watch may have moved
+   *  it while the call was out. */
+  private mark(id: string, patch: Pick<TriggerEvent, "resolved"> | Pick<TriggerEvent, "linked">): void {
+    const now = this.events.get(id);
+    if (now) this.set({ ...now, ...patch });
+  }
+
   private resolveIssue(id: string): Promise<void> {
     return this.queue(async () => {
       const e = this.events.get(id);
-      if (!e || e.status !== "merged" || e.resolved || e.source === "manual") return;
-      await this.loadRules();
-      const rule = this.rule(e.rule);
-      const token = rule?.tokenEnv ? this.env(rule.tokenEnv) : undefined;
-      if (!rule || !token) return;
+      if (!e || e.status !== "merged" || e.resolved) return;
+      const w = await this.writer(e);
+      if (!w) return;
+      const resolve = this.deps.resolve ?? (w.rule.source === "linear" ? linearDone : sentryResolve);
       try {
-        await (this.deps.resolve ?? sentryResolve)(rule, e, token);
-        this.set({ ...e, resolved: { at: this.now() } });
+        await resolve(w.rule, e, w.token);
+        this.mark(id, { resolved: { at: this.now() } });
       } catch (err) {
-        this.set({ ...e, resolved: { error: errText(err) } });
+        this.mark(id, { resolved: { error: errText(err) } });
+      }
+    });
+  }
+
+  private linkIssue(id: string): Promise<void> {
+    return this.queue(async () => {
+      const e = this.events.get(id);
+      if (!e?.pr || e.linked || e.service !== "linear") return;
+      const w = await this.writer(e);
+      if (!w) return;
+      try {
+        await (this.deps.link ?? linearComment)(w.rule, e, w.token);
+        this.mark(id, { linked: { at: this.now() } });
+      } catch (err) {
+        this.mark(id, { linked: { error: errText(err) } });
       }
     });
   }
@@ -417,7 +458,7 @@ export class TriggerHub {
     return this.loadRules().then(() => {
       const rule = this.rule(name);
       if (!rule) throw new TriggerError(`no trigger rule called ${name}`, 404);
-      return this.deliver(rule, sampleIncoming(title, this.now()), "manual");
+      return this.deliver(rule, sampleIncoming(title, this.now(), rule.source), "manual");
     });
   }
 
@@ -449,7 +490,7 @@ export class TriggerHub {
       const repo = this.deps.repo(e.repoId);
       if (!repo) throw new TriggerError(`${e.repoId} is no longer in the tree`, 404);
       const fresh: TriggerEvent = { ...e, status: "queued", lastAt: this.now() };
-      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved"] as const) delete fresh[k];
+      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved", "linked"] as const) delete fresh[k];
       this.set(fresh);
       return this.begin(fresh, repo);
     });
@@ -516,8 +557,8 @@ export class TriggerHub {
     }
   }
 
-  /** A delivery from Sentry. Nothing in the body is read before its
-   *  signature checks out against the rule's secret. */
+  /** A delivery from Sentry or Linear. Nothing in the body is read before
+   *  its signature checks out against the rule's secret. */
   private async hook(req: Request, source: string, name: string): Promise<Response> {
     await this.loadRules();
     const rule = this.rule(name);
@@ -528,18 +569,20 @@ export class TriggerHub {
     if (length > MAX_BODY) return json({ error: "body too large" }, 413);
     const body = await req.text();
     if (body.length > MAX_BODY) return json({ error: "body too large" }, 413);
-    if (!signatureOk(body, req.headers.get("sentry-hook-signature"), secret)) return json({ error: "bad signature" }, 401);
+    const linear = rule.source === "linear";
+    if (!signatureOk(body, req.headers.get(linear ? "linear-signature" : "sentry-hook-signature"), secret)) return json({ error: "bad signature" }, 401);
     let payload: unknown;
     try {
       payload = JSON.parse(body);
     } catch {
       return json({ error: "body is not JSON" }, 400);
     }
-    const inc = parseSentry(req.headers.get("sentry-hook-resource") ?? "", payload);
-    // Sentry counts anything but a 2xx as a failure and retries it, so an
-    // installation ping or a resolved issue is a quiet 200
-    if (!inc) return json({ kind: "skip", why: "not a new issue" });
-    const d = await this.deliver(rule, inc, "sentry");
+    if (linear && !linearFresh(payload, this.now())) return json({ error: "the delivery's webhookTimestamp is more than a minute off" }, 401);
+    const inc = linear ? parseLinear(payload, rule.labels) : parseSentry(req.headers.get("sentry-hook-resource") ?? "", payload);
+    // both services count anything but a 200 as a failure and retry it, so an
+    // installation ping, a resolved issue or an edit that adds no label is a quiet 200
+    if (!inc) return json({ kind: "skip", why: linear ? "no label this rule takes was added" : "not a new issue" });
+    const d = await this.deliver(rule, inc, rule.source);
     return json(d.kind === "skip" ? d : { kind: d.kind, event: d.event.id });
   }
 }

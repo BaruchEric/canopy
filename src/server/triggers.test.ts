@@ -337,3 +337,117 @@ describe("info", () => {
     expect(info.rules[0]?.problem).toContain("no repo gone");
   });
 });
+
+describe("linear", () => {
+  const LINEAR_SECRET = "lin-s3cret";
+  let linked: string[];
+  const env = (name: string) =>
+    ({ CANOPY_TRIGGER_SHOP_SECRET: SECRET, CANOPY_TRIGGER_LIN_SECRET: LINEAR_SECRET, CANOPY_TRIGGER_LIN_TOKEN: "lin_api_k", CANOPY_TRIGGER_SHOP_TOKEN: "tok" })[name];
+  const linearHub = (over: Partial<TriggerDeps> = {}) =>
+    hub({
+      env,
+      workflowProblem: async (name) => (name === "linear-issue" ? null : `unknown workflow: ${name}`),
+      link: async (_rule: TriggerRule, e: TriggerEvent, token: string) => {
+        linked.push(`${e.key}:${e.pr?.number}:${token}`);
+      },
+      ...over,
+    });
+  const issue = (action = "create", over: Record<string, unknown> = {}, updatedFrom?: Record<string, unknown>) =>
+    JSON.stringify({
+      action,
+      type: "Issue",
+      url: "https://linear.app/acme/issue/ENG-7/add-a-sync-time",
+      webhookTimestamp: 1000,
+      data: { id: "iss-7", identifier: "ENG-7", title: "Add a sync time", team: { key: "ENG" }, state: { name: "Todo", type: "unstarted" }, labelIds: ["l1"], labels: [{ id: "l1", name: "canopy" }], ...over },
+      ...(updatedFrom ? { updatedFrom } : {}),
+    });
+  const linearReq = (body: string, sig = sign(body, LINEAR_SECRET)) =>
+    new Request("http://x/api/hooks/linear/lin", { method: "POST", body, headers: { "linear-signature": sig, "linear-event": "Issue" } });
+  const URL_ = new URL("http://x/api/hooks/linear/lin");
+
+  beforeEach(async () => {
+    linked = [];
+    await writeFile(
+      join(dir, "triggers.json"),
+      JSON.stringify({ rules: [{ name: "lin", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_LIN_SECRET", tokenEnv: "CANOPY_TRIGGER_LIN_TOKEN" }] }),
+    );
+  });
+
+  test("a signed issue created with the label starts a branch run named for it", async () => {
+    const h = linearHub();
+    await h.adopt();
+    const res = await h.handle(linearReq(issue()), URL_);
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toMatchObject({ kind: "started" });
+    const [e] = h.list();
+    expect(e).toMatchObject({ key: "iss-7", short: "ENG-7", source: "linear", service: "linear", workflow: "linear-issue", status: "working" });
+    expect(e?.note.startsWith("Linear issue ENG-7 came in.")).toBe(true);
+  });
+
+  test("a bad signature, Sentry's header, or a stale timestamp is refused and records nothing", async () => {
+    const h = linearHub();
+    await h.adopt();
+    expect((await h.handle(linearReq(issue(), sign(issue(), "other")), URL_))?.status).toBe(401);
+    const sentryHeader = new Request("http://x/api/hooks/linear/lin", { method: "POST", body: issue(), headers: { "sentry-hook-signature": sign(issue(), LINEAR_SECRET) } });
+    expect((await h.handle(sentryHeader, URL_))?.status).toBe(401);
+    const stale = JSON.stringify({ ...(JSON.parse(issue()) as Record<string, unknown>), webhookTimestamp: 1000 + 61_000 });
+    const res = await h.handle(linearReq(stale), URL_);
+    expect(res?.status).toBe(401);
+    expect(await res?.json()).toMatchObject({ error: expect.stringContaining("webhookTimestamp") });
+    expect(h.list()).toEqual([]);
+  });
+
+  test("an edit that adds no label is a quiet 200", async () => {
+    const h = linearHub();
+    await h.adopt();
+    const res = await h.handle(linearReq(issue("update", { title: "renamed" }, { title: "Add a sync time" })), URL_);
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toEqual({ kind: "skip", why: "no label this rule takes was added" });
+    expect(h.list()).toEqual([]);
+  });
+
+  test("the PR's link goes to the issue once it opens, and the merge moves it to done", async () => {
+    const h = linearHub();
+    await h.adopt();
+    await h.handle(linearReq(issue()), URL_);
+    const r = runs[0] as Run;
+    h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "ready" } });
+    const watch = { id: "br1", runId: "r1", number: 9, url: "https://github.com/a/b/pull/9", state: { status: "open" } } as PrWatch;
+    h.onPrs([watch]);
+    await h.idle();
+    expect(linked).toEqual(["iss-7:9:lin_api_k"]);
+    expect(h.list()[0]).toMatchObject({ status: "review", linked: { at: 1000 } });
+    h.onPrs([{ ...watch, state: { ...watch.state!, status: "merged" } }]);
+    await h.idle();
+    expect(linked).toHaveLength(1);
+    expect(resolved).toEqual(["iss-7:lin_api_k"]);
+    expect(h.list()[0]).toMatchObject({ status: "merged", linked: { at: 1000 }, resolved: { at: 1000 } });
+  });
+
+  test("a refused comment is kept on the event and the merge still moves the issue", async () => {
+    const h = linearHub({
+      link: async () => {
+        throw new Error("Linear answered 401");
+      },
+    });
+    await h.adopt();
+    await h.handle(linearReq(issue()), URL_);
+    const r = runs[0] as Run;
+    h.onPrs([{ id: r.branch!.origin, runId: r.id, number: 2, url: "u", state: { status: "merged" } } as PrWatch]);
+    await h.idle();
+    expect(h.list()[0]).toMatchObject({ status: "merged", linked: { error: "Linear answered 401" }, resolved: { at: 1000 } });
+  });
+
+  test("with no token, or on a test fire, Linear is never called", async () => {
+    await writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "lin", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_LIN_SECRET" }] }));
+    const h = linearHub();
+    await h.adopt();
+    await h.handle(linearReq(issue()), URL_);
+    await h.fire("lin", "");
+    for (const r of runs) h.onPrs([{ id: r.branch!.origin, runId: r.id, number: 1, url: "u", state: { status: "merged" } } as PrWatch]);
+    await h.idle();
+    expect(linked).toEqual([]);
+    expect(resolved).toEqual([]);
+    expect(h.list().find((e) => e.source === "manual")).toMatchObject({ service: "linear", title: "Show the last sync time on the settings page" });
+  });
+});
