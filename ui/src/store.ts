@@ -64,7 +64,7 @@ import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
-import { loadNotes, noteId, notesPrompt, saveNotes, withNote, withoutNotes, type Note } from "./reviewnotes";
+import { loadNotes, noteId, notesPrompt, updateNotes, withNote, withoutNotes, type Note, REVIEW_NOTES_STORE } from "./reviewnotes";
 import { originOf, pairLabel, readPair, readToken, readsAdmin, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
 import { deviceName } from "../../src/core/presence";
 import { listedTask } from "../../src/core/tasks";
@@ -4066,28 +4066,20 @@ export const useStore = create<CanopyState>((set, get) => ({
     return "started";
   },
   addNote: (note) => {
-    const reviewNotes = withNote(get().reviewNotes, { ...note, id: noteId() });
-    set({ reviewNotes });
-    saveNotes(reviewNotes);
+    set({ reviewNotes: updateNotes(get().reviewNotes, (all) => withNote(all, { ...note, id: noteId() })) });
   },
   removeNote: (repoId, id) => {
-    const reviewNotes = withoutNotes(get().reviewNotes, repoId, new Set([id]));
-    set({ reviewNotes });
-    saveNotes(reviewNotes);
+    set({ reviewNotes: updateNotes(get().reviewNotes, (all) => withoutNotes(all, repoId, new Set([id]))) });
   },
   clearNotes: (repoId) => {
-    const reviewNotes = withoutNotes(get().reviewNotes, repoId, new Set((get().reviewNotes[repoId] ?? []).map((n) => n.id)));
-    set({ reviewNotes });
-    saveNotes(reviewNotes);
+    set({ reviewNotes: updateNotes(get().reviewNotes, (all) => withoutNotes(all, repoId, new Set((all[repoId] ?? []).map((n) => n.id)))) });
   },
   sendNotes: async (repoId) => {
     const notes = get().reviewNotes[repoId] ?? [];
     if (notes.length === 0) throw new Error("no review notes on this repo");
     const how = await get().sendToAgent(repoId, notesPrompt(notes));
     // only the ones sent: a note left while it went stays for the next send
-    const reviewNotes = withoutNotes(get().reviewNotes, repoId, new Set(notes.map((n) => n.id)));
-    set({ reviewNotes });
-    saveNotes(reviewNotes);
+    set({ reviewNotes: updateNotes(get().reviewNotes, (all) => withoutNotes(all, repoId, new Set(notes.map((n) => n.id)))) });
     return how;
   },
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
@@ -5095,3 +5087,10 @@ export function pairsOf(auth: Record<string, BackendAuth>): Record<string, Pendi
  *  was just refused for want of one. */
 export const wantsSignIn = (a: BackendAuth | undefined): boolean =>
   a !== undefined && a.mode !== "off" && a.you === "none" && (!a.hasToken || a.needed);
+
+// another window of this browser left or sent notes: show them here too
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (e.key === REVIEW_NOTES_STORE || e.key === null) useStore.setState({ reviewNotes: loadNotes() });
+  });
+}

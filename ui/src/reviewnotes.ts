@@ -224,6 +224,20 @@ export function saveNotes(all: Record<string, Note[]>, store: Store | null = loc
   }
 }
 
+/** Applies a change to the stored notes, not to this page's copy, and keeps
+ *  the result: a solo or pop-out window holds its own copy, and writing that
+ *  whole would drop the notes another window left since. With no storage
+ *  the page's own copy is all there is. */
+export function updateNotes(
+  held: Record<string, Note[]>,
+  change: (all: Record<string, Note[]>) => Record<string, Note[]>,
+  store: Store | null = local(),
+): Record<string, Note[]> {
+  const next = change(store ? loadNotes(store) : held);
+  saveNotes(next, store);
+  return next;
+}
+
 /** the notes with one added under its repo */
 export function withNote(all: Record<string, Note[]>, note: Note): Record<string, Note[]> {
   return { ...all, [note.repoId]: [...(all[note.repoId] ?? []), note] };

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { anchorOf, loadNotes, noteOn, notesPrompt, parseDiff, REVIEW_NOTES_STORE, saveNotes, takesNotes, withNote, withoutNotes, WORKING_TREE, type Note } from "./reviewnotes";
+import { anchorOf, loadNotes, noteOn, notesPrompt, parseDiff, REVIEW_NOTES_STORE, saveNotes, takesNotes, updateNotes, withNote, withoutNotes, WORKING_TREE, type Note } from "./reviewnotes";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
 function storage(blocked = false) {
@@ -167,6 +167,18 @@ describe("storage", () => {
     expect(loadNotes(storage(true))).toEqual({});
     expect(saveNotes({}, storage(true))).toBe(false);
     expect(saveNotes({}, null)).toBe(false);
+  });
+
+  test("a window's change lands on what is stored, not on its own stale copy", () => {
+    const st = storage();
+    const stale = loadNotes(st);
+    // another window leaves a note after this one read
+    saveNotes(withNote({}, note({ id: "a" })), st);
+    const next = updateNotes(stale, (all) => withNote(all, note({ id: "b" })), st);
+    expect(next["canopy"]?.map((n) => n.id)).toEqual(["a", "b"]);
+    expect(loadNotes(st)).toEqual(next);
+    // with no storage the page's own copy is what changes
+    expect(updateNotes(withNote({}, note({ id: "c" })), (all) => all, null)["canopy"]?.map((n) => n.id)).toEqual(["c"]);
   });
 
   test("removing leaves the other notes and repos alone", () => {
