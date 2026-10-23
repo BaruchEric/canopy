@@ -130,9 +130,9 @@ export class SweepHub {
   /**
    * Fires the schedule when it is on, its cron reads and the cron's next
    * time after the last fire has come. Only one fire for any number of
-   * missed times. With no fire on record the count starts now. The fire's
-   * time is written before it runs, so a crash in the middle never fires
-   * it again.
+   * missed times. With no fire on record, or one in the future, the count
+   * starts now. The fire's time is written before it runs, so a crash in
+   * the middle never fires it again.
    */
   async tick(now: number): Promise<void> {
     if (this.ticking) return;
@@ -143,14 +143,17 @@ export class SweepHub {
       const cron = parseCron(settings.cron);
       if ("error" in cron) return;
       const last = await readLastFire();
-      if (last === null) {
+      // with no fire on record, or one in the future (a clock set back, a
+      // hand edit), the count starts now; a future one left in place would
+      // keep every slot until it from firing
+      if (last === null || last > now) {
         await writeLastFire(now);
         return;
       }
       const due = nextFire(cron, last);
       if (due === null || due > now) return;
       await writeLastFire(now);
-      await this.fire(settings);
+      await this.fire();
     } finally {
       this.ticking = false;
     }
@@ -159,8 +162,12 @@ export class SweepHub {
   /** Closes what the schedule may close and holds the closable rest as the
    *  ask, replacing any ask not yet answered. One log entry, even for a
    *  fire that found nothing. */
-  private fire(settings: SweepSettings): Promise<void> {
+  private fire(): Promise<void> {
     return this.queue(async () => {
+      // read again on the queue: a close ahead of this fire may have taken
+      // long enough for Eric to switch the schedule off or change its kinds
+      const settings = await this.settings();
+      if (!settings.on) return;
       const items = this.plan(await this.deps.facts(), settings);
       // a draft PR joins neither the close nor the ask once PRs are swept (Task 10)
       const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
@@ -175,8 +182,9 @@ export class SweepHub {
   async info(): Promise<SweepInfo> {
     const [facts, settings, log, shells, chats, ask] = await Promise.all([this.deps.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
     const items = this.plan(facts, settings);
-    // what the ask held that has since closed or come back into use drops out of it
-    const still = ask?.filter((a) => items.some((i) => i.key === a.key)) ?? [];
+    // the ask's keys as the plan has them now, so a shell that has started a
+    // program since reads unticked; what has closed or come back into use drops out
+    const still = ask ? items.filter((i) => ask.some((a) => a.key === i.key)) : [];
     return {
       items,
       settings,
@@ -210,9 +218,10 @@ export class SweepHub {
 
   /** `close` without the queue or the event, for callers already on the
    *  queue. The schedule closes a key only when the fresh plan still lets
-   *  it close on its own: a shell that has started a program since is
-   *  "in use now". */
-  private async closeKeys(keys: string[], by: "eric" | "schedule"): Promise<SweepOutcome[]> {
+   *  it close on its own, and an answer to the ask (`ticked`) only when the
+   *  fresh plan ticks it: a shell that has started a program since is
+   *  "in use now" to both. */
+  private async closeKeys(keys: string[], by: "eric" | "schedule", ticked = false): Promise<SweepOutcome[]> {
     const wanted = [...new Set(keys)];
     if (wanted.length === 0) return [];
     const settings = await this.settings();
@@ -230,7 +239,7 @@ export class SweepHub {
         outcomes.push({ key, result: "failed", why: "it is listed only; the sweep does not close it" });
         continue;
       }
-      if (by === "schedule" && !autoCloses(item, settings)) {
+      if ((by === "schedule" && !autoCloses(item, settings)) || (ticked && !item.checked)) {
         outcomes.push({ key, result: "in use now" });
         continue;
       }
@@ -255,8 +264,8 @@ export class SweepHub {
   }
 
   /** Answers the ask: closes those of its keys named, each after a recheck
-   *  as any close, and clears it. 404 with no ask, 400 for a key it does
-   *  not hold. */
+   *  as any close and only while the fresh plan still ticks it (else "in use
+   *  now"), and clears it. 404 with no ask, 400 for a key it does not hold. */
   answer(keys: string[]): Promise<SweepOutcome[]> {
     return this.queue(async () => {
       const ask = await readAsk();
@@ -264,7 +273,7 @@ export class SweepHub {
       const stray = keys.find((k) => !ask.some((i) => i.key === k));
       if (stray !== undefined) throw new SweepError(400, `${stray} is not in the ask`);
       await writeAsk(null);
-      const outcomes = await this.closeKeys(keys, "eric");
+      const outcomes = await this.closeKeys(keys, "eric", true);
       await this.publish();
       return outcomes;
     });

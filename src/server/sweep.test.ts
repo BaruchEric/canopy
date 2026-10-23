@@ -602,6 +602,68 @@ describe("the schedule", () => {
     expect((await readLog()).at(-1)?.by).toBe("eric");
   });
 
+  test("a shell in the ask that starts vim after the fire reads unticked and is not closed by the answer", async () => {
+    const w = world();
+    on(w, { auto: ["chat"] });
+    w.shells = [shell({ id: "t1" })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect((await readAsk())?.map((i) => [i.key, i.checked])).toEqual([["shell:t1", true]]);
+    // Eric starts vim in it before he answers
+    const t1 = w.shells.find((s) => s.id === "t1");
+    if (t1) t1.command = "vim";
+    const [item] = (await hub.info()).ask ?? [];
+    expect(item).toMatchObject({ key: "shell:t1", checked: false, auto: false });
+    expect(item?.why).toContain("running vim");
+    const got = await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t1"] } });
+    expect((got.body as { outcomes: SweepOutcome[] }).outcomes).toEqual([{ key: "shell:t1", result: "in use now" }]);
+    expect(w.calls.endShell).toEqual([]);
+    expect(w.shells.map((s) => s.id)).toEqual(["t1"]);
+  });
+
+  test("turning the schedule off while a fire waits behind a slow close: that fire closes nothing", async () => {
+    const w = world();
+    on(w);
+    w.shells = [shell({ id: "t0" })];
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    let release = (): void => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    w.deps.endShell = async (id) => {
+      w.calls.endShell.push(id);
+      await held;
+      w.shells = w.shells.filter((s) => s.id !== id);
+      return "closed";
+    };
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    const slow = hub.close(["shell:t0"], "eric");
+    while (w.calls.endShell.length === 0) await Bun.sleep(1);
+    const ticked = hub.tick(NOW);
+    while ((await readLastFire()) !== NOW) await Bun.sleep(1);
+    await Bun.sleep(10);
+    w.settings = { ...w.settings, on: false };
+    release();
+    await Promise.all([slow, ticked]);
+    expect(w.calls.dismiss).toEqual([]);
+    expect(await scheduled()).toEqual([]);
+    expect(await readAsk()).toBeNull();
+  });
+
+  test("a last fire a day ahead still fires at the next due time", async () => {
+    const w = world();
+    on(w);
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW + DAY);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(w.calls.dismiss).toEqual([]);
+    await hub.tick(NOW + 2 * MIN);
+    expect(w.calls.dismiss).toEqual(["d1"]);
+  });
+
   test("the ask's routes: only its own keys, a 404 with none, and a dismiss that closes nothing", async () => {
     const w = world();
     on(w);
