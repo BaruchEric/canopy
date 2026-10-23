@@ -151,7 +151,8 @@ export interface PlanInputs {
   outside: AgentCard[];
   /** the open PRs the gh login authored */
   prs: AuthoredPr[];
-  /** watched PRs with a canopy fix going, as `slug#number` */
+  /** watched PRs canopy works on, as `slug#number`: a fix going, its own
+   *  auto-merge on, or a run on the branch going (`PrHub.busy`) */
   fixing: ReadonlySet<string>;
   /** the scan's repos, to find a PR's checkout by its GitHub remote; a
    *  forge listing is not a checkout, and one on this machine beats one

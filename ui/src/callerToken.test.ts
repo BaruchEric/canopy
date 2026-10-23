@@ -146,7 +146,6 @@ describe("the first code box", () => {
   });
 });
 
-
 describe("readsAdmin", () => {
   test("off and log let anyone read; enforce wants a kind with admin; unread is no", () => {
     expect(readsAdmin({ mode: "off", you: "none" })).toBe(true);

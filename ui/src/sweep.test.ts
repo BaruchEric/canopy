@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { askCloses, askGone, askTitle, headKeys, nextAuto, pickKeys, prUrl, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
+import { askCloses, askGone, askTitle, headKeys, nextAuto, pickKeys, prPlace, prsDownNote, prUrl, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -327,5 +327,20 @@ describe("a span in the settings row", () => {
     expect(spanMs("1e-10", "hours")).toBeNull();
     expect(spanMs("1e306", "days")).toBeNull();
     expect(spanMs("Infinity", "hours")).toBeNull();
+  });
+});
+
+describe("the PRs GitHub did not list", () => {
+  test("prsDownNote says gh's line when the backend could not list them, and nothing when it could", () => {
+    expect(prsDownNote({ prsDown: "gh api graphql: HTTP 401: Bad credentials" })).toBe("GitHub did not list your PRs, so none are offered: gh api graphql: HTTP 401: Bad credentials");
+    expect(prsDownNote({})).toBeNull();
+    expect(prsDownNote(null)).toBeNull();
+  });
+
+  test("prPlace is where the PR group would be: before the first kind after pr, else the end", () => {
+    expect(prPlace([{ kind: "shell" }, { kind: "run" }, { kind: "outside" }])).toBe(2);
+    expect(prPlace([{ kind: "shell" }, { kind: "chat" }])).toBe(2);
+    expect(prPlace([{ kind: "outside" }])).toBe(0);
+    expect(prPlace([])).toBe(0);
   });
 });

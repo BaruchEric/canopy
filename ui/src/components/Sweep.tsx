@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SWEEP_KINDS, type KeptShell, type SweepItem, type SweepKind, type SweepOutcome, type SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, dropPicks, groupItems, headKeys, KIND_HEAD, nextAuto, outcomesOf, prUrl, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
+import { defaultPicks, dropPicks, groupItems, headKeys, KIND_HEAD, nextAuto, outcomesOf, prPlace, prsDownNote, prUrl, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
 import { useNow } from "./Registry";
 import { PopGear } from "./PopGrip";
 
@@ -122,6 +122,17 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
   const rows = sheetRows(items, done);
   const outcomes = new Map(rows.flatMap((r) => (r.outcome ? [[r.item.key, r.outcome] as const] : [])));
   const groups = groupItems(rows.map((r) => r.item));
+  // GitHub did not list the PRs: said where their group would be
+  const prsDown = groups.some((g) => g.kind === "pr") ? null : prsDownNote(sweep);
+  const downAt = prPlace(groups);
+  const downNote = prsDown && (
+    <section key="pr-down" className="sweep-group k-pr">
+      <h3 className="sweep-head">
+        <span>{KIND_HEAD.pr}</span>
+        <span className="sweep-note">{prsDown}</span>
+      </h3>
+    </section>
+  );
 
   const setTicks = (keys: string[], on: boolean) =>
     setPicks((p) => {
@@ -164,11 +175,12 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
           )
         )}
         {groups.length === 0 && <p className="sweep-none">Nothing has been idle long enough to offer.</p>}
-        {groups.map((g) => {
+        {groups.flatMap((g, at) => {
           // a draft or a busy shell is left to its own box
           const can = headKeys(g.items, live);
           const all = can.length > 0 && can.every((k) => chosen.has(k));
-          return (
+          return [
+            at === downAt ? downNote : null,
             <section key={g.kind} className={`sweep-group k-${g.kind}`}>
               <h3 className="sweep-head">
                 {can.length > 0 ? (
@@ -197,9 +209,10 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
                   />
                 ))}
               </ul>
-            </section>
-          );
+            </section>,
+          ];
         })}
+        {downAt === groups.length && downNote}
         <Swept shells={sweep.swept.shells} chats={sweep.swept.chats} now={now} />
         {error && <p className="note err">{error}</p>}
       </div>
@@ -471,6 +484,7 @@ export function SweepRow() {
         sweep PRs from this backend
       </label>
       <p className="settings-hint">{PRS_HINT}</p>
+      {s.prs && prsDownNote(sweep) && <p className="settings-hint error">{prsDownNote(sweep)}</p>}
       <div className="ranger-fields">
         <label className="layout-field">
           when (cron)

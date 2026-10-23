@@ -103,7 +103,7 @@ export class SweepHub {
   private stopped = false;
   /** the authored-PR list and when it was asked for; the promise, so
    *  reads that arrive together share one query */
-  private prList: { at: number; list: Promise<AuthoredPr[] | null> } | null = null;
+  private prList: { at: number; list: Promise<AuthoredPr[] | string> } | null = null;
 
   constructor(private readonly deps: SweepDeps) {}
 
@@ -135,15 +135,15 @@ export class SweepHub {
 
   /** The authored PRs, from the list kept for `PR_LIST_MS`. A backend that
    *  does not sweep PRs plans none and never asks. A list gh could not
-   *  give is null, kept as long: no news about the PRs, as tmux not
+   *  give is gh's error, kept as long: no news about the PRs, as tmux not
    *  answering is about the shells, so the rest of the plan still reads. */
-  private authored(settings: SweepSettings): Promise<AuthoredPr[] | null> {
+  private authored(settings: SweepSettings): Promise<AuthoredPr[] | string> {
     if (!this.sweepsPrs(settings)) return Promise.resolve([]);
     const now = this.now();
     if (this.prList && now - this.prList.at < PR_LIST_MS) return this.prList.list;
     const list = this.deps.authoredPrs().catch((err) => {
       console.error("canopy: sweep: the authored PRs could not be listed:", errText(err));
-      return null;
+      return errText(err);
     });
     this.prList = { at: now, list };
     return list;
@@ -151,10 +151,11 @@ export class SweepHub {
 
   /** the facts with the authored PRs, from `prs` when the caller has
    *  them; `prsDown` when there is no list (GitHub did not give one, or the
-   *  caller did not read it), planned as none */
-  private async facts(settings: SweepSettings, prs?: AuthoredPr[] | null): Promise<Facts> {
+   *  caller did not read it, null), planned as none, with gh's error as
+   *  `prsWhy` */
+  private async facts(settings: SweepSettings, prs?: AuthoredPr[] | string | null): Promise<Facts> {
     const [facts, list] = await Promise.all([this.deps.facts(), prs === undefined ? this.authored(settings) : prs]);
-    return { ...facts, prs: list ?? [], prsDown: list === null };
+    return { ...facts, prs: Array.isArray(list) ? list : [], prsDown: !Array.isArray(list), prsWhy: typeof list === "string" ? list : null };
   }
 
   /** The plan less what this hub has closed already. A closed key the plan
@@ -305,6 +306,8 @@ export class SweepHub {
       lastRun: log.at(-1) ?? null,
       swept: { shells, chats },
       ask: still.length > 0 ? still : null,
+      // set only on a backend that sweeps PRs, the one that asks GitHub
+      ...(facts.prsWhy !== null ? { prsDown: facts.prsWhy } : {}),
     };
   }
 
@@ -361,6 +364,8 @@ export class SweepHub {
         if (!settings.on) break;
         if (!(settings.auto as readonly string[]).includes(key.slice(0, key.indexOf(":")))) continue;
       }
+      // a PR is public: a switch-off mid-close stops the rest, Eric's close too
+      if (by !== "schedule" && key.startsWith("pr:")) settings = await this.settings();
       if (key.startsWith("pr:") && !this.sweepsPrs(settings)) {
         outcomes.push({ key, result: "failed", why: "this backend does not sweep PRs: its sweep setting prs is off, or it does not hold its flows lock" });
         continue;
@@ -468,8 +473,8 @@ export class SweepHub {
         // gh's last line, and the catch around this makes it "failed"
         const now = await this.deps.prState(pr.slug, pr.number);
         if (now.state !== "OPEN") return { key, result: "gone" };
-        // activity, auto-merge, or a move to draft since the list: someone is at it
-        if (now.updatedAt > pr.updatedAt || now.autoMerge || (now.draft && !pr.draft)) return { key, result: "in use now" };
+        // activity, auto-merge, a merge queue, or a move to draft since the list: someone is at it
+        if (now.updatedAt > pr.updatedAt || now.autoMerge || now.queued || (now.draft && !pr.draft)) return { key, result: "in use now" };
         await this.deps.closePr(pr, sweepComment(spanDays(settings.spans.pr)));
         return { key, result: "closed" };
       }
@@ -558,7 +563,7 @@ export class SweepHub {
 const isKind = (k: string): k is SweepKind => (SWEEP_KINDS as readonly string[]).includes(k);
 
 /** the plan's inputs, and whether GitHub failed to list the PRs */
-type Facts = PlanInputs & { prsDown: boolean };
+type Facts = PlanInputs & { prsDown: boolean; prsWhy: string | null };
 
 /** What a key the fresh plan no longer has came to: "in use now" when the
  *  thing is still there, "gone" when it is not. A shell cannot be told

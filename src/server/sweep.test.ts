@@ -180,7 +180,7 @@ function world(): Facts & { deps: SweepDeps } {
     prState: async (slug, number) => {
       const id = `${slug}#${number}`;
       const pr = w.prs.find((p) => `${p.slug}#${p.number}` === id);
-      const listed: PrNow = pr ? { state: "OPEN", updatedAt: pr.updatedAt, draft: pr.draft, autoMerge: pr.autoMerge } : { state: "CLOSED", updatedAt: NOW, draft: false, autoMerge: false };
+      const listed: PrNow = pr ? { state: "OPEN", updatedAt: pr.updatedAt, draft: pr.draft, autoMerge: pr.autoMerge, queued: pr.queued } : { state: "CLOSED", updatedAt: NOW, draft: false, autoMerge: false, queued: false };
       const set = w.prState.get(id);
       if (typeof set === "string") throw new Error(set);
       return { ...listed, ...set };
@@ -507,7 +507,6 @@ describe("the schedule", () => {
       { key: "run:d1", result: "closed" },
     ]);
     expect(await readLastFire()).toBe(NOW);
-    expect((await hub.info()).ask).toBeNull();
     const info = await hub.info();
     expect(info.ask).toBeNull();
     // it stays in the sheet, where a tick closes it
@@ -955,18 +954,39 @@ describe("PRs", () => {
     expect(w.calls.authored).toBe(2);
   });
 
-  test("a gh failure listing PRs plans none and keeps the rest of the plan", async () => {
+  test("a gh failure listing PRs plans none, keeps the rest of the plan, and says why", async () => {
     const w = prWorld();
     w.shells = [shell()];
-    const hub = new SweepHub({
-      ...w.deps,
-      authoredPrs: async () => {
-        throw new Error("gh: not logged in");
-      },
-    });
+    w.listFails = "gh api graphql: HTTP 401: Bad credentials";
+    const hub = new SweepHub(w.deps);
     const got = await call(hub, "/api/sweep");
     expect(got.status).toBe(200);
     expect((got.body as SweepInfo).items.map((i) => i.key)).toEqual(["shell:t1"]);
+    expect((got.body as SweepInfo).prsDown).toBe("gh api graphql: HTTP 401: Bad credentials");
+    // a backend that does not sweep PRs never asks, so has nothing to say
+    const v = world();
+    v.listFails = "gh api graphql: HTTP 401: Bad credentials";
+    expect((await new SweepHub(v.deps).info()).prsDown).toBeUndefined();
+    // and a list that reads says nothing either
+    const u = prWorld();
+    expect((await new SweepHub(u.deps).info()).prsDown).toBeUndefined();
+  });
+
+  test("prs switched off in the middle of a close stops the rest of its PRs", async () => {
+    const w = prWorld();
+    w.prs = [authored(), authored({ number: 8, url: "https://github.com/eric/app/pull/8" })];
+    const close = w.deps.closePr;
+    const hub = new SweepHub({
+      ...w.deps,
+      closePr: async (pr, comment) => {
+        await close(pr, comment);
+        w.settings = { ...w.settings, prs: false };
+      },
+    });
+    const got = await hub.close([PR, "pr:eric/app#8"], "eric");
+    expect(got[0]).toEqual({ key: PR, result: "closed" });
+    expect(got[1]).toMatchObject({ key: "pr:eric/app#8", result: "failed" });
+    expect(w.calls.closePr.map((c) => c.id)).toEqual(["eric/app#7"]);
   });
 
   test("a PR GitHub did not list is \"failed\", not gone, and the ask keeps it", async () => {
@@ -1041,8 +1061,8 @@ describe("PRs", () => {
     expect(w.calls.closePr).toEqual([]);
   });
 
-  test("auto-merge turned on, or a move to draft, since the list is \"in use now\"", async () => {
-    for (const since of [{ autoMerge: true }, { draft: true }]) {
+  test("auto-merge turned on, a merge queue, or a move to draft, since the list is \"in use now\"", async () => {
+    for (const since of [{ autoMerge: true }, { queued: true }, { draft: true }]) {
       const w = prWorld();
       w.prs = [authored()];
       w.prState.set("eric/app#7", since);

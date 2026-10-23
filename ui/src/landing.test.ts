@@ -176,6 +176,15 @@ describe("a branch that opened a PR, in the landing section", () => {
     expect(openedRow(opened("a"), [watch("a")])).toEqual({ word: "PR #12", url: "https://github.com/o/canopy/pull/12", canDrop: false });
   });
 
+  test("watched but swept, or read closed or merged: drop as the server allows it, still linking to the PR", () => {
+    const url = "https://github.com/o/canopy/pull/12";
+    expect(openedRow(opened("a"), [watch("a", { swept: 5 })])).toEqual({ word: "PR #12", url, canDrop: true });
+    for (const status of ["closed", "merged"] as const) {
+      expect(openedRow(opened("a"), [watch("a", { state: { status } as PrWatch["state"] })]).canDrop).toBe(true);
+    }
+    expect(openedRow(opened("a", { state: "working" }), [watch("a", { swept: 5 })]).canDrop).toBe(false);
+  });
+
   test("no watch (dropped 30 days after a sweep closed it): PR #n with drop, never land", () => {
     expect(openedRow(opened("a"), [watch("b"), watch("a", { repoId: "other" })])).toEqual({ word: "PR #12", canDrop: true });
   });

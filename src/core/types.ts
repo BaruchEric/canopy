@@ -164,6 +164,8 @@ export interface PrNow {
   draft: boolean;
   /** set to merge on its own once checks pass */
   autoMerge: boolean;
+  /** in a merge queue */
+  queued: boolean;
 }
 
 /* ---------- sources: the folders canopy scans ---------- */
@@ -1305,10 +1307,11 @@ export interface PrWatch {
    *  keeps its branch and the landing record's `pr`, drops this on a
    *  reopen and goes after 30 days */
   swept?: number;
-  /** closed on GitHub, and its comments could not be read to tell whether
-   *  the sweep closed it: the landing record keeps `pr`, and it is read
-   *  again once a day until they can be */
-  closeUnread?: true;
+  /** closed on GitHub, and who closed it could not be read to tell
+   *  whether the sweep did, since when (unix ms): the landing record keeps
+   *  `pr`, and it is read again once a day until it can be told, or 30
+   *  days have gone */
+  closeUnread?: number;
   /** unix ms */
   openedAt: number;
   updatedAt: number;
@@ -3086,6 +3089,9 @@ export interface SweepInfo {
   swept: { shells: KeptShell[]; chats: SweptChat[] };
   /** the scheduled fire's pending question: what it held back */
   ask: SweepItem[] | null;
+  /** why GitHub did not list the PRs (gh's last line), on a backend that
+   *  sweeps PRs: no PR rows then means "not known", not "none idle" */
+  prsDown?: string;
 }
 
 /** `GET /api/ranger` and the `ranger` event. */

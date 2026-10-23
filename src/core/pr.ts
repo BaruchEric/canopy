@@ -139,6 +139,12 @@ export function readyToMerge(s: PrState, w: Pick<PrWatch, "autoMerge" | "fixing"
   return { ok: true };
 }
 
+/** Whether a PR watch still holds its branch: there is one, its PR is not
+ *  swept and not read as closed or merged. The landing hub will not drop
+ *  such a branch, and the landing row offers no drop for it. */
+export const watchHolds = (w: Pick<PrWatch, "swept" | "state"> | undefined): boolean =>
+  w !== undefined && w.swept === undefined && w.state?.status !== "closed" && w.state?.status !== "merged";
+
 /** How long until the PR is read again; null once it is merged or closed.
  *  A PR not read yet is read soon. */
 export function nextPoll(w: Pick<PrWatch, "state" | "fixing" | "queued">): number | null {

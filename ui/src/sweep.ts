@@ -4,7 +4,7 @@
  *  windows close with them. Tested in sweep.test.ts. */
 
 import { mayClose } from "../../src/core/sweep";
-import { SWEEP_KINDS, type AgentCard, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome } from "../../src/core/types";
+import { SWEEP_KINDS, type AgentCard, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome } from "../../src/core/types";
 
 /** each kind's heading in the sheet */
 export const KIND_HEAD: Record<SweepKind, string> = {
@@ -20,6 +20,20 @@ export const KIND_HEAD: Record<SweepKind, string> = {
  *  out. */
 export function groupItems(items: readonly SweepItem[]): { kind: SweepKind; items: SweepItem[] }[] {
   return SWEEP_KINDS.map((kind) => ({ kind, items: items.filter((i) => i.kind === kind) })).filter((g) => g.items.length > 0);
+}
+
+/** What the sheet and the settings row say when GitHub did not list the
+ *  PRs on a backend that sweeps them, so no PR rows reads as "not known"
+ *  rather than "none idle"; null when it did. */
+export function prsDownNote(info: Pick<SweepInfo, "prsDown"> | null | undefined): string | null {
+  return info?.prsDown === undefined ? null : `GitHub did not list your PRs, so none are offered: ${info.prsDown}`;
+}
+
+/** Where among the sheet's groups the PRs' place is: the index of the
+ *  first group of a kind after pr, else the end. */
+export function prPlace(groups: readonly { kind: SweepKind }[]): number {
+  const at = groups.findIndex((g) => SWEEP_KINDS.indexOf(g.kind) > SWEEP_KINDS.indexOf("pr"));
+  return at < 0 ? groups.length : at;
 }
 
 /** what the sheet starts ticked: the plan's checked items it may close,

@@ -3,6 +3,7 @@
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
 
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
+import { watchHolds } from "../../src/core/pr";
 import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [] };
@@ -87,16 +88,18 @@ export function repoLanding(info: LandingInfo, repoId: string): RepoLanding {
 
 /**
  * A branch that opened a PR, as its landing row shows it: "PR #n" and
- * never land, which the server refuses for it. While the PR watch has it,
- * the row links to the PR and offers no drop, since the watch keeps the
- * worktree. With no watch, as when a PR the sweep closed stays closed past
- * its 30 days, drop is how the branch and its worktree go, once no run on
- * it is working.
+ * never land, which the server refuses for it. A watched PR links to it.
+ * Drop is offered by the server's rule (`watchHolds`): not while the watch
+ * holds the branch (its PR open and not swept), since the watch keeps the
+ * worktree; once it is swept, read closed or merged, or there is no watch
+ * (as when a PR the sweep closed stays closed past its 30 days), drop is
+ * how the branch and its worktree go, once no run on it is working.
  */
 export function openedRow(r: OpenedRun, watches: readonly PrWatch[]): { word: string; url?: string; canDrop: boolean } {
   const w = watches.find((x) => x.id === r.id && x.repoId === r.repoId);
   const word = `PR #${r.pr}`;
-  return w ? { word, url: w.url, canDrop: false } : { word, canDrop: r.state !== "working" };
+  const canDrop = !watchHolds(w) && r.state !== "working";
+  return w ? { word, url: w.url, canDrop } : { word, canDrop };
 }
 
 /** Whether a repo has anything for its landing section to show. */

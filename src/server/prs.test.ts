@@ -50,6 +50,8 @@ interface Gh {
   closedAt: string | null;
   /** the gh login */
   viewer: string;
+  /** fields over the state query's answer */
+  now: Record<string, unknown>;
 }
 
 let n = 0;
@@ -111,7 +113,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
   const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
-  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric" };
+  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric", now: {} };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
@@ -120,6 +122,9 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
     const [a, b] = args;
     if (a === "auth") return g.auth ? ok("Logged in") : no("not logged in");
     if (a === "pr" && b === "create") return ok(`https://github.com/o/r/pull/7\n`);
+    if (a === "api" && b === "graphql" && args.some((x) => x.includes("mergeQueueEntry"))) {
+      return ok(JSON.stringify({ data: { repository: { pullRequest: { state: g.state, updatedAt: "2026-10-01T12:00:00Z", isDraft: false, autoMergeRequest: null, mergeQueueEntry: null, ...g.now } } } }));
+    }
     if (a === "api" && b === "graphql") {
       if (typeof g.prComments === "string") return no(`some noise\n${g.prComments}\n`);
       return ok(JSON.stringify({ data: { viewer: { login: g.viewer }, repository: { pullRequest: { closedAt: g.closedAt, comments: { nodes: g.prComments } } } } }));
@@ -574,6 +579,7 @@ describe("close", () => {
     await w.hub.open(w.rec.id);
     w.gh.head = await revOf(w.dir, "HEAD");
     w.gh.state = "CLOSED";
+    w.gh.closedAt = "2026-10-02T12:00:00Z";
     const pr = await pollNow(w);
     expect(pr.state?.status).toBe("closed");
     expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
@@ -760,7 +766,7 @@ describe("the sweep's close", () => {
     w.gh.prComments = "gh: HTTP 502";
     w.clock = Date.now();
     const pr = await pollNow(w);
-    expect(pr.closeUnread).toBe(true);
+    expect(pr.closeUnread).toBe(w.clock);
     expect(pr.error).toContain("HTTP 502");
     expect(w.records.get(w.rec.id)?.pr).toBe(7);
     expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
@@ -805,15 +811,87 @@ describe("the sweep's close", () => {
     expect(await remoteHas(w)).toBe(true);
   });
 
-  test("readState reads one PR's state, last activity, draft and auto-merge, and throws gh's last line", async () => {
+  test("readState reads state, last activity, draft, auto-merge and the merge queue through GraphQL, and throws gh's last line", async () => {
     const w = await world();
-    expect(await w.hub.readState("o/r", 7)).toEqual({ state: "OPEN", updatedAt: Date.parse("2026-10-01T12:00:00Z"), draft: false, autoMerge: false });
-    expect(w.gh.calls.at(-1)).toEqual(["pr", "view", "7", "-R", "o/r", "--json", "state,updatedAt,isDraft,autoMergeRequest"]);
+    expect(await w.hub.readState("o/r", 7)).toEqual({ state: "OPEN", updatedAt: Date.parse("2026-10-01T12:00:00Z"), draft: false, autoMerge: false, queued: false });
+    const call = w.gh.calls.at(-1)!;
+    expect(call.slice(0, 2)).toEqual(["api", "graphql"]);
+    expect(call).toEqual(expect.arrayContaining(["owner=o", "name=r", "number=7"]));
+    w.gh.now = { isDraft: true, autoMergeRequest: { enabledAt: "2026-10-01T12:00:00Z" }, mergeQueueEntry: { id: "q1" } };
+    expect(await w.hub.readState("o/r", 7)).toMatchObject({ draft: true, autoMerge: true, queued: true });
+    w.gh.now = { updatedAt: "not a time" };
+    await expect(w.hub.readState("o/r", 7)).rejects.toThrow("its answer did not read");
     const v = await world();
-    (v.hub as unknown as { deps: { gh: unknown } }).deps.gh = async () => ok(JSON.stringify({ state: "OPEN", updatedAt: "2026-10-01T12:00:00Z", isDraft: true, autoMergeRequest: { enabledAt: "2026-10-01T12:00:00Z" } }));
-    expect(await v.hub.readState("o/r", 7)).toMatchObject({ draft: true, autoMerge: true });
     (v.hub as unknown as { deps: { gh: unknown } }).deps.gh = async () => no("some noise\nGraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)\n");
-    await expect(v.hub.readState("o/r", 7)).rejects.toThrow("gh pr view: GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)");
+    await expect(v.hub.readState("o/r", 7)).rejects.toThrow("gh api graphql: GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)");
+  });
+
+  test("a close GitHub gives no time for is asked again, never freed", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.closedAt = null;
+    w.clock = Date.now();
+    const pr = await pollNow(w);
+    expect(pr.closeUnread).toBe(w.clock);
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+  });
+
+  test("busy: the watched PRs canopy works on, by a fix, its own auto-merge or a run on the branch", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    expect(w.hub.busy()).toEqual(new Set());
+    await w.hub.set(w.rec.id, { autoMerge: true });
+    expect(w.hub.busy()).toEqual(new Set(["o/r#7"]));
+    await w.hub.set(w.rec.id, { autoMerge: false });
+    w.active.add(w.hub.info()[0]!.runId);
+    expect(w.hub.busy()).toEqual(new Set(["o/r#7"]));
+  });
+
+  test("sweepClose refuses a PR with canopy's auto-merge on or a run on its branch going", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoMerge: true });
+    await expect(w.hub.sweepClose(w.rec.id, COMMENT)).rejects.toThrow("auto-merge is on");
+    await w.hub.set(w.rec.id, { autoMerge: false });
+    w.active.add(w.hub.info()[0]!.runId);
+    await expect(w.hub.sweepClose(w.rec.id, COMMENT)).rejects.toThrow("a run on its branch is still going");
+    expect(w.gh.calls.some((c) => c[1] === "close")).toBe(false);
+  });
+
+  test("swept, or closed by no one known, for 30 days with its last read failed: dropped before another read, keeping its PR", async () => {
+    for (const how of ["swept", "unread"] as const) {
+      const w = await world();
+      await w.hub.open(w.rec.id);
+      w.gh.head = await revOf(w.dir, "HEAD");
+      await pollNow(w);
+      w.clock = Date.now();
+      if (how === "swept") await w.hub.sweepClose(w.rec.id, COMMENT);
+      else {
+        w.gh.state = "CLOSED";
+        w.gh.prComments = "gh: HTTP 404";
+        await pollNow(w);
+        expect(w.hub.info()[0]?.closeUnread).toBe(w.clock);
+      }
+      // the repo is gone: every read fails from here
+      const deps = (w.hub as unknown as { deps: { gh: (args: string[]) => Promise<ExecResult> } }).deps;
+      deps.gh = async (args) => {
+        w.gh.calls.push(args);
+        return no("GraphQL: Could not resolve to a Repository with the name 'o/r'.");
+      };
+      w.clock += 10 * DAY;
+      await pollNow(w);
+      expect(w.hub.info()).toHaveLength(1);
+      w.clock += 21 * DAY;
+      const reads = w.gh.calls.length;
+      await pollNow(w);
+      expect(w.hub.info()).toEqual([]);
+      expect(w.gh.calls.length).toBe(reads);
+      expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    }
   });
 });
 

@@ -867,10 +867,10 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   // a coordinator's children while it runs: its cards follow them
   const coordinating = new Set(all.filter((r) => r.action === "coordinate" && isRunActive(r)).map((r) => r.id));
   for (const r of all) if (r.parent && coordinating.has(r.parent)) heldRuns.add(r.id);
-  // a watched PR with a fix going is never offered, and its fix run is held
-  const watches = state.prs.info().filter((w) => w.fixing);
-  for (const w of watches) if (w.fixing) heldRuns.add(w.fixing.run);
-  const fixing = new Set(watches.map((w) => `${w.slug.toLowerCase()}#${w.number}`));
+  // a watched PR's fix run is held; a watched PR canopy works on (a fix,
+  // its own auto-merge, a run on the branch) is never offered
+  for (const w of state.prs.info()) if (w.fixing) heldRuns.add(w.fixing.run);
+  const fixing = state.prs.busy();
   return { serverStart, shells, runs, heldRuns, outside: cards, fixing, repos: state.result.repos };
 }
 
