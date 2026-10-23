@@ -495,7 +495,7 @@ describe("pair requests", () => {
 
 describe("the sweep's ask", () => {
   const DAY = 86_400_000;
-  const settings: SweepSettings = { on: true, cron: "0 4 * * *", spans: { shell: DAY, chat: DAY / 2, run: 3 * DAY, pr: 14 * DAY, outside: DAY }, auto: ["shell", "chat", "run"] };
+  const settings: SweepSettings = { on: true, cron: "0 4 * * *", spans: { shell: DAY, chat: DAY / 2, run: 3 * DAY, pr: 14 * DAY, outside: DAY }, auto: ["shell", "chat", "run"], prs: false };
   const pr = (id: string, idleSince: number): SweepItem => ({
     key: `pr:${id}`,
     kind: "pr",

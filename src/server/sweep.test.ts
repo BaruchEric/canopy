@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SWEEP, normalizeSweep, type PlanInputs, type ShellFacts } from "../core/sweep";
 import { addSweptChat, readAsk, readLastFire, readLog, readSweptChats, sweepDir, writeAsk, writeLastFire } from "../core/sweepstore";
-import type { AgentCard, AuthoredPr, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
+import type { AgentCard, AuthoredPr, PrNow, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
 import { SweepHub, type SweepDeps } from "./sweep";
 
 const H = 3_600_000;
@@ -94,8 +94,9 @@ interface Facts {
   prs: AuthoredPr[];
   /** whether this backend holds the flows lock */
   lock: boolean;
-  /** what a read of one PR says, by `slug#number`; absent reads as GitHub's list does */
-  prState: Map<string, { state: string; updatedAt: number } | null>;
+  /** what a read of one PR says, by `slug#number`, or gh's error; absent
+   *  reads as GitHub's list does */
+  prState: Map<string, Partial<PrNow> | string>;
   /** gh's last line when a close fails */
   closeFails: string | null;
   /** gh's error when listing the authored PRs fails */
@@ -178,9 +179,11 @@ function world(): Facts & { deps: SweepDeps } {
     },
     prState: async (slug, number) => {
       const id = `${slug}#${number}`;
-      if (w.prState.has(id)) return w.prState.get(id) ?? null;
       const pr = w.prs.find((p) => `${p.slug}#${p.number}` === id);
-      return pr ? { state: "OPEN", updatedAt: pr.updatedAt } : { state: "CLOSED", updatedAt: NOW };
+      const listed: PrNow = pr ? { state: "OPEN", updatedAt: pr.updatedAt, draft: pr.draft, autoMerge: pr.autoMerge } : { state: "CLOSED", updatedAt: NOW, draft: false, autoMerge: false };
+      const set = w.prState.get(id);
+      if (typeof set === "string") throw new Error(set);
+      return { ...listed, ...set };
     },
     closePr: async (pr, comment) => {
       const id = `${pr.slug}#${pr.number}`;
@@ -930,9 +933,15 @@ describe("PRs", () => {
   const PR = "pr:eric/app#7";
   const COMMENT = "Closed by canopy's sweep after 14 days with no activity. Reopen it to pick it back up.";
   const prKeys = (info: SweepInfo): string[] => info.items.filter((i) => i.kind === "pr").map((i) => i.key);
+  /** a backend that sweeps PRs: the setting on, the lock held */
+  const prWorld = () => {
+    const w = world();
+    w.settings.prs = true;
+    return w;
+  };
 
   test("the authored list is asked once for reads in a row, and again once it is a minute old", async () => {
-    const w = world();
+    const w = prWorld();
     w.prs = [authored()];
     let now = NOW;
     const hub = new SweepHub({ ...w.deps, now: () => now });
@@ -947,7 +956,7 @@ describe("PRs", () => {
   });
 
   test("a gh failure listing PRs plans none and keeps the rest of the plan", async () => {
-    const w = world();
+    const w = prWorld();
     w.shells = [shell()];
     const hub = new SweepHub({
       ...w.deps,
@@ -961,7 +970,7 @@ describe("PRs", () => {
   });
 
   test("a PR GitHub did not list is \"failed\", not gone, and the ask keeps it", async () => {
-    const w = world();
+    const w = prWorld();
     w.settings = { ...w.settings, on: true, cron: "* * * * *" };
     w.prs = [authored()];
     await writeLastFire(NOW - 2 * 60_000);
@@ -984,7 +993,7 @@ describe("PRs", () => {
   });
 
   test("an unwatched PR closes with the comment and no branch delete", async () => {
-    const w = world();
+    const w = prWorld();
     w.prs = [authored()];
     const hub = new SweepHub(w.deps);
     expect(await hub.close([PR], "eric")).toEqual([{ key: PR, result: "closed" }]);
@@ -994,21 +1003,21 @@ describe("PRs", () => {
 
   test("a push since the plan spares the PR (\"in use now\")", async () => {
     // the cached list still has it idle: the read of the one PR says otherwise
-    const w = world();
+    const w = prWorld();
     w.prs = [authored()];
     const hub = new SweepHub(w.deps);
     expect(prKeys(await hub.info())).toEqual([PR]);
     w.prState.set("eric/app#7", { state: "OPEN", updatedAt: NOW - H });
     expect(await hub.close([PR], "eric")).toEqual([{ key: PR, result: "in use now" }]);
     // a fresh list no longer has it idle
-    const v = world();
+    const v = prWorld();
     v.prs = [authored({ updatedAt: NOW - H })];
     expect(await new SweepHub(v.deps).close([PR], "eric")).toEqual([{ key: PR, result: "in use now" }]);
     expect([...w.calls.closePr, ...v.calls.closePr]).toEqual([]);
   });
 
   test("a PR closed since the plan is gone", async () => {
-    const w = world();
+    const w = prWorld();
     w.prs = [authored()];
     w.prState.set("eric/app#7", { state: "CLOSED", updatedAt: NOW });
     expect(await new SweepHub(w.deps).close([PR], "eric")).toEqual([{ key: PR, result: "gone" }]);
@@ -1016,7 +1025,7 @@ describe("PRs", () => {
   });
 
   test("a gh failure is \"failed\" with gh's last line and the PR stays offered", async () => {
-    const w = world();
+    const w = prWorld();
     w.prs = [authored()];
     w.closeFails = "GraphQL: Resource not accessible by integration (closePullRequest)";
     const hub = new SweepHub(w.deps);
@@ -1024,17 +1033,49 @@ describe("PRs", () => {
     expect(prKeys(await hub.info())).toEqual([PR]);
   });
 
-  test("a PR GitHub cannot be asked about is \"failed\" and not closed", async () => {
-    const w = world();
+  test("a PR GitHub cannot be asked about is \"failed\" with gh's last line and not closed", async () => {
+    const w = prWorld();
     w.prs = [authored()];
-    w.prState.set("eric/app#7", null);
-    const [got] = await new SweepHub(w.deps).close([PR], "eric");
-    expect(got?.result).toBe("failed");
+    w.prState.set("eric/app#7", "gh pr view: HTTP 502: Bad Gateway");
+    expect(await new SweepHub(w.deps).close([PR], "eric")).toEqual([{ key: PR, result: "failed", why: "gh pr view: HTTP 502: Bad Gateway" }]);
     expect(w.calls.closePr).toEqual([]);
   });
 
-  test("without the flows lock no PR is planned", async () => {
+  test("auto-merge turned on, or a move to draft, since the list is \"in use now\"", async () => {
+    for (const since of [{ autoMerge: true }, { draft: true }]) {
+      const w = prWorld();
+      w.prs = [authored()];
+      w.prState.set("eric/app#7", since);
+      expect(await new SweepHub(w.deps).close([PR], "eric")).toEqual([{ key: PR, result: "in use now" }]);
+      expect(w.calls.closePr).toEqual([]);
+    }
+    // a draft the list had as one is closed by a tick as offered
+    const d = prWorld();
+    d.prs = [authored({ draft: true })];
+    expect(await new SweepHub(d.deps).close([PR], "eric")).toEqual([{ key: PR, result: "closed" }]);
+  });
+
+  test("with the prs setting off no PR is planned and GitHub is never asked", async () => {
     const w = world();
+    w.prs = [authored()];
+    const hub = new SweepHub(w.deps);
+    expect(w.settings.prs).toBe(false);
+    expect(prKeys(await hub.info())).toEqual([]);
+    const [got] = await hub.close([PR], "eric");
+    expect(got).toMatchObject({ key: PR, result: "failed" });
+    expect(w.calls.authored).toBe(0);
+    expect(w.calls.closePr).toEqual([]);
+  });
+
+  test("a close of shells alone never lists the PRs", async () => {
+    const w = prWorld();
+    w.shells = [shell()];
+    expect(await new SweepHub(w.deps).close(["shell:t1"], "eric")).toEqual([{ key: "shell:t1", result: "closed" }]);
+    expect(w.calls.authored).toBe(0);
+  });
+
+  test("with the prs setting on but without the flows lock no PR is planned", async () => {
+    const w = prWorld();
     w.prs = [authored()];
     w.lock = false;
     const hub = new SweepHub(w.deps);
@@ -1046,7 +1087,7 @@ describe("PRs", () => {
   });
 
   test("a closed PR is not offered again", async () => {
-    const w = world();
+    const w = prWorld();
     w.prs = [authored(), authored({ number: 8, url: "https://github.com/eric/app/pull/8" })];
     const hub = new SweepHub(w.deps);
     expect(prKeys(await hub.info())).toEqual([PR, "pr:eric/app#8"]);
@@ -1059,10 +1100,16 @@ describe("PRs", () => {
     // the close let the cached list go: the next read asks GitHub again
     expect(prKeys(await hub.info())).toEqual([]);
     expect(w.calls.authored).toBe(2);
+    // GitHub's list lags and still has #7: a close of shells alone, which
+    // reads no list, does not let the hub forget it closed it
+    w.prs = [authored()];
+    w.shells = [shell()];
+    await hub.close(["shell:t1"], "eric");
+    expect(prKeys(await hub.info())).toEqual([]);
   });
 
   test("the span in the comment is the pr span in days", async () => {
-    const w = world();
+    const w = prWorld();
     w.prs = [authored({ updatedAt: NOW - 40 * 24 * H })];
     w.settings.spans.pr = 30 * 24 * H;
     await new SweepHub(w.deps).close([PR], "eric");
@@ -1070,7 +1117,7 @@ describe("PRs", () => {
   });
 
   test("the schedule leaves PRs to the ask unless pr is an auto kind, and never takes a draft", async () => {
-    const w = world();
+    const w = prWorld();
     w.settings = { ...w.settings, on: true, cron: "* * * * *" };
     w.prs = [authored(), authored({ number: 9, draft: true })];
     await writeLastFire(NOW - 2 * 60_000);

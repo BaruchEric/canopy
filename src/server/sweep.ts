@@ -19,7 +19,7 @@ import { nextFire, parseCron } from "../core/cron";
 import { loadConfig, setSweep } from "../core/store";
 import { mayClose, patchSweep, planSweep, spanDays, sweepComment, type PlanInputs } from "../core/sweep";
 import { addSweptChat, appendLog, readAsk, readLastFire, readLog, readSweptChats, takeSweptChat, writeAsk, writeLastFire } from "../core/sweepstore";
-import { SWEEP_KINDS, type AuthoredPr, type KeptShell, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
+import { SWEEP_KINDS, type AuthoredPr, type KeptShell, type PrNow, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
 
 export interface SweepDeps {
   broadcast(ev: ServerEvent): void;
@@ -43,12 +43,12 @@ export interface SweepDeps {
   /** the open PRs the gh login authored (`AUTHORED_QUERY`); throws when
    *  gh cannot list them */
   authoredPrs(): Promise<AuthoredPr[]>;
-  /** one PR's state (`OPEN`, `CLOSED`, `MERGED`) and last activity as
-   *  GitHub has them now; null when gh could not say */
-  prState(slug: string, number: number): Promise<{ state: string; updatedAt: number } | null>;
+  /** one PR as GitHub has it now; throws gh's last line when gh could not say */
+  prState(slug: string, number: number): Promise<PrNow>;
   /** closes a PR with the comment and keeps its branch; throws gh's last line */
   closePr(pr: AuthoredPr, comment: string): Promise<void>;
-  /** whether this backend holds the flows lock, the one that sweeps PRs */
+  /** whether this backend holds its flows lock, which sweeping PRs needs
+   *  besides the `prs` setting */
   holdsFlowsLock(): boolean;
   now?: () => number;
   /** the settings' read and write, in place of the config's; tests */
@@ -125,12 +125,20 @@ export class SweepHub {
     return (await loadConfig()).sweep;
   }
 
-  /** The authored PRs, from the list kept for `PR_LIST_MS`. A backend
-   *  without the flows lock sweeps no PRs and never asks. A list gh could
-   *  not give is null, kept as long: no news about the PRs, as tmux not
+  /** Whether this backend sweeps PRs: its `prs` setting is on and it holds
+   *  its flows lock. The lock is per config dir, so it keeps two servers on
+   *  one dir apart but not the Mac and the mini; the setting, meant to be
+   *  on for one backend, does that. */
+  private sweepsPrs(settings: SweepSettings): boolean {
+    return settings.prs && this.deps.holdsFlowsLock();
+  }
+
+  /** The authored PRs, from the list kept for `PR_LIST_MS`. A backend that
+   *  does not sweep PRs plans none and never asks. A list gh could not
+   *  give is null, kept as long: no news about the PRs, as tmux not
    *  answering is about the shells, so the rest of the plan still reads. */
-  private authored(): Promise<AuthoredPr[] | null> {
-    if (!this.deps.holdsFlowsLock()) return Promise.resolve([]);
+  private authored(settings: SweepSettings): Promise<AuthoredPr[] | null> {
+    if (!this.sweepsPrs(settings)) return Promise.resolve([]);
     const now = this.now();
     if (this.prList && now - this.prList.at < PR_LIST_MS) return this.prList.list;
     const list = this.deps.authoredPrs().catch((err) => {
@@ -142,17 +150,19 @@ export class SweepHub {
   }
 
   /** the facts with the authored PRs, from `prs` when the caller has
-   *  them; `prsDown` when GitHub did not list them, planned as none */
-  private async facts(prs?: AuthoredPr[] | null): Promise<Facts> {
-    const [facts, list] = await Promise.all([this.deps.facts(), prs === undefined ? this.authored() : prs]);
+   *  them; `prsDown` when there is no list (GitHub did not give one, or the
+   *  caller did not read it), planned as none */
+  private async facts(settings: SweepSettings, prs?: AuthoredPr[] | null): Promise<Facts> {
+    const [facts, list] = await Promise.all([this.deps.facts(), prs === undefined ? this.authored(settings) : prs]);
     return { ...facts, prs: list ?? [], prsDown: list === null };
   }
 
   /** The plan less what this hub has closed already. A closed key the plan
-   *  no longer has is let go of: whatever it was has ended. */
-  private plan(facts: PlanInputs, settings: SweepSettings): SweepItem[] {
+   *  no longer has is let go of: whatever it was has ended. A PR key stays
+   *  while there is no PR list, which says nothing about it. */
+  private plan(facts: Facts, settings: SweepSettings): SweepItem[] {
     const items = planSweep(facts, settings, this.now());
-    for (const k of this.closed) if (!items.some((i) => i.key === k)) this.closed.delete(k);
+    for (const k of this.closed) if (!items.some((i) => i.key === k) && !(facts.prsDown && k.startsWith("pr:"))) this.closed.delete(k);
     return items.filter((i) => !this.closed.has(i.key));
   }
 
@@ -226,7 +236,7 @@ export class SweepHub {
       // long enough for Eric to switch the schedule off or change its kinds
       const settings = await this.settings();
       if (!settings.on) return;
-      const facts = await this.facts();
+      const facts = await this.facts(settings);
       const items = this.plan(facts, settings);
       // a draft PR is handOnly, so it joins neither the close nor the ask
       const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
@@ -268,8 +278,9 @@ export class SweepHub {
     try {
       const ask = await readAsk();
       if (!ask) return;
-      const facts = await this.facts();
-      const items = this.plan(facts, await this.settings());
+      const settings = await this.settings();
+      const facts = await this.facts(settings);
+      const items = this.plan(facts, settings);
       const left = ask.filter((a) => items.some((i) => i.key === a.key) || (facts.shells === null && a.kind === "shell") || (facts.prsDown && a.kind === "pr"));
       if (left.length < ask.length) await writeAsk(left);
     } catch (err) {
@@ -278,7 +289,8 @@ export class SweepHub {
   }
 
   async info(): Promise<SweepInfo> {
-    const [facts, settings, log, shells, chats, ask] = await Promise.all([this.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
+    const settings = await this.settings();
+    const [facts, log, shells, chats, ask] = await Promise.all([this.facts(settings), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
     const items = this.plan(facts, settings);
     // the ask's keys as the plan has them now: what has closed or come back
     // into use drops out, and so does a shell that has started a program
@@ -335,8 +347,9 @@ export class SweepHub {
     let settings = await this.settings();
     const outcomes: SweepOutcome[] = [];
     const items: SweepItem[] = [];
-    // every key's plan carries the PRs, so a PR closed earlier stays out of it
-    const prs = await this.authored();
+    // the list only when a PR is named; without it the plan has no news
+    // about the PRs, so the keys of PRs closed before stay out of it
+    const prs = wanted.some((k) => k.startsWith("pr:")) ? await this.authored(settings) : null;
     let closedPr = false;
     for (const key of wanted) {
       if (by === "schedule") {
@@ -344,11 +357,11 @@ export class SweepHub {
         if (!settings.on) break;
         if (!(settings.auto as readonly string[]).includes(key.slice(0, key.indexOf(":")))) continue;
       }
-      if (key.startsWith("pr:") && !this.deps.holdsFlowsLock()) {
-        outcomes.push({ key, result: "failed", why: "PRs are swept only by the backend that holds the flows lock" });
+      if (key.startsWith("pr:") && !this.sweepsPrs(settings)) {
+        outcomes.push({ key, result: "failed", why: "this backend does not sweep PRs: its sweep setting prs is off, or it does not hold its flows lock" });
         continue;
       }
-      const facts = await this.facts(prs);
+      const facts = await this.facts(settings, prs);
       const item = this.plan(facts, settings).find((i) => i.key === key);
       if (!item) {
         outcomes.push(this.closed.has(key) ? { key, result: "gone" } : missing(key, facts));
@@ -447,11 +460,12 @@ export class SweepHub {
       case "pr": {
         const pr = facts.prs.find((p) => prId(p) === id);
         if (!pr) return { key, result: "gone" };
-        // the list may be a minute old: the PR as it is now
+        // the list may be a minute old: the PR as it is now. A throw is
+        // gh's last line, and the catch around this makes it "failed"
         const now = await this.deps.prState(pr.slug, pr.number);
-        if (!now) return { key, result: "failed", why: "GitHub could not be asked whether it is still idle" };
         if (now.state !== "OPEN") return { key, result: "gone" };
-        if (now.updatedAt > pr.updatedAt) return { key, result: "in use now" };
+        // activity, auto-merge, or a move to draft since the list: someone is at it
+        if (now.updatedAt > pr.updatedAt || now.autoMerge || (now.draft && !pr.draft)) return { key, result: "in use now" };
         await this.deps.closePr(pr, sweepComment(spanDays(settings.spans.pr)));
         return { key, result: "closed" };
       }

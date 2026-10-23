@@ -155,6 +155,17 @@ export interface AuthoredPr {
   archived: boolean;
 }
 
+/** One PR as GitHub has it the moment before the sweep closes it. */
+export interface PrNow {
+  /** `OPEN`, `CLOSED` or `MERGED` */
+  state: string;
+  /** unix ms */
+  updatedAt: number;
+  draft: boolean;
+  /** set to merge on its own once checks pass */
+  autoMerge: boolean;
+}
+
 /* ---------- sources: the folders canopy scans ---------- */
 
 /** Where a scanned source is: a folder on this machine, a folder on a host
@@ -1294,6 +1305,10 @@ export interface PrWatch {
    *  keeps its branch and the landing record's `pr`, drops this on a
    *  reopen and goes after 30 days */
   swept?: number;
+  /** closed on GitHub, and its comments could not be read to tell whether
+   *  the sweep closed it: the landing record keeps `pr`, and it is read
+   *  again once a day until they can be */
+  closeUnread?: true;
   /** unix ms */
   openedAt: number;
   updatedAt: number;
@@ -2997,13 +3012,17 @@ export const SWEEP_KINDS = ["shell", "chat", "run", "pr", "outside"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
 
 /** The sweep's settings as stored: whether the schedule is on, its cron
- *  line, how long each kind sits idle before it is offered (ms), and the
- *  kinds the schedule closes without asking. */
+ *  line, how long each kind sits idle before it is offered (ms), the
+ *  kinds the schedule closes without asking, and whether this backend
+ *  sweeps PRs at all. */
 export interface SweepSettings {
   on: boolean;
   cron: string;
   spans: Record<SweepKind, number>;
   auto: SweepKind[];
+  /** this backend plans the login's authored PRs (with its flows lock);
+   *  meant to be on for one backend only, since the list is login-wide */
+  prs: boolean;
 }
 
 /** One thing the sweep offers to close. `key` is `${kind}:${id}`. */

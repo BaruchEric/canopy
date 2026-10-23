@@ -177,3 +177,11 @@ test("sweepComment says the span in days, and spanDays rounds the pr span to who
   expect(spanDays(36 * 3_600_000)).toBe(2);
   expect(spanDays(10 * 60_000)).toBe(1);
 });
+
+test("prs is off by default, read only as true, and patched only with a boolean", () => {
+  expect(DEFAULT_SWEEP.prs).toBe(false);
+  expect(normalizeSweep({ prs: "yes" }).prs).toBe(false);
+  expect(normalizeSweep({ prs: true }).prs).toBe(true);
+  expect(patchSweep(DEFAULT_SWEEP, { prs: 1 })).toBe("prs is true or false");
+  expect(patchSweep(DEFAULT_SWEEP, { prs: true })).toMatchObject({ prs: true, auto: DEFAULT_SWEEP.auto });
+});

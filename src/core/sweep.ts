@@ -20,6 +20,7 @@ export const DEFAULT_SWEEP: SweepSettings = {
   cron: "0 4 * * *",
   spans: { shell: 24 * HOUR, chat: 12 * HOUR, run: 3 * DAY, pr: 14 * DAY, outside: 24 * HOUR },
   auto: ["shell", "chat", "run"],
+  prs: false,
 };
 
 /** the shortest span a change through the settings route may set: shorter
@@ -55,6 +56,7 @@ export function normalizeSweep(raw: unknown): SweepSettings {
     }
   }
   if (Array.isArray(r["auto"])) out.auto = kindsOf(r["auto"]);
+  out.prs = r["prs"] === true;
   return out;
 }
 
@@ -93,11 +95,19 @@ export function patchSweep(cur: SweepSettings, patch: unknown): SweepSettings | 
     if (!Array.isArray(a) || !a.every(isKind)) return `auto is a list of kinds: ${SWEEP_KINDS.join(", ")}`;
     out.auto = kindsOf(a);
   }
+  if ("prs" in b) {
+    if (typeof b["prs"] !== "boolean") return "prs is true or false";
+    out.prs = b["prs"];
+  }
   return out;
 }
 
+/** how the sweep's comment starts, whatever the span: a PR watch on
+ *  another backend reads it to tell a PR the sweep closed */
+export const SWEEP_COMMENT_PREFIX = "Closed by canopy's sweep after";
+
 /** The comment a PR the sweep closes gets; `days` is the pr span in days. */
-export const sweepComment = (days: number): string => `Closed by canopy's sweep after ${days} day${days === 1 ? "" : "s"} with no activity. Reopen it to pick it back up.`;
+export const sweepComment = (days: number): string => `${SWEEP_COMMENT_PREFIX} ${days} day${days === 1 ? "" : "s"} with no activity. Reopen it to pick it back up.`;
 
 /** the pr span as the comment says it: whole days, at least one */
 export const spanDays = (ms: number): number => Math.max(1, Math.round(ms / DAY));

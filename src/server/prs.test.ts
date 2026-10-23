@@ -43,6 +43,9 @@ interface Gh {
   permDown: boolean;
   /** what gh says when a close fails */
   closeFails: string | null;
+  /** the PR's conversation comments as `gh pr view --json comments` has
+   *  them, or gh's error */
+  prComments: unknown[] | string;
 }
 
 let n = 0;
@@ -104,7 +107,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
   const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
-  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null };
+  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [] };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
@@ -113,6 +116,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
     const [a, b] = args;
     if (a === "auth") return g.auth ? ok("Logged in") : no("not logged in");
     if (a === "pr" && b === "create") return ok(`https://github.com/o/r/pull/7\n`);
+    if (a === "pr" && b === "view" && args.at(-1) === "comments") return typeof g.prComments === "string" ? no(`some noise\n${g.prComments}\n`) : ok(JSON.stringify({ comments: g.prComments }));
     if (a === "pr" && b === "view") return ok(JSON.stringify({ ...view(g), updatedAt: "2026-10-01T12:00:00Z" }));
     if (a === "pr" && b === "merge") {
       if (g.mergeFails) return no("Head branch was modified");
@@ -645,13 +649,82 @@ describe("the sweep's close", () => {
     w.clock += 29 * DAY;
     expect((await pollNow(w)).swept).toBeDefined();
     w.clock += 2 * DAY;
-    const reads = w.gh.calls.filter((c) => c[1] === "view").length;
+    // a read gh fails keeps it, at the daily pace
+    const fake = (w.hub as unknown as { deps: { gh: (args: string[]) => Promise<ExecResult> } }).deps;
+    const real = fake.gh;
+    fake.gh = async () => no("gh: HTTP 502");
+    expect((await pollNow(w)).error).toContain("HTTP 502");
+    expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+    fake.gh = real;
+    // a read that still says closed drops it, with the branch left on the
+    // remote and the landing record keeping its PR
     await pollNow(w);
     expect(w.hub.info()).toEqual([]);
-    // dropped as close drops it, with no read and the branch left on the remote
-    expect(w.gh.calls.filter((c) => c[1] === "view").length).toBe(reads);
-    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
     expect(await remoteHas(w)).toBe(true);
+  });
+
+  test("a swept watch past 30 days that reads open again stays, as a watch like any other", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.clock = Date.now();
+    await w.hub.sweepClose(w.rec.id, COMMENT);
+    w.clock += 31 * DAY;
+    const pr = await pollNow(w);
+    expect(pr.swept).toBeUndefined();
+    expect(pr.state?.status).toBe("open");
+  });
+
+  test("a PR closed with the sweep's comment, on another backend, is marked swept and keeps its PR", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.prComments = [
+      { body: "looks good", createdAt: "2026-10-02T12:00:00Z" },
+      { body: "Closed by canopy's sweep after 21 days with no activity. Reopen it to pick it back up.", createdAt: "2026-10-03T12:00:00Z" },
+    ];
+    w.clock = Date.parse("2026-10-04T12:00:00Z");
+    const pr = await pollNow(w);
+    expect(pr.swept).toBe(Date.parse("2026-10-03T12:00:00Z"));
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+  });
+
+  test("a PR closed by hand, with no sweep comment, frees its run", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.prComments = [{ body: "not doing this after all", createdAt: "2026-10-02T12:00:00Z" }];
+    const pr = await pollNow(w);
+    expect(pr.swept).toBeUndefined();
+    expect(pr.closeUnread).toBeUndefined();
+    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
+  });
+
+  test("a closed PR whose comments gh cannot read keeps its PR and is asked again in a day", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.prComments = "gh: HTTP 502";
+    w.clock = Date.now();
+    const pr = await pollNow(w);
+    expect(pr.closeUnread).toBe(true);
+    expect(pr.error).toContain("HTTP 502");
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+    // and once they read, it is told: a hand close here
+    w.gh.prComments = [];
+    const next = await pollNow(w);
+    expect(next.closeUnread).toBeUndefined();
+    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
   });
 
   test("a swept watch is kept past the closed PRs prune keeps", async () => {
@@ -687,13 +760,15 @@ describe("the sweep's close", () => {
     expect(await remoteHas(w)).toBe(true);
   });
 
-  test("readState reads one PR's state and last activity, null when gh cannot", async () => {
+  test("readState reads one PR's state, last activity, draft and auto-merge, and throws gh's last line", async () => {
     const w = await world();
-    expect(await w.hub.readState("o/r", 7)).toEqual({ state: "OPEN", updatedAt: Date.parse("2026-10-01T12:00:00Z") });
-    expect(w.gh.calls.at(-1)).toEqual(["pr", "view", "7", "-R", "o/r", "--json", "state,updatedAt"]);
+    expect(await w.hub.readState("o/r", 7)).toEqual({ state: "OPEN", updatedAt: Date.parse("2026-10-01T12:00:00Z"), draft: false, autoMerge: false });
+    expect(w.gh.calls.at(-1)).toEqual(["pr", "view", "7", "-R", "o/r", "--json", "state,updatedAt,isDraft,autoMergeRequest"]);
     const v = await world();
-    (v.hub as unknown as { deps: { gh: unknown } }).deps.gh = async () => no("could not resolve to a PullRequest");
-    expect(await v.hub.readState("o/r", 7)).toBeNull();
+    (v.hub as unknown as { deps: { gh: unknown } }).deps.gh = async () => ok(JSON.stringify({ state: "OPEN", updatedAt: "2026-10-01T12:00:00Z", isDraft: true, autoMergeRequest: { enabledAt: "2026-10-01T12:00:00Z" } }));
+    expect(await v.hub.readState("o/r", 7)).toMatchObject({ draft: true, autoMerge: true });
+    (v.hub as unknown as { deps: { gh: unknown } }).deps.gh = async () => no("some noise\nGraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)\n");
+    await expect(v.hub.readState("o/r", 7)).rejects.toThrow("gh pr view: GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)");
   });
 });
 

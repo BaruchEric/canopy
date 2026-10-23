@@ -35,7 +35,8 @@ import {
   trusted,
 } from "../core/pr";
 import { configDir } from "../core/store";
-import type { LandingRun, PrComment, PrState, PrWatch, Run, RunReview, ServerEvent } from "../core/types";
+import { SWEEP_COMMENT_PREFIX } from "../core/sweep";
+import type { LandingRun, PrComment, PrNow, PrState, PrWatch, Run, RunReview, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { dirtyFiles, pushBranch, pushRemote, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
 import { sortRun } from "./landing";
@@ -55,8 +56,9 @@ export const SWEPT_POLL = 24 * 3_600_000;
 export const SWEPT_FOR = 30 * 24 * 3_600_000;
 
 /** when a watch is read next, from now: once a day while the sweep has it
- *  closed, else `nextPoll`'s pace (null for none) */
-const pace = (w: PrWatch): number | null => (w.swept !== undefined ? SWEPT_POLL : nextPoll(w));
+ *  closed or who closed it is not known yet, else `nextPoll`'s pace (null
+ *  for none) */
+const pace = (w: PrWatch): number | null => (w.swept !== undefined || w.closeUnread ? SWEPT_POLL : nextPoll(w));
 
 export class PrError extends Error {
   constructor(
@@ -211,7 +213,7 @@ export class PrHub {
   /** Merged and closed PRs past the newest `KEEP_DONE` go; one the sweep
    *  closed stays for its 30 days. */
   private prune(): void {
-    const done = this.info().filter((w) => w.state && w.state.status !== "open" && w.swept === undefined);
+    const done = this.info().filter((w) => w.state && w.state.status !== "open" && w.swept === undefined && !w.closeUnread);
     for (const w of done.slice(KEEP_DONE)) this.drop(w.id);
   }
 
@@ -398,20 +400,48 @@ export class PrHub {
     if (r.code !== 0) throw new PrError(`gh pr close: ${lastLine(r, "gh pr close")}`, 502);
   }
 
-  /** One PR's state (`OPEN`, `CLOSED`, `MERGED`) and GitHub's last
-   *  activity on it, for the sweep's look just before a close; null when
-   *  gh could not say. */
-  async readState(slug: string, number: number): Promise<{ state: string; updatedAt: number } | null> {
-    const r = await this.gh(["pr", "view", String(number), "-R", slug, "--json", "state,updatedAt"]);
-    if (r.code !== 0) return null;
+  /** One PR as GitHub has it, for the sweep's look just before a close:
+   *  its state (`OPEN`, `CLOSED`, `MERGED`), last activity, draft and
+   *  auto-merge (`gh pr view` has no merge queue field). Throws gh's last
+   *  line when gh could not say. */
+  async readState(slug: string, number: number): Promise<PrNow> {
+    const r = await this.gh(["pr", "view", String(number), "-R", slug, "--json", "state,updatedAt,isDraft,autoMergeRequest"]);
+    if (r.code !== 0) throw new PrError(`gh pr view: ${lastLine(r, "gh pr view")}`, 502);
+    let v: unknown;
     try {
-      const v: unknown = JSON.parse(r.stdout);
-      if (!isRecord(v) || typeof v["state"] !== "string" || typeof v["updatedAt"] !== "string") return null;
-      const updatedAt = Date.parse(v["updatedAt"]);
-      return Number.isNaN(updatedAt) ? null : { state: v["state"], updatedAt };
+      v = JSON.parse(r.stdout);
     } catch {
-      return null;
+      throw new PrError("gh pr view: its answer did not read", 502);
     }
+    const updatedAt = isRecord(v) && typeof v["updatedAt"] === "string" ? Date.parse(v["updatedAt"]) : NaN;
+    if (!isRecord(v) || typeof v["state"] !== "string" || Number.isNaN(updatedAt)) throw new PrError("gh pr view: its answer did not read", 502);
+    return { state: v["state"], updatedAt, draft: v["isDraft"] === true, autoMerge: v["autoMergeRequest"] != null };
+  }
+
+  /** A PR found closed with no `swept`: whether the sweep closed it, here
+   *  or on another backend, by its comment. Found, the watch is marked
+   *  `swept` from the comment's time and the landing record keeps `pr`;
+   *  not found, the run may land here again; comments gh cannot read
+   *  leave `pr` on the record and the watch to try again in a day. */
+  private async whoClosed(w: PrWatch): Promise<PrWatch> {
+    const { closeUnread: _c, ...rest } = w;
+    const r = await this.gh(["pr", "view", String(w.number), "-R", w.slug, "--json", "comments"]);
+    let comments: unknown[] | null = null;
+    try {
+      const v: unknown = r.code === 0 ? JSON.parse(r.stdout) : null;
+      if (isRecord(v) && Array.isArray(v["comments"])) comments = v["comments"];
+    } catch {
+      // read again tomorrow
+    }
+    if (!comments) return { ...rest, closeUnread: true, error: `reading PR #${w.number}'s comments: ${r.code === 0 ? "the answer did not read" : lastLine(r, "gh pr view")}` };
+    const sweeps = comments.filter((c): c is Record<string, unknown> => isRecord(c) && typeof c["body"] === "string" && c["body"].trimStart().startsWith(SWEEP_COMMENT_PREFIX));
+    const last = sweeps.at(-1);
+    if (!last) {
+      this.deps.markPr(w.id, null);
+      return rest;
+    }
+    const at = typeof last["createdAt"] === "string" ? Date.parse(last["createdAt"]) : NaN;
+    return { ...rest, swept: Number.isNaN(at) ? this.now() : at };
   }
 
   /** A branch the landing queue dropped: its watch goes with it. */
@@ -471,23 +501,15 @@ export class PrHub {
       this.due.delete(id);
       return null;
     }
-    // swept and not reopened in 30 days: dropped as close drops it, with
-    // no read, and the remote branch left where it is
-    if (had.swept !== undefined && this.now() - had.swept >= SWEPT_FOR) {
-      this.drop(id);
-      this.deps.markPr(id, null);
-      this.publish();
-      return null;
-    }
     const r = await this.gh(["pr", "view", String(had.number), "-R", had.slug, "--json", PR_FIELDS]);
     let w: PrWatch;
     try {
       if (r.code !== 0) throw new Error(lastLine(r, "gh pr view"));
       const { error: _e, ...rest } = had;
       w = { ...rest, state: parsePrView(JSON.parse(r.stdout)), polledAt: this.now() };
-      // reopened (or merged) since the sweep closed it: a watch like any other
-      if (w.swept !== undefined && w.state?.status !== "closed") {
-        const { swept: _s, ...open } = w;
+      // reopened (or merged) since it closed: a watch like any other
+      if (w.state?.status !== "closed") {
+        const { swept: _s, closeUnread: _c, ...open } = w;
         w = open;
       }
     } catch (err) {
@@ -496,6 +518,13 @@ export class PrHub {
       this.due.set(id, this.now() + (pace(had) ?? 0));
       this.publish();
       return why;
+    }
+    // swept and still closed after 30 days: the watch goes, with the remote
+    // branch where it is and the landing record keeping its PR
+    if (w.swept !== undefined && w.state?.status === "closed" && this.now() - w.swept >= SWEPT_FOR) {
+      this.drop(id);
+      this.publish();
+      return null;
     }
     if (w.state?.status === "merged") {
       // merged on GitHub while a run works the branch: its worktree stays until it ends
@@ -512,8 +541,8 @@ export class PrHub {
     }
     if (w.fixing && !this.deps.runActive(w.fixing.run)) w = await this.finishFix(w);
     // closed on GitHub: the run may land here again, unless the sweep
-    // closed it, which keeps the PR on the record until it is dropped
-    if (w.state?.status === "closed" && had.state?.status !== "closed" && w.swept === undefined) this.deps.markPr(w.id, null);
+    // closed it (here or on another backend), which keeps the PR on the record
+    if (w.state?.status === "closed" && w.swept === undefined && (had.state?.status !== "closed" || w.closeUnread)) w = await this.whoClosed(w);
     if (w.state?.status === "open") {
       if (w.autoFix && !w.fixing) w = await this.autoFix(w);
       if (w.autoMerge && !w.fixing && w.state && readyToMerge(w.state, w).ok) {
@@ -526,7 +555,7 @@ export class PrHub {
     this.save(w);
     if (w.pushed !== had.pushed) this.fresh.set(id, this.now() + FRESH_FOR);
     let next = pace(w);
-    if (next !== null && w.swept === undefined && (this.fresh.get(id) ?? 0) > this.now()) next = Math.min(next, POLL_BUSY);
+    if (next !== null && w.swept === undefined && !w.closeUnread && (this.fresh.get(id) ?? 0) > this.now()) next = Math.min(next, POLL_BUSY);
     if (next === null) this.due.delete(id);
     else this.due.set(id, this.now() + next);
     this.prune();

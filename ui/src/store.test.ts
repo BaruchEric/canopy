@@ -1469,7 +1469,7 @@ describe("several backends", () => {
 
     test("signed in to home, the page reads the sweep at once, so its inbox item and Settings tab need no reload", async () => {
       const homeAnswers = backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends });
-      const sweep = { items: [], settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [] }, lastRun: null, swept: { shells: [], chats: [] }, ask: null };
+      const sweep = { items: [], settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [], prs: false }, lastRun: null, swept: { shells: [], chats: [] }, ask: null };
       let homeClaims: Response[] = [];
       const home: Answer = (path, init) => {
         const p = path.split("?")[0] ?? "";
@@ -2672,7 +2672,7 @@ describe("a sweep event", () => {
 
   const info = (lastRun: SweepLogEntry | null): SweepInfo => ({
     items: [],
-    settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [] },
+    settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [], prs: false },
     lastRun,
     swept: { shells: [], chats: [] },
     ask: null,
