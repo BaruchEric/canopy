@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { SweepItem } from "../core/types";
-import { sweepKeys, sweepTimeoutMs } from "./sweep";
+import type { SweepItem, SweepKind } from "../core/types";
+import { planLines, sweepKeys, sweepTimeoutMs } from "./sweep";
 
 const item = (key: string, kind: SweepItem["kind"], over: Partial<SweepItem> = {}): SweepItem => ({
   key,
@@ -19,24 +19,40 @@ const item = (key: string, kind: SweepItem["kind"], over: Partial<SweepItem> = {
 });
 
 describe("sweepKeys", () => {
+  // as the planner makes them: a busy shell is handOnly and unticked, every
+  // PR starts unticked, and a draft is handOnly too
   const items = [
     item("s1", "shell"),
     item("c1", "chat"),
     item("r1", "run"),
-    item("p1", "pr"),
-    item("s2", "shell", { checked: false }),
+    item("p1", "pr", { checked: false }),
+    item("p2", "pr", { checked: false, handOnly: true }),
+    item("s2", "shell", { checked: false, handOnly: true }),
     item("c2", "chat", { closable: false }),
   ];
-  test("without kinds: every checked, closable item but the prs", () => {
+  test("without kinds: every checked, closable item, so never a PR", () => {
     expect(sweepKeys(items, undefined)).toEqual(["s1", "c1", "r1"]);
   });
-  test("with kinds: only those, and pr only when named", () => {
+  test("with kinds: only those, each one it may close, ticked by default or not", () => {
     expect(sweepKeys(items, ["shell"])).toEqual(["s1"]);
     expect(sweepKeys(items, ["pr", "run"])).toEqual(["r1", "p1"]);
   });
-  test("drafts and listed-only items are never swept", () => {
-    expect(sweepKeys(items, ["shell", "chat"])).not.toContain("s2");
+  test("--kind pr closes the PRs that are not drafts", () => {
+    expect(sweepKeys(items, ["pr"])).toEqual(["p1"]);
+  });
+  test("drafts, busy shells and listed-only items are never swept", () => {
+    expect(sweepKeys(items, ["shell", "chat", "pr"])).not.toContain("s2");
+    expect(sweepKeys(items, ["shell", "chat", "pr"])).not.toContain("p2");
     expect(sweepKeys(items, ["chat"])).not.toContain("c2");
+  });
+});
+
+describe("planLines", () => {
+  test("marks what --yes would close with the kinds given", () => {
+    const items = [item("s1", "shell"), item("p1", "pr", { checked: false }), item("p2", "pr", { checked: false, handOnly: true }), item("o1", "outside", { closable: false })];
+    const marks = (kinds: SweepKind[] | undefined) => planLines(items, 0, kinds).map((l) => l.slice(0, 3));
+    expect(marks(undefined)).toEqual(["[x]", "[ ]", "[ ]", "[-]"]);
+    expect(marks(["pr"])).toEqual(["[ ]", "[x]", "[ ]", "[-]"]);
   });
 });
 

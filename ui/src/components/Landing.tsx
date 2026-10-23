@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
-import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
+import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
 import { repoPrChip } from "../prs";
@@ -75,6 +75,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
   const orphanLanding = useStore((s) => s.orphanLanding);
   const showRun = useStore((s) => s.showRun);
   const runs = useStore((s) => s.runs);
+  const watches = useStore((s) => prsAll(s));
   const [error, setError] = useState("");
   const [skipped, setSkipped] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -120,6 +121,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
           ...l.back.map((e) => `${e.branch}  ${landWord(e, info.entries)}  ${backLine(e)}`),
           ...l.ready.map((r) => `${r.branch}  ready`),
           ...l.other.filter(stoppedWhole).map((r) => `${r.branch}  stopped, can land`),
+          ...l.opened.map((r) => `${r.branch}  ${openedRow(r, watches).word}`),
         ].join("\n")
       }
     >
@@ -217,6 +219,34 @@ export function LandingSection({ repo }: { repo: Repo }) {
                 <span className="landing-note">{r.note}</span>
               </li>
             ))}
+          </ul>
+        )}
+        {l.opened.length > 0 && (
+          <ul className="landing-list dim">
+            {l.opened.map((r) => {
+              const o = openedRow(r, watches);
+              return (
+                <li key={r.id} className="landing-row st-pr">
+                  {runLink(r)}
+                  {o.url ? (
+                    <a className="landing-state" href={o.url} target="_blank" rel="noreferrer" title="The PR watch has it: open it on GitHub">
+                      {o.word}
+                    </a>
+                  ) : (
+                    <span className="landing-state" title="It opened a PR, so it never lands here, and no PR watch has it now">
+                      {o.word}
+                    </span>
+                  )}
+                  {o.canDrop && (
+                    <span className="landing-tools">
+                      <button type="button" className="mini" disabled={busy !== null} title="Remove the branch and its worktree here; the PR and its remote branch stay on GitHub" onClick={() => act(`drop:${r.id}`, () => dropLanding(r.id))}>
+                        drop
+                      </button>
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
         {l.other.length > 0 && (

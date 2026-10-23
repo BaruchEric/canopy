@@ -22,9 +22,18 @@ export function groupItems(items: readonly SweepItem[]): { kind: SweepKind; item
   return SWEEP_KINDS.map((kind) => ({ kind, items: items.filter((i) => i.kind === kind) })).filter((g) => g.items.length > 0);
 }
 
-/** what the sheet starts ticked: the plan's checked items it may close */
+/** what the sheet starts ticked: the plan's checked items it may close,
+ *  never a PR (public, and seen by others when it closes), draft or not */
 export function defaultPicks(items: readonly SweepItem[]): Set<string> {
-  return new Set(items.filter((i) => i.checked && i.closable).map((i) => i.key));
+  return new Set(items.filter((i) => i.checked && i.closable && i.kind !== "pr").map((i) => i.key));
+}
+
+/** A PR row's page on GitHub, from its id (`owner/name#number`); null for
+ *  any other kind or an id that does not read as one. */
+export function prUrl(item: Pick<SweepItem, "kind" | "id">): string | null {
+  if (item.kind !== "pr") return null;
+  const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(item.id);
+  return m ? `https://github.com/${m[1]}/pull/${m[2]}` : null;
 }
 
 /** What a close picked is no longer picked once the close is back: the

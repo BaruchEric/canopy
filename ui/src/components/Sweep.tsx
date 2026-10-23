@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SWEEP_KINDS, type KeptShell, type SweepItem, type SweepKind, type SweepOutcome, type SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, dropPicks, groupItems, KIND_HEAD, nextAuto, outcomesOf, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
+import { defaultPicks, dropPicks, groupItems, KIND_HEAD, nextAuto, outcomesOf, prUrl, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
 import { useNow } from "./Registry";
 import { PopGear } from "./PopGrip";
 
@@ -28,7 +28,7 @@ export function SweepButton({ className = "mini" }: { className?: string }) {
   const openSweep = useStore((s) => s.openSweep);
   const n = useStore((s) => s.sweep?.items.filter((i) => i.closable).length ?? 0);
   return (
-    <button type="button" className={`${className} sweep-btn`} title="Sweep: close the shells, chats and runs that went idle" onClick={openSweep}>
+    <button type="button" className={`${className} sweep-btn`} title="Sweep: close the shells, chats, runs and PRs that went idle" onClick={openSweep}>
       <Broom />
       sweep{n > 0 && <span className="sweep-count">{n}</span>}
     </button>
@@ -51,8 +51,9 @@ const outWord = (o: SweepOutcome, kind: SweepItem["kind"]): string => {
 /**
  * The sweep sheet (FR-018): what went idle on the home backend, a kind at
  * a time, each row with its box, where it is, how long it has been idle
- * and why it counts. It starts ticked as the plan says (every kind but
- * PRs); agents canopy did not start are listed with no box. "Close N"
+ * and why it counts. It starts ticked as the plan says, and never on a PR
+ * (`defaultPicks`), a draft's row saying it is one; a PR's title links to
+ * it on GitHub. Agents canopy did not start are listed with no box. "Close N"
  * closes the ticked ones, each looked at again first, and every row it
  * took stays in place with how it went. The "swept" fold brings back what
  * an earlier close took: a shell restores with its history and its agent's
@@ -179,6 +180,7 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
                 )}
                 <span className="sweep-n">{g.items.length}</span>
                 {g.kind === "outside" && <span className="sweep-note">listed only: canopy did not start them and never stops them</span>}
+                {g.kind === "pr" && <span className="sweep-note">unticked to start: a close is public, with a comment saying the sweep closed it; the branch stays</span>}
               </h3>
               <ul className="sweep-list">
                 {g.items.map((i) => (
@@ -201,7 +203,7 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
-        <span className="sheet-hint">A closed shell keeps its history and comes back from the swept list; a closed chat resumes its conversation.</span>
+        <span className="sheet-hint">A closed shell keeps its history and comes back from the swept list; a closed chat resumes its conversation; a closed PR keeps its branch and reopens on GitHub.</span>
         <span className="spacer" />
         <button type="button" className="mini" onClick={close}>
           {done ? "done" : "cancel"}
@@ -232,12 +234,21 @@ function SweepRowView({
   onTick: (on: boolean) => void;
 }) {
   const idle = durationWord(now - item.idleSince);
+  const url = prUrl(item);
   const text = (
     <>
       <span className="sweep-where" title={item.title !== item.where ? item.title : undefined}>
         {item.where}
       </span>
-      {item.title && item.title !== item.where && <span className="sweep-title">{item.title}</span>}
+      {item.title &&
+        item.title !== item.where &&
+        (url ? (
+          <a className="sweep-title" href={url} target="_blank" rel="noreferrer" title="Open it on GitHub">
+            {item.title}
+          </a>
+        ) : (
+          <span className="sweep-title">{item.title}</span>
+        ))}
       <span className="sweep-idle" title="idle for">
         {idle}
       </span>
@@ -356,6 +367,10 @@ const SPAN_LABEL: Record<SweepKind, string> = {
 /** what the row says when PRs are among the kinds closed on their own */
 export const PR_AUTO_WARNING = "Closes public PRs on GitHub with no one looking.";
 
+/** what the row says under "sweep PRs from this backend" */
+export const PRS_HINT =
+  "Your open PRs on every repo, as gh's login sees them. Turn this on for one backend only: the list is the same from every backend. With PRs also ticked to close on their own below, the schedule closes public PRs with no one looking.";
+
 /**
  * The sweep's row in Settings, beside the ranger's: the schedule's switch
  * and cron, how long each kind sits idle before it is offered (in hours or
@@ -450,6 +465,11 @@ export function SweepRow() {
         <input type="checkbox" checked={s.on} disabled={busy} onChange={(e) => void save({ on: e.target.checked })} />
         sweep on a schedule
       </label>
+      <label className="settings-line">
+        <input type="checkbox" checked={s.prs} disabled={busy} onChange={(e) => void save({ prs: e.target.checked })} />
+        sweep PRs from this backend
+      </label>
+      <p className="settings-hint">{PRS_HINT}</p>
       <div className="ranger-fields">
         <label className="layout-field">
           when (cron)

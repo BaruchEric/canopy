@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { askCloses, askGone, askTitle, nextAuto, pickKeys, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
+import { askCloses, askGone, askTitle, nextAuto, pickKeys, prUrl, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -36,6 +36,11 @@ describe("groupItems", () => {
   test("nothing idle is no groups", () => {
     expect(groupItems([])).toEqual([]);
   });
+
+  test("PRs come after the runs and before the outside agents", () => {
+    const items = [item("outside:o1"), item("pr:o/app#1"), item("run:r1"), item("pr:o/app#2"), item("shell:s1")];
+    expect(groupItems(items).map((g) => g.kind)).toEqual(["shell", "run", "pr", "outside"]);
+  });
 });
 
 describe("defaultPicks", () => {
@@ -46,6 +51,26 @@ describe("defaultPicks", () => {
 
   test("never an item that is listed only, even one marked checked", () => {
     expect(defaultPicks([item("outside:o1", { checked: true, closable: false })]).size).toBe(0);
+  });
+
+  test("leaves every PR out, drafts included, even one marked checked", () => {
+    const picks = defaultPicks([item("shell:s1"), item("pr:o/app#1", { checked: true }), item("pr:o/app#2", { handOnly: true, why: "draft, no activity for 15d" })]);
+    expect([...picks]).toEqual(["shell:s1"]);
+  });
+});
+
+describe("prUrl", () => {
+  test("a PR's id names its page on GitHub", () => {
+    expect(prUrl(item("pr:barucheric/canopy#12"))).toBe("https://github.com/barucheric/canopy/pull/12");
+    expect(prUrl(item("pr:some.org/my-repo_x#7"))).toBe("https://github.com/some.org/my-repo_x/pull/7");
+  });
+
+  test("anything else, or an id that does not read as one, has none", () => {
+    expect(prUrl(item("shell:s1"))).toBeNull();
+    expect(prUrl(item("pr:barucheric/canopy"))).toBeNull();
+    expect(prUrl(item("pr:barucheric/canopy#x"))).toBeNull();
+    expect(prUrl(item("pr:a/b/c#1"))).toBeNull();
+    expect(prUrl(item("pr:javascript:alert(1)//x#1"))).toBeNull();
   });
 });
 

@@ -4935,6 +4935,9 @@ button.landing-open:hover {
 .landing-state {
   color: var(--ink-dim);
 }
+a.landing-state {
+  color: var(--sky);
+}
 .landing-tools {
   display: inline-flex;
   gap: 6px;
@@ -5118,6 +5121,13 @@ label.sweep-pick:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+a.sweep-title {
+  color: var(--sky);
+  text-decoration: none;
+}
+a.sweep-title:hover {
+  text-decoration: underline;
 }
 .sweep-idle {
   grid-column: 4;

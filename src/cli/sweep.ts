@@ -1,17 +1,22 @@
-/** `canopy sweep` (FR-018): the idle shells, chats and runs a backend offers
- *  for closing, and, with --yes, closing the ones its sheet starts ticked. */
+/** `canopy sweep` (FR-018): the idle shells, chats, runs and PRs a backend
+ *  offers for closing, and, with --yes, closing the ones its sheet starts
+ *  ticked, or every one it may close of the kinds --kind names. */
 
+import { mayClose } from "../core/sweep";
 import { ago } from "../core/treelines";
 import { SWEEP_KINDS, type SweepInfo, type SweepItem, type SweepKind, type SweepOutcome } from "../core/types";
 import { ask, errText, has, take, type Target } from "./health";
 
-export const SWEEP_USAGE = "usage: canopy sweep [--yes [--kind shell,chat,run]] [--backend URL]";
+export const SWEEP_USAGE = "usage: canopy sweep [--yes [--kind shell,chat,run,pr]] [--backend URL]";
 
-/** The keys --yes closes: ticked, closable items of the kinds named, or of
- *  every kind but pr when none are. A pr goes only when named. */
+/** The keys --yes closes. With no kinds, the ones the sheet starts ticked
+ *  (`checked` and closable), which is never a PR. With kinds named, every
+ *  item of those kinds the sweep may close (`mayClose`), ticked or not, so
+ *  `--kind pr` closes the PRs; a draft or a shell running a program is
+ *  only ever closed from a tick in the sheet. */
 export function sweepKeys(items: readonly SweepItem[], kinds: readonly SweepKind[] | undefined): string[] {
-  const want = kinds ?? SWEEP_KINDS.filter((k) => k !== "pr");
-  return items.filter((i) => i.closable && i.checked && want.includes(i.kind)).map((i) => i.key);
+  const pick = kinds ? (i: SweepItem) => kinds.includes(i.kind) && mayClose(i) : (i: SweepItem) => i.closable && i.checked && i.kind !== "pr";
+  return items.filter(pick).map((i) => i.key);
 }
 
 function parseKinds(text: string): SweepKind[] | string {
@@ -29,12 +34,13 @@ function parseKinds(text: string): SweepKind[] | string {
 export const sweepTimeoutMs = (keys: number): number => Math.min(10 * 60_000, 30_000 + 15_000 * keys);
 
 /** The plan, a kind at a time: `kind  where  idle  why`, with a mark for
- *  what --yes would close. */
-export function planLines(items: readonly SweepItem[], now: number = Date.now()): string[] {
+ *  what --yes would close with `kinds`. */
+export function planLines(items: readonly SweepItem[], now: number = Date.now(), kinds?: readonly SweepKind[]): string[] {
   const out: string[] = [];
+  const closes = new Set(sweepKeys(items, kinds));
   for (const kind of SWEEP_KINDS) {
     for (const i of items.filter((x) => x.kind === kind)) {
-      const mark = i.closable ? (i.checked ? "x" : " ") : "-";
+      const mark = i.closable ? (closes.has(i.key) ? "x" : " ") : "-";
       out.push(`[${mark}] ${kind.padEnd(7)} ${i.where.padEnd(28)} ${ago(i.idleSince / 1000, now).padStart(4)}  ${i.why}`);
     }
   }
@@ -61,7 +67,7 @@ export async function sweepCommand(argv: string[], { fail }: { fail: (msg: strin
   const info = await ask<SweepInfo>(target, "GET", "/api/sweep").catch(failed);
   if (!yes) {
     if (info.items.length === 0) return console.log("nothing is idle enough to close");
-    for (const line of planLines(info.items)) console.log(line);
+    for (const line of planLines(info.items, Date.now(), kinds)) console.log(line);
     const n = sweepKeys(info.items, kinds).length;
     console.log(`${n} would close with --yes${kinds ? ` --kind ${kinds.join(",")}` : ""}`);
     return;

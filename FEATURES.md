@@ -44,7 +44,7 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
 One command, and optionally a schedule, closes what nobody is using: PRs with no activity, idle shells and windows, agents that finished or stalled. It lists what it would close and waits for a yes before touching a PR. Written down on two separate pages.
 Spec: docs/superpowers/specs/2026-10-22-sweep-design.md (2026-10-22).
-Plan: docs/superpowers/plans/2026-10-22-sweep.md. Phase 1 (shells, chats and runs on demand) shipped 2026-10-22; phase 2 (the schedule, its ask in the inbox, the settings row) shipped 2026-10-23; phase 3 (PRs) remains.
+Plan: docs/superpowers/plans/2026-10-22-sweep.md. Phase 1 (shells, chats and runs on demand) shipped 2026-10-22; phase 2 (the schedule, its ask in the inbox, the settings row) shipped 2026-10-23; phase 3 (PRs the gh login authored, closed with a comment and their branch kept, swept by one backend's own setting) is built on branch fr-018-sweep-p3 and waits on a live run before it counts as shipped.
 
 ## Shipped
 

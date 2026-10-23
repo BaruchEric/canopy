@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { advance, enqueue } from "../../src/core/landing";
-import type { LandEntry, LandingInfo, LandingRun, LandNotice, Run, RunReview } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, repoLanding, runLanding, verdictTone, verdictWord } from "./landing";
+import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, runLanding, verdictTone, verdictWord } from "./landing";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -62,6 +62,13 @@ describe("a repo's landing", () => {
     const l = repoLanding(info([rec("a", { state: "stopped", whole: { ok: true } }), rec("b", { state: "stopped", whole: { ok: false, why: "changes left uncommitted" } }), rec("c")]), "canopy");
     expect(l.ready.map((r) => r.id)).toEqual(["c"]);
     expect(l.other.map((r) => r.id).sort()).toEqual(["a", "b"]);
+  });
+
+  test("a branch that opened a PR is neither ready nor the rest, in any state", () => {
+    const l = repoLanding(info([rec("a", { pr: 12 }), rec("b", { state: "stopped", pr: 13 }), rec("c")]), "canopy");
+    expect(l.ready.map((r) => r.id)).toEqual(["c"]);
+    expect(l.other).toEqual([]);
+    expect(l.opened.map((r) => r.id)).toEqual(["a", "b"]);
   });
 
   test("two backends' queues read as one", () => {
@@ -158,5 +165,21 @@ describe("review rules in the page", () => {
     expect(noticeLine(n("b", 1, { kind: "held", why: "after the rebase it needs your land" }))).toBe("run/x-e held back: after the rebase it needs your land");
     const merged = mergeLanding({ mini: { ...info([]), notices: [n("m1", 1)] }, mac: { ...info([]), notices: [n("c1", 5)] } });
     expect(merged.notices?.map((x) => x.id)).toEqual(["c1", "m1"]);
+  });
+});
+
+describe("a branch that opened a PR, in the landing section", () => {
+  const watch = (id: string, over: Partial<PrWatch> = {}): PrWatch => ({ id, repoId: "canopy", number: 12, url: "https://github.com/o/canopy/pull/12", ...over }) as PrWatch;
+
+  test("watched: PR #n linking to it, and no land or drop, since the watch keeps its worktree", () => {
+    expect(openedRow(rec("a", { pr: 12 }), [watch("a")])).toEqual({ word: "PR #12", url: "https://github.com/o/canopy/pull/12", canDrop: false });
+  });
+
+  test("no watch (dropped 30 days after a sweep closed it): PR #n with drop, never land", () => {
+    expect(openedRow(rec("a", { pr: 12 }), [watch("b"), watch("a", { repoId: "other" })])).toEqual({ word: "PR #12", canDrop: true });
+  });
+
+  test("no drop while a run on the branch is still working", () => {
+    expect(openedRow(rec("a", { pr: 12, state: "working" }), []).canDrop).toBe(false);
   });
 });

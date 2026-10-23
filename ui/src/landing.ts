@@ -3,7 +3,7 @@
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
 
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, ReviewFile, Run, RunAction } from "../../src/core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [] };
 
@@ -62,25 +62,43 @@ export interface RepoLanding {
   ready: LandingRun[];
   /** branch runs that are neither ready nor queued: working, uncommitted, stopped, nothing */
   other: LandingRun[];
+  /** branch runs that opened a PR, in any state: they land on GitHub, never here */
+  opened: LandingRun[];
 }
 
 /** One repo's part of the queue, for its landing section. */
 export function repoLanding(info: LandingInfo, repoId: string): RepoLanding {
   const mine = info.entries.filter((e) => e.repoId === repoId);
   const has = new Set(mine.map((e) => e.id));
-  const runs = info.runs.filter((r) => r.repoId === repoId && !has.has(r.id));
+  const mineRuns = info.runs.filter((r) => r.repoId === repoId && !has.has(r.id));
+  const runs = mineRuns.filter((r) => r.pr === undefined);
   return {
     queue: queueOf(info.entries, repoId),
     back: mine.filter(sentBack).sort((a, b) => a.updatedAt - b.updatedAt),
     landed: mine.filter((e) => e.state === "landed").sort((a, b) => (b.landedAt ?? 0) - (a.landedAt ?? 0)),
     ready: runs.filter((r) => r.state === "ready"),
     other: runs.filter((r) => r.state !== "ready").sort((a, b) => b.startedAt - a.startedAt),
+    opened: mineRuns.filter((r) => r.pr !== undefined),
   };
+}
+
+/**
+ * A branch that opened a PR, as its landing row shows it: "PR #n" and
+ * never land, which the server refuses for it. While the PR watch has it,
+ * the row links to the PR and offers no drop, since the watch keeps the
+ * worktree. With no watch, as when a PR the sweep closed stays closed past
+ * its 30 days, drop is how the branch and its worktree go, once no run on
+ * it is working.
+ */
+export function openedRow(r: LandingRun, watches: readonly PrWatch[]): { word: string; url?: string; canDrop: boolean } {
+  const w = watches.find((x) => x.id === r.id && x.repoId === r.repoId);
+  const word = `PR #${r.pr ?? w?.number ?? "?"}`;
+  return w ? { word, url: w.url, canDrop: false } : { word, canDrop: r.state !== "working" };
 }
 
 /** Whether a repo has anything for its landing section to show. */
 export const hasLanding = (l: RepoLanding): boolean =>
-  l.queue.length + l.back.length + l.landed.length + l.ready.length + l.other.length > 0;
+  l.queue.length + l.back.length + l.landed.length + l.ready.length + l.other.length + l.opened.length > 0;
 
 /** The orphaned worktrees of one repo, by its main checkout's path. */
 export const repoOrphans = (info: LandingInfo, repoPath: string): LandingOrphan[] => info.orphans.filter((o) => o.repoPath === repoPath);
