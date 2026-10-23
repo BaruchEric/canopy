@@ -32,7 +32,7 @@ import { peerLines } from "./peers";
 import { sproutLines } from "./sprouts";
 import { taskLines } from "./tasks";
 import { agentWord, harnessOf } from "./runs";
-import { freshEntry, sweepSummary } from "./sweep";
+import { freshEntry, outcomesOf, sweepSummary } from "./sweep";
 
 export type FeedKind =
   | "git"
@@ -524,8 +524,9 @@ export function describeEvent(
     // resume or a settings change, which says nothing new
     case "sweep": {
       const entry = freshEntry(prev.sweepAt, ev.sweep.lastRun, at);
-      if (!entry || entry.outcomes.length === 0) return [];
-      return [{ at, kind: "sweep", source: "", text: `sweep ${sweepSummary(entry.outcomes)}${entry.by === "schedule" ? " (on its schedule)" : ""}`, quiet: false }];
+      const outcomes = entry ? outcomesOf(entry) : [];
+      if (!entry || outcomes.length === 0) return [];
+      return [{ at, kind: "sweep", source: "", text: `sweep ${sweepSummary(outcomes)}${entry.by === "schedule" ? " (on its schedule)" : ""}`, quiet: false }];
     }
     // the incubator view and the inbox say these; the feed has no line for them
     case "stages":

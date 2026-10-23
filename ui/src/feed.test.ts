@@ -522,6 +522,14 @@ describe("the sweep", () => {
     expect(describeEvent(info({ at: 10, by: "schedule" }), snap({ sweepAt: null }), 20)[0]?.text).toBe("sweep closed 1 shell, dismissed 1 run (on its schedule)");
   });
 
+  test("a close from a broken log with no outcomes is no line", () => {
+    const ev = info({ at: 10 });
+    if (ev.type !== "sweep" || !ev.sweep.lastRun) throw new Error("no entry");
+    const { outcomes: _gone, ...rest } = ev.sweep.lastRun;
+    const broken = { ...ev, sweep: { ...ev.sweep, lastRun: rest as typeof ev.sweep.lastRun } };
+    expect(describeEvent(broken, snap({ sweepAt: 5 }), 20)).toEqual([]);
+  });
+
   test("the same close again, or none, is no line", () => {
     expect(describeEvent(info({ at: 10 }), snap({ sweepAt: 10 }), 20)).toEqual([]);
     expect(describeEvent(info(null), snap({ sweepAt: null }), 20)).toEqual([]);

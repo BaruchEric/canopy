@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { defaultPicks, endedCards, freshEntry, groupItems, sheetRows, sweepSummary } from "./sweep";
+import { defaultPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, sweepSummary } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -131,5 +131,24 @@ describe("sheetRows", () => {
       ["run:r1", "", undefined],
       ["shell:s1", "", "closed"],
     ]);
+  });
+});
+
+describe("a log entry from a broken log", () => {
+  // as a hand-edited or older log.json can send it
+  const broken = { at: 1, by: "eric", items: [] } as unknown as SweepLogEntry;
+
+  test("an entry with no outcomes reads as none, and its summary says so", () => {
+    expect(outcomesOf(broken)).toEqual([]);
+    expect(sweepSummary(outcomesOf(broken))).toBe("closed nothing");
+  });
+
+  test("an outcome that is not one is left out", () => {
+    const mixed = { at: 1, by: "eric", items: [], outcomes: [null, { result: "closed" }, out("shell:s1", "closed")] } as unknown as SweepLogEntry;
+    expect(outcomesOf(mixed)).toEqual([out("shell:s1", "closed")]);
+  });
+
+  test("endedCards finds nothing in it", () => {
+    expect([...endedCards(broken, [])]).toEqual([]);
   });
 });

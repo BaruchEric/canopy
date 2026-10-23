@@ -26,6 +26,15 @@ export function defaultPicks(items: readonly SweepItem[]): Set<string> {
   return new Set(items.filter((i) => i.checked && i.closable).map((i) => i.key));
 }
 
+/** A log entry's outcomes, read as data from a file a hand may have
+ *  edited: an entry with no list has none, and an outcome with no key is
+ *  left out. */
+export function outcomesOf(entry: SweepLogEntry): SweepOutcome[] {
+  const list: unknown = entry.outcomes;
+  if (!Array.isArray(list)) return [];
+  return list.filter((o): o is SweepOutcome => typeof o === "object" && o !== null && typeof (o as { key?: unknown }).key === "string");
+}
+
 const kindOf = (key: string): string => key.slice(0, Math.max(0, key.indexOf(":")));
 
 const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
@@ -86,7 +95,7 @@ export function freshEntry(seen: number | null | undefined, entry: SweepLogEntry
  */
 export function endedCards(entry: SweepLogEntry, cards: readonly AgentCard[], backend?: string): Set<string> {
   const out = new Set<string>();
-  for (const o of entry.outcomes) {
+  for (const o of outcomesOf(entry)) {
     if (o.result !== "closed") continue;
     const kind = kindOf(o.key);
     const id = o.key.slice(kind.length + 1);

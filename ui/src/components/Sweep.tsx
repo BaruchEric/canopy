@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { KeptShell, SweepItem, SweepOutcome, SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, groupItems, KIND_HEAD, sheetRows, sweepSummary } from "../sweep";
+import { defaultPicks, groupItems, KIND_HEAD, outcomesOf, sheetRows, sweepSummary } from "../sweep";
 import { useNow } from "./Registry";
 
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
@@ -150,7 +150,7 @@ export function SweepSheet() {
         ) : (
           last && (
             <p className="sheet-hint sweep-last">
-              Last close {durationWord(now - last.at)} ago{last.by === "schedule" ? ", on its schedule" : ""}: {sweepSummary(last.outcomes)}
+              Last close {durationWord(now - last.at)} ago{last.by === "schedule" ? ", on its schedule" : ""}: {sweepSummary(outcomesOf(last))}
             </p>
           )
         )}
