@@ -2,6 +2,26 @@
 
 ## Open
 
+### FR-025 · Copy the branch, PR link or run id from the keyboard
+P3 · added 2026-10-23 · source: Eric (Linear UX study)
+With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch.
+
+### FR-024 · ⌘K acts on the focused card
+P2 · added 2026-10-23 · source: Eric (Linear UX study)
+With a repo card focused or a set selected, ⌘K opens the command line with that repo already in the repo slot and offers the verbs that apply to it first. Today the command line wants the repo's name typed, where Linear's menu acts on whatever is selected.
+
+### FR-023 · j/k through cards and rows, Space to peek
+P2 · added 2026-10-23 · source: Eric (Linear UX study)
+j and k (and the arrows) move a focus ring through the repo cards, trigger rows and inbox rows; Space opens the focused run's sheet over the list and Escape closes it without losing the place; Enter goes in. The most work of the Linear borrowings: it needs one focus model across the tree, the grid and the dock.
+
+### FR-022 · g then a letter switches views
+P2 · added 2026-10-23 · source: Eric (Linear UX study)
+Two-key chords switch views from anywhere outside a text box, as Linear's G then I does: g then t for triggers, l for the Library, h for health, i for the incubator, s for sessions, b for the board. The chord list lives in the same table as FR-021's sheet.
+
+### FR-021 · ? shows every shortcut
+P2 · added 2026-10-23 · source: Eric (Linear UX study)
+Pressing ? outside a text box opens a sheet of every keyboard shortcut on the current view. About a dozen single keys exist (/ f [ e w d * x s n :) and none is shown on the page; the sheet and the key handler should read one table so they cannot drift.
+
 ### FR-017 · Section headings show what changed and who is working
 P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-21)
 A topic section's heading in the tree and the grid carries more than the dirty count: lines added and removed across its repos, and how many agents are working in them right now. The note reads "show info in section headers, like changes (+/-), agents working".
