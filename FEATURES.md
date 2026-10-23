@@ -6,11 +6,6 @@
 P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-21)
 A topic section's heading in the tree and the grid carries more than the dirty count: lines added and removed across its repos, and how many agents are working in them right now. The note reads "show info in section headers, like changes (+/-), agents working".
 
-### FR-018 · A sweep that closes what went idle
-P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
-One command, and optionally a schedule, closes what nobody is using: PRs with no activity, idle shells and windows, agents that finished or stalled. It lists what it would close and waits for a yes before touching a PR. Written down on two separate pages.
-Spec: docs/superpowers/specs/2026-10-22-sweep-design.md (2026-10-22).
-
 ### FR-019 · Drill from a card into a branch and its worktree
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14)
 From a repo card, open one branch and see the changes in its worktree, not only the main checkout's. The note reads "drill to branch; work tree on changes", so confirm the intent before writing a spec.
@@ -44,6 +39,12 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-018 · A sweep that closes what went idle
+P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
+One command, and optionally a schedule, closes what nobody is using: PRs with no activity, idle shells and windows, agents that finished or stalled. It lists what it would close and waits for a yes before touching a PR. Written down on two separate pages.
+Spec: docs/superpowers/specs/2026-10-22-sweep-design.md (2026-10-22).
+Plan: docs/superpowers/plans/2026-10-22-sweep.md. Phase 1 (shells, chats and runs on demand) shipped 2026-10-22; phase 2 (the schedule) and phase 3 (PRs) remain.
 
 ## Shipped
 
