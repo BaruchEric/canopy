@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { DEFAULT_SWEEP, type PlanInputs, type ShellFacts } from "../core/sweep";
 import { addSweptChat, readLog, readSweptChats, sweepDir } from "../core/sweepstore";
 import type { Run, ServerEvent, SweepInfo, SweepSettings, SweptChat } from "../core/types";
-import { SweepHub, type SweepDeps } from "./sweep";
+import { SweepError, SweepHub, type SweepDeps } from "./sweep";
 
 const H = 3_600_000;
 // the swept-chat records expire against the real clock, so the facts are
@@ -345,6 +345,51 @@ describe("the sweep hub", () => {
     expect(w.calls.startChat).toEqual([rec]);
     expect(await readSweptChats()).toEqual([]);
     expect((await call(hub, "/api/sweep/resume", { method: "POST", body: { runId: "c1" } })).status).toBe(404);
+  });
+
+  test("resume right after the close waits for the stopped chat to end before starting on its session", async () => {
+    const w = world();
+    // the stopped chat's process is still exiting: it holds the repo, and a
+    // second process on the same session would run beside it
+    w.runs = [run({ id: "c1", chat: true, status: "idle", session: "sess-c1" })];
+    await addSweptChat({ runId: "c1", repoId: "app", harness: "claude", session: "sess-c1", title: "Chat", sweptAt: NOW });
+    const waits: number[] = [];
+    const hub = new SweepHub({
+      ...w.deps,
+      startChat: async (c) => {
+        if (w.runs.some((r) => r.id === "c1" && r.status === "idle")) throw new SweepError(409, "app already has a run going (chat)");
+        return w.deps.startChat(c);
+      },
+      sleep: async (ms) => {
+        waits.push(ms);
+        const r = w.runs.find((x) => x.id === "c1");
+        if (r && waits.length === 3) r.status = "done";
+      },
+    });
+    const got = await call(hub, "/api/sweep/resume", { method: "POST", body: { runId: "c1" } });
+    expect(got.status).toBe(200);
+    expect((got.body as Run).id).toBe("new-chat");
+    expect(waits).toHaveLength(3);
+    expect(await readSweptChats()).toEqual([]);
+  });
+
+  test("resume gives up on a stopped chat that never ends, and keeps the record", async () => {
+    const w = world();
+    w.runs = [run({ id: "c1", chat: true, status: "idle", session: "sess-c1" })];
+    await addSweptChat({ runId: "c1", repoId: "app", harness: "claude", session: "sess-c1", title: "Chat", sweptAt: NOW });
+    let clock = NOW;
+    const hub = new SweepHub({
+      ...w.deps,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+    });
+    const got = await call(hub, "/api/sweep/resume", { method: "POST", body: { runId: "c1" } });
+    expect(got.status).toBe(409);
+    expect(String((got.body as { error: string }).error)).toContain("still stopping");
+    expect(w.calls.startChat).toEqual([]);
+    expect((await readSweptChats()).map((c) => c.runId)).toEqual(["c1"]);
   });
 
   test("POST /api/sweep closes the keys it is sent and refuses anything but a list of strings", async () => {

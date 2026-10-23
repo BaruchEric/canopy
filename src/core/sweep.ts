@@ -122,9 +122,11 @@ export interface PlanInputs {
   outside: AgentCard[];
 }
 
-/** a span as the row says it: hours under two days, else days */
+/** a span as the row says it: minutes under an hour, hours under two
+ *  days, else days */
 function ago(ms: number): string {
   const h = Math.floor(ms / HOUR);
+  if (h < 1) return `${Math.max(1, Math.floor(ms / 60_000))}m`;
   return h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 

@@ -21,6 +21,13 @@ test("a shell quiet past its span is offered, checked", () => {
   const [it] = planSweep({ ...base, shells: [shell()] }, DEFAULT_SWEEP, now);
   expect(it).toMatchObject({ key: "shell:t1", kind: "shell", closable: true, checked: true, idleSince: now - 30 * H, why: "no input or output for 30h" });
 });
+test("a span under an hour reads in minutes, never 0h", () => {
+  const short = { ...DEFAULT_SWEEP, spans: { ...DEFAULT_SWEEP.spans, shell: 60_000 } };
+  const at = (ms: number) => planSweep({ ...base, shells: [shell({ lastOutput: now - ms })] }, short, now)[0]?.why;
+  expect(at(45 * 60_000)).toBe("no input or output for 45m");
+  expect(at(90_000)).toBe("no input or output for 1m");
+  expect(at(3 * H)).toBe("no input or output for 3h");
+});
 test("a keystroke inside the span keeps it", () => {
   expect(planSweep({ ...base, shells: [shell({ lastInput: now - 1 * H })] }, DEFAULT_SWEEP, now)).toEqual([]);
 });
