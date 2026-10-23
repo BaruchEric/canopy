@@ -893,6 +893,29 @@ describe("the sweep's close", () => {
       expect(w.records.get(w.rec.id)?.pr).toBe(7);
     }
   });
+
+  test("closed by no one known for 30 days, its state reading but its comments never: dropped before another read, keeping its PR", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.prComments = "gh: HTTP 502";
+    w.clock = Date.now();
+    await pollNow(w);
+    expect(w.hub.info()[0]?.closeUnread).toBe(w.clock);
+    // the state keeps reading CLOSED; only who closed it fails
+    w.clock += 10 * DAY;
+    const pr = await pollNow(w);
+    expect(pr.closeUnread).toBeDefined();
+    expect(pr.error).toContain("HTTP 502");
+    w.clock += 21 * DAY;
+    const reads = w.gh.calls.length;
+    await pollNow(w);
+    expect(w.hub.info()).toEqual([]);
+    expect(w.gh.calls.length).toBe(reads);
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+  });
 });
 
 describe("routes", () => {
