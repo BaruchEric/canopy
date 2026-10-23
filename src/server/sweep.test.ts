@@ -431,7 +431,7 @@ describe("the schedule", () => {
     expect(w.events).toEqual([]);
   });
 
-  test("a fire closes the auto kinds and holds the rest as the ask", async () => {
+  test("a fire closes the auto kinds; with the default kinds the ask is empty and a busy shell stays for the sheet", async () => {
     const w = world();
     on(w);
     // an idle shell, one running vim (offered unticked), an idle Claude
@@ -445,8 +445,8 @@ describe("the schedule", () => {
     expect(w.calls.endShell).toEqual(["t1"]);
     expect(w.calls.stopChat).toEqual(["c1"]);
     expect(w.calls.dismiss).toEqual(["d1"]);
-    // the busy shell is asked about, never closed; the outside agent is in neither
-    expect(keys(await readAsk())).toEqual(["shell:t2"]);
+    // the busy shell is in neither the close nor the ask, and nor is the outside agent
+    expect(await readAsk()).toBeNull();
     const log = await scheduled();
     expect(log).toHaveLength(1);
     expect(log[0]?.outcomes).toEqual([
@@ -455,10 +455,12 @@ describe("the schedule", () => {
       { key: "run:d1", result: "closed" },
     ]);
     expect(await readLastFire()).toBe(NOW);
-    expect(keys(lastSweep(w)?.ask)).toEqual(["shell:t2"]);
+    expect(lastSweep(w)?.ask).toBeNull();
     const info = await hub.info();
-    expect(keys(info.ask)).toEqual(["shell:t2"]);
+    expect(info.ask).toBeNull();
+    // it stays in the sheet, where a tick closes it
     expect(keys(info.items)).toEqual(["shell:t2", "outside:claude:s1"]);
+    expect(await call(hub, "/api/sweep", { method: "POST", body: { keys: ["shell:t2"] } })).toEqual({ status: 200, body: { outcomes: [{ key: "shell:t2", result: "closed" }] } });
   });
 
   test("a kind left out of auto goes to the ask, not the close", async () => {
@@ -492,22 +494,33 @@ describe("the schedule", () => {
 
   test("a newer fire replaces an unanswered ask", async () => {
     const w = world();
-    on(w);
-    w.shells = [shell({ id: "t2", command: "vim" })];
+    on(w, { auto: ["shell"] });
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
     await writeLastFire(NOW - 2 * MIN);
     const hub = new SweepHub(w.deps);
     await hub.tick(NOW);
-    expect(keys(await readAsk())).toEqual(["shell:t2"]);
-    w.shells = [shell({ id: "t3", command: "htop" })];
+    expect(keys(await readAsk())).toEqual(["run:d1"]);
+    w.runs = [run({ id: "d2", endedAt: NOW - 4 * DAY })];
     await hub.tick(NOW + 2 * MIN);
-    expect(keys(await readAsk())).toEqual(["shell:t3"]);
+    expect(keys(await readAsk())).toEqual(["run:d2"]);
     expect(await scheduled()).toHaveLength(2);
+  });
+
+  test("a busy shell is never in the ask, whatever kinds close on their own", async () => {
+    const w = world();
+    on(w, { auto: [] });
+    w.shells = [shell({ id: "t1" }), shell({ id: "t2", command: "vim" })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect(keys(await readAsk())).toEqual(["shell:t1"]);
+    expect(w.calls.endShell).toEqual([]);
   });
 
   test("a fire that finds nothing writes a log line and no ask", async () => {
     const w = world();
     on(w);
-    await writeAsk([{ key: "shell:old", kind: "shell", id: "old", repoId: "app", where: "app", title: "shell", idleSince: 1, why: "w", closable: true, checked: false, auto: false }]);
+    await writeAsk([{ key: "shell:old", kind: "shell", id: "old", repoId: "app", where: "app", title: "shell", idleSince: 1, why: "w", closable: true, checked: false, handOnly: false, auto: false }]);
     await writeLastFire(NOW - 2 * MIN);
     const hub = new SweepHub(w.deps);
     await hub.tick(NOW);
@@ -578,13 +591,13 @@ describe("the schedule", () => {
 
   test("answering the ask closes those keys after a recheck", async () => {
     const w = world();
-    on(w, { auto: ["shell"] });
-    w.shells = [shell({ id: "t1" }), shell({ id: "t2", command: "vim" })];
+    on(w, { auto: ["run"] });
+    w.shells = [shell({ id: "t1" }), shell({ id: "t2" })];
     w.runs = [idleChat("c1")];
     await writeLastFire(NOW - 2 * MIN);
     const hub = new SweepHub(w.deps);
     await hub.tick(NOW);
-    expect(keys(await readAsk())).toEqual(["shell:t2", "chat:c1"]);
+    expect(keys(await readAsk())).toEqual(["shell:t1", "shell:t2", "chat:c1"]);
     // Eric is back at t2 before he answers
     const t2 = w.shells.find((s) => s.id === "t2");
     if (t2) t2.lastInput = NOW - 1_000;
@@ -594,7 +607,7 @@ describe("the schedule", () => {
       { key: "shell:t2", result: "in use now" },
       { key: "chat:c1", result: "closed" },
     ]);
-    expect(w.calls.endShell).toEqual(["t1"]);
+    expect(w.calls.endShell).toEqual([]);
     expect(w.calls.stopChat).toEqual(["c1"]);
     expect(await readAsk()).toBeNull();
     expect((await hub.info()).ask).toBeNull();
@@ -609,12 +622,12 @@ describe("the schedule", () => {
     await writeLastFire(NOW - 2 * MIN);
     const hub = new SweepHub(w.deps);
     await hub.tick(NOW);
-    expect((await readAsk())?.map((i) => [i.key, i.checked])).toEqual([["shell:t1", true]]);
+    expect((await readAsk())?.map((i) => [i.key, i.handOnly])).toEqual([["shell:t1", false]]);
     // Eric starts vim in it before he answers
     const t1 = w.shells.find((s) => s.id === "t1");
     if (t1) t1.command = "vim";
     const [item] = (await hub.info()).ask ?? [];
-    expect(item).toMatchObject({ key: "shell:t1", checked: false, auto: false });
+    expect(item).toMatchObject({ key: "shell:t1", checked: false, handOnly: true, auto: false });
     expect(item?.why).toContain("running vim");
     const got = await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t1"] } });
     expect((got.body as { outcomes: SweepOutcome[] }).outcomes).toEqual([{ key: "shell:t1", result: "in use now" }]);
@@ -666,13 +679,14 @@ describe("the schedule", () => {
 
   test("the ask's routes: only its own keys, a 404 with none, and a dismiss that closes nothing", async () => {
     const w = world();
-    on(w);
-    w.shells = [shell({ id: "t1" }), shell({ id: "t2", command: "vim" })];
+    on(w, { auto: ["shell"] });
+    w.shells = [shell({ id: "t1" })];
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
     const hub = new SweepHub(w.deps);
-    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t2"] } })).status).toBe(404);
+    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["run:d1"] } })).status).toBe(404);
     await writeLastFire(NOW - 2 * MIN);
     await hub.tick(NOW);
-    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: "shell:t2" } })).status).toBe(400);
+    expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: "run:d1" } })).status).toBe(400);
     // t1 was the fire's to close, not the ask's
     expect((await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t1"] } })).status).toBe(400);
     const gone = await call(hub, "/api/sweep/ask", { method: "DELETE" });
@@ -680,7 +694,8 @@ describe("the schedule", () => {
     expect(await readAsk()).toBeNull();
     expect(lastSweep(w)?.ask).toBeNull();
     expect(w.calls.endShell).toEqual(["t1"]);
-    expect(w.shells.map((s) => s.id)).toEqual(["t2"]);
+    expect(w.calls.dismiss).toEqual([]);
+    expect(w.runs.map((r) => r.id)).toEqual(["d1"]);
   });
 
   test("turning the schedule on counts from then, not from an old fire", async () => {

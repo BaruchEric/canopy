@@ -16,6 +16,7 @@ const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
     why: "",
     closable: kind !== "outside",
     checked: kind !== "outside" && kind !== "pr",
+    handOnly: false,
     auto: false,
     ...over,
   };
@@ -188,17 +189,23 @@ describe("the ask's words", () => {
     expect(askTitle([item("run:r1"), item("run:r2")], spans)).toBe("Sweep: 2 finished runs idle 3+ days");
   });
 
-  test("askCloses is the ask's ticked keys it may close, in its order", () => {
-    const ask = [item("shell:s1", { checked: false }), item("chat:c1"), item("pr:1", { checked: true }), item("outside:o1", { checked: true })];
+  test("askCloses is every ask key it may close, in its order: not a busy shell, not one listed only", () => {
+    const ask = [item("shell:s1", { checked: false, handOnly: true }), item("chat:c1"), item("pr:1"), item("outside:o1", { checked: true })];
     expect(askCloses(ask)).toEqual(["chat:c1", "pr:1"]);
-    expect(askCloses([item("shell:s1", { checked: false })])).toEqual([]);
+    expect(askCloses([item("shell:s1", { checked: false, handOnly: true })])).toEqual([]);
+  });
+
+  test("an item the sheet leaves unticked but no hand holds is closed by close all", () => {
+    // a PR as phase 3 plans it, and a chat whose kind left auto, forced unticked
+    const ask = [item("chat:c1", { checked: false }), item("pr:1", { checked: false })];
+    expect(askCloses(ask)).toEqual(["chat:c1", "pr:1"]);
   });
 });
 
 describe("pick", () => {
-  test("starts the sheet on the ask's ticked items alone: a shell running a program stays unticked", () => {
-    const ask = [item("shell:busy", { checked: false, why: "running vim, no input or output for 30h" }), item("shell:idle"), item("chat:c1")];
-    expect(pickKeys(ask)).toEqual(["shell:idle", "chat:c1"]);
+  test("starts the sheet on every ask item close all would close: a shell running a program stays unticked", () => {
+    const ask = [item("shell:busy", { checked: false, handOnly: true, why: "running vim, no input or output for 30h" }), item("shell:idle"), item("chat:c1"), item("pr:1", { checked: false })];
+    expect(pickKeys(ask)).toEqual(["shell:idle", "chat:c1", "pr:1"]);
     expect(pickKeys(ask)).not.toContain("shell:busy");
   });
 });

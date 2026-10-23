@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_SWEEP, normalizeSweep, patchSweep, planSweep, type ShellFacts } from "./sweep";
-import type { AgentCard, Run } from "./types";
+import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, type ShellFacts } from "./sweep";
+import type { AgentCard, Run, SweepItem } from "./types";
 
 const H = 3_600_000;
 const now = Date.UTC(2026, 9, 22, 12);
@@ -45,11 +45,11 @@ test.each([
 });
 test("a shell running a quiet program is listed unticked, saying what runs", () => {
   const [it] = planSweep({ ...base, shells: [shell({ command: "vim" })] }, DEFAULT_SWEEP, now);
-  expect(it).toMatchObject({ key: "shell:t1", closable: true, checked: false, auto: false, why: "running vim, no input or output for 30h" });
+  expect(it).toMatchObject({ key: "shell:t1", closable: true, checked: false, handOnly: true, auto: false, why: "running vim, no input or output for 30h" });
 });
 test.each(["zsh", "-zsh", "bash", "-bash", "sh", "fish", "dash", "ksh", "tcsh", "nu"])("a shell at its %s prompt is still ticked", (command) => {
   const [it] = planSweep({ ...base, shells: [shell({ command })] }, DEFAULT_SWEEP, now);
-  expect(it).toMatchObject({ key: "shell:t1", checked: true, auto: true, why: "no input or output for 30h" });
+  expect(it).toMatchObject({ key: "shell:t1", checked: true, handOnly: false, auto: true, why: "no input or output for 30h" });
 });
 test("an idle agent at its prompt goes with its shell", () => {
   expect(planSweep({ ...base, shells: [shell({ agent: { state: "idle", session: "s" } })] }, DEFAULT_SWEEP, now)).toHaveLength(1);
@@ -65,18 +65,18 @@ test("an idle Claude chat past 12h is offered; a Codex chat is listed but not cl
     ],
   }, DEFAULT_SWEEP, now);
   expect(out.map((i) => i.key)).toEqual(["chat:c1", "chat:c2"]);
-  expect(out[0]).toMatchObject({ kind: "chat", closable: true, checked: true, idleSince: at, why: "chat quiet for 13h" });
-  expect(out[1]).toMatchObject({ kind: "chat", closable: false, checked: false });
+  expect(out[0]).toMatchObject({ kind: "chat", closable: true, checked: true, handOnly: false, idleSince: at, why: "chat quiet for 13h" });
+  expect(out[1]).toMatchObject({ kind: "chat", closable: false, checked: false, handOnly: false });
 });
 test("a finished run past 3d is offered unless landing or a flow holds it", () => {
   const r = run({ id: "d1", status: "done", endedAt: now - 4 * 24 * H });
   const [it] = planSweep({ ...base, runs: [r] }, DEFAULT_SWEEP, now);
-  expect(it).toMatchObject({ key: "run:d1", kind: "run", closable: true, checked: true, why: "finished 4d ago" });
+  expect(it).toMatchObject({ key: "run:d1", kind: "run", closable: true, checked: true, handOnly: false, why: "finished 4d ago" });
   expect(planSweep({ ...base, runs: [r], heldRuns: new Set(["d1"]) }, DEFAULT_SWEEP, now)).toEqual([]);
 });
 test("an outside agent is listed, never closable or checked", () => {
   const [it] = planSweep({ ...base, outside: [card()] }, DEFAULT_SWEEP, now);
-  expect(it).toMatchObject({ kind: "outside", closable: false, checked: false, idleSince: now - 25 * H });
+  expect(it).toMatchObject({ kind: "outside", closable: false, checked: false, handOnly: false, idleSince: now - 25 * H });
   expect(planSweep({ ...base, outside: [card({ where: { os: "linux", container: false, pid: 1, term: null, canopy: { backend: "mini" } } })] }, DEFAULT_SWEEP, now)).toEqual([]);
 });
 test("normalizeSweep drops a negative span and an unknown auto kind to defaults", () => {
@@ -102,4 +102,15 @@ test("a finished chat is a run item; the same chat idle is a chat item", () => {
   expect(planSweep({ ...base, runs: [ended] }, DEFAULT_SWEEP, now)).toMatchObject([{ key: "run:c1", kind: "run", closable: true, checked: true }]);
   const idle = run({ id: "c1", chat: true, status: "idle", session: "s", startedAt: now - 4 * 24 * H });
   expect(planSweep({ ...base, runs: [idle] }, DEFAULT_SWEEP, now)).toMatchObject([{ key: "chat:c1", kind: "chat" }]);
+});
+test("mayClose: closable and not by hand only, whatever the sheet's default tick", () => {
+  const it = (over: Partial<SweepItem>): SweepItem => ({
+    key: "pr:1", kind: "pr", id: "1", repoId: "app", where: "o/app", title: "PR 1", idleSince: 0, why: "", closable: true, checked: false, handOnly: false, auto: false, ...over,
+  });
+  // a PR as phase 3 will plan it: unticked in the sheet, still closable from the ask
+  expect(mayClose(it({}))).toBe(true);
+  expect(mayClose(it({ kind: "chat", key: "chat:c1", checked: false }))).toBe(true);
+  // a shell running a program: only a tick in the sheet closes it
+  expect(mayClose(it({ kind: "shell", key: "shell:t1", handOnly: true }))).toBe(false);
+  expect(mayClose(it({ kind: "outside", key: "outside:o1", closable: false, checked: true }))).toBe(false);
 });

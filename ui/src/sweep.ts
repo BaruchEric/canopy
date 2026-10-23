@@ -3,6 +3,7 @@
  *  the feed, and which agent cards a close ended, so their panels and
  *  windows close with them. Tested in sweep.test.ts. */
 
+import { mayClose } from "../../src/core/sweep";
 import { SWEEP_KINDS, type AgentCard, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome } from "../../src/core/types";
 
 /** each kind's heading in the sheet */
@@ -182,11 +183,12 @@ export function askTitle(items: readonly SweepItem[], spans: Readonly<Record<Swe
   return `Sweep: ${parts.join(", ")}`;
 }
 
-/** What "close all" on the ask sends: the keys the plan ticks and may
- *  close. The server answers any other key with "in use now", so a shell
- *  running a program is left for the sheet, where Eric can tick it. */
+/** What "close all" on the ask sends: every key it may close (`mayClose`),
+ *  ticked in the sheet or not, as a PR is not. The server answers a key
+ *  held for the hand with "in use now", so a shell that has started a
+ *  program since the fire is left for the sheet, where Eric can tick it. */
 export function askCloses(items: readonly SweepItem[]): string[] {
-  return items.filter((i) => i.checked && i.closable).map((i) => i.key);
+  return items.filter(mayClose).map((i) => i.key);
 }
 
 /** What the ask's "pick" starts the sheet with ticked: the same items

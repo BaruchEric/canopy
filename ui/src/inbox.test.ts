@@ -506,7 +506,9 @@ describe("the sweep's ask", () => {
     idleSince,
     why: "no activity for 15d",
     closable: true,
-    checked: true,
+    // the sheet leaves a PR unticked; close all still closes it
+    checked: false,
+    handOnly: false,
     auto: false,
   });
   const info = (ask: SweepItem[] | null, lastRun: SweepInfo["lastRun"] = { at: 900, by: "schedule", outcomes: [], items: [] }): Pick<SweepInfo, "ask" | "settings" | "lastRun"> => ({ ask, settings, lastRun });

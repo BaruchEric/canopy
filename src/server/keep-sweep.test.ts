@@ -270,7 +270,7 @@ describe("the sweep's end of a shell", () => {
         return info.items.some((i) => i.key === `shell:${id}`);
       }, "the busy shell to be offered");
       const item = (info as SweepInfo | null)?.items.find((i) => i.key === `shell:${id}`);
-      expect(item).toMatchObject({ closable: true, checked: false, auto: false });
+      expect(item).toMatchObject({ closable: true, checked: false, handOnly: true, auto: false });
       expect(item?.why).toMatch(/^running \S+, no input or output for /);
     } finally {
       await shellSpan(24 * 3_600_000);

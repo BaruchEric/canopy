@@ -74,8 +74,11 @@ function parseItem(v: unknown): SweepItem | null {
     isStr(v["why"]) &&
     isBool(v["closable"]) &&
     isBool(v["checked"]) &&
+    (v["handOnly"] === undefined || isBool(v["handOnly"])) &&
     isBool(v["auto"]);
-  return ok ? (v as unknown as SweepItem) : null;
+  // an item written before handOnly reads as not held; nothing closes on a
+  // stored item's flags, every close plans afresh
+  return ok ? ({ ...v, handOnly: v["handOnly"] === true } as unknown as SweepItem) : null;
 }
 
 /** A log entry needs its time, who ran it and its outcomes; an outcome or

@@ -80,7 +80,7 @@ test("a chats file that is not a list reads as none", async () => {
 });
 
 test("a log entry without outcomes or items is dropped; a bad outcome or item inside a good entry is left out", async () => {
-  const item = { key: "shell:t", kind: "shell", id: "t", repoId: "r", where: "r", title: "shell", idleSince: 1, why: "w", closable: true, checked: true, auto: true };
+  const item = { key: "shell:t", kind: "shell", id: "t", repoId: "r", where: "r", title: "shell", idleSince: 1, why: "w", closable: true, checked: true, handOnly: false, auto: true };
   await put("log.json", [
     null,
     { at: 1, by: "eric", items: [] },
@@ -93,7 +93,7 @@ test("a log entry without outcomes or items is dropped; a bad outcome or item in
   expect((await readLog()).map((e) => e.at)).toEqual([4, 5]);
 });
 
-const askItem = (id: string): SweepItem => ({ key: `shell:${id}`, kind: "shell", id, repoId: "r", where: "r", title: "shell", idleSince: 1, why: "running vim, no input or output for 30h", closable: true, checked: false, auto: false });
+const askItem = (id: string): SweepItem => ({ key: `shell:${id}`, kind: "shell", id, repoId: "r", where: "r", title: "shell", idleSince: 1, why: "running vim, no input or output for 30h", closable: true, checked: false, handOnly: true, auto: false });
 
 test("the ask is stored, read back and cleared", async () => {
   expect(await readAsk()).toBeNull();
@@ -101,6 +101,12 @@ test("the ask is stored, read back and cleared", async () => {
   expect(await readAsk()).toEqual([askItem("a"), askItem("b")]);
   await writeAsk(null);
   expect(await readAsk()).toBeNull();
+});
+
+test("an item written before handOnly reads as not held; a handOnly that is not a boolean is dropped", async () => {
+  const { handOnly: _gone, ...old } = askItem("old");
+  await put("ask.json", [old, { ...askItem("bad"), handOnly: "yes" }]);
+  expect(await readAsk()).toEqual([{ ...askItem("old"), handOnly: false }]);
 });
 
 test("a malformed ask entry is dropped; an ask with none left, or not a list, reads as none", async () => {

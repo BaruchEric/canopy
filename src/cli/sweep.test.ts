@@ -13,6 +13,7 @@ const item = (key: string, kind: SweepItem["kind"], over: Partial<SweepItem> = {
   why: "idle",
   closable: true,
   checked: true,
+  handOnly: false,
   auto: false,
   ...over,
 });

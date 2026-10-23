@@ -95,6 +95,12 @@ export function patchSweep(cur: SweepSettings, patch: unknown): SweepSettings | 
   return out;
 }
 
+/** Whether a close Eric did not tick by hand may take the item: the
+ *  schedule's own closes, the ask, and an answer to it. It must be one the
+ *  sweep can close, and not one only a tick in the sheet closes. The
+ *  sheet's default tick (`checked`) plays no part. */
+export const mayClose = (item: Pick<SweepItem, "closable" | "handOnly">): boolean => item.closable && !item.handOnly;
+
 /** What the planner needs to know about one canopy shell. */
 export interface ShellFacts {
   id: string;
@@ -143,18 +149,19 @@ const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
  * first. Shells with a name, a task, the ranger, a move under way, or an
  * agent that is working or waiting are never offered; an agent idle at its
  * prompt goes with its shell. A shell running some other program in the
- * foreground is offered unticked and left out of the schedule's closes,
- * with the program named. Chats are listed always, and closable only
+ * foreground is offered unticked and by hand only (out of the ask and the
+ * schedule's closes), with the program named. Chats are listed always, and closable only
  * when they are Claude's with a session to resume. Agents canopy did not
  * start are listed, never closable.
  */
 export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): SweepItem[] {
   const items: SweepItem[] = [];
-  // `ask`: offered, but only by hand: never ticked, never closed unasked
-  const add = (kind: SweepKind, id: string, repoId: string | null, where: string, title: string, idleSince: number, why: (idle: number) => string, closable: boolean, ask = false) => {
+  // `handOnly`: offered, but closed only by a tick in the sheet: never
+  // ticked to start, never in the ask, never closed by the schedule
+  const add = (kind: SweepKind, id: string, repoId: string | null, where: string, title: string, idleSince: number, why: (idle: number) => string, closable: boolean, handOnly = false) => {
     const idle = now - idleSince;
     if (idle < s.spans[kind]) return;
-    items.push({ key: `${kind}:${id}`, kind, id, repoId, where, title, idleSince, why: why(idle), closable, checked: closable && kind !== "pr" && !ask, auto: s.auto.includes(kind) && !ask });
+    items.push({ key: `${kind}:${id}`, kind, id, repoId, where, title, idleSince, why: why(idle), closable, checked: closable && kind !== "pr" && !handOnly, handOnly, auto: s.auto.includes(kind) && !handOnly });
   };
 
   for (const sh of inputs.shells ?? []) {

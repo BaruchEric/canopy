@@ -2994,8 +2994,14 @@ export interface SweepItem {
   why: string;
   /** false for items that are listed only */
   closable: boolean;
-  /** whether the sheet starts with it ticked */
+  /** whether the sheet starts with it ticked; the sheet's default only,
+   *  never what decides a close (a PR starts unticked and the ask may
+   *  still close it) */
   checked: boolean;
+  /** only a tick in the sheet closes it: a shell running a program in the
+   *  foreground. Never in the ask, never closed by the schedule or by an
+   *  answer to the ask */
+  handOnly: boolean;
   /** whether the schedule closes it without asking */
   auto: boolean;
 }

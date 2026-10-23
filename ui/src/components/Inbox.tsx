@@ -419,11 +419,11 @@ export function InboxRow({
 }
 
 /** The sweep's ask: what its scheduled fire found closable and did not
- *  close on its own, each with where and why. "close all" closes the ones
- *  the plan ticks (a shell running a program is not one) and clears the
- *  ask; "pick" opens the sweep sheet with those same ones ticked, where
- *  the rest can be ticked by hand; "dismiss" drops the ask and closes
- *  nothing. */
+ *  close on its own, each with where and why. "close all" closes every one
+ *  it may (a shell that has started a program since the fire is not one)
+ *  and clears the ask; "pick" opens the sweep sheet with those same ones
+ *  ticked, where the rest can be ticked by hand; "dismiss" drops the ask
+ *  and closes nothing. */
 function SweepAsk({ items, busy, now, onAnswer }: { items: readonly SweepItem[]; busy: boolean; now: number; onAnswer: (a: InboxAnswer) => void }) {
   const closes = askCloses(items);
   const n = closes.length;
@@ -438,19 +438,19 @@ function SweepAsk({ items, busy, now, onAnswer }: { items: readonly SweepItem[];
       <div className="eyebrow">held back by the sweep's schedule</div>
       <ul className="inbox-sweep">
         {items.map((i) => (
-          <li key={i.key} className={i.checked ? undefined : "unticked"}>
+          <li key={i.key} className={i.handOnly ? "unticked" : undefined}>
             <span className="inbox-sweep-where" title={i.title !== i.where ? i.title : undefined}>
               {i.where}
             </span>
             <span className="inbox-sweep-idle">{durationWord(now - i.idleSince)}</span>
             <span className="inbox-sweep-why">
               {i.why}
-              {!i.checked && <span className="dim"> · left for the sheet</span>}
+              {i.handOnly && <span className="dim"> · left for the sheet</span>}
             </span>
           </li>
         ))}
       </ul>
-      {n === 0 && <p className="settings-hint">None of these is ticked to close: pick them in the sweep sheet, or dismiss the ask.</p>}
+      {n === 0 && <p className="settings-hint">None of these can be closed from here: tick them in the sweep sheet, or dismiss the ask.</p>}
       <div className="ask-row">
         <button
           type="button"

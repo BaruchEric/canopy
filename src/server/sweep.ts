@@ -16,7 +16,7 @@
 
 import { nextFire, parseCron } from "../core/cron";
 import { loadConfig, setSweep } from "../core/store";
-import { patchSweep, planSweep, type PlanInputs } from "../core/sweep";
+import { mayClose, patchSweep, planSweep, type PlanInputs } from "../core/sweep";
 import { addSweptChat, appendLog, readAsk, readLastFire, readLog, readSweptChats, takeSweptChat, writeAsk, writeLastFire } from "../core/sweepstore";
 import { SWEEP_KINDS, type KeptShell, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
 
@@ -65,9 +65,10 @@ const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
 const TICK_MS = 60_000;
 
 /** Whether the schedule may close an item with no one looking: its kind is
- *  one Eric let close on its own, and the plan ticks it and may close it.
- *  A shell running a program in the foreground is never one. */
-const autoCloses = (item: SweepItem, settings: SweepSettings): boolean => settings.auto.includes(item.kind) && item.auto && item.checked && item.closable;
+ *  one Eric let close on its own, and the plan lets a close he did not
+ *  tick take it (`mayClose`). A shell running a program in the foreground
+ *  is never one. */
+const autoCloses = (item: SweepItem, settings: SweepSettings): boolean => settings.auto.includes(item.kind) && mayClose(item);
 
 export class SweepHub {
   /** closes and resumes, one at a time */
@@ -171,7 +172,8 @@ export class SweepHub {
       const items = this.plan(await this.deps.facts(), settings);
       // a draft PR joins neither the close nor the ask once PRs are swept (Task 10)
       const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
-      const rest = items.filter((i) => i.closable && !auto.includes(i.key));
+      // a busy shell is left for the sheet, out of the ask as well
+      const rest = items.filter((i) => mayClose(i) && !auto.includes(i.key));
       if (auto.length > 0) await this.closeKeys(auto, "schedule");
       else await this.log({ at: this.now(), by: "schedule", outcomes: [], items: [] });
       await writeAsk(rest);
@@ -218,10 +220,10 @@ export class SweepHub {
 
   /** `close` without the queue or the event, for callers already on the
    *  queue. The schedule closes a key only when the fresh plan still lets
-   *  it close on its own, and an answer to the ask (`ticked`) only when the
-   *  fresh plan ticks it: a shell that has started a program since is
-   *  "in use now" to both. */
-  private async closeKeys(keys: string[], by: "eric" | "schedule", ticked = false): Promise<SweepOutcome[]> {
+   *  it close on its own, and an answer to the ask (`asked`) only when the
+   *  fresh plan lets an unticked close take it (`mayClose`): a shell that
+   *  has started a program since is "in use now" to both. */
+  private async closeKeys(keys: string[], by: "eric" | "schedule", asked = false): Promise<SweepOutcome[]> {
     const wanted = [...new Set(keys)];
     if (wanted.length === 0) return [];
     const settings = await this.settings();
@@ -239,7 +241,7 @@ export class SweepHub {
         outcomes.push({ key, result: "failed", why: "it is listed only; the sweep does not close it" });
         continue;
       }
-      if ((by === "schedule" && !autoCloses(item, settings)) || (ticked && !item.checked)) {
+      if ((by === "schedule" && !autoCloses(item, settings)) || (asked && !mayClose(item))) {
         outcomes.push({ key, result: "in use now" });
         continue;
       }
@@ -264,8 +266,8 @@ export class SweepHub {
   }
 
   /** Answers the ask: closes those of its keys named, each after a recheck
-   *  as any close and only while the fresh plan still ticks it (else "in use
-   *  now"), and clears it. 404 with no ask, 400 for a key it does not hold. */
+   *  as any close and only while the fresh plan still lets an unticked
+   *  close take it (else "in use now"), and clears it. 404 with no ask, 400 for a key it does not hold. */
   answer(keys: string[]): Promise<SweepOutcome[]> {
     return this.queue(async () => {
       const ask = await readAsk();

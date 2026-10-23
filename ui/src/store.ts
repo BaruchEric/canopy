@@ -3599,7 +3599,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         return;
       }
       const keys = askCloses(item.sweep ?? []);
-      if (keys.length === 0) throw new Error("none of these is ticked to close: pick them in the sheet");
+      if (keys.length === 0) throw new Error("none of these can be closed from here: tick them in the sheet");
       await api.answerSweepAsk(keys);
       return;
     }
