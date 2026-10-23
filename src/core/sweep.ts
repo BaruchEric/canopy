@@ -137,8 +137,9 @@ export interface PlanInputs {
   prs: AuthoredPr[];
   /** watched PRs with a canopy fix going, as `slug#number` */
   fixing: ReadonlySet<string>;
-  /** the checkouts, to find a PR's repo by its GitHub remote */
-  repos: Pick<Repo, "id" | "remotes">[];
+  /** the scan's repos, to find a PR's checkout by its GitHub remote; a
+   *  forge listing is not a checkout */
+  repos: Pick<Repo, "id" | "remotes" | "forge">[];
 }
 
 /** a span as the row says it: minutes under an hour, hours under two
@@ -201,6 +202,7 @@ export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): Sw
     // the first checkout with a GitHub remote on the PR's repo
     const bySlug = new Map<string, string>();
     for (const r of inputs.repos) {
+      if (r.forge) continue;
       for (const url of r.remotes ?? []) {
         const slug = githubSlug(url);
         if (slug && !bySlug.has(slug)) bySlug.set(slug, r.id);

@@ -2701,6 +2701,39 @@ describe("a sweep event", () => {
     expect(sweepLines()).toBe(1);
   });
 
+  test("a home token alone reads it; an old close on the first read ends nothing", async () => {
+    signIn();
+    useStore.setState({ sweep: null, panels: ["/agent/shell:s1"] });
+    served = info(entry(2));
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
+    expect(reads).toEqual(["/api/sweep"]);
+    expect(useStore.getState().sweep).toEqual(served);
+    expect(useStore.getState().panels).toEqual(["/agent/shell:s1"]);
+    expect(sweepLines()).toBe(0);
+  });
+
+  test("only the newest event's read is taken", async () => {
+    signIn();
+    useStore.setState({ sweep: info(null) });
+    const answers = [info(entry(5)), info(entry(9))];
+    const gates: (() => void)[] = [];
+    globalThis.fetch = (async () => {
+      const body = answers.shift();
+      await new Promise<void>((r) => gates.push(r));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as unknown as typeof fetch;
+    useStore.getState().applyEvent({ type: "sweep" });
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
+    // the second read answers first, then the first, older one
+    gates[1]?.();
+    await settle();
+    gates[0]?.();
+    await settle();
+    expect(useStore.getState().sweep?.lastRun?.at).toBe(9);
+  });
+
   test("a page with no home token and no sweep read reads nothing", async () => {
     served = info(entry(2));
     useStore.setState({ sweep: null });

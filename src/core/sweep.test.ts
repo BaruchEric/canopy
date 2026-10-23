@@ -148,6 +148,11 @@ test("a PR on a repo with no checkout is listed by slug", () => {
   const [it] = planSweep({ ...base, prs: [authored()], repos: [elsewhere, { id: "bare" }] }, DEFAULT_SWEEP, now);
   expect(it).toMatchObject({ key: "pr:barucheric/canopy#12", repoId: null, where: "barucheric/canopy" });
 });
+test("a forge listing is not a checkout, so the PR goes to the clone", () => {
+  const listing = { ...checkout, id: "forge:eric/canopy", forge: { kind: "forgejo" as const, slug: "eric/canopy", clone: "", branch: "main", updated: 0, private: false, empty: false } };
+  expect(planSweep({ ...base, prs: [authored()], repos: [listing, checkout] }, DEFAULT_SWEEP, now)[0]).toMatchObject({ repoId: "dev-tools/canopy" });
+  expect(planSweep({ ...base, prs: [authored()], repos: [listing] }, DEFAULT_SWEEP, now)[0]).toMatchObject({ repoId: null });
+});
 test("PRs sort after runs and before outside agents, oldest first", () => {
   const out = planSweep({
     ...base,
