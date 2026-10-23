@@ -752,7 +752,7 @@ describe("the schedule", () => {
     expect((await readLog()).at(-1)?.by).toBe("eric");
   });
 
-  test("a shell in the ask that starts vim after the fire reads unticked and is not closed by the answer", async () => {
+  test("a shell in the ask that starts vim after the fire drops out of the ask shown, and an answer naming it does not close it", async () => {
     const w = world();
     on(w, { auto: ["chat"] });
     w.shells = [shell({ id: "t1" })];
@@ -763,9 +763,12 @@ describe("the schedule", () => {
     // Eric starts vim in it before he answers
     const t1 = w.shells.find((s) => s.id === "t1");
     if (t1) t1.command = "vim";
-    const [item] = (await hub.info()).ask ?? [];
-    expect(item).toMatchObject({ key: "shell:t1", checked: false, handOnly: true, auto: false });
-    expect(item?.why).toContain("running vim");
+    const info = await hub.info();
+    // a busy shell stays out of the ask; the sheet still has it
+    expect(info.ask).toBeNull();
+    expect(info.items.find((i) => i.key === "shell:t1")).toMatchObject({ checked: false, handOnly: true, auto: false });
+    // the stored key is kept: once vim exits and the shell is idle again, it is back in the ask
+    expect(keys(await readAsk())).toEqual(["shell:t1"]);
     const got = await call(hub, "/api/sweep/ask", { method: "POST", body: { keys: ["shell:t1"] } });
     expect((got.body as { outcomes: SweepOutcome[] }).outcomes).toEqual([{ key: "shell:t1", result: "in use now" }]);
     expect(w.calls.endShell).toEqual([]);

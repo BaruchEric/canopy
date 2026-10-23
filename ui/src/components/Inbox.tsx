@@ -420,10 +420,10 @@ export function InboxRow({
 
 /** The sweep's ask: what its scheduled fire found closable and did not
  *  close on its own, each with where and why. "close all" closes every one
- *  it may (a shell that has started a program since the fire is not one)
- *  and clears the ask; "pick" opens the sweep sheet with those same ones
- *  ticked, where the rest can be ticked by hand; "dismiss" drops the ask
- *  and closes nothing. */
+ *  and clears the ask; "pick" opens the sweep sheet with them ticked;
+ *  "dismiss" drops the ask and closes nothing. The server leaves a shell
+ *  held for the hand (`handOnly`) out of the ask, so the "left for the
+ *  sheet" marking and "close N" below are only a guard. */
 function SweepAsk({ items, busy, now, onAnswer }: { items: readonly SweepItem[]; busy: boolean; now: number; onAnswer: (a: InboxAnswer) => void }) {
   const closes = askCloses(items);
   const n = closes.length;
@@ -456,12 +456,12 @@ function SweepAsk({ items, busy, now, onAnswer }: { items: readonly SweepItem[];
           type="button"
           className="mini strong"
           disabled={busy || n === 0}
-          title={`Closes ${n === items.length ? "them" : `the ${n} ticked`}, each looked at again first, and clears the ask${left > 0 ? `: the ${left} left for the sheet leave the inbox too, and stay in the sweep sheet` : ""}`}
+          title={`Closes ${n === items.length ? "them" : `the ${n} it can`}, each looked at again first, and clears the ask${left > 0 ? `: the ${left} left for the sheet leave the inbox too, and stay in the sweep sheet` : ""}`}
           onClick={() => onAnswer({ sweep: "close" })}
         >
           {n === items.length || n === 0 ? "close all" : `close ${n}`}
         </button>
-        <button type="button" className="mini" disabled={busy} title={left > 0 ? `Opens the sweep sheet with the ${n} ticked here ticked there too; tick the ${left} left for the sheet by hand to close ${left === 1 ? "it" : "them"} as well` : "Opens the sweep sheet with these ticked, to choose which go"} onClick={pick}>
+        <button type="button" className="mini" disabled={busy} title={left > 0 ? `Opens the sweep sheet with the ${n} close all would close ticked; tick the ${left} left for the sheet by hand to close ${left === 1 ? "it" : "them"} as well` : "Opens the sweep sheet with these ticked, to choose which go"} onClick={pick}>
           pick
         </button>
         <span className="spacer" />

@@ -238,9 +238,11 @@ export class SweepHub {
   async info(): Promise<SweepInfo> {
     const [facts, settings, log, shells, chats, ask] = await Promise.all([this.deps.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
     const items = this.plan(facts, settings);
-    // the ask's keys as the plan has them now, so a shell that has started a
-    // program since reads unticked; what has closed or come back into use drops out
-    const still = ask ? items.filter((i) => ask.some((a) => a.key === i.key)) : [];
+    // the ask's keys as the plan has them now: what has closed or come back
+    // into use drops out, and so does a shell that has started a program
+    // since, which only the sheet closes (its key stays stored, so it is
+    // back in the ask if it goes idle at its prompt again)
+    const still = ask ? items.filter((i) => mayClose(i) && ask.some((a) => a.key === i.key)) : [];
     return {
       items,
       settings,
