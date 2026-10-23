@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import {
   askPermission,
@@ -490,5 +490,41 @@ describe("pair requests", () => {
     expect(items[0]?.pair).toEqual(pair("p2", { label: "cli mini", at: 3 }));
     expect(toRunAnswer({ pair: "allow" })).toBeNull();
     expect(toAskAnswer({ pair: "deny" })).toBeNull();
+  });
+});
+
+describe("the sweep's ask", () => {
+  const DAY = 86_400_000;
+  const settings: SweepSettings = { on: true, cron: "0 4 * * *", spans: { shell: DAY, chat: DAY / 2, run: 3 * DAY, pr: 14 * DAY, outside: DAY }, auto: ["shell", "chat", "run"] };
+  const pr = (id: string, idleSince: number): SweepItem => ({
+    key: `pr:${id}`,
+    kind: "pr",
+    id,
+    repoId: "app",
+    where: "o/app",
+    title: `PR ${id}`,
+    idleSince,
+    why: "no activity for 15d",
+    closable: true,
+    checked: true,
+    auto: false,
+  });
+  const info = (ask: SweepItem[] | null): Pick<SweepInfo, "ask" | "settings"> => ({ ask, settings });
+
+  test("an ask becomes one sweep item with its count in the title", () => {
+    const ask = [pr("1", 300), pr("2", 100), pr("3", 200)];
+    const items = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info(ask) });
+    expect(items.map((i) => [i.key, i.source, i.kind, i.title])).toEqual([["sweep:ask", "sweep", "sweep", "Sweep: 3 PRs idle 14+ days"]]);
+    // it has waited since the oldest of them went idle
+    expect(items[0]?.at).toBe(100);
+    expect(items[0]?.sweep?.map((i) => i.key)).toEqual(["pr:1", "pr:2", "pr:3"]);
+    expect(toRunAnswer({ sweep: "close" })).toBeNull();
+    expect(toAskAnswer({ sweep: "dismiss" })).toBeNull();
+  });
+
+  test("no ask, no item", () => {
+    expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info(null) })).toEqual([]);
+    expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info([]) })).toEqual([]);
+    expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: null })).toEqual([]);
   });
 });

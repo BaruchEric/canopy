@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { KeptShell, SweepItem, SweepOutcome, SweptChat } from "../../../src/core/types";
+import { SWEEP_KINDS, type KeptShell, type SweepItem, type SweepKind, type SweepOutcome, type SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, dropPicks, groupItems, KIND_HEAD, outcomesOf, sheetRows, sweepSummary } from "../sweep";
+import { defaultPicks, dropPicks, groupItems, KIND_HEAD, outcomesOf, sheetRows, spanMs, spanParts, sweepSummary, type SpanUnit } from "../sweep";
 import { useNow } from "./Registry";
 import { PopGear } from "./PopGrip";
 
@@ -56,14 +56,17 @@ const outWord = (o: SweepOutcome, kind: SweepItem["kind"]): string => {
  * closes the ticked ones, each looked at again first, and every row it
  * took stays in place with how it went. The "swept" fold brings back what
  * an earlier close took: a shell restores with its history and its agent's
- * own conversation, a chat resumes its session.
+ * own conversation, a chat resumes its session. Opened from the sweep's ask
+ * in the inbox, it starts with the ask's items ticked instead; a close from
+ * here leaves the ask, which loses what closed on the next event.
  */
-export function SweepSheet() {
+export function SweepSheet({ picks: start }: { picks?: readonly string[] | undefined } = {}) {
   const sweep = useStore((s) => s.sweep);
   const close = useStore((s) => s.closeSheet);
   const loadSweep = useStore((s) => s.loadSweep);
   const closeSweep = useStore((s) => s.closeSweep);
-  const [picks, setPicks] = useState<Set<string> | null>(null);
+  // the inbox's "pick" starts it on the ask's items alone, rather than the plan's defaults
+  const [picks, setPicks] = useState<Set<string> | null>(() => (start ? new Set(start) : null));
   const [done, setDone] = useState<{ items: SweepItem[]; outcomes: SweepOutcome[] } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -333,5 +336,165 @@ function Swept({ shells, chats, now }: { shells: KeptShell[]; chats: SweptChat[]
         ))}
       </ul>
     </details>
+  );
+}
+
+/** the kinds the schedule may close on its own; agents canopy did not
+ *  start are never closed, so they are not offered */
+const AUTO_KINDS = ["shell", "chat", "run", "pr"] as const satisfies readonly SweepKind[];
+
+/** each span's label in the settings row */
+const SPAN_LABEL: Record<SweepKind, string> = {
+  shell: "shells idle after",
+  chat: "chats idle after",
+  run: "finished runs after",
+  pr: "PRs idle after",
+  outside: "outside agents after",
+};
+
+/** what the row says when PRs are among the kinds closed on their own */
+export const PR_AUTO_WARNING = "Closes public PRs on GitHub with no one looking.";
+
+/**
+ * The sweep's row in Settings, beside the ranger's: the schedule's switch
+ * and cron, how long each kind sits idle before it is offered (in hours or
+ * days), and the kinds the schedule closes without asking. The home
+ * backend's alone, as every sweep route is. A refusal (a cron that does
+ * not parse) shows in the row, and the cron as typed stays to be fixed.
+ */
+export function SweepRow() {
+  const sweep = useStore((s) => s.sweep);
+  const home = useStore((s) => s.home);
+  const setSweepSettings = useStore((s) => s.setSweepSettings);
+  // typed and not yet saved: saved on blur or Enter, not on each keystroke
+  const [cron, setCron] = useState<string | null>(null);
+  const [typed, setTyped] = useState<Partial<Record<SweepKind, string>>>({});
+  const [units, setUnits] = useState<Partial<Record<SweepKind, SpanUnit>>>({});
+  const [err, setErr] = useState<string | null>(null);
+  if (!sweep) return null;
+  const s = sweep.settings;
+  const save = async (patch: Record<string, unknown>): Promise<boolean> => {
+    setErr(null);
+    try {
+      await setSweepSettings(patch);
+      return true;
+    } catch (e) {
+      setErr(errText(e));
+      return false;
+    }
+  };
+  const commitCron = () => {
+    if (cron === null) return;
+    const v = cron.trim();
+    if (!v || v === s.cron) {
+      setCron(null);
+      return;
+    }
+    void save({ cron: v }).then((ok) => {
+      if (ok) setCron(null);
+    });
+  };
+  const commitSpan = (kind: SweepKind, unit: SpanUnit, text: string | undefined) => {
+    if (text === undefined) return;
+    const ms = spanMs(text, unit);
+    if (ms === null) {
+      setErr(`the ${kind} span is a number above zero`);
+      return;
+    }
+    const drop = () => setTyped(({ [kind]: _gone, ...rest }) => rest);
+    if (ms === s.spans[kind]) {
+      drop();
+      return;
+    }
+    void save({ spans: { [kind]: ms } }).then((ok) => {
+      if (ok) drop();
+    });
+  };
+  const toggleAuto = (kind: SweepKind, on: boolean) => {
+    const next = SWEEP_KINDS.filter((k) => (k === kind ? on : s.auto.includes(k)));
+    void save({ auto: next });
+  };
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">sweep</h3>
+      <label className="settings-line">
+        <input type="checkbox" checked={s.on} onChange={(e) => void save({ on: e.target.checked })} />
+        sweep on a schedule
+      </label>
+      <div className="ranger-fields">
+        <label className="layout-field">
+          when (cron)
+          <input
+            className="settings-input sweep-cron"
+            value={cron ?? s.cron}
+            spellCheck={false}
+            placeholder="0 4 * * *"
+            onChange={(e) => setCron(e.target.value)}
+            onBlur={commitCron}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitCron();
+            }}
+          />
+        </label>
+      </div>
+      <div className="ranger-fields sweep-spans">
+        {SWEEP_KINDS.map((kind) => {
+          const shown = spanParts(s.spans[kind], units[kind]);
+          const text = typed[kind];
+          return (
+            <label key={kind} className="layout-field">
+              {SPAN_LABEL[kind]}
+              <span className="sweep-span">
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={0}
+                  step="any"
+                  aria-label={`${SPAN_LABEL[kind]}, in ${shown.unit}`}
+                  value={text ?? shown.value}
+                  onChange={(e) => setTyped((t) => ({ ...t, [kind]: e.target.value }))}
+                  onBlur={() => commitSpan(kind, shown.unit, text)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitSpan(kind, shown.unit, text);
+                  }}
+                />
+                <select
+                  className="settings-input"
+                  aria-label={`${SPAN_LABEL[kind]}: hours or days`}
+                  value={shown.unit}
+                  onChange={(e) => {
+                    const unit = e.target.value === "days" ? "days" : "hours";
+                    setUnits((u) => ({ ...u, [kind]: unit }));
+                    // the number stays and now counts in the new unit
+                    commitSpan(kind, unit, text ?? shown.value);
+                  }}
+                >
+                  <option value="hours">hours</option>
+                  <option value="days">days</option>
+                </select>
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <div className="layout-field">
+        closes on its own
+        <div className="sweep-auto">
+          {AUTO_KINDS.map((kind) => (
+            <label key={kind} className="settings-line" title={kind === "pr" ? PR_AUTO_WARNING : undefined}>
+              <input type="checkbox" checked={s.auto.includes(kind)} onChange={(e) => toggleAuto(kind, e.target.checked)} />
+              {KIND_HEAD[kind]}
+            </label>
+          ))}
+        </div>
+      </div>
+      {s.auto.includes("pr") && <p className="settings-hint error">{PR_AUTO_WARNING}</p>}
+      {err && <p className="settings-hint error">{err}</p>}
+      <p className="settings-hint">
+        A setting of {home}, the home backend. On its cron ({home}'s local time) the sweep closes what went idle past these spans among the
+        kinds ticked to close on their own, and puts the rest it could close in the inbox as one ask: close all, pick, or dismiss. A shell
+        running a program is never closed on its own, and agents canopy did not start are only ever listed.
+      </p>
+    </section>
   );
 }

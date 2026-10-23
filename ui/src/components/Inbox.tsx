@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
-import type { AdviceOffer, Ask, PendingPair } from "../../../src/core/types";
+import type { AdviceOffer, Ask, PendingPair, SweepItem } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { api } from "../api";
 import { rememberOffer } from "../../../src/core/offer";
 import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
+import { durationWord } from "../agentcards";
+import { askCloses } from "../sweep";
 import { pairAsk } from "../callerToken";
 import { HANGS_RIGHT, useFitPop } from "../pop";
 import { PopGrip, usePopEntries } from "./PopGrip";
@@ -42,8 +44,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -315,6 +317,8 @@ export function InboxRow({
                 </div>
               )}
             </div>
+          ) : item.kind === "sweep" ? (
+            <SweepAsk items={item.sweep ?? []} busy={busy} now={now} onAnswer={answer} />
           ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>
@@ -396,7 +400,7 @@ export function InboxRow({
             />
           )}
           <div className="kept-acts">
-            {item.source !== "ask" && item.source !== "advice" && item.source !== "auth" && (
+            {item.source !== "ask" && item.source !== "advice" && item.source !== "auth" && item.source !== "sweep" && (
               <button type="button" className="mini" onClick={openSheet}>
                 open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : item.source === "pr" ? "run" : "workflow"}
               </button>
@@ -411,6 +415,60 @@ export function InboxRow({
         </div>
       )}
     </li>
+  );
+}
+
+/** The sweep's ask: what its scheduled fire found closable and did not
+ *  close on its own, each with where and why. "close all" closes the ones
+ *  the plan ticks (a shell running a program is not one) and clears the
+ *  ask; "pick" opens the sweep sheet on these alone, where any of them can
+ *  be ticked; "dismiss" drops the ask and closes nothing. */
+function SweepAsk({ items, busy, now, onAnswer }: { items: readonly SweepItem[]; busy: boolean; now: number; onAnswer: (a: InboxAnswer) => void }) {
+  const closes = askCloses(items);
+  const n = closes.length;
+  const left = items.length - n;
+  const pick = () => {
+    const st = useStore.getState();
+    st.closeInbox();
+    st.pickSweep(items.map((i) => i.key));
+  };
+  return (
+    <div className="ask">
+      <div className="eyebrow">held back by the sweep's schedule</div>
+      <ul className="inbox-sweep">
+        {items.map((i) => (
+          <li key={i.key} className={i.checked ? undefined : "unticked"}>
+            <span className="inbox-sweep-where" title={i.title !== i.where ? i.title : undefined}>
+              {i.where}
+            </span>
+            <span className="inbox-sweep-idle">{durationWord(now - i.idleSince)}</span>
+            <span className="inbox-sweep-why">
+              {i.why}
+              {!i.checked && <span className="dim"> · left for the sheet</span>}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {n === 0 && <p className="settings-hint">None of these is ticked to close: pick them in the sweep sheet, or dismiss the ask.</p>}
+      <div className="ask-row">
+        <button
+          type="button"
+          className="mini strong"
+          disabled={busy || n === 0}
+          title={`Closes ${n === items.length ? "them" : `the ${n} ticked`}, each looked at again first, and clears the ask${left > 0 ? `: the ${left} left for the sheet leave the inbox too, and stay in the sweep sheet` : ""}`}
+          onClick={() => onAnswer({ sweep: "close" })}
+        >
+          {n === items.length || n === 0 ? "close all" : `close ${n}`}
+        </button>
+        <button type="button" className="mini" disabled={busy} title="Opens the sweep sheet with these ticked, to choose which go" onClick={pick}>
+          pick
+        </button>
+        <span className="spacer" />
+        <button type="button" className="mini" disabled={busy} title="Drops the ask and closes nothing; they stay in the sweep sheet" onClick={() => onAnswer({ sweep: "dismiss" })}>
+          dismiss
+        </button>
+      </div>
+    </div>
   );
 }
 

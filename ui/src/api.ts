@@ -20,6 +20,7 @@ import type {
   RangerInfo,
   SweepInfo,
   SweepOutcome,
+  SweepSettings,
   RangerWake,
   TermScreen,
   AgentActivity,
@@ -676,6 +677,14 @@ export const api = {
   sweep: () => req<SweepInfo>(homeName(), "/api/sweep"),
   /** closes the items named, each after a fresh look; an outcome per key */
   closeSweep: async (keys: string[]) => (await req<{ outcomes: SweepOutcome[] }>(homeName(), "/api/sweep", { method: "POST", body: JSON.stringify({ keys }) })).outcomes,
+  /** answers the scheduled fire's ask: closes those of its keys the plan
+   *  still ticks, and clears the whole ask */
+  answerSweepAsk: async (keys: string[]) =>
+    (await req<{ outcomes: SweepOutcome[] }>(homeName(), "/api/sweep/ask", { method: "POST", body: JSON.stringify({ keys }) })).outcomes,
+  /** drops the ask, closing nothing */
+  dismissSweepAsk: () => req<{ ok: true }>(homeName(), "/api/sweep/ask", { method: "DELETE" }),
+  /** patches the sweep's settings; a refusal (a bad cron) is its error */
+  setSweepSettings: (patch: Record<string, unknown>) => req<SweepSettings>(homeName(), "/api/sweep/settings", { method: "POST", body: JSON.stringify(patch) }),
   /** starts a chat on a swept chat's session; it waits idle for a message */
   resumeSwept: (runId: string) => req<Run>(homeName(), "/api/sweep/resume", { method: "POST", body: JSON.stringify({ runId }) }),
   /** the retro lessons on offer */

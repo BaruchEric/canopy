@@ -145,3 +145,67 @@ export function sheetRows(items: readonly SweepItem[], done: { items: readonly S
   }
   return rows;
 }
+
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+
+/** a number with at most `places` decimals, trailing zeros dropped */
+const trim = (n: number, places: number): string => String(Number(n.toFixed(places)));
+
+/**
+ * A span as the ask's title says it: whole days from two days up ("14+
+ * days"), hours from an hour ("24+ hours", "1.5+ hours"), minutes below
+ * that, never fewer than one ("2+ minutes").
+ */
+export function spanWord(ms: number): string {
+  const plus = (n: string, unit: string) => `${n}+ ${unit}${n === "1" ? "" : "s"}`;
+  if (ms >= 2 * DAY && ms % DAY === 0) return plus(String(ms / DAY), "day");
+  if (ms >= HOUR) return plus(trim(ms / HOUR, 1), "hour");
+  return plus(String(Math.max(1, Math.round(ms / MINUTE))), "minute");
+}
+
+/** each kind's noun in the ask's title, one and many */
+const ASK_NOUN: Record<SweepKind, [string, string]> = {
+  shell: ["shell", "shells"],
+  chat: ["chat", "chats"],
+  run: ["finished run", "finished runs"],
+  pr: ["PR", "PRs"],
+  outside: ["outside agent", "outside agents"],
+};
+
+/** The scheduled fire's ask as one line: `"Sweep: 3 PRs idle 14+ days"`,
+ *  a kind at a time in the sweep's order when it holds several, each with
+ *  its own span from the settings. */
+export function askTitle(items: readonly SweepItem[], spans: Readonly<Record<SweepKind, number>>): string {
+  const parts = groupItems(items).map(({ kind, items: of }) => `${count(of.length, ...ASK_NOUN[kind])} idle ${spanWord(spans[kind])}`);
+  return `Sweep: ${parts.join(", ")}`;
+}
+
+/** What "close all" on the ask sends: the keys the plan ticks and may
+ *  close. The server answers any other key with "in use now", so a shell
+ *  running a program is left for the sheet, where Eric can tick it. */
+export function askCloses(items: readonly SweepItem[]): string[] {
+  return items.filter((i) => i.checked && i.closable).map((i) => i.key);
+}
+
+export type SpanUnit = "hours" | "days";
+
+/** A span as the settings row shows it: in `unit` when the row has one
+ *  picked, else whole days in days and anything else in hours; a span
+ *  under an hour is a fraction of one (four places, and never rounded down
+ *  to nothing). */
+export function spanParts(ms: number, unit?: SpanUnit): { value: string; unit: SpanUnit } {
+  const u: SpanUnit = unit ?? (ms >= DAY && ms % DAY === 0 ? "days" : "hours");
+  const n = ms / (u === "days" ? DAY : HOUR);
+  const value = trim(n, 4);
+  return { value: value === "0" ? String(n) : value, unit: u };
+}
+
+/** what was typed in a span's box, in ms; null when it is not a positive number */
+export function spanMs(typed: string, unit: SpanUnit): number | null {
+  const t = typed.trim();
+  const n = t === "" ? Number.NaN : Number(t);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * (unit === "days" ? DAY : HOUR));
+}

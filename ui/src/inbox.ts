@@ -27,14 +27,17 @@ import type {
   RunAnswer,
   RunQuestion,
   Sprout,
+  SweepInfo,
+  SweepItem,
 } from "../../src/core/types";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 import { handOffText } from "../../src/core/sprout";
 import { sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
+import { askTitle } from "./sweep";
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -43,7 +46,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "ci" | "gave-up" | "pair";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "ci" | "gave-up" | "pair" | "sweep";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -87,6 +90,8 @@ export interface InboxItem {
   /** a pair request's: the backend it waits on, and the request itself */
   backend?: string;
   pair?: PendingPair;
+  /** the sweep's ask: what the scheduled fire held back, as the plan has it now */
+  sweep?: SweepItem[];
 }
 
 export interface InboxContext {
@@ -111,6 +116,8 @@ export interface InboxContext {
   /** the pair requests waiting, by backend, on the backends where this
    *  page holds a page token (only an admin can approve one) */
   pairs?: Readonly<Record<string, readonly PendingPair[]>>;
+  /** the home backend's sweep: its pending ask, if any, is one item */
+  sweep?: Pick<SweepInfo, "ask" | "settings"> | null;
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -392,6 +399,31 @@ function pairItem(backend: string, p: PendingPair): InboxItem {
   };
 }
 
+/** The sweep's pending ask, what its scheduled fire found closable and
+ *  did not close on its own, as one item: close all, pick, or dismiss.
+ *  It has waited, as far as the page can tell, since the oldest of them
+ *  went idle; the ask itself records no time. */
+function sweepItem(info: Pick<SweepInfo, "ask" | "settings">): InboxItem | null {
+  const ask = info.ask;
+  if (!ask || ask.length === 0) return null;
+  return {
+    key: "sweep:ask",
+    source: "sweep",
+    id: "ask",
+    kind: "sweep",
+    repoId: null,
+    repo: "",
+    who: "sweep",
+    where: "on its schedule",
+    title: askTitle(ask, info.settings.spans),
+    detail: "",
+    at: Math.min(...ask.map((i) => i.idleSince)),
+    left: null,
+    until: null,
+    sweep: [...ask],
+  };
+}
+
 /** Everything waiting on the human, oldest first: open asks, waiting runs
  *  (a flow's step run named by its flow), gated flows. */
 export function mergeInbox(
@@ -428,6 +460,8 @@ export function mergeInbox(
     if (it) items.push(it);
   }
   for (const [backend, pending] of Object.entries(ctx.pairs ?? {})) for (const p of pending) items.push(pairItem(backend, p));
+  const swept = ctx.sweep ? sweepItem(ctx.sweep) : null;
+  if (swept) items.push(swept);
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -460,12 +494,14 @@ export type InboxAnswer =
   /** a PR with a red check: turn auto-fix on */
   | { pr: "auto-fix" }
   /** a pair request: let it in, or turn it away */
-  | { pair: "allow" | "deny" };
+  | { pair: "allow" | "deny" }
+  /** the sweep's ask: close its ticked items, or drop it closing nothing */
+  | { sweep: "close" | "dismiss" };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a || "sweep" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   if (a.always) return { kind: "allow-all" };
@@ -475,7 +511,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 /** the broker's answer: a question's answers go as an allow; a remember's
  *  rule rides along for the home backend to keep (the broker never sees it) */
 export function toAskAnswer(a: InboxAnswer): (AskAnswer & { remember?: string }) | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a || "sweep" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}), ...(a.remember ? { remember: a.remember.rule } : {}) };

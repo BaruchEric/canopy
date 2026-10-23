@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, sweepSummary } from "./sweep";
+import { askCloses, askTitle, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -161,5 +161,68 @@ describe("dropPicks", () => {
   test("with the defaults still in force, they are what it drops from", () => {
     const items = [item("shell:a"), item("shell:b"), item("chat:c", { checked: false })];
     expect([...dropPicks(null, items, ["shell:a"])]).toEqual(["shell:b"]);
+  });
+});
+
+describe("the ask's words", () => {
+  const MIN = 60_000;
+  const HOUR = 60 * MIN;
+  const DAY = 24 * HOUR;
+  const spans = { shell: DAY, chat: 12 * HOUR, run: 3 * DAY, pr: 14 * DAY, outside: DAY };
+
+  test("spanWord reads days from two whole days up, hours below, minutes under an hour", () => {
+    expect(spanWord(14 * DAY)).toBe("14+ days");
+    expect(spanWord(2 * DAY)).toBe("2+ days");
+    expect(spanWord(DAY)).toBe("24+ hours");
+    expect(spanWord(36 * HOUR)).toBe("36+ hours");
+    expect(spanWord(HOUR)).toBe("1+ hour");
+    expect(spanWord(90 * MIN)).toBe("1.5+ hours");
+    expect(spanWord(2 * MIN)).toBe("2+ minutes");
+    expect(spanWord(MIN)).toBe("1+ minute");
+    expect(spanWord(1_000)).toBe("1+ minute");
+  });
+
+  test("askTitle counts the ask a kind at a time, each with its own span", () => {
+    expect(askTitle([item("pr:1"), item("pr:2"), item("pr:3")], spans)).toBe("Sweep: 3 PRs idle 14+ days");
+    expect(askTitle([item("pr:1"), item("shell:s1", { checked: false })], spans)).toBe("Sweep: 1 shell idle 24+ hours, 1 PR idle 14+ days");
+    expect(askTitle([item("run:r1"), item("run:r2")], spans)).toBe("Sweep: 2 finished runs idle 3+ days");
+  });
+
+  test("askCloses is the ask's ticked keys it may close, in its order", () => {
+    const ask = [item("shell:s1", { checked: false }), item("chat:c1"), item("pr:1", { checked: true }), item("outside:o1", { checked: true })];
+    expect(askCloses(ask)).toEqual(["chat:c1", "pr:1"]);
+    expect(askCloses([item("shell:s1", { checked: false })])).toEqual([]);
+  });
+});
+
+describe("a span in the settings row", () => {
+  const HOUR = 3_600_000;
+  const DAY = 24 * HOUR;
+
+  test("whole days read as days, anything else as hours", () => {
+    expect(spanParts(14 * DAY)).toEqual({ value: "14", unit: "days" });
+    expect(spanParts(DAY)).toEqual({ value: "1", unit: "days" });
+    expect(spanParts(12 * HOUR)).toEqual({ value: "12", unit: "hours" });
+    expect(spanParts(36 * HOUR)).toEqual({ value: "36", unit: "hours" });
+  });
+
+  test("a span under an hour is a fraction of one, never rounded to nothing", () => {
+    expect(spanParts(120_000)).toEqual({ value: "0.0333", unit: "hours" });
+    expect(Number(spanParts(1_000).value)).toBeGreaterThan(0);
+  });
+
+  test("a unit the row picked holds, whatever the span", () => {
+    expect(spanParts(DAY, "hours")).toEqual({ value: "24", unit: "hours" });
+    expect(spanParts(36 * HOUR, "days")).toEqual({ value: "1.5", unit: "days" });
+  });
+
+  test("spanMs turns what was typed back into ms; nothing positive is null", () => {
+    expect(spanMs("3", "days")).toBe(3 * DAY);
+    expect(spanMs("1.5", "hours")).toBe(1.5 * HOUR);
+    expect(spanMs(" 12 ", "hours")).toBe(12 * HOUR);
+    expect(spanMs("0", "hours")).toBeNull();
+    expect(spanMs("-2", "days")).toBeNull();
+    expect(spanMs("", "days")).toBeNull();
+    expect(spanMs("soon", "days")).toBeNull();
   });
 });

@@ -16,6 +16,7 @@ import { screenNow, screenWord, windowNow, windowWord } from "../screens";
 import { GearIcon } from "./Gear";
 import { ScreenLayoutsRow } from "./ScreenLayouts";
 import { RangerRow } from "./Ranger";
+import { SweepRow } from "./Sweep";
 import type { Palette } from "../settings";
 
 const LEVEL = [
@@ -114,7 +115,7 @@ const KEYS = [
 
 /** A tab down Settings' rail. The first group holds this browser's own
  *  choices, the second the backend the picker names. */
-type Tab = "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "ranger" | "about";
+type Tab = "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "ranger" | "sweep" | "about";
 
 const BROWSER_TABS: readonly { tab: Tab; label: string }[] = [
   { tab: "look", label: "look" },
@@ -129,6 +130,7 @@ const BACKEND_TABS: readonly { tab: Tab; label: string }[] = [
   { tab: "signed", label: "signed in" },
   { tab: "shells", label: "shell history" },
   { tab: "ranger", label: "ranger" },
+  { tab: "sweep", label: "sweep" },
   { tab: "about", label: "about" },
 ];
 
@@ -175,6 +177,8 @@ export function SettingsMenu() {
   const setKeeping = useStore((s) => s.setKeeping);
   const auth = useStore((s) => s.authByBackend[scope]);
   const ranger = useStore((s) => s.rangers[scope]);
+  // the sweep is the home backend's alone: every route of it goes there
+  const sweep = useStore((s) => (scope === s.home ? s.sweep : null));
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("look");
   const [query, setQuery] = useState("");
@@ -213,7 +217,7 @@ export function SettingsMenu() {
 
   // a tab with nothing to show on this backend is left off the rail, and a
   // picked tab that went away falls back to the first
-  const shown = [...BROWSER_TABS, ...BACKEND_TABS.filter((t) => (t.tab !== "signed" || auth) && (t.tab !== "ranger" || ranger))];
+  const shown = [...BROWSER_TABS, ...BACKEND_TABS.filter((t) => (t.tab !== "signed" || auth) && (t.tab !== "ranger" || ranger) && (t.tab !== "sweep" || sweep))];
   const current = shown.some((t) => t.tab === tab) ? tab : "look";
   const stale = !!about && !!PAGE_BUILD && !sameBuild(PAGE_BUILD, about);
 
@@ -227,6 +231,7 @@ export function SettingsMenu() {
         signed: auth?.mode,
         shells: keeping ? "kept" : "off",
         ranger: ranger && (ranger.settings.on ? ranger.state : "off"),
+        sweep: sweep ? (sweep.settings.on ? sweep.settings.cron : "off") : undefined,
         about: about?.version,
       }
     : {};
@@ -503,6 +508,12 @@ export function SettingsMenu() {
           key: "ranger",
           words: "ranger always-on agent crons cron wake telegram profile",
           node: <RangerRow backend={scope} />,
+        },
+        {
+          tab: "sweep",
+          key: "sweep",
+          words: "sweep idle close schedule cron spans shells chats runs prs auto inbox ask",
+          node: <SweepRow />,
         },
         {
           tab: "about",

@@ -48,7 +48,7 @@ import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
-import { endedCards, freshEntry } from "./sweep";
+import { askCloses, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
@@ -1097,6 +1097,10 @@ export interface CanopyState {
   loadSweep: () => Promise<void>;
   /** opens the sweep sheet, which reads the sweep afresh */
   openSweep: () => void;
+  /** opens it with only these keys ticked: the ask's "pick" */
+  pickSweep: (keys: string[]) => void;
+  /** patches the sweep's settings on the home backend */
+  setSweepSettings: (patch: Record<string, unknown>) => Promise<void>;
   /** closes the items named, each looked at again first; how each went */
   closeSweep: (keys: string[]) => Promise<SweepOutcome[]>;
   /** starts a chat on a swept chat's session and opens it, waiting for a message */
@@ -1358,8 +1362,9 @@ export type Sheet =
   | { kind: "fleet"; fleetId: string }
   /** a branch run's sensitive files and their diffs, then "approve and land" */
   | { kind: "approve"; id: string }
-  /** what went idle, to pick from and close (FR-018) */
-  | { kind: "sweep" };
+  /** what went idle, to pick from and close (FR-018); `picks` are the
+   *  keys it starts ticked, the sweep's ask's when the inbox opened it */
+  | { kind: "sweep"; picks?: string[] };
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -3232,6 +3237,13 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   // the sheet reads the sweep afresh as it opens
   openSweep: () => set({ sheet: { kind: "sweep" } }),
+  pickSweep: (keys) => set({ sheet: { kind: "sweep", picks: [...keys] } }),
+  setSweepSettings: async (patch) => {
+    const settings = await api.setSweepSettings(patch);
+    // the event brings the whole sweep with these settings too; this shows
+    // them at once on a page whose stream is slow or down
+    set((s) => (s.sweep ? { sweep: { ...s.sweep, settings } } : {}));
+  },
   closeSweep: async (keys) => {
     // No read after it: the hub sends its event before it answers, but on
     // another connection, and a read that landed first would hold the new
@@ -3574,6 +3586,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     return accepted ?? null;
   },
   answerInbox: async (item, answer) => {
+    if (item.source === "sweep") {
+      if (!("sweep" in answer)) throw new Error("the sweep's ask takes close all or dismiss");
+      if (answer.sweep === "dismiss") {
+        await api.dismissSweepAsk();
+        return;
+      }
+      const keys = askCloses(item.sweep ?? []);
+      if (keys.length === 0) throw new Error("none of these is ticked to close: pick them in the sheet");
+      await api.answerSweepAsk(keys);
+      return;
+    }
     if (item.source === "landing") {
       if (!("landing" in answer)) throw new Error("a sent-back branch takes fix it or drop");
       if (answer.landing === "drop") return get().dropLanding(item.id);
@@ -4556,6 +4579,7 @@ let inboxIn: {
   landing: Record<string, LandingInfo>;
   prs: Record<string, PrWatch[]>;
   auth: Record<string, BackendAuth>;
+  sweep: SweepInfo | null;
 } | null = null;
 let inboxOut: InboxItem[] = [];
 
@@ -4564,10 +4588,10 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
@@ -4578,6 +4602,7 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     landing: landingAll(s),
     prs: prsAll(s),
     pairs: pairsOf(s.authByBackend),
+    sweep: s.sweep,
   });
   return inboxOut;
 }

@@ -1777,6 +1777,48 @@ div.waiting-row {
 .inbox-qs .dim {
   color: var(--ink-faint);
 }
+/* the sweep's ask: each item held back, where and how long on one line, why under it */
+.inbox-glyph.k-sweep {
+  color: var(--lichen);
+}
+.inbox-sweep {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.inbox-sweep li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 10px;
+  font-size: 12px;
+}
+.inbox-sweep-where {
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inbox-sweep-idle {
+  color: var(--ink-dim);
+  font-variant-numeric: tabular-nums;
+}
+.inbox-sweep-why {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--ink-faint);
+  overflow-wrap: anywhere;
+}
+.inbox-sweep .unticked .inbox-sweep-where {
+  color: var(--ink-dim);
+}
+.inbox-sweep .dim {
+  color: var(--ink-faint);
+}
 .inbox-recent li {
   display: flex;
   align-items: baseline;
@@ -11149,6 +11191,33 @@ span.effective-flag:not(:first-child) {
 .key-row .settings-input.ranger-cron-prompt {
   flex: 1 1 90px;
   min-width: 0;
+}
+
+/* the sweep's settings row: a span is its number and its unit side by side */
+.settings-input.sweep-cron {
+  font-family: var(--mono);
+}
+.sweep-span {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+.sweep-span input {
+  flex: 1 1 0;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+.sweep-span select {
+  flex: 0 0 auto;
+  width: auto;
+}
+.sweep-auto {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.sweep-auto .settings-line {
+  align-self: auto;
 }
 
 /* ---------- health: the chip, its popover, the panel and the page ---------- */
