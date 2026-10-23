@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keepDir } from "../core/keep";
+import { loadConfig, setSweep } from "../core/store";
 import { killServer, tmuxBase } from "../core/tmux";
 import type { AgentCard, KeptShell, SweepInfo, SweepOutcome } from "../core/types";
 import { startServer } from "./index";
@@ -76,6 +77,11 @@ let server: {
 };
 
 const api = (path: string) => `http://127.0.0.1:${server.port}${path}`;
+/** sets the shell span in the config the server reads on every sweep */
+const shellSpan = async (ms: number): Promise<void> => {
+  const cur = (await loadConfig()).sweep;
+  await setSweep({ ...cur, spans: { ...cur.spans, shell: ms } });
+};
 const keptList = async (): Promise<KeptShell[]> => ((await (await fetch(api("/api/terms/kept"))).json()) as { kept: KeptShell[] }).kept;
 const onDisk = async (id: string): Promise<boolean> => stat(join(keepDir(), `${id}.json`)).then(() => true, () => false);
 
@@ -167,8 +173,8 @@ describe("the sweep's end of a shell", () => {
   test.if(tmux)("a shell quiet past a short span is offered, and closing it keeps it as swept", async () => {
     const id = "dddddddddddddddddddddddddddddd04";
     await shellWith(id, "marker-quiet");
-    const set = await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 1_000 } }) });
-    expect(set.status).toBe(200);
+    // under the route's 10-minute floor, so straight into the config as a hand edit would
+    await shellSpan(1_000);
     try {
       // tmux counts activity in whole seconds
       await until(async () => ((await (await fetch(api("/api/sweep"))).json()) as SweepInfo).items.some((i) => i.key === `shell:${id}`), "the quiet shell to be offered");
@@ -179,7 +185,7 @@ describe("the sweep's end of a shell", () => {
       const info = (await (await fetch(api("/api/sweep"))).json()) as SweepInfo;
       expect(info.lastRun?.outcomes).toEqual([{ key: `shell:${id}`, result: "closed" }]);
     } finally {
-      await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
+      await shellSpan(24 * 3_600_000);
     }
   }, 60_000);
 
@@ -195,8 +201,8 @@ describe("the sweep's end of a shell", () => {
     // agent's has been quiet longer
     await shellWith(agent, "marker-agent", `${join(bin, "claude")} 300`);
     await shellWith(quiet, "marker-control");
-    const set = await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 1_000 } }) });
-    expect(set.status).toBe(200);
+    // under the route's 10-minute floor, so straight into the config as a hand edit would
+    await shellSpan(1_000);
     try {
       let info: SweepInfo | null = null;
       await until(async () => {
@@ -205,7 +211,7 @@ describe("the sweep's end of a shell", () => {
       }, "the quiet shell to be offered");
       expect((info as SweepInfo | null)?.items.some((i) => i.key === `shell:${agent}`)).toBe(false);
     } finally {
-      await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
+      await shellSpan(24 * 3_600_000);
       for (const id of [quiet, agent]) await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" });
     }
   }, 60_000);
@@ -255,8 +261,8 @@ describe("the sweep's end of a shell", () => {
     await mkdir(bin, { recursive: true });
     await writeFile(join(bin, "devserver"), `#!${process.execPath}\nsetTimeout(() => {}, 300_000);\n`, { mode: 0o755 });
     await shellWith(id, "marker-busy", join(bin, "devserver"));
-    const set = await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 1_000 } }) });
-    expect(set.status).toBe(200);
+    // under the route's 10-minute floor, so straight into the config as a hand edit would
+    await shellSpan(1_000);
     try {
       let info: SweepInfo | null = null;
       await until(async () => {
@@ -267,7 +273,7 @@ describe("the sweep's end of a shell", () => {
       expect(item).toMatchObject({ closable: true, checked: false, auto: false });
       expect(item?.why).toMatch(/^running \S+, no input or output for /);
     } finally {
-      await fetch(api("/api/sweep/settings"), { method: "POST", body: JSON.stringify({ spans: { shell: 24 * 3_600_000 } }) });
+      await shellSpan(24 * 3_600_000);
       await fetch(api(`/api/terms?term=${id}`), { method: "DELETE" });
     }
   }, 60_000);

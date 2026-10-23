@@ -1363,8 +1363,9 @@ export type Sheet =
   /** a branch run's sensitive files and their diffs, then "approve and land" */
   | { kind: "approve"; id: string }
   /** what went idle, to pick from and close (FR-018); `picks` are the
-   *  keys it starts ticked, the sweep's ask's when the inbox opened it */
-  | { kind: "sweep"; picks?: string[] };
+   *  keys it starts ticked, the sweep's ask's when the inbox opened it, and
+   *  `pick` numbers that opening, so each one starts the sheet afresh */
+  | { kind: "sweep"; picks?: string[]; pick?: number };
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -1611,6 +1612,8 @@ const stagesEvents = new Map<string, number>();
 const rangerEvents = new Map<string, number>();
 /* and the home backend's sweep events */
 let sweepEvents = 0;
+/* each "pick" from the sweep's ask, so the sheet it opens is a new one */
+let sweepPicks = 0;
 /* and each backend's health events, the same way */
 const healthEvents = new Map<string, number>();
 /* and each backend's kit events, the same way */
@@ -3237,7 +3240,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   // the sheet reads the sweep afresh as it opens
   openSweep: () => set({ sheet: { kind: "sweep" } }),
-  pickSweep: (keys) => set({ sheet: { kind: "sweep", picks: [...keys] } }),
+  pickSweep: (keys) => set({ sheet: { kind: "sweep", picks: [...keys], pick: ++sweepPicks } }),
   setSweepSettings: async (patch) => {
     const settings = await api.setSweepSettings(patch);
     // the event brings the whole sweep with these settings too; this shows
@@ -3408,6 +3411,9 @@ export const useStore = create<CanopyState>((set, get) => ({
           writePair(origin, null);
           say(null);
           await get().loadAuth(backend);
+          // the sweep is read only with a home token, so the page that just
+          // got one reads it now: its inbox item and Settings tab need no reload
+          if (backend === get().home) void get().loadSweep();
           return;
         }
         if (Date.now() >= until) throw new Error("no one approved it within ten minutes");

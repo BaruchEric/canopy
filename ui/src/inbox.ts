@@ -117,7 +117,7 @@ export interface InboxContext {
    *  page holds a page token (only an admin can approve one) */
   pairs?: Readonly<Record<string, readonly PendingPair[]>>;
   /** the home backend's sweep: its pending ask, if any, is one item */
-  sweep?: Pick<SweepInfo, "ask" | "settings"> | null;
+  sweep?: Pick<SweepInfo, "ask" | "settings" | "lastRun"> | null;
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -401,9 +401,11 @@ function pairItem(backend: string, p: PendingPair): InboxItem {
 
 /** The sweep's pending ask, what its scheduled fire found closable and
  *  did not close on its own, as one item: close all, pick, or dismiss.
- *  It has waited, as far as the page can tell, since the oldest of them
- *  went idle; the ask itself records no time. */
-function sweepItem(info: Pick<SweepInfo, "ask" | "settings">): InboxItem | null {
+ *  The ask records no time, so it has waited since the newest log entry:
+ *  the fire's own when nothing closed since (`by: "schedule"`), else a
+ *  later close's, which is as near as the data comes. With no log at all
+ *  (an ask written by hand), since the oldest of them went idle. */
+function sweepItem(info: Pick<SweepInfo, "ask" | "settings" | "lastRun">): InboxItem | null {
   const ask = info.ask;
   if (!ask || ask.length === 0) return null;
   return {
@@ -417,7 +419,7 @@ function sweepItem(info: Pick<SweepInfo, "ask" | "settings">): InboxItem | null 
     where: "on its schedule",
     title: askTitle(ask, info.settings.spans),
     detail: "",
-    at: Math.min(...ask.map((i) => i.idleSince)),
+    at: info.lastRun?.at ?? Math.min(...ask.map((i) => i.idleSince)),
     left: null,
     until: null,
     sweep: [...ask],
@@ -543,10 +545,11 @@ export function scopeOffers(item: Pick<InboxItem, "flowStep" | "repo" | "repoPat
   ];
 }
 
-/** what the chip says on the tooltip: "2 in the inbox: …" */
+/** what the chip says on the tooltip: "2 in the inbox: …"; the sweep's
+ *  title names it already ("Sweep: …"), so it goes alone */
 export function inboxTitle(items: readonly InboxItem[]): string {
   if (items.length === 0) return "The inbox is empty";
-  return [`${items.length} in the inbox`, ...items.slice(0, 5).map((i) => `${i.who}${i.repo ? ` in ${i.repo}` : ""}: ${i.title}`)].join("\n");
+  return [`${items.length} in the inbox`, ...items.slice(0, 5).map((i) => (i.source === "sweep" ? i.title : `${i.who}${i.repo ? ` in ${i.repo}` : ""}: ${i.title}`))].join("\n");
 }
 
 /** Asks held by id with `incoming` laid over them and `gone` dropped; an

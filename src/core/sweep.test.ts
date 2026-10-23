@@ -85,6 +85,14 @@ test("normalizeSweep drops a negative span and an unknown auto kind to defaults"
 test("patchSweep refuses a cron parseCron rejects", () => {
   expect(typeof patchSweep(DEFAULT_SWEEP, { cron: "every day" })).toBe("string");
 });
+test("patchSweep refuses a span under 10 minutes, and takes 10 minutes itself", () => {
+  expect(patchSweep(DEFAULT_SWEEP, { spans: { shell: 60_000 } })).toBe("a span is at least 10 minutes");
+  expect(patchSweep(DEFAULT_SWEEP, { spans: { chat: 10 * 60_000 - 1 } })).toBe("a span is at least 10 minutes");
+  expect(patchSweep(DEFAULT_SWEEP, { spans: { run: 10 * 60_000 } })).toMatchObject({ spans: { run: 10 * 60_000 } });
+});
+test("normalizeSweep keeps a short span a config was given by hand", () => {
+  expect(normalizeSweep({ spans: { shell: 1_000 } }).spans.shell).toBe(1_000);
+});
 test("normalizeSweep turns the schedule off for a cron that does not read", () => {
   expect(normalizeSweep({ on: true, cron: "nope" })).toMatchObject({ on: false, cron: "0 4 * * *" });
   expect(normalizeSweep({ on: true, cron: "0 5 * * *" })).toMatchObject({ on: true, cron: "0 5 * * *" });

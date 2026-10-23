@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SWEEP_KINDS, type KeptShell, type SweepItem, type SweepKind, type SweepOutcome, type SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, dropPicks, groupItems, KIND_HEAD, outcomesOf, sheetRows, spanMs, spanParts, sweepSummary, type SpanUnit } from "../sweep";
+import { defaultPicks, dropPicks, groupItems, KIND_HEAD, nextAuto, outcomesOf, sheetRows, spanMs, spanParts, sweepSummary, type SpanUnit } from "../sweep";
 import { useNow } from "./Registry";
 import { PopGear } from "./PopGrip";
 
@@ -56,9 +56,10 @@ const outWord = (o: SweepOutcome, kind: SweepItem["kind"]): string => {
  * closes the ticked ones, each looked at again first, and every row it
  * took stays in place with how it went. The "swept" fold brings back what
  * an earlier close took: a shell restores with its history and its agent's
- * own conversation, a chat resumes its session. Opened from the sweep's ask
- * in the inbox, it starts with the ask's items ticked instead; a close from
- * here leaves the ask, which loses what closed on the next event.
+ * own conversation, a chat resumes its session. Opened by the ask's "pick"
+ * in the inbox, it starts with only the ask's ticked items ticked (a shell
+ * running a program stays unticked until Eric ticks it); a close from here
+ * leaves the ask, which loses what closed on the next event.
  */
 export function SweepSheet({ picks: start }: { picks?: readonly string[] | undefined } = {}) {
   const sweep = useStore((s) => s.sweep);
@@ -371,20 +372,40 @@ export function SweepRow() {
   const [typed, setTyped] = useState<Partial<Record<SweepKind, string>>>({});
   const [units, setUnits] = useState<Partial<Record<SweepKind, SpanUnit>>>({});
   const [err, setErr] = useState<string | null>(null);
+  // Saves go one at a time, in order, and the row is disabled while any is
+  // out. `outstanding` counts them for the handlers, so the blur that
+  // follows an Enter, before the disable lands, posts nothing twice.
+  const [busy, setBusy] = useState(false);
+  const outstanding = useRef(0);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  // the auto kinds as the toggles not yet saved leave them, so a second
+  // toggle in the same moment builds on the first rather than on this render
+  const pendingAuto = useRef<SweepKind[] | null>(null);
+  const [shownAuto, setShownAuto] = useState<SweepKind[] | null>(null);
   if (!sweep) return null;
   const s = sweep.settings;
-  const save = async (patch: Record<string, unknown>): Promise<boolean> => {
-    setErr(null);
-    try {
-      await setSweepSettings(patch);
-      return true;
-    } catch (e) {
-      setErr(errText(e));
-      return false;
-    }
+  const save = (patch: Record<string, unknown>): Promise<boolean> => {
+    outstanding.current += 1;
+    setBusy(true);
+    const run = async (): Promise<boolean> => {
+      setErr(null);
+      try {
+        await setSweepSettings(patch);
+        return true;
+      } catch (e) {
+        setErr(errText(e));
+        return false;
+      } finally {
+        outstanding.current -= 1;
+        if (outstanding.current === 0) setBusy(false);
+      }
+    };
+    const done = queue.current.then(run);
+    queue.current = done;
+    return done;
   };
   const commitCron = () => {
-    if (cron === null) return;
+    if (cron === null || outstanding.current > 0) return;
     const v = cron.trim();
     if (!v || v === s.cron) {
       setCron(null);
@@ -395,7 +416,7 @@ export function SweepRow() {
     });
   };
   const commitSpan = (kind: SweepKind, unit: SpanUnit, text: string | undefined) => {
-    if (text === undefined) return;
+    if (text === undefined || outstanding.current > 0) return;
     const ms = spanMs(text, unit);
     if (ms === null) {
       setErr(`the ${kind} span is a number above zero`);
@@ -411,14 +432,22 @@ export function SweepRow() {
     });
   };
   const toggleAuto = (kind: SweepKind, on: boolean) => {
-    const next = SWEEP_KINDS.filter((k) => (k === kind ? on : s.auto.includes(k)));
-    void save({ auto: next });
+    // over the toggles still on their way, else the newest settings the
+    // store holds, never this render's: one must not undo another
+    const next = nextAuto(pendingAuto.current ?? useStore.getState().sweep?.settings.auto ?? s.auto, kind, on);
+    pendingAuto.current = next;
+    setShownAuto(next);
+    void save({ auto: next }).then(() => {
+      if (pendingAuto.current !== next) return;
+      pendingAuto.current = null;
+      setShownAuto(null);
+    });
   };
   return (
     <section className="settings-row">
       <h3 className="panel-label">sweep</h3>
       <label className="settings-line">
-        <input type="checkbox" checked={s.on} onChange={(e) => void save({ on: e.target.checked })} />
+        <input type="checkbox" checked={s.on} disabled={busy} onChange={(e) => void save({ on: e.target.checked })} />
         sweep on a schedule
       </label>
       <div className="ranger-fields">
@@ -426,6 +455,7 @@ export function SweepRow() {
           when (cron)
           <input
             className="settings-input sweep-cron"
+            disabled={busy}
             value={cron ?? s.cron}
             spellCheck={false}
             placeholder="0 4 * * *"
@@ -448,8 +478,8 @@ export function SweepRow() {
                 <input
                   className="settings-input"
                   type="number"
-                  min={0}
                   step="any"
+                  disabled={busy}
                   aria-label={`${SPAN_LABEL[kind]}, in ${shown.unit}`}
                   value={text ?? shown.value}
                   onChange={(e) => setTyped((t) => ({ ...t, [kind]: e.target.value }))}
@@ -460,6 +490,7 @@ export function SweepRow() {
                 />
                 <select
                   className="settings-input"
+                  disabled={busy}
                   aria-label={`${SPAN_LABEL[kind]}: hours or days`}
                   value={shown.unit}
                   onChange={(e) => {
@@ -482,13 +513,13 @@ export function SweepRow() {
         <div className="sweep-auto">
           {AUTO_KINDS.map((kind) => (
             <label key={kind} className="settings-line" title={kind === "pr" ? PR_AUTO_WARNING : undefined}>
-              <input type="checkbox" checked={s.auto.includes(kind)} onChange={(e) => toggleAuto(kind, e.target.checked)} />
+              <input type="checkbox" checked={(shownAuto ?? s.auto).includes(kind)} disabled={busy} onChange={(e) => toggleAuto(kind, e.target.checked)} />
               {KIND_HEAD[kind]}
             </label>
           ))}
         </div>
       </div>
-      {s.auto.includes("pr") && <p className="settings-hint error">{PR_AUTO_WARNING}</p>}
+      {(shownAuto ?? s.auto).includes("pr") && <p className="settings-hint error">{PR_AUTO_WARNING}</p>}
       {err && <p className="settings-hint error">{err}</p>}
       <p className="settings-hint">
         A setting of {home}, the home backend. On its cron ({home}'s local time) the sweep closes what went idle past these spans among the

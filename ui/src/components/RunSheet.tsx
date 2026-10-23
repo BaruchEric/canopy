@@ -164,8 +164,9 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "fleet-plan") return <FleetPlan key={sheet.workflow} workflow={sheet.workflow} />;
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
   if (sheet.kind === "approve") return <ApproveSheet key={sheet.id} id={sheet.id} />;
-  // keyed by its picks, so the inbox's "pick" over an open sheet starts it afresh
-  if (sheet.kind === "sweep") return <SweepSheet key={sheet.picks?.join("\n") ?? ""} picks={sheet.picks} />;
+  // keyed by the pick that opened it, so every "pick" from the inbox starts
+  // the sheet afresh, hand edits and all, and is never taken for the broom's
+  if (sheet.kind === "sweep") return <SweepSheet key={sheet.pick === undefined ? "broom" : `pick-${sheet.pick}`} picks={sheet.picks} />;
   if (!run) return <Missing what="That run is gone." onClose={close} />;
   // keyed, so a coordinator's view and fold never carry over to the next run shown
   return <Console key={run.id} run={run} repo={repo} />;

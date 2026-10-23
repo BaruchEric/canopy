@@ -189,6 +189,20 @@ export function askCloses(items: readonly SweepItem[]): string[] {
   return items.filter((i) => i.checked && i.closable).map((i) => i.key);
 }
 
+/** What the ask's "pick" starts the sheet with ticked: the same items
+ *  "close all" would send, so a shell running a program starts unticked
+ *  in the sheet too, where Eric can still tick it by hand. */
+export function pickKeys(items: readonly SweepItem[]): string[] {
+  return askCloses(items);
+}
+
+/** The auto kinds with `kind` added or dropped, in the sweep's order:
+ *  computed over the newest settings the row holds, so two quick toggles
+ *  each keep the other's change. */
+export function nextAuto(cur: readonly SweepKind[], kind: SweepKind, on: boolean): SweepKind[] {
+  return SWEEP_KINDS.filter((k) => (k === kind ? on : cur.includes(k)));
+}
+
 export type SpanUnit = "hours" | "days";
 
 /** A span as the settings row shows it: in `unit` when the row has one
@@ -202,10 +216,12 @@ export function spanParts(ms: number, unit?: SpanUnit): { value: string; unit: S
   return { value: value === "0" ? String(n) : value, unit: u };
 }
 
-/** what was typed in a span's box, in ms; null when it is not a positive number */
+/** what was typed in a span's box, in ms; null unless that comes to a
+ *  finite number of ms above nought */
 export function spanMs(typed: string, unit: SpanUnit): number | null {
   const t = typed.trim();
   const n = t === "" ? Number.NaN : Number(t);
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.round(n * (unit === "days" ? DAY : HOUR));
+  const ms = Math.round(n * (unit === "days" ? DAY : HOUR));
+  // a number that rounds to nothing, or runs past what a number holds, is no span
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
 }

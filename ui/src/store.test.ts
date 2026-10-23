@@ -1466,6 +1466,28 @@ describe("several backends", () => {
       expect(useStore.getState().authByBackend["b"]).toMatchObject({ you: "page", hasToken: true, needed: false });
     });
 
+    test("signed in to home, the page reads the sweep at once, so its inbox item and Settings tab need no reload", async () => {
+      const homeAnswers = backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends });
+      const sweep = { items: [], settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [] }, lastRun: null, swept: { shells: [], chats: [] }, ask: null };
+      let homeClaims: Response[] = [];
+      const home: Answer = (path, init) => {
+        const p = path.split("?")[0] ?? "";
+        if (p === "/api/auth/pair") return json({ id: "p9", code: "H0ME", secret: "s9" });
+        if (p === "/api/auth/claim") return homeClaims.shift() ?? json({ waiting: true });
+        if (p === "/api/sweep") return sweep;
+        return homeAnswers(path, init);
+      };
+      await start(home, b);
+      await settle();
+      const before = calls.filter((u) => u.split("?")[0] === "/api/sweep").length;
+      expect(useStore.getState().sweep).toBeNull();
+      homeClaims = [json({ token: "cnp_page_a" })];
+      await useStore.getState().signIn("a");
+      await settle();
+      expect(calls.filter((u) => u.split("?")[0] === "/api/sweep").length).toBeGreaterThan(before);
+      expect(useStore.getState().sweep).toEqual(sweep);
+    });
+
     test("to another origin the token rides on writes and /api/auth alone, so a read is never preflighted", async () => {
       kept.set(B_TOKEN, "cnp_page_b");
       heard.length = 0;

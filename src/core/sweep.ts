@@ -21,6 +21,11 @@ export const DEFAULT_SWEEP: SweepSettings = {
   auto: ["shell", "chat", "run"],
 };
 
+/** the shortest span a change through the settings route may set: shorter
+ *  would sweep a shell between two coffees. A config edited by hand (and
+ *  the tests) can go lower, so normalizeSweep does not hold to it. */
+export const SPAN_FLOOR = 10 * 60_000;
+
 const isKind = (v: unknown): v is SweepKind => (SWEEP_KINDS as readonly unknown[]).includes(v);
 const isSpan = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
 const kindsOf = (v: unknown[]): SweepKind[] => SWEEP_KINDS.filter((k) => v.includes(k));
@@ -78,6 +83,7 @@ export function patchSweep(cur: SweepSettings, patch: unknown): SweepSettings | 
     for (const [k, v] of Object.entries(s)) {
       if (!isKind(k)) return `${k} is not a kind of thing the sweep closes`;
       if (!isSpan(v)) return `the ${k} span is a positive number of milliseconds`;
+      if (v < SPAN_FLOOR) return "a span is at least 10 minutes";
       out.spans[k] = v;
     }
   }

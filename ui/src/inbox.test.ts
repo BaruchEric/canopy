@@ -509,17 +509,30 @@ describe("the sweep's ask", () => {
     checked: true,
     auto: false,
   });
-  const info = (ask: SweepItem[] | null): Pick<SweepInfo, "ask" | "settings"> => ({ ask, settings });
+  const info = (ask: SweepItem[] | null, lastRun: SweepInfo["lastRun"] = { at: 900, by: "schedule", outcomes: [], items: [] }): Pick<SweepInfo, "ask" | "settings" | "lastRun"> => ({ ask, settings, lastRun });
 
   test("an ask becomes one sweep item with its count in the title", () => {
     const ask = [pr("1", 300), pr("2", 100), pr("3", 200)];
     const items = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info(ask) });
     expect(items.map((i) => [i.key, i.source, i.kind, i.title])).toEqual([["sweep:ask", "sweep", "sweep", "Sweep: 3 PRs idle 14+ days"]]);
-    // it has waited since the oldest of them went idle
-    expect(items[0]?.at).toBe(100);
+    // it has waited since the fire that held them back
+    expect(items[0]?.at).toBe(900);
     expect(items[0]?.sweep?.map((i) => i.key)).toEqual(["pr:1", "pr:2", "pr:3"]);
     expect(toRunAnswer({ sweep: "close" })).toBeNull();
     expect(toAskAnswer({ sweep: "dismiss" })).toBeNull();
+  });
+
+  test("its time is the newest log entry's when a close came after the fire, and the oldest idle time with no log", () => {
+    const ask = [pr("1", 300), pr("2", 100)];
+    const later = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info(ask, { at: 1_500, by: "eric", outcomes: [], items: [] }) });
+    expect(later[0]?.at).toBe(1_500);
+    const none = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info(ask, null) });
+    expect(none[0]?.at).toBe(100);
+  });
+
+  test("the chip's tooltip names it once, not as sweep: Sweep:", () => {
+    const items = mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info([pr("1", 1)]) });
+    expect(inboxTitle(items)).toBe("1 in the inbox\nSweep: 1 PR idle 14+ days");
   });
 
   test("no ask, no item", () => {

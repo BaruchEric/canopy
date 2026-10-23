@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { askCloses, askTitle, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary } from "./sweep";
+import { askCloses, askTitle, nextAuto, pickKeys, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -195,6 +195,28 @@ describe("the ask's words", () => {
   });
 });
 
+describe("pick", () => {
+  test("starts the sheet on the ask's ticked items alone: a shell running a program stays unticked", () => {
+    const ask = [item("shell:busy", { checked: false, why: "running vim, no input or output for 30h" }), item("shell:idle"), item("chat:c1")];
+    expect(pickKeys(ask)).toEqual(["shell:idle", "chat:c1"]);
+    expect(pickKeys(ask)).not.toContain("shell:busy");
+  });
+});
+
+describe("nextAuto", () => {
+  test("adds or drops one kind over the auto kinds given, in the sweep's order", () => {
+    expect(nextAuto(["shell", "chat", "run"], "pr", true)).toEqual(["shell", "chat", "run", "pr"]);
+    expect(nextAuto(["shell", "chat", "run", "pr"], "chat", false)).toEqual(["shell", "run", "pr"]);
+    expect(nextAuto(["run"], "shell", true)).toEqual(["shell", "run"]);
+    expect(nextAuto(["shell"], "shell", true)).toEqual(["shell"]);
+  });
+
+  test("two quick toggles, each over the one before, keep both", () => {
+    const first = nextAuto(["shell", "chat", "run", "pr"], "pr", false);
+    expect(nextAuto(first, "chat", false)).toEqual(["shell", "run"]);
+  });
+});
+
 describe("a span in the settings row", () => {
   const HOUR = 3_600_000;
   const DAY = 24 * HOUR;
@@ -224,5 +246,9 @@ describe("a span in the settings row", () => {
     expect(spanMs("-2", "days")).toBeNull();
     expect(spanMs("", "days")).toBeNull();
     expect(spanMs("soon", "days")).toBeNull();
+    // a span that rounds to nothing, or runs past what a number holds
+    expect(spanMs("1e-10", "hours")).toBeNull();
+    expect(spanMs("1e306", "days")).toBeNull();
+    expect(spanMs("Infinity", "hours")).toBeNull();
   });
 });
