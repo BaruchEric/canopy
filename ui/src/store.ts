@@ -3125,10 +3125,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   restoreShell: async (id, resume = false) => {
     const s = get();
+    // said rather than skipped, so the row that asked shows why nothing came back
     const rec = s.kept.find((k) => k.id === id);
-    if (!rec) return;
+    if (!rec) throw new Error("that shell is not on offer any more");
     const repo = s.repos.find((r) => r.id === rec.repoId);
-    if (!repo) return;
+    if (!repo) throw new Error(`the repo that shell was in is not in the scan: ${rec.repoId}`);
     await api.restoreShell(id, resume);
     // the same tab the lost shell had, since it comes back under its name;
     // a tab still showing the shell that went (its socket was told the

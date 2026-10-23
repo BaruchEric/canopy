@@ -263,28 +263,28 @@ function SweepRowView({
  *  resumes its session and opens waiting for a message. */
 function Swept({ shells, chats, now }: { shells: KeptShell[]; chats: SweptChat[]; now: number }) {
   const repos = useStore((s) => s.repos);
-  const kept = useStore((s) => s.kept);
   const restoreShell = useStore((s) => s.restoreShell);
   const resumeSwept = useStore((s) => s.resumeSwept);
   const loadSweep = useStore((s) => s.loadSweep);
   const close = useStore((s) => s.closeSheet);
   const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
+  // the row whose restore or resume failed, and why; shown in that row
+  const [error, setError] = useState<{ id: string; text: string } | null>(null);
   if (shells.length === 0 && chats.length === 0) return null;
   const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
   const act = async (id: string, what: () => Promise<void>) => {
     setBusy(id);
-    setError("");
+    setError(null);
     try {
       await what();
     } catch (err) {
-      setError(errText(err));
+      setError({ id, text: errText(err) });
       setBusy("");
     }
   };
+  // the store says why when the shell is not on offer or its repo has left
   const restore = (k: KeptShell) =>
     act(k.id, async () => {
-      if (!kept.some((x) => x.id === k.id)) throw new Error("that shell is not on offer any more");
       // with its agent's own conversation when one ran in it
       await restoreShell(k.id, k.agent !== null);
       // a restore goes through the shells' routes, which the hub does not hear
@@ -310,6 +310,7 @@ function Swept({ shells, chats, now }: { shells: KeptShell[]; chats: SweptChat[]
                 {busy === k.id ? "restoring…" : "restore"}
               </button>
             </div>
+            {error?.id === k.id && <p className="note err">{error.text}</p>}
           </li>
         ))}
         {chats.map((c) => (
@@ -325,10 +326,10 @@ function Swept({ shells, chats, now }: { shells: KeptShell[]; chats: SweptChat[]
                 {busy === c.runId ? "resuming…" : "resume"}
               </button>
             </div>
+            {error?.id === c.runId && <p className="note err">{error.text}</p>}
           </li>
         ))}
       </ul>
-      {error && <p className="note err">{error}</p>}
     </details>
   );
 }

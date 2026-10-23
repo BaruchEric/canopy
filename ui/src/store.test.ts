@@ -208,6 +208,23 @@ describe("shells this window ends or restores", () => {
     expect(useStore.getState().kept).toEqual([]);
   });
 
+  test("restoring a shell whose repo left the scan says so and asks nothing of the server", async () => {
+    const id = "f".repeat(32);
+    const kept: KeptShell = { id, repoId: "gone", path: "/dev/gone", place: "strip", startedAt: 1, savedAt: 2, lines: 3, agent: null };
+    globalThis.fetch = answer({ ...info(id), restoredAt: 3 });
+    useStore.setState({ repos: [app], panels: [], terms: [], kept: [kept], activeTerm: null });
+    await expect(useStore.getState().restoreShell(id)).rejects.toThrow("the repo that shell was in is not in the scan: gone");
+    expect(calls).toEqual([]);
+    expect(useStore.getState().kept).toEqual([kept]);
+  });
+
+  test("restoring a shell no longer on offer says so", async () => {
+    globalThis.fetch = answer({ ok: true });
+    useStore.setState({ repos: [app], panels: [], terms: [], kept: [], activeTerm: null });
+    await expect(useStore.getState().restoreShell("a".repeat(32))).rejects.toThrow("that shell is not on offer any more");
+    expect(calls).toEqual([]);
+  });
+
   test("closing a task tab sends no DELETE, and a click revives an ended one", () => {
     globalThis.fetch = answer({ ok: true });
     const id = "a".repeat(32);
