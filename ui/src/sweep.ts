@@ -227,3 +227,15 @@ export function spanMs(typed: string, unit: SpanUnit): number | null {
   // a number that rounds to nothing, or runs past what a number holds, is no span
   return Number.isFinite(ms) && ms > 0 ? ms : null;
 }
+
+/**
+ * A span's unit switched in the settings row: the span stays as it is and
+ * shows in the new unit (`spanParts(ms, to)`), so nothing is saved, and a
+ * number typed and not yet saved is converted with it, to be saved on blur
+ * or Enter as any edit. Typed text that is no span stays as it was.
+ */
+export function switchUnit(typed: string | undefined, from: SpanUnit, to: SpanUnit): { unit: SpanUnit; typed: string | undefined } {
+  if (typed === undefined) return { unit: to, typed: undefined };
+  const was = spanMs(typed, from);
+  return { unit: to, typed: was === null ? typed : spanParts(was, to).value };
+}

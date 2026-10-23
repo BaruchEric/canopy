@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { askCloses, askTitle, nextAuto, pickKeys, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary } from "./sweep";
+import { askCloses, askTitle, nextAuto, pickKeys, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -243,6 +243,20 @@ describe("a span in the settings row", () => {
   test("a unit the row picked holds, whatever the span", () => {
     expect(spanParts(DAY, "hours")).toEqual({ value: "24", unit: "hours" });
     expect(spanParts(36 * HOUR, "days")).toEqual({ value: "1.5", unit: "days" });
+  });
+
+  test("a unit change shows the same span in the new unit and saves nothing", () => {
+    // the default shell span, 24h, shown as 1 day: switched to hours it reads 24, not 1
+    expect(switchUnit(undefined, "days", "hours")).toEqual({ unit: "hours", typed: undefined });
+    expect(spanParts(DAY, switchUnit(undefined, "days", "hours").unit).value).toBe("24");
+    expect(switchUnit(undefined, "hours", "days")).toEqual({ unit: "days", typed: undefined });
+  });
+
+  test("a number typed and not yet saved is converted with it, still unsaved", () => {
+    expect(switchUnit("2", "days", "hours")).toEqual({ unit: "hours", typed: "48" });
+    expect(switchUnit("36", "hours", "days")).toEqual({ unit: "days", typed: "1.5" });
+    // text that is no span stays as typed, for its own error on blur
+    expect(switchUnit("soon", "days", "hours")).toEqual({ unit: "hours", typed: "soon" });
   });
 
   test("spanMs turns what was typed back into ms; nothing positive is null", () => {

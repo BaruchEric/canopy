@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SWEEP_KINDS, type KeptShell, type SweepItem, type SweepKind, type SweepOutcome, type SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, dropPicks, groupItems, KIND_HEAD, nextAuto, outcomesOf, sheetRows, spanMs, spanParts, sweepSummary, type SpanUnit } from "../sweep";
+import { defaultPicks, dropPicks, groupItems, KIND_HEAD, nextAuto, outcomesOf, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
 import { useNow } from "./Registry";
 import { PopGear } from "./PopGrip";
 
@@ -494,10 +494,10 @@ export function SweepRow() {
                   aria-label={`${SPAN_LABEL[kind]}: hours or days`}
                   value={shown.unit}
                   onChange={(e) => {
-                    const unit = e.target.value === "days" ? "days" : "hours";
-                    setUnits((u) => ({ ...u, [kind]: unit }));
-                    // the number stays and now counts in the new unit
-                    commitSpan(kind, unit, text ?? shown.value);
+                    // the span stays and shows in the new unit; nothing is saved
+                    const next = switchUnit(text, shown.unit, e.target.value === "days" ? "days" : "hours");
+                    setUnits((u) => ({ ...u, [kind]: next.unit }));
+                    setTyped(({ [kind]: _was, ...rest }) => (next.typed === undefined ? rest : { ...rest, [kind]: next.typed }));
                   }}
                 >
                   <option value="hours">hours</option>
