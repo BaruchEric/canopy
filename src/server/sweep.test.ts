@@ -532,6 +532,31 @@ describe("the schedule", () => {
     expect(await readLastFire()).toBe(NOW);
   });
 
+  test("a catch-up that throws at start is logged, not thrown, and the next tick still fires", async () => {
+    const w = world();
+    on(w);
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * MIN);
+    const load = w.deps.loadSettings;
+    let calls = 0;
+    w.deps.loadSettings = async () => {
+      if (++calls === 1) throw new Error("config unreadable");
+      return load ? load() : w.settings;
+    };
+    const hub = new SweepHub(w.deps);
+    const said = console.error;
+    console.error = () => {};
+    try {
+      await hub.start();
+    } finally {
+      console.error = said;
+      hub.stop();
+    }
+    expect(w.calls.dismiss).toEqual([]);
+    await hub.tick(NOW);
+    expect(w.calls.dismiss).toEqual(["d1"]);
+  });
+
   test("a bad cron in config never fires", async () => {
     const w = world();
     w.shells = [shell()];

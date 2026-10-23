@@ -113,7 +113,9 @@ export class SweepHub {
    *  once a minute; the timer stays off under `bun test`, whose tests call
    *  `tick` themselves. */
   async start(): Promise<void> {
-    await this.tick(this.now());
+    // a catch-up that fails is logged, and the timer still starts: one bad
+    // read at boot must not leave the schedule off until the next restart
+    await this.tick(this.now()).catch((err) => console.error("canopy: sweep: the schedule:", errText(err)));
     if (process.env["NODE_ENV"] === "test" || this.timer) return;
     this.timer = setInterval(() => {
       this.tick(this.now()).catch((err) => console.error("canopy: sweep: the schedule:", errText(err)));
