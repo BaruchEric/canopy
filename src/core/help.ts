@@ -64,6 +64,8 @@ usage:
   canopy sweep                       idle shells, chats, runs and PRs a backend offers for closing
   canopy sweep --yes [--kind shell,chat,run,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy health [--bad] [--repo R] [--canopy] [--json]
                                      every check on every backend the home one lists; exit 1 while one is down
     --on NAME                        only that backend (checks, add and rm speak to it too)

@@ -186,6 +186,9 @@ export interface Settings {
   agentsGrouping: BoardGrouping;
   /** the board's focus moves to an agent the moment it starts waiting */
   agentsFollow: boolean;
+  /** system notifications while the tab is hidden, and the "(n)" count of
+   *  what waits on you in the tab's title; off unless asked for */
+  notify: boolean;
 }
 
 /** the inbox command block's text size, px */
@@ -235,6 +238,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentsLayout: null,
   agentsGrouping: "none",
   agentsFollow: false,
+  notify: false,
 };
 
 const KEY = "canopy.settings";
@@ -406,6 +410,7 @@ export function loadSettings(): Settings {
       agentsLayout: BOARD_LAYOUTS.find((l) => l === saved.agentsLayout) ?? null,
       agentsGrouping: pick(BOARD_GROUPINGS, saved.agentsGrouping, DEFAULT_SETTINGS.agentsGrouping),
       agentsFollow: typeof saved.agentsFollow === "boolean" ? saved.agentsFollow : DEFAULT_SETTINGS.agentsFollow,
+      notify: typeof saved.notify === "boolean" ? saved.notify : DEFAULT_SETTINGS.notify,
       ...levelOf(saved),
     };
   } catch {

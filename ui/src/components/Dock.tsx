@@ -71,6 +71,8 @@ import { GuidedPanel } from "./Guided";
 import { Tour } from "./Tour";
 import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
+import { ReviewNotesStrip } from "./ReviewNotes";
+import { takesNotes, WORKING_TREE } from "../reviewnotes";
 import { baseName, branchText, changesHead, pushText, worktreeText } from "../elsewhere";
 import { ElsewhereChips, PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
@@ -215,7 +217,9 @@ function FileRow({
           }
         })}
       </div>
-      {open && diff !== null && <DiffView diff={diff} />}
+      {open && diff !== null && (
+        <DiffView diff={diff} note={takesNotes(repo) ? { repoId: repo.id, path: file.path, where: WORKING_TREE } : undefined} />
+      )}
     </li>
   );
 }
@@ -2946,6 +2950,8 @@ export function RepoPanel({
               <WorkspaceMenu repo={repo} onError={showError} />
             </div>
           )}
+
+          <ReviewNotesStrip repo={repo} onNote={(kind, text) => setNote({ kind, text })} />
 
           {repo.error ? (
             <p className="panel-error">Could not read this repo: {repo.error}</p>

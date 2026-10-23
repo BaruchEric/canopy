@@ -8,8 +8,9 @@ import type { Harness } from "../../../src/core/types";
 import { HandoffButton } from "./Handoff";
 import { MoveButton } from "./MoveSheet";
 import { devTask } from "../tasks";
-import { agentCandidates, canSave, debugPrompt, devState, pendingAgent, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
+import { canSave, debugPrompt, devState, pendingAgent, SAVE_PROMPT, SETUP_PROMPT } from "../guided";
 import { LIVE, typeInto } from "../liveTerms";
+import { pasteIntoAgentShell, runsAgent } from "../agentsend";
 import type { TermTab } from "../term";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -20,10 +21,6 @@ const PENDING_WAIT = 20_000;
 /** the repos a prompt is on its way to, so a second click does not open a
  *  second shell while the first is still being found or started */
 const asking = new Set<string>();
-
-/** whether tmux says a shell runs an agent, of either harness */
-const runsAgent = async (id: string): Promise<boolean> =>
-  (await api.termAgent(id).catch(() => ({ agent: null }))).agent !== null;
 
 /** Hands a prompt to the repo's agent. A shell already running an agent
  *  (Claude Code or Codex) gets it pasted in, not sent: the agent may be on a
@@ -37,9 +34,7 @@ export async function askAgent(repoId: string, text: string, showing: TermTab | 
   asking.add(repoId);
   try {
     const { terms, openTerm } = useStore.getState();
-    for (const id of agentCandidates(showing, terms, repoId)) {
-      if ((await runsAgent(id)) && typeInto(id, text)) return;
-    }
+    if (await pasteIntoAgentShell(repoId, text, showing, terms)) return;
     const pending = pendingAgent(terms, repoId);
     if (pending) {
       for (let waited = 0; waited < PENDING_WAIT; waited += 500) {

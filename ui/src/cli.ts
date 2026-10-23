@@ -7,7 +7,7 @@
  */
 
 import { HELP_TEXT } from "../../src/core/help";
-import { OPENER_IDS, type OpenerId, type Repo, type SpecHalf } from "../../src/core/types";
+import { AWAKE_MODES, OPENER_IDS, type AwakeMode, type OpenerId, type Repo, type SpecHalf } from "../../src/core/types";
 import type { Line } from "../../src/core/treelines";
 import type { FixMove } from "./fixit";
 
@@ -151,6 +151,8 @@ export type Command =
   | { kind: "view"; view: "library" | "incubator" | "health" | "kit" | "secrets"; sprout: SproutDraft | null }
   /** the sweep sheet: what went idle, to pick from and close */
   | { kind: "sweep" }
+  /** keep awake on the home backend: where it stands, or a new mode */
+  | { kind: "awake"; mode: AwakeMode | null }
   /** a command that belongs in a terminal on the machine, not in a page */
   | { kind: "terminal"; why: string };
 
@@ -373,6 +375,13 @@ export function parseCommand(input: string[]): Parsed {
     // --yes would close, and closes what is ticked
     case "sweep":
       return { kind: "sweep" };
+    case "awake": {
+      const [word, ...more] = args;
+      if (more.length > 0 || word === "--backend") return { kind: "error", text: "keep awake here is the home backend's; Settings has every backend's", usage: usageOf("awake") };
+      if (word === undefined || word === "status") return { kind: "awake", mode: null };
+      const mode = AWAKE_MODES.find((m) => m === word);
+      return mode ? { kind: "awake", mode } : { kind: "error", text: `unknown mode: ${word} (use ${AWAKE_MODES.join(", ")})`, usage: usageOf("awake") };
+    }
   }
   return { kind: "error", text: `unknown command: ${verb}`, usage: "canopy help" };
 }

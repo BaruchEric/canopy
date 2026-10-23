@@ -20,6 +20,7 @@ import {
   useStore,
   type TermTab,
 } from "../store";
+import { setTitleBase } from "../title";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
 import { LABEL_MAX, TERM_FONT, currentTermForSocket, joinsOnly, otherShells, termId, viewKey } from "../term";
 import { benchIs, benchSolo } from "../front";
@@ -1545,9 +1546,9 @@ export function ShellSolo({ id }: { id: string }) {
   }, [tab]);
 
   useEffect(() => {
-    document.title = name ? `${name} · shell · canopy` : "canopy";
+    setTitleBase(name ? `${name} · shell · canopy` : "canopy");
     return () => {
-      document.title = "canopy";
+      setTitleBase("canopy");
     };
   }, [name]);
 

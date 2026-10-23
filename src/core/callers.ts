@@ -78,7 +78,7 @@ const RULES: readonly Rule[] = [
   },
   { methods: DEL, paths: ["terms", "terms/kept"], right: "shell" },
   // Admin is also the default; these are written out so the test can pin them.
-  { methods: POST, paths: ["agents/profile", "agents/role", "peers/sync", "repos/peer", "keep", "health/heal", "remembered/forget"], right: "admin" },
+  { methods: POST, paths: ["agents/profile", "agents/role", "peers/sync", "repos/peer", "keep", "awake", "health/heal", "remembered/forget"], right: "admin" },
   { methods: POST_DEL, paths: ["sources"], right: "admin" },
   { methods: POST, paths: ["sources/rescan", "kit/*", "secrets/*", "ranger", "ranger/restart", "ranger/fresh"], right: "admin" },
   { methods: POST, paths: ["auth/approve", "auth/deny", "auth/revoke"], right: "admin" },

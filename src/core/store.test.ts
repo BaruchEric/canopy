@@ -14,6 +14,7 @@ import {
   saveConfig,
   setArchived,
   setFavorite,
+  setAwake,
   setKeepShells,
   setProfile,
   setRepoAgent,
@@ -240,6 +241,17 @@ describe("config store", () => {
     cfg = await loadConfig();
     expect(cfg.keepShells).toBe(false);
     expect(cfg.agents["/Users/me/dev/k"]).toBeUndefined();
+  });
+
+  test("keep awake is off by default, saved by name, and a hand-edited junk mode reads as off", async () => {
+    expect((await loadConfig()).awake).toBe("off");
+    await setAwake("working");
+    expect((await loadConfig()).awake).toBe("working");
+    const path = join(process.env["CANOPY_CONFIG_DIR"] ?? "", "config.json");
+    const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await writeFile(path, JSON.stringify({ ...raw, awake: "sometimes" }));
+    expect((await loadConfig()).awake).toBe("off");
+    await setAwake("off");
   });
 
   test("two saves at once each land whole, and neither loses its file", async () => {

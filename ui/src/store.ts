@@ -36,6 +36,8 @@ import {
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
+import { snapshot, watch, type Note as Notice, type Watch } from "./notify";
+import { setTitleCount } from "./title";
 import { TERM_FONT, PANEL_TERM_ROWS, adoptLabels, adoptPoppedTerms, adoptTerms, cleanLabel, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
 import { benchHolds, clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
@@ -46,8 +48,9 @@ import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
+import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
@@ -61,6 +64,7 @@ import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
+import { loadNotes, noteId, notesPrompt, saveNotes, withNote, withoutNotes, type Note } from "./reviewnotes";
 import { originOf, pairLabel, readPair, readToken, readsAdmin, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
 import { deviceName } from "../../src/core/presence";
 import { listedTask } from "../../src/core/tasks";
@@ -744,6 +748,8 @@ export interface CanopyState {
   stages: Record<string, IncubatorStages>;
   /** the ranger on each backend that has said, by backend name (server/ranger) */
   rangers: Record<string, RangerInfo>;
+  /** keep awake on each backend that has said, by backend name (core/awake) */
+  awake: Record<string, AwakeInfo>;
   /** the home backend's sweep (server/sweep): what went idle, its settings,
    *  the last close and what it swept; null until read, and on a backend
    *  older than the sweep or a page without the admin right */
@@ -1104,6 +1110,10 @@ export interface CanopyState {
   loadSprouts: (backend?: string) => Promise<void>;
   /** reads one backend's ranger, home by default; an older backend has none */
   loadRanger: (backend?: string) => Promise<void>;
+  /** reads one backend's keep awake; an older backend has none */
+  loadAwake: (backend: string) => Promise<void>;
+  /** sets one backend's keep awake mode; the error is the backend's words */
+  setAwake: (backend: string, mode: AwakeMode) => Promise<void>;
   /** reads the home backend's sweep; an older backend has none */
   loadSweep: () => Promise<void>;
   /** opens the sweep sheet, which reads the sweep afresh */
@@ -1250,6 +1260,21 @@ export interface CanopyState {
    *  else a new idle chat whose first message starts Claude (the peers
    *  panel's "merge with claude" passes one; the menu's plain chat does not) */
   openChat: (repoId: string, note?: string) => Promise<void>;
+  /** hands text to the repo's agent: the next turn of its idle chat, else
+   *  pasted into a shell of the repo that runs Claude Code or Codex (Enter
+   *  left to the user), else a new chat that starts with it. Throws while a
+   *  run is busy. Says which of the three it did. */
+  sendToAgent: (repoId: string, text: string) => Promise<"said" | "pasted" | "started">;
+  /** review notes left on diff lines, by repo id, kept in this browser
+   *  (`ui/src/reviewnotes.ts`) until sent to the repo's agent or cleared */
+  reviewNotes: Record<string, Note[]>;
+  /** leaves a note on a diff line */
+  addNote: (note: Omit<Note, "id">) => void;
+  removeNote: (repoId: string, id: string) => void;
+  clearNotes: (repoId: string) => void;
+  /** hands a repo's notes to its agent in one message (`sendToAgent`) and
+   *  drops the ones it sent; throws as sendToAgent does, keeping them */
+  sendNotes: (repoId: string) => Promise<"said" | "pasted" | "started">;
   /** opens the repo's agent override */
   editAgent: (repoId: string) => void;
   /** stores a repo's override on its backend; an empty one removes it */
@@ -1976,11 +2001,13 @@ export const useStore = create<CanopyState>((set, get) => ({
   asks: {},
   asksReady: false,
   answerKey: readAnswerKey(),
+  reviewNotes: loadNotes(),
   presence: null,
   sprouts: {},
   sproutsReady: false,
   stages: {},
   rangers: {},
+  awake: {},
   sweep: null,
   sweepEnded: [],
   health: {},
@@ -2417,6 +2444,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _history, ...histories } = s.histories;
     const { [name]: _stages, ...stages } = s.stages;
     const { [name]: _ranger, ...rangers } = s.rangers;
+    const { [name]: _awake, ...awake } = s.awake;
     const { [name]: _health, ...health } = s.health;
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
@@ -2447,6 +2475,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       sprouts: recordOut(s.sprouts, name),
       stages,
       rangers,
+      awake,
       health,
       kit,
       landing,
@@ -2916,6 +2945,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ rangers: { ...st.rangers, [b]: ev.ranger } }));
       return;
     }
+    if (ev.type === "awake") {
+      set((st) => ({ awake: { ...st.awake, [b]: ev.awake } }));
+      return;
+    }
     if (ev.type === "sweep") {
       // The event says only that the sweep changed, since every stream hears
       // it and the routes need admin, so the page reads it, but only when
@@ -3300,6 +3333,18 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // an older backend has no ranger; nothing shows for it
     }
+  },
+  loadAwake: async (b) => {
+    try {
+      const info = await api.awake(b);
+      if (isShown(get(), b)) set((s) => ({ awake: { ...s.awake, [b]: info } }));
+    } catch {
+      // an older backend has no keep awake; its row says so
+    }
+  },
+  setAwake: async (b, mode) => {
+    const info = await api.setAwake(mode, b);
+    set((s) => ({ awake: { ...s.awake, [b]: info } }));
   },
   loadSweep: async () => {
     const mark = sweepEvents;
@@ -4001,6 +4046,49 @@ export const useStore = create<CanopyState>((set, get) => ({
     // An idle chat: the note is the next turn, not a fresh start.
     await get().sayRun(active.id, trimmed);
     set({ sheet: { kind: "run", runId: active.id } });
+  },
+  sendToAgent: async (repoId, text) => {
+    const active = activeRunFor(get(), repoId);
+    if (active) {
+      if (mergeAction(active) === "busy") throw new Error("a run is already going on this repo");
+      await get().sayRun(active.id, text);
+      set({ sheet: { kind: "run", runId: active.id } });
+      return "said";
+    }
+    const shell = await pasteIntoAgentShell(repoId, text, null, get().terms);
+    if (shell) {
+      get().showTerm(shell);
+      return "pasted";
+    }
+    // a chat, not a new shell: a shell's first message rides its socket URL
+    // and is cut at the server's prompt cap, a chat's note is not
+    await get().startRun(repoId, "chat", text);
+    return "started";
+  },
+  addNote: (note) => {
+    const reviewNotes = withNote(get().reviewNotes, { ...note, id: noteId() });
+    set({ reviewNotes });
+    saveNotes(reviewNotes);
+  },
+  removeNote: (repoId, id) => {
+    const reviewNotes = withoutNotes(get().reviewNotes, repoId, new Set([id]));
+    set({ reviewNotes });
+    saveNotes(reviewNotes);
+  },
+  clearNotes: (repoId) => {
+    const reviewNotes = withoutNotes(get().reviewNotes, repoId, new Set((get().reviewNotes[repoId] ?? []).map((n) => n.id)));
+    set({ reviewNotes });
+    saveNotes(reviewNotes);
+  },
+  sendNotes: async (repoId) => {
+    const notes = get().reviewNotes[repoId] ?? [];
+    if (notes.length === 0) throw new Error("no review notes on this repo");
+    const how = await get().sendToAgent(repoId, notesPrompt(notes));
+    // only the ones sent: a note left while it went stays for the next send
+    const reviewNotes = withoutNotes(get().reviewNotes, repoId, new Set(notes.map((n) => n.id)));
+    set({ reviewNotes });
+    saveNotes(reviewNotes);
+    return how;
   },
   editAgent: (repoId) => set({ sheet: { kind: "agent", repoId } }),
   setAgent: async (repoId, agent) => {
@@ -4787,6 +4875,47 @@ export function turnItems(s: CanopyState): TurnRow[] {
  *  it lists but the unpushed commits, which can wait */
 export const waitingCount = (s: CanopyState): number =>
   turnItems(s).length + inboxItems(s).length + attentionItems(s).filter((r) => !isUnpushed(r)).length + failedItems(s).length;
+
+/** the page's load and each backend's connection state, which the burst
+ *  guard in notify.ts re-seeds on whenever it changes */
+const connSign = (s: CanopyState): string => [s.loaded ? "1" : "0", ...s.backendOrder.map((b) => `${b}=${connOf(s, b).status.state}`)].join("|");
+
+let notifyWatch: Watch | null = null;
+let notifyIn: { turns: TurnRow[]; inbox: InboxItem[]; failed: FailedRow[]; runs: Record<string, Run>; repos: Repo[]; conns: string } | null = null;
+
+/** A system notification whose click brings this window up on the repo. */
+function showNote(n: Notice): void {
+  const shown = new Notification(n.title, { body: n.body, tag: n.key });
+  shown.onclick = () => {
+    window.focus();
+    const s = useStore.getState();
+    if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
+    shown.close();
+  };
+}
+
+// System notifications and the title's count (notify.ts). Every window
+// counts in its title; only the grove notifies, so a solo or shell window
+// open beside it never shows the same one twice. The snapshot follows along
+// with notify off too, so turning it on never bursts.
+useStore.subscribe((s) => {
+  setTitleCount(s.settings.notify ? waitingCount(s) : 0);
+  if (dockless()) return;
+  const turns = turnItems(s);
+  const inbox = inboxItems(s);
+  const failed = failedItems(s);
+  const conns = connSign(s);
+  const n = notifyIn;
+  if (n && n.turns === turns && n.inbox === inbox && n.failed === failed && n.runs === s.runs && n.repos === s.repos && n.conns === conns) return;
+  notifyIn = { turns, inbox, failed, runs: s.runs, repos: s.repos, conns };
+  const names = new Map(s.repos.map((r) => [r.id, r.name]));
+  const next = snapshot({ turns, inbox, failed, runs: Object.values(s.runs) }, (id) => names.get(id) ?? "");
+  const step = watch(notifyWatch, next, conns, Date.now());
+  notifyWatch = step.watch;
+  if (step.notes.length === 0 || !s.settings.notify || typeof Notification === "undefined") return;
+  if (Notification.permission !== "granted" || !document.hidden) return;
+  for (const note of step.notes) showNote(note);
+});
 
 /** The card a checkout is on, whichever checkout of it. */
 export function cardOf(s: CanopyState, repoId: string): RepoCard | undefined {

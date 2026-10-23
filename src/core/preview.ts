@@ -6,11 +6,13 @@
  * `/@vite/client`, `/_next/...`) and its HMR websocket reach it unchanged,
  * which a path prefix under canopy's own origin would break, and the app
  * cannot touch canopy's API. A slot is handed out by `POST /api/preview`,
- * behind canopy's origin gate, and dials only loopback.
+ * behind canopy's origin gate, and dials only loopback. Each framed page
+ * also gets the design mode's element picker (`pickscript.ts`).
  *
  * The header rewriting, the port range and the slot pool are pure and
  * tested; `PreviewProxy` is Bun.
  */
+import { PICK_PATH, PICK_SCRIPT, PICK_TAG } from "./pickscript";
 import { publicPreviewOrigin } from "./previewPublic";
 import type { Server, ServerWebSocket } from "bun";
 
@@ -146,6 +148,40 @@ export function previewHostOk(hostname: string, open: boolean, tailnet: (h: stri
   return open && tailnet(hostname);
 }
 
+/**
+ * Whether a response gets the picker's tag: a page (GET, 200, HTML) loaded
+ * as a document or a frame, never a fetch or an HMR fragment, which a
+ * script tag would corrupt. `dest` is `Sec-Fetch-Dest`, absent from old
+ * browsers and tools.
+ */
+export function injectable(method: string, status: number, contentType: string | null, dest: string | null): boolean {
+  if (method !== "GET" || status !== 200) return false;
+  if (!/^text\/html\b/i.test((contentType ?? "").trim())) return false;
+  return dest === null || dest === "" || dest === "document" || dest === "iframe";
+}
+
+/** the picker's tag at the end of the page's head, else its body, else the
+ *  document itself, since a parser adds no head or body a page lacks */
+export function withPicker(res: Response): Response {
+  let done = false;
+  const put = {
+    element(el: HTMLRewriterTypes.Element) {
+      if (done) return;
+      done = true;
+      el.append(PICK_TAG, { html: true });
+    },
+  };
+  return new HTMLRewriter()
+    .on("head", put)
+    .on("body", put)
+    .onDocument({
+      end(end) {
+        if (!done) end.append(PICK_TAG, { html: true });
+      },
+    })
+    .transform(res);
+}
+
 interface WsData {
   url: string;
   protocols: string[];
@@ -258,6 +294,16 @@ export class PreviewProxy {
     const pub = this.opts.publicTemplate ? publicPreviewOrigin(this.opts.publicTemplate, slot) : null;
     const onPublic = pub !== null && url.hostname.toLowerCase() === new URL(pub).hostname;
     if (!onPublic && !this.opts.hostOk(url.hostname)) return new Response("Foreign host", { status: 403 });
+    // the picker is canopy's, so it answers even with nothing on the slot
+    if (url.pathname === PICK_PATH) {
+      return new Response(PICK_SCRIPT, {
+        headers: {
+          "content-type": "text/javascript; charset=utf-8",
+          "cache-control": "no-cache",
+          "x-content-type-options": "nosniff",
+        },
+      });
+    }
     const port = this.map.get(slot);
     if (port === undefined) return new Response("Nothing is previewed on this port; pick a port in canopy's panel.", { status: 404 });
     const previewOrigin = onPublic && pub ? pub : url.origin;
@@ -310,11 +356,14 @@ export class PreviewProxy {
         return down(port);
       }
     }
-    return new Response(res.body, {
+    const out = new Response(res.body, {
       status: res.status,
       statusText: res.statusText,
       headers: downstreamHeaders(res.headers, port, previewOrigin),
     });
+    return injectable(req.method, res.status, res.headers.get("content-type"), req.headers.get("sec-fetch-dest"))
+      ? withPicker(out)
+      : out;
   }
 
   private wsOpen(ws: ServerWebSocket<WsData>) {

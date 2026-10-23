@@ -2,6 +2,8 @@ import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } fro
 import type { CostReport } from "../../src/core/costs";
 import type { VoiceEngine } from "./voicelive";
 import type {
+  AwakeInfo,
+  AwakeMode,
   HealthCheck,
   KitAction,
   KitApplyResult,
@@ -562,6 +564,9 @@ export const api = {
   /** turns the recording on or off for this backend */
   setKeeping: (on: boolean, b: string = homeName()) =>
     req<{ keeping: boolean }>(b, "/api/keep", { method: "POST", body: JSON.stringify({ on }) }),
+  /** keep awake on one backend: its mode and whether it holds the machine now */
+  awake: (b: string = homeName()) => req<AwakeInfo>(b, "/api/awake"),
+  setAwake: (mode: AwakeMode, b: string = homeName()) => req<AwakeInfo>(b, "/api/awake", { method: "POST", body: JSON.stringify({ mode }) }),
   /** tailchan: the broker's view as the UI's handle, or why it is off */
   tailchan: () => req<TailchanInfo>(homeName(), "/api/tailchan"),
   /** the agent registry, the home backend's alone; a 503 without a broker */

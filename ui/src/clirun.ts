@@ -12,7 +12,7 @@ import { helperFor, takeWords, useStore } from "./store";
 import { CLI_PANEL, ENTRIES, findRepo, parseCommand, quoteWord, tokenize, underDir, type CliEntry, type Command } from "./cli";
 import { SPEC_TONE, SPEC_WORDS, specLines, treeLines, type Line, type Seg, type Tone } from "../../src/core/treelines";
 import { versionLine } from "../../src/core/version";
-import type { Repo } from "../../src/core/types";
+import { awakeWords, type Repo } from "../../src/core/types";
 
 export interface Outcome {
   ok: boolean;
@@ -312,6 +312,10 @@ async function runInner(cmd: Command): Promise<Outcome> {
     case "sweep": {
       st.openSweep();
       return went("the sweep is open");
+    }
+    case "awake": {
+      const info = cmd.mode ? await api.setAwake(cmd.mode) : await api.awake();
+      return ok([{ text: "keep awake ", tone: "bold" }, { text: `${info.mode}, ${awakeWords(info)}` }]);
     }
     case "terminal":
       return { ok: false, lines: [say(cmd.why, "lichen")] };

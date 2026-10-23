@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { when } from "../util";
 import { DiffView } from "./DiffView";
+import { takesNotes } from "../reviewnotes";
 import type { CommitDetail, CommitFile, Repo } from "../../../src/core/types";
 
 /** A commit never changes once it has a hash, so one read serves the whole
@@ -250,7 +251,9 @@ function FileLine({
         </span>
       </div>
       {error && <p className="panel-error rev-error">{error}</p>}
-      {open && diff !== null && <DiffView diff={diff} />}
+      {open && diff !== null && (
+        <DiffView diff={diff} note={takesNotes(repo) ? { repoId: repo.id, path: file.path, where: commit } : undefined} />
+      )}
     </li>
   );
 }

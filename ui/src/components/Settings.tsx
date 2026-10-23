@@ -16,7 +16,9 @@ import { screenNow, screenWord, windowNow, windowWord } from "../screens";
 import { GearIcon } from "./Gear";
 import { ScreenLayoutsRow } from "./ScreenLayouts";
 import { RangerRow } from "./Ranger";
+import { AwakeRow } from "./AwakeRow";
 import { SweepRow } from "./Sweep";
+import { NotifyRow } from "./NotifyRow";
 import type { Palette } from "../settings";
 
 const LEVEL = [
@@ -115,7 +117,7 @@ const KEYS = [
 
 /** A tab down Settings' rail. The first group holds this browser's own
  *  choices, the second the backend the picker names. */
-type Tab = "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "ranger" | "sweep" | "about";
+type Tab = "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "awake" | "ranger" | "sweep" | "about";
 
 const BROWSER_TABS: readonly { tab: Tab; label: string }[] = [
   { tab: "look", label: "look" },
@@ -129,6 +131,7 @@ const BACKEND_TABS: readonly { tab: Tab; label: string }[] = [
   { tab: "desktop", label: "desktop" },
   { tab: "signed", label: "signed in" },
   { tab: "shells", label: "shell history" },
+  { tab: "awake", label: "keep awake" },
   { tab: "ranger", label: "ranger" },
   { tab: "sweep", label: "sweep" },
   { tab: "about", label: "about" },
@@ -177,6 +180,7 @@ export function SettingsMenu() {
   const setKeeping = useStore((s) => s.setKeeping);
   const auth = useStore((s) => s.authByBackend[scope]);
   const ranger = useStore((s) => s.rangers[scope]);
+  const awake = useStore((s) => s.awake[scope]);
   // the sweep is the home backend's alone: every route of it goes there
   const sweep = useStore((s) => (scope === s.home ? s.sweep : null));
   const [open, setOpen] = useState(false);
@@ -230,6 +234,7 @@ export function SettingsMenu() {
         desktop: caps.via === "backend" ? scope : (caps.helper?.name ?? "none"),
         signed: auth?.mode,
         shells: keeping ? "kept" : "off",
+        awake: awake?.mode,
         ranger: ranger && (ranger.settings.on ? ranger.state : "off"),
         sweep: sweep ? (sweep.settings.on ? sweep.settings.cron : "off") : undefined,
         about: about?.version,
@@ -425,6 +430,12 @@ export function SettingsMenu() {
           node: <AnswerKeyRow />,
         },
         {
+          tab: "device",
+          key: "notify",
+          words: "notifications notify alert system desktop title count waiting hidden tab permission",
+          node: <NotifyRow />,
+        },
+        {
           tab: "keys",
           key: "keys",
           words: `keys keyboard shortcuts ${KEYS.map(([key, what]) => `${key} ${what}`).join(" ")}`,
@@ -502,6 +513,12 @@ export function SettingsMenu() {
               </p>
             </section>
           ),
+        },
+        {
+          tab: "awake",
+          key: "awake",
+          words: "keep awake sleep caffeinate inhibit idle power lid working agents",
+          node: <AwakeRow backend={scope} />,
         },
         {
           tab: "ranger",

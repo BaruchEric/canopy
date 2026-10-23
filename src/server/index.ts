@@ -2,6 +2,8 @@ import { parseAnswer } from "./answers";
 import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
+import { Awake, workingCount } from "../core/awake";
+import { resolveIssueNote } from "../core/issue";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
@@ -74,7 +76,7 @@ import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, i
 import { endAgent, MOVE_MAX, MoveError, moveFileList, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
-import { Launcher, LauncherError } from "../core/launcher";
+import { githubRemote, Launcher, LauncherError } from "../core/launcher";
 import {
   agentLine,
   availableHarnesses,
@@ -115,6 +117,7 @@ import {
   removeWorkspace,
   setArchived,
   setFavorite,
+  setAwake,
   setKeepShells,
   setLaunch,
   setProfile,
@@ -187,7 +190,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES } from "../core/types";
+import { AWAKE_MODES, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -407,6 +410,8 @@ interface ServerState {
   /** the agent registry: this machine's scan posted to the broker, and the
    *  broker's cards followed for `/api/registry` */
   registry: RegistryHub;
+  /** keep awake: the hold on this machine's idle sleep (core/awake) */
+  awake: Awake;
   /** asks for a human: the broker's open asks followed for the inbox,
    *  answers, presence and guards through the answer token */
   asks: AskHub;
@@ -1057,8 +1062,21 @@ async function startRepoRun(
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
-  if (onBranch) return startBranchRun(state, repo, action, note, agent, by, pr);
+  if (onBranch) return startBranchRun(state, repo, action, await issueNoteFor(repo, note), agent, by, pr);
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
+}
+
+/** A branch run's note when it opens with `#123` or an issue's URL: the
+ *  GitHub issue, read with gh off the repo's GitHub remote (core/issue).
+ *  Only here, after every refusal, so a run that cannot start never calls
+ *  gh; a chat in the checkout that opens with `#12` keeps its words. */
+async function issueNoteFor(repo: Repo, note: string): Promise<string> {
+  const got = await resolveIssueNote(note, {
+    slug: async () => (await githubRemote(repo))?.slug ?? null,
+    gh: (args) => exec(["gh", ...args], { cwd: repo.path, timeoutMs: 30_000 }),
+  });
+  if ("error" in got) throw new HttpError(400, got.error);
+  return got.note;
 }
 
 /** A run on a branch of its own: a worktree under the config dir on
@@ -2030,6 +2048,12 @@ function broadcast(state: ServerState, event: ServerEvent): void {
       state.streams.delete(c);
     }
   }
+}
+
+/** Tells keep awake how many agents work on this machine: this backend's
+ *  runs, and the registry's cards that are this machine's (core/awake). */
+function recountAwake(state: ServerState): void {
+  state.awake.setWorking(workingCount(state.runner.list(), state.registry.list(), state.backendName, hostname()));
 }
 
 const deviceList = (state: ServerState): Device[] => devicesOf(state.streams.values());
@@ -3248,6 +3272,16 @@ async function handleApi(
     if (typeof b.term !== "string") return json({ error: "term must be a shell name" }, 400);
     const size = termSize(typeof b.cols === "number" ? b.cols : 80, typeof b.rows === "number" ? b.rows : 24);
     return json(await restoreTerm(state, b.term, size, b.resume === true));
+  }
+  if (path === "/api/awake" && method === "GET") return json(state.awake.status());
+  if (path === "/api/awake" && method === "POST") {
+    const b = (await req.json()) as { mode?: unknown };
+    const mode = AWAKE_MODES.find((m) => m === b.mode);
+    if (!mode) return json({ error: `mode must be one of ${AWAKE_MODES.join(", ")}` }, 400);
+    // saved first, through the config queue, so a restart comes back in it
+    await setAwake(mode);
+    state.awake.setMode(mode);
+    return json(state.awake.status());
   }
   if (path === "/api/keep" && method === "POST") {
     const b = (await req.json()) as { on?: unknown };
@@ -4663,6 +4697,7 @@ export async function startServer(opts: {
       state.prs.onRun(run);
       state.triggers.onRun(run);
       state.coordinator.onRun(run);
+      recountAwake(state);
       // a coordinator's token and folder live exactly as long as its run
       if (run.action === "coordinate" && !isRunActive(run)) {
         state.callers.dropRun(run.id).catch(() => {});
@@ -4671,6 +4706,7 @@ export async function startServer(opts: {
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
+      recountAwake(state);
       state.chan.forget(id);
       state.callers.dropRun(id).catch(() => {});
       void dropCoordFolder(id);
@@ -4989,8 +5025,13 @@ export async function startServer(opts: {
     kept: [],
     keeping: null,
     preview: null,
+    // armed by start() below, outside tests: a test server holds nothing
+    awake: new Awake(cfg.awake, { onChange: (awake) => broadcast(state, { type: "awake", awake }) }),
     registry: new RegistryHub(chanCfg, {
-      broadcast: (ev) => broadcast(state, ev),
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        if (ev.type === "registry") recountAwake(state);
+      },
       onStream: (up) => state.health.report("canopy:registry", streamResult(up)),
       repos: () => state.result.repos,
       scanEvery: opts.registry?.scanEvery ?? (scanOff ? 0 : SCAN_EVERY),
@@ -5801,6 +5842,8 @@ export async function startServer(opts: {
   state.asks.start();
   // a test server pulls nothing and asks no socket
   if (process.env["NODE_ENV"] !== "test") state.secrets.start();
+  // a test server never holds the machine awake, whatever config it finds
+  if (process.env["NODE_ENV"] !== "test") state.awake.start();
   // after the bind, so its session gets this server's CANOPY_API
   void state.ranger.start().catch((err) => console.error("canopy: ranger", err));
   const keepTimer = setInterval(() => void keepPass(state), KEEP_EVERY);
@@ -5821,6 +5864,9 @@ export async function startServer(opts: {
 
   const stopLibrary = () => library.stop();
   process.on("exit", stopLibrary);
+  // the hold watches this pid too; this only lets go sooner
+  const stopAwake = () => state.awake.stop();
+  process.on("exit", stopAwake);
   return {
     port: server.port ?? port,
     coordPort: coordServer?.port ?? null,
@@ -5877,8 +5923,10 @@ export async function startServer(opts: {
         dropHelper(state, name, h.ws);
       }
       library.stop();
+      state.awake.stop();
       state.preview?.stop();
       process.off("exit", stopLibrary);
+      process.off("exit", stopAwake);
       for (const rt of state.sources) rt.watcher?.close();
       coordServer?.stop(true);
       server.stop(true);

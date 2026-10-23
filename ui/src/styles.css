@@ -3594,6 +3594,116 @@ body.resizing-rows {
   color: var(--ink-dim);
 }
 
+/* review notes (DiffView with a note prop): a gutter button on each
+   numbered line, quiet until the line is hovered or the button focused
+   (opacity, not visibility, so Tab still reaches it), and the notes under
+   their line on a sky rail, the colour of the strip that sends them */
+.dl-gut {
+  display: inline-block;
+  width: 1.6em;
+  margin-right: 4px;
+  text-align: center;
+  color: var(--ink-faint);
+  border-radius: var(--r);
+  opacity: 0;
+}
+/* a copy of the diff takes the code alone, not the glyphs and notes */
+.dl-gut,
+.dl-note,
+.dl-gone,
+.dl-edit-row {
+  user-select: none;
+}
+.dl:hover > button.dl-gut,
+button.dl-gut:focus-visible,
+button.dl-gut[aria-expanded="true"],
+button.dl-gut.has {
+  opacity: 1;
+}
+button.dl-gut:hover {
+  color: var(--sky);
+  background: var(--wash);
+}
+button.dl-gut.has {
+  color: var(--sky);
+}
+/* no hover on touch, so the buttons show faintly all the time */
+@media (hover: none) {
+  button.dl-gut {
+    opacity: 0.5;
+  }
+}
+.dl-note,
+.dl-edit {
+  display: block;
+  margin: 2px 0 6px calc(1.6em + 4px);
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--sky);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink);
+}
+.dl-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dl-note-text {
+  flex: 1;
+  min-width: 0;
+}
+.dl-note-at {
+  display: block;
+  color: var(--ink-faint);
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dl-edit textarea {
+  display: block;
+  width: 100%;
+  min-width: 16em;
+  padding: 6px 8px;
+  background: var(--bark1);
+  resize: vertical;
+}
+.dl-edit-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dl-hint {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.dl-gone {
+  display: block;
+  margin-top: 8px;
+}
+.dl-gone-head {
+  display: block;
+  white-space: normal;
+  color: var(--ink-faint);
+}
+/* the repo panel's strip of notes waiting to go to the agent */
+.review-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 14px 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--sky);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.review-strip-n {
+  color: var(--sky);
+  font-weight: 700;
+}
+
 /* commit box */
 .commit-box {
   margin: 10px 14px 0;
@@ -4617,6 +4727,23 @@ body.resizing-rows {
   margin-top: 8px;
   font-size: 12px;
   color: var(--ink-dim);
+}
+/* under the note: how to start from a GitHub issue, and the issue it names */
+.plan-issue {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: -4px 0 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.plan-issue-ref {
+  padding: 0 6px;
+  border: 1px solid var(--moss-pale);
+  border-radius: 3px;
+  color: var(--moss-deep);
+  line-height: 17px;
 }
 .run-branch {
   display: flex;
@@ -7959,6 +8086,70 @@ body:has(.focus-grip.se.dragging) {
   background: #fff;
   font-size: 13px;
   pointer-events: none;
+}
+/* design mode: the picker's hint and the note form, over the frame's top
+   left corner (the bench's float holds the bottom right) */
+.preview-pick {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 3;
+  max-width: min(28rem, calc(100% - 20px));
+  padding: 6px 8px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--bark1);
+  color: var(--ink);
+  box-shadow: 0 6px 18px -8px var(--float-shadow);
+  font-size: 12px;
+}
+.preview-pick-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+.preview-pick-line.bad {
+  color: var(--rust);
+}
+.preview-pick-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(28rem, calc(100vw - 60px));
+  max-width: 100%;
+}
+.preview-pick-sel {
+  font-family: var(--mono);
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-pick-snip {
+  margin: 0;
+  max-height: 5lh;
+  overflow: auto;
+  padding: 4px 6px;
+  border-radius: var(--r);
+  background: var(--bark0);
+  color: var(--ink-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.preview-pick-form textarea {
+  width: 100%;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.preview-pick-form textarea::placeholder {
+  color: var(--ink-faint);
+}
+.preview-pick-row {
+  display: flex;
+  gap: 6px;
 }
 .preview-frame {
   display: block;

@@ -196,6 +196,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "secrets":
     // pair ids are the backend's own and name no repo
     case "auth":
+    // keep awake names no repo; the store files it under its backend
+    case "awake":
       return ev;
   }
 }

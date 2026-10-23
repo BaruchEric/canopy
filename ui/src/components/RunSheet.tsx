@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
+import { parseIssueRef } from "../../../src/core/issue";
 import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
@@ -211,6 +212,9 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // FR-011: a PR in place of the landing queue, so only on a branch
   const [asPr, setAsPr] = useState(false);
   const pr = branchable && onBranch && asPr;
+  // a branch run whose note opens with #123 or an issue URL starts from
+  // that GitHub issue; the backend reads it with gh (core/issue)
+  const issue = branchable && onBranch ? parseIssueRef(note) : null;
 
   const go = async () => {
     if (!ready) return;
@@ -267,6 +271,17 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           }}
           aria-label={spec.noteRequired ? `What ${name} should do` : `Note for ${name}`}
         />
+        {branchable && onBranch && (
+          <p className="plan-issue">
+            {issue && (
+              <span className="plan-issue-ref" title="The run starts from this issue's title, body and latest comments, read with gh on the backend">
+                from issue #{issue.number}
+                {issue.slug && ` in ${issue.slug}`}
+              </span>
+            )}
+            <span>#123 or an issue URL at the start of the note starts from that GitHub issue</span>
+          </p>
+        )}
         {branchable && (
           <label className="plan-branch" title="The agent works in a worktree of its own on a run/ branch and commits there; the landing queue lands it on main once you say land">
             <input type="checkbox" checked={onBranch} onChange={(e) => setOnBranch(e.target.checked)} />

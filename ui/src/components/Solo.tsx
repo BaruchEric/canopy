@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { tellPanes } from "../panes";
 import { groveUrl, parseRoute, soloUrl } from "../routes";
 import { SOLO, idText, useStore } from "../store";
+import { setTitleBase } from "../title";
 import { SECTION_WORD, type SectionKey } from "../surface";
 import { PanelSection, RepoPanel } from "./Dock";
 import { SectionWindow } from "./Surface";
@@ -37,9 +38,9 @@ export function Solo({ id }: { id: string }) {
   const max = Math.max(SOLO.min, Math.min(SOLO.max, windowWidth));
 
   useEffect(() => {
-    document.title = name ? `${name} · canopy` : "canopy";
+    setTitleBase(name ? `${name} · canopy` : "canopy");
     return () => {
-      document.title = "canopy";
+      setTitleBase("canopy");
     };
   }, [name]);
 
@@ -121,9 +122,9 @@ export function SectionSolo({ id, section }: { id: string; section: SectionKey }
   const waiting = useWaitingFor(id, repo !== undefined);
 
   useEffect(() => {
-    document.title = name ? `${name} · ${word} · canopy` : "canopy";
+    setTitleBase(name ? `${name} · ${word} · canopy` : "canopy");
     return () => {
-      document.title = "canopy";
+      setTitleBase("canopy");
     };
   }, [name, word]);
 

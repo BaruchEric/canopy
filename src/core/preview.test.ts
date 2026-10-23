@@ -5,6 +5,7 @@ import {
   down,
   downstreamHeaders,
   dropFrameAncestors,
+  injectable,
   parsePortRange,
   pickSlot,
   previewHostOk,
@@ -12,6 +13,7 @@ import {
   rewriteLocation,
   upstreamHeaders,
 } from "./preview";
+import { PICK_PATH, PICK_SCRIPT, PICK_TAG } from "./pickscript";
 
 test("parsePortRange", () => {
   expect(parsePortRange(undefined)).toEqual([7860, 7861, 7862, 7863, 7864, 7865, 7866, 7867, 7868, 7869]);
@@ -120,6 +122,104 @@ test("previewHostOk", () => {
   expect(previewHostOk("evil.example", true, tail)).toBe(false);
 });
 
+test("injectable: GET 200 HTML loaded as a document or frame", () => {
+  expect(injectable("GET", 200, "text/html; charset=utf-8", null)).toBe(true);
+  expect(injectable("GET", 200, "TEXT/HTML", "document")).toBe(true);
+  expect(injectable("GET", 200, "text/html", "iframe")).toBe(true);
+  expect(injectable("GET", 200, "text/html", "empty")).toBe(false);
+  expect(injectable("GET", 200, "text/html", "script")).toBe(false);
+  expect(injectable("GET", 404, "text/html", null)).toBe(false);
+  expect(injectable("HEAD", 200, "text/html", null)).toBe(false);
+  expect(injectable("GET", 200, "application/json", null)).toBe(false);
+  expect(injectable("GET", 200, "text/htmlx", null)).toBe(false);
+  expect(injectable("GET", 200, null, null)).toBe(false);
+});
+
+describe("the picker script", () => {
+  type Listener = (e: unknown) => void;
+  // the script run against a stand-in window, framed by `parent` or not
+  function load(framed: boolean) {
+    const listeners = new Map<string, Listener[]>();
+    const sent: { msg: unknown; origin: string }[] = [];
+    const parent = { postMessage: (msg: unknown, origin: string) => void sent.push({ msg, origin }) };
+    const win: Record<string, unknown> = {
+      addEventListener: (t: string, f: Listener) => listeners.set(t, [...(listeners.get(t) ?? []), f]),
+      removeEventListener: (t: string, f: Listener) => listeners.set(t, (listeners.get(t) ?? []).filter((g) => g !== f)),
+      getComputedStyle: () => ({ getPropertyValue: (p: string) => (p === "color" ? "red" : "") }),
+    };
+    win.parent = framed ? parent : win;
+    const doc = { body: { appendChild() {} }, documentElement: {}, createElement: () => ({ style: {}, setAttribute() {} }) };
+    new Function("window", "document", "location", "CSS", PICK_SCRIPT)(win, doc, { pathname: "/a", search: "?b=1" }, undefined);
+    const fire = (type: string, e: unknown) => {
+      for (const f of listeners.get(type) ?? []) f(e);
+    };
+    const count = (type: string) => listeners.get(type)?.length ?? 0;
+    return { sent, parent, fire, count };
+  }
+  const canopy = "http://canopy:7850";
+  const enable = { canopy: "pick", on: true };
+  const ev = (more: object) => ({ preventDefault() {}, stopPropagation() {}, ...more });
+  const h1 = {
+    nodeType: 1,
+    tagName: "H1",
+    id: "",
+    className: "title big",
+    parentElement: null,
+    outerHTML: "<h1 class=\"title big\">Hello</h1>",
+    innerText: " Hello ",
+    getBoundingClientRect: () => ({ left: 1.4, top: 2, width: 30, height: 4.6 }),
+  };
+
+  test("is inert in a page that is not framed", () => {
+    expect(load(false).count("message")).toBe(0);
+  });
+
+  test("answers only its parent, and only to the origin that turned it on", () => {
+    const p = load(true);
+    p.fire("message", { source: {}, origin: canopy, data: enable });
+    expect(p.sent).toEqual([]);
+    expect(p.count("click")).toBe(0);
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    expect(p.sent).toEqual([{ msg: { canopy: "pick-ready" }, origin: canopy }]);
+    expect(p.count("click")).toBe(1);
+    // every enable is acked, already on or not, and nothing doubles
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    expect(p.sent).toHaveLength(2);
+    expect(p.count("click")).toBe(1);
+  });
+
+  test("a click reports the element and stops", () => {
+    const p = load(true);
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    p.fire("click", ev({ target: h1 }));
+    expect(p.sent[1]).toEqual({
+      origin: canopy,
+      msg: {
+        canopy: "picked",
+        selector: "h1.title.big",
+        html: h1.outerHTML,
+        text: "Hello",
+        path: "/a?b=1",
+        styles: expect.objectContaining({ color: "red" }),
+        rect: { x: 1, y: 2, width: 30, height: 5 },
+      },
+    });
+    expect(p.count("click")).toBe(0);
+    expect(p.count("mousemove")).toBe(0);
+  });
+
+  test("Esc stops it and tells the parent; the parent can stop it too", () => {
+    const p = load(true);
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    p.fire("keydown", ev({ key: "Escape" }));
+    expect(p.sent[1]).toEqual({ msg: { canopy: "pick-off" }, origin: canopy });
+    expect(p.count("keydown")).toBe(0);
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "pick", on: false } });
+    expect(p.count("click")).toBe(0);
+  });
+});
+
 describe("PreviewProxy against a dev server", () => {
   // a stand-in dev server: a page, a redirect, a framing ban, a POST echo,
   // the Host it was asked with, and a websocket that echoes under a protocol
@@ -136,6 +236,11 @@ describe("PreviewProxy against a dev server", () => {
       }
       if (url.pathname === "/go") return Response.redirect(`http://localhost:${srv.port}/landed`, 302);
       if (url.pathname === "/echo") return new Response(req.body);
+      const html = { "content-type": "text/html; charset=utf-8" };
+      if (url.pathname === "/page") return new Response("<html><head><title>t</title></head><body><h1>hi</h1></body></html>", { headers: html });
+      if (url.pathname === "/bare") return new Response("<h1>hi</h1>", { headers: html });
+      if (url.pathname === "/missing") return new Response("<html><head></head><body>no</body></html>", { status: 404, headers: html });
+      if (url.pathname === "/api") return Response.json({ html: "<head></head>" });
       return new Response(`host=${req.headers.get("host")} path=${url.pathname}`, {
         headers: { "x-frame-options": "DENY" },
       });
@@ -200,6 +305,49 @@ describe("PreviewProxy against a dev server", () => {
     expect(ws.protocol).toBe("vite-hmr");
     expect(got).toBe("vite-hmr:ping");
     ws.close();
+  });
+
+  test("a page loaded as a document or frame gets the picker, in its head", async () => {
+    const plain = await (await fetch(`${base}/page`)).text();
+    expect(plain).toBe(`<html><head><title>t</title>${PICK_TAG}</head><body><h1>hi</h1></body></html>`);
+    const framed = await (await fetch(`${base}/page`, { headers: { "sec-fetch-dest": "iframe" } })).text();
+    expect(framed).toContain(PICK_TAG);
+    // a page without a head or body still gets it, at its end
+    expect(await (await fetch(`${base}/bare`)).text()).toBe(`<h1>hi</h1>${PICK_TAG}`);
+  });
+
+  test("JSON, fragments and non-200 pages pass untouched", async () => {
+    expect(await (await fetch(`${base}/api`)).json()).toEqual({ html: "<head></head>" });
+    const frag = await (await fetch(`${base}/page`, { headers: { "sec-fetch-dest": "empty" } })).text();
+    expect(frag).not.toContain(PICK_PATH);
+    const missing = await fetch(`${base}/missing`);
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).not.toContain(PICK_PATH);
+    const post = await (await fetch(`${base}/page`, { method: "POST", body: "x" })).text();
+    expect(post).not.toContain(PICK_PATH);
+  });
+
+  test("the picker is served ahead of the dev server, behind the host check", async () => {
+    const r = await fetch(`${base}${PICK_PATH}`);
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toContain("javascript");
+    expect(await r.text()).toBe(PICK_SCRIPT);
+    expect((await fetch(`${base}${PICK_PATH}`, { headers: { host: `evil.example:${slotPort}` } })).status).toBe(403);
+  });
+
+  test("the picker answers on a slot with no port mapped", async () => {
+    const slot = slotPort + 1;
+    const lone = new PreviewProxy([slot], { bind: "127.0.0.1", own: () => 1, hostOk: (h) => h === "127.0.0.1" });
+    try {
+      expect(await lone.serve(devPort)).toBe(slot);
+      (lone as unknown as { map: Map<number, number> }).map.clear();
+      expect((await fetch(`http://127.0.0.1:${slot}/`)).status).toBe(404);
+      const r = await fetch(`http://127.0.0.1:${slot}${PICK_PATH}`);
+      expect(r.status).toBe(200);
+      expect(await r.text()).toBe(PICK_SCRIPT);
+    } finally {
+      lone.stop();
+    }
   });
 
   test("nothing listening is a page, not a hang", async () => {

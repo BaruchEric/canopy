@@ -20,9 +20,11 @@ import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } fr
 import { normalizeRanger } from "./ranger";
 import { normalizeSweep } from "./sweep";
 import {
+  AWAKE_MODES,
   DEFAULT_LAUNCH,
   LAUNCH_SOURCE,
   type AgentPick,
+  type AwakeMode,
   type AgentRole,
   type AgentRoutes,
   type AgentSettings,
@@ -72,6 +74,7 @@ const defaults = (): CanopyConfig => ({
   extendOwners: [],
   ranger: normalizeRanger(undefined),
   sweep: normalizeSweep(undefined),
+  awake: "off",
 });
 
 /** The launch settings the same way: only repos that differ from the defaults. */
@@ -191,6 +194,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ),
     ranger: normalizeRanger(cfg.ranger),
     sweep: normalizeSweep(cfg.sweep),
+    awake: AWAKE_MODES.includes(cfg.awake) ? cfg.awake : base.awake,
   };
 }
 
@@ -439,6 +443,13 @@ export async function setRanger(settings: RangerSettings): Promise<void> {
 export async function setSweep(settings: SweepSettings): Promise<void> {
   await withConfig((cfg) => {
     cfg.sweep = normalizeSweep(settings);
+  });
+}
+
+/** Stores when canopy keeps this machine awake (core/awake). */
+export async function setAwake(mode: AwakeMode): Promise<void> {
+  await withConfig((cfg) => {
+    cfg.awake = mode;
   });
 }
 

@@ -541,6 +541,8 @@ export function describeEvent(
     // the kit has its own page
     case "kit":
     case "secrets":
+    // keep awake is a setting; its row in Settings says where it stands
+    case "awake":
     // the repo's landing section and the inbox say where the queue stands
     case "landing":
     case "prs":

@@ -644,6 +644,39 @@ export interface CanopyConfig {
   ranger: RangerSettings;
   /** the sweep: what went idle and is offered for closing; its schedule is off by default */
   sweep: SweepSettings;
+  /** whether canopy keeps this machine from idle sleep: never, always, or
+   *  while an agent here works (core/awake); off by default */
+  awake: AwakeMode;
+}
+
+/** When canopy holds the machine awake: never, always, or while an agent on
+ *  this machine is working. */
+export type AwakeMode = "off" | "always" | "working";
+export const AWAKE_MODES: readonly AwakeMode[] = ["off", "always", "working"];
+
+/** `GET /api/awake` and the `awake` event: the mode, whether a hold is in
+ *  place right now, and whether this backend can hold one at all. */
+export interface AwakeInfo {
+  mode: AwakeMode;
+  /** a caffeinate or systemd-inhibit child is alive */
+  holding: boolean;
+  /** this machine can hold itself awake: a Mac or Linux host with the
+   *  binary, not a container */
+  available: boolean;
+  /** why it cannot, or why the last hold ended; null when all is well */
+  why: string | null;
+  /** agents working on this machine, as last counted */
+  working: number;
+}
+
+/** Where keep awake stands in a few words, for the CLI and Settings:
+ *  "holding the machine awake", "not holding, 0 agents working",
+ *  "unavailable: running in a container, …". */
+export function awakeWords(info: AwakeInfo): string {
+  if (!info.available) return `unavailable: ${info.why ?? "this machine cannot hold itself awake"}`;
+  const agents = `${info.working} agent${info.working === 1 ? "" : "s"} working`;
+  const hold = info.holding ? "holding the machine awake" : info.mode === "working" ? `not holding, ${agents}` : "not holding";
+  return `${hold}${info.why ? ` (${info.why})` : ""}`;
 }
 
 /* ---------- the launcher: release builds and pull requests, run here ---------- */
@@ -1569,7 +1602,9 @@ export type ServerEvent =
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
   | { type: "kit"; kit: KitInfo }
-  | { type: "secrets"; info: SecretsInfo };
+  | { type: "secrets"; info: SecretsInfo }
+  /** keep awake, whole, whenever its mode or hold changes (core/awake) */
+  | { type: "awake"; awake: AwakeInfo };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 

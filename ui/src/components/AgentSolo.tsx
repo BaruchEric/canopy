@@ -4,6 +4,7 @@ import { machineOf } from "../agentcards";
 import { FOCUS_PANE, PANES_CHANNEL, parsePaneMsg, type PaneMsg } from "../panes";
 import { groveUrl } from "../routes";
 import { useStore } from "../store";
+import { setTitleBase } from "../title";
 import { AgentScreen, AskHere, useAgentCard, useShellProbe } from "./AgentFocus";
 import { AgentActions, glyphOf, harnessWord, useNow } from "./Registry";
 import { Wordmark } from "./TopBar";
@@ -68,9 +69,9 @@ export function AgentSolo({ card: first, follow }: { card: string | null; follow
 
   const name = card ? agentName(card) : null;
   useEffect(() => {
-    document.title = name ? `${name} · agent · canopy` : "agent · canopy";
+    setTitleBase(name ? `${name} · agent · canopy` : "agent · canopy");
     return () => {
-      document.title = "canopy";
+      setTitleBase("canopy");
     };
   }, [name]);
 

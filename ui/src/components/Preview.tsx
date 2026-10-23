@@ -20,9 +20,38 @@ import {
   saveChoice,
   type PreviewChoice,
 } from "../preview";
+import { devUrl, pickPrompt, pickSignal, readPick, type Pick } from "../designmode";
 import type { ListeningPort, Repo } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
+
+/** how long an enable waits for the page's ack before the picker is called
+ *  blocked: a CSP without 'self' in script-src keeps the script out */
+const PICK_ACK_MS = 2000;
+const PICK_BLOCKED = "this page blocked the picker (CSP?)";
+const PICK_SAID = {
+  said: "Sent to the agent's chat.",
+  pasted: "Pasted into the agent's shell: press Enter there to send it.",
+  started: "Started a chat with the agent.",
+} as const;
+
+/** The design mode's switch, in the bar and in the bench's float. */
+function PickButton({ on, disabled, toggle }: { on: boolean; disabled?: boolean; toggle: () => void }) {
+  const word = on ? "Stop picking" : "Pick an element on the page to tell the agent about";
+  return (
+    <button
+      type="button"
+      className={`mini${on ? " on" : ""}`}
+      onClick={toggle}
+      disabled={disabled}
+      title={word}
+      aria-label={word}
+      aria-pressed={on}
+    >
+      ⌖
+    </button>
+  );
+}
 
 /** how often the port list is re-read while the section is open with
  *  nothing showing, so a dev server started in a shell turns up on its own */
@@ -109,6 +138,18 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const inBench = useStore((s) => benchIs(s.front, repo.id));
   const soloed = useStore((s) => benchSolo(s.front, repo.id) === "app");
   const soloBench = useStore((s) => s.soloBench);
+  const sendToAgent = useStore((s) => s.sendToAgent);
+  const frame = useRef<HTMLIFrameElement>(null);
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  // counts the frame's loads: a reload inside the page fires load again
+  // with the same key, and picking must be turned back on after it
+  const [loads, setLoads] = useState(0);
+  const [picking, setPicking] = useState(false);
+  const [picked, setPicked] = useState<Pick | null>(null);
+  const [pickNote, setPickNote] = useState("");
+  const [pickBusy, setPickBusy] = useState(false);
+  const [pickWarn, setPickWarn] = useState<string | null>(null);
+  const [pickStatus, setPickStatus] = useState<{ text: string; bad: boolean } | null>(null);
   useEffect(() => {
     if (!closed && !known) loadTasks(repo.id).catch(() => {});
   }, [closed, known, repo.id, loadTasks]);
@@ -181,6 +222,108 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const { mine, loose } = ports ? portsFor(ports, repo.id) : { mine: [], loose: [] };
   const quiet = quietPreview(dev);
   const summary = choice ? `:${choice.port}` : mine.length ? String(mine.length) : "";
+
+  // Design mode. The page's picker talks only to its parent and the origin
+  // that turned it on; here a message counts only from the frame itself, at
+  // the preview's origin, while picking is on. The repo is the prop's.
+  const origin = url ? new URL(url).origin : null;
+  const frameKey = url ? `${url}#${nonce}` : null;
+  const loaded = frameKey !== null && loadedAt === frameKey;
+  // the listener reads picking here, so a message never meets a stale closure
+  const pickingRef = useRef(picking);
+  useEffect(() => {
+    pickingRef.current = picking;
+  }, [picking]);
+  const ackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // each load of the frame (an HMR full reload included) starts a fresh
+  // script, so picking is turned on again, and the ack is waited for
+  useEffect(() => {
+    const w = frame.current?.contentWindow;
+    if (!picking || !loaded || !origin || !w) return;
+    w.postMessage({ canopy: "pick", on: true }, origin);
+    const t = setTimeout(() => setPickWarn(PICK_BLOCKED), PICK_ACK_MS);
+    ackTimer.current = t;
+    return () => clearTimeout(t);
+  }, [picking, loaded, loads, origin]);
+
+  useEffect(() => {
+    if (!origin) return;
+    const receive = (event: MessageEvent) => {
+      if (event.origin !== origin || event.source !== frame.current?.contentWindow || !pickingRef.current) return;
+      const signal = pickSignal(event.data);
+      if (signal === "ready") {
+        if (ackTimer.current) clearTimeout(ackTimer.current);
+        setPickWarn(null);
+        return;
+      }
+      if (signal === "off") {
+        setPicking(false);
+        return;
+      }
+      const got = readPick(event.data);
+      if (!got) return;
+      setPicking(false);
+      setPicked(got);
+      setPickNote("");
+      setPickStatus(null);
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [origin]);
+
+  // focus stays in canopy until the pick itself, so Esc is heard here too
+  useEffect(() => {
+    if (!picking) return;
+    const esc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setPicking(false);
+      setPickWarn(null);
+      if (origin) frame.current?.contentWindow?.postMessage({ canopy: "pick", on: false }, origin);
+    };
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [picking, origin]);
+
+  // a pick names a page on one dev server; another port drops it, since
+  // the prompt's address is read from the choice when it is sent
+  useEffect(() => {
+    setPicked(null);
+    setPicking(false);
+  }, [port]);
+
+  useEffect(() => {
+    if (picked) noteBox.current?.focus();
+  }, [picked]);
+
+  const togglePick = () => {
+    const next = !picking;
+    setPicking(next);
+    setPickWarn(null);
+    if (next) {
+      setPicked(null);
+      setPickStatus(null);
+    } else if (origin) {
+      frame.current?.contentWindow?.postMessage({ canopy: "pick", on: false }, origin);
+    }
+  };
+  const sendPick = async () => {
+    if (!picked || !choice || !pickNote.trim() || pickBusy) return;
+    setPickBusy(true);
+    try {
+      const how = await sendToAgent(repo.id, pickPrompt(picked, pickNote, devUrl(choice.port, choice.path)));
+      setPicked(null);
+      setPickNote("");
+      setPickStatus({ text: PICK_SAID[how], bad: false });
+    } catch (e) {
+      setPickStatus({ text: errText(e), bad: true });
+    } finally {
+      setPickBusy(false);
+    }
+  };
+  const pickLine = pickWarn
+    ? { text: pickWarn, bad: true }
+    : pickStatus ?? (picking ? { text: "Click an element on the page. Esc stops.", bad: false } : null);
 
   const go = () => {
     if (!choice) return;
@@ -308,6 +451,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   >
                     ⟳
                   </button>
+                  <PickButton on={picking} disabled={!url} toggle={togglePick} />
                   <input
                     className="preview-path"
                     aria-label="Path on the dev server"
@@ -337,15 +481,84 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   {url ? (
                     <iframe
                       key={`${url}#${nonce}`}
+                      ref={frame}
                       className="preview-frame"
                       src={url}
-                      onLoad={() => setLoadedAt(`${url}#${nonce}`)}
+                      onLoad={() => {
+                        setLoadedAt(`${url}#${nonce}`);
+                        setLoads((n) => n + 1);
+                      }}
                       title={`${repo.name} on port ${choice.port}`}
                       // its own origin already (another port); no top navigation
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
                     />
                   ) : (
                     <p className="panel-clean">Opening a preview port…</p>
+                  )}
+                  {/* over the frame, so it shows in place and in the bench
+                      alike; whatever the page sent is shown as text only */}
+                  {url && (picked || pickLine) && (
+                    <div className="preview-pick" role="region" aria-label="Design mode">
+                      {picked ? (
+                        <form
+                          className="preview-pick-form"
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            void sendPick();
+                          }}
+                        >
+                          <code className="preview-pick-sel" title={picked.selector}>
+                            {picked.selector}
+                          </code>
+                          {(picked.text || picked.html) && (
+                            <pre className="preview-pick-snip">{(picked.text || picked.html).slice(0, 240)}</pre>
+                          )}
+                          <textarea
+                            ref={noteBox}
+                            rows={3}
+                            required
+                            placeholder="what should change here"
+                            aria-label="Note for the agent about this element"
+                            value={pickNote}
+                            onChange={(e) => setPickNote(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                void sendPick();
+                              } else if (e.key === "Escape") setPicked(null);
+                            }}
+                          />
+                          <div className="preview-pick-row">
+                            <button type="submit" className="mini" disabled={!pickNote.trim() || pickBusy}>
+                              send to the agent
+                            </button>
+                            <button type="button" className="mini" onClick={() => setPicked(null)}>
+                              cancel
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        pickLine && (
+                          <p className={`preview-pick-line${pickLine.bad ? " bad" : ""}`} role="status">
+                            <span>{pickLine.text}</span>
+                            {!picking && (
+                              <button
+                                type="button"
+                                className="mini"
+                                onClick={() => {
+                                  setPickWarn(null);
+                                  setPickStatus(null);
+                                }}
+                                title="Dismiss"
+                                aria-label="Dismiss"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </p>
+                        )
+                      )}
+                    </div>
                   )}
                   {/* in the bench the frame goes edge to edge, and these few
                       controls float over its corner instead of a bar above */}
@@ -354,6 +567,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       <button type="button" className="mini" onClick={() => setNonce((n) => n + 1)} title="Reload" aria-label="Reload">
                         ⟳
                       </button>
+                      <PickButton on={picking} toggle={togglePick} />
                       {[...mine, ...loose].length > 1 && (
                         <select
                           className="preview-select"

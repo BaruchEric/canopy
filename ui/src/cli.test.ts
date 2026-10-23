@@ -72,6 +72,15 @@ describe("parseCommand", () => {
     expect(parse("spec")).toEqual({ kind: "spec-status", dir: null });
   });
 
+  test("awake reads or sets the home backend's mode", () => {
+    expect(VERBS).toContain("awake");
+    expect(parse("awake")).toEqual({ kind: "awake", mode: null });
+    expect(parse("awake status")).toEqual({ kind: "awake", mode: null });
+    expect(parse("awake working")).toEqual({ kind: "awake", mode: "working" });
+    expect(parse("awake sometimes")).toMatchObject({ kind: "error", text: "unknown mode: sometimes (use off, always, working)" });
+    expect(parse("awake off --backend x")).toMatchObject({ kind: "error" });
+  });
+
   test("machine-side commands point at a terminal, never run", () => {
     for (const l of ["peers init", "peers gate --root x", "ui", "helper", "source add --forgejo u --token f"]) {
       expect(parse(l).kind).toBe("terminal");

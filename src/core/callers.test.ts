@@ -110,6 +110,9 @@ describe("needs", () => {
     expect(needs("POST", "/api/agents/role")).toBe("admin");
     expect(needs("POST", "/api/agents/profile")).toBe("admin");
     expect(needs("POST", "/api/peers/sync")).toBe("admin");
+    // keep awake holds the machine out of sleep: never an agent's call
+    expect(needs("POST", "/api/awake")).toBe("admin");
+    expect(needs("GET", "/api/awake")).toBe("read");
     expect(needs("DELETE", "/api/sources")).toBe("admin");
     expect(needs("POST", "/api/kit/install")).toBe("admin");
     expect(needs("POST", "/api/secrets/set")).toBe("admin");
