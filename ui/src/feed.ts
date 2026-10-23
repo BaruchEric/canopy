@@ -20,6 +20,7 @@ import type {
   ServerEvent,
   SourceState,
   Sprout,
+  SweepLogEntry,
   TaskInfo,
   TermInfo,
   Workspace,
@@ -32,7 +33,7 @@ import { peerLines } from "./peers";
 import { sproutLines } from "./sprouts";
 import { taskLines } from "./tasks";
 import { agentWord, harnessOf } from "./runs";
-import { freshEntry, outcomesOf, sweepSummary } from "./sweep";
+import { outcomesOf, sweepSummary } from "./sweep";
 
 export type FeedKind =
   | "git"
@@ -105,9 +106,6 @@ export interface FeedSnapshot {
   asks?: Record<string, Ask>;
   /** the human's presence as last heard */
   presence?: Presence | null;
-  /** when the sweep's last close ran, null for none; absent while the page
-   *  has not read the sweep */
-  sweepAt?: number | null;
 }
 
 /** how many entries the feed keeps; older ones fall off the top */
@@ -379,6 +377,14 @@ function fleetLines(ev: Extract<ServerEvent, { type: "fleet" }>, prev: FeedSnaps
  * because the snapshot's other fields are what every event needs and this
  * one is not.
  */
+/** One line for a close the page has not seen (`freshEntry`), none for no
+ *  entry or one with no outcomes. */
+export function sweepLine(entry: SweepLogEntry | null, at: number): FeedLine[] {
+  const outcomes = entry ? outcomesOf(entry) : [];
+  if (!entry || outcomes.length === 0) return [];
+  return [{ at, kind: "sweep", source: "", text: `sweep ${sweepSummary(outcomes)}${entry.by === "schedule" ? " (on its schedule)" : ""}`, quiet: false }];
+}
+
 export function describeEvent(
   ev: ServerEvent,
   prev: FeedSnapshot,
@@ -520,14 +526,9 @@ export function describeEvent(
     case "incubator":
     case "incubator-gone":
       return sproutLines(ev, prev, at);
-    // one line per close; the hub sends the same last close again on a
-    // resume or a settings change, which says nothing new
-    case "sweep": {
-      const entry = freshEntry(prev.sweepAt, ev.sweep.lastRun, at);
-      const outcomes = entry ? outcomesOf(entry) : [];
-      if (!entry || outcomes.length === 0) return [];
-      return [{ at, kind: "sweep", source: "", text: `sweep ${sweepSummary(outcomes)}${entry.by === "schedule" ? " (on its schedule)" : ""}`, quiet: false }];
-    }
+    // the event carries no plan; the store reads the sweep and says a
+    // close through sweepLine
+    case "sweep":
     // the incubator view and the inbox say these; the feed has no line for them
     case "stages":
     case "advice":

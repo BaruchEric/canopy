@@ -346,7 +346,7 @@ describe("the sweep hub", () => {
     expect(w.calls.endShell).toEqual([]);
   });
 
-  test("a close writes one log entry and broadcasts the new info", async () => {
+  test("a close writes one log entry and pings the stream, with no plan on it", async () => {
     const w = world();
     w.shells = [shell()];
     w.runs = [run({ id: "d1", status: "done", endedAt: NOW - 4 * 24 * H })];
@@ -357,10 +357,12 @@ describe("the sweep hub", () => {
     expect(log[0]).toMatchObject({ at: NOW, by: "eric" });
     expect(log[0]?.outcomes.map((o) => o.result)).toEqual(["closed", "closed"]);
     expect(log[0]?.items.map((i) => i.key)).toEqual(["shell:t1", "run:d1"]);
-    const sent = w.events.filter((e): e is Extract<ServerEvent, { type: "sweep" }> => e.type === "sweep");
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.sweep.items).toEqual([]);
-    expect(sent[0]?.sweep.lastRun?.at).toBe(NOW);
+    // every stream hears the event, read-only ones too, so it says only
+    // that the sweep changed; a page with admin reads the plan from the route
+    expect(w.events.filter((e) => e.type === "sweep")).toEqual([{ type: "sweep" }]);
+    const info = await hub.info();
+    expect(info.items).toEqual([]);
+    expect(info.lastRun?.at).toBe(NOW);
   });
 
   test("resume starts a chat from the record and removes it", async () => {
@@ -416,7 +418,6 @@ describe("the schedule", () => {
   };
   const scheduled = async () => (await readLog()).filter((e) => e.by === "schedule");
   const keys = (items: { key: string }[] | null | undefined): string[] | null => items?.map((i) => i.key) ?? null;
-  const lastSweep = (w: Facts): SweepInfo | undefined => w.events.filter((e): e is Extract<ServerEvent, { type: "sweep" }> => e.type === "sweep").at(-1)?.sweep;
 
   test("off: a due cron does nothing", async () => {
     const w = world();
@@ -458,7 +459,7 @@ describe("the schedule", () => {
       { key: "run:d1", result: "closed" },
     ]);
     expect(await readLastFire()).toBe(NOW);
-    expect(lastSweep(w)?.ask).toBeNull();
+    expect((await hub.info()).ask).toBeNull();
     const info = await hub.info();
     expect(info.ask).toBeNull();
     // it stays in the sheet, where a tick closes it
@@ -529,7 +530,7 @@ describe("the schedule", () => {
     await hub.tick(NOW);
     expect(await scheduled()).toEqual([{ at: NOW, by: "schedule", outcomes: [], items: [] }]);
     expect(await readAsk()).toBeNull();
-    expect(lastSweep(w)?.ask).toBeNull();
+    expect((await hub.info()).ask).toBeNull();
   });
 
   test("a Mac asleep through a slot fires once on waking, with the sleep counted as idle", async () => {
@@ -650,7 +651,7 @@ describe("the schedule", () => {
       console.error = said;
     }
     expect(w.calls.endShell).toEqual(["t1"]);
-    expect(keys(lastSweep(w)?.items)).toEqual(["run:d1"]);
+    expect(w.events.filter((e) => e.type === "sweep")).toEqual([{ type: "sweep" }]);
   });
 
   test("switching the schedule off clears the ask", async () => {
@@ -665,7 +666,7 @@ describe("the schedule", () => {
     expect(keys(await readAsk())).toEqual(["run:d1"]);
     await hub.patch({ on: false });
     expect(await readAsk()).toBeNull();
-    expect(lastSweep(w)?.ask).toBeNull();
+    expect((await hub.info()).ask).toBeNull();
   });
 
   test("an ask stored while the schedule is off is not shown", async () => {
@@ -764,7 +765,7 @@ describe("the schedule", () => {
     expect(w.calls.stopChat).toEqual(["c1"]);
     expect(await readAsk()).toBeNull();
     expect((await hub.info()).ask).toBeNull();
-    expect(lastSweep(w)?.ask).toBeNull();
+    expect((await hub.info()).ask).toBeNull();
     expect((await readLog()).at(-1)?.by).toBe("eric");
   });
 
@@ -848,7 +849,7 @@ describe("the schedule", () => {
     const gone = await call(hub, "/api/sweep/ask", { method: "DELETE" });
     expect(gone.status).toBe(200);
     expect(await readAsk()).toBeNull();
-    expect(lastSweep(w)?.ask).toBeNull();
+    expect((await hub.info()).ask).toBeNull();
     expect(w.calls.endShell).toEqual(["t1"]);
     expect(w.calls.dismiss).toEqual([]);
     expect(w.runs.map((r) => r.id)).toEqual(["d1"]);

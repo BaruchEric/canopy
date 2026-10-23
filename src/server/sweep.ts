@@ -187,7 +187,7 @@ export class SweepHub {
       if (!settings.on) return;
       const facts = await this.deps.facts();
       const items = this.plan(facts, settings);
-      // a draft PR joins neither the close nor the ask once PRs are swept (Task 10)
+      // a draft PR is handOnly, so it joins neither the close nor the ask
       const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
       try {
         const outcomes = auto.length > 0 ? await this.closeKeys(auto, "schedule") : [];
@@ -202,7 +202,7 @@ export class SweepHub {
         const kept = facts.shells === null ? ((await readAsk()) ?? []).filter((i) => i.kind === "shell") : [];
         await this.keepAsk([...kept, ...rest]);
       } finally {
-        await this.publish();
+        this.publish();
       }
     });
   }
@@ -254,12 +254,10 @@ export class SweepHub {
     };
   }
 
-  private async publish(): Promise<void> {
-    try {
-      this.deps.broadcast({ type: "sweep", sweep: await this.info() });
-    } catch (err) {
-      console.error("canopy: sweep:", errText(err));
-    }
+  /** tells every stream the sweep changed, and nothing more: the stream
+   *  reaches callers without admin, so the page reads the plan itself */
+  private publish(): void {
+    this.deps.broadcast({ type: "sweep" });
   }
 
   /**
@@ -273,7 +271,7 @@ export class SweepHub {
       const outcomes = await this.closeKeys(keys, by);
       if (outcomes.length > 0) {
         await this.pruneAsk();
-        await this.publish();
+        this.publish();
       }
       return outcomes;
     });
@@ -345,7 +343,7 @@ export class SweepHub {
       if (stray !== undefined) throw new SweepError(400, `${stray} is not in the ask`);
       await writeAsk(null);
       const outcomes = await this.closeKeys(keys, "eric", true);
-      await this.publish();
+      this.publish();
       return outcomes;
     });
   }
@@ -354,7 +352,7 @@ export class SweepHub {
   dismiss(): Promise<void> {
     return this.queue(async () => {
       await writeAsk(null);
-      await this.publish();
+      this.publish();
     });
   }
 
@@ -403,7 +401,7 @@ export class SweepHub {
       if (!rec) throw new SweepError(404, "no swept chat by that id");
       const run = await this.deps.startChat(rec);
       await takeSweptChat(runId);
-      await this.publish();
+      this.publish();
       return run;
     });
   }
@@ -422,7 +420,7 @@ export class SweepHub {
       else await setSweep(next);
       // a schedule switched off has no question pending
       if (cur.on && !next.on) await writeAsk(null);
-      await this.publish();
+      this.publish();
       return next;
     });
     this.patching = run.catch(() => {});

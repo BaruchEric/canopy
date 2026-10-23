@@ -1540,8 +1540,10 @@ export type ServerEvent =
   | { type: "asks"; asks: Ask[]; gone?: string[]; presence?: Presence }
   /** the ranger, whole, whenever anything about it changes (server/ranger.ts) */
   | { type: "ranger"; ranger: RangerInfo }
-  /** the sweep, whole, whenever its plan, settings or log change */
-  | { type: "sweep"; sweep: SweepInfo }
+  /** the sweep's plan, settings or log changed. Only that: every stream
+   *  hears every event, read-only ones too, and the sweep's routes need
+   *  admin, so a page with the right reads `GET /api/sweep` for the rest */
+  | { type: "sweep" }
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
   | { type: "kit"; kit: KitInfo }
@@ -3053,7 +3055,7 @@ export interface SweepLogEntry {
   items: SweepItem[];
 }
 
-/** `GET /api/sweep` and the `sweep` event. */
+/** `GET /api/sweep`; the `sweep` event says when to read it again. */
 export interface SweepInfo {
   items: SweepItem[];
   settings: SweepSettings;

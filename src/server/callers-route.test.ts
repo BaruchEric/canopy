@@ -146,6 +146,26 @@ describe("enforce", () => {
     }
   });
 
+  test("a stream with no token hears that the sweep changed, never the plan its routes guard", async () => {
+    const events = new AbortController();
+    const stream = await call(s, "/api/events", { signal: events.signal });
+    if (!stream.body) throw new Error("the event stream has no body");
+    const reader = stream.body.getReader();
+    expect((await call(s, "/api/sweep")).status).toBe(401);
+    const saved = await post(s, "/api/sweep/settings", { spans: { shell: 2 * 3_600_000 } }, page);
+    expect(saved.status).toBe(200);
+    let seen = "";
+    const until = Date.now() + 5_000;
+    while (!seen.includes(`"type":"sweep"`) && Date.now() < until) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      seen += new TextDecoder().decode(value);
+    }
+    events.abort();
+    const frame = seen.split("\n").find((l) => l.includes(`"type":"sweep"`));
+    expect(frame).toBe(`data: {"type":"sweep"}`);
+  });
+
   test("reads stay open", async () => {
     expect((await call(s, "/api/runs")).status).toBe(200);
     const auth = (await (await call(s, "/api/auth", { token: page })).json()) as AuthInfo;

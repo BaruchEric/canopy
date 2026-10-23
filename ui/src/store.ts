@@ -44,7 +44,7 @@ import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
-import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./feed";
+import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
@@ -1500,9 +1500,6 @@ function feedView(s: CanopyState, from: string): FeedSnapshot {
     asks: s.asks,
     presence: s.presence,
     sprouts: s.sprouts,
-    // the `at` of the close the page has seen: null for none, left out
-    // while the sweep is unread
-    ...(s.sweep ? { sweepAt: s.sweep.lastRun?.at ?? null } : {}),
   };
 }
 
@@ -1725,6 +1722,30 @@ function openSavedPanels(
  *  backend as wanting a sign-in that nothing else on the page asked for. The
  *  sheet reads it on open whatever, where a refusal is the right answer. */
 const signedIn = (b: string): boolean => readToken(originOf(baseOf(b))) !== null;
+
+/** A sweep read after its event. A close the page has not seen is one feed
+ *  line and ends agents: their dock panels close here, and an agent window
+ *  showing one closes itself on sweepEnded. The hub pings on a resume or a
+ *  settings change too, with the same last close, and a restored shell keeps
+ *  its id, so only a newer close counts. */
+function takeSweep(get: () => CanopyState, set: (s: Partial<CanopyState> | ((s: CanopyState) => Partial<CanopyState>)) => void, sweep: SweepInfo): void {
+  const before = get();
+  const now = Date.now();
+  const entry = freshEntry(before.sweep ? (before.sweep.lastRun?.at ?? null) : undefined, sweep.lastRun, now);
+  const lines = sweepLine(entry, now);
+  if (lines.length) {
+    set((s) => {
+      const { feed, seq } = appendFeed(s.feed, lines, s.feedSeq);
+      return { feed, feedSeq: seq };
+    });
+  }
+  const ended = entry ? endedCards(entry, Object.values(before.registry), before.home) : new Set<string>();
+  set({ sweep, ...(entry ? { sweepEnded: [...ended] } : {}) });
+  for (const p of get().panels) {
+    const card = cardOfPanel(p);
+    if (card && ended.has(card)) get().closePanel(p);
+  }
+}
 
 function refusedHere(set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string, sent: string | null): void {
   const origin = originOf(baseOf(b));
@@ -2882,18 +2903,20 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (ev.type === "sweep") {
-      sweepEvents += 1;
-      // A close the page has not seen ends agents: their dock panels close
-      // here, and an agent window showing one closes itself on sweepEnded.
-      // The hub sends the same last close again on a resume or a settings
-      // change, and a restored shell keeps its id, so only a newer one counts.
-      const entry = freshEntry(before.sweep ? (before.sweep.lastRun?.at ?? null) : undefined, ev.sweep.lastRun, Date.now());
-      const ended = entry ? endedCards(entry, Object.values(before.registry), before.home) : new Set<string>();
-      set({ sweep: ev.sweep, ...(entry ? { sweepEnded: [...ended] } : {}) });
-      for (const p of get().panels) {
-        const card = cardOfPanel(p);
-        if (card && ended.has(card)) get().closePanel(p);
-      }
+      // The event says only that the sweep changed, since every stream hears
+      // it and the routes need admin, so the page reads it: with a home
+      // token, or once it holds a sweep it read (no token needed while the
+      // backend does not enforce). Without either, a refused read would mark
+      // home as wanting a sign-in nothing on the page asked for. A newer
+      // event's read wins over an older one's, and over loadSweep's.
+      const mark = ++sweepEvents;
+      if (!signedIn(b) && !before.sweep) return;
+      void api.sweep().then(
+        (sweep) => {
+          if (sweepEvents === mark) takeSweep(get, set, sweep);
+        },
+        () => {},
+      );
       return;
     }
     if (ev.type === "kit") {

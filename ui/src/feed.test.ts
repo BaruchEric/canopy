@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AGENT } from "../../src/core/types";
-import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, SweepLogEntry, TaskInfo } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -9,6 +9,7 @@ import {
   filterFeed,
   listNames,
   statusLines,
+  sweepLine,
   type FeedEntry,
   type FeedSnapshot,
 } from "./feed";
@@ -498,40 +499,28 @@ describe("words", () => {
 });
 
 describe("the sweep", () => {
-  const info = (lastRun: { at: number; by?: "eric" | "schedule" } | null): ServerEvent => ({
-    type: "sweep",
-    sweep: {
-      items: [],
-      settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [] },
-      lastRun: lastRun && {
-        at: lastRun.at,
-        by: lastRun.by ?? "eric",
-        items: [],
-        outcomes: [
-          { key: "shell:a", result: "closed" },
-          { key: "run:b", result: "closed" },
-        ],
-      },
-      swept: { shells: [], chats: [] },
-      ask: null,
-    },
+  const entry = (at: number, by: "eric" | "schedule" = "eric"): SweepLogEntry => ({
+    at,
+    by,
+    items: [],
+    outcomes: [
+      { key: "shell:a", result: "closed" },
+      { key: "run:b", result: "closed" },
+    ],
   });
 
   test("a new close is one line", () => {
-    expect(describeEvent(info({ at: 10 }), snap({ sweepAt: 5 }), 20)).toEqual([{ at: 20, kind: "sweep", source: "", text: "sweep closed 1 shell, dismissed 1 run", quiet: false }]);
-    expect(describeEvent(info({ at: 10, by: "schedule" }), snap({ sweepAt: null }), 20)[0]?.text).toBe("sweep closed 1 shell, dismissed 1 run (on its schedule)");
+    expect(sweepLine(entry(10), 20)).toEqual([{ at: 20, kind: "sweep", source: "", text: "sweep closed 1 shell, dismissed 1 run", quiet: false }]);
+    expect(sweepLine(entry(10, "schedule"), 20)[0]?.text).toBe("sweep closed 1 shell, dismissed 1 run (on its schedule)");
   });
 
   test("a close from a broken log with no outcomes is no line", () => {
-    const ev = info({ at: 10 });
-    if (ev.type !== "sweep" || !ev.sweep.lastRun) throw new Error("no entry");
-    const { outcomes: _gone, ...rest } = ev.sweep.lastRun;
-    const broken = { ...ev, sweep: { ...ev.sweep, lastRun: rest as typeof ev.sweep.lastRun } };
-    expect(describeEvent(broken, snap({ sweepAt: 5 }), 20)).toEqual([]);
+    const { outcomes: _gone, ...rest } = entry(10);
+    expect(sweepLine(rest as SweepLogEntry, 20)).toEqual([]);
   });
 
-  test("the same close again, or none, is no line", () => {
-    expect(describeEvent(info({ at: 10 }), snap({ sweepAt: 10 }), 20)).toEqual([]);
-    expect(describeEvent(info(null), snap({ sweepAt: null }), 20)).toEqual([]);
+  test("no close is no line, and neither is the event, which carries no plan", () => {
+    expect(sweepLine(null, 20)).toEqual([]);
+    expect(describeEvent({ type: "sweep" }, snap({}), 20)).toEqual([]);
   });
 });

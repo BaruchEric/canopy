@@ -2647,7 +2647,28 @@ describe("flowFor", () => {
 
 describe("a sweep event", () => {
   const pristine = useStore.getState();
-  afterEach(() => useStore.setState(pristine, true));
+  const realFetch = globalThis.fetch;
+  const g = globalThis as unknown as { localStorage?: unknown };
+  const reads: string[] = [];
+  let served: SweepInfo;
+  beforeEach(() => {
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      reads.push(String(url));
+      return new Response(JSON.stringify(served), { status: 200 });
+    }) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    useStore.setState(pristine, true);
+    globalThis.fetch = realFetch;
+    delete g.localStorage;
+    reads.length = 0;
+  });
+  /** a page holding a token for home, which in tests has no origin */
+  const signIn = () => {
+    const kept = new Map([["canopy.token.", "cnp_page_home"]]);
+    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+  };
+  const settle = () => new Promise((r) => setTimeout(r, 10));
 
   const info = (lastRun: SweepLogEntry | null): SweepInfo => ({
     items: [],
@@ -2657,17 +2678,44 @@ describe("a sweep event", () => {
     ask: null,
   });
   const entry = (at: number): SweepLogEntry => ({ at, by: "eric", items: [], outcomes: [{ key: "shell:s1", result: "closed" }] });
+  const sweepLines = () => useStore.getState().feed.filter((f) => f.kind === "sweep").length;
 
-  test("a newer close ends its agents' panels once; the same close again ends nothing", () => {
+  test("the event reads the sweep; a newer close ends its agents' panels once; the same close again ends nothing", async () => {
+    signIn();
     useStore.setState({ sweep: info({ ...entry(1), outcomes: [] }), panels: ["/agent/shell:s1", "/agent/run:other"], sweepEnded: [] });
-    useStore.getState().applyEvent({ type: "sweep", sweep: info(entry(2)) });
+    served = info(entry(2));
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
+    expect(reads).toEqual(["/api/sweep"]);
+    expect(useStore.getState().sweep).toEqual(served);
     expect(useStore.getState().panels).toEqual(["/agent/run:other"]);
     expect(useStore.getState().sweepEnded).toEqual(["shell:s1"]);
+    expect(sweepLines()).toBe(1);
     // a restored shell keeps its id: its panel opened again must survive the
     // same close arriving again with a resume or a settings change
     useStore.setState({ panels: ["/agent/shell:s1", "/agent/run:other"], sweepEnded: [] });
-    useStore.getState().applyEvent({ type: "sweep", sweep: info(entry(2)) });
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
     expect(useStore.getState().panels).toEqual(["/agent/shell:s1", "/agent/run:other"]);
     expect(useStore.getState().sweepEnded).toEqual([]);
+    expect(sweepLines()).toBe(1);
+  });
+
+  test("a page with no home token and no sweep read reads nothing", async () => {
+    served = info(entry(2));
+    useStore.setState({ sweep: null });
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
+    expect(reads).toEqual([]);
+    expect(useStore.getState().sweep).toBeNull();
+  });
+
+  test("a page that has read the sweep reads it again without a token", async () => {
+    useStore.setState({ sweep: info(null) });
+    served = info(entry(2));
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
+    expect(reads).toEqual(["/api/sweep"]);
+    expect(useStore.getState().sweep?.lastRun?.at).toBe(2);
   });
 });
