@@ -148,6 +148,13 @@ test("a PR on a repo with no checkout is listed by slug", () => {
   const [it] = planSweep({ ...base, prs: [authored()], repos: [elsewhere, { id: "bare" }] }, DEFAULT_SWEEP, now);
   expect(it).toMatchObject({ key: "pr:barucheric/canopy#12", repoId: null, where: "barucheric/canopy" });
 });
+test("a checkout on this machine beats one over ssh, whichever the scan lists first", () => {
+  const remote = { ...checkout, id: "mini:dev-tools/canopy", host: "mini" };
+  const plan = (repos: (typeof checkout & { host?: string })[]) => planSweep({ ...base, prs: [authored()], repos }, DEFAULT_SWEEP, now)[0]?.repoId;
+  expect(plan([remote, checkout])).toBe("dev-tools/canopy");
+  expect(plan([checkout, remote])).toBe("dev-tools/canopy");
+  expect(plan([remote, { ...remote, id: "nas:canopy", host: "nas" }])).toBe("mini:dev-tools/canopy");
+});
 test("a forge listing is not a checkout, so the PR goes to the clone", () => {
   const listing = { ...checkout, id: "forge:eric/canopy", forge: { kind: "forgejo" as const, slug: "eric/canopy", clone: "", branch: "main", updated: 0, private: false, empty: false } };
   expect(planSweep({ ...base, prs: [authored()], repos: [listing, checkout] }, DEFAULT_SWEEP, now)[0]).toMatchObject({ repoId: "dev-tools/canopy" });

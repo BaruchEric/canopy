@@ -155,13 +155,20 @@ describe("enforce", () => {
     const saved = await post(s, "/api/sweep/settings", { spans: { shell: 2 * 3_600_000 } }, page);
     expect(saved.status).toBe(200);
     let seen = "";
-    const until = Date.now() + 5_000;
-    while (!seen.includes(`"type":"sweep"`) && Date.now() < until) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      seen += new TextDecoder().decode(value);
+    // a read waits on the next frame, so the bound has to cut the stream itself
+    const bound = setTimeout(() => events.abort(), 5_000);
+    try {
+      while (!seen.includes(`"type":"sweep"`)) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        seen += new TextDecoder().decode(value);
+      }
+    } catch {
+      // cut at the bound: the frame never came, which the expect below says
+    } finally {
+      clearTimeout(bound);
+      events.abort();
     }
-    events.abort();
     const frame = seen.split("\n").find((l) => l.includes(`"type":"sweep"`));
     expect(frame).toBe(`data: {"type":"sweep"}`);
   });

@@ -651,6 +651,7 @@ describe("the schedule", () => {
       console.error = said;
     }
     expect(w.calls.endShell).toEqual(["t1"]);
+    // the plan after the fire is not checked: info() reads ask.json, a directory here
     expect(w.events.filter((e) => e.type === "sweep")).toEqual([{ type: "sweep" }]);
   });
 
@@ -764,7 +765,6 @@ describe("the schedule", () => {
     expect(w.calls.endShell).toEqual([]);
     expect(w.calls.stopChat).toEqual(["c1"]);
     expect(await readAsk()).toBeNull();
-    expect((await hub.info()).ask).toBeNull();
     expect((await hub.info()).ask).toBeNull();
     expect((await readLog()).at(-1)?.by).toBe("eric");
   });

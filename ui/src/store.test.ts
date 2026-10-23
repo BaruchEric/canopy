@@ -43,6 +43,7 @@ import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
 import { projectFront } from "./front";
 import { api, onBackendSignal } from "./api";
 import { setBase, setRegistry } from "./registry";
+import type { BackendAuth } from "./callerToken";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
 import {
@@ -2648,7 +2649,6 @@ describe("flowFor", () => {
 describe("a sweep event", () => {
   const pristine = useStore.getState();
   const realFetch = globalThis.fetch;
-  const g = globalThis as unknown as { localStorage?: unknown };
   const reads: string[] = [];
   let served: SweepInfo;
   beforeEach(() => {
@@ -2660,13 +2660,13 @@ describe("a sweep event", () => {
   afterEach(() => {
     useStore.setState(pristine, true);
     globalThis.fetch = realFetch;
-    delete g.localStorage;
     reads.length = 0;
   });
-  /** a page holding a token for home, which in tests has no origin */
-  const signIn = () => {
-    const kept = new Map([["canopy.token.", "cnp_page_home"]]);
-    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+  /** home's sign-in as it last said */
+  const auth = (mode: BackendAuth["mode"], you: BackendAuth["you"]): void => {
+    const home = useStore.getState().home;
+    const a: BackendAuth = { mode, you, youId: null, refused: { count: 0, recent: [] }, callers: [], pending: [], hasToken: you !== "none", needed: false };
+    useStore.setState({ authByBackend: { [home]: a } });
   };
   const settle = () => new Promise((r) => setTimeout(r, 10));
 
@@ -2681,7 +2681,7 @@ describe("a sweep event", () => {
   const sweepLines = () => useStore.getState().feed.filter((f) => f.kind === "sweep").length;
 
   test("the event reads the sweep; a newer close ends its agents' panels once; the same close again ends nothing", async () => {
-    signIn();
+    auth("enforce", "page");
     useStore.setState({ sweep: info({ ...entry(1), outcomes: [] }), panels: ["/agent/shell:s1", "/agent/run:other"], sweepEnded: [] });
     served = info(entry(2));
     useStore.getState().applyEvent({ type: "sweep" });
@@ -2701,8 +2701,8 @@ describe("a sweep event", () => {
     expect(sweepLines()).toBe(1);
   });
 
-  test("a home token alone reads it; an old close on the first read ends nothing", async () => {
-    signIn();
+  test("a first read takes the sweep; an old close in it ends nothing", async () => {
+    auth("enforce", "cli");
     useStore.setState({ sweep: null, panels: ["/agent/shell:s1"] });
     served = info(entry(2));
     useStore.getState().applyEvent({ type: "sweep" });
@@ -2713,8 +2713,47 @@ describe("a sweep event", () => {
     expect(sweepLines()).toBe(0);
   });
 
+  test("an enforcing home that took the page for a caller without admin is not read", async () => {
+    served = info(entry(2));
+    for (const you of ["none", "shell"] as const) {
+      auth("enforce", you);
+      useStore.getState().applyEvent({ type: "sweep" });
+    }
+    await settle();
+    expect(reads).toEqual([]);
+    expect(useStore.getState().authByBackend[useStore.getState().home]?.needed).toBe(false);
+  });
+
+  test("a home that does not enforce is read with no token", async () => {
+    served = info(entry(2));
+    for (const mode of ["off", "log"] as const) {
+      auth(mode, "none");
+      useStore.getState().applyEvent({ type: "sweep" });
+      await settle();
+    }
+    expect(reads).toEqual(["/api/sweep", "/api/sweep"]);
+    expect(useStore.getState().sweep?.lastRun?.at).toBe(2);
+  });
+
+  test("an event that sends no read leaves a sheet's read in flight to land", async () => {
+    // home's sign-in not read yet: the event reads nothing, and the sheet's
+    // own read (loadSweep, which reads whatever) still lands
+    served = info(entry(4));
+    let open: () => void = () => {};
+    globalThis.fetch = (async () => {
+      await new Promise<void>((r) => (open = r));
+      return new Response(JSON.stringify(served), { status: 200 });
+    }) as unknown as typeof fetch;
+    const loading = useStore.getState().loadSweep();
+    useStore.getState().applyEvent({ type: "sweep" });
+    await settle();
+    open();
+    await loading;
+    expect(useStore.getState().sweep?.lastRun?.at).toBe(4);
+  });
+
   test("only the newest event's read is taken", async () => {
-    signIn();
+    auth("enforce", "page");
     useStore.setState({ sweep: info(null) });
     const answers = [info(entry(5)), info(entry(9))];
     const gates: (() => void)[] = [];
@@ -2732,23 +2771,5 @@ describe("a sweep event", () => {
     gates[0]?.();
     await settle();
     expect(useStore.getState().sweep?.lastRun?.at).toBe(9);
-  });
-
-  test("a page with no home token and no sweep read reads nothing", async () => {
-    served = info(entry(2));
-    useStore.setState({ sweep: null });
-    useStore.getState().applyEvent({ type: "sweep" });
-    await settle();
-    expect(reads).toEqual([]);
-    expect(useStore.getState().sweep).toBeNull();
-  });
-
-  test("a page that has read the sweep reads it again without a token", async () => {
-    useStore.setState({ sweep: info(null) });
-    served = info(entry(2));
-    useStore.getState().applyEvent({ type: "sweep" });
-    await settle();
-    expect(reads).toEqual(["/api/sweep"]);
-    expect(useStore.getState().sweep?.lastRun?.at).toBe(2);
   });
 });

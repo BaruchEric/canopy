@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PendingPair } from "../../src/core/types";
-import { dialPlan, isOwnCode, originOf, pairAsk, pairKey, pairLabel, readPair, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writePair, writeToken } from "./callerToken";
+import { dialPlan, isOwnCode, originOf, pairAsk, pairKey, pairLabel, readPair, readsAdmin, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writePair, writeToken } from "./callerToken";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
 function storage(blocked = false) {
@@ -146,3 +146,15 @@ describe("the first code box", () => {
   });
 });
 
+
+describe("readsAdmin", () => {
+  test("off and log let anyone read; enforce wants a kind with admin; unread is no", () => {
+    expect(readsAdmin({ mode: "off", you: "none" })).toBe(true);
+    expect(readsAdmin({ mode: "log", you: "none" })).toBe(true);
+    expect(readsAdmin({ mode: "enforce", you: "page" })).toBe(true);
+    expect(readsAdmin({ mode: "enforce", you: "cli" })).toBe(true);
+    expect(readsAdmin({ mode: "enforce", you: "shell" })).toBe(false);
+    expect(readsAdmin({ mode: "enforce", you: "none" })).toBe(false);
+    expect(readsAdmin(undefined)).toBe(false);
+  });
+});

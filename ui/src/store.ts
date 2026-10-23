@@ -61,7 +61,7 @@ import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
 import { cleanKey, keyTestOf, readAnswerKey, writeAnswerKey, type KeyTest } from "./answerKey";
-import { originOf, pairLabel, readPair, readToken, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
+import { originOf, pairLabel, readPair, readToken, readsAdmin, writePair, writeToken, type AuthInfo, type BackendAuth, type SignIn } from "./callerToken";
 import { deviceName } from "../../src/core/presence";
 import { listedTask } from "../../src/core/tasks";
 import { startsDev } from "./tasks";
@@ -2904,13 +2904,14 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     if (ev.type === "sweep") {
       // The event says only that the sweep changed, since every stream hears
-      // it and the routes need admin, so the page reads it: with a home
-      // token, or once it holds a sweep it read (no token needed while the
-      // backend does not enforce). Without either, a refused read would mark
-      // home as wanting a sign-in nothing on the page asked for. A newer
-      // event's read wins over an older one's, and over loadSweep's.
+      // it and the routes need admin, so the page reads it, but only when
+      // home last said the read will land (not enforcing, or this page is a
+      // caller with admin): a refused read on every event would mark home as
+      // wanting a sign-in nothing on the page asked for. A read sent wins
+      // over an older event's and over loadSweep's; an event that sends none
+      // leaves those to land.
+      if (!readsAdmin(before.authByBackend[b])) return;
       const mark = ++sweepEvents;
-      if (!signedIn(b) && !before.sweep) return;
       void api.sweep().then(
         (sweep) => {
           if (sweepEvents === mark) takeSweep(get, set, sweep);
@@ -3266,8 +3267,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickSweep: (keys) => set({ sheet: { kind: "sweep", picks: [...keys], pick: ++sweepPicks } }),
   setSweepSettings: async (patch) => {
     const settings = await api.setSweepSettings(patch);
-    // the event brings the whole sweep with these settings too; this shows
-    // them at once on a page whose stream is slow or down
+    // the event that follows makes the page read the whole sweep again;
+    // this shows the settings at once, before that read or without a stream
     set((s) => (s.sweep ? { sweep: { ...s.sweep, settings } } : {}));
   },
   closeSweep: async (keys) => {

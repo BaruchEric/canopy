@@ -177,6 +177,12 @@ export type SignIn = { state: "waiting"; id: string; code: string } | { state: "
  *  mode is not read yet counts as enforce, since only a check refuses. */
 export type DialPlan = { kind: "ticket"; ticket: string } | { kind: "bare" } | { kind: "wait" };
 
+/** Whether a read of an `admin` route will land on a backend as it last
+ *  said: anything goes while it does not enforce, else the kind it took
+ *  this page for must hold admin. Unread, nothing is assumed. */
+export const readsAdmin = (auth: Pick<AuthInfo, "mode" | "you"> | undefined): boolean =>
+  auth !== undefined && (auth.mode !== "enforce" || KIND_RIGHTS[auth.you].includes("admin"));
+
 export function dialPlan(mode: AuthInfo["mode"] | undefined, ticket: string | null, refused: boolean): DialPlan {
   if (ticket) return { kind: "ticket", ticket };
   if (mode === "enforce") return { kind: "wait" };

@@ -138,8 +138,9 @@ export interface PlanInputs {
   /** watched PRs with a canopy fix going, as `slug#number` */
   fixing: ReadonlySet<string>;
   /** the scan's repos, to find a PR's checkout by its GitHub remote; a
-   *  forge listing is not a checkout */
-  repos: Pick<Repo, "id" | "remotes" | "forge">[];
+   *  forge listing is not a checkout, and one on this machine beats one
+   *  over ssh */
+  repos: Pick<Repo, "id" | "remotes" | "forge" | "host">[];
 }
 
 /** a span as the row says it: minutes under an hour, hours under two
@@ -199,19 +200,22 @@ export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): Sw
   }
 
   if (inputs.prs.length > 0) {
-    // the first checkout with a GitHub remote on the PR's repo
-    const bySlug = new Map<string, string>();
+    // the first checkout on this machine with a GitHub remote on the PR's
+    // repo, else the first over ssh
+    const bySlug = new Map<string, { id: string; local: boolean }>();
     for (const r of inputs.repos) {
       if (r.forge) continue;
+      const local = !r.host;
       for (const url of r.remotes ?? []) {
         const slug = githubSlug(url);
-        if (slug && !bySlug.has(slug)) bySlug.set(slug, r.id);
+        const had = slug ? bySlug.get(slug) : undefined;
+        if (slug && (!had || (local && !had.local))) bySlug.set(slug, { id: r.id, local });
       }
     }
     for (const pr of inputs.prs) {
       const id = `${pr.slug}#${pr.number}`;
       if (pr.archived || pr.autoMerge || pr.queued || inputs.fixing.has(id)) continue;
-      const repoId = bySlug.get(pr.slug) ?? null;
+      const repoId = bySlug.get(pr.slug)?.id ?? null;
       add("pr", id, repoId, repoId ?? pr.slug, `#${pr.number} ${pr.title}`, pr.updatedAt, (i) => `${pr.draft ? "draft, " : ""}no activity for ${ago(i)}`, true, pr.draft);
     }
   }

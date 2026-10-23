@@ -371,12 +371,6 @@ function fleetLines(ev: Extract<ServerEvent, { type: "fleet" }>, prev: FeedSnaps
   return lines;
 }
 
-/**
- * The lines one event adds to the feed, given what the store held before it
- * was applied. `prevAgents` is the backend's agent routing, kept separate
- * because the snapshot's other fields are what every event needs and this
- * one is not.
- */
 /** One line for a close the page has not seen (`freshEntry`), none for no
  *  entry or one with no outcomes. */
 export function sweepLine(entry: SweepLogEntry | null, at: number): FeedLine[] {
@@ -385,6 +379,12 @@ export function sweepLine(entry: SweepLogEntry | null, at: number): FeedLine[] {
   return [{ at, kind: "sweep", source: "", text: `sweep ${sweepSummary(outcomes)}${entry.by === "schedule" ? " (on its schedule)" : ""}`, quiet: false }];
 }
 
+/**
+ * The lines one event adds to the feed, given what the store held before it
+ * was applied. `prevAgents` is the backend's agent routing, kept separate
+ * because the snapshot's other fields are what every event needs and this
+ * one is not.
+ */
 export function describeEvent(
   ev: ServerEvent,
   prev: FeedSnapshot,
