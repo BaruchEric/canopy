@@ -665,6 +665,19 @@ describe("the schedule", () => {
     expect(lastSweep(w)?.ask).toBeNull();
   });
 
+  test("an ask stored while the schedule is off is not shown", async () => {
+    const w = world();
+    on(w, { auto: ["shell"] });
+    w.runs = [run({ id: "d1", endedAt: NOW - 4 * DAY })];
+    await writeLastFire(NOW - 2 * MIN);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    // a fire that finished as the switch-off landed wrote its ask after it
+    w.settings = { ...w.settings, on: false };
+    expect(keys(await readAsk())).toEqual(["run:d1"]);
+    expect((await hub.info()).ask).toBeNull();
+  });
+
   test("a close from the sheet drops what it closed from the ask, and the ask once none is left", async () => {
     const w = world();
     on(w, { auto: ["shell"] });
