@@ -55,6 +55,47 @@ export const SWEPT_POLL = 24 * 3_600_000;
 /** how long a PR the sweep closed is watched for a reopen */
 export const SWEPT_FOR = 30 * 24 * 3_600_000;
 
+/** how far from the close the sweep's comment may be posted: `gh pr
+ *  close --comment` comments, then closes, seconds apart */
+export const SWEEP_CLOSE_SKEW = 5 * 60_000;
+
+/** Who closed a PR, as the watch reads it: the gh login, when GitHub says
+ *  it closed, and its newest comments (so a long thread never pages). */
+const CLOSED_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      closedAt
+      comments(last: 20) { nodes { body createdAt author { login } } }
+    }
+  }
+}`;
+
+/** When the sweep closed the PR, from `CLOSED_QUERY`'s answer: a comment
+ *  by the gh login that starts as the sweep's does, posted within
+ *  `SWEEP_CLOSE_SKEW` of the close, so a sweep comment from before a
+ *  reopen and a later hand close does not count. Null for a close the
+ *  sweep did not make; undefined when the answer does not read. */
+export function sweptAtOf(body: unknown): number | null | undefined {
+  const data = isRecord(body) ? body["data"] : undefined;
+  if (!isRecord(data)) return undefined;
+  const viewer = isRecord(data["viewer"]) ? data["viewer"]["login"] : undefined;
+  const repo = data["repository"];
+  const pr = isRecord(repo) ? repo["pullRequest"] : undefined;
+  const nodes = isRecord(pr) && isRecord(pr["comments"]) ? pr["comments"]["nodes"] : undefined;
+  if (typeof viewer !== "string" || !isRecord(pr) || !Array.isArray(nodes)) return undefined;
+  const closedAt = typeof pr["closedAt"] === "string" ? Date.parse(pr["closedAt"]) : NaN;
+  if (Number.isNaN(closedAt)) return null;
+  const me = viewer.toLowerCase();
+  const ours = nodes.some((c) => {
+    if (!isRecord(c) || typeof c["body"] !== "string" || typeof c["createdAt"] !== "string") return false;
+    const author = isRecord(c["author"]) ? c["author"]["login"] : undefined;
+    const at = Date.parse(c["createdAt"]);
+    return c["body"].trimStart().startsWith(SWEEP_COMMENT_PREFIX) && typeof author === "string" && author.toLowerCase() === me && Math.abs(at - closedAt) <= SWEEP_CLOSE_SKEW;
+  });
+  return ours ? closedAt : null;
+}
+
 /** when a watch is read next, from now: once a day while the sweep has it
  *  closed or who closed it is not known yet, else `nextPoll`'s pace (null
  *  for none) */
@@ -419,29 +460,26 @@ export class PrHub {
   }
 
   /** A PR found closed with no `swept`: whether the sweep closed it, here
-   *  or on another backend, by its comment. Found, the watch is marked
-   *  `swept` from the comment's time and the landing record keeps `pr`;
-   *  not found, the run may land here again; comments gh cannot read
-   *  leave `pr` on the record and the watch to try again in a day. */
+   *  or on another backend, by its comment (`sweptAtOf`). Found, the watch
+   *  is marked `swept` from the close and the landing record keeps `pr`;
+   *  not found, the run may land here again; an answer gh cannot give
+   *  leaves `pr` on the record and the watch to try again in a day. */
   private async whoClosed(w: PrWatch): Promise<PrWatch> {
     const { closeUnread: _c, ...rest } = w;
-    const r = await this.gh(["pr", "view", String(w.number), "-R", w.slug, "--json", "comments"]);
-    let comments: unknown[] | null = null;
+    const [owner = "", name = ""] = w.slug.split("/");
+    const r = await this.gh(["api", "graphql", "-f", `query=${CLOSED_QUERY}`, "-f", `owner=${owner}`, "-f", `name=${name}`, "-F", `number=${w.number}`]);
+    let at: number | null | undefined;
     try {
-      const v: unknown = r.code === 0 ? JSON.parse(r.stdout) : null;
-      if (isRecord(v) && Array.isArray(v["comments"])) comments = v["comments"];
+      at = r.code === 0 ? sweptAtOf(JSON.parse(r.stdout)) : undefined;
     } catch {
       // read again tomorrow
     }
-    if (!comments) return { ...rest, closeUnread: true, error: `reading PR #${w.number}'s comments: ${r.code === 0 ? "the answer did not read" : lastLine(r, "gh pr view")}` };
-    const sweeps = comments.filter((c): c is Record<string, unknown> => isRecord(c) && typeof c["body"] === "string" && c["body"].trimStart().startsWith(SWEEP_COMMENT_PREFIX));
-    const last = sweeps.at(-1);
-    if (!last) {
+    if (at === undefined) return { ...rest, closeUnread: true, error: `reading who closed PR #${w.number}: ${r.code === 0 ? "the answer did not read" : lastLine(r, "gh api graphql")}` };
+    if (at === null) {
       this.deps.markPr(w.id, null);
       return rest;
     }
-    const at = typeof last["createdAt"] === "string" ? Date.parse(last["createdAt"]) : NaN;
-    return { ...rest, swept: Number.isNaN(at) ? this.now() : at };
+    return { ...rest, swept: at };
   }
 
   /** A branch the landing queue dropped: its watch goes with it. */

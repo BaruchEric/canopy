@@ -43,9 +43,13 @@ interface Gh {
   permDown: boolean;
   /** what gh says when a close fails */
   closeFails: string | null;
-  /** the PR's conversation comments as `gh pr view --json comments` has
-   *  them, or gh's error */
+  /** the PR's newest conversation comments as the close query has them,
+   *  or gh's error */
   prComments: unknown[] | string;
+  /** when GitHub says the PR closed */
+  closedAt: string | null;
+  /** the gh login */
+  viewer: string;
 }
 
 let n = 0;
@@ -107,7 +111,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
   const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
-  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [] };
+  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric" };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
@@ -116,7 +120,10 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
     const [a, b] = args;
     if (a === "auth") return g.auth ? ok("Logged in") : no("not logged in");
     if (a === "pr" && b === "create") return ok(`https://github.com/o/r/pull/7\n`);
-    if (a === "pr" && b === "view" && args.at(-1) === "comments") return typeof g.prComments === "string" ? no(`some noise\n${g.prComments}\n`) : ok(JSON.stringify({ comments: g.prComments }));
+    if (a === "api" && b === "graphql") {
+      if (typeof g.prComments === "string") return no(`some noise\n${g.prComments}\n`);
+      return ok(JSON.stringify({ data: { viewer: { login: g.viewer }, repository: { pullRequest: { closedAt: g.closedAt, comments: { nodes: g.prComments } } } } }));
+    }
     if (a === "pr" && b === "view") return ok(JSON.stringify({ ...view(g), updatedAt: "2026-10-01T12:00:00Z" }));
     if (a === "pr" && b === "merge") {
       if (g.mergeFails) return no("Head branch was modified");
@@ -677,21 +684,53 @@ describe("the sweep's close", () => {
     expect(pr.state?.status).toBe("open");
   });
 
+  const SWEPT_21 = "Closed by canopy's sweep after 21 days with no activity. Reopen it to pick it back up.";
+
   test("a PR closed with the sweep's comment, on another backend, is marked swept and keeps its PR", async () => {
     const w = await world();
     await w.hub.open(w.rec.id);
     w.gh.head = await revOf(w.dir, "HEAD");
     await pollNow(w);
     w.gh.state = "CLOSED";
+    w.gh.closedAt = "2026-10-03T12:00:04Z";
     w.gh.prComments = [
-      { body: "looks good", createdAt: "2026-10-02T12:00:00Z" },
-      { body: "Closed by canopy's sweep after 21 days with no activity. Reopen it to pick it back up.", createdAt: "2026-10-03T12:00:00Z" },
+      { body: "looks good", createdAt: "2026-10-02T12:00:00Z", author: { login: "someone" } },
+      { body: SWEPT_21, createdAt: "2026-10-03T12:00:02Z", author: { login: "Eric" } },
     ];
     w.clock = Date.parse("2026-10-04T12:00:00Z");
     const pr = await pollNow(w);
-    expect(pr.swept).toBe(Date.parse("2026-10-03T12:00:00Z"));
+    expect(pr.swept).toBe(Date.parse("2026-10-03T12:00:04Z"));
     expect(w.records.get(w.rec.id)?.pr).toBe(7);
     expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+    const query = w.gh.calls.find((c) => c[1] === "graphql")!;
+    expect(query).toEqual(expect.arrayContaining(["owner=o", "name=r", "number=7"]));
+    expect(query.join(" ")).toContain("comments(last: 20)");
+  });
+
+  test("a sweep comment from another author is not the sweep's close", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.closedAt = "2026-10-03T12:00:04Z";
+    w.gh.prComments = [{ body: SWEPT_21, createdAt: "2026-10-03T12:00:02Z", author: { login: "mallory" } }];
+    const pr = await pollNow(w);
+    expect(pr.swept).toBeUndefined();
+    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
+  });
+
+  test("an old sweep comment, then a reopen and a close by hand, is not the sweep's close", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.gh.state = "CLOSED";
+    w.gh.closedAt = "2026-10-12T09:00:00Z";
+    w.gh.prComments = [{ body: SWEPT_21, createdAt: "2026-10-03T12:00:02Z", author: { login: "eric" } }];
+    const pr = await pollNow(w);
+    expect(pr.swept).toBeUndefined();
+    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
   });
 
   test("a PR closed by hand, with no sweep comment, frees its run", async () => {
@@ -700,7 +739,8 @@ describe("the sweep's close", () => {
     w.gh.head = await revOf(w.dir, "HEAD");
     await pollNow(w);
     w.gh.state = "CLOSED";
-    w.gh.prComments = [{ body: "not doing this after all", createdAt: "2026-10-02T12:00:00Z" }];
+    w.gh.closedAt = "2026-10-02T12:00:01Z";
+    w.gh.prComments = [{ body: "not doing this after all", createdAt: "2026-10-02T12:00:00Z", author: { login: "eric" } }];
     const pr = await pollNow(w);
     expect(pr.swept).toBeUndefined();
     expect(pr.closeUnread).toBeUndefined();
@@ -722,6 +762,7 @@ describe("the sweep's close", () => {
     expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
     // and once they read, it is told: a hand close here
     w.gh.prComments = [];
+    w.gh.closedAt = "2026-10-02T12:00:01Z";
     const next = await pollNow(w);
     expect(next.closeUnread).toBeUndefined();
     expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
