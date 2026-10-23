@@ -3,7 +3,8 @@ import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
 import { activeFilterCount, archivedCount, favoriteCount, healthBad, scopedRepos, useStore } from "../store";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 
 /** Toggleable facet chips behind one pill. The pill counts what is lit so a
  *  narrowed grove never looks like a small one. */
@@ -165,6 +166,7 @@ export function FilterMenu() {
               </div>
             </section>
           )}
+          <PopGrip name="filters" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

@@ -5,7 +5,8 @@ import type { HealthCheck, Repo, RepoCheckKind, RepoHealMode, RepoHealthInfo } f
 import { api } from "../api";
 import { openView } from "../clirun";
 import { HEALTH_PANEL, STATE_TONE, STATE_WORD, groupRows, healthRows, healthSummary, repoChecks, repoWord, type HealthGroup, type HealthRow } from "../health";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { useStore } from "../store";
 import { escapeCloses, keepKeys } from "../surface";
 import { ago } from "../util";
@@ -206,6 +207,7 @@ export function HealthChip() {
             </button>
           </div>
           <HealthList />
+          <PopGrip name="health" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

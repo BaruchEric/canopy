@@ -527,7 +527,9 @@ body.resizing-rows {
   cursor: row-resize;
 }
 /* a drag across the preview's page must stay the page's own */
-body.resizing iframe {
+body.resizing iframe,
+body.resizing-nwse iframe,
+body.resizing-nesw iframe {
   pointer-events: none;
 }
 .spacer {
@@ -1353,7 +1355,7 @@ body.resizing iframe {
 }
 /* ---------- the inbox: the asks, prompts and gates, oldest first ---------- */
 .inbox-pop {
-  width: 460px;
+  width: var(--inbox-w, 460px);
   max-height: min(80vh, 760px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -4454,12 +4456,16 @@ body.resizing-rows {
   inset: 0;
   z-index: 40;
   display: grid;
+  /* one cell the veil's own size, so a sheet's 100% is the room inside it
+     and a sized sheet never pushes past the window */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
   place-items: center;
   padding: 24px;
   background: color-mix(in srgb, var(--bark0) 72%, transparent);
   backdrop-filter: blur(2px);
 }
 .sheet {
+  position: relative;
   width: min(640px, 100%);
   max-height: min(84vh, 920px);
   display: flex;
@@ -12478,5 +12484,96 @@ button.trigger-title:hover {
     50% {
       background: color-mix(in srgb, var(--rust) 18%, var(--float));
     }
+  }
+}
+
+/* ---------- the popups' corner grip (PopGrip) ----------
+   It sits on the corner that moves as a popup grows: bottom right on a
+   sheet and on a popover hanging off its chip's left edge, bottom left on
+   one hanging off the right. A sized popup reads its size from the two
+   custom properties the grip writes, and comes last here so it wins over
+   each popup's own width and height. A phone's popups are sheets off the
+   bottom edge, full width and unsized. */
+.pop-grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 3;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  touch-action: none;
+  color: var(--ink-faint);
+  opacity: 0.55;
+  background: linear-gradient(
+    135deg,
+    transparent 0 46%,
+    currentColor 46% 53%,
+    transparent 53% 70%,
+    currentColor 70% 77%,
+    transparent 77%
+  );
+  transition:
+    opacity 120ms ease,
+    color 120ms ease;
+}
+.pop-grip.at-left {
+  right: auto;
+  left: 2px;
+  cursor: nesw-resize;
+  background: linear-gradient(
+    225deg,
+    transparent 0 46%,
+    currentColor 46% 53%,
+    transparent 53% 70%,
+    currentColor 70% 77%,
+    transparent 77%
+  );
+}
+.pop-grip:hover {
+  color: var(--ink-dim);
+  opacity: 1;
+}
+.pop-grip:focus-visible,
+body.resizing-nwse .pop-grip,
+body.resizing-nesw .pop-grip {
+  color: var(--moss-deep);
+  opacity: 1;
+  outline: none;
+}
+body.resizing-nwse {
+  cursor: nwse-resize;
+  user-select: none;
+}
+body.resizing-nesw {
+  cursor: nesw-resize;
+  user-select: none;
+}
+@media (min-width: 761px) {
+  .sheet[data-sized],
+  .settings-pop[data-sized] {
+    width: var(--pop-w);
+    height: var(--pop-h);
+    max-width: none;
+    max-height: none;
+  }
+  /* a sheet is held inside its veil's padding when the window shrinks */
+  .sheet[data-sized] {
+    max-width: 100%;
+    max-height: 100%;
+  }
+  /* the body takes the height a sheet was given, and a popover scrolls in
+     its own */
+  .sheet[data-sized] > .sheet-body,
+  .sheet[data-sized] > .coord-tasks {
+    flex: 1 1 auto;
+  }
+  .settings-pop[data-sized]:not(.prefs) {
+    overflow-y: auto;
+  }
+}
+@media (max-width: 760px) {
+  .pop-grip {
+    display: none;
   }
 }

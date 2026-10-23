@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { multi, useStore } from "../store";
 import { ericsCrons, rangerCard, rangerLine, rangerTone, shownRangers, sizeWord, wakeWhen, worstTone } from "../ranger";
 import type { RangerInfo } from "../../../src/core/types";
@@ -176,6 +177,7 @@ export function RangerChip({ compact = false }: { compact?: boolean }) {
           {shown.map(([b, r]) => (
             <RangerBlock key={b} backend={b} info={r} close={() => setOpen(false)} showBackend={several} />
           ))}
+          <PopGrip name="ranger" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

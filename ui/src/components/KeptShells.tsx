@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { homeConn, idParts, useStore } from "../store";
 import { registry } from "../registry";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { eachOf, keptByBackend, newestFirst, restorePlan, stillPicked } from "../kept";
 
 /** "2m", "3h", "2d": how long ago a kept shell was last written out */
@@ -288,6 +289,7 @@ export function KeptShells() {
               {!keeping && " Recording is off, so nothing new is being kept; settings has the switch."}
             </p>
           </section>
+          <PopGrip name="kept" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

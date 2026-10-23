@@ -31,6 +31,8 @@ import { helperFor, useStore } from "../store";
 import { Section } from "./Surface";
 import { fileKind, type FileKind } from "../../../src/core/filekind";
 import type { DirEntry, Repo, RepoFiles } from "../../../src/core/types";
+import { CENTERED } from "../pop";
+import { PopGrip } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -367,6 +369,7 @@ function Viewer({
         <div className="finder-viewer-body">
           <FileBody repoId={repo.id} path={path} stamp={stamp(path)} big onOpen={onOpen} />
         </div>
+        <PopGrip name="sheet viewer" anchor={CENTERED} gap={24} />
       </div>
     </div>,
     document.body,

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import type { AdviceOffer, Ask, PendingPair } from "../../../src/core/types";
@@ -8,7 +9,8 @@ import { rememberOffer } from "../../../src/core/offer";
 import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { pairAsk } from "../callerToken";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
 import { canAnswer as canAnswerHere, inboxItems, prsAll, useStore } from "../store";
@@ -536,7 +538,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
         <span className="chip-icon letter" aria-hidden="true">?</span> {items.length || ""}
       </button>
       {open && (
-        <div className="settings-pop inbox-pop" role="dialog" aria-label="Inbox" style={zoom === 1 ? undefined : { width: Math.round(460 * zoom) }}>
+        <div className="settings-pop inbox-pop" role="dialog" aria-label="Inbox" style={zoom === 1 ? undefined : { "--inbox-w": `${Math.round(460 * zoom)}px` } as CSSProperties}>
           <div className="inbox-top">
             <h3 className="panel-label">inbox</h3>
             <Gear
@@ -609,6 +611,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
             </section>
           )}
           </div>
+          <PopGrip name="inbox" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

@@ -2,7 +2,8 @@ import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, use
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { capsFor, connOf, multi, useStore } from "../store";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
 import type { About } from "../../../src/core/types";
@@ -604,6 +605,7 @@ export function SettingsMenu() {
               </p>
             )}
           </div>
+          <PopGrip name="settings" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

@@ -4,7 +4,8 @@ import type { FormEvent } from "react";
 import { api } from "../api";
 import { backendOf } from "../registry";
 import { multi, useStore } from "../store";
-import { useFitPop } from "../pop";
+import { HANGS_LEFT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import type { Listing, SourceState } from "../../../src/core/types";
 import { Seg } from "./Seg";
 
@@ -539,6 +540,7 @@ export function SourcesMenu() {
             <h3 className="panel-label">add a folder</h3>
             <AddSourceForm onAdded={() => {}} backendOrder={backendOrder} isMulti={isMulti} />
           </section>
+          <PopGrip name="sources" anchor={HANGS_LEFT} />
         </div>
       )}
     </div>

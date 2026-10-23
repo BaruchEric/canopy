@@ -2,7 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { chanBlobUrl } from "../api";
 import { convName, convOf, convOrder, latestClip, messageText } from "../chan";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { canReadClipboard, copyText, readText } from "../share";
 import { useStore } from "../store";
 import { DictateButton } from "./Dictate";
@@ -248,6 +249,7 @@ export function ChanChip() {
             </label>
             {err && <p className="settings-hint error">{err}</p>}
           </section>
+          <PopGrip name="chan" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

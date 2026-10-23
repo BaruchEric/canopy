@@ -1,4 +1,5 @@
 import { type RefObject, useLayoutEffect } from "react";
+import { clamp } from "./util";
 
 /** the gap a popover keeps from either edge of the window */
 const EDGE = 8;
@@ -38,4 +39,78 @@ export function useFitPop(ref: RefObject<HTMLElement | null>, open: boolean, siz
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
   }, [ref, open, size]);
+}
+
+/** How a popup sits, axis by axis: on `start` its left or top edge holds
+ *  and it grows right or down, on `end` its right edge holds and it grows
+ *  left, and on `center` it grows both ways at once. */
+export interface PopAnchor {
+  x: "start" | "end" | "center";
+  y: "start" | "center";
+}
+
+/** the sheets: centered both ways in their veil */
+export const CENTERED: PopAnchor = { x: "center", y: "center" };
+/** a popover hanging off its chip's right edge, most of them */
+export const HANGS_RIGHT: PopAnchor = { x: "end", y: "start" };
+/** a popover hanging off its chip's left edge (the pick menus, the folders) */
+export const HANGS_LEFT: PopAnchor = { x: "start", y: "start" };
+
+/** the smallest a popup can be sized to, px */
+export const POP_MIN = { w: 240, h: 120 } as const;
+/** the largest a saved size is kept at, past any screen's room */
+const POP_MAX = 8000;
+
+export interface PopSize {
+  w: number;
+  h: number;
+}
+
+/** each popup's size, by name; a popup with none keeps its own */
+export type PopSizes = Record<string, PopSize>;
+
+const sizeOf = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? Math.round(clamp(v, 0, POP_MAX)) : null;
+
+/** Saved sizes held to whole px in range; anything else is dropped, so a
+ *  hand-edited entry never sizes a popup to nothing. */
+export function popSizesOf(v: unknown): PopSizes {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out: PopSizes = {};
+  for (const [name, raw] of Object.entries(v)) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const w = sizeOf(r["w"]);
+    const h = sizeOf(r["h"]);
+    if (w !== null && h !== null) out[name] = { w: Math.max(w, POP_MIN.w), h: Math.max(h, POP_MIN.h) };
+  }
+  return out;
+}
+
+/** The most a popup can take on each axis, `gap` clear of the window's
+ *  edges: from its held edge to the far one, or for a centered axis twice
+ *  the nearer edge's distance from its middle. Never below the minimum. */
+export function popRoom(
+  r: { left: number; right: number; top: number; bottom: number },
+  view: { w: number; h: number },
+  anchor: PopAnchor,
+  gap: number,
+): PopSize {
+  const mid = (a: number, b: number, size: number) => 2 * Math.min((a + b) / 2 - gap, size - gap - (a + b) / 2);
+  const w = anchor.x === "start" ? view.w - gap - r.left : anchor.x === "end" ? r.right - gap : mid(r.left, r.right, view.w);
+  const h = anchor.y === "start" ? view.h - gap - r.top : mid(r.top, r.bottom, view.h);
+  return { w: Math.floor(Math.max(w, POP_MIN.w)), h: Math.floor(Math.max(h, POP_MIN.h)) };
+}
+
+/** The size a grip drag of (`dx`, `dy`) px makes: the grip sits on the
+ *  corner that moves, so it follows the pointer, at twice the travel on a
+ *  centered axis (its far edge moves as much) and reversed for a popup
+ *  that grows left. Held to the minimum and to `room`. */
+export function gripSize(start: PopSize, dx: number, dy: number, anchor: PopAnchor, room: PopSize): PopSize {
+  const sx = anchor.x === "center" ? 2 : anchor.x === "end" ? -1 : 1;
+  const sy = anchor.y === "center" ? 2 : 1;
+  return {
+    w: Math.round(clamp(start.w + dx * sx, POP_MIN.w, room.w)),
+    h: Math.round(clamp(start.h + dy * sy, POP_MIN.h, room.h)),
+  };
 }

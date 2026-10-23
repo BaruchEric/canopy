@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { hasOtherBackend } from "../backends";
 import { onBeat } from "../live";
 import { seenWord } from "../peers";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { homeConn, useStore } from "../store";
 import { escapeCloses } from "../surface";
 import { BackendTags, BackendsSection } from "./Backends";
@@ -127,6 +128,7 @@ export function BackendMenu() {
             </section>
           )}
           <DevicesSection />
+          <PopGrip name="backend" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>

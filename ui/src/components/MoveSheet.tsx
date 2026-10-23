@@ -6,6 +6,8 @@ import { backendOf, qual } from "../registry";
 import { closeUndoes, MOVE_STEPS, offersResume, runMove, statusOf, type MoveOutcome, type MoveStep } from "../move";
 import { cardOf, useStore } from "../store";
 import { termId, type TermTab } from "../term";
+import { CENTERED } from "../pop";
+import { PopGrip } from "./PopGrip";
 
 const STEP_TEXT: Record<MoveStep, string> = {
   check: "the target can take it",
@@ -359,6 +361,7 @@ function MoveSheet({ tab, harness, session, toRepoId, close }: Moving & { close:
             </button>
           )}
         </footer>
+        <PopGrip name="sheet move" anchor={CENTERED} gap={24} />
       </div>
     </div>
   );

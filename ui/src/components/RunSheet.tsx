@@ -36,6 +36,8 @@ import {
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
+import { CENTERED } from "../pop";
+import { PopGrip } from "./PopGrip";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -113,6 +115,7 @@ export function RunSheet() {
         aria-modal="true"
       >
         <Body sheet={sheet} />
+        <PopGrip name={`sheet ${sheet.kind}`} anchor={CENTERED} gap={24} />
       </div>
     </div>
   );

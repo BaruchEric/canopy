@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { useFitPop } from "../pop";
+import { HANGS_LEFT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { escapeCloses } from "../surface";
 
 /** One choice in a pick menu: its name, and the line under it that says what
@@ -135,6 +136,7 @@ export function PickMenu({
             </section>
           ))}
           {hint && <p className="settings-hint pick-hint">{hint}</p>}
+          <PopGrip name={`pick ${label}`} anchor={HANGS_LEFT} />
         </div>
       )}
     </div>

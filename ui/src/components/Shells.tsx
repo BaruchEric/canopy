@@ -3,7 +3,8 @@ import { escapeCloses } from "../surface";
 import { api } from "../api";
 import { clientId } from "../client";
 import { dockless, idText, useStore } from "../store";
-import { useFitPop } from "../pop";
+import { HANGS_RIGHT, useFitPop } from "../pop";
+import { PopGrip } from "./PopGrip";
 import { eachOf, stillPicked, unwatched } from "../kept";
 import { BackendWord } from "./IdLabel";
 import { HARNESS } from "../../../src/core/harness";
@@ -415,6 +416,7 @@ export function ShellsChip() {
               live there, not here.
             </p>
           </section>
+          <PopGrip name="shells" anchor={HANGS_RIGHT} />
         </div>
       )}
     </div>
