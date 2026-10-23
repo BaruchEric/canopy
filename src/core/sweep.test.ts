@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, spanDays, sweepComment, type ShellFacts } from "./sweep";
-import type { AgentCard, AuthoredPr, Run, SweepItem } from "./types";
+import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, spanDays, sweepComment, type OutsideFacts, type ShellFacts } from "./sweep";
+import type { AuthoredPr, Run, SweepItem } from "./types";
 
 const H = 3_600_000;
 const now = Date.UTC(2026, 9, 22, 12);
@@ -11,10 +11,10 @@ const run = (over: Partial<Run> = {}): Run => ({
   id: "r1", repoId: "dev-tools/canopy", action: "chat", verb: "Chat", progress: "", expectsChange: false, chat: false, harness: "claude",
   note: "", status: "done", startedAt: now - 100 * H, steps: [], prompt: null, ...over,
 });
-const card = (over: Partial<AgentCard> = {}): AgentCard => ({
+const card = (over: Partial<OutsideFacts> = {}): OutsideFacts => ({
   id: "claude:s1", handle: "h", node: "mac", harness: "claude", session: "s1", origin: "elsewhere", cwd: "/x", repo: null, branch: null, model: null,
   mode: null, state: "idle", waiting: null, caps: [], offers: [], notifyIdle: false,
-  where: { os: "darwin", container: false, pid: 1, term: "kitty", canopy: null }, transcript: null, startedAt: now - 30 * H, seenAt: now - 25 * H, endedAt: null, ...over,
+  where: { os: "darwin", container: false, pid: 1, term: "kitty", canopy: null }, transcript: null, startedAt: now - 30 * H, seenAt: now - 25 * H, endedAt: null, idleSince: now - 25 * H, ...over,
 });
 
 test("a shell quiet past its span is offered, checked", () => {
@@ -78,6 +78,12 @@ test("an outside agent is listed, never closable or checked", () => {
   const [it] = planSweep({ ...base, outside: [card()] }, DEFAULT_SWEEP, now);
   expect(it).toMatchObject({ kind: "outside", closable: false, checked: false, handOnly: false, idleSince: now - 25 * H });
   expect(planSweep({ ...base, outside: [card({ where: { os: "linux", container: false, pid: 1, term: null, canopy: { backend: "mini" } } })] }, DEFAULT_SWEEP, now)).toEqual([]);
+});
+test("an outside agent's heartbeats do not reset its idle span", () => {
+  const idle = { ...card({ seenAt: now }), idleSince: now - 25 * H };
+  const out = planSweep({ ...base, outside: [idle] }, DEFAULT_SWEEP, now);
+  expect(out).toHaveLength(1);
+  expect(out[0]).toMatchObject({ key: "outside:claude:s1", idleSince: now - 25 * H, why: "idle for 25h, not started by canopy", closable: false });
 });
 test("normalizeSweep drops a negative span and an unknown auto kind to defaults", () => {
   expect(normalizeSweep({ spans: { shell: -1 }, auto: ["shell", "nope"] })).toMatchObject({ spans: { shell: 24 * H }, auto: ["shell"] });

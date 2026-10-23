@@ -197,6 +197,78 @@ describe("shells this window ends or restores", () => {
     expect(useStore.getState().terms.map((t) => t.id)).toEqual([other]);
   });
 
+  test("a rename after the socket URL was sent survives the first shell list", async () => {
+    const id = "b".repeat(32);
+    globalThis.fetch = answer({ ok: true, label: "after" });
+    const current = useStore.getState();
+    const conn = connOf(current, current.home);
+    useStore.setState({
+      repos: [app],
+      panels: [],
+      terms: [{ ...tab(id), label: "before" }],
+      shells: [],
+      pendingTermLabels: {},
+      conns: { ...current.conns, [current.home]: { ...conn, backend: { ...conn.backend, labels: true } } },
+    });
+
+    useStore.getState().renameTerm(id, "after");
+    expect(useStore.getState().terms.find((t) => t.id === id)?.label).toBe("after");
+    expect(calls).toEqual([]);
+
+    // The socket already carried "before" when the user renamed the tab.
+    useStore.getState().applyEvent({ type: "terms", terms: [{ ...info(id), label: "before" }] });
+    expect(useStore.getState().terms.find((t) => t.id === id)?.label).toBe("after");
+    expect(calls.some((call) => call.includes("/api/terms/label"))).toBe(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(useStore.getState().pendingTermLabels[id]).toBeUndefined();
+  });
+
+  test("a second rename after the ticket resolves uses the label the socket actually sent", async () => {
+    const id = "d".repeat(32);
+    globalThis.fetch = answer({ ok: true, label: "C" });
+    const current = useStore.getState();
+    const conn = connOf(current, current.home);
+    useStore.setState({
+      repos: [app],
+      panels: [],
+      terms: [{ ...tab(id), label: "A" }],
+      shells: [],
+      pendingTermLabels: {},
+      conns: { ...current.conns, [current.home]: { ...conn, backend: { ...conn.backend, labels: true } } },
+    });
+
+    useStore.getState().renameTerm(id, "B");
+    useStore.getState().termSocketLabelSent(id, "B");
+    useStore.getState().renameTerm(id, "C");
+    useStore.getState().applyEvent({ type: "terms", terms: [{ ...info(id), label: "B" }] });
+
+    expect(useStore.getState().terms.find((t) => t.id === id)?.label).toBe("C");
+    expect(calls.some((call) => call.includes("/api/terms/label"))).toBe(true);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(useStore.getState().pendingTermLabels[id]).toBeUndefined();
+  });
+
+  test("a later label from another device wins over a pending startup rename", () => {
+    const id = "c".repeat(32);
+    globalThis.fetch = answer({ ok: true });
+    const current = useStore.getState();
+    const conn = connOf(current, current.home);
+    useStore.setState({
+      repos: [app],
+      panels: [],
+      terms: [{ ...tab(id), label: "before" }],
+      shells: [],
+      pendingTermLabels: {},
+      conns: { ...current.conns, [current.home]: { ...conn, backend: { ...conn.backend, labels: true } } },
+    });
+
+    useStore.getState().renameTerm(id, "local rename");
+    useStore.getState().applyEvent({ type: "terms", terms: [{ ...info(id), label: "other device" }] });
+
+    expect(useStore.getState().terms.find((t) => t.id === id)?.label).toBe("other device");
+    expect(calls).toEqual([]);
+  });
+
   test("restoring over a tab whose shell went starts that tab's view over", async () => {
     const id = "e".repeat(32);
     const kept: KeptShell = { id, repoId: "app", path: "/dev/app", place: "strip", startedAt: 1, savedAt: 2, lines: 3, agent: null };

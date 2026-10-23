@@ -140,6 +140,12 @@ export interface ShellFacts {
   agent: { state: AgentState; session: string | null } | null;
 }
 
+/** A registry card with the start of its current state observed here.
+ *  `seenAt` is a heartbeat, so it cannot measure how long it stayed idle. */
+export interface OutsideFacts extends AgentCard {
+  idleSince: number;
+}
+
 export interface PlanInputs {
   /** when this server process started */
   serverStart: number;
@@ -148,7 +154,7 @@ export interface PlanInputs {
   runs: Run[];
   /** runs the landing queue or a flow still holds */
   heldRuns: ReadonlySet<string>;
-  outside: AgentCard[];
+  outside: OutsideFacts[];
   /** the open PRs the gh login authored */
   prs: AuthoredPr[];
   /** watched PRs canopy works on, as `slug#number`: a fix going, its own
@@ -213,7 +219,7 @@ export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): Sw
 
   for (const c of inputs.outside) {
     if (c.where.canopy !== null || (c.state !== "idle" && c.state !== "lost")) continue;
-    add("outside", c.id, null, `${c.node}:${c.cwd}`, `${c.harness} agent`, c.seenAt, (i) => `${c.state} for ${ago(i)}, not started by canopy`, false);
+    add("outside", c.id, null, `${c.node}:${c.cwd}`, `${c.harness} agent`, c.idleSince, (i) => `${c.state} for ${ago(i)}, not started by canopy`, false);
   }
 
   if (inputs.prs.length > 0) {

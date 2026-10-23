@@ -108,6 +108,12 @@ export function renameTab(tabs: TermTab[], id: string, label: string): TermTab[]
   return next;
 }
 
+/** The tab a shell should start with after an async ticket request: the
+ *  current tab for this shell, or the original if it has since disappeared. */
+export function currentTermForSocket(tabs: readonly TermTab[], starting: TermTab): TermTab {
+  return tabs.find((t) => t.id === starting.id) ?? starting;
+}
+
 /** `tabs` with the names their shells carry on the backend, so a rename or
  *  a cleared name on another device reaches this one and a shell brought
  *  back keeps its name. `keeps` says whether a tab's backend keeps names at

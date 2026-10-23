@@ -565,6 +565,15 @@ export interface Conn {
   peerSync: PeerSync;
 }
 
+/** A local rename made before the shell's first list arrived. `previous`
+ *  records the label the startup socket carried, so a later remote rename
+ *  can take precedence when the shell appears. */
+type PendingTermLabel = {
+  previous: string | null;
+  label: string | null;
+  phase: "waiting" | "sending";
+};
+
 /** What a backend is before it has said anything. One frozen object, so a
  *  selector reading a backend not yet known gets the same thing every time. */
 const NO_CONN: Conn = Object.freeze({
@@ -686,6 +695,8 @@ export interface CanopyState {
   /** every shell the server holds, with who is looking at each; the tabs
    *  here are the ones of those this window shows */
   shells: TermInfo[];
+  /** startup renames waiting for their shell's first terms event */
+  pendingTermLabels: Record<string, PendingTermLabel>;
   /** the shells a machine going down left behind, offered to restore */
   kept: KeptShell[];
   /** tailchan as the backend sees it: null until asked, `ready: false`
@@ -1212,6 +1223,8 @@ export interface CanopyState {
   setChanNotify: (on: boolean) => Promise<void>;
   /** marks a shell whose process has ended; its tab stays until closed */
   endTerm: (id: string, code: number | null) => void;
+  /** records the initial socket's label before the shell appears in a terms event */
+  termSocketLabelSent: (id: string, label: string | null) => void;
   setTermHeight: (px: number) => void;
   setPanelTermHeight: (repoId: string, px: number) => void;
   setFocusSize: (size: FocusSize | null) => void;
@@ -1948,6 +1961,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   peerSeen: [],
   peerSync: "off",
   shells: [],
+  pendingTermLabels: {},
   kept: [],
   chan: null,
   chanAs: "",
@@ -3066,15 +3080,50 @@ export const useStore = create<CanopyState>((set, get) => ({
       // a shell opened on another device shows up here too; a dockless
       // window (solo, shell) keeps no tabs of its own, but a pop-out
       // (popped=1) keeps its own panel's (adoptHere)
+      const labelsToSet: Array<{ id: string; label: string; wanted: string | null }> = [];
       set((s) => {
         const shells = sliceIn(registry(), s.shells, b, ev.terms, (t) => t.id);
         const hiddenTerms = pruneHiddenOf(s.hiddenTerms, b, ev.terms);
+        const pendingTermLabels = { ...s.pendingTermLabels };
+        for (const shell of shells) {
+          if (backendOf(shell.id) !== b) continue;
+          const pending = pendingTermLabels[shell.id];
+          if (!pending) continue;
+          const serverLabel = shell.label ?? null;
+          if (serverLabel === pending.label || serverLabel !== pending.previous) {
+            // Our startup label landed, or another device changed it after
+            // the socket label was sent. In either case the server is current.
+            delete pendingTermLabels[shell.id];
+          } else if (pending.phase === "waiting") {
+            pendingTermLabels[shell.id] = { ...pending, phase: "sending" };
+            labelsToSet.push({ id: shell.id, label: pending.label ?? "", wanted: pending.label });
+          }
+        }
+        let terms = adoptLabels(adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)), shells, (id) => connOf(s, backendOf(id)).backend.labels === true);
+        for (const [id, pending] of Object.entries(pendingTermLabels)) terms = renameTab(terms, id, pending.label ?? "");
         return {
           shells,
           hiddenTerms,
-          terms: adoptLabels(adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)), shells, (id) => connOf(s, backendOf(id)).backend.labels === true),
+          terms,
+          pendingTermLabels,
         };
       });
+      for (const { id, label, wanted } of labelsToSet) {
+        void api.labelTerm(id, label).then(() => {
+          set((s) => {
+            const pending = s.pendingTermLabels[id];
+            if (!pending || pending.phase !== "sending" || pending.label !== wanted) return {};
+            const { [id]: _done, ...rest } = s.pendingTermLabels;
+            return { pendingTermLabels: rest };
+          });
+        }).catch(() => {
+          set((s) => {
+            const pending = s.pendingTermLabels[id];
+            if (!pending || pending.phase !== "sending" || pending.label !== wanted) return {};
+            return { pendingTermLabels: { ...s.pendingTermLabels, [id]: { ...pending, phase: "waiting" } } };
+          });
+        });
+      }
     }
   },
 
@@ -3759,14 +3808,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a task's and the ranger's sessions belong to their hubs: closing the tab only leaves
     if (!tab.task && !tab.ranger) endShells([tab]);
     const terms = s.terms.filter((t) => t.id !== id);
-    set({ terms, activeTerm: nextStripTab(s.terms, id, s.activeTerm), front: keepFront(s.front, terms, s.panels) });
+    const { [id]: _pending, ...pendingTermLabels } = s.pendingTermLabels;
+    set({ terms, pendingTermLabels, activeTerm: nextStripTab(s.terms, id, s.activeTerm), front: keepFront(s.front, terms, s.panels) });
   },
   hideTerm: (id) => {
     const s = get();
     if (!s.terms.some((t) => t.id === id)) return;
     const terms = s.terms.filter((t) => t.id !== id);
+    const { [id]: _pending, ...pendingTermLabels } = get().pendingTermLabels;
     set({
       terms,
+      pendingTermLabels,
       activeTerm: nextStripTab(s.terms, id, s.activeTerm),
       front: keepFront(s.front, terms, s.panels),
       hiddenTerms: s.hiddenTerms.includes(id) ? s.hiddenTerms : [...s.hiddenTerms, id],
@@ -3840,15 +3892,37 @@ export const useStore = create<CanopyState>((set, get) => ({
     }));
   },
   showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
+  termSocketLabelSent: (id, label) =>
+    set((s) => {
+      const pending = s.pendingTermLabels[id];
+      return pending && pending.previous !== label
+        ? { pendingTermLabels: { ...s.pendingTermLabels, [id]: { ...pending, previous: label } } }
+        : {};
+    }),
   renameTerm: (id, label) => {
-    const before = get().terms;
+    const state = get();
+    const before = state.terms;
+    const previous = before.find((t) => t.id === id);
     const terms = renameTab(before, id, label);
     if (terms === before) return;
-    set({ terms });
-    // a task's and the ranger's sessions have names of their own; a shell
-    // not started yet takes the name from its socket
     const tab = terms.find((t) => t.id === id);
-    if (tab && !tab.task && !tab.ranger && get().shells.some((x) => x.id === id)) void api.labelTerm(id, tab.label ?? "").catch(() => {});
+    const shellExists = state.shells.some((x) => x.id === id);
+    if (tab && !tab.task && !tab.ranger && !shellExists && connOf(state, backendOf(id)).backend.labels === true) {
+      const pending = state.pendingTermLabels[id];
+      set({
+        terms,
+        pendingTermLabels: {
+          ...state.pendingTermLabels,
+          [id]: { previous: pending ? pending.previous : previous?.label ?? null, label: tab.label ?? null, phase: "waiting" },
+        },
+      });
+      return;
+    }
+    const { [id]: _pending, ...pendingTermLabels } = state.pendingTermLabels;
+    set({ terms, pendingTermLabels });
+    // a task's and the ranger's sessions have names of their own; a shell
+    // already listed takes a label over HTTP
+    if (tab && !tab.task && !tab.ranger && shellExists) void api.labelTerm(id, tab.label ?? "").catch(() => {});
   },
   swapTerms: (a, b) => set((s) => ({ terms: swapTabs(s.terms, a, b) })),
   endTerm: (id, code) =>

@@ -21,7 +21,7 @@ import {
   type TermTab,
 } from "../store";
 import { IdLabel, WaitingFor, useWaitingFor } from "./IdLabel";
-import { LABEL_MAX, TERM_FONT, joinsOnly, otherShells, termId, viewKey } from "../term";
+import { LABEL_MAX, TERM_FONT, currentTermForSocket, joinsOnly, otherShells, termId, viewKey } from "../term";
 import { benchIs, benchSolo } from "../front";
 import { SPOT_WORD, flipMode, shellCopyOf, shellSpot, termFontIn, tidyLines, type CopyOut, type ShellSpot, type SurfaceMode } from "../surface";
 import { SHELL_TARGETS, type ShellTarget } from "../settings";
@@ -353,7 +353,12 @@ export function TermView({
         return;
       }
       saidSignIn = false;
-      const sock = new WebSocket(socketUrl(tab, term.cols, term.rows, rejoin, plan.kind === "ticket" ? plan.ticket : null));
+      const socketTab = currentTermForSocket(useStore.getState().terms, tab);
+      if (!rejoin) {
+        const label = joinsOnly(socketTab, rejoin) ? null : socketTab.label ?? null;
+        useStore.getState().termSocketLabelSent(socketTab.id, label);
+      }
+      const sock = new WebSocket(socketUrl(socketTab, term.cols, term.rows, rejoin, plan.kind === "ticket" ? plan.ticket : null));
       sock.binaryType = "arraybuffer";
       ws = sock;
       // A rejoined shell's output arrives again from the start of its

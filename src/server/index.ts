@@ -871,7 +871,8 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   // its own auto-merge, a run on the branch) is never offered
   for (const w of state.prs.info()) if (w.fixing) heldRuns.add(w.fixing.run);
   const fixing = state.prs.busy();
-  return { serverStart, shells, runs, heldRuns, outside: cards, fixing, repos: state.result.repos };
+  const outside = cards.map((c) => ({ ...c, idleSince: state.registry.stateSince(c.id) ?? serverStart }));
+  return { serverStart, shells, runs, heldRuns, outside, fixing, repos: state.result.repos };
 }
 
 /** Starts a chat on the session the sweep stopped one on, as a chat started

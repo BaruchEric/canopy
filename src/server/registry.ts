@@ -49,11 +49,15 @@ export interface RegistryDeps {
   relistEvery?: number;
   /** the pid namespace the scan names; read off the machine when absent */
   container?: boolean;
+  now?: () => number;
 }
 
 export class RegistryHub {
   readonly chan: Chan | null;
   private cards = new Map<string, AgentCard>();
+  /** When this backend observed each card enter its current state.
+   *  A heartbeat updates the card without resetting this clock. */
+  private stateTimes = new Map<string, number>();
   /** Which event last told of each card, numbered in the order they came.
    *  A list asked for before then is older news about that card even when
    *  its beat is the same: the broker marks a card lost without a new
@@ -119,12 +123,18 @@ export class RegistryHub {
     return [...this.cards.values()].sort((a, b) => b.seenAt - a.seenAt);
   }
 
+  /** The current state's observed start, unknown once the card is gone. */
+  stateSince(id: string): number | undefined {
+    return this.stateTimes.get(id);
+  }
+
   /** One card into the map, unless an older reading of it (a stream event
    *  that lagged behind a list); says whether a follower would see a
    *  change, since a beat alone moves only `seenAt`. */
   private absorb(card: AgentCard): boolean {
     const prev = this.cards.get(card.id);
     if (prev && prev.seenAt > card.seenAt) return false;
+    if (!prev || prev.state !== card.state) this.stateTimes.set(card.id, this.deps.now?.() ?? Date.now());
     this.cards.set(card.id, card);
     return !prev || sig(prev) !== sig(card);
   }
@@ -158,6 +168,7 @@ export class RegistryHub {
         for (const [id, c] of this.cards) {
           if (!ids.has(id) && c.seenAt < asked && !since(id)) {
             this.cards.delete(id);
+            this.stateTimes.delete(id);
             this.heard.delete(id);
             gone.push(id);
           }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, adoptLabels, cleanLabel, renameTab, swapTabs, LABEL_MAX, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, adoptLabels, cleanLabel, renameTab, swapTabs, currentTermForSocket, LABEL_MAX, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -358,6 +358,21 @@ describe("naming and ordering tabs by hand", () => {
     expect(renameTab(named, "b", "loot")).toBe(named);
     expect("label" in (renameTab(named, "b", "  ")[1] ?? {})).toBe(false);
     expect(renameTab(tabs, "zz", "x")).toBe(tabs);
+  });
+
+  test("a rename while a ticket is pending is the tab the socket starts with", async () => {
+    const original = t("a", { label: "before" });
+    let tabs = [original];
+    let releaseTicket: (() => void) | undefined;
+    const ticket = new Promise<void>((resolve) => {
+      releaseTicket = resolve;
+    });
+    const opening = ticket.then(() => currentTermForSocket(tabs, original));
+
+    tabs = renameTab(tabs, original.id, "after");
+    releaseTicket?.();
+
+    expect((await opening).label).toBe("after");
   });
 
   test("swapping trades two places; a missing tab changes nothing", () => {

@@ -13,6 +13,7 @@ import { join } from "node:path";
 import type { AgentProc } from "../core/agentscan";
 import { selfName } from "../core/backends";
 import { Chan } from "../core/chan";
+import { DEFAULT_SWEEP, planSweep } from "../core/sweep";
 import type { AgentCard, RegistryInfo, ScanBody, ServerEvent } from "../core/types";
 import { startServer } from "./index";
 import { RegistryHub } from "./registry";
@@ -100,7 +101,7 @@ const CFG = { url: BROKER, as: "eric", bot: "canopy", channel: "canopy" };
 
 let scratch: string;
 let root: string;
-let server: { port: number; stop: () => void };
+let server: Awaited<ReturnType<typeof startServer>>;
 const saved: Record<string, string | undefined> = {};
 const api = (path: string) => `http://127.0.0.1:${server.port}${path}`;
 const events: ServerEvent[] = [];
@@ -157,7 +158,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   listening.abort();
-  server.stop();
+  await server.stop();
   broker.stop(true);
   for (const [k, v] of Object.entries(saved)) {
     if (v === undefined) delete process.env[k];
@@ -194,6 +195,45 @@ describe("the follow", () => {
 });
 
 describe("the hub on its own", () => {
+  test("outside agents age through heartbeats and start their idle span again after activity", () => {
+    const start = Date.UTC(2026, 9, 22, 12);
+    const H = 3_600_000;
+    let now = start;
+    const hub = new RegistryHub(CFG, { broadcast: () => {}, repos: () => [], now: () => now });
+    const outside = card({ id: "claude:outside", startedAt: start - 72 * H, seenAt: start, where: { os: "darwin", container: false, pid: 42, term: "kitty", canopy: null } });
+    const hear = (c: AgentCard) => hub["onMessage"]({ id: 1, channel: "agents", handle: "tailchan", node: "tailchan", kind: "event", body: JSON.stringify({ type: "agent", card: c }), meta: {}, ts: now });
+    const plan = () => planSweep({ serverStart: start, shells: [], runs: [], heldRuns: new Set<string>(), outside: hub.list().map((c) => ({ ...c, idleSince: hub.stateSince(c.id) ?? now })), prs: [], fixing: new Set<string>(), repos: [] }, DEFAULT_SWEEP, now);
+
+    hear(outside);
+    // The backend cannot infer how long an already-running agent was idle.
+    expect(plan()).toEqual([]);
+    for (let hour = 1; hour <= 25; hour++) {
+      now = start + hour * H;
+      hear({ ...outside, seenAt: now });
+    }
+    expect(plan()).toMatchObject([{ key: "outside:claude:outside", idleSince: start, closable: false }]);
+
+    hear({ ...outside, state: "working", seenAt: now });
+    expect(plan()).toEqual([]);
+    now += H;
+    hear({ ...outside, seenAt: now });
+    const idleAgain = now;
+    expect(plan()).toEqual([]);
+    now += 25 * H;
+    hear({ ...outside, seenAt: now });
+    // An older state event must not reset the current idle span.
+    hear({ ...outside, state: "working", seenAt: idleAgain });
+    expect(plan()).toMatchObject([{ key: "outside:claude:outside", idleSince: idleAgain }]);
+
+    // The broker marks an agent lost without advancing its last heartbeat.
+    now += H;
+    hear({ ...outside, state: "lost", seenAt: now - H });
+    expect(plan()).toEqual([]);
+    now += 25 * H;
+    expect(plan()).toMatchObject([{ key: "outside:claude:outside", idleSince: now - 25 * H }]);
+    hub.close();
+  });
+
   test("a lagging event is passed over, a re-list drops what the broker swept and says only what changed", async () => {
     const out: ServerEvent[] = [];
     const hub = new RegistryHub(CFG, { broadcast: (ev) => out.push(ev), repos: () => [], chan: new Chan(BROKER), scanEvery: 0, relistEvery: 0 });
@@ -210,6 +250,7 @@ describe("the hub on its own", () => {
     await hub.relist();
     expect(out).toEqual([{ type: "registry", cards: [], gone: ["codex:old"] }]);
     expect(hub.list()[0]?.seenAt).toBe(9_000);
+    expect(hub.stateSince("codex:old")).toBeUndefined();
     hub.close();
   });
 
@@ -248,7 +289,7 @@ describe("the hub on its own", () => {
       expect(res.status).toBe(503);
       expect(((await res.json()) as { error: string }).error).toContain("tailchan");
     } finally {
-      other.stop();
+      await other.stop();
     }
   });
 });

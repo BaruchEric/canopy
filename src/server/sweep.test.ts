@@ -8,9 +8,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:tes
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_SWEEP, normalizeSweep, type PlanInputs, type ShellFacts } from "../core/sweep";
+import { DEFAULT_SWEEP, normalizeSweep, type OutsideFacts, type PlanInputs, type ShellFacts } from "../core/sweep";
 import { addSweptChat, readAsk, readLastFire, readLog, readSweptChats, sweepDir, writeAsk, writeLastFire } from "../core/sweepstore";
-import type { AgentCard, AuthoredPr, PrNow, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
+import type { AuthoredPr, PrNow, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
 import { SweepHub, type SweepDeps } from "./sweep";
 
 const H = 3_600_000;
@@ -42,7 +42,7 @@ const run = (over: Partial<Run> = {}): Run => ({
   prompt: null,
   ...over,
 });
-const card = (over: Partial<AgentCard> = {}): AgentCard => ({
+const card = (over: Partial<OutsideFacts> = {}): OutsideFacts => ({
   id: "claude:s1",
   handle: "h",
   node: "mac",
@@ -64,6 +64,7 @@ const card = (over: Partial<AgentCard> = {}): AgentCard => ({
   startedAt: NOW - 30 * H,
   seenAt: NOW - 25 * H,
   endedAt: null,
+  idleSince: NOW - 25 * H,
   ...over,
 });
 const authored = (over: Partial<AuthoredPr> = {}): AuthoredPr => ({
@@ -84,7 +85,7 @@ const idleChat = (id: string): Run => run({ id, chat: true, status: "idle", sess
 interface Facts {
   shells: ShellFacts[];
   runs: Run[];
-  outside: AgentCard[];
+  outside: OutsideFacts[];
   tmuxDown: boolean;
   /** a started chat's stop ends it only when its process exits, later */
   chatEndsLater: boolean;
