@@ -96,6 +96,12 @@ export function patchSweep(cur: SweepSettings, patch: unknown): SweepSettings | 
   return out;
 }
 
+/** The comment a PR the sweep closes gets; `days` is the pr span in days. */
+export const sweepComment = (days: number): string => `Closed by canopy's sweep after ${days} day${days === 1 ? "" : "s"} with no activity. Reopen it to pick it back up.`;
+
+/** the pr span as the comment says it: whole days, at least one */
+export const spanDays = (ms: number): number => Math.max(1, Math.round(ms / DAY));
+
 /** Whether a close Eric did not tick by hand may take the item: the
  *  schedule's own closes, the ask, and an answer to it. It must be one the
  *  sweep can close, and not one only a tick in the sheet closes. The

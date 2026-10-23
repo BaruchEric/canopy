@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, type ShellFacts } from "./sweep";
+import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, spanDays, sweepComment, type ShellFacts } from "./sweep";
 import type { AgentCard, AuthoredPr, Run, SweepItem } from "./types";
 
 const H = 3_600_000;
@@ -168,4 +168,12 @@ test("PRs sort after runs and before outside agents, oldest first", () => {
     outside: [card()],
   }, DEFAULT_SWEEP, now);
   expect(out.map((i) => i.key)).toEqual(["run:d1", "pr:barucheric/canopy#2", "pr:barucheric/canopy#1", "outside:claude:s1"]);
+});
+
+test("sweepComment says the span in days, and spanDays rounds the pr span to whole days, at least one", () => {
+  expect(sweepComment(14)).toBe("Closed by canopy's sweep after 14 days with no activity. Reopen it to pick it back up.");
+  expect(sweepComment(1)).toBe("Closed by canopy's sweep after 1 day with no activity. Reopen it to pick it back up.");
+  expect(spanDays(DEFAULT_SWEEP.spans.pr)).toBe(14);
+  expect(spanDays(36 * 3_600_000)).toBe(2);
+  expect(spanDays(10 * 60_000)).toBe(1);
 });

@@ -41,6 +41,8 @@ interface Gh {
   mergeQueued: boolean;
   /** the permission endpoint answers 502 */
   permDown: boolean;
+  /** what gh says when a close fails */
+  closeFails: string | null;
 }
 
 let n = 0;
@@ -60,6 +62,8 @@ interface World {
   forgot: string[];
   held: string | null;
   recDir: string;
+  /** the hub's clock when set, else the real one */
+  clock: number | null;
   /** a new hub on the same records, as after a restart */
   restart: () => Promise<PrHub>;
 }
@@ -100,22 +104,22 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
   const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
-  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false };
+  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir } as unknown as World;
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
     if (a === "auth") return g.auth ? ok("Logged in") : no("not logged in");
     if (a === "pr" && b === "create") return ok(`https://github.com/o/r/pull/7\n`);
-    if (a === "pr" && b === "view") return ok(JSON.stringify(view(g)));
+    if (a === "pr" && b === "view") return ok(JSON.stringify({ ...view(g), updatedAt: "2026-10-01T12:00:00Z" }));
     if (a === "pr" && b === "merge") {
       if (g.mergeFails) return no("Head branch was modified");
       if (!g.mergeQueued) g.state = "MERGED";
       return ok("");
     }
-    if (a === "pr" && b === "close") return ok("");
+    if (a === "pr" && b === "close") return g.closeFails ? no(`some noise\n${g.closeFails}\n`) : ok("");
     if (a === "run" && b === "view") return ok("lots of log\nError: expected 2, got 3\n");
     if (a === "repo" && b === "view") return ok(JSON.stringify({ squashMergeAllowed: true, mergeCommitAllowed: false, rebaseMergeAllowed: false }));
     if (a === "api" && b?.endsWith("/permission")) {
@@ -156,6 +160,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
       runOk: (x) => !w.active.has(x) && !w.failed.has(x),
       dir: recDir,
       tickEvery: 60_000,
+      now: () => w.clock ?? Date.now(),
     });
   w.hub = make();
   await w.hub.adopt();
@@ -562,6 +567,133 @@ describe("close", () => {
     expect(pr.state?.status).toBe("closed");
     expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
     expect(existsSync(w.dir)).toBe(true);
+  });
+});
+
+describe("the sweep's close", () => {
+  const COMMENT = "Closed by canopy's sweep after 14 days with no activity. Reopen it to pick it back up.";
+  const DAY = 24 * 3_600_000;
+  const due = (hub: PrHub, id: string): number | undefined => (hub as unknown as { due: Map<string, number> }).due.get(id);
+  const remoteHas = async (w: World): Promise<boolean> => (await exec(["git", "rev-parse", "-q", "--verify", `refs/heads/${w.rec.branch}`], { cwd: w.bare })).code === 0;
+
+  test("sweepClose comments, keeps the branch and marks the watch", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.clock = Date.now();
+    await w.hub.sweepClose(w.rec.id, COMMENT);
+    expect(w.gh.calls.find((c) => c[1] === "close")).toEqual(["pr", "close", "7", "-R", "o/r", "--comment", COMMENT]);
+    expect(await remoteHas(w)).toBe(true);
+    expect(existsSync(w.dir)).toBe(true);
+    // the landing record keeps its PR, so the branch stays out of the queue
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    const pr = w.hub.info()[0]!;
+    expect(pr.swept).toBe(w.clock);
+    expect(pr.state?.status).toBe("closed");
+    expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+    // a read that finds it closed changes none of that
+    w.gh.state = "CLOSED";
+    const read = await pollNow(w);
+    expect(read.swept).toBe(w.clock);
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    expect(due(w.hub, w.rec.id)).toBe(w.clock + DAY);
+    // and a restart reads it again
+    const again = await w.restart();
+    expect(due(again, w.rec.id)).toBeDefined();
+  });
+
+  test("sweepClose refuses while a fix runs and says gh's last line when the close fails", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    await w.hub.set(w.rec.id, { autoFix: true });
+    await pollNow(w);
+    expect(w.fixes).toHaveLength(1);
+    await expect(w.hub.sweepClose(w.rec.id, COMMENT)).rejects.toThrow("a fix is going");
+    expect(w.gh.calls.some((c) => c[1] === "close")).toBe(false);
+    await endFix(w, w.fixes[0]!.id, "fix.txt");
+    w.gh.closeFails = "GraphQL: Resource not accessible by integration (closePullRequest)";
+    await expect(w.hub.sweepClose(w.rec.id, COMMENT)).rejects.toThrow(/^gh pr close: GraphQL: Resource not accessible by integration \(closePullRequest\)$/);
+    expect(w.hub.info()[0]?.swept).toBeUndefined();
+  });
+
+  test("a swept watch reopened on GitHub goes back to normal polling", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    await w.hub.sweepClose(w.rec.id, COMMENT);
+    w.gh.state = "OPEN";
+    w.clock = Date.now();
+    const pr = await pollNow(w);
+    expect(pr.swept).toBeUndefined();
+    expect(pr.state?.status).toBe("open");
+    expect(w.records.get(w.rec.id)?.pr).toBe(7);
+    expect(due(w.hub, w.rec.id)! - w.clock).toBeLessThanOrEqual(5 * 60_000);
+  });
+
+  test("a swept watch past 30 days is dropped", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    w.clock = Date.now();
+    await w.hub.sweepClose(w.rec.id, COMMENT);
+    w.gh.state = "CLOSED";
+    w.clock += 29 * DAY;
+    expect((await pollNow(w)).swept).toBeDefined();
+    w.clock += 2 * DAY;
+    const reads = w.gh.calls.filter((c) => c[1] === "view").length;
+    await pollNow(w);
+    expect(w.hub.info()).toEqual([]);
+    // dropped as close drops it, with no read and the branch left on the remote
+    expect(w.gh.calls.filter((c) => c[1] === "view").length).toBe(reads);
+    expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
+    expect(await remoteHas(w)).toBe(true);
+  });
+
+  test("a swept watch is kept past the closed PRs prune keeps", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    w.gh.head = await revOf(w.dir, "HEAD");
+    await pollNow(w);
+    await w.hub.sweepClose(w.rec.id, COMMENT);
+    // older closed watches would push it past KEEP_DONE
+    const hub = w.hub as unknown as { watches: Map<string, PrWatch>; prune: () => void };
+    const base = w.hub.info()[0]!;
+    for (let i = 0; i < 25; i++) hub.watches.set(`x${i}`, { ...base, id: `x${i}`, swept: undefined, openedAt: base.openedAt + 1 + i } as unknown as PrWatch);
+    hub.prune();
+    expect(w.hub.info().some((x) => x.id === w.rec.id)).toBe(true);
+  });
+
+  test("watchFor matches a PR by slug in any case and number", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    expect(w.hub.watchFor("O/R", 7)?.id).toBe(w.rec.id);
+    expect(w.hub.watchFor("o/r", 8)).toBeUndefined();
+  });
+
+  test("closeAuthored: a watched PR goes through sweepClose, any other is closed with the comment and its branch kept", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.closeAuthored("o/r", 7, COMMENT);
+    expect(w.hub.info()[0]?.swept).toBeDefined();
+    await w.hub.closeAuthored("eric/other", 3, COMMENT);
+    const closes = w.gh.calls.filter((c) => c[1] === "close");
+    expect(closes.at(-1)).toEqual(["pr", "close", "3", "-R", "eric/other", "--comment", COMMENT]);
+    expect(closes.flat()).not.toContain("--delete-branch");
+    expect(await remoteHas(w)).toBe(true);
+  });
+
+  test("readState reads one PR's state and last activity, null when gh cannot", async () => {
+    const w = await world();
+    expect(await w.hub.readState("o/r", 7)).toEqual({ state: "OPEN", updatedAt: Date.parse("2026-10-01T12:00:00Z") });
+    expect(w.gh.calls.at(-1)).toEqual(["pr", "view", "7", "-R", "o/r", "--json", "state,updatedAt"]);
+    const v = await world();
+    (v.hub as unknown as { deps: { gh: unknown } }).deps.gh = async () => no("could not resolve to a PullRequest");
+    expect(await v.hub.readState("o/r", 7)).toBeNull();
   });
 });
 

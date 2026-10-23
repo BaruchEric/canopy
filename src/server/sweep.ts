@@ -17,14 +17,14 @@
 
 import { nextFire, parseCron } from "../core/cron";
 import { loadConfig, setSweep } from "../core/store";
-import { mayClose, patchSweep, planSweep, type PlanInputs } from "../core/sweep";
+import { mayClose, patchSweep, planSweep, spanDays, sweepComment, type PlanInputs } from "../core/sweep";
 import { addSweptChat, appendLog, readAsk, readLastFire, readLog, readSweptChats, takeSweptChat, writeAsk, writeLastFire } from "../core/sweepstore";
-import { SWEEP_KINDS, type KeptShell, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
+import { SWEEP_KINDS, type AuthoredPr, type KeptShell, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
 
 export interface SweepDeps {
   broadcast(ev: ServerEvent): void;
-  /** the shells, runs and cards as they are now */
-  facts(): Promise<PlanInputs>;
+  /** the shells, runs and cards as they are now; the hub adds the PRs */
+  facts(): Promise<Omit<PlanInputs, "prs">>;
   /** ends a shell, keeping its history as a swept record first: "in use
    *  now" when it was typed into after `seen`, the last keystroke the plan
    *  saw for it (0 for none), "failed" when the record could not be
@@ -40,6 +40,16 @@ export interface SweepDeps {
   startChat(c: SweptChat): Promise<Run>;
   /** the swept shells on offer to restore */
   keptSwept(): Promise<KeptShell[]>;
+  /** the open PRs the gh login authored (`AUTHORED_QUERY`); throws when
+   *  gh cannot list them */
+  authoredPrs(): Promise<AuthoredPr[]>;
+  /** one PR's state (`OPEN`, `CLOSED`, `MERGED`) and last activity as
+   *  GitHub has them now; null when gh could not say */
+  prState(slug: string, number: number): Promise<{ state: string; updatedAt: number } | null>;
+  /** closes a PR with the comment and keeps its branch; throws gh's last line */
+  closePr(pr: AuthoredPr, comment: string): Promise<void>;
+  /** whether this backend holds the flows lock, the one that sweeps PRs */
+  holdsFlowsLock(): boolean;
   now?: () => number;
   /** the settings' read and write, in place of the config's; tests */
   loadSettings?: () => Promise<SweepSettings>;
@@ -66,6 +76,11 @@ const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
 
 /** how often the schedule looks at its cron */
 const TICK_MS = 60_000;
+/** how long the authored-PR list is kept: a sweep event has every open
+ *  page read the plan at once, and each read would be a GraphQL query */
+const PR_LIST_MS = 60_000;
+
+const prId = (pr: AuthoredPr): string => `${pr.slug}#${pr.number}`;
 
 /** Whether the schedule may close an item with no one looking: its kind is
  *  one Eric let close on its own, and the plan lets a close he did not
@@ -86,6 +101,9 @@ export class SweepHub {
   private ticking = false;
   /** set by `stop`, so a `start` whose catch-up outlives it stays stopped */
   private stopped = false;
+  /** the authored-PR list and when it was asked for; the promise, so
+   *  reads that arrive together share one query */
+  private prList: { at: number; list: Promise<AuthoredPr[]> } | null = null;
 
   constructor(private readonly deps: SweepDeps) {}
 
@@ -105,6 +123,27 @@ export class SweepHub {
   private async settings(): Promise<SweepSettings> {
     if (this.deps.loadSettings) return this.deps.loadSettings();
     return (await loadConfig()).sweep;
+  }
+
+  /** The authored PRs, from the list kept for `PR_LIST_MS`. A backend
+   *  without the flows lock sweeps no PRs and never asks; a list gh could
+   *  not give is none, kept as long, so the rest of the plan still reads. */
+  private authored(): Promise<AuthoredPr[]> {
+    if (!this.deps.holdsFlowsLock()) return Promise.resolve([]);
+    const now = this.now();
+    if (this.prList && now - this.prList.at < PR_LIST_MS) return this.prList.list;
+    const list = this.deps.authoredPrs().catch((err) => {
+      console.error("canopy: sweep: the authored PRs could not be listed:", errText(err));
+      return [];
+    });
+    this.prList = { at: now, list };
+    return list;
+  }
+
+  /** the facts with the authored PRs, from `prs` when the caller has them */
+  private async facts(prs?: AuthoredPr[]): Promise<PlanInputs> {
+    const [facts, list] = await Promise.all([this.deps.facts(), prs ?? this.authored()]);
+    return { ...facts, prs: list };
   }
 
   /** The plan less what this hub has closed already. A closed key the plan
@@ -185,7 +224,7 @@ export class SweepHub {
       // long enough for Eric to switch the schedule off or change its kinds
       const settings = await this.settings();
       if (!settings.on) return;
-      const facts = await this.deps.facts();
+      const facts = await this.facts();
       const items = this.plan(facts, settings);
       // a draft PR is handOnly, so it joins neither the close nor the ask
       const auto = items.filter((i) => autoCloses(i, settings)).map((i) => i.key);
@@ -226,7 +265,7 @@ export class SweepHub {
     try {
       const ask = await readAsk();
       if (!ask) return;
-      const facts = await this.deps.facts();
+      const facts = await this.facts();
       const items = this.plan(facts, await this.settings());
       const left = ask.filter((a) => items.some((i) => i.key === a.key) || (facts.shells === null && a.kind === "shell"));
       if (left.length < ask.length) await writeAsk(left);
@@ -236,7 +275,7 @@ export class SweepHub {
   }
 
   async info(): Promise<SweepInfo> {
-    const [facts, settings, log, shells, chats, ask] = await Promise.all([this.deps.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
+    const [facts, settings, log, shells, chats, ask] = await Promise.all([this.facts(), this.settings(), readLog(), this.deps.keptSwept(), readSweptChats(), readAsk()]);
     const items = this.plan(facts, settings);
     // the ask's keys as the plan has them now: what has closed or come back
     // into use drops out, and so does a shell that has started a program
@@ -284,20 +323,29 @@ export class SweepHub {
    *  has started a program since is "in use now" to both. The schedule
    *  reads the settings again before each key: once the schedule is off
    *  it stops, and a key whose kind has left the auto kinds is skipped;
-   *  either way such keys get no outcome, since nothing looked at them. */
+   *  either way such keys get no outcome, since nothing looked at them.
+   *  The authored PRs are listed once per call, not per key: each PR is
+   *  read again on its own just before its close. */
   private async closeKeys(keys: string[], by: "eric" | "schedule", asked = false): Promise<SweepOutcome[]> {
     const wanted = [...new Set(keys)];
     if (wanted.length === 0) return [];
     let settings = await this.settings();
     const outcomes: SweepOutcome[] = [];
     const items: SweepItem[] = [];
+    // every key's plan carries the PRs, so a PR closed earlier stays out of it
+    const prs = await this.authored();
+    let closedPr = false;
     for (const key of wanted) {
       if (by === "schedule") {
         settings = await this.settings();
         if (!settings.on) break;
         if (!(settings.auto as readonly string[]).includes(key.slice(0, key.indexOf(":")))) continue;
       }
-      const facts = await this.deps.facts();
+      if (key.startsWith("pr:") && !this.deps.holdsFlowsLock()) {
+        outcomes.push({ key, result: "failed", why: "PRs are swept only by the backend that holds the flows lock" });
+        continue;
+      }
+      const facts = await this.facts(prs);
       const item = this.plan(facts, settings).find((i) => i.key === key);
       if (!item) {
         outcomes.push(this.closed.has(key) ? { key, result: "gone" } : missing(key, facts));
@@ -313,13 +361,18 @@ export class SweepHub {
         continue;
       }
       try {
-        const out = await this.closeOne(item, facts);
-        if (out.result === "closed") this.closed.add(key);
+        const out = await this.closeOne(item, facts, settings);
+        if (out.result === "closed") {
+          this.closed.add(key);
+          if (item.kind === "pr") closedPr = true;
+        }
         outcomes.push(out);
       } catch (err) {
         outcomes.push({ key, result: "failed", why: errText(err) });
       }
     }
+    // the list still has what was closed: the next plan asks GitHub again
+    if (closedPr) this.prList = null;
     await this.log({ at: this.now(), by, outcomes, items });
     return outcomes;
   }
@@ -356,7 +409,7 @@ export class SweepHub {
     });
   }
 
-  private async closeOne(item: SweepItem, facts: PlanInputs): Promise<SweepOutcome> {
+  private async closeOne(item: SweepItem, facts: PlanInputs, settings: SweepSettings): Promise<SweepOutcome> {
     const { key, id } = item;
     switch (item.kind) {
       case "shell": {
@@ -388,6 +441,17 @@ export class SweepHub {
       case "run":
         this.deps.dismissRun(id);
         return { key, result: "closed" };
+      case "pr": {
+        const pr = facts.prs.find((p) => prId(p) === id);
+        if (!pr) return { key, result: "gone" };
+        // the list may be a minute old: the PR as it is now
+        const now = await this.deps.prState(pr.slug, pr.number);
+        if (!now) return { key, result: "failed", why: "GitHub could not be asked whether it is still idle" };
+        if (now.state !== "OPEN") return { key, result: "gone" };
+        if (now.updatedAt > pr.updatedAt) return { key, result: "in use now" };
+        await this.deps.closePr(pr, sweepComment(spanDays(settings.spans.pr)));
+        return { key, result: "closed" };
+      }
       default:
         return { key, result: "failed", why: `the sweep does not close a ${item.kind}` };
     }
@@ -496,6 +560,10 @@ function missing(key: string, facts: PlanInputs): SweepOutcome {
       break;
     case "outside":
       there = facts.outside.some((c) => c.id === id);
+      break;
+    case "pr":
+      // still open but out of the plan: pushed to, set to auto-merge, or a fix started
+      there = facts.prs.some((p) => prId(p) === id);
       break;
     default:
       there = false;

@@ -1290,6 +1290,10 @@ export interface PrWatch {
   approve?: { head: string; why: string };
   /** the last poll's or merge's error */
   error?: string;
+  /** when the sweep closed the PR, unix ms: the watch is read once a day,
+   *  keeps its branch and the landing record's `pr`, drops this on a
+   *  reopen and goes after 30 days */
+  swept?: number;
   /** unix ms */
   openedAt: number;
   updatedAt: number;

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SWEEP, normalizeSweep, type PlanInputs, type ShellFacts } from "../core/sweep";
 import { addSweptChat, readAsk, readLastFire, readLog, readSweptChats, sweepDir, writeAsk, writeLastFire } from "../core/sweepstore";
-import type { AgentCard, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
+import type { AgentCard, AuthoredPr, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
 import { SweepHub, type SweepDeps } from "./sweep";
 
 const H = 3_600_000;
@@ -66,6 +66,19 @@ const card = (over: Partial<AgentCard> = {}): AgentCard => ({
   endedAt: null,
   ...over,
 });
+const authored = (over: Partial<AuthoredPr> = {}): AuthoredPr => ({
+  slug: "eric/app",
+  number: 7,
+  url: "https://github.com/eric/app/pull/7",
+  title: "make the thing",
+  branch: "run/thing",
+  draft: false,
+  updatedAt: NOW - 20 * 24 * H,
+  autoMerge: false,
+  queued: false,
+  archived: false,
+  ...over,
+});
 const idleChat = (id: string): Run => run({ id, chat: true, status: "idle", session: `sess-${id}`, steps: [{ id: "1", at: NOW - 13 * H, kind: "text" }] });
 
 interface Facts {
@@ -77,9 +90,17 @@ interface Facts {
   chatEndsLater: boolean;
   /** runs once the facts are read: a change that lands after the recheck */
   afterFacts: (() => void) | null;
+  /** what GitHub lists as the gh login's open PRs */
+  prs: AuthoredPr[];
+  /** whether this backend holds the flows lock */
+  lock: boolean;
+  /** what a read of one PR says, by `slug#number`; absent reads as GitHub's list does */
+  prState: Map<string, { state: string; updatedAt: number } | null>;
+  /** gh's last line when a close fails */
+  closeFails: string | null;
   settings: SweepSettings;
   events: ServerEvent[];
-  calls: { endShell: string[]; seen: number[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[] };
+  calls: { endShell: string[]; seen: number[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[]; authored: number; closePr: { id: string; comment: string }[] };
 }
 
 /** what the stand-in deps read and write, and the deps over it */
@@ -91,20 +112,23 @@ function world(): Facts & { deps: SweepDeps } {
     tmuxDown: false,
     chatEndsLater: false,
     afterFacts: null,
+    prs: [],
+    lock: true,
+    prState: new Map(),
+    closeFails: null,
     settings: { ...DEFAULT_SWEEP, spans: { ...DEFAULT_SWEEP.spans }, auto: [...DEFAULT_SWEEP.auto] },
     events: [],
-    calls: { endShell: [], seen: [], stopChat: [], dismiss: [], startChat: [] },
+    calls: { endShell: [], seen: [], stopChat: [], dismiss: [], startChat: [], authored: 0, closePr: [] },
   };
   const deps: SweepDeps = {
     broadcast: (ev) => w.events.push(ev),
-    facts: async (): Promise<PlanInputs> => {
-      const read: PlanInputs = {
+    facts: async (): Promise<Omit<PlanInputs, "prs">> => {
+      const read: Omit<PlanInputs, "prs"> = {
         serverStart: NOW - 10 * 24 * H,
         shells: w.tmuxDown ? null : w.shells.map((s) => ({ ...s })),
         runs: w.runs.map((r) => ({ ...r })),
         heldRuns: new Set<string>(),
         outside: w.outside.map((c) => ({ ...c })),
-        prs: [],
         fixing: new Set<string>(),
         repos: [],
       };
@@ -144,6 +168,23 @@ function world(): Facts & { deps: SweepDeps } {
       return r;
     },
     keptSwept: async () => [],
+    authoredPrs: async () => {
+      w.calls.authored++;
+      return w.prs.map((p) => ({ ...p }));
+    },
+    prState: async (slug, number) => {
+      const id = `${slug}#${number}`;
+      if (w.prState.has(id)) return w.prState.get(id) ?? null;
+      const pr = w.prs.find((p) => `${p.slug}#${p.number}` === id);
+      return pr ? { state: "OPEN", updatedAt: pr.updatedAt } : { state: "CLOSED", updatedAt: NOW };
+    },
+    closePr: async (pr, comment) => {
+      const id = `${pr.slug}#${pr.number}`;
+      w.calls.closePr.push({ id, comment });
+      if (w.closeFails) throw new Error(w.closeFails);
+      w.prs = w.prs.filter((p) => `${p.slug}#${p.number}` !== id);
+    },
+    holdsFlowsLock: () => w.lock,
     now: () => NOW,
     loadSettings: async () => w.settings,
     saveSettings: async (s) => {
@@ -878,5 +919,140 @@ describe("the schedule", () => {
     await hub.tick(NOW);
     expect(w.calls.dismiss).toEqual([]);
     expect(await readLastFire()).toBe(NOW);
+  });
+});
+
+describe("PRs", () => {
+  const PR = "pr:eric/app#7";
+  const COMMENT = "Closed by canopy's sweep after 14 days with no activity. Reopen it to pick it back up.";
+  const prKeys = (info: SweepInfo): string[] => info.items.filter((i) => i.kind === "pr").map((i) => i.key);
+
+  test("the authored list is asked once for reads in a row, and again once it is a minute old", async () => {
+    const w = world();
+    w.prs = [authored()];
+    let now = NOW;
+    const hub = new SweepHub({ ...w.deps, now: () => now });
+    expect(prKeys(await hub.info())).toEqual([PR]);
+    await hub.info();
+    // a ping makes every open page read at once
+    await Promise.all([hub.info(), hub.info()]);
+    expect(w.calls.authored).toBe(1);
+    now += 61_000;
+    await hub.info();
+    expect(w.calls.authored).toBe(2);
+  });
+
+  test("a gh failure listing PRs plans none and keeps the rest of the plan", async () => {
+    const w = world();
+    w.shells = [shell()];
+    const hub = new SweepHub({
+      ...w.deps,
+      authoredPrs: async () => {
+        throw new Error("gh: not logged in");
+      },
+    });
+    const got = await call(hub, "/api/sweep");
+    expect(got.status).toBe(200);
+    expect((got.body as SweepInfo).items.map((i) => i.key)).toEqual(["shell:t1"]);
+  });
+
+  test("an unwatched PR closes with the comment and no branch delete", async () => {
+    const w = world();
+    w.prs = [authored()];
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close([PR], "eric")).toEqual([{ key: PR, result: "closed" }]);
+    expect(w.calls.closePr).toEqual([{ id: "eric/app#7", comment: COMMENT }]);
+    expect((await readLog()).at(-1)?.outcomes).toEqual([{ key: PR, result: "closed" }]);
+  });
+
+  test("a push since the plan spares the PR (\"in use now\")", async () => {
+    // the cached list still has it idle: the read of the one PR says otherwise
+    const w = world();
+    w.prs = [authored()];
+    const hub = new SweepHub(w.deps);
+    expect(prKeys(await hub.info())).toEqual([PR]);
+    w.prState.set("eric/app#7", { state: "OPEN", updatedAt: NOW - H });
+    expect(await hub.close([PR], "eric")).toEqual([{ key: PR, result: "in use now" }]);
+    // a fresh list no longer has it idle
+    const v = world();
+    v.prs = [authored({ updatedAt: NOW - H })];
+    expect(await new SweepHub(v.deps).close([PR], "eric")).toEqual([{ key: PR, result: "in use now" }]);
+    expect([...w.calls.closePr, ...v.calls.closePr]).toEqual([]);
+  });
+
+  test("a PR closed since the plan is gone", async () => {
+    const w = world();
+    w.prs = [authored()];
+    w.prState.set("eric/app#7", { state: "CLOSED", updatedAt: NOW });
+    expect(await new SweepHub(w.deps).close([PR], "eric")).toEqual([{ key: PR, result: "gone" }]);
+    expect(w.calls.closePr).toEqual([]);
+  });
+
+  test("a gh failure is \"failed\" with gh's last line and the PR stays offered", async () => {
+    const w = world();
+    w.prs = [authored()];
+    w.closeFails = "GraphQL: Resource not accessible by integration (closePullRequest)";
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close([PR], "eric")).toEqual([{ key: PR, result: "failed", why: "GraphQL: Resource not accessible by integration (closePullRequest)" }]);
+    expect(prKeys(await hub.info())).toEqual([PR]);
+  });
+
+  test("a PR GitHub cannot be asked about is \"failed\" and not closed", async () => {
+    const w = world();
+    w.prs = [authored()];
+    w.prState.set("eric/app#7", null);
+    const [got] = await new SweepHub(w.deps).close([PR], "eric");
+    expect(got?.result).toBe("failed");
+    expect(w.calls.closePr).toEqual([]);
+  });
+
+  test("without the flows lock no PR is planned", async () => {
+    const w = world();
+    w.prs = [authored()];
+    w.lock = false;
+    const hub = new SweepHub(w.deps);
+    expect(prKeys(await hub.info())).toEqual([]);
+    const [got] = await hub.close([PR], "eric");
+    expect(got).toMatchObject({ key: PR, result: "failed" });
+    expect(w.calls.authored).toBe(0);
+    expect(w.calls.closePr).toEqual([]);
+  });
+
+  test("a closed PR is not offered again", async () => {
+    const w = world();
+    w.prs = [authored(), authored({ number: 8, url: "https://github.com/eric/app/pull/8" })];
+    const hub = new SweepHub(w.deps);
+    expect(prKeys(await hub.info())).toEqual([PR, "pr:eric/app#8"]);
+    // one list for the whole close, however many PRs it takes
+    expect(await hub.close([PR, "pr:eric/app#8"], "eric")).toEqual([
+      { key: PR, result: "closed" },
+      { key: "pr:eric/app#8", result: "closed" },
+    ]);
+    expect(w.calls.authored).toBe(1);
+    // the close let the cached list go: the next read asks GitHub again
+    expect(prKeys(await hub.info())).toEqual([]);
+    expect(w.calls.authored).toBe(2);
+  });
+
+  test("the span in the comment is the pr span in days", async () => {
+    const w = world();
+    w.prs = [authored({ updatedAt: NOW - 40 * 24 * H })];
+    w.settings.spans.pr = 30 * 24 * H;
+    await new SweepHub(w.deps).close([PR], "eric");
+    expect(w.calls.closePr[0]?.comment).toBe("Closed by canopy's sweep after 30 days with no activity. Reopen it to pick it back up.");
+  });
+
+  test("the schedule leaves PRs to the ask unless pr is an auto kind, and never takes a draft", async () => {
+    const w = world();
+    w.settings = { ...w.settings, on: true, cron: "* * * * *" };
+    w.prs = [authored(), authored({ number: 9, draft: true })];
+    await writeLastFire(NOW - 2 * 60_000);
+    await new SweepHub(w.deps).tick(NOW);
+    expect(w.calls.closePr).toEqual([]);
+    expect((await readAsk())?.map((i) => i.key)).toEqual([PR]);
+    w.settings.auto = ["pr"];
+    await writeLastFire(NOW - 2 * 60_000);
+    await new SweepHub(w.deps).tick(NOW);
+    expect(w.calls.closePr.map((c) => c.id)).toEqual(["eric/app#7"]);
   });
 });

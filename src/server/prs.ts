@@ -49,6 +49,14 @@ export const FRESH_FOR = 10 * 60_000;
 export const KEEP_DONE = 20;
 /** the file a repo turns auto-merge on with, read from its main checkout's HEAD */
 export const REPO_DEFAULT_FILE = ".canopy/prs.json";
+/** how often a PR the sweep closed is read, for a reopen */
+export const SWEPT_POLL = 24 * 3_600_000;
+/** how long a PR the sweep closed is watched for a reopen */
+export const SWEPT_FOR = 30 * 24 * 3_600_000;
+
+/** when a watch is read next, from now: once a day while the sweep has it
+ *  closed, else `nextPoll`'s pace (null for none) */
+const pace = (w: PrWatch): number | null => (w.swept !== undefined ? SWEPT_POLL : nextPoll(w));
 
 export class PrError extends Error {
   constructor(
@@ -134,6 +142,17 @@ export class PrHub {
     return [...this.watches.values()].sort((a, b) => b.openedAt - a.openedAt);
   }
 
+  /** whether this server writes the records: it holds the flows lock */
+  get keeps(): boolean {
+    return this.keeping;
+  }
+
+  /** the watch on a PR, by its slug in any case and its number */
+  watchFor(slug: string, number: number): PrWatch | undefined {
+    const want = slug.toLowerCase();
+    return [...this.watches.values()].find((w) => w.number === number && w.slug.toLowerCase() === want);
+  }
+
   private publish(): void {
     this.deps.broadcast({ type: "prs", prs: this.info() });
   }
@@ -189,9 +208,10 @@ export class PrHub {
     this.persist(id);
   }
 
-  /** Merged and closed PRs past the newest `KEEP_DONE` go. */
+  /** Merged and closed PRs past the newest `KEEP_DONE` go; one the sweep
+   *  closed stays for its 30 days. */
   private prune(): void {
-    const done = this.info().filter((w) => w.state && w.state.status !== "open");
+    const done = this.info().filter((w) => w.state && w.state.status !== "open" && w.swept === undefined);
     for (const w of done.slice(KEEP_DONE)) this.drop(w.id);
   }
 
@@ -217,7 +237,7 @@ export class PrHub {
       }
     }
     const now = this.now();
-    for (const w of this.watches.values()) if (nextPoll(w) !== null) this.due.set(w.id, now);
+    for (const w of this.watches.values()) if (pace(w) !== null) this.due.set(w.id, now);
     this.publish();
   }
 
@@ -324,7 +344,7 @@ export class PrHub {
         }
       }
       this.save(w);
-      if (nextPoll(w) !== null) this.due.set(w.id, this.now());
+      if (pace(w) !== null) this.due.set(w.id, this.now());
       this.publish();
       void this.tick();
       return w;
@@ -347,6 +367,51 @@ export class PrHub {
       this.deps.markPr(w.id, null);
       this.publish();
     });
+  }
+
+  /** The sweep's close: the PR closes with `comment`, and its remote
+   *  branch, worktree and local branch stay, as does the landing record's
+   *  `pr`, so the branch does not slip back into the landing queue. The
+   *  watch stays too, marked `swept` and read once a day for a reopen. */
+  sweepClose(id: string, comment: string): Promise<void> {
+    return this.queue(async () => {
+      const w = this.find(id);
+      if (!w) throw new PrError("no PR by that id", 404);
+      if (w.fixing && this.deps.runActive(w.fixing.run)) throw new PrError("a fix is going; stop it first");
+      const r = await this.gh(["pr", "close", String(w.number), "-R", w.slug, "--comment", comment]);
+      if (r.code !== 0) throw new PrError(`gh pr close: ${lastLine(r, "gh pr close")}`, 502);
+      const now = this.now();
+      this.save({ ...w, ...(w.state ? { state: { ...w.state, status: "closed" as const } } : {}), swept: now, updatedAt: now });
+      this.due.set(w.id, now + SWEPT_POLL);
+      this.fresh.delete(w.id);
+      this.publish();
+    });
+  }
+
+  /** The sweep's close of a PR the gh login authored: a watched one goes
+   *  through `sweepClose`; any other is closed with `comment`, and its
+   *  branch stays. Throws with gh's last line. */
+  async closeAuthored(slug: string, number: number, comment: string): Promise<void> {
+    const w = this.watchFor(slug, number);
+    if (w) return this.sweepClose(w.id, comment);
+    const r = await this.gh(["pr", "close", String(number), "-R", slug, "--comment", comment]);
+    if (r.code !== 0) throw new PrError(`gh pr close: ${lastLine(r, "gh pr close")}`, 502);
+  }
+
+  /** One PR's state (`OPEN`, `CLOSED`, `MERGED`) and GitHub's last
+   *  activity on it, for the sweep's look just before a close; null when
+   *  gh could not say. */
+  async readState(slug: string, number: number): Promise<{ state: string; updatedAt: number } | null> {
+    const r = await this.gh(["pr", "view", String(number), "-R", slug, "--json", "state,updatedAt"]);
+    if (r.code !== 0) return null;
+    try {
+      const v: unknown = JSON.parse(r.stdout);
+      if (!isRecord(v) || typeof v["state"] !== "string" || typeof v["updatedAt"] !== "string") return null;
+      const updatedAt = Date.parse(v["updatedAt"]);
+      return Number.isNaN(updatedAt) ? null : { state: v["state"], updatedAt };
+    } catch {
+      return null;
+    }
   }
 
   /** A branch the landing queue dropped: its watch goes with it. */
@@ -406,16 +471,29 @@ export class PrHub {
       this.due.delete(id);
       return null;
     }
+    // swept and not reopened in 30 days: dropped as close drops it, with
+    // no read, and the remote branch left where it is
+    if (had.swept !== undefined && this.now() - had.swept >= SWEPT_FOR) {
+      this.drop(id);
+      this.deps.markPr(id, null);
+      this.publish();
+      return null;
+    }
     const r = await this.gh(["pr", "view", String(had.number), "-R", had.slug, "--json", PR_FIELDS]);
     let w: PrWatch;
     try {
       if (r.code !== 0) throw new Error(lastLine(r, "gh pr view"));
       const { error: _e, ...rest } = had;
       w = { ...rest, state: parsePrView(JSON.parse(r.stdout)), polledAt: this.now() };
+      // reopened (or merged) since the sweep closed it: a watch like any other
+      if (w.swept !== undefined && w.state?.status !== "closed") {
+        const { swept: _s, ...open } = w;
+        w = open;
+      }
     } catch (err) {
       const why = `reading PR #${had.number}: ${errText(err)}`;
       this.save({ ...had, error: why, polledAt: this.now() });
-      this.due.set(id, this.now() + (nextPoll(had) ?? 0));
+      this.due.set(id, this.now() + (pace(had) ?? 0));
       this.publish();
       return why;
     }
@@ -433,8 +511,9 @@ export class PrHub {
       return null;
     }
     if (w.fixing && !this.deps.runActive(w.fixing.run)) w = await this.finishFix(w);
-    // closed on GitHub: the run may land here again
-    if (w.state?.status === "closed" && had.state?.status !== "closed") this.deps.markPr(w.id, null);
+    // closed on GitHub: the run may land here again, unless the sweep
+    // closed it, which keeps the PR on the record until it is dropped
+    if (w.state?.status === "closed" && had.state?.status !== "closed" && w.swept === undefined) this.deps.markPr(w.id, null);
     if (w.state?.status === "open") {
       if (w.autoFix && !w.fixing) w = await this.autoFix(w);
       if (w.autoMerge && !w.fixing && w.state && readyToMerge(w.state, w).ok) {
@@ -446,8 +525,8 @@ export class PrHub {
     w.updatedAt = this.now();
     this.save(w);
     if (w.pushed !== had.pushed) this.fresh.set(id, this.now() + FRESH_FOR);
-    let next = nextPoll(w);
-    if (next !== null && (this.fresh.get(id) ?? 0) > this.now()) next = Math.min(next, POLL_BUSY);
+    let next = pace(w);
+    if (next !== null && w.swept === undefined && (this.fresh.get(id) ?? 0) > this.now()) next = Math.min(next, POLL_BUSY);
     if (next === null) this.due.delete(id);
     else this.due.set(id, this.now() + next);
     this.prune();

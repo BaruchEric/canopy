@@ -30,7 +30,7 @@ import {
 import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
 import { linkFavorites } from "../core/favorite";
-import { linkPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
+import { AUTHORED_QUERY, linkPulls, parseAuthoredPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
   historyOverview,
@@ -801,11 +801,12 @@ async function dropShell(state: ServerState, tmux: string[], id: string): Promis
  * What the sweep plans from: every shell held here with tmux's last output
  * for it, its last keystroke and the agent its registry card says runs in
  * it; the runs; the runs a landing record, an active flow or a running
- * coordinator still holds; and the registry's cards. `shells` is null when
+ * coordinator still holds, or a watched PR is fixing on; and the
+ * registry's cards. The hub adds the authored PRs. `shells` is null when
  * there is no tmux, or tmux did not answer or has no server: the shells
  * cannot be read then, and a shell that cannot be read is never idle.
  */
-async function sweepFacts(state: ServerState, serverStart: number): Promise<PlanInputs> {
+async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit<PlanInputs, "prs">> {
   const cards = state.registry.list();
   let shells: ShellFacts[] | null = null;
   if (state.tmux) {
@@ -866,11 +867,11 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Plan
   // a coordinator's children while it runs: its cards follow them
   const coordinating = new Set(all.filter((r) => r.action === "coordinate" && isRunActive(r)).map((r) => r.id));
   for (const r of all) if (r.parent && coordinating.has(r.parent)) heldRuns.add(r.id);
-  // a watched PR with a fix going is never offered
-  const fixing = new Set(state.prs.info().filter((w) => w.fixing).map((w) => `${w.slug.toLowerCase()}#${w.number}`));
-  // no authored PRs yet: they join once the hub can close them, and then
-  // only on the backend that holds the flows lock
-  return { serverStart, shells, runs, heldRuns, outside: cards, prs: [], fixing, repos: state.result.repos };
+  // a watched PR with a fix going is never offered, and its fix run is held
+  const watches = state.prs.info().filter((w) => w.fixing);
+  for (const w of watches) if (w.fixing) heldRuns.add(w.fixing.run);
+  const fixing = new Set(watches.map((w) => `${w.slug.toLowerCase()}#${w.number}`));
+  return { serverStart, shells, runs, heldRuns, outside: cards, fixing, repos: state.result.repos };
 }
 
 /** Starts a chat on the session the sweep stopped one on, as a chat started
@@ -5128,6 +5129,17 @@ export async function startServer(opts: {
       dismissRun: (id) => state.runner.dismiss(id),
       startChat: (c) => startSweptChat(state, c),
       keptSwept: async () => state.kept.filter((k) => k.swept),
+      authoredPrs: async () => {
+        const r = await exec(["gh", "api", "graphql", "--paginate", "--slurp", "-f", `query=${AUTHORED_QUERY}`], { timeoutMs: 60_000 });
+        if (r.code !== 0) throw new Error(`gh api graphql: ${(r.stderr.trim() || r.stdout.trim()).split("\n").pop() ?? `exited ${r.code}`}`);
+        return parseAuthoredPulls(JSON.parse(r.stdout));
+      },
+      prState: (slug, number) => state.prs.readState(slug, number),
+      closePr: (pr, comment) => state.prs.closeAuthored(pr.slug, pr.number, comment),
+      // the PR watch writes its records only while this server holds the
+      // flows lock (adopt and detach), so it answers for the lock; the lock
+      // itself is taken after the hubs are built
+      holdsFlowsLock: () => state.prs.keeps,
     }),
     triggers: new TriggerHub({
       broadcast: (ev) => broadcast(state, ev),
