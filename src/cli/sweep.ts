@@ -29,6 +29,12 @@ function parseKinds(text: string): SweepKind[] | string {
   return out.length > 0 ? out : "--kind needs at least one kind";
 }
 
+/** The closing POST's body. The CLI never ticks a box, so it asks the
+ *  server to close each key only while the fresh plan lets an unticked
+ *  close take it (`unticked`): a PR turned into a draft, or a shell that
+ *  started a program, between the plan's read and the POST stays open. */
+export const sweepBody = (keys: readonly string[]): { keys: string[]; unticked: true } => ({ keys: [...keys], unticked: true });
+
 /** How long the closing POST may take: the server closes items one at a
  *  time and snapshots each shell first, so it scales with the keys. */
 export const sweepTimeoutMs = (keys: number): number => Math.min(10 * 60_000, 30_000 + 15_000 * keys);
@@ -74,7 +80,7 @@ export async function sweepCommand(argv: string[], { fail }: { fail: (msg: strin
   }
   const keys = sweepKeys(info.items, kinds);
   if (keys.length === 0) return console.log("nothing to close");
-  const { outcomes } = await ask<{ outcomes: SweepOutcome[] }>(target, "POST", "/api/sweep", { keys }, sweepTimeoutMs(keys.length)).catch(failed);
+  const { outcomes } = await ask<{ outcomes: SweepOutcome[] }>(target, "POST", "/api/sweep", sweepBody(keys), sweepTimeoutMs(keys.length)).catch(failed);
   const byKey = new Map(info.items.map((i) => [i.key, i]));
   for (const o of outcomes) {
     const i = byKey.get(o.key);

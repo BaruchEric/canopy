@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { askCloses, askGone, askTitle, nextAuto, pickKeys, prUrl, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
+import { askCloses, askGone, askTitle, headKeys, nextAuto, pickKeys, prUrl, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -56,6 +56,24 @@ describe("defaultPicks", () => {
   test("leaves every PR out, drafts included, even one marked checked", () => {
     const picks = defaultPicks([item("shell:s1"), item("pr:o/app#1", { checked: true }), item("pr:o/app#2", { handOnly: true, why: "draft, no activity for 15d" })]);
     expect([...picks]).toEqual(["shell:s1"]);
+  });
+});
+
+describe("headKeys", () => {
+  test("a kind's head box ticks only what mayClose lets go: a draft or a busy shell needs its own tick", () => {
+    const live = [item("pr:o/a#1", { checked: false }), item("pr:o/a#2", { checked: false, handOnly: true }), item("shell:s1"), item("shell:s2", { checked: false, handOnly: true })];
+    const byKey = new Map(live.map((i) => [i.key, i]));
+    expect(headKeys(live.filter((i) => i.kind === "pr"), byKey)).toEqual(["pr:o/a#1"]);
+    expect(headKeys(live.filter((i) => i.kind === "shell"), byKey)).toEqual(["shell:s1"]);
+  });
+
+  test("a row a close already took, gone from the plan, is not ticked again", () => {
+    expect(headKeys([item("shell:s1")], new Map())).toEqual([]);
+  });
+
+  test("listed-only rows never", () => {
+    const o = item("outside:o1");
+    expect(headKeys([o], new Map([[o.key, o]]))).toEqual([]);
   });
 });
 

@@ -318,11 +318,15 @@ export class SweepHub {
    * Closes the items named by `keys`, each after planning again from fresh
    * facts: a key the new plan has and may close is closed; one it lacks is
    * "in use now" while the thing is still there and "gone" once it is not.
+   * With `unticked` (keys picked by rule, as the CLI's `--kind` picks them,
+   * not by a tick in the sheet) a key closes only while the fresh plan lets
+   * an unticked close take it (`mayClose`), as an answer to the ask does,
+   * so a PR turned into a draft since the plan was read stays open.
    * One log entry per call, then the new plan goes out.
    */
-  close(keys: string[], by: "eric" | "schedule"): Promise<SweepOutcome[]> {
+  close(keys: string[], by: "eric" | "schedule", unticked = false): Promise<SweepOutcome[]> {
     return this.queue(async () => {
-      const outcomes = await this.closeKeys(keys, by);
+      const outcomes = await this.closeKeys(keys, by, unticked);
       if (outcomes.length > 0) {
         await this.pruneAsk();
         this.publish();
@@ -521,7 +525,9 @@ export class SweepHub {
         const b = await body();
         const keys = isRecord(b) ? b["keys"] : undefined;
         if (!Array.isArray(keys) || !keys.every((k): k is string => typeof k === "string")) return json({ error: "keys is a list of item keys" }, 400);
-        return json({ outcomes: await this.close(keys, "eric") });
+        const unticked = isRecord(b) ? b["unticked"] : undefined;
+        if (unticked !== undefined && typeof unticked !== "boolean") return json({ error: "unticked is true or false" }, 400);
+        return json({ outcomes: await this.close(keys, "eric", unticked === true) });
       }
       if (path === "/api/sweep/ask" && method === "POST") {
         const b = await body();

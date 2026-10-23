@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { SWEEP_KINDS, type KeptShell, type SweepItem, type SweepKind, type SweepOutcome, type SweptChat } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { useStore } from "../store";
-import { defaultPicks, dropPicks, groupItems, KIND_HEAD, nextAuto, outcomesOf, prUrl, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
+import { defaultPicks, dropPicks, groupItems, headKeys, KIND_HEAD, nextAuto, outcomesOf, prUrl, sheetRows, spanMs, spanParts, sweepSummary, switchUnit, type SpanUnit } from "../sweep";
 import { useNow } from "./Registry";
 import { PopGear } from "./PopGrip";
 
@@ -165,14 +165,15 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
         )}
         {groups.length === 0 && <p className="sweep-none">Nothing has been idle long enough to offer.</p>}
         {groups.map((g) => {
-          const can = g.items.filter((i) => live.get(i.key)?.closable);
-          const all = can.length > 0 && can.every((i) => chosen.has(i.key));
+          // a draft or a busy shell is left to its own box
+          const can = headKeys(g.items, live);
+          const all = can.length > 0 && can.every((k) => chosen.has(k));
           return (
             <section key={g.kind} className={`sweep-group k-${g.kind}`}>
               <h3 className="sweep-head">
                 {can.length > 0 ? (
                   <label>
-                    <input type="checkbox" checked={all} disabled={busy} onChange={(e) => setTicks(can.map((i) => i.key), e.currentTarget.checked)} />
+                    <input type="checkbox" checked={all} disabled={busy} onChange={(e) => setTicks(can, e.currentTarget.checked)} />
                     {KIND_HEAD[g.kind]}
                   </label>
                 ) : (
@@ -203,7 +204,7 @@ export function SweepSheet({ picks: start }: { picks?: readonly string[] | undef
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
-        <span className="sheet-hint">A closed shell keeps its history and comes back from the swept list; a closed chat resumes its conversation; a closed PR keeps its branch and reopens on GitHub.</span>
+        <span className="sheet-hint">A closed shell keeps its history and comes back from the swept list; a closed chat resumes its conversation; a closed PR keeps its branch and can be reopened on GitHub.</span>
         <span className="spacer" />
         <button type="button" className="mini" onClick={close}>
           {done ? "done" : "cancel"}

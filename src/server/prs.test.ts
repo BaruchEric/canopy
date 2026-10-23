@@ -593,7 +593,11 @@ describe("the sweep's close", () => {
     w.gh.head = await revOf(w.dir, "HEAD");
     await pollNow(w);
     w.clock = Date.now();
+    // open and watched, the landing hub may not drop the branch
+    expect(w.hub.holds(w.rec.id)).toBe(true);
     await w.hub.sweepClose(w.rec.id, COMMENT);
+    expect(w.hub.holds(w.rec.id)).toBe(false);
+    expect(w.hub.holds("nobody")).toBe(false);
     expect(w.gh.calls.find((c) => c[1] === "close")).toEqual(["pr", "close", "7", "-R", "o/r", "--comment", COMMENT]);
     expect(await remoteHas(w)).toBe(true);
     expect(existsSync(w.dir)).toBe(true);

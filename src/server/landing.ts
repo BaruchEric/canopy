@@ -69,6 +69,9 @@ export interface LandingDeps {
   openPr?: (id: string) => Promise<unknown> | void;
   /** a branch was dropped with its worktree: its PR watch goes too */
   dropped?: (id: string) => void;
+  /** whether a PR watch still holds the branch: its PR open and not swept,
+   *  so its worktree is the watch's to keep */
+  prHeld?: (id: string) => boolean;
   dir?: string;
   worktrees?: string;
   now?: () => number;
@@ -654,9 +657,11 @@ export class LandingHub {
   }
 
   /** Drops a sent-back entry, its branch and its worktree: the work is
-   *  given up. */
+   *  given up. Not a branch whose PR is open and watched: the watch works
+   *  in that worktree, and the PR is closed from its run's sheet. */
   async drop(id: string): Promise<void> {
     const rec = this.find(id);
+    if (rec?.pr !== undefined && this.deps.prHeld?.(rec.id)) throw new LandError(`PR #${rec.pr} is open and canopy watches it; close the PR from its run's sheet first`);
     const entry = this.entries.find((e) => e.id === (rec?.id ?? id));
     if (entry && inQueue(entry)) throw new LandError("it is in the queue; wait for it to land or come back");
     if (rec && this.deps.runActive(rec.runId)) throw new LandError("the run is still going");

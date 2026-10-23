@@ -51,6 +51,9 @@ export function noticeLine(n: LandNotice): string {
   return n.kind === "landed" ? `${n.branch} landed on its own${n.head ? ` at ${n.head.slice(0, 7)}` : ""}` : `${n.branch} held back: ${n.why ?? "its sort changed"}`;
 }
 
+/** a branch run whose record carries the PR it opened */
+export type OpenedRun = LandingRun & { pr: number };
+
 export interface RepoLanding {
   /** in the queue, in order */
   queue: LandEntry[];
@@ -63,7 +66,7 @@ export interface RepoLanding {
   /** branch runs that are neither ready nor queued: working, uncommitted, stopped, nothing */
   other: LandingRun[];
   /** branch runs that opened a PR, in any state: they land on GitHub, never here */
-  opened: LandingRun[];
+  opened: OpenedRun[];
 }
 
 /** One repo's part of the queue, for its landing section. */
@@ -78,7 +81,7 @@ export function repoLanding(info: LandingInfo, repoId: string): RepoLanding {
     landed: mine.filter((e) => e.state === "landed").sort((a, b) => (b.landedAt ?? 0) - (a.landedAt ?? 0)),
     ready: runs.filter((r) => r.state === "ready"),
     other: runs.filter((r) => r.state !== "ready").sort((a, b) => b.startedAt - a.startedAt),
-    opened: mineRuns.filter((r) => r.pr !== undefined),
+    opened: mineRuns.filter((r): r is OpenedRun => r.pr !== undefined),
   };
 }
 
@@ -90,9 +93,9 @@ export function repoLanding(info: LandingInfo, repoId: string): RepoLanding {
  * its 30 days, drop is how the branch and its worktree go, once no run on
  * it is working.
  */
-export function openedRow(r: LandingRun, watches: readonly PrWatch[]): { word: string; url?: string; canDrop: boolean } {
+export function openedRow(r: OpenedRun, watches: readonly PrWatch[]): { word: string; url?: string; canDrop: boolean } {
   const w = watches.find((x) => x.id === r.id && x.repoId === r.repoId);
-  const word = `PR #${r.pr ?? w?.number ?? "?"}`;
+  const word = `PR #${r.pr}`;
   return w ? { word, url: w.url, canDrop: false } : { word, canDrop: r.state !== "working" };
 }
 

@@ -37,6 +37,7 @@ interface World {
   /** branches the hub asked to open a PR for, and ones it dropped */
   opened: string[];
   dropped: string[];
+  held: Set<string>;
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
@@ -62,6 +63,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     active: new Set(),
     opened: [],
     dropped: [],
+    held: new Set(),
     hub: null as unknown as LandingHub,
   };
   let fixN = 0;
@@ -86,6 +88,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
       w.opened.push(id);
     },
     dropped: (id) => w.dropped.push(id),
+    prHeld: (id) => w.held.has(id),
     dir: w.dir,
     worktrees: w.wts,
   });
@@ -632,6 +635,23 @@ describe("restarts", () => {
 });
 
 describe("PR runs (FR-011)", () => {
+  test("drop refuses a branch whose PR is open and watched, and takes it once the watch lets go", async () => {
+    const w = await world();
+    await readyRun(w, "pd01", "b.txt", "b\n");
+    await w.hub.idle();
+    w.hub.stop();
+    w.hub.markPr("pd01", 12);
+    w.held.add("pd01");
+    await expect(w.hub.drop("pd01")).rejects.toThrow("PR #12 is open and canopy watches it; close the PR from its run's sheet first");
+    expect(existsSync(runTreeDir(w.repo.path, "pd01", w.wts))).toBe(true);
+    expect(w.dropped).toEqual([]);
+    // swept, or its watch dropped after 30 days: the branch may go
+    w.held.delete("pd01");
+    await w.hub.drop("pd01");
+    expect(recOf(w, "pd01")).toBeUndefined();
+    expect(w.dropped).toEqual(["pd01"]);
+  });
+
   test("a run with a PR never lands: land refuses, land all skips it, and it never joins on its own", async () => {
     const w = await world();
     await rulesOn(w, RULES);

@@ -28,6 +28,16 @@ export function defaultPicks(items: readonly SweepItem[]): Set<string> {
   return new Set(items.filter((i) => i.checked && i.closable && i.kind !== "pr").map((i) => i.key));
 }
 
+/** What a kind's head box ticks or unticks: the group's rows the plan
+ *  still has (`live`) and an unticked close may take (`mayClose`), so a
+ *  draft or a shell running a program always needs a tick of its own. */
+export function headKeys(group: readonly SweepItem[], live: ReadonlyMap<string, SweepItem>): string[] {
+  return group.flatMap((i) => {
+    const now = live.get(i.key);
+    return now && mayClose(now) ? [i.key] : [];
+  });
+}
+
 /** A PR row's page on GitHub, from its id (`owner/name#number`); null for
  *  any other kind or an id that does not read as one. */
 export function prUrl(item: Pick<SweepItem, "kind" | "id">): string | null {

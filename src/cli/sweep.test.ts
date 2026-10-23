@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SweepItem, SweepKind } from "../core/types";
-import { planLines, sweepKeys, sweepTimeoutMs } from "./sweep";
+import { planLines, sweepBody, sweepKeys, sweepTimeoutMs } from "./sweep";
 
 const item = (key: string, kind: SweepItem["kind"], over: Partial<SweepItem> = {}): SweepItem => ({
   key,
@@ -61,6 +61,12 @@ describe("sweepKeys, outside items", () => {
     const outside = item("o1", "outside", { closable: false });
     expect(sweepKeys([outside], undefined)).toEqual([]);
     expect(sweepKeys([outside], ["outside"])).toEqual([]);
+  });
+});
+
+describe("sweepBody", () => {
+  test("asks the server to close only what an unticked close may take", () => {
+    expect(sweepBody(["pr:o/a#1", "shell:s1"])).toEqual({ keys: ["pr:o/a#1", "shell:s1"], unticked: true });
   });
 });
 

@@ -1055,6 +1055,17 @@ describe("PRs", () => {
     expect(await new SweepHub(d.deps).close([PR], "eric")).toEqual([{ key: PR, result: "closed" }]);
   });
 
+  test("POST /api/sweep with unticked closes only what mayClose lets go: a draft stays", async () => {
+    const d = prWorld();
+    d.prs = [authored({ draft: true })];
+    const hub = new SweepHub(d.deps);
+    expect((await call(hub, "/api/sweep", { method: "POST", body: { keys: [PR], unticked: "yes" } })).status).toBe(400);
+    expect(await call(hub, "/api/sweep", { method: "POST", body: { keys: [PR], unticked: true } })).toEqual({ status: 200, body: { outcomes: [{ key: PR, result: "in use now" }] } });
+    expect(d.calls.closePr).toEqual([]);
+    // the same draft ticked by hand in the sheet closes
+    expect(await call(hub, "/api/sweep", { method: "POST", body: { keys: [PR] } })).toEqual({ status: 200, body: { outcomes: [{ key: PR, result: "closed" }] } });
+  });
+
   test("with the prs setting off no PR is planned and GitHub is never asked", async () => {
     const w = world();
     w.prs = [authored()];

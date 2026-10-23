@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { advance, enqueue } from "../../src/core/landing";
 import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, runLanding, verdictTone, verdictWord } from "./landing";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, type OpenedRun, runLanding, verdictTone, verdictWord } from "./landing";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -169,17 +169,18 @@ describe("review rules in the page", () => {
 });
 
 describe("a branch that opened a PR, in the landing section", () => {
+  const opened = (id: string, over: Partial<LandingRun> = {}): OpenedRun => ({ ...rec(id, over), pr: 12 });
   const watch = (id: string, over: Partial<PrWatch> = {}): PrWatch => ({ id, repoId: "canopy", number: 12, url: "https://github.com/o/canopy/pull/12", ...over }) as PrWatch;
 
   test("watched: PR #n linking to it, and no land or drop, since the watch keeps its worktree", () => {
-    expect(openedRow(rec("a", { pr: 12 }), [watch("a")])).toEqual({ word: "PR #12", url: "https://github.com/o/canopy/pull/12", canDrop: false });
+    expect(openedRow(opened("a"), [watch("a")])).toEqual({ word: "PR #12", url: "https://github.com/o/canopy/pull/12", canDrop: false });
   });
 
   test("no watch (dropped 30 days after a sweep closed it): PR #n with drop, never land", () => {
-    expect(openedRow(rec("a", { pr: 12 }), [watch("b"), watch("a", { repoId: "other" })])).toEqual({ word: "PR #12", canDrop: true });
+    expect(openedRow(opened("a"), [watch("b"), watch("a", { repoId: "other" })])).toEqual({ word: "PR #12", canDrop: true });
   });
 
   test("no drop while a run on the branch is still working", () => {
-    expect(openedRow(rec("a", { pr: 12, state: "working" }), []).canDrop).toBe(false);
+    expect(openedRow(opened("a", { state: "working" }), []).canDrop).toBe(false);
   });
 });

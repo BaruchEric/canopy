@@ -300,6 +300,14 @@ export class PrHub {
     this.timer = null;
   }
 
+  /** Whether a watch still holds the branch `id` (the landing record's id):
+   *  its PR not swept and not read as closed or merged. The landing hub
+   *  will not drop such a branch. */
+  holds(id: string): boolean {
+    const w = this.watches.get(id);
+    return w !== undefined && w.swept === undefined && w.state?.status !== "closed" && w.state?.status !== "merged";
+  }
+
   private find(id: string): PrWatch | undefined {
     return this.watches.get(id) ?? [...this.watches.values()].find((w) => w.runId === id);
   }
