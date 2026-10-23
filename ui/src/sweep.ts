@@ -191,6 +191,14 @@ export function askCloses(items: readonly SweepItem[]): string[] {
   return items.filter(mayClose).map((i) => i.key);
 }
 
+/** Whether an answer to the ask, or its dismiss, failed only because no
+ *  ask is pending: a 404, as when another device answered it first. That
+ *  is done, not an error. A 400 (a key a newer fire's ask does not hold)
+ *  stays an error, since the ask on screen is not the one pending. */
+export function askGone(err: unknown): boolean {
+  return err instanceof Error && (err as Error & { status?: unknown }).status === 404;
+}
+
 /** What the ask's "pick" starts the sheet with ticked: the same items
  *  "close all" would send, so a shell running a program starts unticked
  *  in the sheet too, where Eric can still tick it by hand. */

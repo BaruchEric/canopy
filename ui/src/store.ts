@@ -48,7 +48,7 @@ import { appendFeed, describeEvent, type FeedEntry, type FeedSnapshot } from "./
 import { mergeAction } from "./peers";
 import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
-import { askCloses, endedCards, freshEntry } from "./sweep";
+import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
@@ -3594,13 +3594,16 @@ export const useStore = create<CanopyState>((set, get) => ({
   answerInbox: async (item, answer) => {
     if (item.source === "sweep") {
       if (!("sweep" in answer)) throw new Error("the sweep's ask takes close all or dismiss");
-      if (answer.sweep === "dismiss") {
-        await api.dismissSweepAsk();
-        return;
+      const keys = answer.sweep === "dismiss" ? null : askCloses(item.sweep ?? []);
+      if (keys?.length === 0) throw new Error("none of these can be closed from here: tick them in the sheet");
+      try {
+        await (keys === null ? api.dismissSweepAsk() : api.answerSweepAsk(keys));
+      } catch (e) {
+        // no ask pending: another device answered it first, which is done;
+        // read the sweep so the item leaves even if its event was missed
+        if (!askGone(e)) throw e;
+        void get().loadSweep();
       }
-      const keys = askCloses(item.sweep ?? []);
-      if (keys.length === 0) throw new Error("none of these can be closed from here: tick them in the sheet");
-      await api.answerSweepAsk(keys);
       return;
     }
     if (item.source === "landing") {

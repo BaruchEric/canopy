@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, SweepItem, SweepLogEntry, SweepOutcome } from "../../src/core/types";
-import { askCloses, askTitle, nextAuto, pickKeys, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
+import { askCloses, askGone, askTitle, nextAuto, pickKeys, defaultPicks, dropPicks, endedCards, freshEntry, groupItems, outcomesOf, sheetRows, spanMs, spanParts, spanWord, sweepSummary, switchUnit } from "./sweep";
 
 const item = (key: string, over: Partial<SweepItem> = {}): SweepItem => {
   const at = key.indexOf(":");
@@ -199,6 +199,19 @@ describe("the ask's words", () => {
     // a PR as phase 3 plans it, and a chat whose kind left auto, forced unticked
     const ask = [item("chat:c1", { checked: false }), item("pr:1", { checked: false })];
     expect(askCloses(ask)).toEqual(["chat:c1", "pr:1"]);
+  });
+});
+
+describe("a stale answer to the ask", () => {
+  const err = (status: number) => Object.assign(new Error("e"), { status });
+  test("a 404, no ask pending (answered from another device), is done", () => {
+    expect(askGone(err(404))).toBe(true);
+  });
+  test("a 400 for an ask a newer fire replaced, or anything else, is still an error", () => {
+    expect(askGone(err(400))).toBe(false);
+    expect(askGone(err(500))).toBe(false);
+    expect(askGone(new Error("network down"))).toBe(false);
+    expect(askGone("404")).toBe(false);
   });
 });
 
