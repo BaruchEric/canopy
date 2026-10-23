@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
 import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, type ShellFacts } from "./sweep";
-import type { AgentCard, Run, SweepItem } from "./types";
+import type { AgentCard, AuthoredPr, Run, SweepItem } from "./types";
 
 const H = 3_600_000;
 const now = Date.UTC(2026, 9, 22, 12);
-const base = { serverStart: now - 72 * H, shells: [], runs: [], heldRuns: new Set<string>(), outside: [] };
+const base = { serverStart: now - 72 * H, shells: [], runs: [], heldRuns: new Set<string>(), outside: [], prs: [], fixing: new Set<string>(), repos: [] };
 const shell = (over: Partial<ShellFacts> = {}): ShellFacts =>
   ({ id: "t1", repoId: "dev-tools/canopy", startedAt: now - 48 * H, lastOutput: now - 30 * H, agent: null, ...over });
 const run = (over: Partial<Run> = {}): Run => ({
@@ -113,4 +113,47 @@ test("mayClose: closable and not by hand only, whatever the sheet's default tick
   // a shell running a program: only a tick in the sheet closes it
   expect(mayClose(it({ kind: "shell", key: "shell:t1", handOnly: true }))).toBe(false);
   expect(mayClose(it({ kind: "outside", key: "outside:o1", closable: false, checked: true }))).toBe(false);
+});
+
+const D = 24 * H;
+const authored = (over: Partial<AuthoredPr> = {}): AuthoredPr => ({
+  slug: "barucheric/canopy", number: 12, url: "https://github.com/BaruchEric/canopy/pull/12", title: "Fix the tree", branch: "run/fix",
+  draft: false, updatedAt: now - 15 * D, autoMerge: false, queued: false, archived: false, ...over,
+});
+const checkout = { id: "dev-tools/canopy", remotes: ["git@github.com:BaruchEric/canopy.git"] };
+
+test("an authored PR quiet 15 days is offered, unticked", () => {
+  const [it] = planSweep({ ...base, prs: [authored()], repos: [checkout] }, DEFAULT_SWEEP, now);
+  expect(it).toEqual({
+    key: "pr:barucheric/canopy#12", kind: "pr", id: "barucheric/canopy#12", repoId: "dev-tools/canopy", where: "dev-tools/canopy", title: "#12 Fix the tree",
+    idleSince: now - 15 * D, why: "no activity for 15d", closable: true, checked: false, handOnly: false, auto: false,
+  });
+  expect(mayClose(it as SweepItem)).toBe(true);
+  // inside the span it waits
+  expect(planSweep({ ...base, prs: [authored({ updatedAt: now - 13 * D })] }, DEFAULT_SWEEP, now)).toEqual([]);
+  // with pr in auto, the schedule may close it
+  expect(planSweep({ ...base, prs: [authored()] }, { ...DEFAULT_SWEEP, auto: ["pr"] }, now)[0]).toMatchObject({ auto: true, checked: false });
+});
+test("a draft is offered unticked and hand only", () => {
+  const [it] = planSweep({ ...base, prs: [authored({ draft: true })] }, { ...DEFAULT_SWEEP, auto: ["pr"] }, now);
+  expect(it).toMatchObject({ kind: "pr", closable: true, checked: false, handOnly: true, auto: false, why: "draft, no activity for 15d" });
+  expect(mayClose(it as SweepItem)).toBe(false);
+});
+test("archived, auto-merge, queued and fixing PRs are never offered", () => {
+  const prs = [authored({ number: 1, archived: true }), authored({ number: 2, autoMerge: true }), authored({ number: 3, queued: true }), authored({ number: 4 })];
+  expect(planSweep({ ...base, prs, fixing: new Set(["barucheric/canopy#4"]) }, DEFAULT_SWEEP, now)).toEqual([]);
+});
+test("a PR on a repo with no checkout is listed by slug", () => {
+  const elsewhere = { id: "web-apps/other", remotes: ["git@github.com:BaruchEric/other.git", "ssh://git@192.168.1.76:2222/eric/canopy.git"] };
+  const [it] = planSweep({ ...base, prs: [authored()], repos: [elsewhere, { id: "bare" }] }, DEFAULT_SWEEP, now);
+  expect(it).toMatchObject({ key: "pr:barucheric/canopy#12", repoId: null, where: "barucheric/canopy" });
+});
+test("PRs sort after runs and before outside agents, oldest first", () => {
+  const out = planSweep({
+    ...base,
+    prs: [authored({ number: 1, updatedAt: now - 15 * D }), authored({ number: 2, updatedAt: now - 20 * D })],
+    runs: [run({ id: "d1", status: "done", endedAt: now - 4 * D })],
+    outside: [card()],
+  }, DEFAULT_SWEEP, now);
+  expect(out.map((i) => i.key)).toEqual(["run:d1", "pr:barucheric/canopy#2", "pr:barucheric/canopy#1", "outside:claude:s1"]);
 });

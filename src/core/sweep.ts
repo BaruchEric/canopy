@@ -1,15 +1,16 @@
 /**
  * The sweep (docs/superpowers/specs/2026-10-22-sweep-design.md): the pure
- * part. Its settings as stored, and the planner that turns the shells, runs
- * and registry cards the server holds into the list of things idle long
- * enough to offer for closing. No I/O; the hub that closes them is
+ * part. Its settings as stored, and the planner that turns the shells, runs,
+ * registry cards and authored PRs the server holds into the list of things
+ * idle long enough to offer for closing. No I/O; the hub that closes them is
  * server/sweep.ts. Browser-safe.
  */
 
 import { CRON_MAX, isCron, parseCron } from "./cron";
+import { githubSlug } from "./github";
 import { isShellCommand } from "./shellname";
 import { SWEEP_KINDS } from "./types";
-import type { AgentCard, AgentState, Run, SweepItem, SweepKind, SweepSettings } from "./types";
+import type { AgentCard, AgentState, AuthoredPr, Repo, Run, SweepItem, SweepKind, SweepSettings } from "./types";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -132,6 +133,12 @@ export interface PlanInputs {
   /** runs the landing queue or a flow still holds */
   heldRuns: ReadonlySet<string>;
   outside: AgentCard[];
+  /** the open PRs the gh login authored */
+  prs: AuthoredPr[];
+  /** watched PRs with a canopy fix going, as `slug#number` */
+  fixing: ReadonlySet<string>;
+  /** the checkouts, to find a PR's repo by its GitHub remote */
+  repos: Pick<Repo, "id" | "remotes">[];
 }
 
 /** a span as the row says it: minutes under an hour, hours under two
@@ -152,7 +159,9 @@ const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
  * foreground is offered unticked and by hand only (out of the ask and the
  * schedule's closes), with the program named. Chats are listed always, and closable only
  * when they are Claude's with a session to resume. Agents canopy did not
- * start are listed, never closable.
+ * start are listed, never closable. An authored PR is offered unticked, and
+ * a draft by hand only; one on an archived repo, set to auto-merge, in a
+ * merge queue or with a fix going is never offered.
  */
 export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): SweepItem[] {
   const items: SweepItem[] = [];
@@ -186,6 +195,23 @@ export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): Sw
   for (const c of inputs.outside) {
     if (c.where.canopy !== null || (c.state !== "idle" && c.state !== "lost")) continue;
     add("outside", c.id, null, `${c.node}:${c.cwd}`, `${c.harness} agent`, c.seenAt, (i) => `${c.state} for ${ago(i)}, not started by canopy`, false);
+  }
+
+  if (inputs.prs.length > 0) {
+    // the first checkout with a GitHub remote on the PR's repo
+    const bySlug = new Map<string, string>();
+    for (const r of inputs.repos) {
+      for (const url of r.remotes ?? []) {
+        const slug = githubSlug(url);
+        if (slug && !bySlug.has(slug)) bySlug.set(slug, r.id);
+      }
+    }
+    for (const pr of inputs.prs) {
+      const id = `${pr.slug}#${pr.number}`;
+      if (pr.archived || pr.autoMerge || pr.queued || inputs.fixing.has(id)) continue;
+      const repoId = bySlug.get(pr.slug) ?? null;
+      add("pr", id, repoId, repoId ?? pr.slug, `#${pr.number} ${pr.title}`, pr.updatedAt, (i) => `${pr.draft ? "draft, " : ""}no activity for ${ago(i)}`, true, pr.draft);
+    }
   }
 
   const order = (k: SweepKind) => SWEEP_KINDS.indexOf(k);

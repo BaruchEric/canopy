@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { githubSlug, linkPulls, parsePullCounts, pullsFor } from "./github";
+import { AUTHORED_QUERY, githubSlug, linkPulls, parseAuthoredPulls, parsePullCounts, pullsFor } from "./github";
 import type { Repo } from "./types";
 
 const page = (nodes: unknown[], hasNextPage = false) => ({
@@ -74,5 +74,51 @@ describe("pullsFor and linkPulls", () => {
       forge: { kind: "forgejo", slug: "eric/homelab", clone: "", branch: "main", updated: 0, private: false, empty: false },
     });
     expect(linkPulls([f], counts)[0]?.pulls).toBeUndefined();
+  });
+});
+
+describe("parseAuthoredPulls", () => {
+  const authoredPage = (nodes: unknown[], hasNextPage = false) => ({
+    data: { viewer: { pullRequests: { pageInfo: { hasNextPage, endCursor: hasNextPage ? "c1" : null }, nodes } } },
+  });
+  const pr = (nameWithOwner: string, number: number, over: Record<string, unknown> = {}) => ({
+    number,
+    url: `https://github.com/${nameWithOwner}/pull/${number}`,
+    title: `PR ${number}`,
+    isDraft: false,
+    updatedAt: "2026-10-01T12:00:00Z",
+    headRefName: `run/fix-${number}`,
+    autoMergeRequest: null,
+    mergeQueueEntry: null,
+    repository: { nameWithOwner, isArchived: false },
+    ...over,
+  });
+
+  test("parseAuthoredPulls reads two pages and skips malformed nodes", () => {
+    const got = parseAuthoredPulls([
+      authoredPage([pr("BaruchEric/Canopy", 7), null, { number: 8 }, pr("a/b", 9, { updatedAt: "not a date" })], true),
+      authoredPage([
+        pr("org/thing", 3, { isDraft: true, autoMergeRequest: { enabledAt: "2026-10-02T00:00:00Z" }, mergeQueueEntry: { id: "q" }, repository: { nameWithOwner: "Org/Thing", isArchived: true } }),
+      ]),
+    ]);
+    expect(got).toEqual([
+      {
+        slug: "barucheric/canopy", number: 7, url: "https://github.com/BaruchEric/Canopy/pull/7", title: "PR 7", branch: "run/fix-7", draft: false,
+        updatedAt: Date.parse("2026-10-01T12:00:00Z"), autoMerge: false, queued: false, archived: false,
+      },
+      {
+        slug: "org/thing", number: 3, url: "https://github.com/org/thing/pull/3", title: "PR 3", branch: "run/fix-3", draft: true,
+        updatedAt: Date.parse("2026-10-01T12:00:00Z"), autoMerge: true, queued: true, archived: true,
+      },
+    ]);
+    // one page comes as one object; a body with no list is empty
+    expect(parseAuthoredPulls(authoredPage([pr("a/b", 1)]))).toHaveLength(1);
+    expect(parseAuthoredPulls({ errors: [{ message: "bad" }] })).toEqual([]);
+    expect(parseAuthoredPulls("nope")).toEqual([]);
+  });
+
+  test("AUTHORED_QUERY pages the viewer's open PRs", () => {
+    expect(AUTHORED_QUERY).toContain("pullRequests(states: OPEN, first: 100, after: $endCursor)");
+    expect(AUTHORED_QUERY).toContain("pageInfo { hasNextPage endCursor }");
   });
 });

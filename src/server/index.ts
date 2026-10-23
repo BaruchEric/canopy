@@ -866,7 +866,11 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Plan
   // a coordinator's children while it runs: its cards follow them
   const coordinating = new Set(all.filter((r) => r.action === "coordinate" && isRunActive(r)).map((r) => r.id));
   for (const r of all) if (r.parent && coordinating.has(r.parent)) heldRuns.add(r.id);
-  return { serverStart, shells, runs, heldRuns, outside: cards };
+  // a watched PR with a fix going is never offered
+  const fixing = new Set(state.prs.info().filter((w) => w.fixing).map((w) => `${w.slug.toLowerCase()}#${w.number}`));
+  // no authored PRs yet: they join once the hub can close them, and then
+  // only on the backend that holds the flows lock
+  return { serverStart, shells, runs, heldRuns, outside: cards, prs: [], fixing, repos: state.result.repos };
 }
 
 /** Starts a chat on the session the sweep stopped one on, as a chat started

@@ -104,6 +104,9 @@ function world(): Facts & { deps: SweepDeps } {
         runs: w.runs.map((r) => ({ ...r })),
         heldRuns: new Set<string>(),
         outside: w.outside.map((c) => ({ ...c })),
+        prs: [],
+        fixing: new Set<string>(),
+        repos: [],
       };
       w.afterFacts?.();
       return read;

@@ -134,6 +134,27 @@ export interface PullCount {
   archived?: true;
 }
 
+/** An open pull request the gh login authored, on any repo, as the sweep
+ *  reads it (`AUTHORED_QUERY` in core/github). */
+export interface AuthoredPr {
+  /** `owner/name`, lowercased */
+  slug: string;
+  number: number;
+  url: string;
+  title: string;
+  /** the head branch */
+  branch: string;
+  draft: boolean;
+  /** GitHub's last activity on it, unix ms */
+  updatedAt: number;
+  /** set to merge on its own once checks pass */
+  autoMerge: boolean;
+  /** in a merge queue */
+  queued: boolean;
+  /** its repo is archived, so it cannot be closed */
+  archived: boolean;
+}
+
 /* ---------- sources: the folders canopy scans ---------- */
 
 /** Where a scanned source is: a folder on this machine, a folder on a host

@@ -1,5 +1,7 @@
-import { isGitHub, parseRemote } from "./access";
-import type { PullCount, Repo } from "./types";
+// ./remote, not ./access: core/sweep reads githubSlug, and the page loads
+// core/sweep, so nothing here may pull in exec
+import { isGitHub, parseRemote } from "./remote";
+import type { AuthoredPr, PullCount, Repo } from "./types";
 
 /** Every repo the gh login owns, collaborates on or reaches through an org,
  *  with its open pull request count and whether it is archived: one query,
@@ -38,6 +40,57 @@ export function parsePullCounts(body: unknown): Map<string, PullCount> {
       const open = n.pullRequests?.totalCount;
       if (typeof n.nameWithOwner !== "string" || typeof n.url !== "string" || typeof open !== "number") continue;
       out.set(n.nameWithOwner.toLowerCase(), { open, url: `${n.url}/pulls`, ...(n.isArchived === true ? { archived: true as const } : {}) });
+    }
+  }
+  return out;
+}
+
+/** Every open pull request the gh login authored, on any repo, whoever
+ *  opened it for them: what the sweep offers to close. One query, paged by
+ *  gh; the sweep asks when it plans, never on a timer. */
+export const AUTHORED_QUERY = `query($endCursor: String) {
+  viewer {
+    pullRequests(states: OPEN, first: 100, after: $endCursor) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number url title isDraft updatedAt headRefName
+        autoMergeRequest { enabledAt }
+        mergeQueueEntry { id }
+        repository { nameWithOwner isArchived }
+      }
+    }
+  }
+}`;
+
+/** `AUTHORED_QUERY`'s answer, pages as `parsePullCounts` takes them. A node
+ *  missing a field, or with an `updatedAt` that does not read, is skipped. */
+export function parseAuthoredPulls(body: unknown): AuthoredPr[] {
+  const out: AuthoredPr[] = [];
+  const pages = Array.isArray(body) ? body : [body];
+  for (const page of pages) {
+    const data = (page as { data?: { viewer?: { pullRequests?: { nodes?: unknown } } } } | null)?.data;
+    const nodes = data?.viewer?.pullRequests?.nodes;
+    if (!Array.isArray(nodes)) continue;
+    for (const node of nodes) {
+      if (!node || typeof node !== "object") continue;
+      const n = node as Record<string, unknown>;
+      const repo = n["repository"] as { nameWithOwner?: unknown; isArchived?: unknown } | null | undefined;
+      const { number, url, title, headRefName } = n;
+      const updatedAt = typeof n["updatedAt"] === "string" ? Date.parse(n["updatedAt"]) : NaN;
+      if (typeof number !== "number" || typeof url !== "string" || typeof title !== "string" || typeof headRefName !== "string") continue;
+      if (typeof repo?.nameWithOwner !== "string" || Number.isNaN(updatedAt)) continue;
+      out.push({
+        slug: repo.nameWithOwner.toLowerCase(),
+        number,
+        url,
+        title,
+        branch: headRefName,
+        draft: n["isDraft"] === true,
+        updatedAt,
+        autoMerge: n["autoMergeRequest"] != null,
+        queued: n["mergeQueueEntry"] != null,
+        archived: repo.isArchived === true,
+      });
     }
   }
   return out;
