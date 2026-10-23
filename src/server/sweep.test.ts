@@ -98,6 +98,8 @@ interface Facts {
   prState: Map<string, { state: string; updatedAt: number } | null>;
   /** gh's last line when a close fails */
   closeFails: string | null;
+  /** gh's error when listing the authored PRs fails */
+  listFails: string | null;
   settings: SweepSettings;
   events: ServerEvent[];
   calls: { endShell: string[]; seen: number[]; stopChat: string[]; dismiss: string[]; startChat: SweptChat[]; authored: number; closePr: { id: string; comment: string }[] };
@@ -116,6 +118,7 @@ function world(): Facts & { deps: SweepDeps } {
     lock: true,
     prState: new Map(),
     closeFails: null,
+    listFails: null,
     settings: { ...DEFAULT_SWEEP, spans: { ...DEFAULT_SWEEP.spans }, auto: [...DEFAULT_SWEEP.auto] },
     events: [],
     calls: { endShell: [], seen: [], stopChat: [], dismiss: [], startChat: [], authored: 0, closePr: [] },
@@ -170,6 +173,7 @@ function world(): Facts & { deps: SweepDeps } {
     keptSwept: async () => [],
     authoredPrs: async () => {
       w.calls.authored++;
+      if (w.listFails) throw new Error(w.listFails);
       return w.prs.map((p) => ({ ...p }));
     },
     prState: async (slug, number) => {
@@ -954,6 +958,29 @@ describe("PRs", () => {
     const got = await call(hub, "/api/sweep");
     expect(got.status).toBe(200);
     expect((got.body as SweepInfo).items.map((i) => i.key)).toEqual(["shell:t1"]);
+  });
+
+  test("a PR GitHub did not list is \"failed\", not gone, and the ask keeps it", async () => {
+    const w = world();
+    w.settings = { ...w.settings, on: true, cron: "* * * * *" };
+    w.prs = [authored()];
+    await writeLastFire(NOW - 2 * 60_000);
+    await new SweepHub(w.deps).tick(NOW);
+    expect((await readAsk())?.map((i) => i.key)).toEqual([PR]);
+    // the list fails: a fire is no news about the PRs
+    w.listFails = "gh: HTTP 502";
+    await writeLastFire(NOW - 2 * 60_000);
+    const hub = new SweepHub(w.deps);
+    await hub.tick(NOW);
+    expect((await readAsk())?.map((i) => i.key)).toEqual([PR]);
+    // and neither is a close: the PR fails, and the prune after it keeps the ask's PR
+    w.shells = [shell()];
+    expect(await hub.close([PR, "shell:t1"], "eric")).toEqual([
+      { key: PR, result: "failed", why: "GitHub did not list the PRs, so it could not be checked" },
+      { key: "shell:t1", result: "closed" },
+    ]);
+    expect((await readAsk())?.map((i) => i.key)).toEqual([PR]);
+    expect(w.calls.closePr).toEqual([]);
   });
 
   test("an unwatched PR closes with the comment and no branch delete", async () => {

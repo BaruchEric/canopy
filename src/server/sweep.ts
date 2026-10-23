@@ -103,7 +103,7 @@ export class SweepHub {
   private stopped = false;
   /** the authored-PR list and when it was asked for; the promise, so
    *  reads that arrive together share one query */
-  private prList: { at: number; list: Promise<AuthoredPr[]> } | null = null;
+  private prList: { at: number; list: Promise<AuthoredPr[] | null> } | null = null;
 
   constructor(private readonly deps: SweepDeps) {}
 
@@ -126,24 +126,26 @@ export class SweepHub {
   }
 
   /** The authored PRs, from the list kept for `PR_LIST_MS`. A backend
-   *  without the flows lock sweeps no PRs and never asks; a list gh could
-   *  not give is none, kept as long, so the rest of the plan still reads. */
-  private authored(): Promise<AuthoredPr[]> {
+   *  without the flows lock sweeps no PRs and never asks. A list gh could
+   *  not give is null, kept as long: no news about the PRs, as tmux not
+   *  answering is about the shells, so the rest of the plan still reads. */
+  private authored(): Promise<AuthoredPr[] | null> {
     if (!this.deps.holdsFlowsLock()) return Promise.resolve([]);
     const now = this.now();
     if (this.prList && now - this.prList.at < PR_LIST_MS) return this.prList.list;
     const list = this.deps.authoredPrs().catch((err) => {
       console.error("canopy: sweep: the authored PRs could not be listed:", errText(err));
-      return [];
+      return null;
     });
     this.prList = { at: now, list };
     return list;
   }
 
-  /** the facts with the authored PRs, from `prs` when the caller has them */
-  private async facts(prs?: AuthoredPr[]): Promise<PlanInputs> {
-    const [facts, list] = await Promise.all([this.deps.facts(), prs ?? this.authored()]);
-    return { ...facts, prs: list };
+  /** the facts with the authored PRs, from `prs` when the caller has
+   *  them; `prsDown` when GitHub did not list them, planned as none */
+  private async facts(prs?: AuthoredPr[] | null): Promise<Facts> {
+    const [facts, list] = await Promise.all([this.deps.facts(), prs === undefined ? this.authored() : prs]);
+    return { ...facts, prs: list ?? [], prsDown: list === null };
   }
 
   /** The plan less what this hub has closed already. A closed key the plan
@@ -237,8 +239,9 @@ export class SweepHub {
         // the schedule skipped because its kind left auto mid-fire is asked about
         const tried = new Set(outcomes.map((o) => o.key));
         const rest = items.filter((i) => mayClose(i) && !tried.has(i.key));
-        // tmux not answering is no news about the shells: the ask keeps the ones it held
-        const kept = facts.shells === null ? ((await readAsk()) ?? []).filter((i) => i.kind === "shell") : [];
+        // tmux not answering is no news about the shells, and GitHub not
+        // listing is none about the PRs: the ask keeps the ones it held
+        const kept = facts.shells === null || facts.prsDown ? ((await readAsk()) ?? []).filter((i) => (facts.shells === null && i.kind === "shell") || (facts.prsDown && i.kind === "pr")) : [];
         await this.keepAsk([...kept, ...rest]);
       } finally {
         this.publish();
@@ -267,7 +270,7 @@ export class SweepHub {
       if (!ask) return;
       const facts = await this.facts();
       const items = this.plan(facts, await this.settings());
-      const left = ask.filter((a) => items.some((i) => i.key === a.key) || (facts.shells === null && a.kind === "shell"));
+      const left = ask.filter((a) => items.some((i) => i.key === a.key) || (facts.shells === null && a.kind === "shell") || (facts.prsDown && a.kind === "pr"));
       if (left.length < ask.length) await writeAsk(left);
     } catch (err) {
       console.error("canopy: sweep: the ask could not be pruned:", errText(err));
@@ -409,7 +412,7 @@ export class SweepHub {
     });
   }
 
-  private async closeOne(item: SweepItem, facts: PlanInputs, settings: SweepSettings): Promise<SweepOutcome> {
+  private async closeOne(item: SweepItem, facts: Facts, settings: SweepSettings): Promise<SweepOutcome> {
     const { key, id } = item;
     switch (item.kind) {
       case "shell": {
@@ -534,10 +537,13 @@ export class SweepHub {
 
 const isKind = (k: string): k is SweepKind => (SWEEP_KINDS as readonly string[]).includes(k);
 
+/** the plan's inputs, and whether GitHub failed to list the PRs */
+type Facts = PlanInputs & { prsDown: boolean };
+
 /** What a key the fresh plan no longer has came to: "in use now" when the
  *  thing is still there, "gone" when it is not. A shell cannot be told
- *  either way while tmux does not answer. */
-function missing(key: string, facts: PlanInputs): SweepOutcome {
+ *  either way while tmux does not answer, nor a PR while GitHub does not list them. */
+function missing(key: string, facts: Facts): SweepOutcome {
   const at = key.indexOf(":");
   const kind = key.slice(0, at);
   const id = key.slice(at + 1);
@@ -562,6 +568,7 @@ function missing(key: string, facts: PlanInputs): SweepOutcome {
       there = facts.outside.some((c) => c.id === id);
       break;
     case "pr":
+      if (facts.prsDown) return { key, result: "failed", why: "GitHub did not list the PRs, so it could not be checked" };
       // still open but out of the plan: pushed to, set to auto-merge, or a fix started
       there = facts.prs.some((p) => prId(p) === id);
       break;
