@@ -17,7 +17,7 @@
 
 import { nextFire, parseCron } from "../core/cron";
 import { loadConfig, setSweep } from "../core/store";
-import { mayClose, patchSweep, planSweep, spanDays, sweepComment, type PlanInputs } from "../core/sweep";
+import { mayClose, patchSweep, planSweep, sweepComment, type PlanInputs } from "../core/sweep";
 import { addSweptChat, appendLog, readAsk, readLastFire, readLog, readSweptChats, takeSweptChat, writeAsk, writeLastFire } from "../core/sweepstore";
 import { SWEEP_KINDS, type AuthoredPr, type KeptShell, type PrNow, type Run, type ServerEvent, type SweepInfo, type SweepItem, type SweepKind, type SweepLogEntry, type SweepOutcome, type SweepSettings, type SweptChat } from "../core/types";
 
@@ -475,7 +475,7 @@ export class SweepHub {
         if (now.state !== "OPEN") return { key, result: "gone" };
         // activity, auto-merge, a merge queue, or a move to draft since the list: someone is at it
         if (now.updatedAt > pr.updatedAt || now.autoMerge || now.queued || (now.draft && !pr.draft)) return { key, result: "in use now" };
-        await this.deps.closePr(pr, sweepComment(spanDays(settings.spans.pr)));
+        await this.deps.closePr(pr, sweepComment(settings.spans.pr));
         return { key, result: "closed" };
       }
       default:

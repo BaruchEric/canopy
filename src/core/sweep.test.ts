@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, spanDays, sweepComment, type OutsideFacts, type ShellFacts } from "./sweep";
+import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, sweepComment, type OutsideFacts, type ShellFacts } from "./sweep";
 import type { AuthoredPr, Run, SweepItem } from "./types";
 
 const H = 3_600_000;
@@ -176,12 +176,13 @@ test("PRs sort after runs and before outside agents, oldest first", () => {
   expect(out.map((i) => i.key)).toEqual(["run:d1", "pr:barucheric/canopy#2", "pr:barucheric/canopy#1", "outside:claude:s1"]);
 });
 
-test("sweepComment says the span in days, and spanDays rounds the pr span to whole days, at least one", () => {
-  expect(sweepComment(14)).toBe("Closed by canopy's sweep after 14 days with no activity. Reopen it to pick it back up.");
-  expect(sweepComment(1)).toBe("Closed by canopy's sweep after 1 day with no activity. Reopen it to pick it back up.");
-  expect(spanDays(DEFAULT_SWEEP.spans.pr)).toBe(14);
-  expect(spanDays(36 * 3_600_000)).toBe(2);
-  expect(spanDays(10 * 60_000)).toBe(1);
+test("sweepComment says the pr span in whole days, else hours, else minutes, rounded down", () => {
+  expect(sweepComment(DEFAULT_SWEEP.spans.pr)).toBe("Closed by canopy's sweep after 14 days with no activity. Reopen it to pick it back up.");
+  expect(sweepComment(36 * 3_600_000)).toBe("Closed by canopy's sweep after 1 day with no activity. Reopen it to pick it back up.");
+  expect(sweepComment(5 * 3_600_000)).toBe("Closed by canopy's sweep after 5 hours with no activity. Reopen it to pick it back up.");
+  expect(sweepComment(3_600_000)).toBe("Closed by canopy's sweep after 1 hour with no activity. Reopen it to pick it back up.");
+  expect(sweepComment(15 * 60_000)).toBe("Closed by canopy's sweep after 15 minutes with no activity. Reopen it to pick it back up.");
+  expect(sweepComment(1_000)).toBe("Closed by canopy's sweep after 1 minute with no activity. Reopen it to pick it back up.");
 });
 
 test("prs is off by default, read only as true, and patched only with a boolean", () => {

@@ -106,11 +106,13 @@ export function patchSweep(cur: SweepSettings, patch: unknown): SweepSettings | 
  *  another backend reads it to tell a PR the sweep closed */
 export const SWEEP_COMMENT_PREFIX = "Closed by canopy's sweep after";
 
-/** The comment a PR the sweep closes gets; `days` is the pr span in days. */
-export const sweepComment = (days: number): string => `${SWEEP_COMMENT_PREFIX} ${days} day${days === 1 ? "" : "s"} with no activity. Reopen it to pick it back up.`;
-
-/** the pr span as the comment says it: whole days, at least one */
-export const spanDays = (ms: number): number => Math.max(1, Math.round(ms / DAY));
+/** The comment a PR the sweep closes gets, with the pr span in whole days
+ *  from a day up, whole hours from an hour, else minutes, at least one:
+ *  each rounded down, so it never says longer than the span. */
+export function sweepComment(span: number): string {
+  const [n, unit] = span >= DAY ? [Math.floor(span / DAY), "day"] : span >= HOUR ? [Math.floor(span / HOUR), "hour"] : [Math.max(1, Math.floor(span / 60_000)), "minute"];
+  return `${SWEEP_COMMENT_PREFIX} ${n} ${unit}${n === 1 ? "" : "s"} with no activity. Reopen it to pick it back up.`;
+}
 
 /** Whether a close Eric did not tick by hand may take the item: the
  *  schedule's own closes, the ask, and an answer to it. It must be one the
