@@ -20,7 +20,8 @@ import {
   saveChoice,
   type PreviewChoice,
 } from "../preview";
-import { devUrl, pickPrompt, pickSignal, readPick, type Pick } from "../designmode";
+import { annotationsPrompt, devUrl, marksMessage, pickSignal, readPick, type Annotation, type Intent, type Pick } from "../designmode";
+import { PICK_SAID, PickNotes } from "./PickNotes";
 import type { ListeningPort, Repo } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -29,11 +30,6 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
  *  blocked: a CSP without 'self' in script-src keeps the script out */
 const PICK_ACK_MS = 2000;
 const PICK_BLOCKED = "this page blocked the picker (CSP?)";
-const PICK_SAID = {
-  said: "Sent to the agent's chat.",
-  pasted: "Pasted into the agent's shell: press Enter there to send it.",
-  started: "Started a chat with the agent.",
-} as const;
 
 /** The design mode's switch, in the bar and in the bench's float. */
 function PickButton({ on, disabled, toggle }: { on: boolean; disabled?: boolean; toggle: () => void }) {
@@ -147,6 +143,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<Pick | null>(null);
   const [pickNote, setPickNote] = useState("");
+  const [intent, setIntent] = useState<Intent>("change");
+  // notes left on elements, sent together (FR-027)
+  const [notes, setNotes] = useState<Annotation[]>([]);
   const [pickBusy, setPickBusy] = useState(false);
   const [pickWarn, setPickWarn] = useState<string | null>(null);
   const [pickStatus, setPickStatus] = useState<{ text: string; bad: boolean } | null>(null);
@@ -290,7 +289,16 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   useEffect(() => {
     setPicked(null);
     setPicking(false);
+    setNotes([]);
   }, [port]);
+
+  // the page numbers the elements with notes; each load starts a fresh
+  // script, so the marks go again after it
+  useEffect(() => {
+    const w = frame.current?.contentWindow;
+    if (!loaded || !origin || !w) return;
+    w.postMessage(marksMessage(notes), origin);
+  }, [notes, loaded, loads, origin]);
 
   useEffect(() => {
     if (picked) noteBox.current?.focus();
@@ -307,23 +315,34 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       frame.current?.contentWindow?.postMessage({ canopy: "pick", on: false }, origin);
     }
   };
-  const sendPick = async () => {
-    if (!picked || !choice || !pickNote.trim() || pickBusy) return;
-    setPickBusy(true);
-    try {
-      const how = await sendToAgent(repo.id, pickPrompt(picked, pickNote, devUrl(choice.port, choice.path)));
-      setPicked(null);
-      setPickNote("");
-      setPickStatus({ text: PICK_SAID[how], bad: false });
-    } catch (e) {
-      setPickStatus({ text: errText(e), bad: true });
-    } finally {
-      setPickBusy(false);
+  const pageUrl = choice ? devUrl(choice.port, choice.path) : "";
+  // the note being written joins the list; "add" goes back to picking for
+  // the next element, "send now" sends the lot to the repo's agent
+  const addPick = (then: "pick" | "send") => {
+    if (!picked || !pickNote.trim() || pickBusy) return;
+    const all = [...notes, { pick: picked, note: pickNote.trim(), intent }];
+    setNotes(all);
+    setPicked(null);
+    setPickNote("");
+    setPickStatus(null);
+    if (then === "pick") {
+      setPickWarn(null);
+      setPicking(true);
+      return;
     }
+    setPickBusy(true);
+    sendToAgent(repo.id, annotationsPrompt(all, pageUrl))
+      .then((how) => {
+        setNotes([]);
+        setPickStatus({ text: PICK_SAID[how], bad: false });
+      })
+      .catch((e: unknown) => setPickStatus({ text: errText(e), bad: true }))
+      .finally(() => setPickBusy(false));
   };
   const pickLine = pickWarn
     ? { text: pickWarn, bad: true }
-    : pickStatus ?? (picking ? { text: "Click an element on the page. Esc stops.", bad: false } : null);
+    : pickStatus ??
+      (picking ? { text: notes.length ? "Click another element, or send the notes. Esc stops." : "Click an element on the page. Esc stops.", bad: false } : null);
 
   const go = () => {
     if (!choice) return;
@@ -504,7 +523,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                           className="preview-pick-form"
                           onSubmit={(e) => {
                             e.preventDefault();
-                            void sendPick();
+                            addPick("pick");
                           }}
                         >
                           <code className="preview-pick-sel" title={picked.selector}>
@@ -513,24 +532,40 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                           {(picked.text || picked.html) && (
                             <pre className="preview-pick-snip">{(picked.text || picked.html).slice(0, 240)}</pre>
                           )}
+                          <div className="preview-pick-intent" role="group" aria-label="What the note asks for">
+                            {(["change", "question"] as const).map((k) => (
+                              <button key={k} type="button" className={`mini${intent === k ? " on" : ""}`} aria-pressed={intent === k} onClick={() => setIntent(k)}>
+                                {k === "change" ? "change it" : "ask about it"}
+                              </button>
+                            ))}
+                          </div>
                           <textarea
                             ref={noteBox}
                             rows={3}
                             required
-                            placeholder="what should change here"
+                            placeholder={intent === "change" ? "what should change here" : "what do you want to know"}
                             aria-label="Note for the agent about this element"
                             value={pickNote}
                             onChange={(e) => setPickNote(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                                 e.preventDefault();
-                                void sendPick();
+                                addPick(e.shiftKey ? "send" : "pick");
                               } else if (e.key === "Escape") setPicked(null);
                             }}
                           />
                           <div className="preview-pick-row">
-                            <button type="submit" className="mini" disabled={!pickNote.trim() || pickBusy}>
-                              send to the agent
+                            <button type="submit" className="mini" disabled={!pickNote.trim() || pickBusy} title="Add the note and pick the next element (Ctrl+Enter)">
+                              add
+                            </button>
+                            <button
+                              type="button"
+                              className="mini"
+                              disabled={!pickNote.trim() || pickBusy}
+                              title={`Send ${notes.length ? `this and the ${notes.length} waiting` : "it"} to the repo's agent (Ctrl+Shift+Enter)`}
+                              onClick={() => addPick("send")}
+                            >
+                              send now
                             </button>
                             <button type="button" className="mini" onClick={() => setPicked(null)}>
                               cancel
@@ -559,6 +594,20 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                         )
                       )}
                     </div>
+                  )}
+                  {url && notes.length > 0 && !picked && (
+                    <PickNotes
+                      repoId={repo.id}
+                      notes={notes}
+                      pageUrl={pageUrl}
+                      onRemove={(i) => setNotes((l) => l.filter((_, j) => j !== i))}
+                      onClear={() => setNotes([])}
+                      onSent={(said) => {
+                        setNotes([]);
+                        setPickStatus({ text: said, bad: false });
+                      }}
+                      say={(text, bad) => setPickStatus({ text, bad })}
+                    />
                   )}
                   {/* in the bench the frame goes edge to edge, and these few
                       controls float over its corner instead of a bar above */}

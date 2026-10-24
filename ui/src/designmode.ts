@@ -61,25 +61,58 @@ export function readPick(data: unknown): Pick | null {
 /** the dev server's own address for a page, which the agent can open */
 export const devUrl = (port: number, path: string): string => `http://localhost:${port}${path.startsWith("/") ? path : `/${path}`}`;
 
-/** What the agent is told: the user's note and the page they were on, then
- *  everything the page reported fenced as data, since a page's class names
- *  and text are anyone's words. */
-export function pickPrompt(pick: Pick, note: string, pageUrl: string): string {
+/** what a note on an element asks for: a change, or only an answer */
+export type Intent = "change" | "question";
+
+/** a note left on one picked element, waiting with the others to be sent */
+export interface Annotation {
+  pick: Pick;
+  note: string;
+  intent: Intent;
+}
+
+function reported(pick: Pick): string {
   const styles = Object.entries(pick.styles)
     .map(([k, v]) => `${k}: ${v}`)
     .join("; ");
   const { x, y, width, height } = pick.rect;
-  const lines = [
+  return [
     `selector: ${pick.selector}`,
     pick.path && `page path: ${pick.path}`,
     `box: ${width}x${height} at ${x},${y}`,
     styles && `computed styles: ${styles}`,
     pick.text && `text: ${pick.text}`,
     pick.html && `html:\n${pick.html}`,
-  ].filter(Boolean);
-  return (
-    `In the preview of ${pageUrl} I picked an element on the page. ${note.trim()}\n\n` +
-    `${fence("What the page reported about that element", lines.join("\n"))}\n\n` +
-    "Find the code that renders it and act on my note."
-  );
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
+
+const INTENT_WORD: Record<Intent, string> = { change: "Change", question: "Question" };
+
+/** What the agent is told about a batch of notes (FR-027): each note
+ *  numbered with what it asks for, in the user's words, and what the page
+ *  reported about its element fenced as data under it, since a page's class
+ *  names and text are anyone's words. Questions are to be answered, not
+ *  acted on. */
+export function annotationsPrompt(list: readonly Annotation[], pageUrl: string): string {
+  const one = list.length === 1;
+  const head = one ? `In the preview of ${pageUrl} I left a note on an element of the page.` : `In the preview of ${pageUrl} I left ${list.length} notes on elements of the page.`;
+  const items = list.map((a, i) => {
+    const n = i + 1;
+    return `${n}. ${INTENT_WORD[a.intent]}: ${a.note.trim()}\n\n${fence(`What the page reported about element ${n}`, reported(a.pick))}`;
+  });
+  const changes = list.some((a) => a.intent === "change");
+  const questions = list.some((a) => a.intent === "question");
+  const ask =
+    changes && questions
+      ? "Find the code that renders each element. Make the changes the notes ask for, and answer the questions without changing anything for them."
+      : questions
+        ? "Find the code that renders each element and answer the questions. Change nothing for them."
+        : `Find the code that renders ${one ? "it" : "each element"} and make the ${one ? "change" : "changes"} the ${one ? "note asks" : "notes ask"} for.`;
+  return `${head}\n\n${items.join("\n\n")}\n\n${ask}`;
+}
+
+/** what the page's picker is told to mark: each note's element, numbered
+ *  in this order */
+export const marksMessage = (list: readonly Annotation[]) => ({ canopy: "marks", list: list.map((a) => a.pick.selector) });

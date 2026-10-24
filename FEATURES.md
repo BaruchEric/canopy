@@ -2,9 +2,9 @@
 
 ## Open
 
-### FR-027 · Design mode batches annotations and picks who gets them
-P2 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 12:00 to 19:30)
-canopy's preview picker sends one element with one note. Orca's lets you pin several notes on the page before sending: each pick opens a popover with the element's selector path, a note and an intent (Change or Question), numbered dots mark the picked elements, and a bar reads "2 annotations ready" with Send and Copy All. Send asks where the notes go: a session waiting for input, or a new agent of any harness. While picking, C copies the element and S screenshots it cropped. A draw mode (pen, arrow, box, text, colours) ends in Copy Markup for pasting into an agent. The batching and the send-to picker are the parts worth taking first.
+### FR-029 · Design mode's copy and screenshot keys, and a draw mode
+P3 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 12:00 to 19:30), split from FR-027
+While picking in Orca, C copies the hovered element and S screenshots it cropped to its box. A draw mode (pen, arrow, box, text, colours) over the page ends in Copy Markup for pasting into an agent. canopy's picker has neither.
 
 ### FR-028 · What is left on each subscription, in the status line
 P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
@@ -63,10 +63,15 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 
 ## Shipped
 
+### FR-027 · Design mode batches annotations and picks who gets them
+P2 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 12:00 to 19:30) · shipped 2026-10-24
+canopy's preview picker sends one element with one note. Orca's lets you pin several notes on the page before sending: each pick opens a popover with the element's selector path, a note and an intent (Change or Question), numbered dots mark the picked elements, and a bar reads "2 annotations ready" with Send and Copy All. Send asks where the notes go: a session waiting for input, or a new agent of any harness. While picking, C copies the element and S screenshots it cropped. A draw mode (pen, arrow, box, text, colours) ends in Copy Markup for pasting into an agent. The batching and the send-to picker are the parts worth taking first.
+Built 2026-10-24: a pick's form takes a note and an intent (change it, ask about it); "add" keeps it and goes back to picking, "send now" sends the lot to the repo's agent. The page numbers each noted element with a blue badge (the `marks` message in core/pickscript.ts), and a bar over the frame lists the notes with send, copy all and clear. Send goes to the repo's agent, an agent running in one of the repo's shells, a new chat, or a new shell with either harness. The prompt is annotationsPrompt in ui/src/designmode.ts. Checked on a scratch server: two notes of each intent, the badges, the send menu finding claude in a shell, and the paste into it. The C and S keys and the draw mode moved to FR-029.
+
 ### FR-026 · Split panes in the sessions view
 P2 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 05:50) · shipped 2026-10-24
 A tab in the sessions view splits right or down into panes, each its own shell, as Orca's terminal tabs do. Each pane has a header at its top right with a hand-off to the other harness (while an agent runs there), split right and close. The mouse does the rest: a click focuses a pane, the seams drag to resize, and a pane's header or a tab drags onto a pane's edge to split there. The tab menu gets split right and split down, and Ctrl+Shift+D and Alt+Shift+D split from the keyboard.
-Built 2026-10-24: ui/src/splitpanes.ts (pure, tested) and components/SessionPanes.tsx; the groups are the per-browser setting sessionSplits. Checked on a scratch server: header and key splits, a seam drag, a pane dragged onto another's edge, a tab dragged onto a pane, close and out of the split, existing xterms kept through a split, and the phone width. The hand-off icon was not run live.
+Built 2026-10-24: ui/src/splitpanes.ts (pure, tested) and components/SessionPanes.tsx; the groups are the per-browser setting sessionSplits. Checked on a scratch server: header and key splits, a seam drag, a pane dragged onto another's edge, a tab dragged onto a pane, close and out of the split, existing xterms kept through a split, and the phone width. The hand-off icon was checked live on 2026-10-24: with claude in a pane it opened codex in a new pane to the right.
 
 ### FR-022 · g then a letter switches views
 P2 · added 2026-10-23 · source: Eric (Linear UX study) · shipped 2026-10-24

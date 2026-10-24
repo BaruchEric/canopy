@@ -148,13 +148,31 @@ describe("the picker script", () => {
       getComputedStyle: () => ({ getPropertyValue: (p: string) => (p === "color" ? "red" : "") }),
     };
     win.parent = framed ? parent : win;
-    const doc = { body: { appendChild() {} }, documentElement: {}, createElement: () => ({ style: {}, setAttribute() {} }) };
+    win.innerWidth = 800;
+    win.innerHeight = 600;
+    type El = { style: Record<string, string>; children: El[]; textContent?: string; parentNode?: { removeChild: (c: El) => void } | null; setAttribute(): void; appendChild(c: El): void };
+    const body: { added: El[]; appendChild(c: El): void; removeChild(c: El): void } = {
+      added: [],
+      appendChild(c) {
+        body.added.push(c);
+        c.parentNode = body;
+      },
+      removeChild(c) {
+        body.added = body.added.filter((x) => x !== c);
+      },
+    };
+    const element = (): El => {
+      const el: El = { style: {}, children: [], setAttribute() {}, appendChild: (c) => void el.children.push(c) };
+      return el;
+    };
+    const found = (sel: string) => (sel === "h1.title" ? { getBoundingClientRect: () => ({ left: 10, top: 20, right: 110, width: 100, height: 30 }) } : null);
+    const doc = { body, documentElement: {}, createElement: element, querySelector: found };
     new Function("window", "document", "location", "CSS", PICK_SCRIPT)(win, doc, { pathname: "/a", search: "?b=1" }, undefined);
     const fire = (type: string, e: unknown) => {
       for (const f of listeners.get(type) ?? []) f(e);
     };
     const count = (type: string) => listeners.get(type)?.length ?? 0;
-    return { sent, parent, fire, count };
+    return { sent, parent, fire, count, body };
   }
   const canopy = "http://canopy:7850";
   const enable = { canopy: "pick", on: true };
@@ -206,6 +224,24 @@ describe("the picker script", () => {
     });
     expect(p.count("click")).toBe(0);
     expect(p.count("mousemove")).toBe(0);
+  });
+
+  test("numbers the elements the parent names, follows a scroll, and clears", () => {
+    const p = load(true);
+    p.fire("message", { source: {}, origin: canopy, data: { canopy: "marks", list: ["h1.title"] } });
+    expect(p.body.added).toHaveLength(0);
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "marks", list: ["h1.title", "nope", 3] } });
+    const layer = p.body.added[0];
+    expect(layer?.children.map((b) => [b.textContent, b.style.display])).toEqual([
+      ["1", "flex"],
+      ["2", "none"],
+    ]);
+    expect(layer?.children[0]?.style.left).toBe("101px");
+    expect(layer?.children[0]?.style.top).toBe("11px");
+    expect(p.count("scroll")).toBe(1);
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "marks", list: [] } });
+    expect(p.body.added).toHaveLength(0);
+    expect(p.count("scroll")).toBe(0);
   });
 
   test("Esc stops it and tells the parent; the parent can stop it too", () => {

@@ -8,6 +8,8 @@
  *
  * Messages, all `{canopy: ...}` objects:
  * - parent to page: `{canopy:"pick", on:true|false}`
+ * - parent to page: `{canopy:"marks", list:[selector, ...]}` numbers the
+ *   elements the user left notes on (FR-027); an empty list clears them
  * - page to parent: `{canopy:"pick-ready"}` for each enable,
  *   `{canopy:"picked", selector, html, text, path, styles, rect}` on a click,
  *   `{canopy:"pick-off"}` when Esc in the page stops it.
@@ -35,6 +37,9 @@ export const PICK_SCRIPT = `(function () {
   var box = null;
   var hovered = null;
   var STYLES = ["display", "position", "color", "background-color", "font-family", "font-size", "font-weight", "line-height", "padding", "margin", "border", "border-radius", "gap"];
+  var marks = [];
+  var markLayer = null;
+  var MARKS_MAX = 50;
   var BLOCK = ["pointerdown", "pointerup", "mousedown", "mouseup", "dblclick", "contextmenu", "auxclick"];
 
   function post(msg) {
@@ -97,6 +102,41 @@ export const PICK_SCRIPT = `(function () {
   function redraw() {
     if (hovered && hovered.isConnected) draw(hovered);
   }
+  function placeMarks() {
+    if (!markLayer) return;
+    for (var i = 0; i < markLayer.children.length; i++) {
+      var b = markLayer.children[i];
+      var el = null;
+      try { el = document.querySelector(marks[i]); } catch (e) {}
+      if (!el) { b.style.display = "none"; continue; }
+      var r = el.getBoundingClientRect();
+      b.style.display = "flex";
+      b.style.left = Math.max(0, Math.min(window.innerWidth - 18, r.right - 9)) + "px";
+      b.style.top = Math.max(0, Math.min(window.innerHeight - 18, r.top - 9)) + "px";
+    }
+  }
+  function setMarks(list) {
+    marks = [];
+    for (var i = 0; i < list.length && marks.length < MARKS_MAX; i++) if (typeof list[i] === "string") marks.push(list[i]);
+    if (markLayer && markLayer.parentNode) markLayer.parentNode.removeChild(markLayer);
+    markLayer = null;
+    window.removeEventListener("scroll", placeMarks, true);
+    window.removeEventListener("resize", placeMarks);
+    if (!marks.length) return;
+    markLayer = document.createElement("div");
+    markLayer.setAttribute("data-canopy-marks", "");
+    markLayer.style.cssText = "position:fixed;inset:0;z-index:2147483646;pointer-events:none;";
+    for (var k = 0; k < marks.length; k++) {
+      var b = document.createElement("div");
+      b.textContent = String(k + 1);
+      b.style.cssText = "position:fixed;display:none;align-items:center;justify-content:center;width:18px;height:18px;border-radius:9px;background:#3b82f6;color:#fff;font:600 11px/1 system-ui,sans-serif;box-shadow:0 1px 3px rgba(0,0,0,0.3);";
+      markLayer.appendChild(b);
+    }
+    (document.body || document.documentElement).appendChild(markLayer);
+    window.addEventListener("scroll", placeMarks, true);
+    window.addEventListener("resize", placeMarks);
+    placeMarks();
+  }
   function swallow(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -150,6 +190,10 @@ export const PICK_SCRIPT = `(function () {
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent) return;
     var d = e.data;
+    if (d && typeof d === "object" && d.canopy === "marks" && Array.isArray(d.list)) {
+      setMarks(d.list);
+      return;
+    }
     if (!d || typeof d !== "object" || d.canopy !== "pick") return;
     if (d.on === true) {
       origin = e.origin;

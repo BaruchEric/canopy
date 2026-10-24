@@ -8348,7 +8348,115 @@ body:has(.focus-grip.se.dragging) {
 }
 .preview-pick-row {
   display: flex;
+  align-items: center;
   gap: 6px;
+}
+.preview-pick-intent {
+  display: flex;
+  gap: 4px;
+}
+/* design mode's waiting notes, over the frame's bottom left corner */
+.preview-notes {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(24rem, calc(100% - 20px));
+  padding: 6px 8px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--bark1);
+  color: var(--ink);
+  box-shadow: 0 6px 18px -8px var(--float-shadow);
+  font-size: 12px;
+}
+.preview-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 8lh;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+.preview-notes-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+/* the same blue badge the page puts on the element */
+.preview-notes-n {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+}
+.preview-notes-intent {
+  flex: none;
+  color: var(--ink-dim);
+}
+.preview-notes-intent.question {
+  color: var(--lichen);
+}
+.preview-notes-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-notes-count {
+  flex: 1;
+  color: var(--ink-dim);
+}
+.preview-notes-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  display: flex;
+  flex-direction: column;
+  min-width: 14rem;
+  max-width: calc(100vw - 40px);
+  padding: 4px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--bark1);
+  box-shadow: 0 6px 18px -8px var(--float-shadow);
+}
+.preview-notes-menu button {
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r);
+  background: none;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.preview-notes-menu button:hover:not(:disabled),
+.preview-notes-menu button:focus-visible {
+  background: var(--bark2);
+}
+.preview-notes-menu button:disabled {
+  color: var(--ink-faint);
+  cursor: default;
+}
+.preview-notes-hint {
+  margin: 0;
+  padding: 4px 8px;
+  color: var(--ink-faint);
 }
 .preview-frame {
   display: block;
