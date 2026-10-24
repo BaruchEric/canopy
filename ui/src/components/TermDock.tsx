@@ -984,6 +984,9 @@ export function TermTabs({
   onMenu,
   renaming,
   onRenamed,
+  panes,
+  focus,
+  onGrab,
 }: {
   terms: TermTab[];
   active: string | null;
@@ -998,6 +1001,13 @@ export function TermTabs({
   /** the tab whose name is being typed in place, and what to do with it */
   renaming?: string | null;
   onRenamed?: (id: string, label: string | null) => void;
+  /** how many panes a split tab stands for, by its id (the sessions view) */
+  panes?: Readonly<Record<string, number>>;
+  /** the shell the agent buttons act on, when it is not the active tab
+   *  itself: the focused pane of a split one */
+  focus?: TermTab | null;
+  /** a press on a tab, which may turn into a drag onto a pane */
+  onGrab?: (id: string, e: PointerEvent<HTMLElement>) => void;
 }) {
   const closeTerm = useStore((s) => s.closeTerm);
   const labels = tabLabels(terms);
@@ -1024,6 +1034,7 @@ export function TermTabs({
             className={`term-tab${on ? " on" : ""}${t.exit !== undefined ? " exited" : ""}`}
             title={t.exit === undefined ? t.path : `${t.path} · exited`}
             onClick={() => onShow(t.id)}
+            onPointerDown={onGrab && ((e) => onGrab(t.id, e))}
             onContextMenu={
               onMenu &&
               ((e) => {
@@ -1044,6 +1055,11 @@ export function TermTabs({
           >
             <span className={`dot ${t.exit === undefined ? "moss" : "faint"}`} aria-hidden="true" />
             <span className="term-tab-name">{label}</span>
+            {(panes?.[t.id] ?? 0) > 1 && (
+              <span className="term-tab-panes" title={`split into ${panes?.[t.id]} panes`}>
+                {panes?.[t.id]}
+              </span>
+            )}
             <button
               type="button"
               className="term-x"
@@ -1060,7 +1076,7 @@ export function TermTabs({
         );
       })}
       {(() => {
-        const showing = terms.find((t) => t.id === active);
+        const showing = focus === undefined ? terms.find((t) => t.id === active) : focus;
         return showing && showing.task === undefined && !showing.ranger && showing.exit === undefined ? <AgentButtons tab={showing} /> : null;
       })()}
       {extra}

@@ -174,6 +174,16 @@ export function sessionsKey(e: { key: string; metaKey: boolean; ctrlKey: boolean
   }
 }
 
+/** Orca's split keys, read before a shell sees them since they work from
+ *  inside one: Ctrl+Shift+D splits right, Alt+Shift+D splits down. By
+ *  `code`, since Alt on a Mac changes the key's character. */
+export function splitKey(e: { code: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean }): "right" | "bottom" | null {
+  if (e.code !== "KeyD" || !e.shiftKey || e.metaKey) return null;
+  if (e.ctrlKey && !e.altKey) return "right";
+  if (e.altKey && !e.ctrlKey) return "bottom";
+  return null;
+}
+
 /** What a new tab runs: a plain shell, or a shell with that harness typed in. */
 export type TabKind = "shell" | Harness;
 

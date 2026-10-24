@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { HARNESS } from "../../../src/core/harness";
-import type { Harness } from "../../../src/core/types";
+import type { Harness, ShellPlace } from "../../../src/core/types";
 import { harnessesOf } from "../agents";
 import { api } from "../api";
 import { handoffPrompt, otherHarness } from "../handoff";
@@ -15,13 +15,14 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
  * where the first session's transcript is. The transcript is the one the
  * agent's registry card named when there is one; otherwise the shell's
  * backend looks up the newest one for its agent in the repo. Without either
- * the new agent starts on the repo alone.
+ * the new agent starts on the repo alone. The sessions view asks for a
+ * strip shell, which it splits in beside the first.
  */
-export async function handOff(repoId: string, from: Harness, transcript: string | null, term: string | null): Promise<void> {
+export async function handOff(repoId: string, from: Harness, transcript: string | null, term: string | null, place: ShellPlace = "panel"): Promise<void> {
   let path = transcript;
   if (!path && term) path = await api.termTranscript(term, from).then((r) => r.path, () => null);
   const prompt = handoffPrompt(from, path);
-  useStore.getState().openTerm(repoId, "panel", "agent", prompt || undefined, { harness: otherHarness(from) });
+  useStore.getState().openTerm(repoId, place, "agent", prompt || undefined, { harness: otherHarness(from) });
 }
 
 /** "switch to codex" (or claude): greyed where the backend lacks the other

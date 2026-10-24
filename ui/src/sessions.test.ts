@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, Repo, RepoStatus, TermInfo } from "../../src/core/types";
 import { split, type Reg } from "./backends";
-import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed } from "./sessions";
+import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, splitKey, stepTab, tabsIn, untabbed } from "./sessions";
 import type { TermTab } from "./term";
 
 const reg: Reg = { home: "mac", names: ["mac", "mini"] };
@@ -175,6 +175,16 @@ describe("tabs and keys", () => {
     expect(sessionsKey(k("w"), true)).toBeNull();
     expect(sessionsKey(k("n", { metaKey: true }), false)).toBeNull();
     expect(sessionsKey(k("x"), false)).toBeNull();
+  });
+
+  test("the split keys: Ctrl+Shift+D right, Alt+Shift+D down, by code", () => {
+    const d = (over: Partial<{ code: string; shiftKey: boolean; metaKey: boolean; ctrlKey: boolean; altKey: boolean }>) => ({ code: "KeyD", shiftKey: true, metaKey: false, ctrlKey: false, altKey: false, ...over });
+    expect(splitKey(d({ ctrlKey: true }))).toBe("right");
+    expect(splitKey(d({ altKey: true }))).toBe("bottom");
+    expect(splitKey(d({ ctrlKey: true, altKey: true }))).toBeNull();
+    expect(splitKey(d({ ctrlKey: true, shiftKey: false }))).toBeNull();
+    expect(splitKey(d({ ctrlKey: true, metaKey: true }))).toBeNull();
+    expect(splitKey(d({ code: "KeyE", ctrlKey: true }))).toBeNull();
   });
 
   test("the new-shell picker puts names that start with the query first", () => {

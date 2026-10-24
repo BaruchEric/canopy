@@ -6,12 +6,14 @@ import { joinTarget, machineOf, stateWord } from "../agentcards";
 import { healthBadge } from "../badges";
 import { NARROW, useMedia } from "../media";
 import { backendOf, qual } from "../registry";
-import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
+import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, splitKey, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
+import { boxesOf, dropBox, edgeAt, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, pruneGroups, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
 import { connOf, useStore } from "../store";
 import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { useIsChat } from "./Registry";
+import { PaneHead, Seams, boxStyle } from "./SessionPanes";
 import { ShellSpotHere } from "./Surface";
 import { SweepButton } from "./Sweep";
 import { TermTabs, TermView } from "./TermDock";
@@ -25,15 +27,25 @@ const TONE_DOT: Record<RepoTone, string> = { waiting: "rust", working: "moss liv
 
 const STATE_DOT: Record<AgentCard["state"], string> = { waiting: "rust", working: "moss live", idle: "moss", lost: "faint", ended: "faint" };
 
-/** the textarea of the shell showing, once the layout has settled; never
- *  taken from a field typed in meanwhile, such as a rename the second
- *  press of a double-click opened */
+/** the textarea of the shell showing (the focused pane of a split tab),
+ *  once the layout has settled; never taken from a field typed in
+ *  meanwhile, such as a rename the second press of a double-click opened */
 const refocus = (box: Element | null) =>
   requestAnimationFrame(() => {
     const at = document.activeElement;
     if (at instanceof HTMLInputElement) return;
-    box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea")?.focus();
+    (box?.querySelector<HTMLElement>(".ss-pane.on .term-view:not([hidden]) textarea") ?? box?.querySelector<HTMLElement>(".term-view:not([hidden]) textarea"))?.focus();
   });
+
+/** how far a press on a tab or a pane's grip moves before it is a drag */
+const DRAG_PX = 6;
+
+/** a pane being dragged, and where it would land */
+interface PaneDrag {
+  id: string;
+  target: string | null;
+  edge: Edge;
+}
 
 /**
  * The sessions view: every shell and agent in one screen, laid out like a
@@ -50,6 +62,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const showTerm = useStore((s) => s.showTerm);
   const openTerm = useStore((s) => s.openTerm);
   const joinTerm = useStore((s) => s.joinTerm);
+  const closeTerm = useStore((s) => s.closeTerm);
   const swapTerms = useStore((s) => s.swapTerms);
   const renameTerm = useStore((s) => s.renameTerm);
   const repos = useStore((s) => s.repos);
@@ -80,7 +93,27 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   });
   const visible = useMemo(() => tabsIn(strip, scope, backendOf), [strip, scope]);
   const held = useMemo(() => tabsIn(untabbed(shells, strip), scope, backendOf), [shells, strip, scope]);
-  const showing = visible.find((t) => t.id === activeTerm) ?? null;
+  // Split tabs (FR-026): the saved groups, with the tabs since closed taken
+  // out. The row shows a group as one tab, and a group any of whose panes
+  // is in scope brings the rest along.
+  const splits = useStore((s) => s.settings.sessionSplits);
+  const groups = useMemo(() => pruneGroups(splits, new Set(strip.map((t) => t.id))), [splits, strip]);
+  const reach = useMemo(() => {
+    const ids = new Set(visible.map((t) => t.id));
+    for (const g of groups) {
+      const ps = paneIds(g);
+      if (ps.some((id) => ids.has(id))) for (const id of ps) ids.add(id);
+    }
+    return strip.filter((t) => ids.has(t.id));
+  }, [strip, visible, groups]);
+  const { row, panes } = useMemo(() => rowOf(visible, groups), [visible, groups]);
+  const showing = reach.find((t) => t.id === activeTerm) ?? null;
+  // a seam's tree while it is dragged, and a pane on its way elsewhere
+  const [draft, setDraft] = useState<PaneTree | null>(null);
+  const [drag, setDrag] = useState<PaneDrag | null>(null);
+  // the pane last focused in each split tab, by each of its panes, so going
+  // back to the tab lands where you were
+  const lastIn = useRef(new Map<string, string>());
   const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
   // the repo the new-tab box is open for, and what the last new tab ran
@@ -102,9 +135,22 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
 
   // a scope that leaves the showing tab out shows its last tab instead
   useEffect(() => {
-    const want = showingIn(visible, activeTerm);
+    const want = showingIn(reach, activeTerm);
     if (want && want !== activeTerm) showTerm(want);
-  }, [visible, activeTerm, showTerm]);
+  }, [reach, activeTerm, showTerm]);
+  const group = !overTabs && activeTerm ? groupOf(groups, activeTerm) : undefined;
+  useEffect(() => {
+    if (!group || !activeTerm) return;
+    for (const id of paneIds(group)) lastIn.current.set(id, activeTerm);
+  }, [group, activeTerm]);
+  // a phone shows the focused pane alone
+  const tree = narrow || !group ? null : (draft && hasPane(draft, activeTerm ?? "") ? draft : group);
+  const boxes = useMemo(() => (tree ? boxesOf(tree) : null), [tree]);
+  // the panes a drag can land on: a split tab's, or the one tab showing
+  const targets = useMemo<Record<string, Box>>(
+    () => boxes ?? (showing && !overTabs ? { [showing.id]: { x: 0, y: 0, w: 1, h: 1 } } : {}),
+    [boxes, showing, overTabs],
+  );
   const machines = useMemo(
     () => machinesOf({ home, shown, repos, shells, tabs: strip, cards, backendOf }, currentRepo ? [currentRepo] : []),
     [home, shown, repos, shells, strip, cards, currentRepo],
@@ -118,6 +164,97 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     showTerm(id);
     setDrawer(false);
     if (moved) refocus(main.current);
+  };
+  // a tab in the row: a split one goes back to the pane last focused in it,
+  // or stays on the one focused now
+  const showRowTab = (id: string) => {
+    const g = groupOf(groups, id);
+    if (!g) return showTab(id);
+    if (!overTabs && activeTerm && hasPane(g, activeTerm)) return showTab(activeTerm);
+    const last = lastIn.current.get(id);
+    showTab(last && hasPane(g, last) ? last : id);
+  };
+  // the saved groups changed, read fresh so two changes in one handler
+  // both land, with the tabs since closed taken out
+  const writeSplits = (f: (g: PaneTree[]) => PaneTree[]) => {
+    const st = useStore.getState();
+    const live = new Set(st.terms.filter((t) => t.place === "strip").map((t) => t.id));
+    st.setSetting("sessionSplits", f(pruneGroups(st.settings.sessionSplits, live)));
+  };
+  // put the shell just opened beside `id`; openTerm makes a strip shell
+  // the active tab at once, so a change of it is the new shell
+  const besideNew = (id: string, before: string | null, edge: Edge) => {
+    const made = useStore.getState().activeTerm;
+    if (made && made !== before && made !== id) writeSplits((g) => splitIn(g, id, made, edge));
+  };
+  // a new shell at the same repo, beside `id`
+  const splitFrom = (id: string, edge: Edge) => {
+    const tab = strip.find((t) => t.id === id);
+    if (!tab) return;
+    const before = useStore.getState().activeTerm;
+    setPicked(null);
+    openTerm(tab.repoId, "strip");
+    besideNew(id, before, edge);
+  };
+  // a pane's ×: the shell ends, as the tab's × ends it, and the focus goes
+  // to the pane beside it
+  const closePane = (id: string) => {
+    const g = groupOf(groups, id);
+    const next = g && id === activeTerm ? neighbourOf(g, id) : null;
+    if (next) showTab(next);
+    writeSplits((gs) => leaveGroup(gs, id));
+    closeTerm(id);
+  };
+  // A press on a tab or a pane's grip: a click as before, or, once it moves
+  // DRAG_PX, a drag that lands the pane on the edge of the pane under the
+  // pointer. Escape or a release off every pane leaves things as they were.
+  const grab = (id: string, e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || (e.target instanceof Element && e.target.closest("button"))) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let moving = false;
+    let at: PaneDrag | null = null;
+    const move = (ev: PointerEvent) => {
+      if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < DRAG_PX) return;
+      moving = true;
+      const r = main.current?.getBoundingClientRect();
+      const fx = r ? (ev.clientX - r.left) / r.width : -1;
+      const fy = r ? (ev.clientY - r.top) / r.height : -1;
+      const hit = Object.entries(live.current.targets).find(([pid, b]) => pid !== id && fx >= b.x && fx <= b.x + b.w && fy >= b.y && fy <= b.y + b.h);
+      at = { id, target: hit?.[0] ?? null, edge: hit ? edgeAt((fx - hit[1].x) / hit[1].w, (fy - hit[1].y) / hit[1].h) : "right" };
+      setDrag(at);
+    };
+    const end = (drop: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", esc, true);
+      setDrag(null);
+      if (!moving) return;
+      // the press was a drag, so the click it ends in is not a pick
+      const swallow = (ev: MouseEvent) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+      const target = at?.target;
+      if (!drop || !at || !target) return;
+      const edge = at.edge;
+      writeSplits((g) => splitIn(g, target, id, edge));
+      showTab(id);
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const esc = (ev: KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", esc, true);
   };
   const openRepo = (repoId: string) => {
     setDrawer(false);
@@ -158,8 +295,9 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   };
 
   // read inside the key handler, which is set up once
-  const live = useRef({ visible, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell });
-  live.current = { visible, activeTerm, rows, overTabs, currentAgent, showTab, pickAgent, newShell };
+  const head = overTabs ? null : headOf(row, groups, activeTerm);
+  const live = useRef({ row, head, activeTerm, rows, currentAgent, showRowTab, pickAgent, newShell, splitFrom, targets });
+  live.current = { row, head, activeTerm, rows, currentAgent, showRowTab, pickAgent, newShell, splitFrom, targets };
   const startTab = (repoId: string, name: string, run: TabKind) => {
     setNewTab(null);
     setKind(run);
@@ -177,8 +315,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
       const l = live.current;
       e.preventDefault();
       if (k === "next-tab" || k === "prev-tab") {
-        const id = stepTab(l.visible, l.overTabs ? null : l.activeTerm, k === "next-tab" ? 1 : -1);
-        if (id) l.showTab(id);
+        const id = stepTab(l.row, l.head, k === "next-tab" ? 1 : -1);
+        if (id) l.showRowTab(id);
       } else if (k === "new") l.newShell();
       else {
         const id = nextWaitingRow(l.rows, l.currentAgent);
@@ -188,6 +326,22 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  // The split keys work from inside a shell, so they are read on the way
+  // down, before xterm sees them (Ctrl+Shift+D would reach the shell as
+  // Ctrl+D and end it).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const edge = splitKey(e);
+      if (!edge || document.querySelector(OVER_PAGE)) return;
+      const l = live.current;
+      if (!l.head || !l.activeTerm) return;
+      e.preventDefault();
+      e.stopPropagation();
+      l.splitFrom(l.activeTerm, edge);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, []);
 
   const side = (
@@ -230,14 +384,17 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
 
   return (
     <ShellSpotHere.Provider value="full">
-      <div className={`sessions${narrow ? " narrow" : ""}`}>
+      <div className={`sessions${narrow ? " narrow" : ""}${drag ? " ss-dragging" : ""}`}>
         {narrow && drawer && <div className="drawer-back" aria-hidden="true" onClick={() => setDrawer(false)} />}
         {(!narrow || drawer) && side}
         <section className="ss-main" aria-label="Sessions">
           <TermTabs
-            terms={visible}
-            active={overTabs ? null : activeTerm}
-            onShow={showTab}
+            terms={row}
+            active={head}
+            onShow={showRowTab}
+            panes={panes}
+            focus={overTabs ? null : showing}
+            onGrab={narrow ? undefined : grab}
             caption=""
             lead={<ScopeChip scope={scope} names={repos} onClear={() => setScope(null)} />}
             onMenu={(id, at, rename) => (rename ? setRenaming(id) : setMenu({ id, at }))}
@@ -303,9 +460,54 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
             }
           />
           <div className="term-body" ref={main}>
-            {strip.map((t) => (
-              <TermView key={viewKey(t)} tab={t} active={!overTabs && t.id === activeTerm} />
-            ))}
+            {/* Every strip shell stays a keyed child here, split or not, and
+                a split only places it, since a moved xterm would remount and
+                rejoin its shell. */}
+            {strip.map((t) => {
+              const box = boxes?.[t.id];
+              const inView = !overTabs && (boxes ? box !== undefined : t.id === activeTerm);
+              const on = inView && t.id === activeTerm;
+              return (
+                <div
+                  key={viewKey(t)}
+                  className={`ss-pane${on ? " on" : ""}${box ? " split" : ""}`}
+                  hidden={!inView}
+                  style={box ? boxStyle(box) : undefined}
+                  onPointerDownCapture={() => {
+                    if (inView && t.id !== activeTerm) showTerm(t.id);
+                  }}
+                >
+                  {inView && (
+                    <PaneHead
+                      tab={t}
+                      label={t.label ?? t.name}
+                      focused={on}
+                      grouped={box !== undefined}
+                      onGrab={(e) => grab(t.id, e)}
+                      onSplit={() => splitFrom(t.id, "right")}
+                      onClose={() => closePane(t.id)}
+                      onMenu={(at) => setMenu({ id: t.id, at })}
+                      onHandedOff={(before) => besideNew(t.id, before, "right")}
+                    />
+                  )}
+                  <div className="ss-pane-body">
+                    <TermView tab={t} active={inView} quiet={!on} />
+                  </div>
+                </div>
+              );
+            })}
+            {tree && group && (
+              <Seams
+                tree={tree}
+                body={() => main.current}
+                onDraft={setDraft}
+                onCommit={(path, at) => {
+                  const id = paneIds(group)[0];
+                  if (id) writeSplits((gs) => gs.map((g) => (hasPane(g, id) ? setAt(g, path, at) : g)));
+                }}
+              />
+            )}
+            {drag?.target && targets[drag.target] && <div className="ss-drop" aria-hidden="true" style={boxStyle(dropBox(targets[drag.target] ?? { x: 0, y: 0, w: 1, h: 1 }, drag.edge))} />}
             {pickedShell && <TermView key={pickedShell.id} tab={pickedShell} active />}
             {pickedCard && (
               <div className="ss-agent-pane">
@@ -332,7 +534,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
           </div>
           <footer className="ss-status">
             <span className="ss-keys">
-              <span className="ss-faint">[ ] tabs · n new tab · w next waiting · double-click a tab to rename</span>
+              <span className="ss-faint">[ ] tabs · n new tab · w next waiting · double-click a tab to rename · ^⇧D split right · ⌥⇧D split down · drag a tab onto a pane</span>
               <SignInChips />
             </span>
             <SweepButton className="ss-sweep" />
@@ -348,7 +550,9 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
         <TabMenu
           id={menu.id}
           at={menu.at}
-          tabs={visible}
+          tabs={reach}
+          inRow={row.some((t) => t.id === menu.id)}
+          grouped={groupOf(groups, menu.id) !== undefined}
           onClose={() => setMenu(null)}
           onRename={(id) => setRenaming(id)}
           onNew={setNewTab}
@@ -357,6 +561,11 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
             const other = visible[i + by];
             if (other) swapTerms(id, other.id);
           }}
+          onSplit={(id, edge) => {
+            if (id !== activeTerm) showTab(id);
+            splitFrom(id, edge);
+          }}
+          onLeave={(id) => writeSplits((gs) => leaveGroup(gs, id))}
         />
       )}
     </ShellSpotHere.Provider>
@@ -380,24 +589,35 @@ function ScopeChip({ scope, names, onClear }: { scope: TabScope; names: readonly
   );
 }
 
-/** A tab's menu: rename, a new shell beside it, move it along the row,
- *  hide it (the shell runs on) or close it (the shell ends). */
+/** A tab's menu: rename, a new shell beside it, split it right or down,
+ *  take it out of its split, move it along the row, hide it (the shell runs
+ *  on) or close it (the shell ends). */
 function TabMenu({
   id,
   at,
   tabs,
   onClose,
+  inRow,
+  grouped,
   onRename,
   onNew,
   onMove,
+  onSplit,
+  onLeave,
 }: {
   id: string;
   at: DOMRect;
   tabs: readonly TermTab[];
+  /** the tab has a place of its own in the row, where a rename is typed */
+  inRow: boolean;
+  /** the tab is a pane of a split tab */
+  grouped: boolean;
   onClose: () => void;
   onRename: (id: string) => void;
   onNew: (repoId: string) => void;
   onMove: (id: string, by: 1 | -1) => void;
+  onSplit: (id: string, edge: Edge) => void;
+  onLeave: (id: string) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   // read by the listeners below, set up once
@@ -430,12 +650,23 @@ function TabMenu({
   const left = Math.max(8, Math.min(at.left, window.innerWidth - 200));
   return (
     <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The tab at ${tab.label ?? tab.name}`} style={{ top: at.bottom + 2, left }}>
-      <button type="button" role="menuitem" onClick={act(() => onRename(id))}>
+      <button type="button" role="menuitem" disabled={!inRow} onClick={act(() => onRename(id))}>
         rename <span className="ss-faint">F2</span>
       </button>
       <button type="button" role="menuitem" onClick={act(() => onNew(tab.repoId))}>
         new tab at {tab.name}…
       </button>
+      <button type="button" role="menuitem" onClick={act(() => onSplit(id, "right"))}>
+        split right <span className="ss-faint">^⇧D</span>
+      </button>
+      <button type="button" role="menuitem" onClick={act(() => onSplit(id, "bottom"))}>
+        split down <span className="ss-faint">⌥⇧D</span>
+      </button>
+      {grouped && (
+        <button type="button" role="menuitem" title="Its own tab again; the shell keeps running" onClick={act(() => onLeave(id))}>
+          out of the split
+        </button>
+      )}
       <button type="button" role="menuitem" disabled={i <= 0} onClick={act(() => onMove(id, -1))}>
         move left
       </button>

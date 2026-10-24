@@ -61,7 +61,7 @@ const AGENT_POLL = 15_000;
 /** The agent running in a shell: what its registry card says (its hooks
  *  registered it), else what tmux says of the pane, asked again now and
  *  then since an agent starts and quits inside a shell that stays. */
-function useShellAgent(tab: TermTab): { harness: Harness | null; transcript: string | null; session: string | null } {
+export function useShellAgent(tab: TermTab): { harness: Harness | null; transcript: string | null; session: string | null } {
   const backend = backendOf(tab.id);
   const card = useStore((s) => cardOfShell(s.registry, backend, plainOf(tab.id)));
   const [pane, setPane] = useState<Harness | null>(null);

@@ -2,6 +2,14 @@
 
 ## Open
 
+### FR-027 · Design mode batches annotations and picks who gets them
+P2 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 12:00 to 19:30)
+canopy's preview picker sends one element with one note. Orca's lets you pin several notes on the page before sending: each pick opens a popover with the element's selector path, a note and an intent (Change or Question), numbered dots mark the picked elements, and a bar reads "2 annotations ready" with Send and Copy All. Send asks where the notes go: a session waiting for input, or a new agent of any harness. While picking, C copies the element and S screenshots it cropped. A draw mode (pen, arrow, box, text, colours) ends in Copy Markup for pasting into an agent. The batching and the send-to picker are the parts worth taking first.
+
+### FR-028 · What is left on each subscription, in the status line
+P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
+Orca's status bar shows each subscription's usage beside its reset ("3% used 4h 32m", "24% used 6d 6h") for Claude, Codex and Grok. The costs view shows what was spent after the fact; this is the quota left now, so a long run can go to the harness with room.
+
 ### FR-025 · Copy the branch, PR link or run id from the keyboard
 P3 · added 2026-10-23 · source: Eric (Linear UX study)
 With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch.
@@ -54,6 +62,11 @@ A link, tag, note, move or new category made in one backend's Library shows up i
 Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Phase 1 syncs the data; phase 2 replays folder moves when safe and asks otherwise (Eric's call). Phase 1 is live on the Mac and the mini since 2026-10-24 (d2cc24a, librarySync on for both).
 
 ## Shipped
+
+### FR-026 · Split panes in the sessions view
+P2 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 05:50) · shipped 2026-10-24
+A tab in the sessions view splits right or down into panes, each its own shell, as Orca's terminal tabs do. Each pane has a header at its top right with a hand-off to the other harness (while an agent runs there), split right and close. The mouse does the rest: a click focuses a pane, the seams drag to resize, and a pane's header or a tab drags onto a pane's edge to split there. The tab menu gets split right and split down, and Ctrl+Shift+D and Alt+Shift+D split from the keyboard.
+Built 2026-10-24: ui/src/splitpanes.ts (pure, tested) and components/SessionPanes.tsx; the groups are the per-browser setting sessionSplits. Checked on a scratch server: header and key splits, a seam drag, a pane dragged onto another's edge, a tab dragged onto a pane, close and out of the split, existing xterms kept through a split, and the phone width. The hand-off icon was not run live.
 
 ### FR-022 · g then a letter switches views
 P2 · added 2026-10-23 · source: Eric (Linear UX study) · shipped 2026-10-24

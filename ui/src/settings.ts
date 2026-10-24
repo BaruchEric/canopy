@@ -16,6 +16,7 @@ import { PREVIEW_H, previewHeightOf } from "./preview";
 import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
 import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
 import { popSizesOf, popZoomsOf, type PopSizes, type PopZooms } from "./pop";
+import { splitsOf, type PaneTree } from "./splitpanes";
 import { BOARD_GROUPINGS, BOARD_LAYOUTS, type BoardGrouping, type BoardLayout } from "./board";
 import {
   SECTION_KEYS,
@@ -186,6 +187,8 @@ export interface Settings {
   agentsGrouping: BoardGrouping;
   /** the board's focus moves to an agent the moment it starts waiting */
   agentsFollow: boolean;
+  /** the sessions view's split tabs (FR-026), by tab id */
+  sessionSplits: PaneTree[];
   /** system notifications while the tab is hidden, and the "(n)" count of
    *  what waits on you in the tab's title; off unless asked for */
   notify: boolean;
@@ -238,6 +241,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentsLayout: null,
   agentsGrouping: "none",
   agentsFollow: false,
+  sessionSplits: [],
   notify: false,
 };
 
@@ -410,6 +414,7 @@ export function loadSettings(): Settings {
       agentsLayout: BOARD_LAYOUTS.find((l) => l === saved.agentsLayout) ?? null,
       agentsGrouping: pick(BOARD_GROUPINGS, saved.agentsGrouping, DEFAULT_SETTINGS.agentsGrouping),
       agentsFollow: typeof saved.agentsFollow === "boolean" ? saved.agentsFollow : DEFAULT_SETTINGS.agentsFollow,
+      sessionSplits: splitsOf(saved.sessionSplits),
       notify: typeof saved.notify === "boolean" ? saved.notify : DEFAULT_SETTINGS.notify,
       ...levelOf(saved),
     };

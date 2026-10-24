@@ -6129,6 +6129,13 @@ a.sweep-title:hover {
   line-height: 1;
   color: var(--ink-faint);
 }
+.term-tab-panes {
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--wash);
+  color: var(--ink-dim);
+  font-size: 10px;
+}
 .term-x:hover {
   color: var(--rust);
   background: var(--wash);
@@ -6513,6 +6520,152 @@ button.ss-scope:hover {
 .ss-tabmenu button:disabled {
   color: var(--ink-faint);
   cursor: default;
+}
+/* Split panes (FR-026): every strip shell is a .ss-pane, filling the main
+   pane alone or placed at its part of a split tab by inline percentages. */
+.ss-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.ss-pane[hidden] {
+  display: none;
+}
+.ss-pane-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.ss-pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 4px 0 8px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 11px;
+  color: var(--ink-faint);
+  user-select: none;
+}
+.ss-pane.split.on > .ss-pane-head {
+  color: var(--ink-dim);
+  box-shadow: inset 0 2px 0 var(--moss);
+}
+.ss-pane-grip {
+  cursor: grab;
+  touch-action: none;
+}
+.ss-pane-grip:hover {
+  color: var(--ink);
+}
+.ss-pane-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ss-pane-acts {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+.ss-pane-acts button {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-faint);
+  cursor: pointer;
+}
+.ss-pane-acts button:hover:not(:disabled),
+.ss-pane-acts button:focus-visible {
+  color: var(--ink);
+  background: var(--wash);
+  outline: none;
+}
+.ss-pane-acts button.x:hover {
+  color: var(--rust);
+}
+.ss-pane-acts button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.ss-pane-acts svg {
+  width: 13px;
+  height: 13px;
+}
+.ss-seam {
+  position: absolute;
+  z-index: 3;
+  touch-action: none;
+}
+.ss-seam.row {
+  width: 9px;
+  transform: translateX(-50%);
+  cursor: col-resize;
+}
+.ss-seam.col {
+  height: 9px;
+  transform: translateY(-50%);
+  cursor: row-resize;
+}
+.ss-seam::before {
+  content: "";
+  position: absolute;
+  background: var(--hair);
+}
+.ss-seam.row::before {
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+}
+.ss-seam.col::before {
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+}
+.ss-seam:hover::before,
+.ss-seam:focus-visible::before,
+.ss-seam.on::before {
+  background: var(--moss);
+}
+.ss-seam:focus-visible {
+  outline: none;
+}
+.ss-seam.row:hover::before,
+.ss-seam.row:focus-visible::before,
+.ss-seam.row.on::before {
+  left: 3px;
+  width: 3px;
+}
+.ss-seam.col:hover::before,
+.ss-seam.col:focus-visible::before,
+.ss-seam.col.on::before {
+  top: 3px;
+  height: 3px;
+}
+.ss-drop {
+  position: absolute;
+  z-index: 4;
+  border: 1px solid var(--moss);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--moss) 16%, transparent);
+  pointer-events: none;
+}
+.sessions.ss-dragging,
+.sessions.ss-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
 }
 .ss-newtab {
   position: absolute;
