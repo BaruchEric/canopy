@@ -60,13 +60,13 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ## In Progress
 
+## Shipped
+
 ### FR-018 · A sweep that closes what went idle
-P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
+P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21) · shipped 2026-10-23
 One command, and optionally a schedule, closes what nobody is using: PRs with no activity, idle shells and windows, agents that finished or stalled. It lists what it would close and waits for a yes before touching a PR. Written down on two separate pages.
 Spec: docs/superpowers/specs/2026-10-22-sweep-design.md (2026-10-22).
-Plan: docs/superpowers/plans/2026-10-22-sweep.md. Phase 1 (shells, chats and runs on demand) shipped 2026-10-22; phase 2 (the schedule, its ask in the inbox, the settings row) shipped 2026-10-23; phase 3 (PRs the gh login authored, closed with a comment and their branch kept, swept by one backend's own setting) is built on branch fr-018-sweep-p3 and waits on a live run before it counts as shipped.
-
-## Shipped
+Plan: docs/superpowers/plans/2026-10-22-sweep.md. Phase 1 (shells, chats and runs on demand) shipped 2026-10-22; phase 2 (the schedule, its ask in the inbox, the settings row) shipped 2026-10-23; phase 3 (PRs the gh login authored, closed with a comment and their branch kept, swept by one backend's own setting) shipped 2026-10-23. Checked live on 2026-10-23: the mini's sweep closed barucheric/canopy-trigger-test#5 with its comment and kept the sweep-live-test branch, and the schedule's 4 a.m. fire on 2026-10-24 found nothing to close.
 
 ### FR-010 · A coordinator that splits a goal into runs, on its own model and effort
 P2 · added 2026-10-09 · source: Eric (Claude Code Projects video) · shipped 2026-10-17
