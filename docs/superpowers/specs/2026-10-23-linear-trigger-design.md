@@ -1,6 +1,6 @@
 # Linear triggers: a labeled issue starts a branch run
 
-Status: the label trigger was built, committed (c640e64) and deployed to the mini on 2026-10-23. The agent (phase 2, below) was built the same day. Both are tested against fixtures and a stand-in for Linear's API only: no Linear workspace or key existed yet.
+Status: the label trigger was built, committed (c640e64) and deployed to the mini on 2026-10-23. The agent (phase 2, below) was built the same day, and that day it was set up against a real workspace (beric, team BER): installed as `actor=app` from the triggers page (the install callback needed d946458 to pass the origin gate), and BER-5, delegated to canopy, ran on the mini and answered on its agent session.
 
 ## Why
 
