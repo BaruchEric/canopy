@@ -168,6 +168,47 @@ def serve():
     hub.cmd_serve(argparse.Namespace(port=0))
 
 
+SYNC_FILES = ('categories.json', 'references.json', 'tags.json', 'relations.json', 'health.json')
+SYNC_BACKUPS = 10
+
+
+def sync_write():
+    """Write what a Library sync merged (src/server/libsync.ts), under the
+    engine's lock. stdin: {expect: {name: sha256 or null}, files: {name: text}}.
+    Refuses with exit 3 when a file no longer hashes to what the merge read,
+    so an edit landing mid-merge is never overwritten. Each file it replaces
+    is first copied into sync-backups/<stamp>/ (the newest 10 kept), and each
+    write goes through a temp file and a rename. sync.json goes last."""
+    import datetime
+    import hashlib
+    req = json.load(sys.stdin)
+    expect, files = req.get('expect', {}), req.get('files', {})
+    allowed = set(SYNC_FILES) | {'sync.json'}
+    if not set(expect) <= set(SYNC_FILES) or not set(files) <= allowed:
+        raise ValueError('sync-write names a file it may not write')
+    with locked():
+        for name, want in expect.items():
+            path = hub.HERE / name
+            have = hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
+            if have != want:
+                print(f'{name} changed since the merge read it', file=sys.stderr)
+                sys.exit(3)
+        stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S-%f')
+        backups = hub.HERE / 'sync-backups'
+        replaced = [n for n in files if n in SYNC_FILES and (hub.HERE / n).is_file()]
+        if replaced:
+            (backups / stamp).mkdir(parents=True, exist_ok=True)
+            for name in replaced:
+                shutil.copyfile(hub.HERE / name, backups / stamp / name)
+            for old in sorted(p for p in backups.iterdir() if p.is_dir())[:-SYNC_BACKUPS]:
+                shutil.rmtree(old, ignore_errors=True)
+        for name in sorted(files, key=lambda n: n == 'sync.json'):
+            tmp = hub.HERE / f'.{name}.tmp'
+            tmp.write_text(files[name], encoding='utf-8')
+            os.replace(tmp, hub.HERE / name)
+    print(json.dumps({'ok': True, 'backup': stamp if replaced else None}))
+
+
 def caller_token(port):
     """The CLI's caller token for this backend: the token file named for host and
     port in canopy's config dir, else CANOPY_TOKEN; a blank value is no token."""
@@ -217,6 +258,9 @@ def main():
     command = command or ['--help']
     if command[0] == '__serve':
         serve()
+        return
+    if command[0] == '__sync-write':
+        sync_write()
         return
     # Process lifecycle is owned by Canopy. Site-specific publishing remains
     # in the original repo, rather than shipping personal deployment targets.

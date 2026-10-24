@@ -26,10 +26,6 @@ From a repo card, open one branch and see the changes in its worktree, not only 
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
 Jot a note or set a reminder without leaving canopy, on a repo or on its own, and a reminder lands in the inbox when it comes due.
 
-### FR-016 · One Library across backends
-P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
-A link, tag, note, move or new category made in one backend's Library shows up in the other's. Today each backend keeps its own copy of categories.json, references.json, tags.json, relations.json and health.json, and peer sync carries only commits, so the mini started from defaults and drifts again after every edit. Host-specific keys (host_root, terminal_app, trusted_origins) stay per machine.
-
 ### FR-015 · A cards width that holds
 P3 · added 2026-10-15 · source: FR-003 fix
 The cards area only gets what the dock leaves over: at least `--cards-min` (320px), and more only while the dock's columns fit inside its widest. Widening a column takes room from the cards until they reach the minimum, and nothing remembers a width Eric chose for them. A resizer between the cards and the dock, saved per screen layout profile like the sidebar's width, would let the cards keep a set width while the dock scrolls.
@@ -51,6 +47,11 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-016 · One Library across backends
+P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
+A link, tag, note, move or new category made in one backend's Library shows up in the other's. Today each backend keeps its own copy of categories.json, references.json, tags.json, relations.json and health.json, and peer sync carries only commits, so the mini started from defaults and drifts again after every edit. Host-specific keys (host_root, terminal_app, trusted_origins) stay per machine.
+Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Phase 1 syncs the data; phase 2 replays folder moves when safe and asks otherwise (Eric's call).
 
 ## Shipped
 

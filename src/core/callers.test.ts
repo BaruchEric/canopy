@@ -14,6 +14,8 @@ describe("needs", () => {
   test("each read-only Library path is read", () => {
     for (const p of [
       "/api/library",
+      "/api/library/sync",
+      "/api/library/sync/status",
       "/library",
       "/library/",
       "/library/index.html",
@@ -123,6 +125,8 @@ describe("needs", () => {
     expect(needs("PUT", "/api/runs")).toBe("admin");
     expect(needs("POST", "/library/refresh")).toBe("admin");
     expect(needs("POST", "/api/library/refresh")).toBe("admin");
+    // a join or a pull changes the Library's files
+    expect(needs("POST", "/api/library/sync")).toBe("admin");
   });
 
   test("pairing routes are open", () => {

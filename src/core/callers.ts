@@ -117,6 +117,8 @@ const ruled = (method: string, rel: string): Right | "open" | undefined =>
  *  urlparse) must not slip past it. */
 const LIBRARY_READS: ReadonlySet<string> = new Set([
   "/api/library",
+  "/api/library/sync",
+  "/api/library/sync/status",
   "/library",
   "/library/",
   "/library/index.html",

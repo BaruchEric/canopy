@@ -39,6 +39,9 @@ usage:
   canopy launch <repo> --build "…" | --run "…" | --asset "glob" | --open "…"   set the launch lines
   canopy library [--root dir] <command> [args...]
                                      organize projects, links, tags, health, and dev servers
+  canopy library sync [--status]     pull the other backends' Library entries now, or show where that stands
+  canopy library sync --seed | --adopt <backend>   join: this copy starts it, or take that backend's whole
+  canopy library sync --accept <backend>           let a held mass deletion from that backend through
   canopy source                      list the extra folders the UI scans
   canopy source add <dir> [--host h] [--label l]   scan another folder; --host for one over ssh
   canopy source add --forgejo <url> [--token f]    list a self-hosted Forgejo's repos

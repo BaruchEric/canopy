@@ -359,6 +359,21 @@ support. Canopy starts and stops its own library helper; no separate helper or
 LaunchAgent is needed. Personal DNS setup and standalone gallery/endpoint-site
 publishing stay in `_devhub`.
 
+With several backends, `"librarySync": "on"` in each one's config shares the
+Library's metadata between them: every minute each backend pulls the others'
+entries over their `tailnet` URLs and merges them entry by entry, the newer
+edit winning. The host keys (`host_root`, `terminal_app`, `trusted_origins`,
+`helper_port`) stay per machine, and project folders are not moved yet. A backend
+joins once, either as the starting copy or by taking another's whole:
+
+```bash
+canopy library sync --seed                     # this backend's copy is the start
+canopy library sync --adopt mac --backend URL  # that backend takes the Mac's copy
+canopy library sync --status                   # each peer's last pull, and any hold
+canopy library sync                            # pull now
+canopy library sync --accept mac               # let a held mass deletion through
+```
+
 ## Caller tokens
 
 Under `enforce`, every write to the API needs a caller token in `X-Canopy-Token`; in the default `log` mode a write without one is logged, not refused. Reads stay open. A page, the CLI and a helper get theirs by pairing: the asker shows a code, a page that is already signed in approves it from the inbox, and `canopy auth login` or `canopy helper --pair` writes the token to a 0600 file in the config dir. While nobody is signed in, the backend prints a one-time first code to its log, which the sign-in strip (or `--code`) takes in place of an approval. Shells and the ranger carry their own token as `$CANOPY_TOKEN`. `CANOPY_CALLERS=off|log|enforce` sets the mode; `log`, the default, counts what `enforce` would refuse and refuses nothing. `canopy auth status` and `GET /api/auth` show the count. See `docs/deploy.md`, "Caller tokens", for the rollout.

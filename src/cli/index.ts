@@ -55,6 +55,7 @@ import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./
 import { landCommand } from "./land";
 import { prCommand } from "./pr";
 import { awakeCommand } from "./awake";
+import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
 import { secretsCommand } from "./secrets";
 import { SPEC_WORDS, specLines } from "../core/treelines";
@@ -149,6 +150,7 @@ export async function main(argv: string[]): Promise<void> {
 
   switch (cmd) {
     case "library": {
+      if (isLibrarySync(args)) return librarySyncCommand(args, { fail });
       const root = resolve(opt(args, "--root") ?? ".");
       process.exitCode = await libraryCommand(root, args);
       return;

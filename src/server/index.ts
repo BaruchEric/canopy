@@ -1,7 +1,8 @@
 import { parseAnswer } from "./answers";
 import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
-import { coordApiHost, Library, libraryOriginAllowed, openBind, returnLeg, tailnetHost } from "../core/library";
+import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
+import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
 import { resolveIssueNote } from "../core/issue";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -332,6 +333,8 @@ interface ServerState {
   prs: PrHub;
   /** what went idle, offered for closing, and the close (server/sweep) */
   sweep: SweepHub;
+  /** the Library's entries pulled from the other backends and merged (server/libsync) */
+  librarySync: LibrarySync;
   /** outside events (Sentry, Linear) that start branch runs, and what became of each (server/triggers) */
   triggers: TriggerHub;
   /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
@@ -2462,6 +2465,9 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   // reported by the PR loop after each read; ok until it reads one
   state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
   state.health.report(PRS_CHECK, { state: "ok" });
+  // reported after each pull; off until the first one says otherwise
+  state.health.add({ id: LIBRARY_SYNC_CHECK, label: "Library sync", scope: canopy, heal: "self" });
+  state.health.report(LIBRARY_SYNC_CHECK, { state: "off", why: "librarySync is off" });
   // ok in both modes, the count in words: a log week would otherwise keep
   // the top bar on a warning the whole time
   state.health.add({
@@ -2503,6 +2509,7 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
 }
 
 const PRS_CHECK = "canopy:prs";
+const LIBRARY_SYNC_CHECK = "canopy:library-sync";
 const CALLERS_CHECK = "canopy:callers";
 
 const PASS_LABEL = { "canopy:activity": "fetch and pull request pass", "canopy:remote": "remote repos refresh", "canopy:keep": "kept shells" } as const;
@@ -3090,6 +3097,8 @@ async function handleApi(
   if (prsRes) return prsRes;
   const sweepRes = await state.sweep.handle(req, url);
   if (sweepRes) return sweepRes;
+  const libSyncRes = await state.librarySync.handle(req, url);
+  if (libSyncRes) return libSyncRes;
   const triggersRes = await state.triggers.handle(req, url);
   if (triggersRes) return triggersRes;
   const coordRes = await state.coordinator.handle(req, url, caller);
@@ -4864,6 +4873,8 @@ export async function startServer(opts: {
     if (ledgerOff) return;
     appendCost(e).catch((err: unknown) => console.error(`costs: could not write the ledger: ${err instanceof Error ? err.message : String(err)}`));
   };
+  // the Library itself is built after the state, so its rebuild is reached through this
+  let refreshLibrary: () => Promise<void> = async () => {};
   const state: ServerState = {
     root,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
@@ -5161,6 +5172,22 @@ export async function startServer(opts: {
       runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
     }),
+    librarySync: new LibrarySync({
+      root,
+      dir: libraryStateDir(root),
+      settings: async () => {
+        const cfg = await loadConfig();
+        return { mode: cfg.librarySync, self: cfg.self, backends: cfg.backends };
+      },
+      write: async (expect, files) => {
+        const r = await libraryCall(root, "__sync-write", JSON.stringify({ expect, files }));
+        if (r.code === 3) return "changed";
+        if (r.code !== 0) throw new Error(`the Library's sync write failed: ${r.stderr.trim() || `exited ${r.code}`}`);
+        return "ok";
+      },
+      refresh: () => refreshLibrary(),
+      report: (r) => state.health.report(LIBRARY_SYNC_CHECK, r),
+    }),
     sweep: new SweepHub({
       broadcast: (ev) => broadcast(state, ev),
       facts: () => sweepFacts(state, serverStart),
@@ -5377,6 +5404,7 @@ export async function startServer(opts: {
   const coordHost = coord ? coordApiHost(process.env["CANOPY_COORD_API"]) : null;
   const coordHosts = coordHost ? [coordHost] : [];
   const library = new Library(root, publicOrigin, beyondLoopback, origins);
+  refreshLibrary = () => library.refresh();
   // The in-app browser's ports, each listener started on first use. A
   // preview dials the backend's loopback, which in the container is the
   // shells container's too (compose puts canopy in its network namespace),
@@ -5848,6 +5876,8 @@ export async function startServer(opts: {
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
   // a test server never fires the schedule on whatever config it finds
   if (process.env["NODE_ENV"] !== "test") void state.sweep.start().catch((err) => console.error("canopy: sweep", err));
+  // a test server pulls no other backend's Library
+  if (process.env["NODE_ENV"] !== "test") state.librarySync.start();
   if (process.env["NODE_ENV"] !== "test") state.triggers.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket
@@ -5892,6 +5922,7 @@ export async function startServer(opts: {
       state.landing.stop();
       state.prs.stop();
       state.sweep.stop();
+      state.librarySync.stop();
       state.triggers.stop();
       state.secrets.stop();
       state.tasks.stop();

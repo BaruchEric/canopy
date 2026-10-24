@@ -19,6 +19,7 @@ import { normalizeTaskPatch } from "./tasks";
 import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } from "./peers";
 import { normalizeRanger } from "./ranger";
 import { normalizeSweep } from "./sweep";
+import { LIBRARY_SYNC_MODES } from "./libsync";
 import {
   AWAKE_MODES,
   DEFAULT_LAUNCH,
@@ -69,6 +70,7 @@ const defaults = (): CanopyConfig => ({
   self: null,
   peers: [],
   peerSync: "off",
+  librarySync: "off",
   seed: [...DEFAULT_SEED],
   backends: [],
   extendOwners: [],
@@ -187,6 +189,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     self: typeof cfg.self === "string" && isPeerName(cfg.self) ? cfg.self : null,
     peers: normalizePeers(cfg.peers),
     peerSync: PEER_SYNC.includes(cfg.peerSync) ? cfg.peerSync : "off",
+    librarySync: LIBRARY_SYNC_MODES.includes(cfg.librarySync) ? cfg.librarySync : "off",
     seed: normalizeSeed(cfg.seed),
     backends: normalizeBackends(cfg.backends),
     extendOwners: (Array.isArray(cfg.extendOwners) ? cfg.extendOwners : []).filter(

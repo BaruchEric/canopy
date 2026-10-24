@@ -509,6 +509,9 @@ export interface PeerState {
 /** Another canopy server this page may connect to: its name (a peer name,
  *  so `|` can never appear in it) and where it answers. `public` is an
  *  https origin behind the edge gate; `tailnet` an origin on the tailnet. */
+/** the Library sync's mode, as `peerSync`'s */
+export type LibrarySyncMode = "off" | "dry" | "on";
+
 export interface BackendEntry {
   name: string;
   public?: string;
@@ -632,6 +635,9 @@ export interface CanopyConfig {
   peers: Peer[];
   /** whether the peer pass runs: off, dry (report only) or on */
   peerSync: PeerSync;
+  /** whether this backend pulls the others' Library entries: off, dry
+   *  (report only) or on (docs/superpowers/specs/2026-10-24-library-sync-design.md) */
+  librarySync: LibrarySyncMode;
   /** ignored files copied from a peer when a repo lacks them (names or simple globs) */
   seed: string[];
   /** the canopy backends a page served from here may connect to, in the

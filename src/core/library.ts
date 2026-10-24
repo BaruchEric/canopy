@@ -8,8 +8,24 @@ const adapter = join(import.meta.dir, "../../lib/devhub/canopy.py");
 
 export async function libraryArgs(root: string): Promise<string[]> {
   const canonical = await realpath(root);
+  return [adapter, "--root", canonical, "--state", libraryStateDir(canonical), "--"];
+}
+
+/** the Library's state folder for a root already made canonical */
+export function libraryStateDir(canonical: string): string {
   const id = createHash("sha256").update(canonical).digest("hex").slice(0, 24);
-  return [adapter, "--root", canonical, "--state", join(configDir(), "library", id), "--"];
+  return join(configDir(), "library", id);
+}
+
+/** Runs one adapter command with `input` on stdin, for the Library sync's
+ *  locked write; the exit code and what it printed. */
+export async function libraryCall(root: string, command: string, input: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const child = Bun.spawn([python(), ...await libraryArgs(root), command], {
+    stdin: new TextEncoder().encode(input), stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  return { code, stdout, stderr };
 }
 
 function python(): string {
@@ -131,6 +147,16 @@ export class Library {
     private open = openBind(),
     private origins: readonly string[] = parseOrigins(process.env["CANOPY_ORIGINS"]),
   ) {}
+
+  /** Rebuilds the manifest when the worker is up, after a Library sync
+   *  wrote its files; a worker not started yet builds it when it starts. */
+  async refresh(): Promise<void> {
+    if (!this.child || !this.pending) return;
+    const port = await this.pending;
+    await fetch(`http://127.0.0.1:${port}/refresh`, {
+      method: "POST", headers: { "X-Canopy-Library": this.token }, signal: AbortSignal.timeout(180_000),
+    });
+  }
 
   stop(): void {
     this.stopped = true;
