@@ -512,6 +512,13 @@ describe("fromRun", () => {
     expect(fromRun(e, run({ status: "done", branch: { ...branch, state: "nothing" } }), 5)).toMatchObject({ status: "no-fix", endedAt: 5 });
     expect(fromRun(e, run({ status: "done", branch: { ...branch, state: "uncommitted" } }), 5).status).toBe("stopped");
   });
+  test("a done run whose worktree is not read yet still works, so a session hears no commit that never happened", () => {
+    const e = event({ runId: "r1", status: "working" });
+    const next = fromRun(e, run({ status: "done", branch: { ...branch, state: "working" } }), 5);
+    expect(next).toMatchObject({ status: "working" });
+    expect(next.reason).toBeUndefined();
+    expect(activityFor({ ...e, session: "s1" }, { ...next, session: "s1" })).toBeNull();
+  });
   test("stopped and failed say why", () => {
     const e = event({ runId: "r1", status: "working" });
     expect(fromRun(e, run({ status: "stopped" }), 5).reason).toContain("stopped");

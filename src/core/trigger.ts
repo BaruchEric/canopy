@@ -588,11 +588,13 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     next.reason = run.error ?? "the run failed";
   } else if (run.status === "done") {
     if (run.result?.text.trim()) next.summary = run.result.text.trim().slice(0, 2000);
+    // the worktree is read just after the run ends; until then the branch
+    // still says working, and the event does too
     const state = run.branch?.state;
-    next.status = state === "nothing" ? "no-fix" : state === "uncommitted" ? "stopped" : "ready";
+    next.status = state === "working" ? "working" : state === "nothing" ? "no-fix" : state === "uncommitted" ? "stopped" : "ready";
     if (state === "nothing") next.reason = "the agent committed nothing: it found no fix to make";
     else if (state === "uncommitted") next.reason = "the run ended with changes it did not commit";
-    else next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+    else if (state !== "working") next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
   }
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
   else delete next.endedAt;
