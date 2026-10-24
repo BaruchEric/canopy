@@ -1,10 +1,10 @@
-import { useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent, RefObject } from "react";
 import { HARNESS } from "../../../src/core/harness";
 import { harnessesOf } from "../agents";
 import { otherHarness } from "../handoff";
 import { backendOf } from "../registry";
-import { atFrom, setAt, seamsOf, type Box, type PaneTree, type Seam } from "../splitpanes";
+import { atFrom, dropBox, edgeAt, pruneGroups, setAt, seamsOf, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
 import { connOf, useStore } from "../store";
 import type { TermTab } from "../term";
 import { useShellAgent } from "./AgentButtons";
@@ -12,6 +12,103 @@ import { handOff } from "./Handoff";
 
 /** a part of the main pane as an inline style, in percent */
 export const boxStyle = (b: Box): CSSProperties => ({ left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` });
+
+/** where split groups are kept: the sessions view's strip shells, or the
+ *  repo panels' shells */
+type SplitsKey = "sessionSplits" | "panelSplits";
+const SPLITS_OF: Record<"strip" | "panel", SplitsKey> = { strip: "sessionSplits", panel: "panelSplits" };
+
+/** The saved split groups for one place's shells, with the shells since
+ *  closed taken out, and a writer that reads them fresh, so two changes in
+ *  one handler both land. */
+export function useSplits(place: "strip" | "panel") {
+  const key = SPLITS_OF[place];
+  const terms = useStore((s) => s.terms);
+  const splits = useStore((s) => s.settings[key]);
+  const groups = useMemo(() => pruneGroups(splits, new Set(terms.filter((t) => t.place === place).map((t) => t.id))), [splits, terms, place]);
+  const write = (f: (g: PaneTree[]) => PaneTree[]) => {
+    const st = useStore.getState();
+    const live = new Set(st.terms.filter((t) => t.place === place).map((t) => t.id));
+    st.setSetting(key, f(pruneGroups(st.settings[key], live)));
+  };
+  return { groups, write };
+}
+
+/** every shell's id now, to tell the one opened after it */
+export const termIds = (): ReadonlySet<string> => new Set(useStore.getState().terms.map((t) => t.id));
+/** the shell opened since `before`, if one was */
+export const openedSince = (before: ReadonlySet<string>): string | null => useStore.getState().terms.find((t) => !before.has(t.id))?.id ?? null;
+
+/** how far a press on a tab or a pane's grip moves before it is a drag */
+const DRAG_PX = 6;
+
+/** a pane being dragged, and where it would land */
+export interface PaneDrag {
+  id: string;
+  target: string | null;
+  edge: Edge;
+}
+
+/**
+ * A press on a tab or a pane's grip: a click as before, or, once it moves
+ * DRAG_PX, a drag that lands the pane on the edge of the pane under the
+ * pointer (`targets`, parts of `body`). Escape or a release off every pane
+ * leaves things as they were.
+ */
+export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record<string, Box>, onDrop: (id: string, target: string, edge: Edge) => void) {
+  const [drag, setDrag] = useState<PaneDrag | null>(null);
+  // read by the listeners, which outlive the render that set them up
+  const live = useRef({ targets, onDrop });
+  live.current = { targets, onDrop };
+  const grab = (id: string, e: PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || (e.target instanceof Element && e.target.closest("button"))) return;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let moving = false;
+    let at: PaneDrag | null = null;
+    const move = (ev: globalThis.PointerEvent) => {
+      if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < DRAG_PX) return;
+      moving = true;
+      const r = body.current?.getBoundingClientRect();
+      const fx = r ? (ev.clientX - r.left) / r.width : -1;
+      const fy = r ? (ev.clientY - r.top) / r.height : -1;
+      const hit = Object.entries(live.current.targets).find(([pid, b]) => pid !== id && fx >= b.x && fx <= b.x + b.w && fy >= b.y && fy <= b.y + b.h);
+      at = { id, target: hit?.[0] ?? null, edge: hit ? edgeAt((fx - hit[1].x) / hit[1].w, (fy - hit[1].y) / hit[1].h) : "right" };
+      setDrag(at);
+    };
+    const end = (drop: boolean) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", esc, true);
+      setDrag(null);
+      if (!moving) return;
+      // the press was a drag, so the click it ends in is not a pick
+      const swallow = (ev: MouseEvent) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+      };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+      const target = at?.target;
+      if (drop && at && target) live.current.onDrop(id, target, at.edge);
+    };
+    const up = () => end(true);
+    const cancel = () => end(false);
+    const esc = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.stopPropagation();
+      end(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", esc, true);
+  };
+  const box = drag?.target ? targets[drag.target] : undefined;
+  const preview = drag && box ? <div className="ss-drop" aria-hidden="true" style={boxStyle(dropBox(box, drag.edge))} /> : null;
+  return { drag, grab, preview };
+}
 
 /** the step a seam's arrow keys move it */
 const SEAM_STEP = 0.05;
@@ -67,8 +164,9 @@ export function PaneHead({
   onSplit: () => void;
   onClose: () => void;
   onMenu: (at: DOMRect) => void;
-  /** a hand-off started a new shell, which goes in beside this one */
-  onHandedOff: (before: string | null) => void;
+  /** a hand-off started a new shell, which goes in beside this one; the
+   *  shells there were before it */
+  onHandedOff: (before: ReadonlySet<string>) => void;
 }) {
   return (
     <div
@@ -101,9 +199,9 @@ export function PaneHead({
 }
 
 /** The hand-off button, there only while Claude Code or Codex runs in the
- *  pane: a new shell at the same repo with the other harness, told where
- *  this session's transcript is. */
-function PaneHandoff({ tab, onHandedOff }: { tab: TermTab; onHandedOff: (before: string | null) => void }) {
+ *  pane: a new shell at the same repo and place with the other harness,
+ *  told where this session's transcript is. */
+function PaneHandoff({ tab, onHandedOff }: { tab: TermTab; onHandedOff: (before: ReadonlySet<string>) => void }) {
   const agent = useShellAgent(tab);
   const backend = backendOf(tab.id);
   const has = useStore((s) => harnessesOf(connOf(s, backend).backend));
@@ -121,10 +219,10 @@ function PaneHandoff({ tab, onHandedOff }: { tab: TermTab; onHandedOff: (before:
       title={err ?? (missing ? `${HARNESS[to].label} is not installed on ${backend}` : `${label}: a new pane with ${HARNESS[to].label}, told where this session's transcript is`)}
       disabled={missing || busy}
       onClick={() => {
-        const before = useStore.getState().activeTerm;
+        const before = termIds();
         setBusy(true);
         setErr(null);
-        handOff(tab.repoId, from, agent.transcript, tab.id, "strip")
+        handOff(tab.repoId, from, agent.transcript, tab.id, tab.place)
           .then(() => onHandedOff(before))
           .catch((e: unknown) => setErr(String(e instanceof Error ? e.message : e)))
           .finally(() => setBusy(false));
@@ -215,5 +313,107 @@ export function Seams({
         />
       ))}
     </>
+  );
+}
+
+/** A tab's menu: rename, a new shell beside it, split it right or down,
+ *  take it out of its split, move it along the row, hide it (the shell runs
+ *  on) or close it (the shell ends). The items a place has no use for
+ *  (`onNew`, `onMove`) are left out. */
+export function TabMenu({
+  id,
+  at,
+  tabs,
+  onClose,
+  inRow,
+  grouped,
+  onRename,
+  onNew,
+  onMove,
+  onSplit,
+  onLeave,
+}: {
+  id: string;
+  at: DOMRect;
+  tabs: readonly TermTab[];
+  /** the tab has a place of its own in the row, where a rename is typed */
+  inRow: boolean;
+  /** the tab is a pane of a split tab */
+  grouped: boolean;
+  onClose: () => void;
+  onRename: (id: string) => void;
+  onNew?: (repoId: string) => void;
+  onMove?: (id: string, by: 1 | -1) => void;
+  onSplit: (id: string, edge: Edge) => void;
+  onLeave: (id: string) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  // read by the listeners below, set up once
+  const close = useRef(onClose);
+  close.current = onClose;
+  const hideTerm = useStore((s) => s.hideTerm);
+  const closeTerm = useStore((s) => s.closeTerm);
+  const tab = tabs.find((t) => t.id === id);
+  const i = tabs.findIndex((t) => t.id === id);
+  useEffect(() => {
+    box.current?.querySelector("button")?.focus();
+    const down = (e: globalThis.PointerEvent) => {
+      if (!(e.target instanceof Node) || !box.current?.contains(e.target)) close.current();
+    };
+    const key = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") close.current();
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("pointerdown", down, true);
+      window.removeEventListener("keydown", key, true);
+    };
+  }, []);
+  if (!tab) return null;
+  const act = (f: () => void) => () => {
+    onClose();
+    f();
+  };
+  const left = Math.max(8, Math.min(at.left, window.innerWidth - 200));
+  const top = Math.max(8, Math.min(at.bottom + 2, window.innerHeight - 280));
+  return (
+    <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The tab at ${tab.label ?? tab.name}`} style={{ top, left }}>
+      <button type="button" role="menuitem" disabled={!inRow} onClick={act(() => onRename(id))}>
+        rename <span className="ss-faint">F2</span>
+      </button>
+      {onNew && (
+        <button type="button" role="menuitem" onClick={act(() => onNew(tab.repoId))}>
+          new tab at {tab.name}…
+        </button>
+      )}
+      <button type="button" role="menuitem" onClick={act(() => onSplit(id, "right"))}>
+        split right <span className="ss-faint">^⇧D</span>
+      </button>
+      <button type="button" role="menuitem" onClick={act(() => onSplit(id, "bottom"))}>
+        split down <span className="ss-faint">⌥⇧D</span>
+      </button>
+      {grouped && (
+        <button type="button" role="menuitem" title="Its own tab again; the shell keeps running" onClick={act(() => onLeave(id))}>
+          out of the split
+        </button>
+      )}
+      {onMove && (
+        <>
+          <button type="button" role="menuitem" disabled={i <= 0} onClick={act(() => onMove(id, -1))}>
+            move left
+          </button>
+          <button type="button" role="menuitem" disabled={i < 0 || i >= tabs.length - 1} onClick={act(() => onMove(id, 1))}>
+            move right
+          </button>
+        </>
+      )}
+      <button type="button" role="menuitem" title="Takes the tab away here and leaves the shell running" onClick={act(() => hideTerm(id))}>
+        hide, keep running
+      </button>
+      <button type="button" role="menuitem" className="t-rust" title="Ends the shell on every device" onClick={act(() => closeTerm(id))}>
+        close and end the shell
+      </button>
+    </div>
   );
 }

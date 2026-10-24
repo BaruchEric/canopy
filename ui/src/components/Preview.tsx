@@ -37,14 +37,14 @@ function PickButton({ on, disabled, toggle }: { on: boolean; disabled?: boolean;
   return (
     <button
       type="button"
-      className={`mini${on ? " on" : ""}`}
+      className={`mini preview-pick-btn${on ? " on" : ""}`}
       onClick={toggle}
       disabled={disabled}
       title={word}
       aria-label={word}
       aria-pressed={on}
     >
-      ⌖
+      <span aria-hidden="true">⌖</span> {on ? "picking" : "pick"}
     </button>
   );
 }

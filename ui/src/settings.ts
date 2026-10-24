@@ -189,6 +189,8 @@ export interface Settings {
   agentsFollow: boolean;
   /** the sessions view's split tabs (FR-026), by tab id */
   sessionSplits: PaneTree[];
+  /** the repo panels' split shells, by tab id */
+  panelSplits: PaneTree[];
   /** system notifications while the tab is hidden, and the "(n)" count of
    *  what waits on you in the tab's title; off unless asked for */
   notify: boolean;
@@ -242,6 +244,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentsGrouping: "none",
   agentsFollow: false,
   sessionSplits: [],
+  panelSplits: [],
   notify: false,
 };
 
@@ -415,6 +418,7 @@ export function loadSettings(): Settings {
       agentsGrouping: pick(BOARD_GROUPINGS, saved.agentsGrouping, DEFAULT_SETTINGS.agentsGrouping),
       agentsFollow: typeof saved.agentsFollow === "boolean" ? saved.agentsFollow : DEFAULT_SETTINGS.agentsFollow,
       sessionSplits: splitsOf(saved.sessionSplits),
+      panelSplits: splitsOf(saved.panelSplits),
       notify: typeof saved.notify === "boolean" ? saved.notify : DEFAULT_SETTINGS.notify,
       ...levelOf(saved),
     };

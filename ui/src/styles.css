@@ -6663,7 +6663,9 @@ button.ss-scope:hover {
   pointer-events: none;
 }
 .sessions.ss-dragging,
-.sessions.ss-dragging * {
+.sessions.ss-dragging *,
+.panel-shells.ss-dragging,
+.panel-shells.ss-dragging * {
   cursor: grabbing !important;
   user-select: none;
 }
@@ -8350,6 +8352,14 @@ body:has(.focus-grip.se.dragging) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+/* the design mode's switch says what it is, not a lone glyph */
+.preview-pick-btn {
+  gap: 4px;
+  color: var(--ink);
+}
+.preview-pick-btn.on {
+  color: var(--moss);
 }
 .preview-pick-intent {
   display: flex;
