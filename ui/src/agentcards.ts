@@ -62,11 +62,34 @@ export function repoOfCard(card: AgentCard, repos: readonly Repo[]): Repo | unde
   return hits.sort((a, b) => b.path.length - a.path.length)[0];
 }
 
+/** the states in order of need: what waits on you, what works, the rest */
+const NEED: readonly AgentState[] = ["waiting", "working", "idle", "lost", "ended"];
 const RANK: Record<AgentState, number> = { waiting: 0, working: 1, idle: 2, lost: 3, ended: 4 };
 
-/** waiting first, then working, idle, lost, ended; newest start first in each */
-export function orderCards(cards: readonly AgentCard[]): AgentCard[] {
-  return [...cards].sort((a, b) => RANK[a.state] - RANK[b.state] || b.startedAt - a.startedAt || a.id.localeCompare(b.id));
+/** whether a canopy run's card is a chat's; the page knows from its runs */
+export type IsChat = (c: AgentCard) => boolean;
+const noChat: IsChat = () => false;
+
+/** Whether an agent is a session someone drives: a canopy shell, a hooked
+ *  terminal anywhere, a scan's find, or a canopy chat. A canopy run that is
+ *  no chat (a job, a flow's step, a coordinator) goes on without you. */
+export const isSession = (c: AgentCard, chat: IsChat = noChat): boolean => c.origin !== "canopy-run" || chat(c);
+
+/** Where a card sorts before its state does: a running session first, then
+ *  a run at work or waiting, then the rest (an idle run, the lost, the
+ *  ended). */
+export function tierOf(c: AgentCard, chat: IsChat = noChat): number {
+  if (!isLiveAgent(c)) return 2;
+  if (isSession(c, chat)) return 0;
+  return c.state === "idle" ? 2 : 1;
+}
+
+/** running sessions first, then runs at work or waiting, then the rest;
+ *  in each waiting, working, idle, lost, ended, newest start first */
+export function orderCards(cards: readonly AgentCard[], chat: IsChat = noChat): AgentCard[] {
+  return [...cards].sort(
+    (a, b) => tierOf(a, chat) - tierOf(b, chat) || RANK[a.state] - RANK[b.state] || b.startedAt - a.startedAt || a.id.localeCompare(b.id),
+  );
 }
 
 export const liveCount = (cards: readonly AgentCard[]): number => cards.filter(isLiveAgent).length;
@@ -77,23 +100,25 @@ export const anyWaiting = (cards: readonly AgentCard[]): boolean => cards.some((
  *  ("1 waiting · 2 working"), or with none running how many stopped within
  *  the day ("3 earlier"), or nothing. */
 export function agentsHead(live: readonly AgentCard[], past: readonly AgentCard[]): { state: AgentState | "past"; text: string }[] {
-  const by = new Map<AgentState, number>();
-  for (const c of orderCards(live)) by.set(c.state, (by.get(c.state) ?? 0) + 1);
-  const out: { state: AgentState | "past"; text: string }[] = [...by].map(([state, n]) => ({ state, text: `${n} ${state}` }));
+  const out: { state: AgentState | "past"; text: string }[] = [];
+  for (const state of NEED) {
+    const n = live.filter((c) => c.state === state).length;
+    if (n) out.push({ state, text: `${n} ${state}` });
+  }
   if (out.length === 0 && past.length > 0) out.push({ state: "past", text: `${past.length} earlier` });
   return out;
 }
 
 /** The running cards, and the ones that ended or were lost within `span`
- *  of `now`; anything older is left out. */
-export function splitRecent(cards: readonly AgentCard[], now: number, span = DAY): { live: AgentCard[]; past: AgentCard[] } {
+ *  of `now`; anything older is left out. Each in `orderCards` order. */
+export function splitRecent(cards: readonly AgentCard[], now: number, chat: IsChat = noChat, span = DAY): { live: AgentCard[]; past: AgentCard[] } {
   const live: AgentCard[] = [];
   const past: AgentCard[] = [];
   for (const c of cards) {
     if (isLiveAgent(c)) live.push(c);
     else if ((c.endedAt ?? c.seenAt) >= now - span) past.push(c);
   }
-  return { live: orderCards(live), past: orderCards(past) };
+  return { live: orderCards(live, chat), past: orderCards(past, chat) };
 }
 
 /** what a row calls an agent: its handle, or for a scan card (no handle,
@@ -375,9 +400,9 @@ export interface CardGroup {
   live: number;
 }
 
-/** Cards in groups by machine or by repo, each group's running ones first;
+/** Cards in groups by machine or by repo, each in `orderCards` order;
  *  groups with more running first, then by name, cards with no repo last. */
-export function groupCards(cards: readonly AgentCard[], by: CardGrouping): CardGroup[] {
+export function groupCards(cards: readonly AgentCard[], by: CardGrouping, chat: IsChat = noChat): CardGroup[] {
   const groups = new Map<string, CardGroup>();
   for (const c of cards) {
     const key = by === "machine" ? machineOf(c) : (urlKey(c.repo) ?? "");
@@ -388,7 +413,7 @@ export function groupCards(cards: readonly AgentCard[], by: CardGrouping): CardG
     groups.set(key, g);
   }
   return [...groups.values()]
-    .map((g) => ({ ...g, cards: orderCards(g.cards) }))
+    .map((g) => ({ ...g, cards: orderCards(g.cards, chat) }))
     .sort((a, b) => Number(a.key === "") - Number(b.key === "") || b.live - a.live || a.label.localeCompare(b.label));
 }
 

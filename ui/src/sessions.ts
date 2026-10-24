@@ -1,6 +1,6 @@
 import type { AgentCard, Harness, Repo, TermInfo } from "../../src/core/types";
 import { isLiveAgent } from "../../src/core/types";
-import { orderCards, repoOfCard } from "./agentcards";
+import { orderCards, repoOfCard, type IsChat } from "./agentcards";
 import type { TermTab } from "./term";
 
 /** A repo's dot in the sessions view's machines tree, most pressing first:
@@ -132,9 +132,10 @@ export function untabbed(shells: readonly TermInfo[], tabs: readonly { id: strin
   return shells.filter((t) => isShell(t) && t.place === "strip" && !tabs.some((x) => x.id === t.id)).sort((a, b) => a.startedAt - b.startedAt);
 }
 
-/** The agents list: every live agent, waiting first, then working, idle;
- *  newest first within each. */
-export const agentRows = (cards: readonly AgentCard[]): AgentCard[] => orderCards(cards.filter(isLiveAgent));
+/** The agents list: every live agent, the sessions first and then the runs
+ *  at work or waiting (`orderCards`); waiting, working, idle in each,
+ *  newest first within those. */
+export const agentRows = (cards: readonly AgentCard[], chat?: IsChat): AgentCard[] => orderCards(cards.filter(isLiveAgent), chat);
 
 /** The tab `by` steps from `active`, wrapping; null with no tabs. */
 export function stepTab(tabs: readonly { id: string }[], active: string | null, by: 1 | -1): string | null {

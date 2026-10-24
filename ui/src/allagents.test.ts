@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, CoordTask, Repo, Run, TermInfo } from "../../src/core/types";
-import { agentName, allAgents, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
+import { agentName, allAgents, chatOf, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
 
 // home is "mac"; another backend's ids carry "mini|"
 const ids: Ids = {
@@ -142,5 +142,17 @@ describe("agentName and madeWord", () => {
     expect(madeWord(c, run({ chat: true }))).toBe("canopy chat");
     expect(madeWord(c, run())).toBe("canopy run: review");
     expect(madeWord(card(), undefined)).toBeNull();
+  });
+});
+
+describe("chatOf", () => {
+  test("a chat's made card and a registry card naming a chat's run; not a job's, not a shell's", () => {
+    const chat = chatOf(["mini|r9", "r2"], ids);
+    const where = (canopy: { backend: string; run?: string; term?: string }): AgentCard["where"] => ({ os: "darwin", container: false, pid: 1, term: null, canopy });
+    expect(chat(runCard(run({ id: "mini|r9", chat: true }), repo, ids))).toBe(true);
+    expect(chat(card({ origin: "canopy-run", where: where({ backend: "mac", run: "r2" }) }))).toBe(true);
+    expect(chat(runCard(run({ id: "mini|r3" }), repo, ids))).toBe(false);
+    expect(chat(card({ where: where({ backend: "mac", term: "r2" }) }))).toBe(false);
+    expect(chat(card())).toBe(false);
   });
 });

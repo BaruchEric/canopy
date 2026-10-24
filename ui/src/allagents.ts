@@ -1,6 +1,6 @@
 import type { AgentCard, AgentKind, AgentState, Repo, Run, RunStatus, TermInfo } from "../../src/core/types";
 import { isLiveAgent } from "../../src/core/types";
-import { cardName, repoName } from "./agentcards";
+import { cardName, repoName, type IsChat } from "./agentcards";
 import { coordTurn, isCoordinator } from "./coord";
 
 /* Every agent the board shows, not only the broker's. The registry knows an
@@ -121,7 +121,7 @@ export function shellCard(t: TermInfo, agent: AgentKind, repo: Repo | undefined,
 }
 
 /** the qualified run or shell a card names, for matching */
-const claimedBy = (c: AgentCard, ids: Ids, kind: "run" | "term"): string | null => {
+const claimedBy = (c: AgentCard, ids: Pick<Ids, "qual">, kind: "run" | "term"): string | null => {
   const cw = c.where.canopy;
   const own = cw?.[kind];
   return own && cw.backend ? ids.qual(cw.backend, own) : null;
@@ -179,3 +179,14 @@ export function shellsToProbe(cards: readonly AgentCard[], shells: readonly Term
 
 /** the run a card stands for, as the page keys its runs */
 export const runOfCard = (c: AgentCard, ids: Ids): string | null => claimedBy(c, ids, "run");
+
+/** Whether a card is a canopy chat's, given the chats' run ids as the page
+ *  qualifies them: a made run card and a registry card naming the run
+ *  alike. What sorts a chat with the sessions rather than the runs. */
+export function chatOf(chats: readonly string[], ids: Pick<Ids, "qual">): IsChat {
+  const set = new Set(chats);
+  return (c) => {
+    const run = claimedBy(c, ids, "run");
+    return run !== null && set.has(run);
+  };
+}

@@ -24,10 +24,12 @@ import {
   transcriptTarget,
   whereWord,
   type CardGrouping,
+  type IsChat,
   type RegistrySummary,
   type Timeline,
   type TrailMark,
 } from "../agentcards";
+import { chatOf } from "../allagents";
 import { api } from "../api";
 import { handoffFrom, handoffRepo } from "../handoff";
 import { backendOf, qual } from "../registry";
@@ -48,6 +50,13 @@ export function useNow(ms = 30_000): number {
     return () => clearInterval(t);
   }, [ms]);
   return now;
+}
+
+/** Whether a card is a canopy chat's, from the chats the page holds: what
+ *  sorts a chat with the sessions in every agents list. */
+export function useIsChat(): IsChat {
+  const chats = useStore(useShallow((s) => Object.values(s.runs).filter((r) => r.chat).map((r) => r.id)));
+  return useMemo(() => chatOf(chats, { qual }), [chats]);
 }
 
 export const glyphOf = (c: AgentCard): string => (c.harness === "other" ? "·" : HARNESS[c.harness].glyph);
@@ -695,8 +704,9 @@ function DayTimeline({ t, drilled, onPick }: { t: Timeline; drilled: string | nu
 /**
  * The registry tab of the agents view: a summary, the day's runs on a
  * timeline, then every agent the broker knows, on any machine, grouped by
- * machine or repo with the busier groups first, running ones first in each;
- * then the day's ended and lost ones, folded. One row is drilled into at a
+ * machine or repo with the busier groups first, in each the running
+ * sessions first and then the runs at work (`orderCards`); then the day's
+ * ended and lost ones, folded. One row is drilled into at a
  * time; a lane of the timeline opens its row and brings it into view.
  */
 export function RegistryTab({ onGit }: { onGit?: () => void }) {
@@ -705,8 +715,9 @@ export function RegistryTab({ onGit }: { onGit?: () => void }) {
   const [drilled, setDrilled] = useState<string | null>(null);
   const [pastOpen, setPastOpen] = useState(false);
   const now = useNow();
-  const { live, past } = useMemo(() => splitRecent(all, now), [all, now]);
-  const groups = useMemo(() => groupCards(live, by), [live, by]);
+  const chat = useIsChat();
+  const { live, past } = useMemo(() => splitRecent(all, now, chat), [all, now, chat]);
+  const groups = useMemo(() => groupCards(live, by, chat), [live, by, chat]);
   const summary = useMemo(() => registrySummary(all, now), [all, now]);
   const timeline = useMemo(() => timelineOf(all, now), [all, now]);
   const toggle = (id: string) => setDrilled((d) => (d === id ? null : id));
@@ -793,7 +804,8 @@ export function AgentsSection({ repo }: { repo: Repo }) {
   const ready = useStore((s) => s.registryReady);
   const cards = useStore((s) => agentsOn(s, repo.id));
   const now = useNow();
-  const { live, past } = useMemo(() => splitRecent(cards, now), [cards, now]);
+  const chat = useIsChat();
+  const { live, past } = useMemo(() => splitRecent(cards, now, chat), [cards, now, chat]);
   if (!ready) return null;
   const head = agentsHead(live, past);
   return (

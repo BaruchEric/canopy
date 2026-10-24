@@ -10,6 +10,7 @@ import {
   cardsFor,
   durationWord,
   groupCards,
+  isSession,
   joinTarget,
   liveCount,
   markTrail,
@@ -24,11 +25,13 @@ import {
   splitRecent,
   stateSince,
   stateWord,
+  tierOf,
   timelineOf,
   TRAIL_CAP,
   transcriptTarget,
   urlKey,
   whereWord,
+  type IsChat,
   type TrailMark,
 } from "./agentcards";
 import { split, qualify, type Reg } from "./backends";
@@ -367,5 +370,57 @@ describe("merging", () => {
     expect(got).toEqual({ a: lost, b, c });
     // without an event since, the list is the news
     expect(replaceCards({ a: lost }, [{ ...a, state: "idle" }])).toEqual({ a: { ...a, state: "idle" } });
+  });
+});
+
+describe("sessions before runs", () => {
+  const ran = (run: string): AgentCard["where"] => ({ os: "linux", container: true, pid: 9, term: null, canopy: { backend: "mini", run } });
+  const job = card({ origin: "canopy-run", state: "working", startedAt: 50, where: ran("r1") });
+  const jobWaits = card({ origin: "canopy-run", state: "waiting", startedAt: 51, where: ran("r2") });
+  const coordIdle = card({ origin: "canopy-run", state: "idle", startedAt: 52, where: ran("r3") });
+  const chatRun = card({ origin: "canopy-run", state: "working", startedAt: 10, where: ran("r4") });
+  const lostRun = card({ origin: "canopy-run", state: "lost", startedAt: 9, where: ran("r5") });
+  const shellIdle = card({ origin: "canopy-shell", state: "idle", startedAt: 5 });
+  const termWaits = card({ origin: "elsewhere", state: "waiting", startedAt: 6 });
+  const scanWorks = card({ origin: "scan", state: "working", startedAt: 7 });
+  const endedSession = card({ origin: "canopy-shell", state: "ended", startedAt: 8, endedAt: 90 });
+  const chat: IsChat = (c) => c === chatRun;
+
+  test("a session is anything but a canopy run, and a chat", () => {
+    expect([shellIdle, termWaits, scanWorks].every((c) => isSession(c))).toBe(true);
+    expect(isSession(job, chat)).toBe(false);
+    expect(isSession(chatRun)).toBe(false);
+    expect(isSession(chatRun, chat)).toBe(true);
+    expect([shellIdle, jobWaits, coordIdle, endedSession, lostRun].map((c) => tierOf(c))).toEqual([0, 1, 2, 2, 2]);
+  });
+
+  test("running sessions whatever their state, then runs at work or waiting, then the rest", () => {
+    expect(orderCards([lostRun, endedSession, coordIdle, job, jobWaits, shellIdle, scanWorks, termWaits])).toEqual([
+      termWaits,
+      scanWorks,
+      shellIdle,
+      jobWaits,
+      job,
+      coordIdle,
+      lostRun,
+      endedSession,
+    ]);
+  });
+
+  test("a chat sorts with the sessions once the page says it is one", () => {
+    expect(orderCards([job, chatRun, shellIdle])).toEqual([shellIdle, job, chatRun]);
+    expect(orderCards([job, chatRun, shellIdle], chat)).toEqual([chatRun, shellIdle, job]);
+    const { live, past } = splitRecent([job, chatRun, shellIdle, endedSession], 100, chat);
+    expect(live).toEqual([chatRun, shellIdle, job]);
+    expect(past).toEqual([endedSession]);
+    expect(groupCards([job, chatRun, shellIdle], "repo", chat).map((g) => g.cards)).toEqual([[chatRun, shellIdle, job]]);
+  });
+
+  test("the section header stays in order of need whatever the cards' order", () => {
+    expect(agentsHead([shellIdle, job, jobWaits], [])).toEqual([
+      { state: "waiting", text: "1 waiting" },
+      { state: "working", text: "1 working" },
+      { state: "idle", text: "1 idle" },
+    ]);
   });
 });

@@ -11,7 +11,7 @@
 
 import type { PaneMsg } from "./panes";
 import { BOARD_LAYOUTS, isLiveAgent, type Ask, type AgentCard, type AgentState, type BoardLayout } from "../../src/core/types";
-import { groupCards, runEnd, type TrailMark } from "./agentcards";
+import { groupCards, runEnd, tierOf, type IsChat, type TrailMark } from "./agentcards";
 import type { InboxAnswer } from "./inbox";
 import { recommendLayout } from "../../src/core/screenlayouts";
 
@@ -29,7 +29,7 @@ export const LAYOUT_WORD: Record<BoardLayout, string> = {
 export const LAYOUT_TITLE: Record<BoardLayout, string> = {
   rail: "Every agent as a row; the one you pick fills the rest with its live shell or its transcript",
   wall: "Every agent as an equal tile, its shell's screen as it stands",
-  spotlight: "The agent in focus large and live, the oldest waits next, the rest small",
+  spotlight: "The agent in focus large and live, the next few in the board's order beside it, the rest small",
   dashboard: "The summary, the asks waiting on you, the agents at work and the rest as chips",
   triage: "A column per state; agents move between them as their state changes",
   lanes: "The day's agents on the clock, coloured by the states this page saw",
@@ -97,11 +97,19 @@ export function sinceOf(c: AgentCard, marks: readonly TrailMark[] | undefined): 
   return c.startedAt;
 }
 
-/** The board's order: waiting first, the longest wait first since it is
+/** The board's order: the running sessions first (canopy shells, hooked
+ *  terminals, chats), then the runs at work or waiting, then the rest
+ *  (`tierOf`). In each, waiting first, the longest wait first since it is
  *  the one to answer next, then working, idle, lost and ended, the longest
  *  in its state first in each. */
-export function boardOrder(cards: readonly AgentCard[], trail: Record<string, TrailMark[]>): AgentCard[] {
-  return [...cards].sort((a, b) => RANK[a.state] - RANK[b.state] || sinceOf(a, trail[a.id]) - sinceOf(b, trail[b.id]) || a.id.localeCompare(b.id));
+export function boardOrder(cards: readonly AgentCard[], trail: Record<string, TrailMark[]>, chat?: IsChat): AgentCard[] {
+  return [...cards].sort(
+    (a, b) =>
+      tierOf(a, chat) - tierOf(b, chat) ||
+      RANK[a.state] - RANK[b.state] ||
+      sinceOf(a, trail[a.id]) - sinceOf(b, trail[b.id]) ||
+      a.id.localeCompare(b.id),
+  );
 }
 
 /** Every running card, and the ones that stopped within `recent`. */
@@ -112,13 +120,13 @@ export function boardCards(cards: readonly AgentCard[], now: number, recent = RE
 /** The board's cards in groups, each in the board's order: one group with
  *  no name when the board is not grouped, else by machine or repo with the
  *  busier groups first, as the registry tab groups them. */
-export function boardGroups(cards: readonly AgentCard[], by: BoardGrouping, trail: Record<string, TrailMark[]>): BoardGroup[] {
-  if (by === "none") return cards.length ? [{ key: "", label: "", cards: boardOrder(cards, trail) }] : [];
-  return groupCards(cards, by).map((g) => ({ key: g.key || "none", label: g.label, cards: boardOrder(g.cards, trail) }));
+export function boardGroups(cards: readonly AgentCard[], by: BoardGrouping, trail: Record<string, TrailMark[]>, chat?: IsChat): BoardGroup[] {
+  if (by === "none") return cards.length ? [{ key: "", label: "", cards: boardOrder(cards, trail, chat) }] : [];
+  return groupCards(cards, by, chat).map((g) => ({ key: g.key || "none", label: g.label, cards: boardOrder(g.cards, trail, chat) }));
 }
 
 /** the agent in focus: the one picked while it is on the board, else the
- *  first, which is the longest wait when anything waits */
+ *  first in the board's order */
 export function focusOf(order: readonly AgentCard[], picked: string | null): string | null {
   if (picked && order.some((c) => c.id === picked)) return picked;
   return order[0]?.id ?? null;
@@ -417,7 +425,8 @@ function planDashboardNarrow(order: readonly AgentCard[]): BoardPlan {
 /* ---------- keys ---------- */
 
 /** The next agent waiting after `focus` in the board's order, which puts
- *  the longest wait first; round to the first after the last. */
+ *  a session's wait before a run's and the longest wait first in each;
+ *  round to the first after the last. */
 export function nextWaiting(order: readonly AgentCard[], focus: string | null): string | null {
   const waiting = order.filter((c) => c.state === "waiting");
   if (!waiting.length) return null;

@@ -135,6 +135,14 @@ describe("the agents list", () => {
     expect(agentRows([idle, done, wait]).map((c) => c.id)).toEqual([wait.id, idle.id]);
   });
 
+  test("the sessions above the runs at work, a chat with the sessions", () => {
+    const run = card({ origin: "canopy-run", state: "working", startedAt: 1 });
+    const chatRun = card({ origin: "canopy-run", state: "working", startedAt: 2 });
+    const shell = card({ origin: "canopy-shell", state: "idle" });
+    expect(agentRows([run, chatRun, shell]).map((c) => c.id)).toEqual([shell.id, chatRun.id, run.id]);
+    expect(agentRows([run, chatRun, shell], (c) => c === chatRun).map((c) => c.id)).toEqual([chatRun.id, shell.id, run.id]);
+  });
+
   test("next waiting wraps and skips the rest", () => {
     const a = card({ state: "waiting" });
     const b = card({ state: "working" });

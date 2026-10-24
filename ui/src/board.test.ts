@@ -352,3 +352,29 @@ describe("focusAwayAfter", () => {
     expect(focusAwayAfter(true, null, P)).toBe(true);
   });
 });
+
+describe("boardOrder and sessions", () => {
+  const ran = (run: string): AgentCard["where"] => ({ os: "linux", container: true, pid: 9, term: null, canopy: { backend: "mac", run } });
+  const job = card({ id: "job", origin: "canopy-run", state: "waiting", where: ran("r1") });
+  const chatty = card({ id: "chat", origin: "canopy-run", state: "working", where: ran("r2") });
+  const coord = card({ id: "coord", origin: "canopy-run", state: "idle", where: ran("r3") });
+  const shell = card({ id: "shell", origin: "canopy-shell", state: "idle" });
+  const term = card({ id: "term", origin: "elsewhere", state: "waiting" });
+  const gone = card({ id: "gone", origin: "canopy-shell", state: "ended", endedAt: 5 });
+  const chat = (c: AgentCard) => c.id === "chat";
+  const ids = (cards: readonly AgentCard[]) => cards.map((c) => c.id);
+
+  test("running sessions first, then runs at work or waiting, then the rest", () => {
+    expect(ids(boardOrder([gone, coord, chatty, job, shell], {}))).toEqual(["shell", "job", "chat", "coord", "gone"]);
+    expect(ids(boardOrder([gone, coord, chatty, job, shell], {}, chat))).toEqual(["chat", "shell", "job", "coord", "gone"]);
+  });
+
+  test("groups keep the order, and w takes a session's wait before an older run's", () => {
+    expect(ids(boardGroups([job, shell, chatty], "none", {}, chat)[0]!.cards)).toEqual(["chat", "shell", "job"]);
+    expect(ids(boardGroups([job, shell, chatty], "repo", {}, chat)[0]!.cards)).toEqual(["chat", "shell", "job"]);
+    const trail = { job: [{ state: "waiting" as const, at: 100 }], term: [{ state: "waiting" as const, at: 900 }] };
+    const order = boardOrder([job, term], trail);
+    expect(nextWaiting(order, null)).toBe("term");
+    expect(nextWaiting(order, "term")).toBe("job");
+  });
+});

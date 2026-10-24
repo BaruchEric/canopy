@@ -11,6 +11,7 @@ import { connOf, useStore } from "../store";
 import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
+import { useIsChat } from "./Registry";
 import { ShellSpotHere } from "./Surface";
 import { SweepButton } from "./Sweep";
 import { TermTabs, TermView } from "./TermDock";
@@ -85,7 +86,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   // the repo the new-tab box is open for, and what the last new tab ran
   const [newTab, setNewTab] = useState<string | null>(null);
   const [kind, setKind] = useState<TabKind>("shell");
-  const rows = useMemo(() => agentRows(cards), [cards]);
+  const chat = useIsChat();
+  const rows = useMemo(() => agentRows(cards, chat), [cards, chat]);
   const pickedCard = picked && "agent" in picked ? cards.find((c) => c.id === picked.agent) : undefined;
   const pickedInfo = picked && "shell" in picked ? shells.find((t) => t.id === picked.shell) : undefined;
   const pickedRepo = pickedInfo ? repos.find((r) => r.id === pickedInfo.repoId) : undefined;

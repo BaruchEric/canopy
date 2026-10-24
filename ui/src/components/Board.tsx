@@ -40,14 +40,14 @@ import { screenNow } from "../screens";
 import { useStore } from "../store";
 import { OVER_PAGE } from "../surface";
 import { AgentScreen, AskHere, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
-import { AgentActions, Summary, glyphOf, harnessWord, useNow } from "./Registry";
+import { AgentActions, Summary, glyphOf, harnessWord, useIsChat, useNow } from "./Registry";
 import { Seg } from "./Seg";
 import { SweepButton } from "./Sweep";
 
 const LAYOUT_OPTIONS = BOARD_LAYOUTS.map((l) => ({ value: l, label: LAYOUT_WORD[l], title: LAYOUT_TITLE[l] }));
 
 const GROUPING_WORD: Record<BoardGrouping, string> = { none: "no groups", machine: "by machine", repo: "by repo" };
-const GROUPING_OPTIONS = BOARD_GROUPINGS.map((g) => ({ value: g, label: GROUPING_WORD[g], title: g === "none" ? "One board, in order of need" : `Grouped ${GROUPING_WORD[g]}` }));
+const GROUPING_OPTIONS = BOARD_GROUPINGS.map((g) => ({ value: g, label: GROUPING_WORD[g], title: g === "none" ? "One board: the sessions first, then the runs at work, each in order of need" : `Grouped ${GROUPING_WORD[g]}` }));
 
 const ORIGIN_WORD: Record<AgentCard["origin"], string> = {
   "canopy-shell": "canopy shell",
@@ -160,8 +160,9 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
   const scr = screenNow();
   const layout: BoardLayout = saved ?? (scr ? recommendBoard(scr.w, scr.h) : "wall");
   const now = useNow(15_000);
+  const chat = useIsChat();
   const cards = useMemo(() => boardCards(all, now), [all, now]);
-  const groups = useMemo(() => boardGroups(cards, grouping, trail), [cards, grouping, trail]);
+  const groups = useMemo(() => boardGroups(cards, grouping, trail, chat), [cards, grouping, trail, chat]);
   const order = useMemo(() => groups.flatMap((g) => g.cards), [groups]);
   const timeline = useMemo(() => timelineOf(cards, now), [cards, now]);
   const [picked, setPicked] = useState<string | null>(null);
@@ -291,7 +292,7 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
           type="button"
           className="mini"
           disabled={waitingCount === 0}
-          title="Focus the next agent waiting on you, the longest wait first (w)"
+          title="Focus the next agent waiting on you, a session's before a run's, the longest wait first (w)"
           onClick={() => {
             const id = nextWaiting(order, focus);
             if (id) pick(id, hasFocusSlot(layout));
