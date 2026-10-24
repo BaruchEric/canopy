@@ -1,6 +1,6 @@
 # One Library across backends
 
-Status: phase 1 built, 2026-10-24, not yet deployed or switched on. FR-016. One question round: Eric chose "replay when safe" for folder changes (phase 2). Every other call below is marked as mine.
+Status: phase 1 live on both backends since 2026-10-24 (d2cc24a): the Mac seeded, the mini adopted from it, `librarySync` is on for both, and a tag added on the mini reached the Mac in 18 s, its removal in 48 s. Phase 2 not started. FR-016. One question round: Eric chose "replay when safe" for folder changes (phase 2). Every other call below is marked as mine.
 
 ## Why
 

@@ -51,7 +51,7 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 ### FR-016 · One Library across backends
 P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
 A link, tag, note, move or new category made in one backend's Library shows up in the other's. Today each backend keeps its own copy of categories.json, references.json, tags.json, relations.json and health.json, and peer sync carries only commits, so the mini started from defaults and drifts again after every edit. Host-specific keys (host_root, terminal_app, trusted_origins) stay per machine.
-Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Phase 1 syncs the data; phase 2 replays folder moves when safe and asks otherwise (Eric's call).
+Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Phase 1 syncs the data; phase 2 replays folder moves when safe and asks otherwise (Eric's call). Phase 1 is live on the Mac and the mini since 2026-10-24 (d2cc24a, librarySync on for both).
 
 ## Shipped
 
