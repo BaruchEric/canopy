@@ -1,7 +1,7 @@
 import { parseAnswer } from "./answers";
 import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionSpec } from "../core/actions";
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
-import { coordApiHost, Library, libraryOriginAllowed, openBind, tailnetHost } from "../core/library";
+import { coordApiHost, Library, libraryOriginAllowed, openBind, returnLeg, tailnetHost } from "../core/library";
 import { Awake, workingCount } from "../core/awake";
 import { resolveIssueNote } from "../core/issue";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -5409,7 +5409,7 @@ export async function startServer(opts: {
     const denied = state.gate.gate(req, url, caller);
     if (denied) return denied;
     if (url.pathname === "/api/library" || url.pathname === "/library" || url.pathname.startsWith("/library/")) return library.handle(req);
-    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(req, publicOrigin, beyondLoopback, origins, lane ? coordHosts : [])) {
+    if (url.pathname.startsWith("/api/") && !libraryOriginAllowed(returnLeg(req, url), publicOrigin, beyondLoopback, origins, lane ? coordHosts : [])) {
       return json({ error: "Foreign origin" }, 403);
     }
     const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");

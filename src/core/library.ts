@@ -80,6 +80,22 @@ export function libraryOriginAllowed(
   }
 }
 
+/** GET routes another site sends the browser back to, which the browser
+ *  marks cross-site: Linear's app install returns to `/api/linear/callback`
+ *  from linear.app. Each checks a one-time state this server handed out, so
+ *  the origin gate reads them without the cross-site mark; the host, the
+ *  forwarded protocol and any Origin still count. */
+export const RETURN_LEGS: ReadonlySet<string> = new Set(["/api/linear/callback"]);
+
+/** The request the origin gate should judge: a cross-site GET to a return
+ *  leg loses its `sec-fetch-site`, anything else is passed through. */
+export function returnLeg(req: Request, url: URL): Request {
+  if (req.method !== "GET" || !RETURN_LEGS.has(url.pathname) || req.headers.get("sec-fetch-site") !== "cross-site") return req;
+  const headers = new Headers(req.headers);
+  headers.delete("sec-fetch-site");
+  return new Request(req.url, { headers });
+}
+
 /** The host (address and port) of `CANOPY_COORD_API`, the URL a
  *  coordinator reaches canopy at, for the origin gate; null when it is
  *  unset or not an http(s) URL. */

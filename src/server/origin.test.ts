@@ -108,6 +108,18 @@ describe("who may call the API", () => {
     expect(tunnelled.local).toBe(false);
   });
 
+  test("Linear sending the admin back from its install passes the gate, and only that GET", async () => {
+    const back = { host: "canopy.example", "x-forwarded-proto": "https", "sec-fetch-site": "cross-site" };
+    // past the gate, the hub answers: this state was never handed out
+    const res = await fetch(api("/api/linear/callback?state=nope&code=c"), { headers: back });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("install link is spent");
+    expect((await fetch(api("/api/linear/callback"), { method: "POST", headers: back })).status).toBe(403);
+    expect((await fetch(api("/api/linear/callback"), { headers: { ...back, origin: EVIL } })).status).toBe(403);
+    expect((await fetch(api("/api/linear/callback"), { headers: { ...back, host: `rebind.evil.example:${server.port}` } })).status).toBe(403);
+    expect((await fetch(api("/api/tree"), { headers: back })).status).toBe(403);
+  });
+
   test("the static page is not gated", async () => {
     expect((await fetch(api("/"), { headers: { origin: EVIL } })).status).not.toBe(403);
   });
