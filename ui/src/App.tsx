@@ -25,6 +25,7 @@ import { Crowns, TopBar } from "./components/TopBar";
 import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { OVER_PAGE } from "./surface";
+import { CHORD_MS, chordView, pressOf, shortcutFor } from "./shortcuts";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, useStore, type CanopyState } from "./store";
@@ -336,96 +337,123 @@ export function App() {
     }
   }, [loaded, openPanel]);
 
+  // when `g` was pressed, while it waits for the letter of its view
+  const goAt = useRef(0);
   useEffect(() => {
+    // Every key reads the one table the ? sheet lists (shortcuts.ts), so
+    // the sheet cannot drift from what the keys do.
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
-      // The one chord: it works from inside a box too, like an editor's.
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
-        if (OTHER_VIEWS.includes(view)) return;
-        e.preventDefault();
-        useStore.getState().openSearch();
-        return;
+      const box = t.tagName === "INPUT" || t.tagName === "TEXTAREA";
+      const press = pressOf(e);
+      // g then a letter: the letter is the chord's, whatever it does alone
+      if (goAt.current) {
+        const armed = Date.now() - goAt.current < CHORD_MS;
+        goAt.current = 0;
+        if (armed && !box && press) {
+          e.preventDefault();
+          const next = chordView(press);
+          if (next) navigate(next);
+          return;
+        }
       }
-      // ⌘K, the command line: from a box or a shell too, like the find
-      // chord; a window holding one panel or one shell has no prompt
+      const sc = press === null ? null : shortcutFor(press, view);
+      if (!sc || (box && !sc.anywhere)) return;
+      // a window holding one panel or one shell has no prompt
       const whole = !(route.repo && (route.solo || route.shell || route.section));
-      if (whole && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        const st = useStore.getState();
-        st.setCliOpen(!st.cliOpen);
-        return;
-      }
-      if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
-      // `:`, the command line, as an editor's is
-      if (whole && e.key === ":" && !e.metaKey && !e.ctrlKey && !e.altKey && !document.querySelector(OVER_PAGE)) {
-        e.preventDefault();
-        useStore.getState().setCliOpen(true);
-        return;
-      }
-      // n: a new project, from the board or the incubator (⌘N is the
-      // browser's new window, which a page cannot take)
-      if (e.key === "n" && !e.metaKey && !e.ctrlKey && !e.altKey && (view === "git" || view === "incubator")) {
-        const st = useStore.getState();
-        if (st.sproutsReady && !st.sheet && !document.querySelector(OVER_PAGE)) {
-          e.preventDefault();
-          st.openNewSprout();
-        }
-        return;
-      }
-      if (OTHER_VIEWS.includes(view)) return;
       const st = useStore.getState();
-      // the drawer is the top layer while it is out
-      if (st.drawerOpen && e.key === "Escape" && !document.querySelector(OVER_PAGE)) {
-        // taken, so a surface under the drawer stays: this listener may run
-        // before the surface's, which then finds the drawer already gone
-        e.preventDefault();
-        st.setDrawer(false);
-        return;
-      }
-      // Select mode's two keys. A sheet, a menu or a popover owns Escape
-      // while it is up, and a select box owns ⌘A, so neither reaches here then.
-      if (st.selecting && !st.sheet && !document.querySelector(OVER_PAGE)) {
-        // a surface over the page or its panel takes Escape first
-        if (e.key === "Escape" && !document.querySelector(".surface-focus, .surface-full, .section-full")) {
-          st.setSelecting(false);
-          return;
-        }
-        if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "a" && t.tagName !== "SELECT") {
+      const over = !!document.querySelector(OVER_PAGE);
+      switch (sc.action) {
+        case "find":
           e.preventDefault();
-          st.pickAll();
+          st.openSearch();
+          return;
+        case "command":
+          // ⌘K toggles it from a box or a shell too, like the find chord; `:` opens it, as an editor's does
+          if (!whole) return;
+          if (sc.anywhere) {
+            e.preventDefault();
+            st.setCliOpen(!st.cliOpen);
+          } else if (!over) {
+            e.preventDefault();
+            st.setCliOpen(true);
+          }
+          return;
+        case "help":
+          if (st.sheet || over) return;
+          e.preventDefault();
+          st.openKeys(view);
+          return;
+        case "go":
+          if (st.sheet || over) return;
+          e.preventDefault();
+          goAt.current = Date.now();
+          return;
+        case "new":
+          // ⌘N is the browser's new window, which a page cannot take
+          if (st.sproutsReady && !st.sheet && !over) {
+            e.preventDefault();
+            st.openNewSprout();
+          }
+          return;
+        case "escape":
+          // the drawer is the top layer while it is out
+          if (st.drawerOpen && !over) {
+            // taken, so a surface under the drawer stays: this listener may run
+            // before the surface's, which then finds the drawer already gone
+            e.preventDefault();
+            st.setDrawer(false);
+            return;
+          }
+          // A sheet, a menu or a popover owns Escape while it is up, and a
+          // surface over the page or its panel takes it first
+          if (st.selecting && !st.sheet && !over && !document.querySelector(".surface-focus, .surface-full, .section-full")) st.setSelecting(false);
+          return;
+        case "select-all":
+          // a select box owns ⌘A
+          if (st.selecting && !st.sheet && !over && t.tagName !== "SELECT") {
+            e.preventDefault();
+            st.pickAll();
+          }
+          return;
+        case "filter":
+          e.preventDefault();
+          document.getElementById("filter-input")?.focus();
+          return;
+        case "filters":
+          document.getElementById("filters-btn")?.click();
+          return;
+        case "tree":
+          if (narrow) st.setDrawer(!st.drawerOpen);
+          else toggleSidebar();
+          return;
+        case "feed":
+          st.toggleFeed();
+          return;
+        case "waiting":
+          // opens "waiting on you", or brings it forward; never closes it
+          st.openPanel(WAITING_PANEL);
+          return;
+        case "dirty":
+          setDirtyOnly(!st.dirtyOnly);
+          return;
+        case "favorites":
+          st.setFavoritesOnly(!st.favoritesOnly);
+          return;
+        case "select":
+          st.setSelecting(!st.selecting);
+          return;
+        case "sort": {
+          const cur = st.settings.sort;
+          const next = SORT_MODES[(SORT_MODES.indexOf(cur) + 1) % SORT_MODES.length];
+          if (next) setSetting("sort", next);
           return;
         }
-      }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === "/") {
-        e.preventDefault();
-        document.getElementById("filter-input")?.focus();
-      } else if (e.key === "f") {
-        document.getElementById("filters-btn")?.click();
-      } else if (e.key === "[") {
-        if (narrow) st.setDrawer(!st.drawerOpen);
-        else toggleSidebar();
-      } else if (e.key === "e") {
-        useStore.getState().toggleFeed();
-      } else if (e.key === "w") {
-        // opens "waiting on you", or brings it forward; never closes it
-        st.openPanel(WAITING_PANEL);
-      } else if (e.key === "d") {
-        setDirtyOnly(!useStore.getState().dirtyOnly);
-      } else if (e.key === "*") {
-        st.setFavoritesOnly(!st.favoritesOnly);
-      } else if (e.key === "x") {
-        st.setSelecting(!st.selecting);
-      } else if (e.key === "s") {
-        const cur = useStore.getState().settings.sort;
-        const next =
-          SORT_MODES[(SORT_MODES.indexOf(cur) + 1) % SORT_MODES.length];
-        if (next) setSetting("sort", next);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setDirtyOnly, setSetting, toggleSidebar, view, narrow]);
+  }, [setDirtyOnly, setSetting, toggleSidebar, view, narrow, navigate]);
 
   // a window grown past the narrow width has the tree beside the cards again
   useEffect(() => {

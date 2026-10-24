@@ -1325,6 +1325,8 @@ export interface CanopyState {
   closeSheet: () => void;
   /** opens the search across every repo in view */
   openSearch: () => void;
+  /** opens the sheet of every keyboard shortcut on a view */
+  openKeys: (view: string) => void;
   setSearchQuery: (q: string) => void;
   /** closes the search sheet, opens the repo's panel with its search section
    *  unfolded, and hands that section the term */
@@ -1403,7 +1405,9 @@ export type Sheet =
   /** what went idle, to pick from and close (FR-018); `picks` are the
    *  keys it starts ticked, the sweep's ask's when the inbox opened it, and
    *  `pick` numbers that opening, so each one starts the sheet afresh */
-  | { kind: "sweep"; picks?: string[]; pick?: number };
+  | { kind: "sweep"; picks?: string[]; pick?: number }
+  /** every keyboard shortcut on `view`, from the ? key (FR-021) */
+  | { kind: "keys"; view: string };
 
 export interface ClickModifiers {
   metaKey?: boolean;
@@ -4201,6 +4205,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   showRun: (runId) => set({ sheet: { kind: "run", runId } }),
   closeSheet: () => set({ sheet: null }),
   openSearch: () => set({ sheet: { kind: "search" } }),
+  openKeys: (view) => set({ sheet: { kind: "keys", view } }),
   setSearchQuery: (q) => set({ searchQuery: q }),
   searchIn: (repoId, q) =>
     set((s) => ({

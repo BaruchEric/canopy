@@ -4690,6 +4690,52 @@ button.dl-gut.has {
   padding: 24px 16px;
   color: var(--ink-dim);
 }
+/* the ? sheet: a press, then what it does */
+.keys-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+.keys-list {
+  margin: 0;
+  display: grid;
+  /* one key column for both lists, wide enough for Ctrl Shift F */
+  grid-template-columns: 112px 1fr;
+  gap: 6px 16px;
+}
+.keys-row {
+  display: contents;
+}
+.keys-row dt {
+  margin: 0;
+  text-align: left;
+}
+.keys-row dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+.keys-row.here dd {
+  color: var(--ink);
+}
+.keys-caps {
+  display: inline-flex;
+  gap: 4px;
+}
+.keys-caps kbd {
+  min-width: 18px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--ink);
+}
+.keys-head {
+  margin: 16px 0 8px;
+  font-size: 11px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
 .plan {
   display: flex;
   flex-direction: column;

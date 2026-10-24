@@ -14,6 +14,7 @@ import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { ApproveSheet } from "./Landing";
 import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
+import { KeysSheet } from "./Keys";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
 import { DictateButton } from "./Dictate";
@@ -143,6 +144,7 @@ function Body({ sheet }: { sheet: Sheet }) {
     return <Plan repo={repo} action={sheet.action} workspace={sheet.workspace} />;
   }
   if (sheet.kind === "search") return <SearchSheet />;
+  if (sheet.kind === "keys") return <KeysSheet view={sheet.view} />;
   if (sheet.kind === "agent") {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <RepoAgentSheet repo={repo} />;
