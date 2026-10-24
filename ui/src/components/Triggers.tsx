@@ -132,7 +132,11 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
   const [copied, setCopied] = useState(false);
   const name = SERVICE_NAME[rule.source];
   const writesBack =
-    rule.source === "linear" ? "A Linear API key lets canopy comment the PR's link on the issue and move it to done once the fix merges" : "A Sentry token lets canopy mark the issue resolved once the fix merges";
+    rule.source === "linear"
+      ? "A Linear API key, or the Linear app's own token, lets canopy put the PR's link on the issue and move it to done once the fix merges"
+      : "A Sentry token lets canopy mark the issue resolved once the fix merges";
+  // the server writes back with the rule's key, else with the app's token
+  const writes = rule.tokenSet || rule.agentSet;
   return (
     <li className="trigger-rule">
       <div className="trigger-main">
@@ -149,8 +153,8 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
           )}
           <span>runs {rule.workflow}</span>
           <span className={rule.secretSet ? "moss" : "rust"}>{rule.secretSet ? "secret set" : `${rule.secretEnv} not set`}</span>
-          <span className={rule.tokenSet ? "moss" : "faint"} title={writesBack}>
-            {rule.tokenSet ? (rule.source === "linear" ? "writes back to Linear" : "resolves in Sentry") : `leaves issues open in ${name}`}
+          <span className={writes ? "moss" : "faint"} title={writesBack}>
+            {writes ? (rule.source === "linear" ? "writes back to Linear" : "resolves in Sentry") : `leaves issues open in ${name}`}
           </span>
         </span>
       </div>
