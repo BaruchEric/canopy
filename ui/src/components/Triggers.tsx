@@ -63,6 +63,7 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
         <span title={new Date(e.lastAt).toLocaleString()}>{ago(e.lastAt / 1000)}</span>
         {e.count > 1 && <span title={`times ${service} sent this issue`}>×{e.count}</span>}
         {e.source === "manual" && <span>test fire</span>}
+        {e.session && <span title="Delegated to canopy in Linear: its agent session hears how the run goes">agent session</span>}
         {e.link && (
           <a href={e.link} target="_blank" rel="noreferrer">
             {service}
@@ -141,6 +142,11 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
             {rule.source} → {repo}
           </span>
           {rule.source === "linear" && <span title="Adding one of these labels to an issue starts the run">on label {rule.labels.join(", ")}</span>}
+          {rule.clientSecretEnv && (
+            <span className={rule.agentSet ? "moss" : "rust"} title="Delegating an issue to the Linear app, or mentioning it, starts the run, and the session hears how it goes">
+              {rule.agentSet ? "agent on" : `${rule.clientSecretEnv} not set`}
+            </span>
+          )}
           <span>runs {rule.workflow}</span>
           <span className={rule.secretSet ? "moss" : "rust"}>{rule.secretSet ? "secret set" : `${rule.secretEnv} not set`}</span>
           <span className={rule.tokenSet ? "moss" : "faint"} title={writesBack}>

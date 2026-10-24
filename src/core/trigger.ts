@@ -45,6 +45,12 @@ export interface TriggerRule {
   org?: string;
   /** the service's API address, for the calls that write back */
   api: string;
+  /** Linear: the OAuth app's client id. With `clientSecretEnv` it turns the
+   *  agent on: delegating an issue to the app, or mentioning it, starts the run */
+  clientId?: string;
+  /** Linear: the env var holding the OAuth app's client secret, which mints
+   *  the app's own token (the client credentials grant), kept in memory only */
+  clientSecretEnv?: string;
 }
 
 /** What canopy says about a rule on the page: no secret, only whether it is set. */
@@ -52,6 +58,8 @@ export interface TriggerRuleInfo extends TriggerRule {
   hook: string;
   secretSet: boolean;
   tokenSet: boolean;
+  /** Linear: the app's client secret is set, so the agent can answer */
+  agentSet: boolean;
   /** why the rule cannot fire: an unknown repo or workflow, a bad line */
   problem?: string;
 }
@@ -122,8 +130,14 @@ export interface TriggerEvent {
   pr?: { number: number; url: string };
   /** set once the merge marked the issue resolved where it came from, or why that failed */
   resolved?: { at: number } | { error: string };
-  /** Linear: set once the PR's link was commented on the issue, or why that failed */
+  /** Linear: set once the PR's link was commented on the issue, or added to
+   *  the agent session, or why that failed */
   linked?: { at: number } | { error: string };
+  /** Linear: the agent session the event reports to, when the issue was
+   *  delegated to canopy or canopy was mentioned on it */
+  session?: string;
+  /** the run's closing message, which a Linear agent session is shown */
+  summary?: string;
   endedAt?: number;
 }
 
@@ -161,6 +175,9 @@ export interface Incoming {
   description?: string;
   /** a Linear issue's state type: triage, backlog, unstarted, started, completed or canceled */
   stateType?: string;
+  /** a Linear agent session's context: the issue, its comments and the
+   *  workspace's guidance, as Linear formats it */
+  context?: string;
 }
 
 export const KEEP_EVENTS = 200;
@@ -227,6 +244,12 @@ function parseRule(item: unknown): TriggerRule {
   const secretEnv = str(item, "secretEnv");
   if (!secretEnv || !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
   if (!secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  const clientId = str(item, "clientId");
+  const clientSecretEnv = str(item, "clientSecretEnv");
+  if ((clientId === undefined) !== (clientSecretEnv === undefined)) throw new Error("clientId and clientSecretEnv go together: both turn the Linear agent on");
+  if (clientId !== undefined && source !== "linear") throw new Error("clientId is for a linear rule");
+  if (clientSecretEnv !== undefined && !ENV.test(clientSecretEnv)) throw new Error(`clientSecretEnv must name an environment variable, not ${clientSecretEnv}`);
+  if (clientSecretEnv !== undefined && !clientSecretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`clientSecretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${clientSecretEnv}`);
   const tokenEnv = str(item, "tokenEnv");
   if (tokenEnv !== undefined && !ENV.test(tokenEnv)) throw new Error(`tokenEnv must name an environment variable, not ${tokenEnv}`);
   if (tokenEnv !== undefined && !tokenEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`tokenEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${tokenEnv}`);
@@ -249,6 +272,7 @@ function parseRule(item: unknown): TriggerRule {
     ...(tokenEnv ? { tokenEnv } : {}),
     ...(org ? { org } : {}),
     api,
+    ...(clientId && clientSecretEnv ? { clientId, clientSecretEnv } : {}),
   };
 }
 
@@ -373,6 +397,60 @@ export function parseLinear(body: unknown, labels: readonly string[]): Incoming 
 
 const idsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
+/** A Linear agent session event: a new session (the issue delegated to
+ *  canopy, or canopy mentioned on it), or a message in one. */
+export type AgentDelivery =
+  /** `inc` is null when the session is not on an issue (a mention in a document) */
+  | { kind: "created"; session: string; inc: Incoming | null }
+  /** `stop` is the user's stop button; otherwise `text` is what they wrote */
+  | { kind: "prompted"; session: string; text: string; stop: boolean };
+
+/** An `AgentSessionEvent` delivery, read tolerantly: Linear's docs name the
+ *  fields but show no whole payload, so the context and the message are
+ *  looked for in each place they could sit. Anything else is null. */
+export function parseAgentEvent(body: unknown): AgentDelivery | null {
+  if (!isRecord(body) || str(body, "type") !== "AgentSessionEvent") return null;
+  const agentSession = isRecord(body["agentSession"]) ? body["agentSession"] : null;
+  const session = agentSession ? str(agentSession, "id") : undefined;
+  if (!agentSession || !session) return null;
+  const action = str(body, "action");
+  if (action === "prompted") {
+    const act = isRecord(body["agentActivity"]) ? body["agentActivity"] : {};
+    const content = isRecord(act["content"]) ? act["content"] : {};
+    const text = (str(act, "body") ?? str(content, "body") ?? "").slice(0, MAX_DESCRIPTION);
+    return { kind: "prompted", session, text, stop: str(act, "signal") === "stop" };
+  }
+  if (action !== "created") return null;
+  const issue = isRecord(agentSession["issue"]) ? agentSession["issue"] : null;
+  const key = issue ? str(issue, "id") : undefined;
+  if (!issue || !key) return { kind: "created", session, inc: null };
+  const short = str(issue, "identifier");
+  const team = isRecord(issue["team"]) ? issue["team"] : {};
+  const state = isRecord(issue["state"]) ? issue["state"] : {};
+  const project = str(team, "key") ?? short?.split("-")[0];
+  const link = str(issue, "url");
+  const description = str(issue, "description")?.slice(0, MAX_DESCRIPTION);
+  const context = (str(body, "promptContext") ?? str(agentSession, "promptContext"))?.slice(0, MAX_DESCRIPTION);
+  const comment = isRecord(agentSession["comment"]) ? str(agentSession["comment"], "body") : undefined;
+  const stateType = str(state, "type");
+  return {
+    kind: "created",
+    session,
+    inc: {
+      key,
+      title: (str(issue, "title") ?? "an untitled Linear issue").slice(0, 300),
+      ...(short ? { short } : {}),
+      ...(project ? { project } : {}),
+      ...(link && /^https?:\/\//.test(link) ? { link } : {}),
+      detail: [str(state, "name") ? `state: ${str(state, "name")}` : undefined, comment ? `asked in a comment: ${comment.slice(0, 2000)}` : undefined].filter((x): x is string => x !== undefined),
+      frames: [],
+      ...(description ? { description } : {}),
+      ...(stateType ? { stateType } : {}),
+      ...(context ? { context } : {}),
+    },
+  };
+}
+
 /** Whether a Linear delivery was sent within `LINEAR_SKEW` of now, by its
  *  `webhookTimestamp`: an old signed body replayed is refused. */
 export function linearFresh(body: unknown, now: number): boolean {
@@ -416,6 +494,7 @@ export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: 
     ...inc.detail,
     inc.frames.length ? `stack, innermost last:\n${inc.frames.map((f) => `  ${f}`).join("\n")}` : "",
     inc.description ? `description:\n${inc.description}` : "",
+    inc.context ? `context from Linear:\n${inc.context}` : "",
   ].filter(Boolean);
   // the first words name the branch (run/<slug>-<id>), so they lead with the
   // id; Linear's GitHub integration links a PR to the issue its branch names
@@ -480,6 +559,7 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     next.status = "failed";
     next.reason = run.error ?? "the run failed";
   } else if (run.status === "done") {
+    if (run.result?.text.trim()) next.summary = run.result.text.trim().slice(0, 2000);
     const state = run.branch?.state;
     next.status = state === "nothing" ? "no-fix" : state === "uncommitted" ? "stopped" : "ready";
     if (state === "nothing") next.reason = "the agent committed nothing: it found no fix to make";
@@ -566,6 +646,50 @@ export function afterRestart(e: TriggerEvent, runKnown: (id: string) => boolean,
     return { ...e, status: "stopped", reason: "a restart cut the run short" };
   }
   return e;
+}
+
+/** What a Linear agent session is shown: Linear's activity content types. */
+export type AgentActivity =
+  | { type: "thought"; body: string }
+  | { type: "action"; action: string; parameter: string; result?: string }
+  | { type: "response"; body: string }
+  | { type: "error"; body: string };
+
+/** The activity an event's move tells its agent session, or null when the
+ *  move is nothing the session needs to hear. `prev` is the event before
+ *  the move, or undefined for a new one. Pure, so each wording is tested. */
+export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent): AgentActivity | null {
+  if (!next.session) return null;
+  const moved = prev?.status !== next.status;
+  const pr = next.pr ? `[pull request #${next.pr.number}](${next.pr.url})` : "the pull request";
+  const said = (lead: string) => (next.summary ? `${lead}\n\n${next.summary}` : lead);
+  if (!moved) {
+    return next.status === "working" && next.step && prev?.step !== next.step ? { type: "action", action: "Working", parameter: `step ${next.step}` } : null;
+  }
+  switch (next.status) {
+    case "queued":
+      return prev ? { type: "thought", body: `Waiting for a free branch slot in ${next.repoId}${next.reason ? `: ${next.reason}` : ""}.` } : null;
+    case "working":
+      return { type: "action", action: "Working", parameter: next.step ? `step ${next.step}` : `${next.repoId}, on a branch of its own` };
+    case "waiting":
+      return { type: "thought", body: `Waiting in canopy: ${next.reason ?? "the run asks something"}.` };
+    case "stopped":
+      return { type: "response", body: `Stopped: ${next.reason ?? "the run ended early"}.${next.branch ? " Write here to carry on from where it stopped, on the same branch." : ""}` };
+    case "failed":
+      return { type: "error", body: next.reason ?? "the run failed" };
+    case "no-fix":
+      return { type: "response", body: said("Nothing committed: the run made no change.") };
+    case "ready":
+      return { type: "thought", body: "Committed on the branch; canopy opens the pull request once its checks pass." };
+    case "review":
+      return { type: "response", body: said(`Opened ${pr}.`) };
+    case "merged":
+      return { type: "response", body: `Merged ${pr}.` };
+    case "closed":
+      return { type: "response", body: `Closed ${pr} without merging it.` };
+    case "ignored":
+      return { type: "response", body: `Not taking this one: ${next.reason ?? "the rule passes it over"}.` };
+  }
 }
 
 /** Whether an event can be resumed: its run stopped and its branch is kept. */

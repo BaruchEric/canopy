@@ -16,6 +16,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { configDir } from "../core/store";
 import {
+  activityFor,
   afterRestart,
   existing,
   fromFlow,
@@ -25,6 +26,7 @@ import {
   ignoreReason,
   linearFresh,
   newEvent,
+  parseAgentEvent,
   parseLinear,
   parseRules,
   parseSentry,
@@ -33,6 +35,8 @@ import {
   retryable,
   sampleIncoming,
   eventLive,
+  type AgentActivity,
+  type AgentDelivery,
   type Delivery,
   type Incoming,
   type TriggerEvent,
@@ -41,7 +45,7 @@ import {
   type TriggersInfo,
 } from "../core/trigger";
 import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
-import { linearComment, linearDone } from "./linear";
+import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearSessionLinks } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
 export const triggersDir = (): string => join(configDir(), "triggers");
@@ -61,6 +65,17 @@ export class TriggerError extends Error {
 
 /** What starting an event's run came to: a run, or the repo's branch slots are full. */
 export type StartOutcome = { run: Run } | { flow: Flow } | { busy: string };
+
+/** What a Linear agent session is told: an activity, or links added to it. */
+export type AgentSay = { activity: AgentActivity } | { links: { label: string; url: string }[] };
+
+/** Linear's API for an agent session. */
+const linearAgent = (rule: TriggerRule, token: string, session: string, say: AgentSay): Promise<void> =>
+  "activity" in say ? linearActivity(rule, token, session, say.activity) : linearSessionLinks(rule, token, session, say.links);
+
+/** An event a message in its agent session can carry on: stopped, or ended
+ *  with nothing committed, on a branch still kept. */
+export const followable = (e: TriggerEvent): boolean => e.branch !== undefined && (e.status === "stopped" || e.status === "no-fix");
 
 export interface TriggerDeps {
   broadcast: (ev: ServerEvent) => void;
@@ -90,6 +105,16 @@ export interface TriggerDeps {
   resolve?: (rule: TriggerRule, event: TriggerEvent, token: string) => Promise<void>;
   /** tells a Linear issue its PR opened; Linear's API unless a test says otherwise */
   link?: (rule: TriggerRule, event: TriggerEvent, token: string) => Promise<void>;
+  /** tells a Linear agent session something; Linear's API unless a test says otherwise */
+  agent?: (rule: TriggerRule, token: string, session: string, say: AgentSay) => Promise<void>;
+  /** the Linear app's token for a rule, from its client secret; minted with
+   *  the client credentials grant unless a test says otherwise */
+  appToken?: (rule: TriggerRule, secret: string) => Promise<string>;
+  /** carries an event on with a message written in its agent session: a run
+   *  on the event's branch that reads the message */
+  followUp?: (event: TriggerEvent, text: string) => Promise<{ run: Run }>;
+  /** canopy's public address (`CANOPY_PUBLIC_ORIGIN`), for the session's link to the triggers page */
+  origin?: string;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -138,6 +163,9 @@ export class TriggerHub {
    *  issue never both start a run */
   private serial: Promise<void> = Promise.resolve();
   private writing: Promise<void> = Promise.resolve();
+  /** what agent sessions are told, in order, apart from the serial queue so
+   *  a slow call to Linear never holds a delivery up */
+  private telling: Promise<void> = Promise.resolve();
   private pumping = false;
 
   constructor(private deps: TriggerDeps) {}
@@ -168,6 +196,7 @@ export class TriggerHub {
   /** Resolves once every change asked for so far is done and on disk. */
   async idle(): Promise<void> {
     await this.serial;
+    await this.telling;
     await this.writing;
   }
 
@@ -201,6 +230,7 @@ export class TriggerHub {
         hook: `/api/hooks/${r.source}/${r.name}`,
         secretSet: this.env(r.secretEnv) !== undefined,
         tokenSet: r.tokenEnv ? this.env(r.tokenEnv) !== undefined : false,
+        agentSet: r.clientSecretEnv ? this.env(r.clientSecretEnv) !== undefined : false,
         ...(problem ? { problem } : {}),
       });
     }
@@ -222,9 +252,12 @@ export class TriggerHub {
   }
 
   private set(e: TriggerEvent): void {
+    const prev = this.events.get(e.id);
     this.events.set(e.id, e);
     this.persist();
     this.publish();
+    const activity = activityFor(prev, e);
+    if (activity && e.session) this.tell(e.rule, e.session, { activity });
   }
 
   private persist(): void {
@@ -281,8 +314,10 @@ export class TriggerHub {
 
   /* ---------- deliveries ---------- */
 
-  /** One issue under one rule: dedupe, the rule's filters, then a run or the queue. */
-  deliver(rule: TriggerRule, inc: Incoming, source: TriggerEvent["source"]): Promise<Delivery> {
+  /** One issue under one rule: dedupe, the rule's filters, then a run or the
+   *  queue. A Linear agent session's issue carries the session, and the event
+   *  reports to it from then on. */
+  deliver(rule: TriggerRule, inc: Incoming, source: TriggerEvent["source"], session?: string): Promise<Delivery> {
     return this.queue(async () => {
       if (!this.keeping) throw new TriggerError("this backend does not hold the flows lock, so it starts no trigger", 503);
       const repo = this.deps.repo(rule.repo);
@@ -290,13 +325,18 @@ export class TriggerHub {
       const now = this.now();
       const had = existing(this.list(), rule.name, inc.key);
       if (had) {
-        this.set({ ...had, count: had.count + 1, lastAt: now });
+        this.set({ ...had, count: had.count + 1, lastAt: now, ...(session ? { session } : {}) });
+        if (session) {
+          const pr = had.pr ? ` Its pull request is ${had.pr.url}.` : "";
+          const more = followable(had) ? " Write here to carry it on from where it stopped." : " Updates come here from now on.";
+          this.tell(rule.name, session, { activity: { type: "response", body: `canopy already has this issue, and its run reads ${had.status}.${pr}${more}` } });
+        }
         return { kind: "duplicate", event: this.events.get(had.id) ?? had };
       }
       const problem = await this.deps.workflowProblem(rule.workflow, repo);
       if (problem) throw new TriggerError(problem, 400);
       const ignored = source === "manual" ? null : ignoreReason(rule, inc);
-      const event = newEvent(rule, inc, repo.id, source, now, ignored);
+      const event: TriggerEvent = { ...newEvent(rule, inc, repo.id, source, now, ignored), ...(session ? { session } : {}) };
       this.set(event);
       if (ignored) return { kind: "ignored", event };
       const started = await this.begin(event, repo);
@@ -405,13 +445,50 @@ export class TriggerHub {
     }
   }
 
-  /** The rule and its token, for a call that writes back to the service. */
+  /** The rule and its token, for a call that writes back to the service:
+   *  the rule's `tokenEnv`, else the Linear app's own token when the agent is on. */
   private async writer(e: TriggerEvent): Promise<{ rule: TriggerRule; token: string } | null> {
     if (e.source === "manual") return null;
     await this.loadRules();
     const rule = this.rule(e.rule);
-    const token = rule?.tokenEnv ? this.env(rule.tokenEnv) : undefined;
-    return rule && token ? { rule, token } : null;
+    if (!rule) return null;
+    const token = rule.tokenEnv ? this.env(rule.tokenEnv) : undefined;
+    if (token) return { rule, token };
+    const app = await this.appTokenOf(rule).catch(() => undefined);
+    return app ? { rule, token: app } : null;
+  }
+
+  /** The Linear app's token, or undefined when the rule has no app or its secret is unset. */
+  private async appTokenOf(rule: TriggerRule): Promise<string | undefined> {
+    const secret = rule.clientSecretEnv ? this.env(rule.clientSecretEnv) : undefined;
+    if (!rule.clientId || !secret) return undefined;
+    return (this.deps.appToken ?? linearAppToken)(rule, secret);
+  }
+
+  /** Queues something for an agent session, after whatever it was told before. */
+  private tell(ruleName: string, session: string, say: AgentSay): void {
+    if (!this.keeping) return;
+    this.telling = this.telling.then(() => this.sayNow(ruleName, session, say)).catch((err) => console.error(`triggers: Linear session ${session}: ${errText(err)}`));
+  }
+
+  /** Tells an agent session something now, as the app; a token Linear
+   *  refuses is minted again once. */
+  private async sayNow(ruleName: string, session: string, say: AgentSay): Promise<void> {
+    await this.loadRules();
+    const rule = this.rule(ruleName);
+    if (!rule) throw new Error(`no rule ${ruleName} any more`);
+    const call = async () => {
+      const token = await this.appTokenOf(rule);
+      if (!token) throw new Error(`${rule.name} has no Linear app secret set, so its sessions hear nothing`);
+      await (this.deps.agent ?? linearAgent)(rule, token, session, say);
+    };
+    try {
+      await call();
+    } catch (err) {
+      if (!(err instanceof LinearError && err.status === 401)) throw err;
+      forgetAppToken(rule);
+      await call();
+    }
   }
 
   /** Sets one field on the event as it is now: the PR watch may have moved
@@ -437,14 +514,20 @@ export class TriggerHub {
     });
   }
 
+  /** The PR's link goes to the issue: on its agent session when it has one,
+   *  else as a comment. */
   private linkIssue(id: string): Promise<void> {
     return this.queue(async () => {
       const e = this.events.get(id);
-      if (!e?.pr || e.linked || e.service !== "linear") return;
-      const w = await this.writer(e);
-      if (!w) return;
+      if (!e?.pr || e.linked || e.service !== "linear" || e.source === "manual") return;
       try {
-        await (this.deps.link ?? linearComment)(w.rule, e, w.token);
+        if (e.session) {
+          await this.sayNow(e.rule, e.session, { links: [{ label: `Pull request #${e.pr.number}`, url: e.pr.url }] });
+        } else {
+          const w = await this.writer(e);
+          if (!w) return;
+          await (this.deps.link ?? linearComment)(w.rule, e, w.token);
+        }
         this.mark(id, { linked: { at: this.now() } });
       } catch (err) {
         this.mark(id, { linked: { error: errText(err) } });
@@ -490,9 +573,25 @@ export class TriggerHub {
       const repo = this.deps.repo(e.repoId);
       if (!repo) throw new TriggerError(`${e.repoId} is no longer in the tree`, 404);
       const fresh: TriggerEvent = { ...e, status: "queued", lastAt: this.now() };
-      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved", "linked"] as const) delete fresh[k];
+      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved", "linked", "summary"] as const) delete fresh[k];
       this.set(fresh);
       return this.begin(fresh, repo);
+    });
+  }
+
+  /** Carries a stopped or fixless event on with a message from its agent
+   *  session: a run on its branch that reads the message. */
+  followUp(id: string, text: string): Promise<TriggerEvent> {
+    return this.queue(async () => {
+      const e = this.events.get(id);
+      if (!e) throw new TriggerError(`no trigger event ${id}`, 404);
+      if (!followable(e)) throw new TriggerError(`${e.short ?? e.title} is ${e.status}; only a stopped or fixless one on a kept branch carries on`);
+      if (!this.deps.followUp) throw new TriggerError("this backend cannot carry an event on", 501);
+      const out = await this.deps.followUp(e, text);
+      const next: TriggerEvent = { ...e, status: "working", runId: out.run.id, lastAt: this.now() };
+      for (const k of ["flowId", "step", "reason", "endedAt", "summary"] as const) delete next[k];
+      this.set(next);
+      return next;
     });
   }
 
@@ -578,11 +677,59 @@ export class TriggerHub {
       return json({ error: "body is not JSON" }, 400);
     }
     if (linear && !linearFresh(payload, this.now())) return json({ error: "the delivery's webhookTimestamp is more than a minute off" }, 401);
+    if (linear && isRecord(payload) && payload["type"] === "AgentSessionEvent") return this.agentHook(rule, payload);
     const inc = linear ? parseLinear(payload, rule.labels) : parseSentry(req.headers.get("sentry-hook-resource") ?? "", payload);
     // both services count anything but a 200 as a failure and retry it, so an
     // installation ping, a resolved issue or an edit that adds no label is a quiet 200
     if (!inc) return json({ kind: "skip", why: linear ? "no label this rule takes was added" : "not a new issue" });
     const d = await this.deliver(rule, inc, rule.source);
     return json(d.kind === "skip" ? d : { kind: d.kind, event: d.event.id });
+  }
+
+  /** A Linear agent session event. Linear gives the hook 5 s and marks a
+   *  session unresponsive after 10 s with no activity, so the hook answers
+   *  at once and the session hears a thought before the run is started. */
+  private agentHook(rule: TriggerRule, payload: unknown): Response {
+    if (!rule.clientId) return json({ kind: "skip", why: "this rule has no Linear app, so its agent is off" });
+    const d = parseAgentEvent(payload);
+    if (!d) return json({ kind: "skip", why: "not a session event canopy acts on" });
+    if (!this.keeping) return json({ error: "this backend does not hold the flows lock, so it starts no trigger" }, 503);
+    const fail = (err: unknown) => this.tell(rule.name, d.session, { activity: { type: "error", body: errText(err) } });
+    if (d.kind === "prompted") {
+      void this.prompted(rule, d).catch(fail);
+      return json({ kind: "accepted" });
+    }
+    if (!d.inc) {
+      this.tell(rule.name, d.session, { activity: { type: "response", body: "canopy works on issues: delegate one to it, or mention it on one." } });
+      return json({ kind: "skip", why: "the session is not on an issue" });
+    }
+    this.tell(rule.name, d.session, { activity: { type: "thought", body: `On it: starting a run in ${rule.repo}.` } });
+    if (this.deps.origin) this.tell(rule.name, d.session, { links: [{ label: "canopy", url: `${this.deps.origin.replace(/\/+$/, "")}/?view=triggers` }] });
+    void this.deliver(rule, d.inc, "linear", d.session).catch(fail);
+    return json({ kind: "accepted" });
+  }
+
+  /** A message in an agent session: stop, carry on, or say why neither. */
+  private async prompted(rule: TriggerRule, d: Extract<AgentDelivery, { kind: "prompted" }>): Promise<void> {
+    const e = this.list().find((x) => x.session === d.session);
+    const say = (body: string) => this.tell(rule.name, d.session, { activity: { type: "response", body } });
+    if (!e) return say("canopy has no run for this session any more. Delegate the issue to canopy again to start one.");
+    const going = e.status === "queued" || eventLive(e);
+    if (d.stop) {
+      if (!going) return say(`Nothing is running: the run reads ${e.status}.`);
+      await this.stopEvent(e.id);
+      return;
+    }
+    if (going) return say("The run is still going, and canopy reads a message only once it ends. Stop it to end it now.");
+    if (followable(e)) {
+      await this.followUp(e.id, d.text);
+      return;
+    }
+    if (e.pr && e.status === "review") return say(`The pull request is open at ${e.pr.url}. Review comments there reach canopy's PR watch.`);
+    if (retryable(e)) {
+      await this.retry(e.id);
+      return;
+    }
+    return say(`The run reads ${e.status}, so there is nothing to carry on. Delegate the issue again for a new run.`);
   }
 }

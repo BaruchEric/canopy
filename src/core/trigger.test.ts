@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  activityFor,
   afterRestart,
   existing,
   fromFlow,
@@ -10,6 +11,7 @@ import {
   linearFresh,
   newEvent,
   noteFor,
+  parseAgentEvent,
   parseLinear,
   parseRules,
   parseSentry,
@@ -104,6 +106,25 @@ describe("parseRules", () => {
     const { rules, problems } = parseRules(JSON.stringify({ rules: [{ name: "web-linear", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_WEB_LINEAR_SECRET" }] }));
     expect(problems).toEqual([]);
     expect(rules[0]).toEqual(LINEAR);
+  });
+
+  test("a linear rule's app turns its agent on: client id and secret together, the secret behind the prefix", () => {
+    const base = { name: "web-linear", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_WEB_LINEAR_SECRET" };
+    const on = parseRules(JSON.stringify({ rules: [{ ...base, clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_WEB_LINEAR_APP" }] }));
+    expect(on.rules[0]).toEqual({ ...LINEAR, clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_WEB_LINEAR_APP" });
+    const bad = parseRules(
+      JSON.stringify({
+        rules: [
+          { ...base, clientId: "cid" },
+          { ...base, name: "b", clientId: "cid", clientSecretEnv: "LINEAR_APP_SECRET" },
+          { name: "c", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_SHOP_SECRET", clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_X" },
+        ],
+      }),
+    );
+    expect(bad.rules).toEqual([]);
+    expect(bad.problems[0]).toContain("go together");
+    expect(bad.problems[1]).toContain("must start with CANOPY_TRIGGER_");
+    expect(bad.problems[2]).toContain("clientId is for a linear rule");
   });
 
   test("labels belong to a linear rule alone", () => {
@@ -270,6 +291,90 @@ describe("parseLinear", () => {
   });
 });
 
+describe("parseAgentEvent", () => {
+  const session = (over: Record<string, unknown> = {}) => ({
+    id: "ses-1",
+    issue: { id: "iss-9", identifier: "ENG-9", title: "Fix the sync badge", url: "https://linear.app/acme/issue/ENG-9", description: "It shows yesterday.", team: { key: "ENG" }, state: { name: "Todo", type: "unstarted" } },
+    ...over,
+  });
+
+  test("a new session on an issue, with Linear's context", () => {
+    const d = parseAgentEvent({ type: "AgentSessionEvent", action: "created", agentSession: session(), promptContext: '<issue identifier="ENG-9">…</issue>', webhookTimestamp: 1 });
+    expect(d).toEqual({
+      kind: "created",
+      session: "ses-1",
+      inc: {
+        key: "iss-9",
+        short: "ENG-9",
+        title: "Fix the sync badge",
+        project: "ENG",
+        link: "https://linear.app/acme/issue/ENG-9",
+        detail: ["state: Todo"],
+        frames: [],
+        description: "It shows yesterday.",
+        stateType: "unstarted",
+        context: '<issue identifier="ENG-9">…</issue>',
+      },
+    });
+  });
+
+  test("the context may sit on the session, and the mentioning comment is kept", () => {
+    const d = parseAgentEvent({ type: "AgentSessionEvent", action: "created", agentSession: session({ promptContext: "ctx", comment: { body: "@canopy take this" } }) });
+    expect(d?.kind === "created" && d.inc?.context).toBe("ctx");
+    expect(d?.kind === "created" && d.inc?.detail).toContain("asked in a comment: @canopy take this");
+  });
+
+  test("a session with no issue has no incoming", () => {
+    expect(parseAgentEvent({ type: "AgentSessionEvent", action: "created", agentSession: { id: "ses-2" } })).toEqual({ kind: "created", session: "ses-2", inc: null });
+  });
+
+  test("a message, from the activity's body or its content, and the stop signal", () => {
+    expect(parseAgentEvent({ type: "AgentSessionEvent", action: "prompted", agentSession: { id: "s" }, agentActivity: { body: "also fix the tooltip" } })).toEqual({ kind: "prompted", session: "s", text: "also fix the tooltip", stop: false });
+    expect(parseAgentEvent({ type: "AgentSessionEvent", action: "prompted", agentSession: { id: "s" }, agentActivity: { content: { type: "prompt", body: "go" } } })).toMatchObject({ text: "go", stop: false });
+    expect(parseAgentEvent({ type: "AgentSessionEvent", action: "prompted", agentSession: { id: "s" }, agentActivity: { signal: "stop" } })).toEqual({ kind: "prompted", session: "s", text: "", stop: true });
+  });
+
+  test("another type, another action or no session id is null", () => {
+    expect(parseAgentEvent({ type: "Issue", action: "created", agentSession: session() })).toBeNull();
+    expect(parseAgentEvent({ type: "AgentSessionEvent", action: "updated", agentSession: session() })).toBeNull();
+    expect(parseAgentEvent({ type: "AgentSessionEvent", action: "created", agentSession: { issue: {} } })).toBeNull();
+  });
+});
+
+describe("activityFor", () => {
+  const ag = (over: Partial<TriggerEvent> = {}): TriggerEvent => ({ ...event({ session: "ses-1", status: "working" }), ...over });
+
+  test("an event with no session tells nothing", () => {
+    expect(activityFor(undefined, event({ status: "ignored", reason: "x" }))).toBeNull();
+  });
+
+  test("a new queued event says nothing, since the hook already thought aloud; a later queue does", () => {
+    expect(activityFor(undefined, ag({ status: "queued" }))).toBeNull();
+    expect(activityFor(ag({ status: "stopped" }), ag({ status: "queued", reason: "two branch runs going" }))).toEqual({ type: "thought", body: "Waiting for a free branch slot in web/shop: two branch runs going." });
+  });
+
+  test("working is an action, and so is each new step of a flow", () => {
+    expect(activityFor(ag({ status: "queued" }), ag())).toEqual({ type: "action", action: "Working", parameter: "web/shop, on a branch of its own" });
+    expect(activityFor(ag({ step: "Triage" }), ag({ step: "Fix" }))).toEqual({ type: "action", action: "Working", parameter: "step Fix" });
+    expect(activityFor(ag(), ag({ count: 2 }))).toBeNull();
+  });
+
+  test("how a run ends is a response, or an error when it failed", () => {
+    expect(activityFor(ag(), ag({ status: "stopped", reason: "stopped before it finished", branch: "br1" }))?.type).toBe("response");
+    expect(activityFor(ag(), ag({ status: "stopped", reason: "x", branch: "br1" }))).toMatchObject({ body: expect.stringContaining("Write here to carry on") });
+    expect(activityFor(ag(), ag({ status: "failed", reason: "no harness" }))).toEqual({ type: "error", body: "no harness" });
+    expect(activityFor(ag(), ag({ status: "no-fix", summary: "The issue names no page." }))).toEqual({ type: "response", body: "Nothing committed: the run made no change.\n\nThe issue names no page." });
+  });
+
+  test("the PR's moves name it", () => {
+    const pr = { number: 9, url: "https://github.com/a/b/pull/9" };
+    expect(activityFor(ag({ status: "ready" }), ag({ status: "review", pr, summary: "Fixed it." }))).toEqual({ type: "response", body: "Opened [pull request #9](https://github.com/a/b/pull/9).\n\nFixed it." });
+    expect(activityFor(ag({ status: "review", pr }), ag({ status: "merged", pr }))).toEqual({ type: "response", body: "Merged [pull request #9](https://github.com/a/b/pull/9)." });
+    expect(activityFor(ag({ status: "review", pr }), ag({ status: "closed", pr }))?.type).toBe("response");
+    expect(activityFor(undefined, ag({ status: "ignored", reason: "team OPS is not one this rule takes" }))).toEqual({ type: "response", body: "Not taking this one: team OPS is not one this rule takes." });
+  });
+});
+
 describe("linearFresh", () => {
   test("a minute either side of now", () => {
     expect(linearFresh({ webhookTimestamp: 100_000 }, 160_000)).toBe(true);
@@ -348,6 +453,14 @@ describe("noteFor a Linear issue", () => {
     const e = newEvent(LINEAR, inc, "web/shop", "manual", 1000, null);
     expect(e.service).toBe("linear");
     expect(noteFor(inc, "manual", "linear").startsWith("Trigger test MANUAL")).toBe(true);
+  });
+});
+
+describe("fromRun keeps the closing message", () => {
+  test("a done run's text is the event's summary", () => {
+    const e = event({ runId: "r1", status: "working" });
+    const done = { id: "r1", status: "done", branch: { origin: "br1", state: "ready" }, result: { text: " Fixed the badge. ", durationMs: 1, turns: 1 } } as Run;
+    expect(fromRun(e, done, 5).summary).toBe("Fixed the badge.");
   });
 });
 

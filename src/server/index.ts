@@ -92,6 +92,7 @@ import {
 } from "../core/openers";
 import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
+import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { mimeOf } from "../core/filekind";
@@ -5206,6 +5207,15 @@ export async function startServer(opts: {
       runKnown: (id) => state.runner.get(id) !== undefined,
       flowKnown: (id) => state.flows.get(id) !== undefined,
       env: (name) => triggerSecrets.get(name),
+      // a message written in a Linear agent session, read by a run on the
+      // event's branch; fenced, since anyone in the workspace can write one
+      followUp: async (event, text) => {
+        const rec = event.branch ? state.landing.record(event.branch) : undefined;
+        if (!rec) throw new HttpError(404, "its branch is gone, so delegate the issue again for a new run");
+        const said = text.trim() ? fence("The message from Linear", text.trim()) : "Carry on with the task from where you stopped.";
+        return { run: await startBranchFix(state, rec, said, "follow-up", true) };
+      },
+      ...(process.env["CANOPY_PUBLIC_ORIGIN"] ? { origin: process.env["CANOPY_PUBLIC_ORIGIN"] } : {}),
     }),
     coordinator: new CoordinatorHub({
       run: (id) => state.runner.get(id),

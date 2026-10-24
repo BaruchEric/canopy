@@ -5,7 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TriggerEvent, TriggerRule } from "../core/trigger";
 import type { Flow, PrWatch, Repo, Run } from "../core/types";
-import { signatureOk, TriggerHub, type StartOutcome, type TriggerDeps } from "./triggers";
+import { LinearError } from "./linear";
+import { signatureOk, TriggerHub, type AgentSay, type StartOutcome, type TriggerDeps } from "./triggers";
 
 const SECRET = "s3cret";
 const REPO = { id: "web/shop", name: "shop", path: "/dev/web/shop" } as Repo;
@@ -449,5 +450,163 @@ describe("linear", () => {
     expect(linked).toEqual([]);
     expect(resolved).toEqual([]);
     expect(h.list().find((e) => e.source === "manual")).toMatchObject({ service: "linear", title: "Show the last sync time on the settings page" });
+  });
+});
+
+describe("the linear agent", () => {
+  const APP_HOOK = "app-hook-secret";
+  let told: { token: string; session: string; say: AgentSay }[];
+  let follows: string[];
+  let mintCount: number;
+  const env = (name: string) => ({ CANOPY_TRIGGER_APP_HOOK: APP_HOOK, CANOPY_TRIGGER_APP_SECRET: "csecret" })[name];
+  const agentHub = (over: Partial<TriggerDeps> = {}) =>
+    hub({
+      env,
+      workflowProblem: async () => null,
+      appToken: async () => "app-tok",
+      agent: async (_rule, token, session, say) => {
+        told.push({ token, session, say });
+      },
+      followUp: async (e, text) => {
+        follows.push(`${e.branch}:${text}`);
+        const r = run();
+        runs.push(r);
+        return { run: r };
+      },
+      origin: "https://canopy.example/",
+      ...over,
+    });
+  const body = (action: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      type: "AgentSessionEvent",
+      action,
+      webhookTimestamp: 1000,
+      agentSession: { id: "ses-1", issue: { id: "iss-9", identifier: "ENG-9", title: "Fix the sync badge", url: "https://linear.app/acme/issue/ENG-9", team: { key: "ENG" } } },
+      promptContext: '<issue identifier="ENG-9"><title>Fix the sync badge</title></issue>',
+      ...extra,
+    });
+  const req = (b: string) => new Request("http://x/api/hooks/linear/app", { method: "POST", body: b, headers: { "linear-signature": sign(b, APP_HOOK) } });
+  const URL_ = new URL("http://x/api/hooks/linear/app");
+  const said = () => told.map((t) => ("activity" in t.say ? `${t.say.activity.type}: ${"body" in t.say.activity ? t.say.activity.body : t.say.activity.parameter}` : `links: ${t.say.links.map((l) => l.url).join(" ")}`));
+
+  beforeEach(async () => {
+    told = [];
+    follows = [];
+    mintCount = 0;
+    await writeFile(
+      join(dir, "triggers.json"),
+      JSON.stringify({ rules: [{ name: "app", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_APP_HOOK", clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_APP_SECRET" }] }),
+    );
+  });
+
+  test("a new session thinks aloud, links canopy, starts a run and reports it", async () => {
+    const h = agentHub();
+    await h.adopt();
+    const res = await h.handle(req(body("created")), URL_);
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toEqual({ kind: "accepted" });
+    await h.idle();
+    const [e] = h.list();
+    expect(e).toMatchObject({ key: "iss-9", short: "ENG-9", session: "ses-1", status: "working", runId: "r1" });
+    expect(e?.note).toContain("context from Linear:");
+    expect(said()).toEqual(["thought: On it: starting a run in web/shop.", "links: https://canopy.example/?view=triggers", "action: web/shop, on a branch of its own"]);
+    expect(told.every((t) => t.session === "ses-1" && t.token === "app-tok")).toBe(true);
+  });
+
+  test("a rule with no app takes no session, and a session with no issue is told why", async () => {
+    await writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "app", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_APP_HOOK" }] }));
+    const h = agentHub();
+    await h.adopt();
+    expect(await (await h.handle(req(body("created")), URL_))?.json()).toMatchObject({ kind: "skip" });
+    await rulesWithApp();
+    const res = await h.handle(req(body("created", { agentSession: { id: "ses-doc" } })), URL_);
+    expect(await res?.json()).toMatchObject({ kind: "skip", why: "the session is not on an issue" });
+    await h.idle();
+    expect(said()).toEqual(["response: canopy works on issues: delegate one to it, or mention it on one."]);
+    expect(h.list()).toEqual([]);
+  });
+
+  async function rulesWithApp(): Promise<void> {
+    await writeFile(
+      join(dir, "triggers.json"),
+      JSON.stringify({ rules: [{ name: "app", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_APP_HOOK", clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_APP_SECRET" }] }),
+    );
+  }
+
+  test("a message while the run works is told to wait; stop stops it, and a message then carries it on", async () => {
+    const h = agentHub();
+    await h.adopt();
+    await h.handle(req(body("created")), URL_);
+    await h.idle();
+    told = [];
+    await h.handle(req(body("prompted", { agentActivity: { body: "also the tooltip" } })), URL_);
+    await h.idle();
+    expect(said()).toEqual(["response: The run is still going, and canopy reads a message only once it ends. Stop it to end it now."]);
+    await h.handle(req(body("prompted", { agentActivity: { signal: "stop" } })), URL_);
+    await h.idle();
+    expect(stopped).toEqual(["r1"]);
+    const r = runs[0] as Run;
+    h.onRun({ ...r, status: "stopped" });
+    await h.idle();
+    expect(said().at(-1)).toContain("response: Stopped: stopped before it finished. Write here to carry on");
+    await h.handle(req(body("prompted", { agentActivity: { body: "also the tooltip" } })), URL_);
+    await h.idle();
+    expect(follows).toEqual(["br1:also the tooltip"]);
+    expect(h.list()[0]).toMatchObject({ status: "working", runId: "r2" });
+    expect(said().at(-1)).toBe("action: web/shop, on a branch of its own");
+  });
+
+  test("the PR goes on the session as a link, not a comment, and the merge moves the issue with the app's token", async () => {
+    const h = agentHub({ link: async () => void linkedComments.push("comment") });
+    await h.adopt();
+    await h.handle(req(body("created")), URL_);
+    await h.idle();
+    const r = runs[0] as Run;
+    h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "ready" }, result: { text: "Fixed the badge.", durationMs: 1, turns: 1 } });
+    const watch = { id: "br1", runId: "r1", number: 9, url: "https://github.com/a/b/pull/9", state: { status: "open" } } as PrWatch;
+    h.onPrs([watch]);
+    await h.idle();
+    h.onPrs([{ ...watch, state: { ...watch.state!, status: "merged" } }]);
+    await h.idle();
+    expect(linkedComments).toEqual([]);
+    expect(said()).toContain("links: https://github.com/a/b/pull/9");
+    expect(said()).toContain("response: Opened [pull request #9](https://github.com/a/b/pull/9).\n\nFixed the badge.");
+    expect(said()).toContain("response: Merged [pull request #9](https://github.com/a/b/pull/9).");
+    expect(resolved).toEqual(["iss-9:app-tok"]);
+    expect(h.list()[0]).toMatchObject({ status: "merged", linked: { at: 1000 }, resolved: { at: 1000 } });
+  });
+  const linkedComments: string[] = [];
+
+  test("a token Linear refuses is minted again once", async () => {
+    let first = true;
+    const h = agentHub({
+      appToken: async () => `app-${++mintCount}`,
+      agent: async (_rule, token, session, say) => {
+        if (first) {
+          first = false;
+          throw new LinearError("Linear answered 401: Authentication required", 401);
+        }
+        told.push({ token, session, say });
+      },
+    });
+    await h.adopt();
+    await h.handle(req(body("created")), URL_);
+    await h.idle();
+    expect(told[0]?.token).toBe("app-2");
+  });
+
+  test("an issue canopy already has takes the session and is told where it stands", async () => {
+    const h = agentHub();
+    await h.adopt();
+    await h.handle(req(body("created")), URL_);
+    await h.idle();
+    told = [];
+    const again = body("created", { agentSession: { id: "ses-2", issue: { id: "iss-9", identifier: "ENG-9", title: "Fix the sync badge", team: { key: "ENG" } } } });
+    await h.handle(req(again), URL_);
+    await h.idle();
+    expect(h.list()).toHaveLength(1);
+    expect(h.list()[0]).toMatchObject({ session: "ses-2", count: 2 });
+    expect(told.map((t) => t.session)).toEqual(["ses-2", "ses-2", "ses-2"]);
+    expect(said().at(-1)).toBe("response: canopy already has this issue, and its run reads working. Updates come here from now on.");
   });
 });
