@@ -2,42 +2,57 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What this is
-
-canopy — multi-repo git cockpit (Bun + TS server, React 19 + Vite SPA, full CLI). See README.md for commands and features.
+canopy is a workbench for building software with Claude across many repos and machines. A Bun server finds every git repo under the folders it is given, streams their state to a React SPA, keeps shells alive on tmux, and drives the user's own `claude` (or `codex`) binary for jobs, chats and workflows. A CLI (`canopy`) does everything the UI does. SPEC.md is the one-page summary of stack, state and decisions; read it first.
 
 ## Commands
 
-- Gates: `bun run typecheck && bun run lint && bun test && bun run build` — all four before calling anything done. Build is required: the server serves `dist/web`, so a stale build shows stale UI.
-- Redeploy the mini's shared backend: `bun run redeploy` (`status`, `log`, `--pull`, `--shells`, `--restart`, `--force`), from the Mac, a canopy shell on the mini, or the mini itself; `scripts/redeploy.sh`, the `redeploy` skill, and `docs/deploy.md`.
-- Single test file: `bun test src/core/git.test.ts`
-- Dev: `bun run dev` (API :7850) + `bun run dev:web` (Vite :7851, proxies /api). Production mode is the built SPA served by the Bun server on :7850 only.
-- Shared-backend mode: canopy runs headless in docker compose on the mini (`canopy`, `shells` holding the tmux server, `stages` for the incubator's agents, `tunnel` under its profile). See `docs/deploy.md`, `docs/prd-shared-backend.md` and "Shared-backend mode" in `docs/architecture.md`.
+```bash
+bun install
+bun run typecheck          # tsc for the server (tsconfig.json) and the SPA (ui/tsconfig.json)
+bun run lint               # oxlint over src, ui/src, bin
+bun test                   # every *.test.ts under src and ui/src
+bun test src/core/git.test.ts          # one file
+bun test src/core/git.test.ts -t "name"  # one test by name
+bun run build              # vite build of ui/ into dist/web
+```
+
+- All four gates (typecheck, lint, test, build) pass before work counts as done. The build matters: the server serves `dist/web`, so a stale build shows a stale UI.
+- Dev: `bun run dev` (API on :7850, restarts on change) plus `bun run dev:web` (Vite on :7851, proxying `/api` and `/library` to :7850).
+- Production locally: `bun run build && bun link`, then `canopy ui ~/dev`. On the Mac a launchd agent keeps a server on :7850.
+- The shared backend on the mini (docker compose) deploys committed `main` with `bun run redeploy` (`status`, `log`, `--pull`, `--shells`, `--restart`, `--force`). See `docs/deploy.md` and the `redeploy` skill.
 
 ## Architecture
 
-The per-module detail lives in `docs/architecture.md`, one section per area. Read the section for the code you touch before changing it, and when a change makes it wrong, update that file, not this one. This file stays short because Claude Code caps the combined size of instruction files.
+Four entry points share one core:
 
-- `src/core/` — pure logic, no HTTP: locators and ssh, git, scan, runs and their drivers (Claude and Codex), shells on tmux, workflows and flows, peers, launcher, search, history. Section "src/core".
-- `src/server/` — Bun.serve: REST + SSE (`/api/events`) + static, one `SourceRuntime` per scanned folder. Section "src/server".
-- `src/cli/` — `bin/canopy.ts` entry; `render.ts` paints `src/core/treelines.ts` lines (the tree, shared with the UI's command line) as ANSI.
-- `ui/` — React SPA, separate tsconfig, one Zustand store in `ui/src/store.ts`, server types imported from `src/core/types.ts` (keep that file browser-safe: no Bun/node imports). Sections "ui/", "Gears", "The project bench", "The guided panel", "Layout and motion".
-- Feature areas with their own sections: the command line, the in-app browser (preview), tailchan, the agent registry, asks and the inbox, guards and hand-off, tasks, the ranger, the incubator, the Library, the kit, version, harnesses and routing, Codex headless, moving a session, the secret store, the landing queue, the PR watch, callers and tokens, voice.
-- Repo **ids** are paths relative to the scan root (prefixed `<source id>:` under an extra source); **workspaces store absolute paths** (stable across roots; a remote repo's is its `ssh://` locator). The API accepts ids and converts at the edge (`idToPath` in server).
+- `src/core/` holds the logic and the types, with no HTTP. Most files are pure and tested. Files that need Bun (pty, spawn, fs) usually say so in their header comment.
+- `src/server/index.ts` is the Bun.serve app: REST, an SSE stream at `/api/events`, websockets for shells, and the static SPA. Every request goes through `route()`, which checks the caller token, the origin and auth before any handler runs. The other files in `src/server/` are feature modules the index wires in.
+- `src/cli/index.ts` (entry `bin/canopy.ts`) is the CLI. Most commands are HTTP calls to a running backend (`--backend`, else `$CANOPY_API`, else `127.0.0.1:7850`) carrying an `X-Canopy-Token` header (`src/cli/api.ts`). `canopy ui` starts the server itself.
+- `ui/` is the React 19 SPA: one Zustand store in `ui/src/store.ts`, components in `ui/src/components/`, pure helpers beside the store with their own tests.
+- `src/stage/`, `src/egress/` and `src/secrets/` are separate processes bundled into their own containers (the incubator's stage runner, the coordinator's egress proxy, the secret store service).
 
-## Conventions & gotchas
+How the main pieces fit:
 
-- Tests run on the Mac (BSD tools) and on the mini (GNU tools, in Linux containers), so a test that shells out to `ps`, `stat`, `sed` or `date` must use flags both accept. `ps -o sid` is Linux-only; `ps -o stat`'s `s` marks a session leader on both. Run the gates on both machines when such a test changes.
-- `git status --porcelain=v2` paths are never quoted; fields split on single spaces with the path last (`splitN`). Rename entries carry `path\torig`.
-- Untracked-file diffs use `git diff --no-index /dev/null <file>`, which exits 1 on success — don't treat that as an error.
-- `unpack` attaches a dmg through a hard link without the `.dmg` extension (`Stub.image`), `-nobrowse` on a private mountpoint, and retries with `-imagekey diskimage-class=CRawDiskImage` when hdiutil says "image not recognized" (a raw image is only told apart by its extension). The link is what keeps "Install this app?" helpers quiet: Vorssaint's disk image installer on this Mac sees every mount, even `-nobrowse` ones, and offers to install the one app on any mount whose `hdiutil info` image path ends in `.dmg`. The launcher tests build their fixture image mount-free (`makehybrid`, then `convert` to UDZO) for the same reason, and unregister the stub app bundle the `open -W` test hands to Launch Services, since the entry outlives the scratch dir.
-- Remote repos assume a POSIX shell, key-based login, and git on the non-interactive PATH of the host (the QNAP has no git, so it can be added but every card there errors). `remoteCommand` single-quotes each argv word; `tildeQuote` keeps a leading `~` bare so the remote expands it. Openers for a remote path run `ssh -t host 'cd … && …'` (kitty, Terminal, agent) or `code --folder-uri vscode-remote://ssh-remote+host/path`; Finder throws.
-- SSE clients buffered through some proxies/sandboxes may look silent; verify reactivity in a real browser before debugging the watcher (the watcher path was correct all along the one time this came up).
-- Runs deliberately do not use `@anthropic-ai/claude-agent-sdk` (it was tried and rolled back): jobs must run on the user's own `claude` install and Max login. The runner spawns `claude -p --input-format stream-json --output-format stream-json --permission-prompt-tool stdio`; the prompt goes down stdin as a `user` message, permission requests come back as `control_request` (`subtype: can_use_tool`) and are answered with a `control_response` carrying `{behavior, updatedInput}`. `AskUserQuestion` arrives the same way and is answered by returning `updatedInput.answers`. Stdin must stay open until the `result` message (the CLI exits once it is closed, and a permission request after that fails) and until canopy's own control requests (`set_permission_mode`) settle; a `result` that arrives while a background subagent (`task_type: local_agent`) still runs is held and stdin stays open until the real one (the turn the subagents wake, or `heldGraceMs` after they finish if none begins), while a background shell never holds one. A chat keeps it open past the result and writes the next `user` message to continue the session. `--setting-sources user,project,local` so CLAUDE.md and permission rules apply (an incubator stage takes `user` alone); MCP servers are off (`--strict-mcp-config` with no `--mcp-config`).
-- claude-history's `--json` shapes are passed through as-is (snake_case types in `types.ts`); its README calls them an API for canopy's sake, so change both sides together. Its CLI answers a bad lookup as plain text with exit 0; `report()` in history.ts turns that into a 404. Days are local: the CLI buckets with sqlite `localtime` and canopy builds the day list with the OS clock, which agree in the server but not under `bun test` (Bun pins JS Dates to UTC there), so tests pass explicit dates.
-- Design system lives entirely in `ui/src/styles.css` (bark/moss/lichen/rust/sky tokens as `light-dark()` pairs; the theme setting only flips `color-scheme` via `data-theme` on `<html>`). No CSS framework — keep it that way.
-- A fleet resolves its workflow once, from the bundled and user sources only (not a repo's own `.canopy/workflows/`), since a fleet runs the same file over every repo it touches and a repo-local override would make that not true. `loadWorkflows` skips the repo source whenever `repo.host` is truthy (it assumes a remote repo, no local `.canopy/`), so the server asks with `loadWorkflows({ path: "", host: "none" })` — a fake host, not a fake path, is what actually suppresses it.
-- The peer gate (`canopy peers gate`, what a peer's forced ssh command runs) clears every `GIT_*` variable from its own process env before doing anything else, since those are git's own env-config channel (`GIT_CONFIG_PARAMETERS`, `uploadpack.packObjectsHook`, and the like) and left in place would let a peer who can influence this process's environment run something the moment `git-upload-pack` or an in-process `git()` call touches the working tree. It then hands `git-upload-pack` an explicit minimal env of its own (`PATH`, `HOME`, `GIT_PROTOCOL` and `LANG`/`LC_ALL` when set) rather than the process environment, reads the serving machine's config read-only (no quarantine-and-rename), and refuses every command on a config it cannot read or parse rather than falling back to defaults. `sshd` must not `AcceptEnv` `GIT_*` or `BUN_*` for the same reason. The default accepts only `LANG`/`LC_*`, and `BUN_OPTIONS=--preload` reaching the gate would run code before it does.
+- **Repos and git.** A repo's locator is an absolute path or `ssh://<host><path>`. `core/exec.ts` runs a command locally or over ssh by locator, so git code never knows where a repo lives. git is shelled out to and its porcelain v2 output parsed in `core/git.ts`. The server holds one `SourceRuntime` per scanned folder, watches local sources with `fs.watch`, polls ssh and Forgejo sources, and broadcasts each changed repo over SSE.
+- **Runs.** `core/runner.ts` owns live runs (one per repo at a time). A `RunDriver` (`core/driver.ts`) owns one run's process and wire: `claudedrive.ts` speaks Claude Code's stream-json over stdio, `codexrun.ts` speaks Codex's app-server JSON-RPC. Permission requests and questions park the run as a prompt the browser answers. A flow (`core/flow.ts`) runs a workflow file (`core/workflow.ts`, markdown with one `##` per step) as a chain of ordinary runs with checks and gates between steps.
+- **Shells.** `core/term.ts` bridges a pty to a websocket. Shells are tmux sessions on canopy's own tmux server (`tmux.sock` in the config dir), so they outlive a reload and a server restart. In compose, that tmux server lives in the separate `shells` container so a redeploy leaves it running.
+- **Several backends, one page.** A page talks to every backend in the registry, not only the one that served it. IDs the UI holds are prefixed with the backend name (`ui/src/backends.ts`). Peers keep each machine's clones in step over git, pull-only and fast-forward only (`core/peers.ts`, `core/peersync.ts`).
+- **State.** There is no database. Config and every feature's state are files under `~/.config/canopy/` (or `$CANOPY_CONFIG_DIR`), per-repo settings are checked-in files under a repo's `.canopy/`, and live runs sit in server memory. SPEC.md "Data and state" lists every file.
+
+## Conventions
+
+- Strict TypeScript with `noUncheckedIndexedAccess` and `verbatimModuleSyntax` in both tsconfigs. Imports are relative; there is no path alias.
+- The UI imports server types and pure helpers straight from `src/core/` (`types.ts`, `peers.ts` and others). A file the UI imports must stay browser-safe: no Bun or node imports.
+- Styling is one stylesheet, `ui/src/styles.css`, with `light-dark()` tokens. No CSS framework, and the theme setting only flips `color-scheme`.
+- oxlint enforces `react/rules-of-hooks` as an error, so a hook after an early return fails lint.
+- Runs never use the Agent SDK or an API key. They spawn the user's installed `claude` so the user's Max login, settings and CLAUDE.md files apply (SPEC.md, 2026-08-24).
+- The suite runs on macOS and on Linux (inside the mini's containers), so a test that shells out must use flags both BSD and GNU tools accept. `bun test` preloads `src/test-env.ts`, which clears the `CANOPY_*` variables a canopy shell inherits so tests never reach a live server. Bun pins JS dates to UTC under test, so tests that care about local days pass explicit dates.
+
+## Docs
+
+- `docs/architecture.md` has one section per feature area and runs to about 400 KB. Don't read it whole: `grep -n '^## ' docs/architecture.md` lists the sections, then read the one for the code you are changing. Update that section when a change makes it wrong.
+- README.md covers CLI usage and features. FEATURES.md is the feature-request list. `docs/superpowers/specs/` and `plans/` hold the dated design docs behind larger features.
+- Update SPEC.md in the same commit as a change that makes it wrong.
 
 <!-- spec:begin v1.0.0 -->
 This repo follows the shared repo spec, version 1.0.0.
