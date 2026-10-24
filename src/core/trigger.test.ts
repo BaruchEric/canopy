@@ -8,6 +8,7 @@ import {
   fromPr,
   fromRun,
   ignoreReason,
+  issueNoteFor,
   linearFresh,
   linearInstallUrl,
   newEvent,
@@ -374,6 +375,28 @@ describe("activityFor", () => {
     expect(activityFor(ag({ status: "review", pr }), ag({ status: "merged", pr }))).toEqual({ type: "response", body: "Merged [pull request #9](https://github.com/a/b/pull/9)." });
     expect(activityFor(ag({ status: "review", pr }), ag({ status: "closed", pr }))?.type).toBe("response");
     expect(activityFor(undefined, ag({ status: "ignored", reason: "team OPS is not one this rule takes" }))).toEqual({ type: "response", body: "Not taking this one: team OPS is not one this rule takes." });
+  });
+});
+
+describe("issueNoteFor", () => {
+  const lin = (over: Partial<TriggerEvent> = {}): TriggerEvent => ({ ...event({ source: "linear", service: "linear", status: "working" }), ...over });
+
+  test("a run that commits nothing says so with its closing message, and the way to retry", () => {
+    expect(issueNoteFor(lin(), lin({ status: "no-fix", summary: "The issue names no file." }), "https://canopy.example/")).toBe(
+      "canopy ran on this issue and committed nothing.\n\nThe issue names no file.\n\nTo try again, use Retry on [canopy's triggers page](https://canopy.example/?view=triggers).",
+    );
+    expect(issueNoteFor(lin(), lin({ status: "no-fix" }))).toBe("canopy ran on this issue and committed nothing.");
+  });
+  test("a failed run gives its reason", () => {
+    expect(issueNoteFor(lin({ status: "queued" }), lin({ status: "failed", reason: "no worktree." }))).toBe("canopy's run on this issue failed: no worktree.");
+  });
+  test("a session, a test fire, Sentry, an unchanged status or any other end says nothing", () => {
+    expect(issueNoteFor(lin(), lin({ status: "no-fix", session: "s1" }))).toBeNull();
+    expect(issueNoteFor(lin(), lin({ status: "no-fix", source: "manual" }))).toBeNull();
+    expect(issueNoteFor(event({ status: "working" }), event({ status: "no-fix" }))).toBeNull();
+    expect(issueNoteFor(lin({ status: "no-fix" }), lin({ status: "no-fix", count: 2 }))).toBeNull();
+    expect(issueNoteFor(lin(), lin({ status: "stopped" }))).toBeNull();
+    expect(issueNoteFor(lin(), lin({ status: "ready" }))).toBeNull();
   });
 });
 

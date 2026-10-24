@@ -48,11 +48,15 @@ const ok = (data: Record<string, unknown>, field: string): boolean => {
 
 const COMMENT = "mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
 
+/** Comments on the issue. */
+export async function linearNote(rule: TriggerRule, event: TriggerEvent, token: string, body: string): Promise<void> {
+  if (!ok(await linearCall(rule, token, COMMENT, { issueId: event.key, body }), "commentCreate")) throw new Error("Linear did not take the comment");
+}
+
 /** Comments the PR's link on the issue. */
 export async function linearComment(rule: TriggerRule, event: TriggerEvent, token: string): Promise<void> {
   if (!event.pr) return;
-  const body = `canopy opened [pull request #${event.pr.number}](${event.pr.url}) for this issue.`;
-  if (!ok(await linearCall(rule, token, COMMENT, { issueId: event.key, body }), "commentCreate")) throw new Error("Linear did not take the comment");
+  await linearNote(rule, event, token, `canopy opened [pull request #${event.pr.number}](${event.pr.url}) for this issue.`);
 }
 
 const DONE_STATES =

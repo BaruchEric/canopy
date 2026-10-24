@@ -439,12 +439,42 @@ describe("linear", () => {
     expect(h.list()[0]).toMatchObject({ status: "merged", linked: { error: "Linear answered 401" }, resolved: { at: 1000 } });
   });
 
+  test("a run that commits nothing or fails says why on the issue, once", async () => {
+    const noted: string[] = [];
+    const h = linearHub({ note: async (_rule, e, token, body) => void noted.push(`${e.key}:${token}:${body}`), origin: "https://canopy.example" });
+    await h.adopt();
+    await h.handle(linearReq(issue()), URL_);
+    const r = runs[0] as Run;
+    const result = { text: "The issue names no file.", durationMs: 1, turns: 1 };
+    h.onRun({ ...r, status: "done", result });
+    h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "nothing" }, result });
+    h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "nothing" }, result });
+    await h.idle();
+    expect(noted).toEqual([
+      "iss-7:lin_api_k:canopy ran on this issue and committed nothing.\n\nThe issue names no file.\n\nTo try again, use Retry on [canopy's triggers page](https://canopy.example/?view=triggers).",
+    ]);
+    expect(h.list()[0]).toMatchObject({ status: "no-fix" });
+
+    noted.length = 0;
+    const failing = linearHub({
+      note: async (_rule, e, _token, body) => void noted.push(`${e.key}:${body}`),
+      start: async () => {
+        throw new Error("no worktree");
+      },
+    });
+    await failing.adopt();
+    await failing.handle(linearReq(issue("create", { id: "iss-8", identifier: "ENG-8" })), URL_);
+    await failing.idle();
+    expect(noted).toEqual(["iss-8:canopy's run on this issue failed: no worktree."]);
+  });
+
   test("with no token, or on a test fire, Linear is never called", async () => {
     await writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "lin", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_LIN_SECRET" }] }));
-    const h = linearHub();
+    const h = linearHub({ note: async () => void linked.push("note") });
     await h.adopt();
     await h.handle(linearReq(issue()), URL_);
     await h.fire("lin", "");
+    for (const r of runs) h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "nothing" } });
     for (const r of runs) h.onPrs([{ id: r.branch!.origin, runId: r.id, number: 1, url: "u", state: { status: "merged" } } as PrWatch]);
     await h.idle();
     expect(linked).toEqual([]);

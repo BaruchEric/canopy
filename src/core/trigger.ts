@@ -722,6 +722,24 @@ export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent):
   }
 }
 
+/** The comment a labeled Linear issue gets when its run ends without a PR,
+ *  so whoever labeled it hears why, or null. An issue with an agent session
+ *  hears through `activityFor` instead, and a test fire tells Linear nothing.
+ *  `origin` is canopy's public address, for the way to retry. */
+export function issueNoteFor(prev: TriggerEvent | undefined, next: TriggerEvent, origin?: string): string | null {
+  if (next.service !== "linear" || next.source === "manual" || next.session || prev?.status === next.status) return null;
+  const lead =
+    next.status === "no-fix"
+      ? "canopy ran on this issue and committed nothing."
+      : next.status === "failed"
+        ? `canopy's run on this issue failed: ${(next.reason ?? "the run failed").replace(/\.+$/, "")}.`
+        : null;
+  if (!lead) return null;
+  const said = next.status === "no-fix" && next.summary ? `\n\n${next.summary}` : "";
+  const retry = origin ? `\n\nTo try again, use Retry on [canopy's triggers page](${origin.replace(/\/+$/, "")}/?view=triggers).` : "";
+  return `${lead}${said}${retry}`;
+}
+
 /** Whether an event can be resumed: its run stopped and its branch is kept. */
 export const resumable = (e: TriggerEvent): boolean => e.status === "stopped" && e.branch !== undefined;
 

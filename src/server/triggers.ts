@@ -24,6 +24,7 @@ import {
   fromPr,
   fromRun,
   ignoreReason,
+  issueNoteFor,
   linearFresh,
   linearInstallUrl,
   newEvent,
@@ -47,7 +48,7 @@ import {
   type TriggersInfo,
 } from "../core/trigger";
 import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
-import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearSessionLinks, type LinearInstall } from "./linear";
+import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearNote, linearSessionLinks, type LinearInstall } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
 export const triggersDir = (): string => join(configDir(), "triggers");
@@ -109,6 +110,8 @@ export interface TriggerDeps {
   resolve?: (rule: TriggerRule, event: TriggerEvent, token: string) => Promise<void>;
   /** tells a Linear issue its PR opened; Linear's API unless a test says otherwise */
   link?: (rule: TriggerRule, event: TriggerEvent, token: string) => Promise<void>;
+  /** comments on a Linear issue whose run ended without a PR; Linear's API unless a test says otherwise */
+  note?: (rule: TriggerRule, event: TriggerEvent, token: string, body: string) => Promise<void>;
   /** tells a Linear agent session something; Linear's API unless a test says otherwise */
   agent?: (rule: TriggerRule, token: string, session: string, say: AgentSay) => Promise<void>;
   /** the Linear app's token for a rule, from its client secret; minted with
@@ -278,6 +281,8 @@ export class TriggerHub {
     this.publish();
     const activity = activityFor(prev, e);
     if (activity && e.session) this.tell(e.rule, e.session, { activity });
+    const note = issueNoteFor(prev, e, this.deps.origin);
+    if (note) void this.noteIssue(e.id, note);
   }
 
   private persist(): void {
@@ -551,6 +556,22 @@ export class TriggerHub {
         this.mark(id, { linked: { at: this.now() } });
       } catch (err) {
         this.mark(id, { linked: { error: errText(err) } });
+      }
+    });
+  }
+
+  /** Comments on a labeled Linear issue why its run ended without a PR. A
+   *  refusal is only logged: the event already says how the run ended. */
+  private noteIssue(id: string, body: string): Promise<void> {
+    return this.queue(async () => {
+      const e = this.events.get(id);
+      if (!e || !this.keeping) return;
+      const w = await this.writer(e);
+      if (!w) return;
+      try {
+        await (this.deps.note ?? linearNote)(w.rule, e, w.token, body);
+      } catch (err) {
+        console.error(`triggers: Linear issue ${e.short}: ${errText(err)}`);
       }
     });
   }
