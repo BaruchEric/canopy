@@ -5,7 +5,7 @@
  *  token, minted from its client secret when the agent is on. The agent
  *  half posts activities to a session and adds links to it. */
 
-import type { AgentActivity, TriggerEvent, TriggerRule } from "../core/trigger";
+import { LINEAR_APP_SCOPES, type AgentActivity, type TriggerEvent, type TriggerRule } from "../core/trigger";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -85,8 +85,6 @@ export async function linearDone(rule: TriggerRule, event: TriggerEvent, token: 
 
 /* ---------- the agent ---------- */
 
-/** what the app's token may do: read and write, and be delegated issues and mentioned */
-export const APP_SCOPES = "read,write,app:assignable,app:mentionable";
 /** a token is used until this long before Linear says it expires */
 const MARGIN = 60 * 60 * 1000;
 
@@ -108,7 +106,7 @@ export async function linearAppToken(rule: TriggerRule, secret: string, now = Da
   const res = await fetch(`${rule.api}/oauth/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "client_credentials", client_id: id, client_secret: secret, scope: APP_SCOPES }),
+    body: new URLSearchParams({ grant_type: "client_credentials", client_id: id, client_secret: secret, scope: LINEAR_APP_SCOPES }),
     signal: AbortSignal.timeout(15_000),
   });
   const v: unknown = await res.json().catch(() => null);
@@ -141,4 +139,40 @@ const SESSION_LINKS = "mutation($id: String!, $data: AgentSessionUpdateInput!) {
 export async function linearSessionLinks(rule: TriggerRule, token: string, session: string, links: { label: string; url: string }[]): Promise<void> {
   if (!links.length) return;
   if (!ok(await linearCall(rule, token, SESSION_LINKS, { id: session, data: { addedExternalUrls: links } }), "agentSessionUpdate")) throw new Error("Linear did not take the links");
+}
+
+/** Where an install landed: the workspace and the app's own user in it. */
+export interface LinearInstall {
+  organization: { id: string; name: string; urlKey?: string };
+  app: { id: string; name: string };
+}
+
+const WHO = "query { viewer { id name } organization { id name urlKey } }";
+
+/** Finishes an `actor=app` install: trades the code for the app's token,
+ *  asks who it is and where, and keeps nothing; the client credentials grant
+ *  mints the tokens canopy uses. */
+export async function linearInstall(rule: TriggerRule, secret: string, code: string, redirect: string): Promise<LinearInstall> {
+  if (!rule.clientId) throw new Error(`${rule.name} has no Linear app`);
+  const res = await fetch(`${rule.api}/oauth/token`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: rule.clientId, client_secret: secret }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  const v: unknown = await res.json().catch(() => null);
+  const token = isRecord(v) && typeof v["access_token"] === "string" ? v["access_token"] : "";
+  if (!res.ok || !token) {
+    const why = isRecord(v) && typeof v["error_description"] === "string" ? `: ${v["error_description"]}` : "";
+    throw new LinearError(`Linear would not finish the install (${res.status}${why})`, res.status);
+  }
+  const data = await linearCall(rule, token, WHO, {});
+  const viewer = isRecord(data["viewer"]) ? data["viewer"] : {};
+  const org = isRecord(data["organization"]) ? data["organization"] : {};
+  const s = (o: Record<string, unknown>, k: string): string => (typeof o[k] === "string" ? o[k] : "");
+  if (!s(org, "id")) throw new Error("Linear did not say which workspace the app went into");
+  return {
+    organization: { id: s(org, "id"), name: s(org, "name") || s(org, "id"), ...(s(org, "urlKey") ? { urlKey: s(org, "urlKey") } : {}) },
+    app: { id: s(viewer, "id"), name: s(viewer, "name") || "canopy" },
+  };
 }

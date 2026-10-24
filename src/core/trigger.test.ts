@@ -9,7 +9,9 @@ import {
   fromRun,
   ignoreReason,
   linearFresh,
+  linearInstallUrl,
   newEvent,
+  otherWorkspace,
   noteFor,
   parseAgentEvent,
   parseLinear,
@@ -372,6 +374,40 @@ describe("activityFor", () => {
     expect(activityFor(ag({ status: "review", pr }), ag({ status: "merged", pr }))).toEqual({ type: "response", body: "Merged [pull request #9](https://github.com/a/b/pull/9)." });
     expect(activityFor(ag({ status: "review", pr }), ag({ status: "closed", pr }))?.type).toBe("response");
     expect(activityFor(undefined, ag({ status: "ignored", reason: "team OPS is not one this rule takes" }))).toEqual({ type: "response", body: "Not taking this one: team OPS is not one this rule takes." });
+  });
+});
+
+describe("the workspace and the install", () => {
+  test("organization belongs to a linear rule, and passes over every other workspace", () => {
+    const { rules, problems } = parseRules(
+      JSON.stringify({
+        rules: [
+          { name: "web-linear", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_WEB_LINEAR_SECRET", organization: "org-1" },
+          { name: "shop", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_SHOP_SECRET", organization: "org-1" },
+        ],
+      }),
+    );
+    expect(problems).toEqual(["rule 2: organization is for a linear rule"]);
+    const rule = rules[0] as TriggerRule;
+    expect(otherWorkspace(rule, { organizationId: "org-1" })).toBe(false);
+    expect(otherWorkspace(rule, { organizationId: "org-2" })).toBe(true);
+    expect(otherWorkspace(rule, {})).toBe(true);
+    expect(otherWorkspace(LINEAR, { organizationId: "anything" })).toBe(false);
+  });
+
+  test("the install address asks for the app as itself, with its scopes and the state", () => {
+    expect(linearInstallUrl(LINEAR, "https://c.example/api/linear/callback", "st")).toBeNull();
+    const u = new URL(linearInstallUrl({ ...LINEAR, clientId: "cid" }, "https://c.example/api/linear/callback", "st") ?? "");
+    expect(u.origin + u.pathname).toBe("https://linear.app/oauth/authorize");
+    expect(Object.fromEntries(u.searchParams)).toEqual({
+      client_id: "cid",
+      redirect_uri: "https://c.example/api/linear/callback",
+      response_type: "code",
+      scope: "read,write,app:assignable,app:mentionable",
+      actor: "app",
+      state: "st",
+      prompt: "consent",
+    });
   });
 });
 

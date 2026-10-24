@@ -169,6 +169,14 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
           {copied ? "copied" : "copy"}
         </button>
       </div>
+      {rule.install && (
+        <div className="trigger-note">
+          <a href={`${origin}${rule.install}`} target="_blank" rel="noreferrer" title="A workspace admin installs the Linear app as itself, so issues can be delegated to it and it can be mentioned">
+            Install in Linear
+          </a>
+          {!rule.organization && " · takes deliveries from any workspace the app is in until the rule names one"}
+        </div>
+      )}
       {rule.problem && <div className="trigger-err">{rule.problem}</div>}
       <FireForm backend={backend} rule={rule} />
     </li>

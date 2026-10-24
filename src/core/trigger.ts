@@ -51,6 +51,9 @@ export interface TriggerRule {
   /** Linear: the env var holding the OAuth app's client secret, which mints
    *  the app's own token (the client credentials grant), kept in memory only */
   clientSecretEnv?: string;
+  /** Linear: the workspace's id; a delivery from any other workspace is
+   *  passed over, so an app installed elsewhere starts nothing here */
+  organization?: string;
 }
 
 /** What canopy says about a rule on the page: no secret, only whether it is set. */
@@ -60,6 +63,8 @@ export interface TriggerRuleInfo extends TriggerRule {
   tokenSet: boolean;
   /** Linear: the app's client secret is set, so the agent can answer */
   agentSet: boolean;
+  /** Linear: the path that installs the rule's app in a workspace, when it has one */
+  install?: string;
   /** why the rule cannot fire: an unknown repo or workflow, a bad line */
   problem?: string;
 }
@@ -250,6 +255,8 @@ function parseRule(item: unknown): TriggerRule {
   if (clientId !== undefined && source !== "linear") throw new Error("clientId is for a linear rule");
   if (clientSecretEnv !== undefined && !ENV.test(clientSecretEnv)) throw new Error(`clientSecretEnv must name an environment variable, not ${clientSecretEnv}`);
   if (clientSecretEnv !== undefined && !clientSecretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`clientSecretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${clientSecretEnv}`);
+  const organization = str(item, "organization");
+  if (organization !== undefined && source !== "linear") throw new Error("organization is for a linear rule");
   const tokenEnv = str(item, "tokenEnv");
   if (tokenEnv !== undefined && !ENV.test(tokenEnv)) throw new Error(`tokenEnv must name an environment variable, not ${tokenEnv}`);
   if (tokenEnv !== undefined && !tokenEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`tokenEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${tokenEnv}`);
@@ -273,6 +280,7 @@ function parseRule(item: unknown): TriggerRule {
     ...(org ? { org } : {}),
     api,
     ...(clientId && clientSecretEnv ? { clientId, clientSecretEnv } : {}),
+    ...(organization ? { organization } : {}),
   };
 }
 
@@ -449,6 +457,26 @@ export function parseAgentEvent(body: unknown): AgentDelivery | null {
       ...(context ? { context } : {}),
     },
   };
+}
+
+/** Whether a Linear delivery comes from a workspace other than the rule's,
+ *  when the rule names one. */
+export function otherWorkspace(rule: TriggerRule, body: unknown): boolean {
+  if (!rule.organization) return false;
+  return !isRecord(body) || str(body, "organizationId") !== rule.organization;
+}
+
+/** where Linear asks a workspace admin to install an app */
+export const LINEAR_AUTHORIZE = "https://linear.app/oauth/authorize";
+/** what the app may do: read and write, and be delegated issues and mentioned */
+export const LINEAR_APP_SCOPES = "read,write,app:assignable,app:mentionable";
+
+/** The address that installs a rule's Linear app as itself (`actor=app`):
+ *  a workspace admin consents there, and Linear sends them back to `redirect`. */
+export function linearInstallUrl(rule: TriggerRule, redirect: string, state: string): string | null {
+  if (!rule.clientId) return null;
+  const q = new URLSearchParams({ client_id: rule.clientId, redirect_uri: redirect, response_type: "code", scope: LINEAR_APP_SCOPES, actor: "app", state, prompt: "consent" });
+  return `${LINEAR_AUTHORIZE}?${q.toString()}`;
 }
 
 /** Whether a Linear delivery was sent within `LINEAR_SKEW` of now, by its

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { TriggerEvent, TriggerRule } from "../core/trigger";
-import { firstDone, forgetAppToken, linearActivity, linearAppToken, linearAuth, linearComment, linearDone, LinearError, linearSessionLinks } from "./linear";
+import { firstDone, forgetAppToken, linearActivity, linearAppToken, linearAuth, linearComment, linearDone, LinearError, linearInstall, linearSessionLinks } from "./linear";
 
 /** A stand-in for api.linear.app/graphql: it records each call and answers
  *  from `reply`, which a test sets. */
@@ -169,5 +169,23 @@ describe("the agent session", () => {
     reply = () => ({ status: 401, body: { errors: [{ message: "Authentication required" }] } });
     const err = await linearActivity(rule(), "old", "ses-1", { type: "thought", body: "x" }).catch((e: unknown) => e);
     expect((err as LinearError).status).toBe(401);
+  });
+});
+
+describe("linearInstall", () => {
+  const app = (): TriggerRule => ({ ...rule(), clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_LIN_APP" });
+
+  test("trades the code, then says which workspace and which app user", async () => {
+    mintReply = () => ({ body: { access_token: "install-tok", token_type: "Bearer", expires_in: 86399, refresh_token: "r" } });
+    reply = () => ({ body: { data: { viewer: { id: "app-user", name: "canopy" }, organization: { id: "org-1", name: "Acme", urlKey: "acme" } } } });
+    const got = await linearInstall(app(), "csecret", "the-code", "https://c.example/api/linear/callback");
+    expect(Object.fromEntries(mints[0] ?? [])).toEqual({ grant_type: "authorization_code", code: "the-code", redirect_uri: "https://c.example/api/linear/callback", client_id: "cid", client_secret: "csecret" });
+    expect(calls[0]?.auth).toBe("Bearer install-tok");
+    expect(got).toEqual({ organization: { id: "org-1", name: "Acme", urlKey: "acme" }, app: { id: "app-user", name: "canopy" } });
+  });
+
+  test("a refused code says why", async () => {
+    mintReply = () => ({ status: 400, body: { error: "invalid_grant", error_description: "The code has expired" } });
+    await expect(linearInstall(app(), "csecret", "old", "https://c.example/cb")).rejects.toThrow("Linear would not finish the install (400: The code has expired)");
   });
 });

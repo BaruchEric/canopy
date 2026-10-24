@@ -41,18 +41,21 @@ Delegating an issue to canopy, or mentioning it on one, starts the same branch r
 - **A message carries it on.** Linear's stop signal stops the run. A message on a stopped or fixless event whose branch is kept starts a run on that branch that reads the message (fenced, since anyone in the workspace can write one). A message while the run works is answered with "stop it to end it now"; on a failed event it starts again on a new branch; on an open PR it points at the PR, where the PR watch reads review comments.
 - **An issue canopy already has** takes the new session, which is told where the run stands.
 
-Linear's docs name the session event's fields but show no whole payload, so `parseAgentEvent` looks for the context and the message in each place they could sit. The docs also do not say whether a client credentials token alone makes the app delegable; if canopy is missing from the delegate menu, the app needs the one-time install through the authorize URL with `actor=app`, which canopy does not drive yet.
+- **The install is one click.** Linear's docs do not say whether a client credentials token alone makes the app delegable, and they describe the `actor=app` authorize flow as the install. So a rule with an app has an "Install in Linear" link: `GET /api/linear/install?rule=` sends the admin to Linear's authorize page with `actor=app`, the app's scopes, `prompt=consent` and a one-time state; `GET /api/linear/callback` takes that state once, within 10 minutes, trades the code, asks Linear which workspace and app user it landed as, and keeps no token. Both are GETs, which a browser's redirect can reach with no canopy token; the edge gate's sign-in still stands in front of them.
+- **The rule can pin its workspace.** `organization` (the workspace id, which the install page shows) makes the hook pass over any delivery whose `organizationId` differs, so an app installed in a second workspace starts nothing here. Until it is set, the triggers page says the rule takes any workspace the app is in. Keep the app private in Linear's settings too.
+
+Linear's docs name the session event's fields but show no whole payload, so `parseAgentEvent` looks for the context and the message in each place they could sit.
 
 ### Setup for the agent
 
-1. In Linear: Settings, API, OAuth applications, new. Name it canopy. Turn on client credentials tokens and webhooks; the webhook URL is the rule's hook address, with Agent session events and Issues checked. Copy the client id, the client secret and the webhook signing secret.
+1. In Linear: Settings, API, OAuth applications, new. Name it canopy and leave it private. The callback URL is `https://canopy.beric.ca/api/linear/callback`. Turn on client credentials tokens and webhooks; the webhook URL is the rule's hook address, with Agent session events and Issues checked. Copy the client id, the client secret and the webhook signing secret.
 2. Put the secrets in the backend's env as `CANOPY_TRIGGER_<NAME>_SECRET` (the webhook's) and `CANOPY_TRIGGER_<NAME>_APP` (the client secret), set `CANOPY_PUBLIC_ORIGIN`, and restart canopy.
 3. The rule: `{ "name": "web-linear", "source": "linear", "repo": "web-apps/shop", "secretEnv": "CANOPY_TRIGGER_WEB_LINEAR_SECRET", "clientId": "<client id>", "clientSecretEnv": "CANOPY_TRIGGER_WEB_LINEAR_APP", "projects": ["ENG"] }`. With the app on, `tokenEnv` is optional: the app's token comments and moves issues too.
+4. On canopy's triggers page, the rule's "Install in Linear" link. Approve as a workspace admin; the page Linear sends you back to names the workspace id. Add it to the rule as `"organization"`.
 
 ## Not done
 
 - A list of Linear issues inside canopy to pick from. It needs the API's read side, and the label already works from Linear's own UI, keyboard and mobile app.
-- The one-time `actor=app` install through the authorize URL, should the client credentials token not make the app delegable.
 - Choosing the repo per session with Linear's `issueRepositorySuggestions` and a `select` elicitation. A rule still names one repo.
 - A plan on the session (`agentSessionUpdate` with `plan`) built from a flow's steps.
 - Moving the issue to "In progress" when the run starts, and back when it fails.

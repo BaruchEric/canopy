@@ -610,3 +610,82 @@ describe("the linear agent", () => {
     expect(said().at(-1)).toBe("response: canopy already has this issue, and its run reads working. Updates come here from now on.");
   });
 });
+
+describe("installing the linear app", () => {
+  let installs: string[];
+  const installHub = (over: Partial<TriggerDeps> = {}) =>
+    hub({
+      env: (name) => ({ CANOPY_TRIGGER_APP_HOOK: "h", CANOPY_TRIGGER_APP_SECRET: "csecret" })[name],
+      origin: "https://canopy.example",
+      install: async (_rule, secret, code, redirect) => {
+        installs.push(`${secret}:${code}:${redirect}`);
+        return { organization: { id: "org-1", name: "Acme" }, app: { id: "u1", name: "canopy" } };
+      },
+      ...over,
+    });
+  const get = (h: TriggerHub, path: string) => h.handle(new Request(`http://x${path}`), new URL(`http://x${path}`));
+
+  beforeEach(async () => {
+    installs = [];
+    await writeFile(
+      join(dir, "triggers.json"),
+      JSON.stringify({ rules: [{ name: "app", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_APP_HOOK", clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_APP_SECRET" }] }),
+    );
+  });
+
+  test("the rule says where its install starts, and that sends the admin to Linear with a fresh state", async () => {
+    const h = installHub();
+    expect((await h.info()).rules[0]?.install).toBe("/api/linear/install?rule=app");
+    const res = await get(h, "/api/linear/install?rule=app");
+    expect(res?.status).toBe(302);
+    const to = new URL(res?.headers.get("location") ?? "");
+    expect(to.searchParams.get("actor")).toBe("app");
+    expect(to.searchParams.get("redirect_uri")).toBe("https://canopy.example/api/linear/callback");
+    expect(to.searchParams.get("state")?.length).toBeGreaterThan(20);
+    expect((await get(h, "/api/linear/install?rule=nope"))?.status).toBe(404);
+  });
+
+  test("the way back trades the code once, and names the workspace to pin", async () => {
+    const h = installHub();
+    const state = new URL((await get(h, "/api/linear/install?rule=app"))?.headers.get("location") ?? "").searchParams.get("state");
+    const res = await get(h, `/api/linear/callback?code=c1&state=${state}`);
+    expect(res?.status).toBe(200);
+    const page = (await res?.text()) ?? "";
+    expect(page).toContain("canopy is installed in Linear");
+    expect(page).toContain('<code>"organization": "org-1"</code>');
+    expect(installs).toEqual(["csecret:c1:https://canopy.example/api/linear/callback"]);
+    expect((await get(h, `/api/linear/callback?code=c1&state=${state}`))?.status).toBe(400);
+    expect(installs).toHaveLength(1);
+  });
+
+  test("an unknown, stale or refused state trades nothing", async () => {
+    let t = 1000;
+    const h = installHub({ now: () => t });
+    expect((await get(h, "/api/linear/callback?code=c&state=made-up"))?.status).toBe(400);
+    const st = (): Promise<string | null> => get(h, "/api/linear/install?rule=app").then((r) => new URL(r?.headers.get("location") ?? "").searchParams.get("state"));
+    const old = await st();
+    t += 11 * 60 * 1000;
+    expect((await get(h, `/api/linear/callback?code=c&state=${old}`))?.status).toBe(400);
+    const denied = await st();
+    const res = await get(h, `/api/linear/callback?error=access_denied&error_description=${encodeURIComponent("<b>no</b>")}&state=${denied}`);
+    expect(res?.status).toBe(400);
+    expect(await res?.text()).toContain("&#60;b&#62;no&#60;/b&#62;");
+    expect(installs).toEqual([]);
+  });
+
+  test("a delivery from another workspace is passed over once the rule names its own", async () => {
+    await writeFile(
+      join(dir, "triggers.json"),
+      JSON.stringify({ rules: [{ name: "app", source: "linear", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_APP_HOOK", organization: "org-1" }] }),
+    );
+    const h = installHub({ workflowProblem: async () => null });
+    await h.adopt();
+    const send = (org: string) => {
+      const b = JSON.stringify({ action: "create", type: "Issue", organizationId: org, webhookTimestamp: 1000, data: { id: `iss-${org}`, identifier: "ENG-1", title: "t", labelIds: ["l"], labels: [{ id: "l", name: "canopy" }] } });
+      return h.handle(new Request("http://x/api/hooks/linear/app", { method: "POST", body: b, headers: { "linear-signature": sign(b, "h") } }), new URL("http://x/api/hooks/linear/app"));
+    };
+    expect(await (await send("org-2"))?.json()).toEqual({ kind: "skip", why: "a delivery from a Linear workspace other than the rule's" });
+    expect(await (await send("org-1"))?.json()).toMatchObject({ kind: "started" });
+    expect(h.list()).toHaveLength(1);
+  });
+});

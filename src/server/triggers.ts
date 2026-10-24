@@ -11,7 +11,7 @@
  *  that Sentry posts to one address. A server without the lock answers a
  *  hook 503, and Sentry retries the same address later. */
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { configDir } from "../core/store";
@@ -25,7 +25,9 @@ import {
   fromRun,
   ignoreReason,
   linearFresh,
+  linearInstallUrl,
   newEvent,
+  otherWorkspace,
   parseAgentEvent,
   parseLinear,
   parseRules,
@@ -45,7 +47,7 @@ import {
   type TriggersInfo,
 } from "../core/trigger";
 import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
-import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearSessionLinks } from "./linear";
+import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearSessionLinks, type LinearInstall } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
 export const triggersDir = (): string => join(configDir(), "triggers");
@@ -53,6 +55,8 @@ export const triggersDir = (): string => join(configDir(), "triggers");
 export const TICK_EVERY = 30_000;
 /** the largest hook body read; Sentry's and Linear's are a few kilobytes */
 export const MAX_BODY = 1024 * 1024;
+/** how long an install link's state is good for, from the click to Linear's redirect back */
+export const INSTALL_FOR = 10 * 60 * 1000;
 
 export class TriggerError extends Error {
   constructor(
@@ -113,8 +117,11 @@ export interface TriggerDeps {
   /** carries an event on with a message written in its agent session: a run
    *  on the event's branch that reads the message */
   followUp?: (event: TriggerEvent, text: string) => Promise<{ run: Run }>;
-  /** canopy's public address (`CANOPY_PUBLIC_ORIGIN`), for the session's link to the triggers page */
+  /** canopy's public address (`CANOPY_PUBLIC_ORIGIN`), for the session's
+   *  link to the triggers page and the install's redirect back */
   origin?: string;
+  /** finishes a Linear app's install with the code Linear sent back; Linear's API unless a test says otherwise */
+  install?: (rule: TriggerRule, secret: string, code: string, redirect: string) => Promise<LinearInstall>;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -122,6 +129,16 @@ export interface TriggerDeps {
 }
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+const escapeHtml = (t: string): string => t.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+/** The page a browser lands on after a Linear install: one heading, one
+ *  line, and the way back to the triggers page. */
+function installPage(status: number, title: string, line: string): Response {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)}</title>
+<style>:root{color-scheme:light dark}body{font:16px/1.5 system-ui,sans-serif;max-width:36rem;margin:4rem auto;padding:0 16px}code{font-size:.9em;overflow-wrap:anywhere}</style></head>
+<body><h1>${escapeHtml(title)}</h1><p>${line}</p><p><a href="/?view=triggers">Back to canopy's triggers</a></p></body></html>`;
+  return new Response(html, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
+}
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
@@ -163,6 +180,8 @@ export class TriggerHub {
    *  issue never both start a run */
   private serial: Promise<void> = Promise.resolve();
   private writing: Promise<void> = Promise.resolve();
+  /** install links handed out, by their state, until Linear sends the admin back */
+  private installs = new Map<string, { rule: string; redirect: string; at: number }>();
   /** what agent sessions are told, in order, apart from the serial queue so
    *  a slow call to Linear never holds a delivery up */
   private telling: Promise<void> = Promise.resolve();
@@ -231,6 +250,7 @@ export class TriggerHub {
         secretSet: this.env(r.secretEnv) !== undefined,
         tokenSet: r.tokenEnv ? this.env(r.tokenEnv) !== undefined : false,
         agentSet: r.clientSecretEnv ? this.env(r.clientSecretEnv) !== undefined : false,
+        ...(r.clientId ? { install: `/api/linear/install?rule=${encodeURIComponent(r.name)}` } : {}),
         ...(problem ? { problem } : {}),
       });
     }
@@ -634,6 +654,8 @@ export class TriggerHub {
       const hook = /^\/api\/hooks\/([a-z]+)\/([a-z0-9-]+)$/.exec(path);
       if (hook && method === "POST") return await this.hook(req, hook[1] ?? "", hook[2] ?? "");
       if (path === "/api/triggers" && method === "GET") return json(await this.info());
+      if (path === "/api/linear/install" && method === "GET") return await this.install(url);
+      if (path === "/api/linear/callback" && method === "GET") return await this.installed(url);
       if (path === "/api/triggers/events" && method === "DELETE") {
         await this.dismiss(url.searchParams.get("id") ?? "");
         return json({ ok: true });
@@ -677,6 +699,7 @@ export class TriggerHub {
       return json({ error: "body is not JSON" }, 400);
     }
     if (linear && !linearFresh(payload, this.now())) return json({ error: "the delivery's webhookTimestamp is more than a minute off" }, 401);
+    if (linear && otherWorkspace(rule, payload)) return json({ kind: "skip", why: "a delivery from a Linear workspace other than the rule's" });
     if (linear && isRecord(payload) && payload["type"] === "AgentSessionEvent") return this.agentHook(rule, payload);
     const inc = linear ? parseLinear(payload, rule.labels) : parseSentry(req.headers.get("sentry-hook-resource") ?? "", payload);
     // both services count anything but a 200 as a failure and retry it, so an
@@ -707,6 +730,43 @@ export class TriggerHub {
     if (this.deps.origin) this.tell(rule.name, d.session, { links: [{ label: "canopy", url: `${this.deps.origin.replace(/\/+$/, "")}/?view=triggers` }] });
     void this.deliver(rule, d.inc, "linear", d.session).catch(fail);
     return json({ kind: "accepted" });
+  }
+
+  /** Sends a workspace admin to Linear to install the rule's app as itself. */
+  private async install(url: URL): Promise<Response> {
+    await this.loadRules();
+    const rule = this.rule(url.searchParams.get("rule") ?? "");
+    if (!rule || rule.source !== "linear" || !rule.clientId) return installPage(404, "No such Linear app", "The rule is gone, or it names no clientId.");
+    const redirect = `${(this.deps.origin ?? url.origin).replace(/\/+$/, "")}/api/linear/callback`;
+    const state = randomBytes(24).toString("base64url");
+    const now = this.now();
+    for (const [k, v] of this.installs) if (now - v.at > INSTALL_FOR) this.installs.delete(k);
+    this.installs.set(state, { rule: rule.name, redirect, at: now });
+    return new Response(null, { status: 302, headers: { location: linearInstallUrl(rule, redirect, state) ?? "/?view=triggers", "cache-control": "no-store" } });
+  }
+
+  /** Where Linear sends the admin back: the state must be one this server
+   *  handed out, once and recently, before the code is traded. */
+  private async installed(url: URL): Promise<Response> {
+    const state = url.searchParams.get("state") ?? "";
+    const held = this.installs.get(state);
+    this.installs.delete(state);
+    if (!held || this.now() - held.at > INSTALL_FOR) return installPage(400, "This install link is spent", "Start the install again from the rule on canopy's triggers page.");
+    const refused = url.searchParams.get("error");
+    if (refused) return installPage(400, "Linear did not install canopy", escapeHtml(url.searchParams.get("error_description") ?? refused));
+    const code = url.searchParams.get("code");
+    if (!code) return installPage(400, "Linear sent no code", "Start the install again from the rule on canopy's triggers page.");
+    await this.loadRules();
+    const rule = this.rule(held.rule);
+    const secret = rule?.clientSecretEnv ? this.env(rule.clientSecretEnv) : undefined;
+    if (!rule || !secret) return installPage(503, "canopy cannot finish the install", `${escapeHtml(rule?.clientSecretEnv ?? "The app's client secret")} is not set on this backend.`);
+    try {
+      const got = await (this.deps.install ?? linearInstall)(rule, secret, code, held.redirect);
+      const keep = rule.organization === got.organization.id ? "The rule already takes this workspace alone." : `To take deliveries from this workspace alone, set <code>"organization": "${escapeHtml(got.organization.id)}"</code> on the ${escapeHtml(rule.name)} rule in triggers.json.`;
+      return installPage(200, "canopy is installed in Linear", `In ${escapeHtml(got.organization.name)} as ${escapeHtml(got.app.name)}. ${keep}`);
+    } catch (err) {
+      return installPage(502, "Linear did not finish the install", escapeHtml(errText(err)));
+    }
   }
 
   /** A message in an agent session: stop, carry on, or say why neither. */
