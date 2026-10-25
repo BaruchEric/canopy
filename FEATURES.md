@@ -56,6 +56,11 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ## In Progress
 
+### FR-030 · A card's sections as tabs in a shell window
+P2 · added 2026-10-24 · source: Eric (canopy chat)
+Any section of a card (history, files, changes and the rest) can leave the card and sit as a tab beside the shells, in every shell window: the card's shell section, the strip and the sessions view, and a shell window of its own. It splits with shells as a pane does. The arrangement is kept per kind of screen (phone, tablet, laptop, desktop, wide, ultra), and named templates, some seeded, can be saved, edited, deleted and loaded.
+Built 2026-10-24, phases 1 to 3: ui/src/sectiontabs.ts (pure, tested) holds a section tab as its own record with a sec: id, so split groups hold it beside shells. A section's gear has "a tab in this card's shells" and "a tab in the shells strip", a shell tab's menu has "a section as a tab", and a shell window's gear lists the sections to add. The tab's close, its pane's close and "back to the card" put the section back. sectionTabs and the three split settings are kept per screen. Checked on a scratch server: history tabbed and split right with a new shell in a card, files in the strip and the sessions view (split down there, the new shell focused), changes split with the shell in a shell window, and a reload of each. Templates are phase 4.
+
 ### FR-016 · One Library across backends
 P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
 A link, tag, note, move or new category made in one backend's Library shows up in the other's. Today each backend keeps its own copy of categories.json, references.json, tags.json, relations.json and health.json, and peer sync carries only commits, so the mini started from defaults and drifts again after every edit. Host-specific keys (host_root, terminal_app, trusted_origins) stay per machine.

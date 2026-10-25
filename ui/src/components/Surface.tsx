@@ -378,6 +378,7 @@ function useSectionLayout(repo: Repo, k: SectionKey, mode: SurfaceMode, setMode:
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
   const setSetting = useStore((s) => s.setSetting);
+  const tabSection = useStore((s) => s.tabSection);
   if (lone) return [];
   const i = order.indexOf(k);
   return [
@@ -396,6 +397,19 @@ function useSectionLayout(repo: Repo, k: SectionKey, mode: SurfaceMode, setMode:
     },
     { type: "item", label: "open in a new tab", run: () => openSectionElsewhere(repo.id, k, "tab") },
     { type: "item", label: "open in a new window", run: () => openSectionElsewhere(repo.id, k, "window") },
+    // FR-030: out of the card, into a shell window's tab row
+    {
+      type: "item",
+      label: "a tab in this card's shells",
+      title: "Moves it out of the card into a tab beside the shells; the tab's close puts it back",
+      run: () => tabSection(repo.id, k, "panel"),
+    },
+    {
+      type: "item",
+      label: "a tab in the shells strip",
+      title: "Moves it out of the card into a tab in the strip and the sessions view",
+      run: () => tabSection(repo.id, k, "strip"),
+    },
   ];
 }
 

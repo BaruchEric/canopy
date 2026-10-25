@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -54,8 +54,10 @@ import { NewShellButton } from "./NewShell";
 import { NARROW, useMedia } from "../media";
 import { splitKey } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
-import { OVER_PAGE } from "../surface";
-import { PaneHead, Seams, TabMenu, boxStyle, openedSince, termIds, usePaneDrag, useSplits } from "./SessionPanes";
+import { OVER_PAGE, SECTION_WORD } from "../surface";
+import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, openedSince, termIds, usePaneDrag, useSplits } from "./SessionPanes";
+import { isSectionTab, isSectionTabId, sectionTabLabel, sectionTabsAt, tabbableKeys, type SectionTab } from "../sectiontabs";
+import { SectionTabView } from "./SectionTab";
 
 /** The design tokens the terminal paints with, resolved through a probe
  *  element so `light-dark()` collapses to the scheme in force. */
@@ -992,6 +994,8 @@ export function TermTabs({
   panes,
   focus,
   onGrab,
+  sections,
+  sectionLabel = sectionTabLabel,
 }: {
   terms: TermTab[];
   active: string | null;
@@ -1013,8 +1017,12 @@ export function TermTabs({
   focus?: TermTab | null;
   /** a press on a tab, which may turn into a drag onto a pane */
   onGrab?: (id: string, e: PointerEvent<HTMLElement>) => void;
+  /** the cards' sections sitting as tabs here (FR-030), after the shells */
+  sections?: readonly SectionTab[];
+  sectionLabel?: (t: SectionTab) => string;
 }) {
   const closeTerm = useStore((s) => s.closeTerm);
+  const untabSection = useStore((s) => s.untabSection);
   const labels = tabLabels(terms);
   return (
     <div className="term-tabs" role="tablist" aria-label="Open shells">
@@ -1073,6 +1081,60 @@ export function TermTabs({
               onClick={(e) => {
                 e.stopPropagation();
                 closeTerm(t.id);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+      {sections?.map((t) => {
+        const label = sectionLabel(t);
+        const on = t.id === active;
+        return (
+          <div
+            key={t.id}
+            role="tab"
+            tabIndex={on ? 0 : -1}
+            aria-selected={on}
+            className={`term-tab sec-tab${on ? " on" : ""}`}
+            title={`${label}: a section of the card, as a tab`}
+            onClick={() => onShow(t.id)}
+            onPointerDown={onGrab && ((e) => onGrab(t.id, e))}
+            onContextMenu={
+              onMenu &&
+              ((e) => {
+                e.preventDefault();
+                onMenu(t.id, e.currentTarget.getBoundingClientRect(), false);
+              })
+            }
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onShow(t.id);
+              } else if (onMenu && e.key === "ContextMenu") {
+                e.preventDefault();
+                onMenu(t.id, e.currentTarget.getBoundingClientRect(), false);
+              }
+            }}
+          >
+            <span className="sec-tab-mark" aria-hidden="true">
+              §
+            </span>
+            <span className="term-tab-name">{label}</span>
+            {(panes?.[t.id] ?? 0) > 1 && (
+              <span className="term-tab-panes" title={`split into ${panes?.[t.id]} panes`}>
+                {panes?.[t.id]}
+              </span>
+            )}
+            <button
+              type="button"
+              className="term-x"
+              aria-label={`Put ${label} back in its card`}
+              title="back to the card"
+              onClick={(e) => {
+                e.stopPropagation();
+                untabSection(t.id);
               }}
             >
               ×
@@ -1356,9 +1418,23 @@ export function TermDock() {
   const [mode, setMode] = useStripMode();
   const spot = shellSpot(mode, false);
   const strip = terms.filter((t) => t.place === "strip");
+  // the cards' sections sitting as tabs here (FR-030); the strip lays its
+  // tabs out one at a time, and the sessions view splits them
+  const allSectionTabs = useStore((s) => s.settings.sectionTabs);
+  const stripSection = useStore((s) => s.stripSection);
+  const showStripSection = useStore((s) => s.showStripSection);
+  const repos = useStore((s) => s.repos);
+  const sections = sectionTabsAt(allSectionTabs, "strip");
+  // with no shell showing (none left, or a reload), the last section shows
+  const current =
+    stripSection && sections.some((t) => t.id === stripSection)
+      ? stripSection
+      : strip.some((t) => t.id === activeTerm)
+        ? activeTerm
+        : (sections[sections.length - 1]?.id ?? activeTerm);
   useLeaveOnEscape(mode, setMode);
 
-  if (strip.length === 0) return null;
+  if (strip.length === 0 && sections.length === 0) return null;
   const leave = () => {
     setMode("normal");
     refocus(dock.current);
@@ -1384,8 +1460,10 @@ export function TermDock() {
         )}
         <TermTabs
           terms={strip}
-          active={activeTerm}
-          onShow={showTerm}
+          sections={sections}
+          sectionLabel={(t) => sectionTabLabel(t, repos.find((r) => r.id === t.repoId)?.name ?? idText(t.repoId))}
+          active={current}
+          onShow={(id) => (isSectionTabId(id) ? showStripSection(id) : showTerm(id))}
           caption="shells"
           end={
             <>
@@ -1404,7 +1482,14 @@ export function TermDock() {
         {mode === "focus" && <FrontOthers set="strip" />}
         <div className="term-body">
           {strip.map((t) => (
-            <TermView key={viewKey(t)} tab={t} active={t.id === activeTerm} />
+            <TermView key={viewKey(t)} tab={t} active={t.id === current} />
+          ))}
+          {sections.map((t) => (
+            <div key={t.id} className="ss-pane sec-pane" hidden={t.id !== current}>
+              <div className="ss-pane-body sec-pane-body">
+                <SectionTabView tab={t} />
+              </div>
+            </div>
           ))}
         </div>
         {mode === "focus" && <FocusGrips box={dock} />}
@@ -1431,16 +1516,30 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const { mode: chosenMode, placed: chosenPlace, setMode, bench } = usePanelShellMode(repo.id);
   const frontPick = useStore((s) => (s.front?.kind === "project" && s.front.repoId === repo.id ? s.front.pick : null));
   const mine = terms.filter((t) => t.place === "panel" && t.repoId === repo.id);
+  // the card's sections sitting as tabs here (FR-030), after the shells
+  const allSectionTabs = useStore((s) => s.settings.sectionTabs);
+  const sections = useMemo(() => sectionTabsAt(allSectionTabs, "panel", repo.id), [allSectionTabs, repo.id]);
+  const tabSection = useStore((s) => s.tabSection);
+  const untabSection = useStore((s) => s.untabSection);
+  const order = useStore((s) => s.settings.sectionOrder);
+  const hiddenSections = useStore((s) => s.settings.sectionsHidden);
   const closeTerm = useStore((s) => s.closeTerm);
   const renameTerm = useStore((s) => s.renameTerm);
   const narrow = useMedia(NARROW);
   const [chosen, setChosen] = useState<string | null>(null);
-  // the newest shell shows until another tab is picked
-  const latest = mine[mine.length - 1]?.id ?? null;
+  // the newest shell shows until another tab is picked, and so does a
+  // section just made a tab
+  const latest = mine[mine.length - 1]?.id ?? sections[sections.length - 1]?.id ?? null;
   const [seenLatest, setSeenLatest] = useState(latest);
   if (latest !== seenLatest) {
     setSeenLatest(latest);
     setChosen(latest);
+  }
+  const newestSection = sections[sections.length - 1]?.id ?? null;
+  const [seenSection, setSeenSection] = useState(newestSection);
+  if (newestSection !== seenSection) {
+    setSeenSection(newestSection);
+    if (newestSection) setChosen(newestSection);
   }
   // a shell brought here from another set's list shows, once
   const [seenPick, setSeenPick] = useState(frontPick);
@@ -1448,11 +1547,14 @@ export function PanelShells({ repo }: { repo: Repo }) {
     setSeenPick(frontPick);
     if (mine.some((t) => t.id === frontPick)) setChosen(frontPick);
   }
-  const active = mine.some((t) => t.id === chosen) ? chosen : latest;
+  const active = mine.some((t) => t.id === chosen) || sections.some((t) => t.id === chosen) ? chosen : latest;
   // Split shells (FR-026), as the sessions view has them: the row shows a
-  // group as one tab, and the panes of the one showing share the body.
+  // group as one tab, and the panes of the one showing share the body. A
+  // section tab is a pane like a shell.
   const { groups, write: writeSplits } = useSplits("panel");
-  const { row, panes } = rowOf(mine, groups);
+  const { row, panes } = rowOf<TermTab | SectionTab>([...mine, ...sections], groups);
+  const termRow = row.filter((t): t is TermTab => !isSectionTab(t));
+  const sectionRow = row.filter(isSectionTab);
   const head = headOf(row, groups, active);
   const [draft, setDraft] = useState<PaneTree | null>(null);
   const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
@@ -1488,7 +1590,8 @@ export function PanelShells({ repo }: { repo: Repo }) {
     const next = g && id === active ? neighbourOf(g, id) : null;
     if (next) setChosen(next);
     writeSplits((gs) => leaveGroup(gs, id));
-    closeTerm(id);
+    if (isSectionTabId(id)) untabSection(id);
+    else closeTerm(id);
   };
   const { drag, grab, preview } = usePaneDrag(body, targets, (id, target, edge) => {
     writeSplits((g) => splitIn(g, target, id, edge));
@@ -1520,7 +1623,7 @@ export function PanelShells({ repo }: { repo: Repo }) {
   const spot = shellSpot(mode, dockless());
   useLeaveOnEscape(mode, setMode);
 
-  if (mine.length === 0)
+  if (mine.length === 0 && sections.length === 0)
     return bench ? (
       <section className="panel-shells bench-empty" aria-label={`Shells at ${repo.name}`}>
         <p className="panel-clean">
@@ -1563,7 +1666,8 @@ export function PanelShells({ repo }: { repo: Repo }) {
           keep running: unmounting a TermView hangs up its pty. */}
         <div className="panel-shells-body" hidden={closed}>
           <TermTabs
-            terms={row}
+            terms={termRow}
+            sections={sectionRow}
             active={head}
             onShow={showRowTab}
             panes={panes}
@@ -1628,6 +1732,37 @@ export function PanelShells({ repo }: { repo: Repo }) {
                 </div>
               );
             })}
+            {sections.map((t) => {
+              const part = boxes?.[t.id];
+              const inView = boxes ? part !== undefined : t.id === active;
+              const on = t.id === active;
+              return (
+                <div
+                  key={t.id}
+                  className={`ss-pane sec-pane${on ? " on" : ""}${part ? " split" : ""}`}
+                  hidden={!inView}
+                  style={part ? boxStyle(part) : undefined}
+                  onPointerDownCapture={() => {
+                    if (inView && !on) setChosen(t.id);
+                  }}
+                >
+                  {inView && (
+                    <SectionPaneHead
+                      label={sectionTabLabel(t)}
+                      grouped={part !== undefined}
+                      canSplit
+                      onGrab={(e) => grab(t.id, e)}
+                      onSplit={() => splitFrom(t.id, "right")}
+                      onClose={() => closePane(t.id)}
+                      onMenu={(at) => setMenu({ id: t.id, at })}
+                    />
+                  )}
+                  <div className="ss-pane-body sec-pane-body">
+                    <SectionTabView tab={t} />
+                  </div>
+                </div>
+              );
+            })}
             {tree && group && (
               <Seams
                 tree={tree}
@@ -1657,6 +1792,10 @@ export function PanelShells({ repo }: { repo: Repo }) {
               splitFrom(id, edge);
             }}
             onLeave={(id) => writeSplits((gs) => leaveGroup(gs, id))}
+            sections={sections}
+            onUntab={closePane}
+            sectionsFor={() => tabbableKeys(allSectionTabs, repo, order, hiddenSections)}
+            onAddSection={(id, k) => tabSection(id, k, "panel")}
           />
         )}
       </section>
@@ -1696,6 +1835,59 @@ export function ShellSolo({ id }: { id: string }) {
   const [exited, setExited] = useState(false);
   const zoom = useShellZoom("window");
   const body = useRef<HTMLDivElement>(null);
+  // The repo's sections sitting as tabs beside the shell (FR-030), split
+  // with it as the card's shells are. The shell is the window's own, not
+  // one of the store's, so the split groups are told its id.
+  const allSectionTabs = useStore((s) => s.settings.sectionTabs);
+  const order = useStore((s) => s.settings.sectionOrder);
+  const hiddenSections = useStore((s) => s.settings.sectionsHidden);
+  const tabSection = useStore((s) => s.tabSection);
+  const untabSection = useStore((s) => s.untabSection);
+  const sections = useMemo(() => sectionTabsAt(allSectionTabs, "window", id), [allSectionTabs, id]);
+  const shellIds = useMemo(() => (tab ? [tab.id] : []), [tab]);
+  const { groups, write: writeSplits } = useSplits("window", shellIds);
+  const narrow = useMedia(NARROW);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const newest = sections[sections.length - 1]?.id ?? null;
+  const [seenNewest, setSeenNewest] = useState(newest);
+  if (newest !== seenNewest) {
+    setSeenNewest(newest);
+    if (newest) setChosen(newest);
+  }
+  const ids = [...shellIds, ...sections.map((t) => t.id)];
+  const active = chosen && ids.includes(chosen) ? chosen : (ids[0] ?? null);
+  const { row, panes } = rowOf(
+    ids.map((x) => ({ id: x })),
+    groups,
+  );
+  const sectionRow = sections.filter((t) => row.some((r) => r.id === t.id));
+  const head = headOf(row, groups, active);
+  const group = active ? groupOf(groups, active) : undefined;
+  const [draft, setDraft] = useState<PaneTree | null>(null);
+  const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
+  const tree = narrow || !group ? null : draft && hasPane(draft, active ?? "") ? draft : group;
+  const boxes = tree ? boxesOf(tree) : null;
+  const targets: Record<string, Box> = boxes ?? (active ? { [active]: { x: 0, y: 0, w: 1, h: 1 } } : {});
+  const { drag, grab, preview } = usePaneDrag(body, targets, (moved, target, edge) => {
+    writeSplits((g) => splitIn(g, target, moved, edge));
+    setChosen(moved);
+  });
+  // a tab in the row: a split one stays on the pane focused in it
+  const showRowTab = (x: string) => {
+    const g = groupOf(groups, x);
+    setChosen(g && active && hasPane(g, active) ? active : x);
+  };
+  // the window has one shell, so a section's split puts it beside
+  const shellBeside = (x: string, edge: Edge) => {
+    if (tab) writeSplits((g) => splitIn(g, x, tab.id, edge));
+  };
+  const closeSection = (x: string) => {
+    writeSplits((gs) => leaveGroup(gs, x));
+    untabSection(x);
+    if (active === x) setChosen(tab?.id ?? null);
+  };
+  const addable = repo ? tabbableKeys(allSectionTabs, repo, order, hiddenSections) : [];
+  const shellBox = tab ? boxes?.[tab.id] : undefined;
 
   useEffect(() => {
     if (tab) nameShellHere(tab.id);
@@ -1725,6 +1917,21 @@ export function ShellSolo({ id }: { id: string }) {
             label={`the shell at ${name ?? idText(id)}`}
             groups={[
               { label: `shells · ${SPOT_WORD.window}`, entries: [zoom] },
+              ...(addable.length > 0
+                ? [
+                    {
+                      label: "a section as a tab",
+                      entries: addable.map(
+                        (k): GearEntry => ({
+                          type: "item",
+                          label: SECTION_WORD[k],
+                          title: `Moves ${SECTION_WORD[k]} out of the card into a tab beside this shell`,
+                          run: () => tabSection(id, k, "window"),
+                        }),
+                      ),
+                    },
+                  ]
+                : []),
               {
                 label: "share",
                 entries: shareEntries({
@@ -1741,10 +1948,95 @@ export function ShellSolo({ id }: { id: string }) {
           whole grove ↗
         </a>
       </header>
+      {tab && sections.length > 0 && (
+        <TermTabs
+          terms={[]}
+          sections={sectionRow}
+          active={head}
+          onShow={showRowTab}
+          panes={panes}
+          focus={null}
+          onGrab={narrow ? undefined : grab}
+          onMenu={(x, at) => setMenu({ id: x, at })}
+          caption=""
+          lead={
+            row.some((r) => r.id === tab.id) && (
+              <div
+                role="tab"
+                tabIndex={head === tab.id ? 0 : -1}
+                aria-selected={head === tab.id}
+                className={`term-tab${head === tab.id ? " on" : ""}${exited ? " exited" : ""}`}
+                title={tab.path}
+                onClick={() => showRowTab(tab.id)}
+                onPointerDown={narrow ? undefined : (e) => grab(tab.id, e)}
+              >
+                <span className={`dot ${exited ? "faint" : "moss"}`} aria-hidden="true" />
+                <span className="term-tab-name">{name ?? idText(id)}</span>
+                {(panes[tab.id] ?? 0) > 1 && (
+                  <span className="term-tab-panes" title={`split into ${panes[tab.id]} panes`}>
+                    {panes[tab.id]}
+                  </span>
+                )}
+              </div>
+            )
+          }
+        />
+      )}
       {tab ? (
-        <div className="term-body" ref={body}>
+        <div className={`term-body${drag ? " ss-dragging" : ""}`} ref={body}>
           <ShellSpotHere.Provider value="window">
-            <TermView tab={tab} active onExit={() => setExited(true)} />
+            {/* one shape with or without section tabs, so the first tab
+                never remounts the shell */}
+            <div
+              className={`ss-pane${tab.id === active ? " on" : ""}${shellBox ? " split" : ""}`}
+              hidden={boxes ? shellBox === undefined : tab.id !== active}
+              style={shellBox ? boxStyle(shellBox) : undefined}
+              onPointerDownCapture={() => setChosen(tab.id)}
+            >
+              <div className="ss-pane-body">
+                <TermView tab={tab} active onExit={() => setExited(true)} />
+              </div>
+            </div>
+            {sections.map((t) => {
+              const part = boxes?.[t.id];
+              const inView = boxes ? part !== undefined : t.id === active;
+              return (
+                <div
+                  key={t.id}
+                  className={`ss-pane sec-pane${t.id === active ? " on" : ""}${part ? " split" : ""}`}
+                  hidden={!inView}
+                  style={part ? boxStyle(part) : undefined}
+                  onPointerDownCapture={() => setChosen(t.id)}
+                >
+                  {inView && (
+                    <SectionPaneHead
+                      label={sectionTabLabel(t)}
+                      grouped={part !== undefined}
+                      canSplit={!(group && hasPane(group, tab.id))}
+                      onGrab={(e) => grab(t.id, e)}
+                      onSplit={() => shellBeside(t.id, "right")}
+                      onClose={() => closeSection(t.id)}
+                      onMenu={(at) => setMenu({ id: t.id, at })}
+                    />
+                  )}
+                  <div className="ss-pane-body sec-pane-body">
+                    <SectionTabView tab={t} />
+                  </div>
+                </div>
+              );
+            })}
+            {tree && group && (
+              <Seams
+                tree={tree}
+                body={() => body.current}
+                onDraft={setDraft}
+                onCommit={(path, at) => {
+                  const first = paneIds(group)[0];
+                  if (first) writeSplits((gs) => gs.map((g) => (hasPane(g, first) ? setAt(g, path, at) : g)));
+                }}
+              />
+            )}
+            {preview}
           </ShellSpotHere.Provider>
         </div>
       ) : waiting ? (
@@ -1754,6 +2046,21 @@ export function ShellSolo({ id }: { id: string }) {
           No repo called {idText(id)} under {root}, or none with a folder to open a shell in.{" "}
           <a href={groveUrl()}>Open the whole grove</a> instead.
         </p>
+      )}
+      {menu && (
+        <TabMenu
+          id={menu.id}
+          at={menu.at}
+          tabs={[]}
+          inRow={false}
+          grouped={groupOf(groups, menu.id) !== undefined}
+          onClose={() => setMenu(null)}
+          onRename={() => {}}
+          onSplit={shellBeside}
+          onLeave={(x) => writeSplits((gs) => leaveGroup(gs, x))}
+          sections={sections}
+          onUntab={closeSection}
+        />
       )}
     </div>
   );

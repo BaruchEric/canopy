@@ -95,6 +95,7 @@ import {
   zoomStyle,
 } from "./Surface";
 import { SECTION_WORD, foldKeys, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
+import { sectionApplies, tabbedKeys } from "../sectiontabs";
 import { openElsewhere, soloUrl } from "../routes";
 import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys, useFullscreenExit } from "../fullscreen";
 import { copyText } from "../share";
@@ -1274,28 +1275,29 @@ function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
 /** One section of a repo's panel by its key, or nothing where it does not
  *  apply (a preview for a repo on another host). */
 export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
+  // sectionApplies holds which sections a repo has nothing for: a branch
+  // run, the files, the tasks and the agents on another host's disk, an
+  // unscanned spec, a preview of another backend's ports
+  if (!sectionApplies(k, repo)) return null;
   switch (k) {
     case "changes":
       return <ChangesSection repo={repo} />;
     case "landing":
-      // a branch run works in a worktree on the backend's own disk
-      return repo.forge ? null : <LandingSection repo={repo} />;
+      return <LandingSection repo={repo} />;
     case "search":
       return <SearchSection repo={repo} />;
     case "files":
-      return repo.forge ? null : <FinderSection repo={repo} />;
+      return <FinderSection repo={repo} />;
     case "history":
       return <History repo={repo} />;
     case "peers":
       return <PeersSection repo={repo} />;
     case "spec":
-      // the scan reads the spec of a checkout on the backend's own disk only
       return repo.spec === undefined ? null : <SpecSection repo={repo} state={repo.spec} />;
     case "preview":
-      // the preview proxies the checkout's own backend's ports
-      return repo.host ? null : <PreviewSection repo={repo} />;
+      return <PreviewSection repo={repo} />;
     case "tasks":
-      return repo.forge ? null : <TasksSection repo={repo} />;
+      return <TasksSection repo={repo} />;
     case "health":
       return <HealthSection repo={repo} />;
     case "launch":
@@ -1303,7 +1305,7 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
     case "claude":
       return <ClaudeSection repo={repo} />;
     case "agents":
-      return repo.forge ? null : <AgentsSection repo={repo} />;
+      return <AgentsSection repo={repo} />;
   }
 }
 
@@ -2526,6 +2528,9 @@ export function RepoPanel({
   const many = useStore(multi);
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);
+  // a section sitting as a tab in a shell window is out of the card (FR-030)
+  const sectionTabs = useStore((s) => s.settings.sectionTabs);
+  const tabbed = useMemo(() => tabbedKeys(sectionTabs, id), [sectionTabs, id]);
   const level = useStore((s) => s.settings.level);
   // "show more" on a guided panel, until the panel closes or shows another repo
   const [more, setMore] = useState(false);
@@ -2957,7 +2962,7 @@ export function RepoPanel({
             <p className="panel-error">Could not read this repo: {repo.error}</p>
           ) : (
             order
-              .filter((k) => !hiddenSections.includes(k))
+              .filter((k) => !hiddenSections.includes(k) && !tabbed.has(k))
               .map((k) => <PanelSection key={k} k={k} repo={repo} />)
           )}
         </>

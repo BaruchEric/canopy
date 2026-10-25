@@ -6539,6 +6539,33 @@ button.ss-scope:hover {
   flex: 1;
   min-height: 0;
 }
+/* a card's section as a tab or pane in a shell window (FR-030): the
+   panel's look around it, filling the pane and scrolling inside it */
+.sec-pane-body > .sec-tab-panel {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  border-right: 0;
+}
+.sec-tab-panel > .panel-body {
+  padding-bottom: 8px;
+}
+.sec-tab-mark {
+  flex: none;
+  color: var(--ink-faint);
+  font-size: 11px;
+  line-height: 1;
+}
+.sec-tab-gone {
+  padding: 12px;
+}
+.ss-tabmenu-sub {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0 2px 10px;
+  padding-left: 4px;
+  border-left: 1px solid var(--hair);
+}
 .ss-pane-head {
   flex: none;
   display: flex;

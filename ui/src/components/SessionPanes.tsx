@@ -7,29 +7,41 @@ import { backendOf } from "../registry";
 import { atFrom, dropBox, edgeAt, pruneGroups, setAt, seamsOf, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
 import { connOf, useStore } from "../store";
 import type { TermTab } from "../term";
+import { sectionTabsAt, type SectionPlace, type SectionTab } from "../sectiontabs";
+import { SECTION_WORD, type SectionKey } from "../surface";
 import { useShellAgent } from "./AgentButtons";
 import { handOff } from "./Handoff";
 
 /** a part of the main pane as an inline style, in percent */
 export const boxStyle = (b: Box): CSSProperties => ({ left: `${b.x * 100}%`, top: `${b.y * 100}%`, width: `${b.w * 100}%`, height: `${b.h * 100}%` });
 
-/** where split groups are kept: the sessions view's strip shells, or the
- *  repo panels' shells */
-type SplitsKey = "sessionSplits" | "panelSplits";
-const SPLITS_OF: Record<"strip" | "panel", SplitsKey> = { strip: "sessionSplits", panel: "panelSplits" };
+/** where split groups are kept: the sessions view's strip shells, the
+ *  repo panels' shells, or a shell window's */
+type SplitsKey = "sessionSplits" | "panelSplits" | "windowSplits";
+const SPLITS_OF: Record<SectionPlace, SplitsKey> = { strip: "sessionSplits", panel: "panelSplits", window: "windowSplits" };
 
-/** The saved split groups for one place's shells, with the shells since
- *  closed taken out, and a writer that reads them fresh, so two changes in
- *  one handler both land. */
-export function useSplits(place: "strip" | "panel") {
+/** every tab at `place` that a split may hold: its shells, the ones named
+ *  in `also` (a shell window's own, which is not in the store), and the
+ *  section tabs there (FR-030) */
+function liveAt(terms: readonly TermTab[], tabs: readonly SectionTab[], place: SectionPlace, also: readonly string[]): Set<string> {
+  return new Set([...terms.filter((t) => t.place === place).map((t) => t.id), ...also, ...sectionTabsAt(tabs, place).map((t) => t.id)]);
+}
+
+const NONE: readonly string[] = [];
+const NO_SECTIONS: readonly SectionTab[] = [];
+
+/** The saved split groups for one place's shells and section tabs, with
+ *  the tabs since closed taken out, and a writer that reads them fresh, so
+ *  two changes in one handler both land. */
+export function useSplits(place: SectionPlace, also: readonly string[] = NONE) {
   const key = SPLITS_OF[place];
   const terms = useStore((s) => s.terms);
+  const tabs = useStore((s) => s.settings.sectionTabs);
   const splits = useStore((s) => s.settings[key]);
-  const groups = useMemo(() => pruneGroups(splits, new Set(terms.filter((t) => t.place === place).map((t) => t.id))), [splits, terms, place]);
+  const groups = useMemo(() => pruneGroups(splits, liveAt(terms, tabs, place, also)), [splits, terms, tabs, place, also]);
   const write = (f: (g: PaneTree[]) => PaneTree[]) => {
     const st = useStore.getState();
-    const live = new Set(st.terms.filter((t) => t.place === place).map((t) => t.id));
-    st.setSetting(key, f(pruneGroups(st.settings[key], live)));
+    st.setSetting(key, f(pruneGroups(st.settings[key], liveAt(st.terms, st.settings.sectionTabs, place, also))));
   };
   return { groups, write };
 }
@@ -138,6 +150,61 @@ const CloseIcon = () => (
     <path d="M18 6 6 18M6 6l12 12" />
   </Icon>
 );
+
+/**
+ * A section tab's pane header (FR-030), shaped as a shell's: the grip, the
+ * section's name, and at the right a split (a new shell beside it) and a
+ * close that puts the section back in its card. A right-click opens the
+ * tab's menu.
+ */
+export function SectionPaneHead({
+  label,
+  grouped,
+  canSplit,
+  onGrab,
+  onSplit,
+  onClose,
+  onMenu,
+}: {
+  label: string;
+  grouped: boolean;
+  /** a new shell can open beside it (a shell window has only its own) */
+  canSplit: boolean;
+  onGrab: (e: PointerEvent<HTMLElement>) => void;
+  onSplit: () => void;
+  onClose: () => void;
+  onMenu: (at: DOMRect) => void;
+}) {
+  return (
+    <div
+      className="ss-pane-head"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenu(e.currentTarget.getBoundingClientRect());
+      }}
+    >
+      {grouped && (
+        <span className="ss-pane-grip" title="Drag onto another pane's edge to move it there" onPointerDown={onGrab}>
+          ⠿
+        </span>
+      )}
+      <span className="sec-tab-mark" aria-hidden="true">
+        §
+      </span>
+      <span className="ss-pane-name">{label}</span>
+      <span className="ss-pane-acts">
+        {canSplit && (
+          <button type="button" aria-label="Split right with a shell" title="Split right: a new shell beside it" onClick={onSplit}>
+            <SplitIcon />
+          </button>
+        )}
+        <button type="button" className="x" aria-label="Back to the card" title="Back to the card: closes the tab, the section goes back in its card" onClick={onClose}>
+          <CloseIcon />
+        </button>
+      </span>
+    </div>
+  );
+}
 
 /**
  * A pane's header: a grip to drag it onto another pane's edge (once there
@@ -332,6 +399,10 @@ export function TabMenu({
   onMove,
   onSplit,
   onLeave,
+  sections = NO_SECTIONS,
+  onUntab,
+  sectionsFor,
+  onAddSection,
 }: {
   id: string;
   at: DOMRect;
@@ -346,14 +417,23 @@ export function TabMenu({
   onMove?: (id: string, by: 1 | -1) => void;
   onSplit: (id: string, edge: Edge) => void;
   onLeave: (id: string) => void;
+  /** the section tabs in the row (FR-030), whose menu is their own */
+  sections?: readonly SectionTab[];
+  /** a section tab closed, its section back in its card */
+  onUntab?: (id: string) => void;
+  /** the sections a shell's repo can add as a tab here, and the add */
+  sectionsFor?: (repoId: string) => SectionKey[];
+  onAddSection?: (repoId: string, key: SectionKey) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
+  const [adding, setAdding] = useState(false);
   // read by the listeners below, set up once
   const close = useRef(onClose);
   close.current = onClose;
   const hideTerm = useStore((s) => s.hideTerm);
   const closeTerm = useStore((s) => s.closeTerm);
   const tab = tabs.find((t) => t.id === id);
+  const section = sections.find((t) => t.id === id);
   const i = tabs.findIndex((t) => t.id === id);
   useEffect(() => {
     box.current?.querySelector("button")?.focus();
@@ -370,13 +450,35 @@ export function TabMenu({
       window.removeEventListener("keydown", key, true);
     };
   }, []);
-  if (!tab) return null;
   const act = (f: () => void) => () => {
     onClose();
     f();
   };
   const left = Math.max(8, Math.min(at.left, window.innerWidth - 200));
   const top = Math.max(8, Math.min(at.bottom + 2, window.innerHeight - 280));
+  if (section)
+    return (
+      <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The ${SECTION_WORD[section.key]} tab`} style={{ top, left }}>
+        <button type="button" role="menuitem" title="A shell beside it, on its right" onClick={act(() => onSplit(id, "right"))}>
+          split right
+        </button>
+        <button type="button" role="menuitem" title="A shell beside it, below" onClick={act(() => onSplit(id, "bottom"))}>
+          split down
+        </button>
+        {grouped && (
+          <button type="button" role="menuitem" title="Its own tab again" onClick={act(() => onLeave(id))}>
+            out of the split
+          </button>
+        )}
+        {onUntab && (
+          <button type="button" role="menuitem" title="Closes the tab and puts the section back in its card" onClick={act(() => onUntab(id))}>
+            back to the card
+          </button>
+        )}
+      </div>
+    );
+  if (!tab) return null;
+  const addable = sectionsFor && onAddSection && tab.task === undefined ? sectionsFor(tab.repoId) : [];
   return (
     <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The tab at ${tab.label ?? tab.name}`} style={{ top, left }}>
       <button type="button" role="menuitem" disabled={!inRow} onClick={act(() => onRename(id))}>
@@ -397,6 +499,20 @@ export function TabMenu({
         <button type="button" role="menuitem" title="Its own tab again; the shell keeps running" onClick={act(() => onLeave(id))}>
           out of the split
         </button>
+      )}
+      {addable.length > 0 && (
+        <button type="button" role="menuitem" aria-expanded={adding} title={`Moves a section out of ${tab.name}'s card into a tab here`} onClick={() => setAdding(!adding)}>
+          a section as a tab {adding ? "▾" : "▸"}
+        </button>
+      )}
+      {adding && (
+        <div className="ss-tabmenu-sub">
+          {addable.map((k) => (
+            <button key={k} type="button" role="menuitem" onClick={act(() => onAddSection?.(tab.repoId, k))}>
+              {SECTION_WORD[k]}
+            </button>
+          ))}
+        </div>
       )}
       {onMove && (
         <>

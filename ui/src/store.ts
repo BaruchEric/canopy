@@ -7,7 +7,8 @@ import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
-import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN } from "./surface";
+import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
+import { addSectionTab, dropSectionTab, sectionTabId, type SectionPlace } from "./sectiontabs";
 import { termFontSize } from "./touch";
 import { isPresetId, matchProfile, type ProfileFields } from "../../src/core/screenlayouts";
 import { deviceHere, neverArranged, screenHere } from "./screenprofiles";
@@ -892,6 +893,9 @@ export interface CanopyState {
   /** saved tabs of a backend that has not answered yet (or is hidden),
    *  kept in the saved layout until it does */
   parkedTerms: TermTab[];
+  /** the section tab (FR-030) the strip and the sessions view show in
+   *  place of `activeTerm`, until a shell's tab is picked again */
+  stripSection: string | null;
   /** which backend's checkout a card that has several stands for, by card key */
   checkoutPref: Record<string, string>;
   /** the shell showing in the strip; null when the strip is empty */
@@ -1076,6 +1080,13 @@ export interface CanopyState {
    *  checkout, and the moved shell's tab in the old one's place */
   landMove: (oldTab: string, fromRepoId: string, toRepoId: string, info: TermInfo) => void;
   showTerm: (id: string) => void;
+  /** a card's section as a tab at a shell window (FR-030), out of the card
+   *  and out of any other place it was a tab; the strip shows it */
+  tabSection: (repoId: string, key: SectionKey, place: SectionPlace) => void;
+  /** a section tab closed, its section back in its card */
+  untabSection: (id: string) => void;
+  /** shows a section tab in the strip and the sessions view */
+  showStripSection: (id: string) => void;
   /** names a tab by hand, and its shell on the backend so every device's
    *  tab says it; a blank label puts its repo's name back */
   renameTerm: (id: string, label: string) => void;
@@ -2072,6 +2083,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   buildsAt: {},
   terms: [],
   parkedTerms: [],
+  stripSection: null,
   checkoutPref: layout.checkoutPref,
   activeTerm: null,
   hiddenTerms: layout.hiddenTerms,
@@ -3940,7 +3952,21 @@ export const useStore = create<CanopyState>((set, get) => ({
       ...(info.place === "panel" ? { ...dockPanel(now, toRepoId), closedSections: unfoldIn(now.closedSections, toRepoId, "shell") } : { activeTerm: info.id }),
     }));
   },
-  showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id } : {})),
+  showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id, stripSection: null } : {})),
+  tabSection: (repoId, key, place) => {
+    const s = get();
+    s.setSetting("sectionTabs", addSectionTab(s.settings.sectionTabs, place, repoId, key));
+    const id = sectionTabId(place, key, repoId);
+    if (place === "strip") set({ stripSection: id });
+    // a folded shell section would hide the new tab
+    if (place === "panel" && closedIn(s, repoId, "shell")) s.toggleSection(repoId, "shell");
+  },
+  untabSection: (id) => {
+    const s = get();
+    s.setSetting("sectionTabs", dropSectionTab(s.settings.sectionTabs, id));
+    if (s.stripSection === id) set({ stripSection: null });
+  },
+  showStripSection: (id) => set((s) => (s.settings.sectionTabs.some((t) => t.id === id && t.place === "strip") ? { stripSection: id } : {})),
   termSocketLabelSent: (id, label) =>
     set((s) => {
       const pending = s.pendingTermLabels[id];
@@ -4405,6 +4431,13 @@ export function dockless(): boolean {
   const route = parseRoute(window.location.search);
   return route.solo || route.shell || route.section !== null || route.agent !== null;
 }
+
+// A strip shell coming forward (a new one, a join, a move) takes the strip
+// back from a section tab showing there (FR-030), so no action that sets
+// activeTerm has to remember to.
+useStore.subscribe((s, prev) => {
+  if (s.stripSection !== null && s.activeTerm !== null && s.activeTerm !== prev.activeTerm) useStore.setState({ stripSection: null });
+});
 
 // Whatever part of the layout a change touched is written as it happens, so
 // no action has to remember to. Only the changed fields go: see saveLayout.
