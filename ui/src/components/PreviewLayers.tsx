@@ -121,6 +121,9 @@ export function DrawLayer({ shapes, onChange, tool, color }: { shapes: readonly 
         if (e.button !== 0 || typing) return;
         const p = inside(box.current, e);
         if (tool === "text") {
+          // the mousedown that would follow moves focus off the input the
+          // moment it opens (its blur closes it), so there is no mousedown
+          e.preventDefault();
           setTyping(p);
           return;
         }

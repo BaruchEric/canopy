@@ -388,6 +388,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   useEffect(() => {
     if (!mode) return;
     const keys = (e: KeyboardEvent) => {
+      // words typed onto the page are the text mark's own; its Esc drops
+      // only that mark
+      if (mode === "draw" && typing(e.target)) return;
       if (e.key === "Escape") {
         if (mode === "pick") pageOff();
         if (mode === "draw") setShapes([]);
