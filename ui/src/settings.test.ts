@@ -47,6 +47,12 @@ describe("loadSettings", () => {
     expect(loadSettings().hideArchived).toBe(true);
     store.set("canopy.settings", JSON.stringify({ hideArchived: false }));
     expect(loadSettings().hideArchived).toBe(false);
+    // the strip splits unless told to show one tab at a time (FR-031)
+    expect(loadSettings().stripSplits).toBe(true);
+    store.set("canopy.settings", JSON.stringify({ stripSplits: false }));
+    expect(loadSettings().stripSplits).toBe(false);
+    store.set("canopy.settings", JSON.stringify({ stripSplits: "no" }));
+    expect(loadSettings().stripSplits).toBe(true);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
   test("zoom, section order and hidden sections survive a reload, repaired", () => {

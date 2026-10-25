@@ -119,6 +119,9 @@ interface Zone {
   targets: Record<string, Box>;
   onDrop: (id: string, target: string, edge: Edge) => void;
   receive?: Receive;
+  /** a tab lands here whole, as a tab of its own, never on an edge: the
+   *  strip showing one tab at a time */
+  whole: boolean;
 }
 
 /** what a shell window does with a tab dragged in from another (FR-031) */
@@ -161,15 +164,23 @@ const hear = (f: () => void) => {
  * DRAG_PX, a drag that lands the pane on the edge of the pane under the
  * pointer (`targets`, parts of `body`). The pane under the pointer may be
  * in another shell window on the page, which lands it there through its
- * `receive` when it takes the tab (FR-031). Escape or a release off every
- * pane leaves things as they were.
+ * `receive` when it takes the tab (FR-031). A window that takes tabs
+ * `whole` has no edges: a tab from elsewhere lands as a tab of its own, and
+ * its own tabs do not split there. Escape or a release off every pane
+ * leaves things as they were.
  */
-export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record<string, Box>, onDrop: (id: string, target: string, edge: Edge) => void, receive?: Receive) {
+export function usePaneDrag(
+  body: RefObject<HTMLElement | null>,
+  targets: Record<string, Box>,
+  onDrop: (id: string, target: string, edge: Edge) => void,
+  receive?: Receive,
+  whole = false,
+) {
   const [drag, setDrag] = useState<PaneDrag | null>(null);
   // read by the listeners, which outlive the render that set them up, and
   // by a drag from another window
-  const live = useRef<Zone>({ body, targets, onDrop, receive });
-  live.current = { body, targets, onDrop, receive };
+  const live = useRef<Zone>({ body, targets, onDrop, receive, whole });
+  live.current = { body, targets, onDrop, receive, whole };
   useEffect(() => {
     ZONES.add(live);
     return () => {
@@ -189,7 +200,7 @@ export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record
       moving = true;
       const zone = zoneAt(ev.clientX, ev.clientY);
       const own = zone === live;
-      const z = zone && (own || zone.current.receive?.accepts(id)) ? zone : null;
+      const z = zone && (own ? !zone.current.whole : zone.current.receive?.accepts(id)) ? zone : null;
       const r = z?.current.body.current?.getBoundingClientRect();
       const fx = r ? (ev.clientX - r.left) / r.width : -1;
       const fy = r ? (ev.clientY - r.top) / r.height : -1;
@@ -233,7 +244,7 @@ export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record
   };
   // the preview shows in the window the pane would land in, this one or not
   const box = over?.target ? targets[over.target] : undefined;
-  const preview = over && box ? <div className="ss-drop" aria-hidden="true" style={boxStyle(dropBox(box, over.edge))} /> : null;
+  const preview = over && box ? <div className="ss-drop" aria-hidden="true" style={boxStyle(whole ? box : dropBox(box, over.edge))} /> : null;
   return { drag, grab, preview };
 }
 

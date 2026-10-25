@@ -192,6 +192,9 @@ export interface Settings {
   sessionSplits: PaneTree[];
   /** the repo panels' split shells, by tab id */
   panelSplits: PaneTree[];
+  /** the strip along the bottom lays a split tab out in panes (FR-031),
+   *  or shows one tab at a time and leaves the splits to the sessions view */
+  stripSplits: boolean;
   /** a shell window's split tabs, by tab id */
   windowSplits: PaneTree[];
   /** the cards' sections sitting as tabs in a shell window (FR-030) */
@@ -252,6 +255,7 @@ export const DEFAULT_SETTINGS: Settings = {
   agentsFollow: false,
   sessionSplits: [],
   panelSplits: [],
+  stripSplits: true,
   windowSplits: [],
   sectionTabs: [],
   itemTabs: [],
@@ -373,6 +377,7 @@ export const SCREEN_SETTINGS = [
   "agentsLayout",
   "sessionSplits",
   "panelSplits",
+  "stripSplits",
   "windowSplits",
   "sectionTabs",
   "itemTabs",
@@ -434,6 +439,7 @@ export function loadSettings(): Settings {
       agentsFollow: typeof saved.agentsFollow === "boolean" ? saved.agentsFollow : DEFAULT_SETTINGS.agentsFollow,
       sessionSplits: splitsOf(saved.sessionSplits),
       panelSplits: splitsOf(saved.panelSplits),
+      stripSplits: typeof saved.stripSplits === "boolean" ? saved.stripSplits : DEFAULT_SETTINGS.stripSplits,
       windowSplits: splitsOf(saved.windowSplits),
       sectionTabs: sectionTabsOf(saved.sectionTabs),
       itemTabs: itemTabsOf(saved.itemTabs),

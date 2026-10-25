@@ -1354,6 +1354,7 @@ function ShellGear({
   showing,
   box,
   bench = false,
+  tabs,
 }: {
   label: string;
   what: string;
@@ -1364,6 +1365,8 @@ function ShellGear({
   /** a pane of a project's bench, whose layout is beside the rest or
    *  filling the bench */
   bench?: boolean;
+  /** how the tabs lay out, where that is a choice (the strip's) */
+  tabs?: GearEntry[];
 }) {
   const spot = useContext(ShellSpotHere);
   const zoom = useShellZoom(spot);
@@ -1387,6 +1390,7 @@ function ShellGear({
       groups={[
         { label: `shells · ${spotWord(spot, what)}`, entries: [zoom] },
         { label: "layout", entries: [...(bench ? benchEntries(mode, setMode) : modeEntries(mode, setMode, what)), ...pop] },
+        ...(tabs ? [{ label: "split tabs", entries: tabs }] : []),
         { label: "new shells open in", entries: landing },
         {
           label: "share",
@@ -1420,6 +1424,7 @@ export function TermDock() {
   const renameTerm = useStore((s) => s.renameTerm);
   const untab = useStore((s) => s.untab);
   const focusSize = useStore((s) => s.focusSize);
+  const setSetting = useStore((s) => s.setSetting);
   const dock = useRef<HTMLElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useStripMode();
@@ -1443,7 +1448,11 @@ export function TermDock() {
         : (pages[pages.length - 1]?.id ?? strip[strip.length - 1]?.id ?? activeTerm);
   // The strip splits as the sessions view does, from the same groups, so a
   // tab dragged in from a card lands on the edge it was dropped on (FR-031).
-  const { groups, write: writeSplits } = useSplits("strip");
+  // Set to one tab at a time, it shows no groups and a tab dropped in lands
+  // as a tab of its own; the sessions view still splits them.
+  const splitsOn = useStore((s) => s.settings.stripSplits);
+  const { groups: saved, write: writeSplits } = useSplits("strip");
+  const groups = splitsOn ? saved : NO_GROUPS;
   const { row, panes } = rowOf<TermTab | PageTab>([...strip, ...pages], groups);
   const termRow = row.filter((t): t is TermTab => !isPageTab(t));
   const pageRow = row.filter(isPageTab);
@@ -1489,23 +1498,24 @@ export function TermDock() {
       writeSplits((g) => splitIn(g, target, id, edge));
       show(id);
     },
-    { accepts: (id) => takes(id, STRIP), drop: (id, target, edge) => void moveTo(id, STRIP, target, edge) },
+    { accepts: (id) => takes(id, STRIP), drop: (id, target, edge) => void (splitsOn ? moveTo(id, STRIP, target, edge) : moveTo(id, STRIP)) },
+    !splitsOn,
   );
   // The split keys, read on the way down before xterm sees them (Ctrl+Shift+D
   // would reach the shell as Ctrl+D and end it), and only while the focus
-  // is in the strip.
-  const keys = useRef({ current, splitFrom });
-  keys.current = { current, splitFrom };
+  // is in the strip. One tab at a time, they still take the key and do nothing.
+  const keys = useRef({ current, splitFrom, splitsOn });
+  keys.current = { current, splitFrom, splitsOn };
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       const edge = splitKey(e);
       if (!edge || document.querySelector(OVER_PAGE)) return;
       const at = document.activeElement;
-      const { current: id, splitFrom: split } = keys.current;
+      const { current: id, splitFrom: split, splitsOn: on } = keys.current;
       if (!id || !(at instanceof Node) || !dock.current?.contains(at)) return;
       e.preventDefault();
       e.stopPropagation();
-      split(id, edge);
+      if (on) split(id, edge);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -1564,6 +1574,22 @@ export function TermDock() {
                 setMode={setMode}
                 showing={strip.find((t) => t.id === activeTerm) ?? null}
                 box={dock}
+                tabs={[
+                  {
+                    type: "item",
+                    label: "split, as the sessions view",
+                    title: "A split tab shows its panes here, and a tab dragged in lands on the edge it is dropped on",
+                    on: splitsOn,
+                    run: () => setSetting("stripSplits", true),
+                  },
+                  {
+                    type: "item",
+                    label: "one at a time",
+                    title: "One tab shows at a time and a tab dragged in lands as a tab of its own; the sessions view still splits them",
+                    on: !splitsOn,
+                    run: () => setSetting("stripSplits", false),
+                  },
+                ]}
               />
             </>
           }
@@ -2000,6 +2026,9 @@ export function PanelShells({ repo }: { repo: Repo }) {
     </ShellSpotHere.Provider>
   );
 }
+
+/** no split groups, for the strip showing one tab at a time */
+const NO_GROUPS: PaneTree[] = [];
 
 /** the strip, as a place a card's tab moves to */
 const STRIP = { place: "strip" as const };
