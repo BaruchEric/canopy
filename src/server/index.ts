@@ -2110,6 +2110,16 @@ function repoById(state: ServerState, id: string): Repo {
   return repo;
 }
 
+/** the image a paste or a design-mode picture sends, or the refusal to
+ *  answer with: empty, or over `PASTE_MAX` */
+async function imageBody(req: Request): Promise<ArrayBuffer | Response> {
+  if (Number(req.headers.get("content-length") ?? 0) > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
+  const bytes = await req.arrayBuffer();
+  if (bytes.byteLength === 0) return json({ error: "the image is empty" }, 400);
+  if (bytes.byteLength > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
+  return bytes;
+}
+
 async function refreshAndBroadcast(
   state: ServerState,
   id: string,
@@ -3317,10 +3327,21 @@ async function handleApi(
     if (host) return json({ error: `this shell runs on ${host}, where a pasted image cannot be saved` }, 400);
     const name = pasteName(live.info.id, req.headers.get("content-type") ?? "", Date.now());
     if (!name) return json({ error: "only a png, jpeg, gif or webp image can be pasted" }, 415);
-    if (Number(req.headers.get("content-length") ?? 0) > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
-    const bytes = await req.arrayBuffer();
-    if (bytes.byteLength === 0) return json({ error: "the image is empty" }, 400);
-    if (bytes.byteLength > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
+    const bytes = await imageBody(req);
+    if (bytes instanceof Response) return bytes;
+    const saved = await savePaste(name, bytes);
+    return json({ path: saved, text: pasteText(saved) }, 201);
+  }
+  if (path === "/api/repos/clip" && method === "POST") {
+    // a picture taken in the preview's design mode (FR-029), saved beside
+    // the pasted images so the repo's agent, in a chat or a shell, can
+    // read it from the path the prompt names
+    const repo = repoById(state, url.searchParams.get("id") ?? "");
+    if (repo.host) return json({ error: `${repo.name} is on ${repo.host}, where a picture cannot be saved` }, 400);
+    const name = pasteName("design", req.headers.get("content-type") ?? "", Date.now());
+    if (!name) return json({ error: "only a png, jpeg, gif or webp image can be saved" }, 415);
+    const bytes = await imageBody(req);
+    if (bytes instanceof Response) return bytes;
     const saved = await savePaste(name, bytes);
     return json({ path: saved, text: pasteText(saved) }, 201);
   }

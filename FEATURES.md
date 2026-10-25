@@ -2,9 +2,80 @@
 
 ## Open
 
-### FR-029 · Design mode's copy and screenshot keys, and a draw mode
-P3 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 12:00 to 19:30), split from FR-027
-While picking in Orca, C copies the hovered element and S screenshots it cropped to its box. A draw mode (pen, arrow, box, text, colours) over the page ends in Copy Markup for pasting into an agent. canopy's picker has neither.
+### FR-046 · Paseo interop study
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo)
+Paseo (getpaseo/paseo, Apache-2.0) has canopy's daemon-plus-clients shape, multi-host model, voice and worktrees, and the native phone apps canopy lacks. A two-half-day study with written thresholds decides between an adapter that speaks its protocol, a landing-queue plugin contributed upstream, or no, which is the default while FR-042 covers the phone.
+Spec: docs/superpowers/specs/2026-10-25-paseo-interop-design.md (2026-10-25); index in 2026-10-25-software-factory-borrowings-design.md.
+
+### FR-045 · The landing queue as a package others can adopt
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25)
+The queue's pure model (states, review sorting, gates reading) and its git half (worktree add, rebase, fast-forward) become a Bun workspace package with no canopy types and a small `land` CLI, so Paseo, Orca or anyone with a CI can run the sort and the gates. No-go by default: go when a second consumer is real. Needs a licence and a name without "canopy" in it (github.com/juliensimon/canopy exists).
+Spec: docs/superpowers/specs/2026-10-25-landing-package-design.md (2026-10-25).
+
+### FR-044 · Harness share in the costs view
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Yegge's "20-25% of all my work")
+Repos marked as the harness (canopy's own, by default) get a share figure in the costs view: the fraction of the window's dollars and Claude sessions that went into canopy itself, eight weeks of plain CSS bars, rust past a per-browser threshold (25%), one quiet inbox line a week at most, and `canopy costs --share`.
+Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25).
+
+### FR-043 · Run transcripts, replay and fork
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
+canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacted and kept 30 days, so a finished run opens after a restart and replays in the sheet. "Fork from here" starts a new branch run from the original's base with `--fork-session`; a fork onto the other harness is a fenced summary handoff. `canopy run export` writes a markdown transcript.
+Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25).
+
+### FR-042 · A PWA with web push for asks and "needs you"
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo, Happy, Orca mobile)
+A manifest and a hand-written service worker that caches the shell only make canopy installable on a phone; web push (VAPID keys under the config dir, subscriptions per browser) tells the phone about a new ask, a sent-back branch, a check that gave up or a trigger event that needs Eric while the page is closed. A push carries the item's key and a title, never a token. Telegram stays for the ranger.
+Spec: docs/superpowers/specs/2026-10-25-pwa-push-design.md (2026-10-25).
+
+### FR-041 · Spec drift and convergence, on a schedule
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode)
+A third trigger source, `schedule` (a cron line, fired by the flows-lock holder, one event per repo per fire, `repo: "*"` for every local repo with a SPEC.md), and a bundled `spec-converge` workflow: a read-only Check step compares SPEC.md with the lockfile, the scripts, the files the code writes and the dated decisions, then a Fix step edits it on a branch. SPEC.md is on the sensitive list, so the fix always waits for a look.
+Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25).
+
+### FR-040 · Pre-edit collision warnings
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)
+canopy already sees every Edit, Write and Bash call a run makes, so it keeps a live touched-path set per run and warns when two runs on one repo, or a queued branch and a working run, touch the same files: a chip on the landing rows, a quiet inbox line, one word into an idle chat. Never a hold. Members of one FR-033 group never collide with each other.
+Spec: docs/superpowers/specs/2026-10-25-collision-warnings-design.md (2026-10-25).
+
+### FR-039 · Per-worktree runtime stacks and a warm worktree pool
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coasts, Treehouse)
+`warm: N` in gates.json keeps prepared worktrees per repo so a branch run starts without `bun install`; a branch run may run the repo's dev task in its own worktree on allotted ports and preview it; a compose task runs per worktree under its own project name and is torn down on land or drop. canopy's own stack on the mini is refused.
+Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25).
+
+### FR-038 · The agent surface: `canopy mcp` and run tokens
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)
+`canopy mcp` is a stdio MCP server whose tools (status, runs, start a branch run, the queue, land, a work note, say, a wake, health) are filtered by the caller's kind; shells and the ranger use it with the tokens they have. A `run` caller kind, minted per run only when the profile turns it on and delivered through a 0600 `--mcp-config` file, lets a run start a child in its own repo (depth 2, three children) and post notes, and can never land, push, open a PR or answer a prompt.
+Spec: docs/superpowers/specs/2026-10-25-agent-surface-design.md (2026-10-25).
+
+### FR-037 · A durable work ledger
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
+A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
+Spec: docs/superpowers/specs/2026-10-25-work-ledger-design.md (2026-10-25).
+
+### FR-036 · Capacity governor: subscription-limit-aware dispatch
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)
+Every start carries a priority (interactive, normal, low); a pure governor holds `low` work past 70% of the five-hour window and `normal` past 90%, never a chat or an ask, and a limit hit makes a run `limited` and retried after the reset rather than failed. A top-bar chip shows each login's windows and their resets (FR-028). The credits lane (an API key funded by the plan's monthly credits for the ranger and low work) is written out and held for Eric, since it reverses the 2026-08-24 decision.
+Spec: docs/superpowers/specs/2026-10-25-capacity-governor-design.md (2026-10-25).
+
+### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
+Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
+Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25).
+
+### FR-034 · Workflow graph: parallel, conditional and manual steps
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)
+Three optional step keys in the markdown format that exists: `after:` (steps ready together run side by side, read-only ones only), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
+Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
+
+### FR-033 · Best-of-N branch runs
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
+The pre-flight runs one note two or three times, across profiles if asked; the members share a group, gates and FR-032 scenarios dry-run on each ready one, a read-only `compare` run ranks them, and the winner is offered "land" by its own sort while the rest drop when it lands. A group sheet shows the members side by side with their diffstat, gates, score and cost. `canopy run --times`.
+Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25).
+
+### FR-032 · Holdout scenario gates in the landing queue
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
+End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` at HEAD sets the run line and the judge mode.
+Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25).
 
 ### FR-028 · What is left on each subscription, in the status line
 P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
@@ -62,6 +133,11 @@ A link, tag, note, move or new category made in one backend's Library shows up i
 Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Phase 1 syncs the data; phase 2 replays folder moves when safe and asks otherwise (Eric's call). Phase 1 is live on the Mac and the mini since 2026-10-24 (d2cc24a, librarySync on for both).
 
 ## Shipped
+
+### FR-029 · Design mode's copy and screenshot keys, and a draw mode
+P3 · added 2026-10-24 · source: Eric (Orca video, Tonbi's AI Garage, 12:00 to 19:30), split from FR-027; Eric again 2026-10-25 (a preview toolbar's pick, remark, draw and clip buttons) · shipped 2026-10-25
+While picking in Orca, C copies the hovered element and S screenshots it cropped to its box. A draw mode (pen, arrow, box, text, colours) over the page ends in Copy Markup for pasting into an agent. canopy's picker has neither. Eric's 2026-10-25 ask adds a clip of any box on the page, a remark on each picture, and the whole batch of picks, clips and notes organized by the agent and sent as one prompt.
+Built 2026-10-25: C copies what the page reports about the element under the pointer, S takes its picture; ⬚ clip drags a box for a picture; ✎ draw puts pen, arrow, box and text marks in four colours over the page and snap takes a picture with them on it. Every picture opens the note form with a thumbnail, is saved on the backend beside pasted images (POST /api/repos/clip) and is named in the prompt for the agent to read; the marks go in words too (markupWords in ui/src/markup.ts). Pictures come from the screen-capture API with this tab preferred (ui/src/shots.ts), one share per session, on an https page or localhost; elsewhere the note goes with the box and the words. With two or more notes the prompt asks the agent to organize them by component and say its plan first. Checked on a scratch server in Chrome with the tab capture auto-picked (playwright-cli): the S key's element picture, a clipped box, a snap with a red arrow and a blue box drawn, three notes in the bar with thumbnails, and the copied prompt naming the three picture files and the marks in words. A still tab sends no new capture frames, so each wait for one is capped at 250 ms.
 
 ### FR-031 · Drag a tab from one shell window into another
 P2 · added 2026-10-24 · source: Eric (canopy chat) · shipped 2026-10-24

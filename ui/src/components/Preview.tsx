@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { backendOf, isHome } from "../registry";
@@ -20,8 +21,12 @@ import {
   saveChoice,
   type PreviewChoice,
 } from "../preview";
-import { annotationsPrompt, devUrl, marksMessage, pickSignal, readPick, type Annotation, type Intent, type Pick } from "../designmode";
+import { annotationsPrompt, devUrl, marksMessage, pickSignal, pickText, readPick, type Annotation, type Clip, type Intent, type Pick, type Rect } from "../designmode";
+import { COLORS, markupWords, type Shape, type Tool } from "../markup";
+import { copyText } from "../share";
+import { NO_SHOTS, Shooter, canShoot, shotError } from "../shots";
 import { PICK_SAID, PickNotes } from "./PickNotes";
+import { ClipLayer, DrawBar, DrawLayer } from "./PreviewLayers";
 import type { ListeningPort, Repo } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
@@ -31,21 +36,45 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
 const PICK_ACK_MS = 2000;
 const PICK_BLOCKED = "this page blocked the picker (CSP?)";
 
-/** The design mode's switch, in the bar and in the bench's float. */
-function PickButton({ on, disabled, toggle }: { on: boolean; disabled?: boolean; toggle: () => void }) {
-  const word = on ? "Stop picking" : "Pick an element on the page to tell the agent about";
+/** what design mode is doing over the frame: picking elements, clipping a
+ *  box for a picture, or drawing marks; null when nothing */
+type Mode = "pick" | "clip" | "draw" | null;
+
+/** a note being written, on an element, a picture, or both */
+interface Pending {
+  pick: Pick | null;
+  clip: Clip | null;
+}
+
+const MODES: { mode: Exclude<Mode, null>; glyph: string; word: string; doing: string; on: string; off: string }[] = [
+  { mode: "pick", glyph: "⌖", word: "pick", doing: "picking", on: "Stop picking", off: "Pick an element on the page to tell the agent about" },
+  { mode: "clip", glyph: "⬚", word: "clip", doing: "clipping", on: "Stop clipping", off: "Drag a box on the page for a picture to tell the agent about" },
+  { mode: "draw", glyph: "✎", word: "draw", doing: "drawing", on: "Stop drawing", off: "Draw on the page, then take a picture of it for the agent" },
+];
+
+/** Design mode's switches, in the bar and in the bench's float. */
+function ModeButtons({ mode, disabled, toggle }: { mode: Mode; disabled?: boolean; toggle: (m: Exclude<Mode, null>) => void }) {
   return (
-    <button
-      type="button"
-      className={`mini preview-pick-btn${on ? " on" : ""}`}
-      onClick={toggle}
-      disabled={disabled}
-      title={word}
-      aria-label={word}
-      aria-pressed={on}
-    >
-      <span aria-hidden="true">⌖</span> {on ? "picking" : "pick"}
-    </button>
+    <>
+      {MODES.map((m) => {
+        const on = mode === m.mode;
+        const word = on ? m.on : m.off;
+        return (
+          <button
+            key={m.mode}
+            type="button"
+            className={`mini preview-pick-btn${on ? " on" : ""}`}
+            onClick={() => toggle(m.mode)}
+            disabled={disabled}
+            title={word}
+            aria-label={word}
+            aria-pressed={on}
+          >
+            <span aria-hidden="true">{m.glyph}</span> {on ? m.doing : m.word}
+          </button>
+        );
+      })}
+    </>
   );
 }
 
@@ -59,7 +88,7 @@ const portLabel = (p: ListeningPort) => (p.command ? `${p.port} · ${p.command}`
  *  the front with the preview as its main pane, and have the preview fill
  *  the panel. Either again puts it back. In the bench there is one: the
  *  preview takes the whole bench, or gives it back. */
-function ModeButtons({ mode, setMode, inBench }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void; inBench: boolean }) {
+function SurfaceButtons({ mode, setMode, inBench }: { mode: SurfaceMode; setMode: (m: SurfaceMode) => void; inBench: boolean }) {
   const focus = mode === "focus";
   const full = mode === "full";
   const word = inBench
@@ -90,6 +119,15 @@ function ModeButtons({ mode, setMode, inBench }: { mode: SurfaceMode; setMode: (
     </>
   );
 }
+
+/** the object URLs of the pictures in a list, let go once the list is */
+const dropThumbs = (list: readonly { clip: Clip | null }[]) => {
+  for (const a of list) if (a.clip?.thumb) URL.revokeObjectURL(a.clip.thumb);
+};
+
+/** whether a key went to something that takes typing */
+const typing = (t: EventTarget | null): boolean =>
+  t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
 /**
  * The in-app browser: the repo's dev server on the backend, framed in the
@@ -140,15 +178,25 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   // counts the frame's loads: a reload inside the page fires load again
   // with the same key, and picking must be turned back on after it
   const [loads, setLoads] = useState(0);
-  const [picking, setPicking] = useState(false);
-  const [picked, setPicked] = useState<Pick | null>(null);
+  const [mode, setMode] = useState<Mode>(null);
+  const picking = mode === "pick";
+  const [pending, setPending] = useState<Pending | null>(null);
   const [pickNote, setPickNote] = useState("");
   const [intent, setIntent] = useState<Intent>("change");
-  // notes left on elements, sent together (FR-027)
+  // notes left on elements and pictures, sent together (FR-027, FR-029)
   const [notes, setNotes] = useState<Annotation[]>([]);
   const [pickBusy, setPickBusy] = useState(false);
   const [pickWarn, setPickWarn] = useState<string | null>(null);
   const [pickStatus, setPickStatus] = useState<{ text: string; bad: boolean } | null>(null);
+  // the draw mode's marks, tool and colour (FR-029)
+  const [shapes, setShapes] = useState<Shape[]>([]);
+  const [tool, setTool] = useState<Tool>("pen");
+  const [color, setColor] = useState(COLORS[0]?.hex ?? "#e5484d");
+  // a picture is being taken: the bars over the frame hide so they stay
+  // out of it
+  const [shooting, setShooting] = useState(false);
+  // the shared tab, kept while design mode has anything going
+  const shooter = useRef<Shooter | null>(null);
   useEffect(() => {
     if (!closed && !known) loadTasks(repo.id).catch(() => {});
   }, [closed, known, repo.id, loadTasks]);
@@ -234,6 +282,57 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     pickingRef.current = picking;
   }, [picking]);
   const ackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pageOff = () => {
+    if (origin) frame.current?.contentWindow?.postMessage({ canopy: "pick", on: false }, origin);
+  };
+
+  /**
+   * A picture of `rect`, a box of the page's viewport, saved on the backend
+   * and opened as a note to write (FR-029): on an element (its own box, the
+   * S key), on a box dragged with the clip tool, or on the page with the
+   * marks drawn over it. The bars over the frame hide first. Where this
+   * browser cannot take pictures the note still opens, saying so. True when
+   * a note opened; a refused share says why in the status line, and an
+   * element keeps its note without the picture.
+   */
+  const takeClip = async (kind: Clip["kind"], rect: Rect, pick: Pick | null, marks: string): Promise<boolean> => {
+    const open = (clip: Clip | null) => {
+      setPending({ pick, clip });
+      setPickNote("");
+      setPickStatus(null);
+    };
+    if (!canShoot()) {
+      open({ kind, path: null, rect, marks, thumb: null });
+      return true;
+    }
+    const fr = frame.current?.getBoundingClientRect();
+    if (!fr) return false;
+    const onScreen = { x: fr.left + rect.x, y: fr.top + rect.y, width: rect.width, height: rect.height };
+    flushSync(() => setShooting(true));
+    try {
+      shooter.current ??= new Shooter();
+      const blob = await shooter.current.shot(onScreen);
+      const thumb = URL.createObjectURL(blob);
+      const saved = await api.clipImage(repo.id, blob).catch((e: unknown) => {
+        URL.revokeObjectURL(thumb);
+        throw e;
+      });
+      open({ kind, path: saved.path, rect, marks, thumb });
+      return true;
+    } catch (e) {
+      setPickStatus({ text: shotError(e), bad: true });
+      if (pick) open(null);
+      return pick !== null;
+    } finally {
+      setShooting(false);
+    }
+  };
+  // the message listener below is bound once per origin; this keeps it on
+  // the current takeClip, whose closure has the current repo and frame
+  const takeClipRef = useRef(takeClip);
+  useEffect(() => {
+    takeClipRef.current = takeClip;
+  });
 
   // each load of the frame (an HMR full reload included) starts a fresh
   // script, so picking is turned on again, and the ack is waited for
@@ -257,13 +356,26 @@ export function PreviewSection({ repo }: { repo: Repo }) {
         return;
       }
       if (signal === "off") {
-        setPicking(false);
+        setMode(null);
         return;
       }
       const got = readPick(event.data);
       if (!got) return;
-      setPicking(false);
-      setPicked(got);
+      if (got.via === "copy") {
+        // the page keeps picking; what it reported goes on the clipboard
+        copyText(pickText(got)).then(
+          () => setPickStatus({ text: `Copied ${got.selector}.`, bad: false }),
+          (e: unknown) => setPickStatus({ text: errText(e), bad: true }),
+        );
+        return;
+      }
+      setMode(null);
+      if (got.via === "shot") {
+        // the page took its outline off the element before it answered
+        void takeClipRef.current("element", got.rect, got, "");
+        return;
+      }
+      setPending({ pick: got, clip: null });
       setPickNote("");
       setPickStatus(null);
     };
@@ -271,26 +383,52 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     return () => window.removeEventListener("message", receive);
   }, [origin]);
 
-  // focus stays in canopy until the pick itself, so Esc is heard here too
+  // focus stays in canopy until the pick itself, so Esc is heard here too,
+  // and so are C and S, which ask the page for the element under the pointer
   useEffect(() => {
-    if (!picking) return;
-    const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setPicking(false);
-      setPickWarn(null);
-      if (origin) frame.current?.contentWindow?.postMessage({ canopy: "pick", on: false }, origin);
+    if (!mode) return;
+    const keys = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        if (mode === "pick") pageOff();
+        if (mode === "draw") setShapes([]);
+        setMode(null);
+        setPickWarn(null);
+        return;
+      }
+      if (mode !== "pick" || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+      const k = e.key.toLowerCase();
+      if (k !== "c" && k !== "s") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (origin) frame.current?.contentWindow?.postMessage({ canopy: "hovered", via: k === "c" ? "copy" : "shot" }, origin);
     };
-    window.addEventListener("keydown", esc);
-    return () => window.removeEventListener("keydown", esc);
-  }, [picking, origin]);
+    window.addEventListener("keydown", keys, true);
+    return () => window.removeEventListener("keydown", keys, true);
+    // pageOff closes over origin alone
+  }, [mode, origin]);
 
   // a pick names a page on one dev server; another port drops it, since
   // the prompt's address is read from the choice when it is sent
   useEffect(() => {
-    setPicked(null);
-    setPicking(false);
-    setNotes([]);
+    setPending((p) => {
+      if (p) dropThumbs([p]);
+      return null;
+    });
+    setMode(null);
+    setShapes([]);
+    setNotes((l) => {
+      dropThumbs(l);
+      return [];
+    });
   }, [port]);
+
+  // the shared tab is let go once design mode has nothing going; the
+  // section going away lets it go too
+  const idle = !mode && !pending && notes.length === 0 && !shooting;
+  useEffect(() => {
+    if (idle) shooter.current?.stop();
+  }, [idle]);
+  useEffect(() => () => shooter.current?.stop(), []);
 
   // the page numbers the elements with notes; each load starts a fresh
   // script, so the marks go again after it
@@ -301,48 +439,71 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   }, [notes, loaded, loads, origin]);
 
   useEffect(() => {
-    if (picked) noteBox.current?.focus();
-  }, [picked]);
+    if (pending) noteBox.current?.focus();
+  }, [pending]);
 
-  const togglePick = () => {
-    const next = !picking;
-    setPicking(next);
+  const toggleMode = (m: Exclude<Mode, null>) => {
+    const next = mode === m ? null : m;
+    if (mode === "pick" && next !== "pick") pageOff();
+    if (mode === "draw" && next !== "draw") setShapes([]);
+    setMode(next);
     setPickWarn(null);
     if (next) {
-      setPicked(null);
+      setPending((p) => {
+        if (p) dropThumbs([p]);
+        return null;
+      });
       setPickStatus(null);
-    } else if (origin) {
-      frame.current?.contentWindow?.postMessage({ canopy: "pick", on: false }, origin);
     }
+  };
+  const cancelPending = () => {
+    setPending((p) => {
+      if (p) dropThumbs([p]);
+      return null;
+    });
   };
   const pageUrl = choice ? devUrl(choice.port, choice.path) : "";
   // the note being written joins the list; "add" goes back to picking for
   // the next element, "send now" sends the lot to the repo's agent
   const addPick = (then: "pick" | "send") => {
-    if (!picked || !pickNote.trim() || pickBusy) return;
-    const all = [...notes, { pick: picked, note: pickNote.trim(), intent }];
+    if (!pending || !pickNote.trim() || pickBusy) return;
+    const all = [...notes, { pick: pending.pick, clip: pending.clip, note: pickNote.trim(), intent }];
     setNotes(all);
-    setPicked(null);
+    setPending(null);
     setPickNote("");
     setPickStatus(null);
     if (then === "pick") {
       setPickWarn(null);
-      setPicking(true);
+      setMode("pick");
       return;
     }
     setPickBusy(true);
     sendToAgent(repo.id, annotationsPrompt(all, pageUrl))
       .then((how) => {
+        dropThumbs(all);
         setNotes([]);
         setPickStatus({ text: PICK_SAID[how], bad: false });
       })
       .catch((e: unknown) => setPickStatus({ text: errText(e), bad: true }))
       .finally(() => setPickBusy(false));
   };
-  const pickLine = pickWarn
-    ? { text: pickWarn, bad: true }
-    : pickStatus ??
-      (picking ? { text: notes.length ? "Click another element, or send the notes. Esc stops." : "Click an element on the page. Esc stops.", bad: false } : null);
+  // a picture of the whole frame with the marks on it, then a note
+  const snap = () => {
+    const fr = frame.current?.getBoundingClientRect();
+    if (!fr) return;
+    void takeClipRef.current("markup", { x: 0, y: 0, width: Math.round(fr.width), height: Math.round(fr.height) }, null, markupWords(shapes)).then((opened) => {
+      if (!opened) return;
+      setShapes([]);
+      setMode(null);
+    });
+  };
+  const hint =
+    mode === "pick"
+      ? `${notes.length ? "Click another element" : "Click an element"} on the page; C copies the one under the pointer, S takes its picture. Esc stops.`
+      : mode === "clip"
+        ? "Drag a box on the page to take its picture. Esc stops."
+        : null; // the draw bar is its own hint
+  const pickLine = pickWarn ? { text: pickWarn, bad: true } : pickStatus ?? (hint ? { text: hint, bad: false } : null);
 
   const go = () => {
     if (!choice) return;
@@ -369,7 +530,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       head={summary}
       title="The repo's dev server, running on the backend, shown here"
       noCapture={url ? "The page in the preview is another origin, which a capture cannot see into" : undefined}
-      tools={(mode, setMode) => <ModeButtons mode={mode} setMode={setMode} inBench={inBench} />}
+      tools={(m, setM) => <SurfaceButtons mode={m} setMode={setM} inBench={inBench} />}
     >
       <div className="preview-body">
         {blocked ? (
@@ -470,7 +631,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   >
                     ⟳
                   </button>
-                  <PickButton on={picking} disabled={!url} toggle={togglePick} />
+                  <ModeButtons mode={mode} disabled={!url || shooting} toggle={toggleMode} />
                   <input
                     className="preview-path"
                     aria-label="Path on the dev server"
@@ -489,7 +650,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                 </div>
                 <div
                   ref={frameBox}
-                  className="preview-frame-wrap"
+                  className={`preview-frame-wrap${shooting ? " shooting" : ""}${mode === "draw" ? " drawing" : ""}`}
                   style={{ "--preview-h": `${height}px` } as CSSProperties}
                 >
                   {url && loadedAt !== `${url}#${nonce}` && (
@@ -514,11 +675,37 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   ) : (
                     <p className="panel-clean">Opening a preview port…</p>
                   )}
+                  {/* the clip and draw tools work on a layer over the frame,
+                      so the page never sees the pointer */}
+                  {url && mode === "clip" && (
+                    <ClipLayer
+                      onClip={(rect) => {
+                        void takeClipRef.current("region", rect, null, "").then((opened) => {
+                          if (opened) setMode(null);
+                        });
+                      }}
+                    />
+                  )}
+                  {url && mode === "draw" && <DrawLayer shapes={shapes} onChange={setShapes} tool={tool} color={color} />}
+                  {url && mode === "draw" && (
+                    <DrawBar
+                      tool={tool}
+                      setTool={setTool}
+                      color={color}
+                      setColor={setColor}
+                      marks={shapes.length}
+                      onUndo={() => setShapes((l) => l.slice(0, -1))}
+                      onClear={() => setShapes([])}
+                      onSnap={snap}
+                      onDone={() => toggleMode("draw")}
+                      busy={shooting}
+                    />
+                  )}
                   {/* over the frame, so it shows in place and in the bench
                       alike; whatever the page sent is shown as text only */}
-                  {url && (picked || pickLine) && (
+                  {url && (pending || pickLine) && (
                     <div className="preview-pick" role="region" aria-label="Design mode">
-                      {picked ? (
+                      {pending ? (
                         <form
                           className="preview-pick-form"
                           onSubmit={(e) => {
@@ -526,11 +713,18 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                             addPick("pick");
                           }}
                         >
-                          <code className="preview-pick-sel" title={picked.selector}>
-                            {picked.selector}
-                          </code>
-                          {(picked.text || picked.html) && (
-                            <pre className="preview-pick-snip">{(picked.text || picked.html).slice(0, 240)}</pre>
+                          {pending.pick && (
+                            <code className="preview-pick-sel" title={pending.pick.selector}>
+                              {pending.pick.selector}
+                            </code>
+                          )}
+                          {pending.clip?.thumb && <img className="preview-pick-thumb" src={pending.clip.thumb} alt="The picture taken, which goes with the note" />}
+                          {pending.clip && !pending.clip.path && (
+                            <p className="preview-pick-line bad">{pending.clip.marks ? `${NO_SHOTS}; the marks go in words` : NO_SHOTS}</p>
+                          )}
+                          {pending.clip?.marks && <pre className="preview-pick-snip">{pending.clip.marks}</pre>}
+                          {pending.pick && (pending.pick.text || pending.pick.html) && (
+                            <pre className="preview-pick-snip">{(pending.pick.text || pending.pick.html).slice(0, 240)}</pre>
                           )}
                           <div className="preview-pick-intent" role="group" aria-label="What the note asks for">
                             {(["change", "question"] as const).map((k) => (
@@ -544,14 +738,14 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                             rows={3}
                             required
                             placeholder={intent === "change" ? "what should change here" : "what do you want to know"}
-                            aria-label="Note for the agent about this element"
+                            aria-label={pending.pick ? "Note for the agent about this element" : "Note for the agent about this picture"}
                             value={pickNote}
                             onChange={(e) => setPickNote(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                                 e.preventDefault();
                                 addPick(e.shiftKey ? "send" : "pick");
-                              } else if (e.key === "Escape") setPicked(null);
+                              } else if (e.key === "Escape") cancelPending();
                             }}
                           />
                           <div className="preview-pick-row">
@@ -567,7 +761,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                             >
                               send now
                             </button>
-                            <button type="button" className="mini" onClick={() => setPicked(null)}>
+                            <button type="button" className="mini" onClick={cancelPending}>
                               cancel
                             </button>
                           </div>
@@ -576,7 +770,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                         pickLine && (
                           <p className={`preview-pick-line${pickLine.bad ? " bad" : ""}`} role="status">
                             <span>{pickLine.text}</span>
-                            {!picking && (
+                            {!mode && (
                               <button
                                 type="button"
                                 className="mini"
@@ -595,15 +789,28 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       )}
                     </div>
                   )}
-                  {url && notes.length > 0 && !picked && (
+                  {url && notes.length > 0 && !pending && (
                     <PickNotes
                       repoId={repo.id}
                       notes={notes}
                       pageUrl={pageUrl}
-                      onRemove={(i) => setNotes((l) => l.filter((_, j) => j !== i))}
-                      onClear={() => setNotes([])}
+                      onRemove={(i) =>
+                        setNotes((l) => {
+                          dropThumbs(l.filter((_, j) => j === i));
+                          return l.filter((_, j) => j !== i);
+                        })
+                      }
+                      onClear={() =>
+                        setNotes((l) => {
+                          dropThumbs(l);
+                          return [];
+                        })
+                      }
                       onSent={(said) => {
-                        setNotes([]);
+                        setNotes((l) => {
+                          dropThumbs(l);
+                          return [];
+                        });
                         setPickStatus({ text: said, bad: false });
                       }}
                       say={(text, bad) => setPickStatus({ text, bad })}
@@ -616,7 +823,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       <button type="button" className="mini" onClick={() => setNonce((n) => n + 1)} title="Reload" aria-label="Reload">
                         ⟳
                       </button>
-                      <PickButton on={picking} toggle={togglePick} />
+                      <ModeButtons mode={mode} disabled={shooting} toggle={toggleMode} />
                       {[...mine, ...loose].length > 1 && (
                         <select
                           className="preview-select"

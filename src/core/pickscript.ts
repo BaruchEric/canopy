@@ -9,9 +9,16 @@
  * Messages, all `{canopy: ...}` objects:
  * - parent to page: `{canopy:"pick", on:true|false}`
  * - parent to page: `{canopy:"marks", list:[selector, ...]}` numbers the
- *   elements the user left notes on (FR-027); an empty list clears them
+ *   elements the user left notes on (FR-027); a blank selector gets no
+ *   badge (a note on a picture alone); an empty list clears them
+ * - parent to page: `{canopy:"hovered", via:"copy"|"shot"}` asks for the
+ *   element under the pointer, for the C and S keys pressed while the
+ *   parent has the keyboard (FR-029)
  * - page to parent: `{canopy:"pick-ready"}` for each enable,
- *   `{canopy:"picked", selector, html, text, path, styles, rect}` on a click,
+ *   `{canopy:"picked", selector, html, text, path, styles, rect, via}` on a
+ *   click (`via:"click"`), the C key over an element (`"copy"`, picking
+ *   goes on) or the S key (`"shot"`, picking stops and its outline goes,
+ *   so a picture taken next shows the page alone),
  *   `{canopy:"pick-off"}` when Esc in the page stops it.
  *
  * Plain ES2017 in a string, since it runs in whatever page the dev server
@@ -107,7 +114,7 @@ export const PICK_SCRIPT = `(function () {
     for (var i = 0; i < markLayer.children.length; i++) {
       var b = markLayer.children[i];
       var el = null;
-      try { el = document.querySelector(marks[i]); } catch (e) {}
+      if (marks[i]) try { el = document.querySelector(marks[i]); } catch (e) {}
       if (!el) { b.style.display = "none"; continue; }
       var r = el.getBoundingClientRect();
       b.style.display = "flex";
@@ -141,16 +148,14 @@ export const PICK_SCRIPT = `(function () {
     e.preventDefault();
     e.stopPropagation();
   }
-  function click(e) {
-    var el = target(e);
-    swallow(e);
-    if (!el) return;
+  function report(el, via) {
     var cs = window.getComputedStyle(el);
     var styles = {};
     for (var i = 0; i < STYLES.length; i++) styles[STYLES[i]] = cs.getPropertyValue(STYLES[i]);
     var r = el.getBoundingClientRect();
     post({
       canopy: "picked",
+      via: via,
       selector: selectorOf(el),
       html: String(el.outerHTML || "").slice(0, ${PICK_HTML_MAX}),
       text: String(el.innerText || el.textContent || "").trim().slice(0, ${PICK_TEXT_MAX}),
@@ -158,13 +163,33 @@ export const PICK_SCRIPT = `(function () {
       styles: styles,
       rect: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) }
     });
+  }
+  function click(e) {
+    var el = target(e);
+    swallow(e);
+    if (!el) return;
+    report(el, "click");
     stop();
   }
+  // the element under the pointer, for the C and S keys: the copy keeps
+  // picking, the picture stops it so its outline is out of the shot
+  function hoveredVia(via) {
+    if (!hovered || !hovered.isConnected) return;
+    report(hovered, via);
+    if (via === "shot") stop();
+  }
   function key(e) {
-    if (e.key !== "Escape") return;
+    if (e.key === "Escape") {
+      swallow(e);
+      stop();
+      post({ canopy: "pick-off" });
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = String(e.key).toLowerCase();
+    if (k !== "c" && k !== "s") return;
     swallow(e);
-    stop();
-    post({ canopy: "pick-off" });
+    hoveredVia(k === "c" ? "copy" : "shot");
   }
   function start() {
     if (on) return;
@@ -192,6 +217,10 @@ export const PICK_SCRIPT = `(function () {
     var d = e.data;
     if (d && typeof d === "object" && d.canopy === "marks" && Array.isArray(d.list)) {
       setMarks(d.list);
+      return;
+    }
+    if (d && typeof d === "object" && d.canopy === "hovered") {
+      if (on && (d.via === "copy" || d.via === "shot")) hoveredVia(d.via);
       return;
     }
     if (!d || typeof d !== "object" || d.canopy !== "pick") return;

@@ -8540,6 +8540,125 @@ body:has(.focus-grip.se.dragging) {
   padding: 4px 8px;
   color: var(--ink-faint);
 }
+/* a picture a note is on (FR-029): a thumbnail in the list and in the form */
+.preview-notes-thumb {
+  flex: none;
+  width: 28px;
+  height: 20px;
+  border-radius: 2px;
+  border: 1px solid var(--float-edge);
+  object-fit: cover;
+}
+.preview-pick-thumb {
+  display: block;
+  max-width: 100%;
+  max-height: 10rem;
+  border-radius: var(--r);
+  border: 1px solid var(--float-edge);
+  object-fit: contain;
+  background: var(--bark0);
+}
+/* the clip and draw tools' layers cover the frame, so the page sees none
+   of the pointer; a picture being taken hides what floats over the frame */
+.preview-clip-layer,
+.preview-draw-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  touch-action: none;
+  user-select: none;
+}
+.preview-clip-layer {
+  cursor: crosshair;
+}
+.preview-clip-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed #3b82f6;
+  background: rgba(59, 130, 246, 0.1);
+  pointer-events: none;
+}
+.preview-draw-layer {
+  cursor: crosshair;
+}
+.preview-draw-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.preview-draw-word {
+  font: 600 15px/1 var(--mono);
+  paint-order: stroke;
+  stroke: #fff;
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  user-select: none;
+}
+.preview-draw-text {
+  position: absolute;
+  z-index: 3;
+  width: 12rem;
+  padding: 2px 4px;
+  border: 1px solid var(--float-edge);
+  border-radius: var(--r);
+  background: var(--bark1);
+  font: 600 14px/1.2 var(--mono);
+}
+.preview-draw-bar {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  padding: 4px;
+  border: 1px solid var(--float-edge);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bark1) 92%, transparent);
+  box-shadow: 0 6px 18px -8px var(--float-shadow);
+  font-size: 12px;
+}
+.preview-draw-bar > .mini {
+  border-radius: 999px;
+}
+.preview-draw-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.preview-draw-group + .preview-draw-group,
+.preview-draw-group + .mini {
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--float-edge);
+}
+.preview-draw-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.preview-draw-swatch.on {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--bark1) inset;
+}
+/* while drawing, the draw bar has the top-left corner and a status line
+   (a refused share) sits under it */
+.preview-frame-wrap.drawing .preview-pick {
+  top: 50px;
+}
+.preview-frame-wrap.shooting .preview-pick,
+.preview-frame-wrap.shooting .preview-notes,
+.preview-frame-wrap.shooting .preview-draw-bar,
+.preview-frame-wrap.shooting .preview-float {
+  visibility: hidden;
+}
 .preview-frame {
   display: block;
   width: 100%;

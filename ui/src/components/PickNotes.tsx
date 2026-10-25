@@ -27,8 +27,9 @@ const shellName = (t: TermTab) => `${t.label ?? t.name} (${t.place})`;
 
 /**
  * The notes left in design mode, waiting to go out together (FR-027): each
- * numbered as the page marks its element, with what it asks for and a way
- * to drop it. "send" picks who gets them: the repo's agent as the picker
+ * numbered as the page marks its element, with what it asks for, the
+ * picture it is on when it is on one (FR-029), and a way to drop it.
+ * "send" picks who gets them: the repo's agent as the picker
  * always chose it, an agent already running in one of the repo's shells
  * here, a new chat, or a new shell with either harness. "copy all" puts the
  * same prompt on the clipboard.
@@ -109,7 +110,8 @@ export function PickNotes({
               {i + 1}
             </span>
             <span className={`preview-notes-intent ${a.intent}`}>{a.intent}</span>
-            <span className="preview-notes-text" title={`${a.pick.selector}\n${a.note}`}>
+            {a.clip?.thumb && <img className="preview-notes-thumb" src={a.clip.thumb} alt={`The picture note ${i + 1} is on`} />}
+            <span className="preview-notes-text" title={`${a.pick?.selector ?? `a picture, ${a.clip?.kind ?? ""}`}\n${a.note}`}>
               {a.note}
             </span>
             <button type="button" className="mini" title="Drop this note" aria-label={`Drop note ${i + 1}`} onClick={() => onRemove(i)}>

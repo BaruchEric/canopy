@@ -476,6 +476,14 @@ export const api = {
       headers: { "Content-Type": image.type },
       body: image,
     }),
+  /** saves a picture taken in the preview's design mode (FR-029) on the
+   *  repo's backend, beside the pasted images, where its agent can read it */
+  clipImage: (id: string, image: Blob) =>
+    repoReq<{ path: string; text: string }>(id, (p) => `/api/repos/clip?${rq(p)}`, {
+      method: "POST",
+      headers: { "Content-Type": image.type },
+      body: image,
+    }),
   /** the shells the server holds, attached or waiting for a browser */
   terms: async (b: string = homeName()) => fromAll(b, await req<TermInfo[]>(b, "/api/terms"), qTerm),
   /** the newest transcript of the agent in a shell, on the shell's own

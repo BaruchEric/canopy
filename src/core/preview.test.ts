@@ -185,8 +185,22 @@ describe("the picker script", () => {
     parentElement: null,
     outerHTML: "<h1 class=\"title big\">Hello</h1>",
     innerText: " Hello ",
+    isConnected: true,
     getBoundingClientRect: () => ({ left: 1.4, top: 2, width: 30, height: 4.6 }),
   };
+  const picked = (via: string) => ({
+    origin: canopy,
+    msg: {
+      canopy: "picked",
+      via,
+      selector: "h1.title.big",
+      html: h1.outerHTML,
+      text: "Hello",
+      path: "/a?b=1",
+      styles: expect.objectContaining({ color: "red" }),
+      rect: { x: 1, y: 2, width: 30, height: 5 },
+    },
+  });
 
   test("is inert in a page that is not framed", () => {
     expect(load(false).count("message")).toBe(0);
@@ -210,31 +224,56 @@ describe("the picker script", () => {
     const p = load(true);
     p.fire("message", { source: p.parent, origin: canopy, data: enable });
     p.fire("click", ev({ target: h1 }));
-    expect(p.sent[1]).toEqual({
-      origin: canopy,
-      msg: {
-        canopy: "picked",
-        selector: "h1.title.big",
-        html: h1.outerHTML,
-        text: "Hello",
-        path: "/a?b=1",
-        styles: expect.objectContaining({ color: "red" }),
-        rect: { x: 1, y: 2, width: 30, height: 5 },
-      },
-    });
+    expect(p.sent[1]).toEqual(picked("click"));
     expect(p.count("click")).toBe(0);
     expect(p.count("mousemove")).toBe(0);
+  });
+
+  test("C over an element reports it to copy and keeps picking; S reports it for a picture and stops", () => {
+    const p = load(true);
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    // nothing under the pointer yet: the keys say nothing
+    p.fire("keydown", ev({ key: "c" }));
+    expect(p.sent).toHaveLength(1);
+    p.fire("mousemove", ev({ target: h1 }));
+    p.fire("keydown", ev({ key: "C", metaKey: true }));
+    expect(p.sent).toHaveLength(1);
+    p.fire("keydown", ev({ key: "c" }));
+    expect(p.sent[1]).toEqual(picked("copy"));
+    expect(p.count("click")).toBe(1);
+    p.fire("keydown", ev({ key: "s" }));
+    expect(p.sent[2]).toEqual(picked("shot"));
+    expect(p.count("click")).toBe(0);
+    expect(p.body.added).toHaveLength(0);
+  });
+
+  test("the parent can ask for the element under the pointer, while picking is on", () => {
+    const p = load(true);
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "hovered", via: "copy" } });
+    expect(p.sent).toHaveLength(0);
+    p.fire("message", { source: p.parent, origin: canopy, data: enable });
+    p.fire("mousemove", ev({ target: h1 }));
+    p.fire("message", { source: {}, origin: canopy, data: { canopy: "hovered", via: "copy" } });
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "hovered", via: "nope" } });
+    expect(p.sent).toHaveLength(1);
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "hovered", via: "copy" } });
+    expect(p.sent[1]).toEqual(picked("copy"));
+    expect(p.count("click")).toBe(1);
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "hovered", via: "shot" } });
+    expect(p.sent[2]).toEqual(picked("shot"));
+    expect(p.count("click")).toBe(0);
   });
 
   test("numbers the elements the parent names, follows a scroll, and clears", () => {
     const p = load(true);
     p.fire("message", { source: {}, origin: canopy, data: { canopy: "marks", list: ["h1.title"] } });
     expect(p.body.added).toHaveLength(0);
-    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "marks", list: ["h1.title", "nope", 3] } });
+    p.fire("message", { source: p.parent, origin: canopy, data: { canopy: "marks", list: ["h1.title", "nope", 3, ""] } });
     const layer = p.body.added[0];
     expect(layer?.children.map((b) => [b.textContent, b.style.display])).toEqual([
       ["1", "flex"],
       ["2", "none"],
+      ["3", "none"],
     ]);
     expect(layer?.children[0]?.style.left).toBe("101px");
     expect(layer?.children[0]?.style.top).toBe("11px");
