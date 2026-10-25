@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, adoptLabels, cleanLabel, renameTab, swapTabs, currentTermForSocket, LABEL_MAX, type TermTab } from "./term";
+import { FOCUS_GAP, FOCUS_MIN, PANEL_TERM_ROWS, adoptPoppedTerms, adoptTerms, otherShells, shellSet, cellHeight, focusResize, loadFocusSize, loadTermTabs, nextStripTab, pruneHidden, joinsOnly, needsPanelShell, panelShellStart, reconcileTerms, rowsPx, termId, viewKey, adoptLabels, adoptPlaces, cleanLabel, renameTab, swapTabs, currentTermForSocket, LABEL_MAX, type TermTab } from "./term";
 import type { Repo, TermInfo } from "../../src/core/types";
 
 describe("rowsPx", () => {
@@ -385,5 +385,22 @@ describe("naming and ordering tabs by hand", () => {
     const back = loadTermTabs([t("a", { label: "loot" }), t("b", { label: " " })]);
     expect(back[0]?.label).toBe("loot");
     expect("label" in (back[1] ?? {})).toBe(false);
+  });
+});
+
+describe("adoptPlaces", () => {
+  const tab = (id: string, over: Partial<TermTab> = {}): TermTab => ({ id, repoId: "app", name: "app", path: "/app", place: "strip", ...over });
+  test("a tab follows its shell to the panel or the strip another device moved it to", () => {
+    const tabs = [tab("a"), tab("b", { place: "panel" }), tab("c")];
+    const got = adoptPlaces(tabs, [
+      { id: "a", place: "panel" },
+      { id: "b", place: "panel" },
+    ]);
+    expect(got.map((t) => t.place)).toEqual(["panel", "panel", "strip"]);
+    expect(adoptPlaces(got, [{ id: "a", place: "panel" }])).toBe(got);
+  });
+  test("a task's tab stays where it is", () => {
+    const tabs = [tab("t", { task: "t1" })];
+    expect(adoptPlaces(tabs, [{ id: "t", place: "panel" }])).toBe(tabs);
   });
 });

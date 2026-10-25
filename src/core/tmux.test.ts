@@ -7,6 +7,7 @@ import {
   isDuplicate,
   killArgs,
   labelArgs,
+  placeArgs,
   listArgs,
   LIST_FORMAT,
   newSessionArgs,
@@ -183,6 +184,11 @@ describe("a shell's hand-given name", () => {
   test("renamed later, or taken off with an empty name", () => {
     expect(labelArgs(base, ID, "maps")).toEqual([...base, "set-option", "-t", `canopy-${ID}`, "@canopy_label", "maps"]);
     expect(labelArgs(base, ID, "")).toEqual([...base, "set-option", "-u", "-t", `canopy-${ID}`, "@canopy_label"]);
+  });
+  test("moved to the strip or a panel later", () => {
+    expect(placeArgs(base, ID, "panel")).toEqual([...base, "set-option", "-t", `canopy-${ID}`, "@canopy_place", "panel"]);
+    const [s] = parseSessions(`canopy-${ID}\tapp\tpanel\t1790000000\t/app\t\t\t`);
+    expect(s?.place).toBe("panel");
   });
 });
 

@@ -55,7 +55,7 @@ import { NARROW, useMedia } from "../media";
 import { splitKey } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
 import { OVER_PAGE, SECTION_WORD } from "../surface";
-import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, openedSince, termIds, usePaneDrag, useSplits } from "./SessionPanes";
+import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, moveTo, openedSince, takes, termIds, usePaneDrag, useSplits } from "./SessionPanes";
 import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabLabel, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
 import { PageTabView, SectionTabView } from "./SectionTab";
 
@@ -1415,27 +1415,82 @@ export function TermDock() {
   const termHeight = useStore((s) => s.termHeight);
   const setTermHeight = useStore((s) => s.setTermHeight);
   const showTerm = useStore((s) => s.showTerm);
+  const openTerm = useStore((s) => s.openTerm);
+  const closeTerm = useStore((s) => s.closeTerm);
+  const renameTerm = useStore((s) => s.renameTerm);
+  const untab = useStore((s) => s.untab);
   const focusSize = useStore((s) => s.focusSize);
   const dock = useRef<HTMLElement>(null);
+  const body = useRef<HTMLDivElement>(null);
   const [mode, setMode] = useStripMode();
   const spot = shellSpot(mode, false);
+  const narrow = useMedia(NARROW);
   const strip = terms.filter((t) => t.place === "strip");
-  // the cards' pages, chats and popups sitting as tabs here (FR-030);
-  // the strip lays its tabs out one at a time, and the sessions view splits them
-  // tabs out one at a time, and the sessions view splits them
+  // the cards' pages, chats and popups sitting as tabs here (FR-030)
   const allSectionTabs = useStore((s) => s.settings.sectionTabs);
   const stripPage = useStore((s) => s.stripPage);
   const showStripPage = useStore((s) => s.showStripPage);
   const repos = useStore((s) => s.repos);
   const allItemTabs = useStore((s) => s.settings.itemTabs);
   const pages: PageTab[] = [...sectionTabsAt(allSectionTabs, "strip"), ...itemTabsAt(allItemTabs, "strip")];
-  // with no shell showing (none left, or a reload), the last section shows
+  // with no shell showing (none left, a reload, or the one showing moved to
+  // its card from another device), the last section shows, else the last shell
   const current =
     stripPage && pages.some((t) => t.id === stripPage)
       ? stripPage
       : strip.some((t) => t.id === activeTerm)
         ? activeTerm
-        : (pages[pages.length - 1]?.id ?? activeTerm);
+        : (pages[pages.length - 1]?.id ?? strip[strip.length - 1]?.id ?? activeTerm);
+  // The strip splits as the sessions view does, from the same groups, so a
+  // tab dragged in from a card lands on the edge it was dropped on (FR-031).
+  const { groups, write: writeSplits } = useSplits("strip");
+  const { row, panes } = rowOf<TermTab | PageTab>([...strip, ...pages], groups);
+  const termRow = row.filter((t): t is TermTab => !isPageTab(t));
+  const pageRow = row.filter(isPageTab);
+  const head = headOf(row, groups, current);
+  const group = current ? groupOf(groups, current) : undefined;
+  const [draft, setDraft] = useState<PaneTree | null>(null);
+  const [menu, setMenu] = useState<{ id: string; at: DOMRect } | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  // a phone shows the focused pane alone
+  const tree = narrow || !group ? null : draft && hasPane(draft, current ?? "") ? draft : group;
+  const boxes = tree ? boxesOf(tree) : null;
+  const targets: Record<string, Box> = boxes ?? (current ? { [current]: { x: 0, y: 0, w: 1, h: 1 } } : {});
+  const show = (id: string) => (isPageTabId(id) ? showStripPage(id) : showTerm(id));
+  // a split tab in the row stays on the pane focused in it
+  const showRowTab = (id: string) => {
+    const g = groupOf(groups, id);
+    show(g && current && hasPane(g, current) ? current : id);
+  };
+  const besideNew = (id: string, before: ReadonlySet<string>, edge: Edge) => {
+    const made = openedSince(before);
+    if (made && made !== id) writeSplits((g) => splitIn(g, id, made, edge));
+  };
+  // a new strip shell at the same repo, beside `id`; a popup has none
+  const splitFrom = (id: string, edge: Edge) => {
+    const tab = strip.find((t) => t.id === id) ?? pages.find((t) => t.id === id);
+    if (!tab?.repoId) return;
+    const before = termIds();
+    openTerm(tab.repoId, "strip");
+    besideNew(id, before, edge);
+  };
+  const closePane = (id: string) => {
+    const g = groupOf(groups, id);
+    const next = g && id === current ? neighbourOf(g, id) : null;
+    if (next) show(next);
+    writeSplits((gs) => leaveGroup(gs, id));
+    if (isPageTabId(id)) untab(id);
+    else closeTerm(id);
+  };
+  const { drag, grab, preview } = usePaneDrag(
+    body,
+    targets,
+    (id, target, edge) => {
+      writeSplits((g) => splitIn(g, target, id, edge));
+      show(id);
+    },
+    { accepts: (id) => takes(id, STRIP), drop: (id, target, edge) => void moveTo(id, STRIP, target, edge) },
+  );
   useLeaveOnEscape(mode, setMode);
 
   if (strip.length === 0 && pages.length === 0) return null;
@@ -1443,12 +1498,14 @@ export function TermDock() {
     setMode("normal");
     refocus(dock.current);
   };
+  const menuTab = menu ? (strip.find((t) => t.id === menu.id) ?? pages.find((t) => t.id === menu.id)) : undefined;
+  const card = menuTab?.repoId ? { place: "panel" as const, repoId: menuTab.repoId } : null;
   return (
     <ShellSpotHere.Provider value={spot}>
       {mode === "focus" && <FocusBackdrop onLeave={leave} />}
       <section
         ref={dock}
-        className={`termdock${mode === "normal" ? "" : ` ${mode}`}`}
+        className={`termdock${mode === "normal" ? "" : ` ${mode}`}${drag ? " ss-dragging" : ""}`}
         aria-label="Shells"
         style={{ "--term-h": `${termHeight}px`, ...focusVars(focusSize) } as CSSProperties}
       >
@@ -1463,11 +1520,20 @@ export function TermDock() {
           />
         )}
         <TermTabs
-          terms={strip}
-          pages={pages}
+          terms={termRow}
+          pages={pageRow}
           pageLabel={(t) => pageTabLabel(t, isItemTab(t) ? undefined : (repos.find((r) => r.id === t.repoId)?.name ?? idText(t.repoId)))}
-          active={current}
-          onShow={(id) => (isPageTabId(id) ? showStripPage(id) : showTerm(id))}
+          active={head}
+          onShow={showRowTab}
+          panes={panes}
+          focus={strip.find((t) => t.id === current) ?? null}
+          onGrab={narrow ? undefined : grab}
+          onMenu={(id, at, rename) => (rename ? setRenaming(id) : setMenu({ id, at }))}
+          renaming={renaming}
+          onRenamed={(id, label) => {
+            setRenaming(null);
+            if (label !== null) renameTerm(id, label);
+          }}
           caption="shells"
           end={
             <>
@@ -1484,19 +1550,107 @@ export function TermDock() {
           }
         />
         {mode === "focus" && <FrontOthers set="strip" />}
-        <div className="term-body">
-          {strip.map((t) => (
-            <TermView key={viewKey(t)} tab={t} active={t.id === current} />
-          ))}
-          {pages.map((t) => (
-            <div key={t.id} className="ss-pane sec-pane" hidden={t.id !== current}>
-              <div className="ss-pane-body sec-pane-body">
-                <PageTabView tab={t} />
+        <div className="term-body" ref={body}>
+          {/* each shell stays a keyed child here, split or not, since a
+              moved xterm would remount and rejoin its shell */}
+          {strip.map((t) => {
+            const part = boxes?.[t.id];
+            const inView = boxes ? part !== undefined : t.id === current;
+            const on = t.id === current;
+            return (
+              <div
+                key={viewKey(t)}
+                className={`ss-pane${on ? " on" : ""}${part ? " split" : ""}`}
+                hidden={!inView}
+                style={part ? boxStyle(part) : undefined}
+                onPointerDownCapture={() => {
+                  if (inView && !on) showTerm(t.id);
+                }}
+              >
+                {part && (
+                  <PaneHead
+                    tab={t}
+                    label={t.label ?? t.name}
+                    focused={on}
+                    grouped
+                    onGrab={(e) => grab(t.id, e)}
+                    onSplit={() => splitFrom(t.id, "right")}
+                    onClose={() => closePane(t.id)}
+                    onMenu={(at) => setMenu({ id: t.id, at })}
+                    onHandedOff={(before) => besideNew(t.id, before, "right")}
+                  />
+                )}
+                <div className="ss-pane-body">
+                  <TermView tab={t} active={inView} quiet={!on} />
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
+          {pages.map((t) => {
+            const part = boxes?.[t.id];
+            const inView = boxes ? part !== undefined : t.id === current;
+            const on = t.id === current;
+            return (
+              <div
+                key={t.id}
+                className={`ss-pane sec-pane${on ? " on" : ""}${part ? " split" : ""}`}
+                hidden={!inView}
+                style={part ? boxStyle(part) : undefined}
+                onPointerDownCapture={() => {
+                  if (inView && !on) showStripPage(t.id);
+                }}
+              >
+                {part && (
+                  <SectionPaneHead
+                    label={pageTabLabel(t, isItemTab(t) ? undefined : (repos.find((r) => r.id === t.repoId)?.name ?? idText(t.repoId)))}
+                    item={isItemTab(t)}
+                    grouped
+                    canSplit={t.repoId !== undefined}
+                    onGrab={(e) => grab(t.id, e)}
+                    onSplit={() => splitFrom(t.id, "right")}
+                    onClose={() => closePane(t.id)}
+                    onMenu={(at) => setMenu({ id: t.id, at })}
+                  />
+                )}
+                <div className="ss-pane-body sec-pane-body">
+                  <PageTabView tab={t} />
+                </div>
+              </div>
+            );
+          })}
+          {tree && group && (
+            <Seams
+              tree={tree}
+              body={() => body.current}
+              onDraft={setDraft}
+              onCommit={(path, at) => {
+                const id = paneIds(group)[0];
+                if (id) writeSplits((gs) => gs.map((g) => (hasPane(g, id) ? setAt(g, path, at) : g)));
+              }}
+            />
+          )}
+          {preview}
         </div>
         {mode === "focus" && <FocusGrips box={dock} />}
+        {menu && (
+          <TabMenu
+            id={menu.id}
+            at={menu.at}
+            tabs={strip}
+            inRow={row.some((t) => t.id === menu.id)}
+            grouped={groupOf(groups, menu.id) !== undefined}
+            onClose={() => setMenu(null)}
+            onRename={setRenaming}
+            onSplit={(id, edge) => {
+              show(id);
+              splitFrom(id, edge);
+            }}
+            onLeave={(id) => writeSplits((gs) => leaveGroup(gs, id))}
+            pages={pages}
+            onUntab={closePane}
+            moveOut={card && takes(menu.id, card) ? { label: "to its card's shells", run: (id) => void moveTo(id, card) } : undefined}
+          />
+        )}
       </section>
     </ShellSpotHere.Provider>
   );
@@ -1602,10 +1756,24 @@ export function PanelShells({ repo }: { repo: Repo }) {
     if (isPageTabId(id)) untab(id);
     else closeTerm(id);
   };
-  const { drag, grab, preview } = usePaneDrag(body, targets, (id, target, edge) => {
-    writeSplits((g) => splitIn(g, target, id, edge));
-    setChosen(id);
-  });
+  // a tab from the strip or another card lands here when it is this repo's
+  const here = { place: "panel" as const, repoId: repo.id };
+  const { drag, grab, preview } = usePaneDrag(
+    body,
+    targets,
+    (id, target, edge) => {
+      writeSplits((g) => splitIn(g, target, id, edge));
+      setChosen(id);
+    },
+    {
+      accepts: (id) => takes(id, here),
+      drop: (id, target, edge) => {
+        void moveTo(id, here, target, edge).then((now) => {
+          if (now) setChosen(now);
+        });
+      },
+    },
+  );
   // The split keys, read on the way down before xterm sees them, and only
   // while the focus is in these shells: every open panel has a listener.
   const keys = useRef({ active, splitFrom });
@@ -1806,12 +1974,16 @@ export function PanelShells({ repo }: { repo: Repo }) {
             onUntab={closePane}
             sectionsFor={() => tabbableKeys(allSectionTabs, repo, order, hiddenSections)}
             onAddSection={(id, k) => tabSection(id, k, "panel")}
+            moveOut={takes(menu.id, STRIP) ? { label: "to the shells strip", run: (id) => void moveTo(id, STRIP) } : undefined}
           />
         )}
       </section>
     </ShellSpotHere.Provider>
   );
 }
+
+/** the strip, as a place a card's tab moves to */
+const STRIP = { place: "strip" as const };
 
 /** The tab a shell window shows for its repo: the shell the url names, else
  *  a new one on the repo's own backend. None for a forge repo. */

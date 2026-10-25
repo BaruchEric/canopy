@@ -14,7 +14,7 @@ import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { useIsChat } from "./Registry";
-import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, openedSince, termIds, usePaneDrag, useSplits } from "./SessionPanes";
+import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, moveTo, openedSince, takes, termIds, usePaneDrag, useSplits } from "./SessionPanes";
 import { PageTabView } from "./SectionTab";
 import { ShellSpotHere } from "./Surface";
 import { SweepButton } from "./Sweep";
@@ -46,6 +46,9 @@ const refocus = (box: Element | null) =>
  * the keyboard. The strip at the foot of the page stays away while this view
  * is up, since both would join the same shells.
  */
+/** the strip, as the place a card's tab moves to (FR-031) */
+const STRIP = { place: "strip" as const };
+
 export function SessionsView({ onView }: { onView: (view: string) => void }) {
   useShellProbe();
   const cards = useAllAgents();
@@ -211,10 +214,27 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     if (isPageTabId(id)) untab(id);
     else closeTerm(id);
   };
-  const { drag, grab, preview } = usePaneDrag(main, targets, (id, target, edge) => {
-    writeSplits((g) => splitIn(g, target, id, edge));
-    showTab(id);
-  });
+  const { drag, grab, preview } = usePaneDrag(
+    main,
+    targets,
+    (id, target, edge) => {
+      writeSplits((g) => splitIn(g, target, id, edge));
+      showTab(id);
+    },
+    {
+      accepts: (id) => takes(id, STRIP),
+      drop: (id, target, edge) => {
+        setPicked(null);
+        void moveTo(id, STRIP, target, edge);
+      },
+    },
+  );
+  // a tab's menu moves it to its card's shells, when the card takes it
+  const cardOf = (id: string) => {
+    const repoId = strip.find((t) => t.id === id)?.repoId ?? pagesAll.find((t) => t.id === id)?.repoId;
+    const card = repoId ? { place: "panel" as const, repoId } : null;
+    return card && takes(id, card) ? { label: "to its card's shells", run: (x: string) => void moveTo(x, card) } : undefined;
+  };
   const openRepo = (repoId: string) => {
     setDrawer(false);
     setScope({ repo: repoId });
@@ -577,6 +597,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
             return repo ? tabbableKeys(allSectionTabs, repo, order, hiddenSections) : [];
           }}
           onAddSection={(repoId, k) => tabSection(repoId, k, "strip")}
+          moveOut={cardOf(menu.id)}
         />
       )}
     </ShellSpotHere.Provider>

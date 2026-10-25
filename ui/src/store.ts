@@ -40,7 +40,7 @@ import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { snapshot, watch, type Note as Notice, type Watch } from "./notify";
 import { setTitleCount } from "./title";
-import { TERM_FONT, PANEL_TERM_ROWS, adoptLabels, adoptPoppedTerms, adoptTerms, cleanLabel, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
+import { TERM_FONT, PANEL_TERM_ROWS, adoptLabels, adoptPlaces, adoptPoppedTerms, adoptTerms, cleanLabel, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
 import { benchHolds, clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
 import { clientId, identity } from "./client";
 export type { TermTab } from "./term";
@@ -1272,6 +1272,9 @@ export interface CanopyState {
    *  is there now: the strip, or its project's bench; its tab here, or a
    *  new tab onto it */
   bringTerm: (id: string) => void;
+  /** a shell tab moved to the strip or its repo's panel, on the backend
+   *  first so every device's tab follows (FR-031); false when it could not */
+  placeTerm: (id: string, place: ShellPlace) => Promise<boolean>;
 
   /** opens the pre-flight dialog for an action on a repo */
   plan: (repoId: string, action: RunAction) => void;
@@ -3177,7 +3180,7 @@ export const useStore = create<CanopyState>((set, get) => ({
             labelsToSet.push({ id: shell.id, label: pending.label ?? "", wanted: pending.label });
           }
         }
-        let terms = adoptLabels(adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)), shells, (id) => connOf(s, backendOf(id)).backend.labels === true);
+        let terms = adoptPlaces(adoptLabels(adoptHere(s.terms, shells, s.repos, s.panels, skipped(hiddenTerms)), shells, (id) => connOf(s, backendOf(id)).backend.labels === true), shells);
         for (const [id, pending] of Object.entries(pendingTermLabels)) terms = renameTab(terms, id, pending.label ?? "");
         return {
           shells,
@@ -4053,6 +4056,23 @@ export const useStore = create<CanopyState>((set, get) => ({
       const front = withSolo(s.front, repoId, pane);
       return front === s.front ? {} : { front };
     }),
+  placeTerm: async (id, place) => {
+    const tab = get().terms.find((t) => t.id === id);
+    if (!tab || tab.task !== undefined || tab.ranger || tab.joinOnly) return false;
+    if (tab.place === place) return true;
+    try {
+      await api.placeTerm(id, place);
+    } catch {
+      return false;
+    }
+    set((s) => ({
+      terms: s.terms.map((t) => (t.id === id ? { ...t, place } : t)),
+      ...(place === "strip"
+        ? { activeTerm: id, stripPage: null }
+        : { activeTerm: nextStripTab(s.terms, id, s.activeTerm), ...dockPanel(s, tab.repoId), closedSections: unfoldIn(s.closedSections, tab.repoId, "shell") }),
+    }));
+    return true;
+  },
   bringTerm: (id) => {
     // joining gives a shell with no tab here one, and opens and unfolds a
     // panel shell's panel; a tab already here keeps its place

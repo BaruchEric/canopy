@@ -132,6 +132,20 @@ export function adoptLabels(tabs: TermTab[], shells: readonly Pick<TermInfo, "id
   return next ?? tabs;
 }
 
+/** `tabs` with each tab at the place its shell is held at now, so a shell
+ *  moved between the strip and a panel on one device moves on the others
+ *  (FR-031). A task's tab stays where it is. */
+export function adoptPlaces(tabs: TermTab[], shells: readonly Pick<TermInfo, "id" | "place">[]): TermTab[] {
+  let next: TermTab[] | null = null;
+  tabs.forEach((t, i) => {
+    const shell = shells.find((x) => x.id === t.id);
+    if (!shell || shell.place === t.place || t.task !== undefined || t.ranger) return;
+    next ??= [...tabs];
+    next[i] = { ...t, place: shell.place };
+  });
+  return next ?? tabs;
+}
+
 /** `tabs` with tabs `a` and `b` in each other's places; the same array when
  *  either is missing. */
 export function swapTabs(tabs: TermTab[], a: string, b: string): TermTab[] {

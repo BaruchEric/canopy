@@ -189,6 +189,29 @@ describe("a shell behind the socket", () => {
     await c.closed;
   });
 
+  test("a shell moves between the strip and a panel, and every device hears it", async () => {
+    const id = "abcdefabcdefabcdefabcdefabcdef0b";
+    const place = (to: unknown, term = id) =>
+      fetch(`http://127.0.0.1:${server.port}/api/terms/place`, { method: "POST", body: JSON.stringify({ term, place: to }) });
+    const c = connect({ term: id });
+    await c.opened;
+    c.ws.send(new TextEncoder().encode("printf 'placed-%s\\n' one\n"));
+    await until(() => c.text().includes("placed-one"), "the shell's first line");
+    const was = (await terms()).find((t) => t.id === id)?.place;
+    const to = was === "panel" ? "strip" : "panel";
+
+    expect((await place(to)).status).toBe(200);
+    expect((await terms()).find((t) => t.id === id)?.place).toBe(to);
+    // tmux holds it, so a server started over reads it back
+    const base = tmuxBase();
+    if (tmux && base) expect((await listSessions(base)).find((x) => x.id === id)?.place).toBe(to);
+
+    expect((await place("window")).status).toBe(400);
+    expect((await place("strip", "ffffffffffffffffffffffffffffffff")).status).toBe(404);
+    await fetch(`http://127.0.0.1:${server.port}/api/terms?term=${id}`, { method: "DELETE" });
+    await c.closed;
+  });
+
   test("a pasted image lands under the config dir and comes back as a path to type", async () => {
     const id = "3333333333333333cccccccccccccccc";
     const c = connect({ term: id });

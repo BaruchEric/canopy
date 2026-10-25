@@ -6724,7 +6724,11 @@ button.ss-scope:hover {
 .sessions.ss-dragging,
 .sessions.ss-dragging *,
 .panel-shells.ss-dragging,
-.panel-shells.ss-dragging * {
+.panel-shells.ss-dragging *,
+.termdock.ss-dragging,
+.termdock.ss-dragging *,
+body.ss-grabbing,
+body.ss-grabbing * {
   cursor: grabbing !important;
   user-select: none;
 }

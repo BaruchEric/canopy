@@ -108,6 +108,9 @@ export function newSessionArgs(base: string[], meta: TmuxMeta, size: TermSize, c
 export const labelArgs = (base: string[], id: string, label: string): string[] =>
   label ? [...base, "set-option", "-t", sessionName(id), "@canopy_label", label] : [...base, "set-option", "-u", "-t", sessionName(id), "@canopy_label"];
 
+/** moves a session's shell to the strip or a repo's panel (FR-031) */
+export const placeArgs = (base: string[], id: string, place: ShellPlace): string[] => [...base, "set-option", "-t", sessionName(id), "@canopy_place", place];
+
 export const attachArgs = (base: string[], id: string): string[] => [...base, "attach-session", "-t", sessionName(id)];
 
 export const killArgs = (base: string[], id: string): string[] => [...base, "kill-session", "-t", sessionName(id)];
@@ -533,6 +536,12 @@ export async function killSession(base: string[], id: string): Promise<void> {
  *  tmux refused, as for a session that is gone */
 export async function setLabel(base: string[], id: string, label: string): Promise<boolean> {
   return (await exec(labelArgs(base, id, label), { timeoutMs: 10_000 })).code === 0;
+}
+
+/** Moves a session to `place`; false when tmux refused, as for a session
+ *  that is gone */
+export async function setPlace(base: string[], id: string, place: ShellPlace): Promise<boolean> {
+  return (await exec(placeArgs(base, id, place), { timeoutMs: 10_000 })).code === 0;
 }
 
 /** How much the session has scrolled off its screen; 0 for one that has not

@@ -49,7 +49,7 @@ import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
@@ -3549,6 +3549,16 @@ async function handleApi(
     else delete live.info.label;
     tellTerms(state);
     return json({ ok: true, ...(label ? { label } : {}) });
+  }
+  if (path === "/api/terms/place" && method === "POST") {
+    const b = (await req.json()) as { term?: unknown; place?: unknown };
+    if (typeof b.term !== "string" || (b.place !== "panel" && b.place !== "strip")) return json({ error: "a shell in term and panel or strip in place" }, 400);
+    const live = state.terms.get(b.term);
+    if (!live || live.ending || live.info.task || live.info.ranger) return json({ error: "no such shell" }, 404);
+    if (state.tmux && !(await setPlace(state.tmux, b.term, b.place))) return json({ error: "tmux would not move that shell" }, 502);
+    live.info.place = b.place;
+    tellTerms(state);
+    return json({ ok: true, place: b.place });
   }
   if (path === "/api/terms" && method === "DELETE") {
     const term = url.searchParams.get("term") ?? "";

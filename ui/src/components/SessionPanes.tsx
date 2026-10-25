@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, RefObject } from "react";
 import { HARNESS } from "../../../src/core/harness";
 import { harnessesOf } from "../agents";
 import { otherHarness } from "../handoff";
 import { backendOf } from "../registry";
-import { atFrom, dropBox, edgeAt, pruneGroups, setAt, seamsOf, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
+import { canMove, movableOf, movedId, movePage, type Spot } from "../panemove";
+import { atFrom, dropBox, edgeAt, leaveGroup, pruneGroups, setAt, seamsOf, splitIn, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
 import { connOf, useStore } from "../store";
 import type { TermTab } from "../term";
 import { isItemTab, itemTabsAt, sectionTabsAt, type ItemTab, type PageTab, type SectionPlace, type SectionTab } from "../sectiontabs";
@@ -40,11 +41,60 @@ export function useSplits(place: SectionPlace, also: readonly string[] = NONE) {
   const items = useStore((s) => s.settings.itemTabs);
   const splits = useStore((s) => s.settings[key]);
   const groups = useMemo(() => pruneGroups(splits, liveAt(terms, tabs, items, place, also)), [splits, terms, tabs, items, place, also]);
-  const write = (f: (g: PaneTree[]) => PaneTree[]) => {
-    const st = useStore.getState();
-    st.setSetting(key, f(pruneGroups(st.settings[key], liveAt(st.terms, st.settings.sectionTabs, st.settings.itemTabs, place, also))));
-  };
+  const write = (f: (g: PaneTree[]) => PaneTree[]) => writeSplitsAt(place, f, also);
   return { groups, write };
+}
+
+/** One change to a place's split groups, read fresh from the store and
+ *  pruned first, so two changes in one handler both land. */
+export function writeSplitsAt(place: SectionPlace, f: (g: PaneTree[]) => PaneTree[], also: readonly string[] = NONE): void {
+  const key = SPLITS_OF[place];
+  const st = useStore.getState();
+  st.setSetting(key, f(pruneGroups(st.settings[key], liveAt(st.terms, st.settings.sectionTabs, st.settings.itemTabs, place, also))));
+}
+
+/** the tab `id` names in the store, shell or page */
+const movableNow = (id: string) => {
+  const st = useStore.getState();
+  return movableOf(st.terms, st.settings.sectionTabs, st.settings.itemTabs, id);
+};
+
+/** whether the shell window at `to` takes the tab `id` from another */
+export const takes = (id: string, to: Spot): boolean => {
+  const m = movableNow(id);
+  return m !== null && canMove(m, to);
+};
+
+/**
+ * A tab from another shell window landed on `beside`'s `edge` here (FR-031):
+ * out of its old window's splits, moved (a shell on its backend first, so
+ * every device's tab follows), and split in beside. The order matters: a
+ * page tab's id names its place, so the old groups let go of the old id
+ * before the tab moves, and the new groups take the new id after it has.
+ * With no `beside` (a tab menu's move) it lands as a tab of its own. The
+ * id the tab has now, or null when it did not move.
+ */
+export async function moveTo(id: string, to: Spot, beside: string | null = null, edge: Edge = "right"): Promise<string | null> {
+  const m = movableNow(id);
+  if (!m || !canMove(m, to)) return null;
+  const from = m.tab.place;
+  const st = useStore.getState();
+  if (m.kind === "shell") {
+    if (to.place === "window" || !(await st.placeTerm(id, to.place))) return null;
+    writeSplitsAt(from, (g) => leaveGroup(g, id));
+  } else {
+    writeSplitsAt(from, (g) => leaveGroup(g, id));
+    const moved = movePage(st.settings.sectionTabs, st.settings.itemTabs, m.tab, to);
+    st.setSetting("sectionTabs", moved.sections);
+    st.setSetting("itemTabs", moved.items);
+  }
+  const now = movedId(m, to);
+  if (beside) writeSplitsAt(to.place, (g) => splitIn(g, beside, now, edge));
+  if (to.place === "strip") {
+    if (m.kind === "page") useStore.getState().showStripPage(now);
+    else useStore.getState().showTerm(now);
+  }
+  return now;
 }
 
 /** every shell's id now, to tell the one opened after it */
@@ -62,39 +112,100 @@ export interface PaneDrag {
   edge: Edge;
 }
 
+/** A shell window a drag can land in: its body, the panes in it, its own
+ *  drop, and for a tab from another window, whether it takes it and how. */
+interface Zone {
+  body: RefObject<HTMLElement | null>;
+  targets: Record<string, Box>;
+  onDrop: (id: string, target: string, edge: Edge) => void;
+  receive?: Receive;
+}
+
+/** what a shell window does with a tab dragged in from another (FR-031) */
+export interface Receive {
+  accepts: (id: string) => boolean;
+  drop: (id: string, target: string, edge: Edge) => void;
+}
+
+/** every shell window on the page, so a drag from one finds the others */
+const ZONES = new Set<{ current: Zone }>();
+
+/** The innermost shell window under the point. elementFromPoint, so a
+ *  window under an overlay or folded away is never hit. */
+function zoneAt(x: number, y: number): { current: Zone } | null {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  let best: { current: Zone } | null = null;
+  for (const z of ZONES) {
+    const b = z.current.body.current;
+    if (b?.contains(el) && (!best || best.current.body.current?.contains(b))) best = z;
+  }
+  return best;
+}
+
+/** the drag going on now, wherever it started, and the window it is over */
+type Shared = (PaneDrag & { zone: { current: Zone } | null }) | null;
+let shared: Shared = null;
+const heard = new Set<() => void>();
+const share = (next: Shared) => {
+  shared = next;
+  for (const f of heard) f();
+};
+const hear = (f: () => void) => {
+  heard.add(f);
+  return () => heard.delete(f);
+};
+
 /**
  * A press on a tab or a pane's grip: a click as before, or, once it moves
  * DRAG_PX, a drag that lands the pane on the edge of the pane under the
- * pointer (`targets`, parts of `body`). Escape or a release off every pane
- * leaves things as they were.
+ * pointer (`targets`, parts of `body`). The pane under the pointer may be
+ * in another shell window on the page, which lands it there through its
+ * `receive` when it takes the tab (FR-031). Escape or a release off every
+ * pane leaves things as they were.
  */
-export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record<string, Box>, onDrop: (id: string, target: string, edge: Edge) => void) {
+export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record<string, Box>, onDrop: (id: string, target: string, edge: Edge) => void, receive?: Receive) {
   const [drag, setDrag] = useState<PaneDrag | null>(null);
-  // read by the listeners, which outlive the render that set them up
-  const live = useRef({ targets, onDrop });
-  live.current = { targets, onDrop };
+  // read by the listeners, which outlive the render that set them up, and
+  // by a drag from another window
+  const live = useRef<Zone>({ body, targets, onDrop, receive });
+  live.current = { body, targets, onDrop, receive };
+  useEffect(() => {
+    ZONES.add(live);
+    return () => {
+      ZONES.delete(live);
+    };
+  }, []);
+  const over = useSyncExternalStore(hear, () => (shared?.zone === live ? shared : null));
   const grab = (id: string, e: PointerEvent<HTMLElement>) => {
     if (e.button !== 0 || (e.target instanceof Element && e.target.closest("button"))) return;
     const x0 = e.clientX;
     const y0 = e.clientY;
     let moving = false;
-    let at: PaneDrag | null = null;
+    let at: Shared = null;
     const move = (ev: globalThis.PointerEvent) => {
       if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < DRAG_PX) return;
+      if (!moving) document.body.classList.add("ss-grabbing");
       moving = true;
-      const r = body.current?.getBoundingClientRect();
+      const zone = zoneAt(ev.clientX, ev.clientY);
+      const own = zone === live;
+      const z = zone && (own || zone.current.receive?.accepts(id)) ? zone : null;
+      const r = z?.current.body.current?.getBoundingClientRect();
       const fx = r ? (ev.clientX - r.left) / r.width : -1;
       const fy = r ? (ev.clientY - r.top) / r.height : -1;
-      const hit = Object.entries(live.current.targets).find(([pid, b]) => pid !== id && fx >= b.x && fx <= b.x + b.w && fy >= b.y && fy <= b.y + b.h);
-      at = { id, target: hit?.[0] ?? null, edge: hit ? edgeAt((fx - hit[1].x) / hit[1].w, (fy - hit[1].y) / hit[1].h) : "right" };
+      const hit = z ? Object.entries(z.current.targets).find(([pid, b]) => (!own || pid !== id) && fx >= b.x && fx <= b.x + b.w && fy >= b.y && fy <= b.y + b.h) : undefined;
+      at = { id, zone: hit ? z : null, target: hit?.[0] ?? null, edge: hit ? edgeAt((fx - hit[1].x) / hit[1].w, (fy - hit[1].y) / hit[1].h) : "right" };
       setDrag(at);
+      share(at);
     };
     const end = (drop: boolean) => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", cancel);
       window.removeEventListener("keydown", esc, true);
+      document.body.classList.remove("ss-grabbing");
       setDrag(null);
+      share(null);
       if (!moving) return;
       // the press was a drag, so the click it ends in is not a pick
       const swallow = (ev: MouseEvent) => {
@@ -104,7 +215,9 @@ export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record
       window.addEventListener("click", swallow, { capture: true, once: true });
       setTimeout(() => window.removeEventListener("click", swallow, true), 0);
       const target = at?.target;
-      if (drop && at && target) live.current.onDrop(id, target, at.edge);
+      if (!drop || !at || !target || !at.zone) return;
+      if (at.zone === live) live.current.onDrop(id, target, at.edge);
+      else at.zone.current.receive?.drop(id, target, at.edge);
     };
     const up = () => end(true);
     const cancel = () => end(false);
@@ -118,8 +231,9 @@ export function usePaneDrag(body: RefObject<HTMLElement | null>, targets: Record
     window.addEventListener("pointercancel", cancel);
     window.addEventListener("keydown", esc, true);
   };
-  const box = drag?.target ? targets[drag.target] : undefined;
-  const preview = drag && box ? <div className="ss-drop" aria-hidden="true" style={boxStyle(dropBox(box, drag.edge))} /> : null;
+  // the preview shows in the window the pane would land in, this one or not
+  const box = over?.target ? targets[over.target] : undefined;
+  const preview = over && box ? <div className="ss-drop" aria-hidden="true" style={boxStyle(dropBox(box, over.edge))} /> : null;
   return { drag, grab, preview };
 }
 
@@ -413,6 +527,7 @@ export function TabMenu({
   onUntab,
   sectionsFor,
   onAddSection,
+  moveOut,
 }: {
   id: string;
   at: DOMRect;
@@ -435,6 +550,9 @@ export function TabMenu({
   /** the sections a shell's repo can add as a tab here, and the add */
   sectionsFor?: (repoId: string) => SectionKey[];
   onAddSection?: (repoId: string, key: SectionKey) => void;
+  /** the tab into another shell window on the page, when one takes it
+   *  (FR-031): the strip from a card, a card from the strip */
+  moveOut?: { label: string; run: (id: string) => void };
 }) {
   const box = useRef<HTMLDivElement>(null);
   const [adding, setAdding] = useState(false);
@@ -479,6 +597,11 @@ export function TabMenu({
         {grouped && (
           <button type="button" role="menuitem" title="Its own tab again" onClick={act(() => onLeave(id))}>
             out of the split
+          </button>
+        )}
+        {moveOut && (
+          <button type="button" role="menuitem" title="Into that shell window, as a tab of its own; drag the tab onto a pane there to split instead" onClick={act(() => moveOut.run(id))}>
+            move {moveOut.label}
           </button>
         )}
         {onUntab &&
@@ -529,6 +652,11 @@ export function TabMenu({
             </button>
           ))}
         </div>
+      )}
+      {moveOut && (
+        <button type="button" role="menuitem" title="Into that shell window, as a tab of its own; drag the tab onto a pane there to split instead" onClick={act(() => moveOut.run(id))}>
+          move {moveOut.label}
+        </button>
       )}
       {onMove && (
         <>

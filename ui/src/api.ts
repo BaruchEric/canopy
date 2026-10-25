@@ -494,6 +494,10 @@ export const api = {
    *  name takes it off */
   labelTerm: (id: string, label: string) =>
     repoReq<{ ok: true; label?: string }>(id, () => "/api/terms/label", { method: "POST", body: JSON.stringify({ term: plainOf(id), label }) }),
+  /** moves a held shell to the strip or its repo's panel, so every
+   *  device's tab moves with it (FR-031) */
+  placeTerm: (id: string, place: ShellPlace) =>
+    repoReq<{ ok: true; place: ShellPlace }>(id, () => "/api/terms/place", { method: "POST", body: JSON.stringify({ term: plainOf(id), place }) }),
   /** ends one shell; closing its socket alone leaves it running */
   endTerm: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/terms?term=${encodeURIComponent(p)}`, { method: "DELETE" }),

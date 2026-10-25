@@ -63,6 +63,11 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 
 ## Shipped
 
+### FR-031 · Drag a tab from one shell window into another
+P2 · added 2026-10-24 · source: Eric (canopy chat) · shipped 2026-10-24
+A tab or a pane drags out of one shell window on the page into another (a card's shells, the strip along the bottom, the sessions view) and lands on the edge of the pane under the pointer, as a drag inside one window already did (FR-026). A shell moves between the strip and its own repo's card, a section between the strip, its card and a shell window, a chat or popup into the strip and a run into its card. A window that will not take the tab shows no drop. The tab menu moves it there too, which also works when the other window has no tab yet.
+Built 2026-10-24: ui/src/panemove.ts (pure, tested) decides what each window takes and the id a page tab has once moved; usePaneDrag in components/SessionPanes.tsx keeps a page-wide list of shell windows and finds the one under the pointer with elementFromPoint, and moveTo carries the move out. A shell's place is the backend's: POST /api/terms/place sets tmux's @canopy_place, and every device's tab follows it (adoptPlaces). The strip along the bottom now splits as the sessions view does, from the same groups. A shell window of its own is another browser window, which a pointer drag cannot reach, so it keeps drags inside itself. Checked on a scratch server: a card's shell dragged to the strip's right edge, a strip tab dragged to a card pane's top edge, a section tab to the strip's left edge, both menu moves, a refused drop on another repo's card, and a reload of each.
+
 ### FR-030 · A card's sections as tabs in a shell window
 P2 · added 2026-10-24 · source: Eric (canopy chat) · shipped 2026-10-24
 Any section of a card (history, files, changes and the rest) can leave the card and sit as a tab beside the shells, in every shell window: the card's shell section, the strip and the sessions view, and a shell window of its own. It splits with shells as a pane does. The arrangement is kept per kind of screen (phone, tablet, laptop, desktop, wide, ultra), and named templates, some seeded, can be saved, edited, deleted and loaded.
