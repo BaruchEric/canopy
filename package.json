@@ -21,28 +21,28 @@
     "redeploy": "bash scripts/redeploy.sh"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.103",
+    "@ai-sdk/gateway": "^4.0.126",
     "@simplewebauthn/browser": "14.0.0",
     "@simplewebauthn/server": "14.0.3",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "age-encryption": "0.3.1",
-    "ai": "^7.0.127",
-    "dompurify": "^3.2.7",
-    "highlight.js": "^11.11.1",
-    "marked": "^16.4.1",
+    "ai": "^7.0.153",
+    "dompurify": "^3.4.17",
+    "highlight.js": "^11.12.0",
+    "marked": "^16.4.2",
     "modern-screenshot": "^4.7.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "zustand": "^5.0.15"
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.16"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.2",
+    "@types/bun": "^1.4.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
-    "oxlint": "^1.86.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "oxlint": "^1.89.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.2"
+    "vite": "^8.3.5"
   }
 }

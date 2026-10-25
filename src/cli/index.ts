@@ -577,7 +577,9 @@ export async function main(argv: string[]): Promise<void> {
             // branches from every peer, an older canopy's fetch included.
             const p = Bun.spawn(["git", "-c", HIDE_RUNS, "upload-pack", ...strict, cmd.path], { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
             const code = await p.exited;
-            const n = p.signalCode ? osConstants.signals[p.signalCode] : undefined;
+            // a signal with no name (a Linux real-time one) arrives as its number
+            const sig = p.signalCode;
+            const n = typeof sig === "number" ? sig : sig ? osConstants.signals[sig] : undefined;
             process.exit(n !== undefined ? 128 + n : code);
           }
           if (cmd.kind === "list") console.log(JSON.stringify(await serveList(rootAbs, cfg.maxDepth)));
