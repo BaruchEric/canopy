@@ -5,6 +5,7 @@ import { useStore } from "../store";
 import { type PopAnchor, type PopSize, gripSize, popRoom } from "../pop";
 import { ZOOM_MAX, ZOOM_MIN, zoomStep, zoomWord } from "../surface";
 import { Gear, type GearEntry } from "./Gear";
+import type { TabRef } from "../sectiontabs";
 
 const KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 
@@ -47,6 +48,27 @@ export interface PopSpec {
   name: string;
   anchor: PopAnchor;
   gap?: number;
+  /** what the popup is as a tab in a shell window (FR-030), when it can be one */
+  tab?: TabRef;
+}
+
+/** Every popup and sheet closes on Escape, so one sent after a popup turns
+ *  into a tab closes it, whichever kind it is. */
+const closePopup = () => requestAnimationFrame(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+
+/** The gear lines that move a popup into a tab: the strip's, and a run's
+ *  card's shells too. */
+function tabEntries(tab: TabRef): GearEntry[] {
+  const to = (place: "strip" | "panel") => () => {
+    useStore.getState().tabItem(place, tab);
+    closePopup();
+  };
+  return [
+    { type: "item", label: "a tab in the shells strip", title: "Out of the popup into a tab in the strip and the sessions view", run: to("strip") },
+    ...(tab.repoId
+      ? [{ type: "item" as const, label: "a tab in its card's shells", title: "Out of the popup into a tab beside the card's shells", run: to("panel") }]
+      : []),
+  ];
 }
 
 /** The popup a sheet's parts sit in, for the gear in its head. */
@@ -61,7 +83,7 @@ export const PopHere = createContext<PopSpec | null>(null);
  * with `gear` puts the popup's gear in its top corner, for a popover with
  * no head to hold one.
  */
-export function PopGrip({ name, anchor, gap = 8, gear = false }: PopSpec & { gear?: boolean }) {
+export function PopGrip({ name, anchor, gap = 8, gear = false, tab }: PopSpec & { gear?: boolean }) {
   const saved = useStore((s) => s.settings.popSizes[name]);
   const zoom = useStore((s) => s.settings.popZooms[name] ?? 1);
   const ref = useRef<HTMLDivElement>(null);
@@ -188,7 +210,7 @@ export function PopGrip({ name, anchor, gap = 8, gear = false }: PopSpec & { gea
         onKeyDown={onKeyDown}
         onDoubleClick={() => save(null)}
       />
-      {gear && <PopGear spec={{ name, anchor, gap }} corner />}
+      {gear && <PopGear spec={{ name, anchor, gap, ...(tab ? { tab } : {}) }} corner />}
     </>
   );
 }
@@ -198,7 +220,7 @@ export function PopGrip({ name, anchor, gap = 8, gear = false }: PopSpec & { gea
  * keeps one of its own (the inbox), and its size, the window's whole room
  * or its own. `pop` finds the popup's element when a line runs.
  */
-export function usePopEntries({ name, anchor, gap = 8 }: PopSpec, pop: () => HTMLElement | null, zoomed = true): GearEntry[] {
+export function usePopEntries({ name, anchor, gap = 8, tab }: PopSpec, pop: () => HTMLElement | null, zoomed = true): GearEntry[] {
   const sized = useStore((s) => s.settings.popSizes[name] !== undefined);
   const zoom = useStore((s) => s.settings.popZooms[name] ?? 1);
   const phone = useMedia(PHONE);
@@ -221,6 +243,7 @@ export function usePopEntries({ name, anchor, gap = 8 }: PopSpec, pop: () => HTM
       ...(off || !sized ? { off: off ?? "It is at its own size" } : {}),
       run: () => saveSize(name, null),
     },
+    ...(tab ? tabEntries(tab) : []),
   ];
   if (!zoomed) return size;
   return [
@@ -252,7 +275,7 @@ function PopGearOf({ spec, corner }: { spec: PopSpec; corner: boolean }) {
   const entries = usePopEntries(spec, () => ref.current?.closest<HTMLElement>(".sheet, .settings-pop") ?? null);
   return (
     <span ref={ref} className={`pop-gear${corner ? " corner" : ""}`}>
-      <Gear label="this popup" hint="Zoom and size" groups={[{ label: "this popup", entries }]} />
+      <Gear label="this popup" hint={spec.tab ? "Zoom, size and as a tab" : "Zoom and size"} groups={[{ label: "this popup", entries }]} />
     </span>
   );
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { TabRef } from "../sectiontabs";
 import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
@@ -84,6 +85,9 @@ function useTick(on: boolean): number {
 export function RunSheet() {
   const sheet = useStore((s) => s.sheet);
   const close = useStore((s) => s.closeSheet);
+  // a run's sheet (a chat or a coordinator) can become a tab (FR-030)
+  const run = useStore((s) => (s.sheet?.kind === "run" ? s.runs[s.sheet.runId] : undefined));
+  const repoName = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId)?.name : undefined));
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -106,7 +110,9 @@ export function RunSheet() {
   }, [sheet, close]);
 
   if (!sheet) return null;
-  const pop = { name: `sheet ${sheet.kind}`, anchor: CENTERED, gap: 24 };
+  // the tab finds the run again by the key the store keeps it under
+  const tab: TabRef | undefined = run && sheet.kind === "run" ? { kind: "run", ref: sheet.runId, label: `${run.verb} · ${repoName ?? idText(run.repoId)}`, repoId: run.repoId } : undefined;
+  const pop = { name: `sheet ${sheet.kind}`, anchor: CENTERED, gap: 24, ...(tab ? { tab } : {}) };
   return (
     <div className="sheet-back" onPointerDown={(e) => {
       if (e.target === e.currentTarget) close();
@@ -473,8 +479,10 @@ export function Timeline({
 
 /* ---------- the console ---------- */
 
-export function Console({ run, repo }: { run: Run; repo: Repo | undefined }) {
-  const close = useStore((s) => s.closeSheet);
+export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefined; onClose?: () => void }) {
+  // in a shell window's tab (FR-030) the ✕ closes the tab, not the sheet
+  const closeSheet = useStore((s) => s.closeSheet);
+  const close = onClose ?? closeSheet;
   const stopRun = useStore((s) => s.stopRun);
   const dismissRun = useStore((s) => s.dismissRun);
   const answerRun = useStore((s) => s.answerRun);

@@ -4,6 +4,7 @@ import { homeConn, idParts, useStore } from "../store";
 import { registry } from "../registry";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
+import { POPUP_WORD } from "../sectiontabs";
 import { eachOf, keptByBackend, newestFirst, restorePlan, stillPicked } from "../kept";
 
 /** "2m", "3h", "2d": how long ago a kept shell was last written out */
@@ -33,23 +34,12 @@ const ALL = "*";
  */
 export function KeptShells() {
   const kept = useStore((s) => s.kept);
-  const keeping = useStore((s) => homeConn(s).keeping);
-  const repos = useStore((s) => s.repos);
-  const restoreShell = useStore((s) => s.restoreShell);
-  const forgetShell = useStore((s) => s.forgetShell);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
-  const [asking, setAsking] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
 
   useEffect(() => {
     if (!open) return;
-    setNow(Date.now());
-    const tick = setInterval(() => setNow(Date.now()), 30_000);
     const onDown = (e: PointerEvent) => {
       if (leavesPop(e.target, ref)) setOpen(false);
     };
@@ -59,20 +49,75 @@ export function KeptShells() {
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {
-      clearInterval(tick);
       document.removeEventListener("pointerdown", onDown);
       window.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
-  // a closed popover forgets its picks and any forget it was asking about
-  useEffect(() => {
-    if (open) return;
-    setPicked(new Set());
-    setAsking(false);
-  }, [open]);
-
   if (kept.length === 0 && !open) return null;
+
+  return (
+    <div className="settings kept" ref={ref}>
+      <button
+        type="button"
+        className={open ? "mini kept-chip on" : "mini kept-chip"}
+        aria-label="Shells from before"
+        aria-expanded={open}
+        title={`${kept.length} shell${kept.length === 1 ? "" : "s"} from before this backend went down`}
+        onClick={() => setOpen(!open)}
+      >
+        <svg
+          className="kept-glyph"
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+          <path d="M3 3v5h5" />
+          <path d="M12 7v5l4 2" />
+        </svg>
+        {kept.length}
+      </button>
+      {open && (
+        <div className="settings-pop kept-pop" role="dialog" aria-label="Shells from before">
+          <KeptPopBody />
+          <PopGrip name="kept" anchor={HANGS_RIGHT} gear tab={{ kind: "popup", ref: "kept", label: POPUP_WORD.kept }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the kept shells popover shows: the list with its picks and bulk
+ * moves, and the note on what a restore brings back. The popover and a tab
+ * in a shell window (FR-030) both draw it. Nothing here closes the popover,
+ * so it takes no `onDone`. Its picks live as long as it is drawn, so
+ * closing the popover forgets them.
+ */
+export function KeptPopBody() {
+  const kept = useStore((s) => s.kept);
+  const keeping = useStore((s) => homeConn(s).keeping);
+  const repos = useStore((s) => s.repos);
+  const restoreShell = useStore((s) => s.restoreShell);
+  const forgetShell = useStore((s) => s.forgetShell);
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [picked, setPicked] = useState<ReadonlySet<string>>(() => new Set());
+  const [asking, setAsking] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  // the ages move every half minute while the list shows
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tick);
+  }, []);
 
   const list = newestFirst(kept);
   const chosen = stillPicked(list, picked);
@@ -129,169 +174,138 @@ export function KeptShells() {
   const locked = busy !== "";
 
   return (
-    <div className="settings kept" ref={ref}>
-      <button
-        type="button"
-        className={open ? "mini kept-chip on" : "mini kept-chip"}
-        aria-label="Shells from before"
-        aria-expanded={open}
-        title={`${kept.length} shell${kept.length === 1 ? "" : "s"} from before this backend went down`}
-        onClick={() => setOpen(!open)}
-      >
-        <svg
-          className="kept-glyph"
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-          <path d="M3 3v5h5" />
-          <path d="M12 7v5l4 2" />
-        </svg>
-        {kept.length}
-      </button>
-      {open && (
-        <div className="settings-pop kept-pop" role="dialog" aria-label="Shells from before">
-          <section className="settings-row">
-            <h3 className="panel-label">shells from before</h3>
-            {list.length === 0 ? (
-              <p className="settings-hint">Nothing was left behind.</p>
-            ) : (
-              <>
-                <div className="kept-bar">
-                  <label className="kept-all">
+    <>
+      <section className="settings-row">
+        <h3 className="panel-label">shells from before</h3>
+        {list.length === 0 ? (
+          <p className="settings-hint">Nothing was left behind.</p>
+        ) : (
+          <>
+            <div className="kept-bar">
+              <label className="kept-all">
+                <input
+                  type="checkbox"
+                  checked={allPicked}
+                  ref={(el) => {
+                    if (el) el.indeterminate = chosen.length > 0 && !allPicked;
+                  }}
+                  disabled={locked}
+                  onChange={() => pick(allPicked ? [] : list.map((k) => k.id))}
+                />
+                {chosen.length > 0 ? `${chosen.length} picked` : "pick all"}
+              </label>
+              {tagged && backends.length > 1 && (
+                <span className="kept-by">
+                  {backends.map((b) => (
+                    <button
+                      key={b.name}
+                      type="button"
+                      className={pickedOn(b.name) ? "mini on" : "mini"}
+                      disabled={locked}
+                      title={`Pick only the ${b.count} on ${b.name}`}
+                      onClick={() => pick(pickedOn(b.name) ? [] : onlyOn(b.name))}
+                    >
+                      {b.name} {b.count}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </div>
+            {chosen.length > 0 && (
+              <div className="kept-acts kept-bulk">
+                {asking ? (
+                  <>
+                    <span className="layout-ask">
+                      forget {chosen.length} shell{chosen.length === 1 ? "" : "s"} and {chosen.length === 1 ? "its" : "their"} history?
+                    </span>
+                    <button type="button" className="mini confirm" disabled={locked} onClick={forgetAll}>
+                      forget
+                    </button>
+                    <button type="button" className="mini" disabled={locked} onClick={() => setAsking(false)}>
+                      keep
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className="mini" disabled={locked} onClick={() => restoreAll(false)}>
+                      restore {chosen.length}
+                    </button>
+                    {anyAgent && (
+                      <button
+                        type="button"
+                        className="mini"
+                        disabled={locked}
+                        title="Restores every picked shell and types the agent's continue into the ones that had an agent"
+                        onClick={() => restoreAll(true)}
+                      >
+                        restore + continue
+                      </button>
+                    )}
+                    <button type="button" className="mini" disabled={locked} onClick={() => setAsking(true)}>
+                      forget {chosen.length}
+                    </button>
+                    <button type="button" className="mini" disabled={locked} onClick={() => pick([])}>
+                      clear
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            <ul className="kept-list">
+              {list.map((k) => {
+                return (
+                  <li key={k.id} className={picked.has(k.id) ? "kept-shell on" : "kept-shell"}>
                     <input
                       type="checkbox"
-                      checked={allPicked}
-                      ref={(el) => {
-                        if (el) el.indeterminate = chosen.length > 0 && !allPicked;
-                      }}
+                      className="kept-pick"
+                      aria-label={`Pick ${repoName(k.repoId)}`}
+                      checked={picked.has(k.id)}
                       disabled={locked}
-                      onChange={() => pick(allPicked ? [] : list.map((k) => k.id))}
+                      onChange={() => toggle(k.id)}
                     />
-                    {chosen.length > 0 ? `${chosen.length} picked` : "pick all"}
-                  </label>
-                  {tagged && backends.length > 1 && (
-                    <span className="kept-by">
-                      {backends.map((b) => (
-                        <button
-                          key={b.name}
-                          type="button"
-                          className={pickedOn(b.name) ? "mini on" : "mini"}
-                          disabled={locked}
-                          title={`Pick only the ${b.count} on ${b.name}`}
-                          onClick={() => pick(pickedOn(b.name) ? [] : onlyOn(b.name))}
-                        >
-                          {b.name} {b.count}
-                        </button>
-                      ))}
+                    <span className="kept-where">
+                      <span>
+                        {repoName(k.repoId)}
+                        {tagged && <span className="backend-word">{ownerOf(k.id)}</span>}
+                      </span>
+                      <span className="kept-fact">
+                        {ago(k.savedAt, now)} · {k.lines} line{k.lines === 1 ? "" : "s"}
+                        {k.agent && ` · ${k.agent} was running`}
+                      </span>
                     </span>
-                  )}
-                </div>
-                {chosen.length > 0 && (
-                  <div className="kept-acts kept-bulk">
-                    {asking ? (
-                      <>
-                        <span className="layout-ask">
-                          forget {chosen.length} shell{chosen.length === 1 ? "" : "s"} and {chosen.length === 1 ? "its" : "their"} history?
-                        </span>
-                        <button type="button" className="mini confirm" disabled={locked} onClick={forgetAll}>
-                          forget
-                        </button>
-                        <button type="button" className="mini" disabled={locked} onClick={() => setAsking(false)}>
-                          keep
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <button type="button" className="mini" disabled={locked} onClick={() => restoreAll(false)}>
-                          restore {chosen.length}
-                        </button>
-                        {anyAgent && (
-                          <button
-                            type="button"
-                            className="mini"
-                            disabled={locked}
-                            title="Restores every picked shell and types the agent's continue into the ones that had an agent"
-                            onClick={() => restoreAll(true)}
-                          >
-                            restore + continue
-                          </button>
-                        )}
-                        <button type="button" className="mini" disabled={locked} onClick={() => setAsking(true)}>
-                          forget {chosen.length}
-                        </button>
-                        <button type="button" className="mini" disabled={locked} onClick={() => pick([])}>
-                          clear
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-                <ul className="kept-list">
-                  {list.map((k) => {
-                    return (
-                      <li key={k.id} className={picked.has(k.id) ? "kept-shell on" : "kept-shell"}>
-                        <input
-                          type="checkbox"
-                          className="kept-pick"
-                          aria-label={`Pick ${repoName(k.repoId)}`}
-                          checked={picked.has(k.id)}
+                    <span className="kept-acts">
+                      <button type="button" className="mini" disabled={locked} onClick={() => void run(k.id, () => restoreShell(k.id))}>
+                        restore
+                      </button>
+                      {k.agent && (
+                        <button
+                          type="button"
+                          className="mini"
                           disabled={locked}
-                          onChange={() => toggle(k.id)}
-                        />
-                        <span className="kept-where">
-                          <span>
-                            {repoName(k.repoId)}
-                            {tagged && <span className="backend-word">{ownerOf(k.id)}</span>}
-                          </span>
-                          <span className="kept-fact">
-                            {ago(k.savedAt, now)} · {k.lines} line{k.lines === 1 ? "" : "s"}
-                            {k.agent && ` · ${k.agent} was running`}
-                          </span>
-                        </span>
-                        <span className="kept-acts">
-                          <button type="button" className="mini" disabled={locked} onClick={() => void run(k.id, () => restoreShell(k.id))}>
-                            restore
-                          </button>
-                          {k.agent && (
-                            <button
-                              type="button"
-                              className="mini"
-                              disabled={locked}
-                              title={`Restores the shell and runs ${k.agent === "codex" ? "codex resume --last" : "claude --continue"} in it`}
-                              onClick={() => void run(k.id, () => restoreShell(k.id, true))}
-                            >
-                              restore + continue
-                            </button>
-                          )}
-                          <button type="button" className="mini" disabled={locked} onClick={() => void run(k.id, () => forgetShell(k.id))}>
-                            forget
-                          </button>
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-            {error && <p className="settings-hint error">{error}</p>}
-            <p className="settings-hint">
-              A restored shell is a new shell at the same repo, under the same name, with what the old one printed ahead of it. The processes that were
-              in it are gone: a shell that had an agent in it is offered its continue (<code>claude --continue</code>, <code>codex resume --last</code>),
-              which picks the conversation back up.
-              {!keeping && " Recording is off, so nothing new is being kept; settings has the switch."}
-            </p>
-          </section>
-          <PopGrip name="kept" anchor={HANGS_RIGHT} gear />
-        </div>
-      )}
-    </div>
+                          title={`Restores the shell and runs ${k.agent === "codex" ? "codex resume --last" : "claude --continue"} in it`}
+                          onClick={() => void run(k.id, () => restoreShell(k.id, true))}
+                        >
+                          restore + continue
+                        </button>
+                      )}
+                      <button type="button" className="mini" disabled={locked} onClick={() => void run(k.id, () => forgetShell(k.id))}>
+                        forget
+                      </button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+        {error && <p className="settings-hint error">{error}</p>}
+        <p className="settings-hint">
+          A restored shell is a new shell at the same repo, under the same name, with what the old one printed ahead of it. The processes that were
+          in it are gone: a shell that had an agent in it is offered its continue (<code>claude --continue</code>, <code>codex resume --last</code>),
+          which picks the conversation back up.
+          {!keeping && " Recording is off, so nothing new is being kept; settings has the switch."}
+        </p>
+      </section>
+    </>
   );
 }

@@ -7,6 +7,7 @@ import { openView } from "../clirun";
 import { HEALTH_PANEL, STATE_TONE, STATE_WORD, groupRows, healthRows, healthSummary, repoChecks, repoWord, type HealthGroup, type HealthRow } from "../health";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
+import { POPUP_WORD } from "../sectiontabs";
 import { useStore } from "../store";
 import { escapeCloses, keepKeys } from "../surface";
 import { ago } from "../util";
@@ -138,6 +139,46 @@ function Pulse() {
 }
 
 /**
+ * What the health popover shows: its head, with the panel and the page one
+ * click away, and every check. It is its own component so the popover and a
+ * tab in a shell window (FR-030) draw the same thing. `onDone` closes the
+ * popover after a move takes the list somewhere else; a tab has nothing to
+ * close.
+ */
+export function HealthPopBody({ onDone }: { onDone?: () => void }) {
+  const openPanel = useStore((s) => s.openPanel);
+  return (
+    <>
+      <div className="health-pop-head">
+        <h3 className="panel-label">health</h3>
+        <span className="spacer" />
+        <button
+          type="button"
+          className="mini"
+          onClick={() => {
+            openPanel(HEALTH_PANEL);
+            onDone?.();
+          }}
+        >
+          open as panel
+        </button>
+        <button
+          type="button"
+          className="mini"
+          onClick={() => {
+            openView("health");
+            onDone?.();
+          }}
+        >
+          open page
+        </button>
+      </div>
+      <HealthList />
+    </>
+  );
+}
+
+/**
  * The top bar's health chip: a quiet pulse while every check is well, amber
  * with a count while something heals, rust with a count when something is
  * down or gave up. Open, it lists every check, with the panel and the page
@@ -146,7 +187,6 @@ function Pulse() {
 export function HealthChip() {
   const rows = useHealthRows();
   const sum = healthSummary(rows, Date.now());
-  const openPanel = useStore((s) => s.openPanel);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
@@ -182,32 +222,8 @@ export function HealthChip() {
       </button>
       {open && (
         <div className="settings-pop health-pop" role="dialog" aria-label="Health">
-          <div className="health-pop-head">
-            <h3 className="panel-label">health</h3>
-            <span className="spacer" />
-            <button
-              type="button"
-              className="mini"
-              onClick={() => {
-                openPanel(HEALTH_PANEL);
-                setOpen(false);
-              }}
-            >
-              open as panel
-            </button>
-            <button
-              type="button"
-              className="mini"
-              onClick={() => {
-                openView("health");
-                setOpen(false);
-              }}
-            >
-              open page
-            </button>
-          </div>
-          <HealthList />
-          <PopGrip name="health" anchor={HANGS_RIGHT} gear />
+          <HealthPopBody onDone={() => setOpen(false)} />
+          <PopGrip name="health" anchor={HANGS_RIGHT} gear tab={{ kind: "popup", ref: "health", label: POPUP_WORD.health }} />
         </div>
       )}
     </div>

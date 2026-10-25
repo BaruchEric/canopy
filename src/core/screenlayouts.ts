@@ -6,7 +6,7 @@
  * matches and applies them. Tested in screenlayouts.test.ts.
  */
 
-import { BOARD_LAYOUTS, type ScreenLayout, type ScreenProfile } from "./types";
+import { BOARD_LAYOUTS, type ScreenLayout, type ScreenProfile, type TabTemplate, type TabTree } from "./types";
 
 /** The bounds a layout's values are held to, the page's own (SIDEBAR and
  *  PANEL in ui/src/store.ts, ZOOM_MIN and ZOOM_MAX in ui/src/surface.ts,
@@ -38,7 +38,7 @@ const clamp = (v: number, min: number, max: number): number => Math.min(max, Mat
  *  dock takes the cards' room and scrolls a column at a time. A screen
  *  1400 px tall or more keeps the event feed up. */
 export function recommendLayout(w: number, h: number): ScreenLayout {
-  if (w < PHONE) return { arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "wall" };
+  if (w < PHONE) return { arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "wall", tabs: recommendTabs(w) };
   const tree = w >= NARROW;
   const sidebarWidth = clamp(Math.round((w * 0.12) / 8) * 8, 220, 320);
   const side = tree ? sidebarWidth + SEAM : 0;
@@ -57,7 +57,79 @@ export function recommendLayout(w: number, h: number): ScreenLayout {
     feedOpen: h >= 1400,
     // the agents board opens on its wall of every agent, on any screen
     agents: "wall",
+    tabs: recommendTabs(w),
   };
+}
+
+/** halves of `a` and `b`, side by side or stacked */
+const halves = (dir: "row" | "col", a: TabTree, b: TabTree): TabTree => ({ dir, at: 0.5, a, b });
+const leaf = (pane: string): TabTree => ({ pane });
+
+/** The tab template recommended for a screen `w` CSS px wide (FR-030): a
+ *  phone or a small laptop keeps its sections in the cards; from NARROW up
+ *  history sits beside each card's shell; a 4K screen adds changes and the
+ *  tasks popup in the strip; a double-wide adds files and health. */
+export function recommendTabs(w: number): TabTemplate {
+  if (w < NARROW) return { panel: [], strip: [] };
+  if (w < 2400) return { panel: ["history"], split: halves("row", leaf("history"), leaf("shell")), strip: [] };
+  if (w < 3600) {
+    return { panel: ["changes", "history"], split: halves("row", leaf("changes"), halves("col", leaf("history"), leaf("shell"))), strip: ["tasks"] };
+  }
+  return {
+    panel: ["changes", "files", "history"],
+    split: halves("row", halves("col", leaf("changes"), leaf("files")), halves("col", leaf("history"), leaf("shell"))),
+    strip: ["tasks", "health"],
+  };
+}
+
+const NAME = /^[a-z]{1,20}$/;
+const TREE_DEPTH = 6;
+
+/** a template's split checked: names only, none twice, halves held to 0.1 to 0.9 */
+function parseTree(v: unknown, seen: Set<string>, depth: number): TabTree | null {
+  if (depth > TREE_DEPTH || !isRecord(v)) return null;
+  if (v["pane"] !== undefined) {
+    const p = v["pane"];
+    if (typeof p !== "string" || !NAME.test(p) || seen.has(p)) return null;
+    seen.add(p);
+    return { pane: p };
+  }
+  const dir = v["dir"];
+  const at = v["at"];
+  if ((dir !== "row" && dir !== "col") || typeof at !== "number" || !Number.isFinite(at)) return null;
+  const a = parseTree(v["a"], seen, depth + 1);
+  const b = parseTree(v["b"], seen, depth + 1);
+  return a && b ? { dir, at: clamp(at, 0.1, 0.9), a, b } : null;
+}
+
+/** a list of names, at most `most`, each once */
+function names(v: unknown, most: number): string[] | null {
+  if (!Array.isArray(v) || v.length > most) return null;
+  if (!v.every((k): k is string => typeof k === "string" && NAME.test(k))) return null;
+  return [...new Set(v)];
+}
+
+/** A tab template checked: lists of names and a split of names. The page
+ *  leaves out a name it has no section or popup for. */
+export function parseTabs(raw: unknown): { tabs: TabTemplate } | { error: string } {
+  if (!isRecord(raw)) return { error: "tabs is an object" };
+  const out: TabTemplate = {};
+  if (raw["panel"] !== undefined) {
+    const got = names(raw["panel"], 20);
+    if (!got) return { error: "tabs.panel is a list of section names" };
+    out.panel = got;
+  }
+  if (raw["strip"] !== undefined) {
+    const got = names(raw["strip"], 20);
+    if (!got) return { error: "tabs.strip is a list of popup names" };
+    out.strip = got;
+  }
+  if (raw["split"] !== undefined) {
+    const tree = parseTree(raw["split"], new Set(), 0);
+    if (!tree || "pane" in tree) return { error: "tabs.split is a split of two or more names" };
+    out.split = tree;
+  }
+  return { tabs: out };
 }
 
 
@@ -139,6 +211,11 @@ export function parseLayout(raw: unknown): { layout: ScreenLayout } | { error: s
     const keys = names.filter((k): k is string => typeof k === "string" && /^[a-z]{1,20}$/.test(k));
     if (keys.length !== names.length) return { error: "sectionsHidden is a list of section names" };
     out.sectionsHidden = [...new Set(keys)];
+  }
+  if (r["tabs"] !== undefined) {
+    const got = parseTabs(r["tabs"]);
+    if ("error" in got) return got;
+    out.tabs = got.tabs;
   }
   return { layout: out };
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { screenLayoutOf, useStore } from "../store";
+import { screenLayoutOf, tabCards, useStore } from "../store";
+import { captureTabs, tabsWords } from "../tabtemplates";
 import { matchProfile, recommendLayout, type MatchHow } from "../../../src/core/screenlayouts";
 import { BOARD_LAYOUTS, type ScreenProfile } from "../../../src/core/types";
 import { LAYOUT_WORD } from "../board";
@@ -65,7 +66,7 @@ export function ScreenLayoutsRow() {
   };
 
   const apply = (p: ScreenProfile) => {
-    useStore.getState().applyScreenLayout(p.layout);
+    useStore.getState().applyScreenLayout(p.layout, true);
     setNote({ ok: true, text: `applied ${p.name} to this window` });
   };
 
@@ -113,6 +114,7 @@ export function ScreenLayoutsRow() {
           <span className="layout-name">{p.name}</span>
           {about.length > 0 && <span className="layout-size">{about.join(" · ")}</span>}
           {on && match && <span className="layout-match">fits this screen, {HOW[match.how]}</span>}
+          {p.layout.tabs && <span className="layout-size">{tabsWords(p.layout.tabs)}</span>}
         </div>
         {asking ? (
           <div className="layout-acts">
@@ -137,7 +139,7 @@ export function ScreenLayoutsRow() {
           </div>
         ) : (
           <div className="layout-acts">
-            <button type="button" className="mini" title="Lay this profile over this window now" onClick={() => apply(p)}>
+            <button type="button" className="mini" title="Lay this profile over this window now, its shell tabs on every open card" onClick={() => apply(p)}>
               apply
             </button>
             <button type="button" className="mini" onClick={() => setEditing({ id: p.id, draft: draftOf(p) })}>
@@ -214,11 +216,15 @@ export function ScreenLayoutsRow() {
       )}
       <p className="settings-hint">
         Kept on the home backend for every browser. A screen this browser has never arranged takes the one that fits as the window moves onto
-        it; any other waits for apply. A layout never opens or closes a panel.
+        it; any other waits for apply. A layout never opens or closes a panel. Its shell tabs land only on apply: every open card takes the
+        sections as tabs, split with its first shell, and the strip takes the popups.
       </p>
     </section>
   );
 }
+
+/** the draft's fields a text box edits */
+type TextField = { [K in keyof Draft]: Draft[K] extends string ? K : never }[keyof Draft];
 
 const TRI: { value: Tri; label: string }[] = [
   { value: "", label: "leave" },
@@ -244,7 +250,7 @@ function ProfileForm({
   onCancel: () => void;
 }) {
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => onChange({ ...draft, [k]: v });
-  const text = (k: keyof Draft, label: string, hint = "") => (
+  const text = (k: TextField, label: string, hint = "") => (
     <label className="layout-field">
       <span>{label}</span>
       <input className="settings-input" type="text" value={draft[k]} placeholder={hint} onChange={(e) => set(k, e.target.value)} />
@@ -338,6 +344,27 @@ function ProfileForm({
         </label>
         {text("sectionsHidden", "hidden sections", "peers, launch")}
       </div>
+      <div className="layout-tabs">
+        <span>shell tabs</span>
+        <span className="layout-tabs-said">{draft.tabs ? tabsWords(draft.tabs) : "leave as they are"}</span>
+        <button
+          type="button"
+          className="mini"
+          title="The sections the first card with any has as tabs, their split with its shell, and the strip's popups"
+          onClick={() => {
+            const st = useStore.getState();
+            set("tabs", captureTabs(st.settings, tabCards(st)));
+          }}
+        >
+          this window's
+        </button>
+        <button type="button" className="mini" title="Applying it puts every section back in its card and takes the popups out of the strip" onClick={() => set("tabs", { panel: [], strip: [] })}>
+          none
+        </button>
+        <button type="button" className="mini" title="Applying it leaves the tabs as they are" onClick={() => set("tabs", null)}>
+          leave
+        </button>
+      </div>
       <div className="key-row">
         <button type="submit" className="mini" disabled={busy}>
           {isNew ? "create" : "save"}
@@ -362,4 +389,5 @@ const LAYOUT_FIELDS = [
   "sectionsHidden",
   "feedOpen",
   "agents",
+  "tabs",
 ] as const satisfies readonly (keyof Draft)[];

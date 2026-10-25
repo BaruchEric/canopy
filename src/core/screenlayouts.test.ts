@@ -1,19 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { PRESETS, isPresetId, matchProfile, parseLayout, parseProfile, recommendLayout, sameSize } from "./screenlayouts";
+import { PRESETS, isPresetId, matchProfile, parseLayout, parseProfile, parseTabs, recommendLayout, recommendTabs, sameSize } from "./screenlayouts";
 import type { ScreenProfile } from "./types";
 
 describe("recommendLayout", () => {
   test("a phone gets tabs and no tree", () => {
-    expect(recommendLayout(393, 852)).toEqual({ arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "wall" });
+    expect(recommendLayout(393, 852)).toEqual({ arrange: "tabs", carousel: false, sidebarOpen: false, feedOpen: false, agents: "wall", tabs: recommendTabs(393) });
   });
   test("a small laptop turns the carousel on, the dock one wide column", () => {
-    expect(recommendLayout(1280, 800)).toEqual({ arrange: "columns", carousel: true, sidebarOpen: true, sidebarWidth: 220, columnWidth: 1048, feedOpen: false, agents: "wall" });
+    expect(recommendLayout(1280, 800)).toEqual({ arrange: "columns", carousel: true, sidebarOpen: true, sidebarWidth: 220, columnWidth: 1048, feedOpen: false, agents: "wall", tabs: recommendTabs(1280) });
   });
   test("full HD keeps the cards and splits the rest in two", () => {
-    expect(recommendLayout(1920, 1080)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 232, columnWidth: 675, feedOpen: false, agents: "wall" });
+    expect(recommendLayout(1920, 1080)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 232, columnWidth: 675, feedOpen: false, agents: "wall", tabs: recommendTabs(1920) });
   });
   test("a 7680 double-wide gets a dozen columns, the widest tree and the feed", () => {
-    expect(recommendLayout(7680, 2160)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 320, columnWidth: 580, feedOpen: true, agents: "wall" });
+    expect(recommendLayout(7680, 2160)).toEqual({ arrange: "columns", carousel: false, sidebarOpen: true, sidebarWidth: 320, columnWidth: 580, feedOpen: true, agents: "wall", tabs: recommendTabs(7680) });
   });
   test("below the narrow width the tree is a drawer, so it is not opened", () => {
     expect(recommendLayout(1000, 1300).sidebarOpen).toBe(false);
@@ -110,5 +110,25 @@ describe("matchProfile", () => {
     expect(matchProfile(PRESETS, { width: 2048, height: 1280 })?.profile.id).toBe("preset-1920x1200");
     // a user's own profile is never the nearest, only an exact or named one
     expect(matchProfile([own("p-x", "", 3800, 1070)], { width: 3840, height: 1080 })).toBeNull();
+  });
+});
+
+describe("tab templates", () => {
+  test("the seeds grow with the screen", () => {
+    expect(recommendTabs(393)).toEqual({ panel: [], strip: [] });
+    expect(recommendTabs(1920).panel).toEqual(["history"]);
+    expect(recommendTabs(2560).strip).toEqual(["tasks"]);
+    expect(recommendTabs(7680).panel).toEqual(["changes", "files", "history"]);
+  });
+  test("a template is checked name by name", () => {
+    const split = { dir: "row", at: 0.95, a: { pane: "history" }, b: { pane: "shell" } };
+    expect(parseTabs({ panel: ["history"], split, strip: ["tasks"] })).toEqual({
+      tabs: { panel: ["history"], split: { dir: "row", at: 0.9, a: { pane: "history" }, b: { pane: "shell" } }, strip: ["tasks"] },
+    });
+    expect(parseTabs({ panel: ["History!"] })).toEqual({ error: "tabs.panel is a list of section names" });
+    expect(parseTabs({ split: { pane: "history" } })).toEqual({ error: "tabs.split is a split of two or more names" });
+    expect(parseTabs({ split: { dir: "row", at: 0.5, a: { pane: "shell" }, b: { pane: "shell" } } })).toEqual({ error: "tabs.split is a split of two or more names" });
+    expect(parseLayout({ tabs: { strip: [] } })).toEqual({ layout: { tabs: { strip: [] } } });
+    expect(parseLayout({ tabs: 3 })).toEqual({ error: "tabs is an object" });
   });
 });

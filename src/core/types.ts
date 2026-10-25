@@ -544,6 +544,27 @@ export interface ScreenLayout {
   feedOpen?: boolean;
   /** the agents board's layout */
   agents?: BoardLayout;
+  /** what the shell windows hold besides shells (FR-030), applied by hand */
+  tabs?: TabTemplate;
+}
+
+/** A split of a card's shell section: a leaf names one of the card's
+ *  sections or "shell", the card's first shell; a split lays two side by
+ *  side (`row`) or stacked (`col`), the first taking `at`. The same shape
+ *  as the page's split groups (ui/src/splitpanes.ts), by name, not by id. */
+export type TabTree = { pane: string } | { dir: "row" | "col"; at: number; a: TabTree; b: TabTree };
+
+/** A screen's tab template (FR-030): no repo in it, so it lands on any
+ *  card. Applied, every open card's shell section takes `panel` as tabs,
+ *  split as `split` says, and the strip takes the popups in `strip`. A
+ *  field left out leaves that part as it is; an empty list clears it. */
+export interface TabTemplate {
+  /** the sections every open card shows as tabs beside its shells */
+  panel?: string[];
+  /** how they split with the card's first shell */
+  split?: TabTree;
+  /** the popups sitting as tabs in the strip */
+  strip?: string[];
 }
 
 /** The agents board's layouts (ui/src/board.ts): a rail of rows beside one

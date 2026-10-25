@@ -6550,6 +6550,38 @@ button.ss-scope:hover {
 .sec-tab-panel > .panel-body {
   padding-bottom: 8px;
 }
+/* a run (a chat or a coordinator) and an agent session in a tab: the
+   sheet's and the board's parts, filling the pane instead of floating */
+.sec-pane-body > .run-tab {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.sec-pane-body > .agent-tab {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+/* a screen layout's shell tabs line: what the template holds, and its three choices */
+.layout-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+}
+.layout-tabs-said {
+  color: var(--ink-dim);
+}
+.ss-keep {
+  margin-left: 6px;
+}
 .sec-tab-mark {
   flex: none;
   color: var(--ink-faint);
@@ -7307,6 +7339,15 @@ body:has(.focus-grip.se.dragging) {
 }
 .shell-solo .topbar {
   flex: none;
+}
+/* a window of one panel, section or shell has a single row of its own,
+   not the main bar's two lines, so it lays out as one */
+.solo > .topbar,
+.shell-solo > .topbar {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
 }
 .shell-solo .term-body {
   flex: 1;
@@ -13216,4 +13257,49 @@ body.resizing-nesw {
 .sheet[data-zoomed] > :not(.sheet-head, .pop-grip, .pop-gear),
 .settings-pop[data-zoomed] > :not(.pop-grip, .pop-gear) {
   zoom: var(--pop-zoom);
+}
+
+/* ---------- popups as tabs (FR-030) ---------- */
+/* A top-bar popup's body as a tab or pane in a shell window: it fills the
+   pane and scrolls inside it, with the popover's padding but not its fixed
+   width, height or float. */
+.popup-tab {
+  height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 4px 0 8px;
+}
+/* the one line a popup says in a tab when it has nothing to show */
+.popup-tab > .settings-hint {
+  padding: 4px 14px;
+}
+.sec-pane-body > .popup-tab {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}
+/* health's head and list sit outside any settings row, so the popover
+   padded them itself */
+.popup-tab[data-popup="health"] {
+  padding: 8px 14px 10px;
+}
+.popup-tab .seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.popup-tab[data-popup="kept"] input[type="checkbox"],
+.popup-tab[data-popup="shells"] input[type="checkbox"] {
+  accent-color: var(--moss);
+}
+.popup-tab[data-popup="shells"] select.settings-input {
+  align-self: stretch;
+}
+/* the bar's controls are one height, popovers included, so the tab's are too */
+.popup-tab .mini,
+.popup-tab .seg {
+  min-height: 28px;
+}
+/* the waiting panel's state colour, which its rows read */
+.popup-tab[data-popup="waiting"] {
+  --state: var(--lichen);
 }

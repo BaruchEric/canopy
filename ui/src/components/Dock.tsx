@@ -95,7 +95,7 @@ import {
   zoomStyle,
 } from "./Surface";
 import { SECTION_WORD, foldKeys, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
-import { sectionApplies, tabbedKeys } from "../sectiontabs";
+import { POPUP_WORD, sectionApplies, tabbedKeys } from "../sectiontabs";
 import { openElsewhere, soloUrl } from "../routes";
 import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys, useFullscreenExit } from "../fullscreen";
 import { copyText } from "../share";
@@ -2053,6 +2053,15 @@ function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement 
           { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
           ...stepEntries(WAITING_PANEL, panels, dockLayout, movePanel),
         ] satisfies GearEntry[])),
+    {
+      type: "item",
+      label: "a tab in the shells strip",
+      title: "Out of the dock into a tab in the strip and the sessions view (FR-030)",
+      run: () => {
+        useStore.getState().tabItem("strip", { kind: "popup", ref: "waiting", label: POPUP_WORD.waiting });
+        useStore.getState().closePanel(WAITING_PANEL);
+      },
+    },
     closeEntry(panelClose, setSetting),
   ];
   return (

@@ -1,6 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  addItemTab,
   addSectionTab,
+  isItemTab,
+  isPageTabId,
+  itemTabsAt,
+  itemTabsOf,
+  pageTabLabel,
   dropSectionTab,
   isSectionTabId,
   sectionApplies,
@@ -71,5 +77,35 @@ describe("section tabs", () => {
     const groups = splitIn([], "mac/t-1", sec, "left");
     expect(pruneGroups(groups, new Set(["mac/t-1", sec]))).toEqual(groups);
     expect(pruneGroups(groups, new Set(["mac/t-1"]))).toEqual([]);
+  });
+});
+
+describe("chat and popup tabs", () => {
+  test("an item is a tab in one place, by an id no shell has", () => {
+    let tabs = addItemTab([], "strip", { kind: "run", ref: "mac/r-1", label: "ask · canopy", repoId: "mac/canopy" });
+    tabs = addItemTab(tabs, "panel", { kind: "run", ref: "mac/r-1", label: "ask · canopy", repoId: "mac/canopy" });
+    expect(tabs.map((t) => t.id)).toEqual(["tab:panel:run:mac/r-1"]);
+    expect(isPageTabId("tab:panel:run:mac/r-1")).toBe(true);
+    expect(itemTabsAt(tabs, "panel", "mac/canopy")).toHaveLength(1);
+    expect(itemTabsAt(tabs, "panel", "mac/other")).toHaveLength(0);
+    const [t] = tabs;
+    if (!t) throw new Error("no tab");
+    expect(isItemTab(t)).toBe(true);
+    expect(pageTabLabel(t, "ignored")).toBe("ask · canopy");
+  });
+
+  test("the saved list read back drops what does not check out", () => {
+    const got = itemTabsOf([
+      { kind: "popup", ref: "health", place: "strip" },
+      { kind: "popup", ref: "nope", place: "strip" },
+      { kind: "agent", ref: "mac/a1", place: "strip", label: "  claude in canopy  " },
+      { kind: "agent", ref: "mac/a1", place: "panel" },
+      { kind: "run", ref: "", place: "strip" },
+      { kind: "shell", ref: "x", place: "strip" },
+    ]);
+    expect(got).toEqual([
+      { id: "tab:strip:popup:health", kind: "popup", ref: "health", label: "health", place: "strip" },
+      { id: "tab:strip:agent:mac/a1", kind: "agent", ref: "mac/a1", label: "claude in canopy", place: "strip" },
+    ]);
   });
 });

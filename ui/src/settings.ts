@@ -17,7 +17,7 @@ import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
 import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
 import { popSizesOf, popZoomsOf, type PopSizes, type PopZooms } from "./pop";
 import { splitsOf, type PaneTree } from "./splitpanes";
-import { sectionTabsOf, type SectionTab } from "./sectiontabs";
+import { itemTabsOf, sectionTabsOf, type ItemTab, type SectionTab } from "./sectiontabs";
 import { BOARD_GROUPINGS, BOARD_LAYOUTS, type BoardGrouping, type BoardLayout } from "./board";
 import {
   SECTION_KEYS,
@@ -196,6 +196,8 @@ export interface Settings {
   windowSplits: PaneTree[];
   /** the cards' sections sitting as tabs in a shell window (FR-030) */
   sectionTabs: SectionTab[];
+  /** chats and popups sitting as tabs in a shell window (FR-030) */
+  itemTabs: ItemTab[];
   /** system notifications while the tab is hidden, and the "(n)" count of
    *  what waits on you in the tab's title; off unless asked for */
   notify: boolean;
@@ -252,6 +254,7 @@ export const DEFAULT_SETTINGS: Settings = {
   panelSplits: [],
   windowSplits: [],
   sectionTabs: [],
+  itemTabs: [],
   notify: false,
 };
 
@@ -372,6 +375,7 @@ export const SCREEN_SETTINGS = [
   "panelSplits",
   "windowSplits",
   "sectionTabs",
+  "itemTabs",
 ] as const satisfies readonly (keyof Settings)[];
 
 /** what is stored under the key, an empty object for anything else */
@@ -432,6 +436,7 @@ export function loadSettings(): Settings {
       panelSplits: splitsOf(saved.panelSplits),
       windowSplits: splitsOf(saved.windowSplits),
       sectionTabs: sectionTabsOf(saved.sectionTabs),
+      itemTabs: itemTabsOf(saved.itemTabs),
       notify: typeof saved.notify === "boolean" ? saved.notify : DEFAULT_SETTINGS.notify,
       ...levelOf(saved),
     };

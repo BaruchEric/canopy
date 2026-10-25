@@ -8,7 +8,8 @@ import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
 import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
-import { addSectionTab, dropSectionTab, sectionTabId, type SectionPlace } from "./sectiontabs";
+import { addItemTab, addSectionTab, dropSectionTab, itemTabId, sectionTabId, type SectionPlace, type TabRef } from "./sectiontabs";
+import { applyTabs, captureTabs, type TabCard } from "./tabtemplates";
 import { termFontSize } from "./touch";
 import { isPresetId, matchProfile, type ProfileFields } from "../../src/core/screenlayouts";
 import { deviceHere, neverArranged, screenHere } from "./screenprofiles";
@@ -717,6 +718,8 @@ export interface CanopyState {
   /** whether the tailchan popover is up, and which conversation it shows */
   chanOpen: boolean;
   chanConv: string | null;
+  /** tailchan sits in a shell window's tab (FR-030), so it is looked at too */
+  chanInTab: boolean;
   /** the agent registry, the home backend's broker's cards by id */
   registry: Record<string, AgentCard>;
   /** whether the home backend has a registry to show; false shows nothing
@@ -895,7 +898,7 @@ export interface CanopyState {
   parkedTerms: TermTab[];
   /** the section tab (FR-030) the strip and the sessions view show in
    *  place of `activeTerm`, until a shell's tab is picked again */
-  stripSection: string | null;
+  stripPage: string | null;
   /** which backend's checkout a card that has several stands for, by card key */
   checkoutPref: Record<string, string>;
   /** the shell showing in the strip; null when the strip is empty */
@@ -990,8 +993,10 @@ export interface CanopyState {
   dropScreenProfile: (id: string) => Promise<void>;
   /** lays a profile's layout over this window through the usual setters,
    *  so the screen's own slots keep it; the dock's layout is written out
-   *  either way, so this screen counts as arranged from then on */
-  applyScreenLayout: (layout: ScreenLayout) => void;
+   *  either way, so this screen counts as arranged from then on. Its tab
+   *  template (FR-030) lands only with `withTabs`, an apply by hand: a
+   *  window moving onto a screen never moves sections out of the cards */
+  applyScreenLayout: (layout: ScreenLayout, withTabs?: boolean) => void;
   /** reads a repo's tasks from its backend */
   loadTasks: (repoId: string) => Promise<void>;
   taskAct: (repoId: string, action: TaskAction, name?: string) => Promise<void>;
@@ -1083,10 +1088,13 @@ export interface CanopyState {
   /** a card's section as a tab at a shell window (FR-030), out of the card
    *  and out of any other place it was a tab; the strip shows it */
   tabSection: (repoId: string, key: SectionKey, place: SectionPlace) => void;
-  /** a section tab closed, its section back in its card */
-  untabSection: (id: string) => void;
-  /** shows a section tab in the strip and the sessions view */
-  showStripSection: (id: string) => void;
+  /** a chat or a popup as a tab at a shell window (FR-030), out of any
+   *  other place it was a tab; the strip shows it */
+  tabItem: (place: SectionPlace, item: TabRef) => void;
+  /** a section's or an item's tab closed; a section goes back in its card */
+  untab: (id: string) => void;
+  /** shows a section's or an item's tab in the strip and the sessions view */
+  showStripPage: (id: string) => void;
   /** names a tab by hand, and its shell on the backend so every device's
    *  tab says it; a blank label puts its repo's name back */
   renameTerm: (id: string, label: string) => void;
@@ -1237,6 +1245,9 @@ export interface CanopyState {
   /** opens the popover, on a conversation or target ("#x", "@h") when given */
   openChan: (target?: string) => void;
   closeChan: () => void;
+  /** a tailchan tab mounted or gone: while one is up it reads as the
+   *  popover does, its conversations loaded and nothing counted unread */
+  chanTab: (on: boolean) => void;
   /** shows a conversation and reads its history */
   showConv: (conv: string) => Promise<void>;
   sendChan: (target: string, body: string, kind?: "text" | "clip") => Promise<void>;
@@ -1910,8 +1921,18 @@ export const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => 
 /** this window's layout as a screen layout profile keeps one: what Settings
  *  offers to take into a profile. The column width is the dock's first
  *  column's, or a new column's with none open. */
+/** the open cards a tab template lands on, each with its first panel shell */
+export function tabCards(s: Pick<CanopyState, "panels" | "repos" | "terms">): TabCard[] {
+  const out: TabCard[] = [];
+  for (const id of s.panels) {
+    const repo = s.repos.find((r) => r.id === id);
+    if (repo) out.push({ repo, shell: s.terms.find((t) => t.place === "panel" && t.repoId === id && t.task === undefined)?.id ?? null });
+  }
+  return out;
+}
+
 export function screenLayoutOf(
-  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "feedOpen">,
+  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "feedOpen" | "panels" | "repos" | "terms">,
 ): ScreenLayout {
   return {
     arrange: arrangementOf(s),
@@ -1925,6 +1946,7 @@ export function screenLayoutOf(
     sectionsHidden: [...s.settings.sectionsHidden],
     feedOpen: s.feedOpen,
     ...(s.settings.agentsLayout ? { agents: s.settings.agentsLayout } : {}),
+    tabs: captureTabs(s.settings, tabCards(s)),
   };
 }
 
@@ -2008,6 +2030,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   chanMsgs: {},
   chanUnread: 0,
   chanOpen: false,
+  chanInTab: false,
   chanConv: null,
   registry: {},
   registryReady: false,
@@ -2083,7 +2106,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   buildsAt: {},
   terms: [],
   parkedTerms: [],
-  stripSection: null,
+  stripPage: null,
   checkoutPref: layout.checkoutPref,
   activeTerm: null,
   hiddenTerms: layout.hiddenTerms,
@@ -2654,8 +2677,14 @@ export const useStore = create<CanopyState>((set, get) => ({
     const r = isPresetId(id) ? await api.layoutReset(id) : await api.layoutDelete(id);
     set({ screenProfiles: r.profiles });
   },
-  applyScreenLayout: (layout) => {
+  applyScreenLayout: (layout, withTabs = false) => {
     const st = get();
+    if (withTabs && layout.tabs) {
+      const got = applyTabs(layout.tabs, st.settings, tabCards(st));
+      st.setSetting("sectionTabs", got.sectionTabs);
+      st.setSetting("itemTabs", got.itemTabs);
+      st.setSetting("panelSplits", got.panelSplits);
+    }
     // through the setters the gears use, each kept for this screen
     if (layout.arrange) st.arrangeDock(layout.arrange);
     if (layout.carousel !== undefined) st.setSetting("dockCarousel", layout.carousel);
@@ -3047,7 +3076,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "chan") {
       const m = ev.message;
       set((s) => {
-        const looking = s.chanOpen && s.chanConv === m.channel && document.visibilityState === "visible";
+        const looking = (s.chanOpen || s.chanInTab) && s.chanConv === m.channel && document.visibilityState === "visible";
         return {
           chanMsgs: { ...s.chanMsgs, [m.channel]: mergeMessages(s.chanMsgs[m.channel], [m]) },
           chanUnread: !looking && isUnread(m, s.chanAs) ? s.chanUnread + 1 : s.chanUnread,
@@ -3838,14 +3867,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     set({ chanOpen: true, chanUnread: 0, chanConv: conv });
     void get().loadChan();
     if (conv) void get().showConv(conv);
-    // the latest clips, for "copy the latest", whether or not this handle
-    // follows the clipboard channel
-    void api
-      .chanRead("#clipboard", 5)
-      .then((msgs) => set((st) => ({ chanMsgs: { ...st.chanMsgs, clipboard: mergeMessages(st.chanMsgs["clipboard"], msgs) } })))
-      .catch(() => {});
+    readClips();
   },
   closeChan: () => set({ chanOpen: false }),
+  chanTab: (on) => {
+    if (!on) return set({ chanInTab: false });
+    set({ chanInTab: true, chanUnread: 0 });
+    const { loadChan, showConv, chanConv } = get();
+    void loadChan();
+    if (chanConv) void showConv(chanConv);
+    readClips();
+  },
   showConv: async (conv) => {
     set({ chanConv: conv });
     const msgs = await api.chanRead(conv, 50).catch((): ChanMessage[] => []);
@@ -3952,21 +3984,30 @@ export const useStore = create<CanopyState>((set, get) => ({
       ...(info.place === "panel" ? { ...dockPanel(now, toRepoId), closedSections: unfoldIn(now.closedSections, toRepoId, "shell") } : { activeTerm: info.id }),
     }));
   },
-  showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id, stripSection: null } : {})),
+  showTerm: (id) => set((s) => (s.terms.some((t) => t.id === id) ? { activeTerm: id, stripPage: null } : {})),
   tabSection: (repoId, key, place) => {
     const s = get();
     s.setSetting("sectionTabs", addSectionTab(s.settings.sectionTabs, place, repoId, key));
     const id = sectionTabId(place, key, repoId);
-    if (place === "strip") set({ stripSection: id });
+    if (place === "strip") set({ stripPage: id });
     // a folded shell section would hide the new tab
     if (place === "panel" && closedIn(s, repoId, "shell")) s.toggleSection(repoId, "shell");
   },
-  untabSection: (id) => {
+  tabItem: (place, item) => {
     const s = get();
-    s.setSetting("sectionTabs", dropSectionTab(s.settings.sectionTabs, id));
-    if (s.stripSection === id) set({ stripSection: null });
+    s.setSetting("itemTabs", addItemTab(s.settings.itemTabs, place, item));
+    const id = itemTabId(place, item.kind, item.ref);
+    if (place === "strip") set({ stripPage: id });
+    if (place === "panel" && item.repoId && closedIn(s, item.repoId, "shell")) s.toggleSection(item.repoId, "shell");
   },
-  showStripSection: (id) => set((s) => (s.settings.sectionTabs.some((t) => t.id === id && t.place === "strip") ? { stripSection: id } : {})),
+  untab: (id) => {
+    const s = get();
+    if (s.settings.sectionTabs.some((t) => t.id === id)) s.setSetting("sectionTabs", dropSectionTab(s.settings.sectionTabs, id));
+    if (s.settings.itemTabs.some((t) => t.id === id)) s.setSetting("itemTabs", s.settings.itemTabs.filter((t) => t.id !== id));
+    if (s.stripPage === id) set({ stripPage: null });
+  },
+  showStripPage: (id) =>
+    set((s) => ([...s.settings.sectionTabs, ...s.settings.itemTabs].some((t) => t.id === id && t.place === "strip") ? { stripPage: id } : {})),
   termSocketLabelSent: (id, label) =>
     set((s) => {
       const pending = s.pendingTermLabels[id];
@@ -4432,11 +4473,20 @@ export function dockless(): boolean {
   return route.solo || route.shell || route.section !== null || route.agent !== null;
 }
 
+/** The latest clips, for tailchan's "copy the latest", whether or not this
+ *  handle follows the clipboard channel. */
+function readClips(): void {
+  void api
+    .chanRead("#clipboard", 5)
+    .then((msgs) => useStore.setState((st) => ({ chanMsgs: { ...st.chanMsgs, clipboard: mergeMessages(st.chanMsgs["clipboard"], msgs) } })))
+    .catch(() => {});
+}
+
 // A strip shell coming forward (a new one, a join, a move) takes the strip
 // back from a section tab showing there (FR-030), so no action that sets
 // activeTerm has to remember to.
 useStore.subscribe((s, prev) => {
-  if (s.stripSection !== null && s.activeTerm !== null && s.activeTerm !== prev.activeTerm) useStore.setState({ stripSection: null });
+  if (s.stripPage !== null && s.activeTerm !== null && s.activeTerm !== prev.activeTerm) useStore.setState({ stripPage: null });
 });
 
 // Whatever part of the layout a change touched is written as it happens, so

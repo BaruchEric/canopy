@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
+import { POPUP_WORD } from "../sectiontabs";
 import { multi, useStore } from "../store";
 import { ericsCrons, rangerCard, rangerLine, rangerTone, shownRangers, sizeWord, wakeWhen, worstTone } from "../ranger";
 import type { RangerInfo } from "../../../src/core/types";
@@ -21,9 +22,10 @@ const errText = (e: unknown): string => (e instanceof Error ? e.message : String
 /**
  * One backend's ranger in the chip's popover: what it is doing, its
  * conversation, open its session, message it, restart it, a fresh
- * conversation, turn it off, and every wake it holds.
+ * conversation, turn it off, and every wake it holds. `close` shuts the
+ * popover after open or message; a tab has none.
  */
-function RangerBlock({ backend, info, close, showBackend }: { backend: string; info: RangerInfo; close: () => void; showBackend: boolean }) {
+function RangerBlock({ backend, info, close, showBackend }: { backend: string; info: RangerInfo; close?: () => void; showBackend: boolean }) {
   const registry = useStore((s) => s.registry);
   const chanReady = useStore((s) => s.chan?.ready === true);
   const openRanger = useStore((s) => s.openRanger);
@@ -72,7 +74,7 @@ function RangerBlock({ backend, info, close, showBackend }: { backend: string; i
           title="Its session in the strip along the bottom"
           onClick={() => {
             openRanger(backend);
-            close();
+            close?.();
           }}
         >
           open
@@ -84,7 +86,7 @@ function RangerBlock({ backend, info, close, showBackend }: { backend: string; i
           title={chanReady ? `A tailchan DM to @${info.handle}, which wakes it` : "No tailchan broker on this page's backend"}
           onClick={() => {
             openChan(`@${info.handle}`);
-            close();
+            close?.();
           }}
         >
           message
@@ -122,6 +124,28 @@ function RangerBlock({ backend, info, close, showBackend }: { backend: string; i
 }
 
 /**
+ * What the ranger popover shows: each shown backend's ranger with what it
+ * is doing and its wakes. The popover and a tab in a shell window (FR-030)
+ * both draw it. `onDone` closes the popover once open or message takes
+ * the user elsewhere; a tab stays.
+ */
+export function RangerPopBody({ onDone }: { onDone?: () => void }) {
+  const rangers = useStore((s) => s.rangers);
+  const order = useStore((s) => s.backendOrder);
+  const several = useStore(multi);
+  const shown = shownRangers(rangers, order);
+  return (
+    <>
+      <h3 className="panel-label">ranger</h3>
+      {shown.length === 0 && <p className="settings-hint">No shown backend has its ranger on.</p>}
+      {shown.map(([b, r]) => (
+        <RangerBlock key={b} backend={b} info={r} {...(onDone ? { close: onDone } : {})} showBackend={several} />
+      ))}
+    </>
+  );
+}
+
+/**
  * The ranger in the top bar: there only while a shown backend has one on,
  * the glyph alone where room is short (a phone's bar).
  * Moss while it runs, rust while it needs someone (gave up, the trust
@@ -132,7 +156,6 @@ export function RangerChip({ compact = false }: { compact?: boolean }) {
   const rangers = useStore((s) => s.rangers);
   const order = useStore((s) => s.backendOrder);
   const registry = useStore((s) => s.registry);
-  const several = useStore(multi);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
@@ -173,11 +196,8 @@ export function RangerChip({ compact = false }: { compact?: boolean }) {
       </button>
       {open && (
         <div className="settings-pop ranger-pop" role="dialog" aria-label="The ranger">
-          <h3 className="panel-label">ranger</h3>
-          {shown.map(([b, r]) => (
-            <RangerBlock key={b} backend={b} info={r} close={() => setOpen(false)} showBackend={several} />
-          ))}
-          <PopGrip name="ranger" anchor={HANGS_RIGHT} gear />
+          <RangerPopBody onDone={() => setOpen(false)} />
+          <PopGrip name="ranger" anchor={HANGS_RIGHT} gear tab={{ kind: "popup", ref: "ranger", label: POPUP_WORD.ranger }} />
         </div>
       )}
     </div>

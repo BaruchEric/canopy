@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
+import { POPUP_WORD } from "../sectiontabs";
 import { taskShellUrl } from "../routes";
 import { tasksOf, useStore } from "../store";
 import { frontTask, markTime, STATUS_WORD, taskChip, taskWhen } from "../tasks";
@@ -366,24 +367,85 @@ export function TaskChip({ repoId }: { repoId: string }) {
   );
 }
 
-/** The top bar's ▶ n: every task that is not idle, on every shown backend,
- *  each with open, restart and stop, and fix for one that failed. Nothing
- *  when none is. */
-export function TasksChip() {
+/**
+ * What the tasks popover shows: every task that is not idle, on every shown
+ * backend, each with open, restart and stop, and fix for one that failed.
+ * The popover and a tab in a shell window (FR-030) both draw it. `onDone`
+ * closes the popover once a task is brought to the front; a tab stays.
+ */
+export function TasksPopBody({ onDone }: { onDone?: () => void }) {
   const all = useStore((s) => s.taskAll);
   const repos = useStore((s) => s.repos);
   const bringTask = useStore((s) => s.bringTask);
   const taskAct = useStore((s) => s.taskAct);
-  const [open, setOpen] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
+
+  // the ages move by the second while the list shows
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, []);
+
+  if (all.length === 0) return <p className="settings-hint">No task is running or in trouble.</p>;
+  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
+  const list = [...all].sort((a, b) => repoName(a.repoId).localeCompare(repoName(b.repoId)) || a.name.localeCompare(b.name));
+  const act = (t: TaskInfo, action: "restart" | "stop") => {
+    setError("");
+    taskAct(t.repoId, action, t.name).catch((e: unknown) => setError(errText(e)));
+  };
+
+  return (
+    <>
+      <ul className="task-list">
+        {list.map((t) => (
+          <li key={t.termId} className={`task-row ${t.status}`}>
+            <button
+              type="button"
+              className="task-main"
+              disabled={t.gone === "repo"}
+              title={`Bring ${t.name} to the front`}
+              onClick={() => {
+                bringTask(t.repoId, t.name);
+                onDone?.();
+              }}
+            >
+              <span className={`task-dot ${t.status}`} aria-label={STATUS_WORD[t.status]} />
+              <span className="task-name">{repoName(t.repoId)}</span>
+              <span>{t.name}</span>
+              <span className="task-when">{t.gone === "repo" ? "not in scan" : taskWhen(t, now)}</span>
+            </button>
+            <span className="task-actions">
+              {t.status === "running" && !t.gone && (
+                <button type="button" className="mini" title="Restart" onClick={() => act(t, "restart")}>
+                  ↻
+                </button>
+              )}
+              {(t.status === "running" || t.status === "backoff") && (
+                <button type="button" className="mini" title="Stop" onClick={() => act(t, "stop")}>
+                  ■
+                </button>
+              )}
+              {fixTask(t.repoId, t)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {error && <p className="note err">{error}</p>}
+    </>
+  );
+}
+
+/** The top bar's ▶ n: the tasks that are not idle, in a popover. Nothing
+ *  when none is. */
+export function TasksChip() {
+  const all = useStore((s) => s.taskAll);
+  const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
 
   useEffect(() => {
     if (!open) return;
-    setNow(Date.now());
-    const tick = setInterval(() => setNow(Date.now()), 1000);
     const onDown = (e: PointerEvent) => {
       if (leavesPop(e.target, ref)) setOpen(false);
     };
@@ -393,21 +455,14 @@ export function TasksChip() {
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {
-      clearInterval(tick);
       document.removeEventListener("pointerdown", onDown);
       window.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
   if (all.length === 0) return null;
-  const repoName = (id: string) => repos.find((r) => r.id === id)?.name ?? id;
-  const list = [...all].sort((a, b) => repoName(a.repoId).localeCompare(repoName(b.repoId)) || a.name.localeCompare(b.name));
   const chip = taskChip(all);
   const running = all.filter((t) => t.status === "running").length;
-  const act = (t: TaskInfo, action: "restart" | "stop") => {
-    setError("");
-    taskAct(t.repoId, action, t.name).catch((e: unknown) => setError(errText(e)));
-  };
 
   return (
     <div className="settings tasks-chip" ref={ref}>
@@ -423,42 +478,8 @@ export function TasksChip() {
       </button>
       {open && (
         <div className="settings-pop tasks-pop" role="dialog" aria-label="Tasks">
-          <ul className="task-list">
-            {list.map((t) => (
-              <li key={t.termId} className={`task-row ${t.status}`}>
-                <button
-                  type="button"
-                  className="task-main"
-                  disabled={t.gone === "repo"}
-                  title={`Bring ${t.name} to the front`}
-                  onClick={() => {
-                    bringTask(t.repoId, t.name);
-                    setOpen(false);
-                  }}
-                >
-                  <span className={`task-dot ${t.status}`} aria-label={STATUS_WORD[t.status]} />
-                  <span className="task-name">{repoName(t.repoId)}</span>
-                  <span>{t.name}</span>
-                  <span className="task-when">{t.gone === "repo" ? "not in scan" : taskWhen(t, now)}</span>
-                </button>
-                <span className="task-actions">
-                  {t.status === "running" && !t.gone && (
-                    <button type="button" className="mini" title="Restart" onClick={() => act(t, "restart")}>
-                      ↻
-                    </button>
-                  )}
-                  {(t.status === "running" || t.status === "backoff") && (
-                    <button type="button" className="mini" title="Stop" onClick={() => act(t, "stop")}>
-                      ■
-                    </button>
-                  )}
-                  {fixTask(t.repoId, t)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {error && <p className="note err">{error}</p>}
-          <PopGrip name="tasks" anchor={HANGS_RIGHT} gear />
+          <TasksPopBody onDone={() => setOpen(false)} />
+          <PopGrip name="tasks" anchor={HANGS_RIGHT} gear tab={{ kind: "popup", ref: "tasks", label: POPUP_WORD.tasks }} />
         </div>
       )}
     </div>

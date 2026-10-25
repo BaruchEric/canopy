@@ -4,6 +4,7 @@ import { chanBlobUrl } from "../api";
 import { convName, convOf, convOrder, latestClip, messageText } from "../chan";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
+import { POPUP_WORD } from "../sectiontabs";
 import { canReadClipboard, copyText, readText } from "../share";
 import { useStore } from "../store";
 import { DictateButton } from "./Dictate";
@@ -19,6 +20,9 @@ function ago(ts: number, now: number): string {
 }
 
 const EMPTY: ChanMessage[] = [];
+
+/** a text box's value and its setter, held by whoever outlasts the body */
+type Held = readonly [string, (v: string) => void];
 
 /** one message: who and when, then the text, a file's link, or a clip */
 function Message({ m, me, now, onError }: { m: ChanMessage; me: string; now: number; onError: (e: string) => void }) {
@@ -46,33 +50,23 @@ function Message({ m, me, now, onError }: { m: ChanMessage; me: string; now: num
 
 /**
  * tailchan in the top bar: `✉ n` counts what arrived while no one was
- * looking. Open, it lists the conversations the backend's handle is in, the
- * open one's messages with a composer, who has been around (a click opens
- * the DM), the clipboard both ways, and the switch that has canopy post its
- * own runs, flows and fleets. Nothing shows when the backend knows no broker.
+ * looking. Open, it shows the popover's body below. Nothing shows when the
+ * backend knows no broker.
  */
 export function ChanChip() {
   const chan = useStore((s) => s.chan);
   const open = useStore((s) => s.chanOpen);
-  const conv = useStore((s) => s.chanConv);
   const unread = useStore((s) => s.chanUnread);
-  const live = useStore((s) => s.chanMsgs);
-  const msgs = useStore((s) => (s.chanConv ? (s.chanMsgs[s.chanConv] ?? EMPTY) : EMPTY));
-  const { openChan, closeChan, showConv, sendChan, putChan, setChanNotify } = useStore.getState();
+  const { openChan, closeChan } = useStore.getState();
+  // the half-typed message and conversation outlast a close, as they did
+  // when the popover held them
   const [draft, setDraft] = useState("");
   const [to, setTo] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [now, setNow] = useState(() => Date.now());
   const ref = useRef<HTMLDivElement>(null);
-  const list = useRef<HTMLUListElement>(null);
-  const draftBox = useRef<HTMLTextAreaElement>(null);
-  const file = useRef<HTMLInputElement>(null);
   useFitPop(ref, open);
 
   useEffect(() => {
     if (!open) return;
-    setNow(Date.now());
-    const tick = setInterval(() => setNow(Date.now()), 30_000);
     const onDown = (e: PointerEvent) => {
       if (leavesPop(e.target, ref)) closeChan();
     };
@@ -82,19 +76,74 @@ export function ChanChip() {
     document.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {
-      clearInterval(tick);
       document.removeEventListener("pointerdown", onDown);
       window.removeEventListener("keydown", onKey);
     };
   }, [open, closeChan]);
 
+  if (!chan?.ready) return null;
+  return (
+    <div className="settings chan" ref={ref}>
+      <button
+        type="button"
+        className={open ? "mini on" : unread ? "mini chan-unread" : "mini"}
+        aria-label="tailchan messages"
+        aria-expanded={open}
+        title={unread ? `${unread} new on tailchan` : "tailchan: channels, DMs and the clipboard"}
+        onClick={() => (open ? closeChan() : openChan())}
+      >
+        <span className="chip-icon envelope" aria-hidden="true">✉</span> {unread || ""}
+      </button>
+      {open && (
+        <div className="settings-pop chan-pop" role="dialog" aria-label="tailchan">
+          <ChanPopBody draft={[draft, setDraft]} to={[to, setTo]} />
+          <PopGrip name="chan" anchor={HANGS_RIGHT} gear tab={{ kind: "popup", ref: "chan", label: POPUP_WORD.chan }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What the tailchan popover shows: the conversations the backend's handle
+ * is in, the open one's messages with a composer, the clipboard both ways,
+ * who has been around (a click opens the DM), and the switch that has
+ * canopy post its own runs, flows and fleets. The popover and a tab in a
+ * shell window (FR-030) both draw it. Nothing here closes the popover, so
+ * it takes no `onDone`. Opening the popover loads the conversations
+ * (`openChan`); a tab does that itself when it mounts. The popover hands in
+ * `draft` and `to` so a half-typed message survives a close; a tab keeps
+ * its own.
+ */
+export function ChanPopBody(props: { draft?: Held; to?: Held }) {
+  const chan = useStore((s) => s.chan);
+  const conv = useStore((s) => s.chanConv);
+  const live = useStore((s) => s.chanMsgs);
+  const msgs = useStore((s) => (s.chanConv ? (s.chanMsgs[s.chanConv] ?? EMPTY) : EMPTY));
+  const { showConv, sendChan, putChan, setChanNotify } = useStore.getState();
+  const ownDraft = useState("");
+  const ownTo = useState("");
+  const [draft, setDraft] = props.draft ?? ownDraft;
+  const [to, setTo] = props.to ?? ownTo;
+  const [err, setErr] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const list = useRef<HTMLUListElement>(null);
+  const draftBox = useRef<HTMLTextAreaElement>(null);
+  const file = useRef<HTMLInputElement>(null);
+
+  // the ages move every half minute while the body shows
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tick);
+  }, []);
+
   // the newest message in view, as a chat would
   useLayoutEffect(() => {
     const el = list.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [msgs, conv, open]);
+  }, [msgs, conv]);
 
-  if (!chan?.ready) return null;
+  if (!chan?.ready) return <p className="settings-hint">No tailchan broker on this page's backend.</p>;
   const me = chan.as;
   const convs = convOrder(chan.channels, live);
   const target = conv ? convName(conv, me) : null;
@@ -137,121 +186,106 @@ export function ChanChip() {
   const clip = latestClip(live);
 
   return (
-    <div className="settings chan" ref={ref}>
-      <button
-        type="button"
-        className={open ? "mini on" : unread ? "mini chan-unread" : "mini"}
-        aria-label="tailchan messages"
-        aria-expanded={open}
-        title={unread ? `${unread} new on tailchan` : "tailchan: channels, DMs and the clipboard"}
-        onClick={() => (open ? closeChan() : openChan())}
-      >
-        <span className="chip-icon envelope" aria-hidden="true">✉</span> {unread || ""}
-      </button>
-      {open && (
-        <div className="settings-pop chan-pop" role="dialog" aria-label="tailchan">
-          <section className="settings-row">
-            <h3 className="panel-label">tailchan · as {me}</h3>
-            <div className="chan-convs">
-              {convs.map((c) => (
-                <button key={c} type="button" className={c === conv ? "mini on" : "mini"} onClick={() => void showConv(c)}>
-                  {convName(c, me)}
-                </button>
-              ))}
-              <input
-                className="settings-input chan-to"
-                placeholder="#channel or @handle"
-                value={to}
-                onChange={(e) => setTo(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") start();
-                }}
-              />
-            </div>
-          </section>
-          {target && (
-            <section className="settings-row">
-              <ul className="chan-msgs" ref={list} aria-label={`messages in ${target}`}>
-                {msgs.length === 0 && <li className="settings-hint">Nothing here yet.</li>}
-                {msgs.map((m) => (
-                  <Message key={m.id} m={m} me={me} now={now} onError={setErr} />
-                ))}
-              </ul>
-              <textarea
-                ref={draftBox}
-                data-mic
-                className="settings-input chan-draft"
-                rows={2}
-                placeholder={`to ${target}; Enter sends, Shift+Enter a new line`}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-              />
-              <div className="kept-acts">
-                <DictateButton target={draftBox} />
-                <button type="button" className="mini strong" disabled={!draft.trim()} onClick={send}>
-                  send
-                </button>
-                <button type="button" className="mini" onClick={() => file.current?.click()}>
-                  file…
-                </button>
-                <input
-                  ref={file}
-                  type="file"
-                  hidden
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    e.target.value = "";
-                    if (f) void act(() => putChan(target, f, draft.trim()).then(() => setDraft("")));
-                  }}
-                />
-              </div>
-            </section>
-          )}
-          <section className="settings-row">
-            <h3 className="panel-label">clipboard</h3>
-            <div className="kept-acts">
-              <button type="button" className="mini" onClick={pushClip} title="Share this device's clipboard to #clipboard">
-                send clipboard
-              </button>
-              {clip && clip.kind === "clip" && (
-                <button type="button" className="mini" onClick={() => void act(() => copyText(clip.body))} title={`from ${clip.handle}@${clip.node}`}>
-                  copy the latest ({ago(clip.ts, now)})
-                </button>
-              )}
-            </div>
-          </section>
-          <section className="settings-row">
-            <h3 className="panel-label">around</h3>
-            <ul className="chan-who-list">
-              {chan.who
-                .filter((w) => w.handle !== me)
-                .map((w) => (
-                  <li key={w.handle}>
-                    <button type="button" className="chan-who-row" onClick={() => void showConv(convOf(`@${w.handle}`, me))} title={`DM ${w.handle}`}>
-                      <span className={w.live ? "chan-dot live" : "chan-dot"} aria-label={w.live ? "listening" : "not listening"} />
-                      {w.handle}
-                      <span className="chan-when">
-                        {w.node} · {ago(w.last_seen, now)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-            </ul>
-            <label className="settings-line">
-              <input type="checkbox" checked={chan.notify} onChange={(e) => void act(() => setChanNotify(e.target.checked))} />
-              post runs, flows and fleets to #{chan.channel}; a prompt or gate waiting on you pings as a DM
-            </label>
-            {err && <p className="settings-hint error">{err}</p>}
-          </section>
-          <PopGrip name="chan" anchor={HANGS_RIGHT} gear />
+    <>
+      <section className="settings-row">
+        <h3 className="panel-label">tailchan · as {me}</h3>
+        <div className="chan-convs">
+          {convs.map((c) => (
+            <button key={c} type="button" className={c === conv ? "mini on" : "mini"} onClick={() => void showConv(c)}>
+              {convName(c, me)}
+            </button>
+          ))}
+          <input
+            className="settings-input chan-to"
+            placeholder="#channel or @handle"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") start();
+            }}
+          />
         </div>
+      </section>
+      {target && (
+        <section className="settings-row">
+          <ul className="chan-msgs" ref={list} aria-label={`messages in ${target}`}>
+            {msgs.length === 0 && <li className="settings-hint">Nothing here yet.</li>}
+            {msgs.map((m) => (
+              <Message key={m.id} m={m} me={me} now={now} onError={setErr} />
+            ))}
+          </ul>
+          <textarea
+            ref={draftBox}
+            data-mic
+            className="settings-input chan-draft"
+            rows={2}
+            placeholder={`to ${target}; Enter sends, Shift+Enter a new line`}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          <div className="kept-acts">
+            <DictateButton target={draftBox} />
+            <button type="button" className="mini strong" disabled={!draft.trim()} onClick={send}>
+              send
+            </button>
+            <button type="button" className="mini" onClick={() => file.current?.click()}>
+              file…
+            </button>
+            <input
+              ref={file}
+              type="file"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = "";
+                if (f) void act(() => putChan(target, f, draft.trim()).then(() => setDraft("")));
+              }}
+            />
+          </div>
+        </section>
       )}
-    </div>
+      <section className="settings-row">
+        <h3 className="panel-label">clipboard</h3>
+        <div className="kept-acts">
+          <button type="button" className="mini" onClick={pushClip} title="Share this device's clipboard to #clipboard">
+            send clipboard
+          </button>
+          {clip && clip.kind === "clip" && (
+            <button type="button" className="mini" onClick={() => void act(() => copyText(clip.body))} title={`from ${clip.handle}@${clip.node}`}>
+              copy the latest ({ago(clip.ts, now)})
+            </button>
+          )}
+        </div>
+      </section>
+      <section className="settings-row">
+        <h3 className="panel-label">around</h3>
+        <ul className="chan-who-list">
+          {chan.who
+            .filter((w) => w.handle !== me)
+            .map((w) => (
+              <li key={w.handle}>
+                <button type="button" className="chan-who-row" onClick={() => void showConv(convOf(`@${w.handle}`, me))} title={`DM ${w.handle}`}>
+                  <span className={w.live ? "chan-dot live" : "chan-dot"} aria-label={w.live ? "listening" : "not listening"} />
+                  {w.handle}
+                  <span className="chan-when">
+                    {w.node} · {ago(w.last_seen, now)}
+                  </span>
+                </button>
+              </li>
+            ))}
+        </ul>
+        <label className="settings-line">
+          <input type="checkbox" checked={chan.notify} onChange={(e) => void act(() => setChanNotify(e.target.checked))} />
+          post runs, flows and fleets to #{chan.channel}; a prompt or gate waiting on you pings as a DM
+        </label>
+        {err && <p className="settings-hint error">{err}</p>}
+      </section>
+    </>
   );
 }

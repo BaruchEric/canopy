@@ -478,6 +478,17 @@ function BoardTile({
             <button type="button" className="mini" title="Open this agent as a dock panel of its own, to drag, split and size with the rest" onClick={toDock}>
               dock
             </button>
+            <button
+              type="button"
+              className="mini"
+              title="Put this agent in a tab in the shells strip and the sessions view, beside the shells (FR-030)"
+              onClick={(e) => {
+                e.stopPropagation();
+                useStore.getState().tabItem("strip", { kind: "agent", ref: card.id, label: name });
+              }}
+            >
+              tab
+            </button>
           </span>
         )}
       </header>

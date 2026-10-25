@@ -7,7 +7,7 @@ import { backendOf } from "../registry";
 import { atFrom, dropBox, edgeAt, pruneGroups, setAt, seamsOf, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
 import { connOf, useStore } from "../store";
 import type { TermTab } from "../term";
-import { sectionTabsAt, type SectionPlace, type SectionTab } from "../sectiontabs";
+import { isItemTab, itemTabsAt, sectionTabsAt, type ItemTab, type PageTab, type SectionPlace, type SectionTab } from "../sectiontabs";
 import { SECTION_WORD, type SectionKey } from "../surface";
 import { useShellAgent } from "./AgentButtons";
 import { handOff } from "./Handoff";
@@ -23,12 +23,12 @@ const SPLITS_OF: Record<SectionPlace, SplitsKey> = { strip: "sessionSplits", pan
 /** every tab at `place` that a split may hold: its shells, the ones named
  *  in `also` (a shell window's own, which is not in the store), and the
  *  section tabs there (FR-030) */
-function liveAt(terms: readonly TermTab[], tabs: readonly SectionTab[], place: SectionPlace, also: readonly string[]): Set<string> {
-  return new Set([...terms.filter((t) => t.place === place).map((t) => t.id), ...also, ...sectionTabsAt(tabs, place).map((t) => t.id)]);
+function liveAt(terms: readonly TermTab[], tabs: readonly SectionTab[], items: readonly ItemTab[], place: SectionPlace, also: readonly string[]): Set<string> {
+  return new Set([...terms.filter((t) => t.place === place).map((t) => t.id), ...also, ...sectionTabsAt(tabs, place).map((t) => t.id), ...itemTabsAt(items, place).map((t) => t.id)]);
 }
 
 const NONE: readonly string[] = [];
-const NO_SECTIONS: readonly SectionTab[] = [];
+const NO_PAGES: readonly PageTab[] = [];
 
 /** The saved split groups for one place's shells and section tabs, with
  *  the tabs since closed taken out, and a writer that reads them fresh, so
@@ -37,11 +37,12 @@ export function useSplits(place: SectionPlace, also: readonly string[] = NONE) {
   const key = SPLITS_OF[place];
   const terms = useStore((s) => s.terms);
   const tabs = useStore((s) => s.settings.sectionTabs);
+  const items = useStore((s) => s.settings.itemTabs);
   const splits = useStore((s) => s.settings[key]);
-  const groups = useMemo(() => pruneGroups(splits, liveAt(terms, tabs, place, also)), [splits, terms, tabs, place, also]);
+  const groups = useMemo(() => pruneGroups(splits, liveAt(terms, tabs, items, place, also)), [splits, terms, tabs, items, place, also]);
   const write = (f: (g: PaneTree[]) => PaneTree[]) => {
     const st = useStore.getState();
-    st.setSetting(key, f(pruneGroups(st.settings[key], liveAt(st.terms, st.settings.sectionTabs, place, also))));
+    st.setSetting(key, f(pruneGroups(st.settings[key], liveAt(st.terms, st.settings.sectionTabs, st.settings.itemTabs, place, also))));
   };
   return { groups, write };
 }
@@ -159,6 +160,7 @@ const CloseIcon = () => (
  */
 export function SectionPaneHead({
   label,
+  item = false,
   grouped,
   canSplit,
   onGrab,
@@ -167,6 +169,8 @@ export function SectionPaneHead({
   onMenu,
 }: {
   label: string;
+  /** a chat's or a popup's, whose close only closes the tab */
+  item?: boolean;
   grouped: boolean;
   /** a new shell can open beside it (a shell window has only its own) */
   canSplit: boolean;
@@ -189,7 +193,7 @@ export function SectionPaneHead({
         </span>
       )}
       <span className="sec-tab-mark" aria-hidden="true">
-        §
+        {item ? "◇" : "§"}
       </span>
       <span className="ss-pane-name">{label}</span>
       <span className="ss-pane-acts">
@@ -198,7 +202,13 @@ export function SectionPaneHead({
             <SplitIcon />
           </button>
         )}
-        <button type="button" className="x" aria-label="Back to the card" title="Back to the card: closes the tab, the section goes back in its card" onClick={onClose}>
+        <button
+          type="button"
+          className="x"
+          aria-label={item ? "Close the tab" : "Back to the card"}
+          title={item ? "Close the tab; what it showed carries on" : "Back to the card: closes the tab, the section goes back in its card"}
+          onClick={onClose}
+        >
           <CloseIcon />
         </button>
       </span>
@@ -399,7 +409,7 @@ export function TabMenu({
   onMove,
   onSplit,
   onLeave,
-  sections = NO_SECTIONS,
+  pages = NO_PAGES,
   onUntab,
   sectionsFor,
   onAddSection,
@@ -417,9 +427,10 @@ export function TabMenu({
   onMove?: (id: string, by: 1 | -1) => void;
   onSplit: (id: string, edge: Edge) => void;
   onLeave: (id: string) => void;
-  /** the section tabs in the row (FR-030), whose menu is their own */
-  sections?: readonly SectionTab[];
-  /** a section tab closed, its section back in its card */
+  /** the section, chat and popup tabs in the row (FR-030), whose menu is
+   *  their own */
+  pages?: readonly PageTab[];
+  /** a page tab closed, a section back in its card */
   onUntab?: (id: string) => void;
   /** the sections a shell's repo can add as a tab here, and the add */
   sectionsFor?: (repoId: string) => SectionKey[];
@@ -433,7 +444,7 @@ export function TabMenu({
   const hideTerm = useStore((s) => s.hideTerm);
   const closeTerm = useStore((s) => s.closeTerm);
   const tab = tabs.find((t) => t.id === id);
-  const section = sections.find((t) => t.id === id);
+  const page = pages.find((t) => t.id === id);
   const i = tabs.findIndex((t) => t.id === id);
   useEffect(() => {
     box.current?.querySelector("button")?.focus();
@@ -456,9 +467,9 @@ export function TabMenu({
   };
   const left = Math.max(8, Math.min(at.left, window.innerWidth - 200));
   const top = Math.max(8, Math.min(at.bottom + 2, window.innerHeight - 280));
-  if (section)
+  if (page)
     return (
-      <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The ${SECTION_WORD[section.key]} tab`} style={{ top, left }}>
+      <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The ${isItemTab(page) ? page.label : SECTION_WORD[page.key]} tab`} style={{ top, left }}>
         <button type="button" role="menuitem" title="A shell beside it, on its right" onClick={act(() => onSplit(id, "right"))}>
           split right
         </button>
@@ -470,11 +481,16 @@ export function TabMenu({
             out of the split
           </button>
         )}
-        {onUntab && (
-          <button type="button" role="menuitem" title="Closes the tab and puts the section back in its card" onClick={act(() => onUntab(id))}>
-            back to the card
-          </button>
-        )}
+        {onUntab &&
+          (isItemTab(page) ? (
+            <button type="button" role="menuitem" title="Closes the tab; what it showed carries on" onClick={act(() => onUntab(id))}>
+              close the tab
+            </button>
+          ) : (
+            <button type="button" role="menuitem" title="Closes the tab and puts the section back in its card" onClick={act(() => onUntab(id))}>
+              back to the card
+            </button>
+          ))}
       </div>
     );
   if (!tab) return null;

@@ -9,13 +9,13 @@ import { backendOf, qual } from "../registry";
 import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, splitKey, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
 import { connOf, idText, useStore } from "../store";
-import { isSectionTab, isSectionTabId, sectionTabLabel, sectionTabsAt, tabbableKeys, type SectionTab } from "../sectiontabs";
+import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
 import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { useIsChat } from "./Registry";
 import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, openedSince, termIds, usePaneDrag, useSplits } from "./SessionPanes";
-import { SectionTabView } from "./SectionTab";
+import { PageTabView } from "./SectionTab";
 import { ShellSpotHere } from "./Surface";
 import { SweepButton } from "./Sweep";
 import { TermTabs, TermView } from "./TermDock";
@@ -84,19 +84,23 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     return t ? { repo: t.repoId } : null;
   });
   const visible = useMemo(() => tabsIn(strip, scope, backendOf), [strip, scope]);
-  // the cards' sections sitting as tabs in the strip (FR-030), after the
+  // the cards' sections, chats and popups sitting as tabs in the strip
+  // (FR-030), after the
   // shells; the one showing stands in for activeTerm until a shell is picked
   const allSectionTabs = useStore((s) => s.settings.sectionTabs);
-  const stripSection = useStore((s) => s.stripSection);
-  const showStripSection = useStore((s) => s.showStripSection);
+  const stripPage = useStore((s) => s.stripPage);
+  const showStripPage = useStore((s) => s.showStripPage);
   const tabSection = useStore((s) => s.tabSection);
-  const untabSection = useStore((s) => s.untabSection);
+  const tabItem = useStore((s) => s.tabItem);
+  const untab = useStore((s) => s.untab);
   const order = useStore((s) => s.settings.sectionOrder);
   const hiddenSections = useStore((s) => s.settings.sectionsHidden);
-  const sectionsAll = useMemo(() => sectionTabsAt(allSectionTabs, "strip"), [allSectionTabs]);
-  const sections = useMemo(() => tabsIn(sectionsAll, scope, backendOf), [sectionsAll, scope]);
-  const current = stripSection && sectionsAll.some((t) => t.id === stripSection) ? stripSection : activeTerm;
-  const show = (id: string) => (isSectionTabId(id) ? showStripSection(id) : showTerm(id));
+  const allItemTabs = useStore((s) => s.settings.itemTabs);
+  const pagesAll = useMemo<PageTab[]>(() => [...sectionTabsAt(allSectionTabs, "strip"), ...itemTabsAt(allItemTabs, "strip")], [allSectionTabs, allItemTabs]);
+  // a chat or a popup with no repo shows whatever the scope
+  const pages = useMemo(() => pagesAll.filter((t) => !t.repoId || tabsIn([{ repoId: t.repoId }], scope, backendOf).length > 0), [pagesAll, scope]);
+  const current = stripPage && pagesAll.some((t) => t.id === stripPage) ? stripPage : activeTerm;
+  const show = (id: string) => (isPageTabId(id) ? showStripPage(id) : showTerm(id));
   const repoName = (repoId: string) => repos.find((r) => r.id === repoId)?.name ?? idText(repoId);
   const held = useMemo(() => tabsIn(untabbed(shells, strip), scope, backendOf), [shells, strip, scope]);
   // Split tabs (FR-026): the saved groups, with the tabs since closed taken
@@ -104,18 +108,18 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   // is in scope brings the rest along.
   const { groups, write: writeSplits } = useSplits("strip");
   const reachIds = useMemo(() => {
-    const ids = new Set([...visible, ...sections].map((t) => t.id));
+    const ids = new Set([...visible, ...pages].map((t) => t.id));
     for (const g of groups) {
       const ps = paneIds(g);
       if (ps.some((id) => ids.has(id))) for (const id of ps) ids.add(id);
     }
     return ids;
-  }, [visible, sections, groups]);
+  }, [visible, pages, groups]);
   const reach = useMemo(() => strip.filter((t) => reachIds.has(t.id)), [strip, reachIds]);
-  const reachSections = useMemo(() => sectionsAll.filter((t) => reachIds.has(t.id)), [sectionsAll, reachIds]);
-  const { row, panes } = useMemo(() => rowOf<TermTab | SectionTab>([...visible, ...sections], groups), [visible, sections, groups]);
-  const termRow = useMemo(() => row.filter((t): t is TermTab => !isSectionTab(t)), [row]);
-  const sectionRow = useMemo(() => row.filter(isSectionTab), [row]);
+  const reachPages = useMemo(() => pagesAll.filter((t) => reachIds.has(t.id)), [pagesAll, reachIds]);
+  const { row, panes } = useMemo(() => rowOf<TermTab | PageTab>([...visible, ...pages], groups), [visible, pages, groups]);
+  const termRow = useMemo(() => row.filter((t): t is TermTab => !isPageTab(t)), [row]);
+  const pageRow = useMemo(() => row.filter(isPageTab), [row]);
   const showing = current === activeTerm ? (reach.find((t) => t.id === activeTerm) ?? null) : null;
   // a seam's tree while it is dragged, and a pane on its way elsewhere
   const [draft, setDraft] = useState<PaneTree | null>(null);
@@ -139,14 +143,14 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const overTabs = pickedCard !== undefined || pickedShell !== null;
   // the agent showing: the one picked, or the one in the tab showing
   const currentAgent = pickedCard?.id ?? (overTabs || !showing ? null : (rows.find((c) => joinTarget(c, shown, qual) === showing.id)?.id ?? null));
-  const sectionShowing = current === activeTerm ? undefined : reachSections.find((t) => t.id === current);
-  const currentRepo = pickedShell ? pickedShell.repoId : overTabs ? null : (showing?.repoId ?? sectionShowing?.repoId ?? (scope && "repo" in scope ? scope.repo : null));
+  const pageShowing = current === activeTerm ? undefined : reachPages.find((t) => t.id === current);
+  const currentRepo = pickedShell ? pickedShell.repoId : overTabs ? null : (showing?.repoId ?? pageShowing?.repoId ?? (scope && "repo" in scope ? scope.repo : null));
 
   // a scope that leaves the showing tab out shows its last tab instead
   useEffect(() => {
-    const want = showingIn([...reach, ...reachSections], current);
+    const want = showingIn([...reach, ...reachPages], current);
     if (want && want !== current) show(want);
-  }, [reach, reachSections, current]);
+  }, [reach, reachPages, current]);
   const group = !overTabs && current ? groupOf(groups, current) : undefined;
   useEffect(() => {
     if (!group || !current) return;
@@ -188,10 +192,10 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     const made = openedSince(before);
     if (made && made !== id) writeSplits((g) => splitIn(g, id, made, edge));
   };
-  // a new shell at the same repo, beside `id`
+  // a new shell at the same repo, beside `id`; a popup has no repo to open one at
   const splitFrom = (id: string, edge: Edge) => {
-    const tab = strip.find((t) => t.id === id) ?? sectionsAll.find((t) => t.id === id);
-    if (!tab) return;
+    const tab = strip.find((t) => t.id === id) ?? pagesAll.find((t) => t.id === id);
+    if (!tab?.repoId) return;
     const before = termIds();
     setPicked(null);
     openTerm(tab.repoId, "strip");
@@ -204,7 +208,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     const next = g && id === current ? neighbourOf(g, id) : null;
     if (next) showTab(next);
     writeSplits((gs) => leaveGroup(gs, id));
-    if (isSectionTabId(id)) untabSection(id);
+    if (isPageTabId(id)) untab(id);
     else closeTerm(id);
   };
   const { drag, grab, preview } = usePaneDrag(main, targets, (id, target, edge) => {
@@ -345,8 +349,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
         <section className="ss-main" aria-label="Sessions">
           <TermTabs
             terms={termRow}
-            sections={sectionRow}
-            sectionLabel={(t) => sectionTabLabel(t, repoName(t.repoId))}
+            pages={pageRow}
+            pageLabel={(t) => pageTabLabel(t, isItemTab(t) ? undefined : repoName(t.repoId))}
             active={head}
             onShow={showRowTab}
             panes={panes}
@@ -372,6 +376,17 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                   <span className="term-tab on ss-picked" title="the agent picked from the list">
                     <span className={`dot ${STATE_DOT[pickedCard.state]}`} aria-hidden="true" />
                     {agentName(pickedCard)}
+                    <button
+                      type="button"
+                      className="mini ss-keep"
+                      title="Keep this agent as a tab here, beside the shells, to split and come back to"
+                      onClick={() => {
+                        tabItem("strip", { kind: "agent", ref: pickedCard.id, label: agentName(pickedCard) });
+                        setPicked(null);
+                      }}
+                    >
+                      keep as a tab
+                    </button>
                   </span>
                 )}
                 {pickedShell && (
@@ -453,7 +468,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                 </div>
               );
             })}
-            {reachSections.map((t) => {
+            {reachPages.map((t) => {
               const box = boxes?.[t.id];
               const inView = !overTabs && (boxes ? box !== undefined : t.id === current);
               const on = inView && t.id === current;
@@ -464,14 +479,15 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                   hidden={!inView}
                   style={box ? boxStyle(box) : undefined}
                   onPointerDownCapture={() => {
-                    if (inView && t.id !== current) showStripSection(t.id);
+                    if (inView && t.id !== current) showStripPage(t.id);
                   }}
                 >
                   {inView && (
                     <SectionPaneHead
-                      label={sectionTabLabel(t, repoName(t.repoId))}
+                      label={pageTabLabel(t, isItemTab(t) ? undefined : repoName(t.repoId))}
+                      item={isItemTab(t)}
                       grouped={box !== undefined}
-                      canSplit
+                      canSplit={t.repoId !== undefined}
                       onGrab={(e) => grab(t.id, e)}
                       onSplit={() => splitFrom(t.id, "right")}
                       onClose={() => closePane(t.id)}
@@ -479,7 +495,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                     />
                   )}
                   <div className="ss-pane-body sec-pane-body">
-                    <SectionTabView tab={t} />
+                    <PageTabView tab={t} />
                   </div>
                 </div>
               );
@@ -513,7 +529,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                 }}
               />
             )}
-            {!overTabs && visible.length === 0 && sections.length === 0 && (
+            {!overTabs && visible.length === 0 && pages.length === 0 && (
               <div className="ss-blank">
                 <p>{scope ? `No shells open at ${scopeName(scope, repos)}.` : "No shells open."}</p>
                 <p className="ss-faint">{scope && "repo" in scope ? "Press + or n to open one." : "Pick a repo on the left, or press n and type its name."}</p>
@@ -554,7 +570,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
             splitFrom(id, edge);
           }}
           onLeave={(id) => writeSplits((gs) => leaveGroup(gs, id))}
-          sections={reachSections}
+          pages={reachPages}
           onUntab={closePane}
           sectionsFor={(repoId) => {
             const repo = repos.find((r) => r.id === repoId);

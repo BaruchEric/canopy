@@ -12,7 +12,8 @@ import { durationWord } from "../agentcards";
 import { askCloses, pickKeys } from "../sweep";
 import { pairAsk } from "../callerToken";
 import { HANGS_RIGHT, useFitPop } from "../pop";
-import { PopGrip, usePopEntries } from "./PopGrip";
+import { PopGrip, usePopEntries, type PopSpec } from "./PopGrip";
+import { POPUP_WORD } from "../sectiontabs";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
 import { canAnswer as canAnswerHere, inboxItems, prsAll, useStore } from "../store";
@@ -528,29 +529,15 @@ function GoneAsk({ id }: { id: string }) {
 export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   const items = useStore(inboxItems);
   const open = useStore((s) => s.inboxOpen);
-  const focus = useStore((s) => s.inboxFocus);
   const ready = useStore((s) => s.asksReady);
-  const canAnswer = useStore(canAnswerHere);
-  const presence = useStore((s) => s.presence);
-  const home = useStore((s) => s.home);
-  const asks = useStore((s) => s.asks);
-  const { openInbox, closeInbox, setAway } = useStore.getState();
-  const [picked, setPicked] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const { openInbox, closeInbox } = useStore.getState();
   const ref = useRef<HTMLDivElement>(null);
-  // the clocks move whenever the inbox is open: a countdown by the second,
-  // a waiting run's or gate's age more slowly
-  const now = useNow(open, inboxTick(items));
-  const { zoom, entry: zoomEntry } = useZoom("inbox");
+  const { zoom } = useZoom("inbox");
   const size = usePopEntries(INBOX_POP, () => ref.current?.querySelector<HTMLElement>(".inbox-pop") ?? null, false);
-  const gear = useInboxGear([zoomEntry, ...size]);
   useFitPop(ref, open, zoom);
 
   useEffect(() => {
     if (!open) return;
-    setPicked(null);
-    // the rules a remember kept, read fresh: another device may have added some
-    void useStore.getState().loadRemembered();
     const onDown = (e: PointerEvent) => {
       const t = e.target;
       // the gear's menu sits in a portal outside the inbox; a click in it stays in
@@ -568,22 +555,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
     };
   }, [open, closeInbox]);
 
-  // the item a link or a row named, in view once the list is drawn
-  useEffect(() => {
-    if (!open || !focus) return;
-    const el = ref.current?.querySelector(`[data-key="${CSS.escape(focus)}"]`);
-    el?.scrollIntoView({ block: "nearest" });
-  }, [open, focus, items]);
-
   if (!ready && items.length === 0) return null;
-  const expanded = picked ?? (focus && items.some((i) => i.key === focus) ? focus : (items[0]?.key ?? null));
-  const recent = recentAsks(Object.values(asks)).slice(0, 8);
-  const goneFocus = focus?.startsWith("ask:") && !items.some((i) => i.key === focus) ? focus.slice(4) : null;
-
-  const toggleAway = (away: boolean) => {
-    setErr(null);
-    setAway(away).catch((e: unknown) => setErr(errText(e)));
-  };
 
   return (
     <div className="settings inbox" ref={ref}>
@@ -599,78 +571,7 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
       </button>
       {open && (
         <div className="settings-pop inbox-pop" role="dialog" aria-label="Inbox" style={zoom === 1 ? undefined : { "--inbox-w": `${Math.round(460 * zoom)}px` } as CSSProperties}>
-          <div className="inbox-top">
-            <h3 className="panel-label">inbox</h3>
-            <Gear
-              label="the inbox"
-              hint="Zoom, size, the command's text, and the rules you remembered"
-              groups={gear}
-              keptElse="the rules are the backend's, for every screen"
-            />
-          </div>
-          <div className="inbox-zoom" style={zoomStyle(zoom)}>
-          <section className="settings-row">
-            {goneFocus && <GoneAsk id={goneFocus} />}
-            <AdviceFile />
-            {items.length === 0 ? (
-              <p className="settings-hint">The inbox is empty: no agent asks, no run is on a prompt, no workflow is at a gate.</p>
-            ) : (
-              <ul className="inbox-list">
-                {items.map((i) => (
-                  <InboxRow
-                    key={i.key}
-                    item={i}
-                    now={now}
-                    open={expanded === i.key}
-                    canAnswer={canAnswer}
-                    onGit={onGit}
-                    onToggle={() => setPicked(expanded === i.key ? "" : i.key)}
-                  />
-                ))}
-              </ul>
-            )}
-          </section>
-          <LandingNotices />
-          {recent.length > 0 && (
-            <section className="settings-row">
-              <h3 className="panel-label">lately</h3>
-              <ul className="inbox-recent">
-                {recent.map((a) => (
-                  <li key={a.id} title={a.title}>
-                    <span className="inbox-who">{a.handle || a.agent}</span> {askWord(a)}: {endingWord(a)}
-                    <span className="inbox-left dim">{ago(a.answeredAt ?? a.createdAt, Date.now())}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-          {ready && (
-            <section className="settings-row">
-              <h3 className="panel-label">presence</h3>
-              {canAnswer ? (
-                <>
-                  <label className="settings-line">
-                    <input type="checkbox" checked={presence?.state === "away" && presence.pinned} onChange={(e) => toggleAway(e.target.checked)} />
-                    I am away: an agent's ask waits half an hour here (and DMs you) before it goes back to its terminal
-                  </label>
-                  <p className="settings-hint">
-                    {presence?.state === "here"
-                      ? "Here now: an ask waits a minute here. Typing in canopy keeps you here; a quarter hour without makes you away."
-                      : presence?.pinned
-                        ? "Away until you clear it."
-                        : "Away: nothing was typed in canopy for a quarter hour."}
-                  </p>
-                </>
-              ) : (
-                <p className="settings-hint">
-                  This device cannot answer asks or set presence: add your answer key in Settings (this device's secret from the broker's
-                  ANSWER_TOKENS, see docs/deploy.md); {home} passes it on and keeps nothing. Runs and workflows still take their answers.
-                </p>
-              )}
-              {err && <p className="settings-hint error">{err}</p>}
-            </section>
-          )}
-          </div>
+          <InboxPopBody popEntries={size} {...(onGit ? { onGit } : {})} />
           <PopGrip {...INBOX_POP} />
         </div>
       )}
@@ -678,10 +579,135 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   );
 }
 
+/**
+ * What the inbox popover shows: its head and gear, every item with the form
+ * that answers it, how the last asks ended, and the away switch. The
+ * popover and a tab in a shell window (FR-030) both draw it. `popEntries`
+ * are the popover's own size and tab lines for the gear, which a tab has no
+ * use for. Nothing here closes the popover: a row that takes the user
+ * elsewhere closes the inbox through the store.
+ */
+export function InboxPopBody({ onGit, popEntries = [] }: { onGit?: () => void; popEntries?: GearEntry[] }) {
+  const items = useStore(inboxItems);
+  const focus = useStore((s) => s.inboxFocus);
+  const ready = useStore((s) => s.asksReady);
+  const canAnswer = useStore(canAnswerHere);
+  const presence = useStore((s) => s.presence);
+  const home = useStore((s) => s.home);
+  const asks = useStore((s) => s.asks);
+  const { setAway } = useStore.getState();
+  const [picked, setPicked] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  // the clocks move while the inbox shows: a countdown by the second, a
+  // waiting run's or gate's age more slowly
+  const now = useNow(true, inboxTick(items));
+  const { zoom, entry: zoomEntry } = useZoom("inbox");
+  const gear = useInboxGear([zoomEntry, ...popEntries]);
+
+  // the rules a remember kept, read fresh: another device may have added some
+  useEffect(() => {
+    void useStore.getState().loadRemembered();
+  }, []);
+
+  // the item a link or a row named, in view once the list is drawn
+  useEffect(() => {
+    if (!focus) return;
+    const el = ref.current?.querySelector(`[data-key="${CSS.escape(focus)}"]`);
+    el?.scrollIntoView({ block: "nearest" });
+  }, [focus, items]);
+
+  const expanded = picked ?? (focus && items.some((i) => i.key === focus) ? focus : (items[0]?.key ?? null));
+  const recent = recentAsks(Object.values(asks)).slice(0, 8);
+  const goneFocus = focus?.startsWith("ask:") && !items.some((i) => i.key === focus) ? focus.slice(4) : null;
+
+  const toggleAway = (away: boolean) => {
+    setErr(null);
+    setAway(away).catch((e: unknown) => setErr(errText(e)));
+  };
+
+  return (
+    <>
+      <div className="inbox-top">
+        <h3 className="panel-label">inbox</h3>
+        <Gear
+          label="the inbox"
+          hint={popEntries.length ? "Zoom, size, the command's text, and the rules you remembered" : "Zoom, the command's text, and the rules you remembered"}
+          groups={gear}
+          keptElse="the rules are the backend's, for every screen"
+        />
+      </div>
+      <div className="inbox-zoom" ref={ref} style={zoomStyle(zoom)}>
+      <section className="settings-row">
+        {goneFocus && <GoneAsk id={goneFocus} />}
+        <AdviceFile />
+        {items.length === 0 ? (
+          <p className="settings-hint">The inbox is empty: no agent asks, no run is on a prompt, no workflow is at a gate.</p>
+        ) : (
+          <ul className="inbox-list">
+            {items.map((i) => (
+              <InboxRow
+                key={i.key}
+                item={i}
+                now={now}
+                open={expanded === i.key}
+                canAnswer={canAnswer}
+                onGit={onGit}
+                onToggle={() => setPicked(expanded === i.key ? "" : i.key)}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+      <LandingNotices />
+      {recent.length > 0 && (
+        <section className="settings-row">
+          <h3 className="panel-label">lately</h3>
+          <ul className="inbox-recent">
+            {recent.map((a) => (
+              <li key={a.id} title={a.title}>
+                <span className="inbox-who">{a.handle || a.agent}</span> {askWord(a)}: {endingWord(a)}
+                <span className="inbox-left dim">{ago(a.answeredAt ?? a.createdAt, Date.now())}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {ready && (
+        <section className="settings-row">
+          <h3 className="panel-label">presence</h3>
+          {canAnswer ? (
+            <>
+              <label className="settings-line">
+                <input type="checkbox" checked={presence?.state === "away" && presence.pinned} onChange={(e) => toggleAway(e.target.checked)} />
+                I am away: an agent's ask waits half an hour here (and DMs you) before it goes back to its terminal
+              </label>
+              <p className="settings-hint">
+                {presence?.state === "here"
+                  ? "Here now: an ask waits a minute here. Typing in canopy keeps you here; a quarter hour without makes you away."
+                  : presence?.pinned
+                    ? "Away until you clear it."
+                    : "Away: nothing was typed in canopy for a quarter hour."}
+              </p>
+            </>
+          ) : (
+            <p className="settings-hint">
+              This device cannot answer asks or set presence: add your answer key in Settings (this device's secret from the broker's
+              ANSWER_TOKENS, see docs/deploy.md); {home} passes it on and keeps nothing. Runs and workflows still take their answers.
+            </p>
+          )}
+          {err && <p className="settings-hint error">{err}</p>}
+        </section>
+      )}
+      </div>
+    </>
+  );
+}
+
 /** The inbox's gear: its zoom; the raw command's text size, wrap and fold;
  *  and every shown backend's remembered rules, each with a forget. */
 /** the inbox as a popup, for its grip and the size lines in its gear */
-const INBOX_POP = { name: "inbox", anchor: HANGS_RIGHT };
+const INBOX_POP: PopSpec = { name: "inbox", anchor: HANGS_RIGHT, tab: { kind: "popup", ref: "inbox", label: POPUP_WORD.inbox } };
 
 function useInboxGear(view: GearEntry[]): GearGroup[] {
   const { text, wrap, fold } = useCommandView();
