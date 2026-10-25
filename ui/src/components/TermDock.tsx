@@ -1491,6 +1491,25 @@ export function TermDock() {
     },
     { accepts: (id) => takes(id, STRIP), drop: (id, target, edge) => void moveTo(id, STRIP, target, edge) },
   );
+  // The split keys, read on the way down before xterm sees them (Ctrl+Shift+D
+  // would reach the shell as Ctrl+D and end it), and only while the focus
+  // is in the strip.
+  const keys = useRef({ current, splitFrom });
+  keys.current = { current, splitFrom };
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      const edge = splitKey(e);
+      if (!edge || document.querySelector(OVER_PAGE)) return;
+      const at = document.activeElement;
+      const { current: id, splitFrom: split } = keys.current;
+      if (!id || !(at instanceof Node) || !dock.current?.contains(at)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      split(id, edge);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   useLeaveOnEscape(mode, setMode);
 
   if (strip.length === 0 && pages.length === 0) return null;
