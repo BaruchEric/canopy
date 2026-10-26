@@ -86,6 +86,11 @@ const RULES: readonly Rule[] = [
   // the sweep's reads too: its plan names every shell and chat here, and an
   // agent in a shell (which holds operate) must never close the rest
   { methods: ["GET", "POST", "DELETE"], paths: ["sweep", "sweep/*"], right: "admin" },
+  // the set's text is the holdout: a page or the CLI reads it, a shell or the
+  // ranger does not; names and a run are for everyone who operates
+  { methods: ["GET"], paths: ["scenarios"], right: "admin" },
+  { methods: POST_DEL, paths: ["scenarios"], right: "admin" },
+  { methods: POST, paths: ["scenarios/run"], right: "operate" },
   {
     methods: POST,
     paths: ["repos/archive", "repos/open", "repos/openfile", "repos/launch", "repos/halt", "repos/install", "repos/uninstall", "repos/build", "repos/launcher"],

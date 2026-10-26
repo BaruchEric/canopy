@@ -4,8 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../core/scenario";
+import type { Repo, ScenarioRun } from "../core/types";
 import { repoKey } from "../core/worktree";
-import { copySet, readScenarioSet, readScenarioSettings, runScenarioSet, setDirOf, type ScenarioRunner } from "./scenarios";
+import { copySet, readScenarioSet, readScenarioSettings, runScenarioSet, Scenarios, setDirOf, type ScenarioRunner } from "./scenarios";
 
 let root = "";
 beforeAll(async () => {
@@ -125,4 +126,75 @@ test("a runner that throws still loses the copy, and the throw carries", async (
   const r = runner({ "make a": () => { throw new Error("worktree gone"); } });
   await expect(runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 })).rejects.toThrow("worktree gone");
   expect(existsSync(r.calls[0]![2])).toBe(false);
+});
+
+test("a repo with no set folder runs the pass without a copy and without a throw", async () => {
+  const repo = join(root, "r9");
+  const setDir = setDirOf(root, repo);
+  const set = await readScenarioSet(root, repo);
+  const r = runner({});
+  const out = await runScenarioSet({ dir: "/wt", setDir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 3 });
+  expect(r.calls).toEqual([]);
+  expect(existsSync(setDir)).toBe(false);
+  expect(out).toEqual({ head: "h", at: 3, total: 0, passed: 0, score: 1, results: [] });
+});
+
+test("readScenarioSettings hands out a copy of the defaults, never the shared object", async () => {
+  const a = await readScenarioSettings(join(root, "nowhere"));
+  expect(a).toEqual(DEFAULT_SETTINGS);
+  expect(a).not.toBe(DEFAULT_SETTINGS);
+});
+
+function hub(repoPath: string, runDir?: string, answers: Record<string, { exit: number; output: string }> = {}) {
+  const repo: Repo = { id: "r", name: "r", path: repoPath, group: "", source: "root", status: null };
+  const calls: string[] = [];
+  const s = new Scenarios({
+    root,
+    repo: (id) => (id === "r" ? repo : undefined),
+    runDir: (id) => (id === "run1" ? runDir : undefined),
+    run: async (_cwd, line) => {
+      calls.push(line);
+      return answers[line] ?? { exit: 0, output: "" };
+    },
+    now: () => 42,
+  });
+  const call = (method: string, path: string, body?: unknown) =>
+    s.handle(new Request(`http://x${path}`, { method, ...(body ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}) }), new URL(`http://x${path}`));
+  return { s, call, calls };
+}
+
+test("the routes: add writes a template, list and names, run against main and against a run, delete", async () => {
+  const repo = join(root, "r8");
+  await mkdir(repo, { recursive: true });
+  const { call, calls } = hub(repo, "/wt/run1");
+  const add = (await call("POST", "/api/scenarios", { repo: "r", name: "checkout", run: "make checkout" }))!;
+  expect(add.status).toBe(201);
+  const { path } = (await add.json()) as { path: string };
+  expect(path).toBe(join(setDirOf(root, repo), "checkout.md"));
+  expect(await readFile(path, "utf8")).toBe("---\nname: checkout\nkind: command\nrun: make checkout\n---\n");
+  expect((await call("POST", "/api/scenarios", { repo: "r", name: "checkout" }))!.status).toBe(409);
+  expect((await call("POST", "/api/scenarios", { repo: "r", name: "../x" }))!.status).toBe(400);
+  expect((await call("POST", "/api/scenarios", { repo: "r", name: "a/b" }))!.status).toBe(400);
+  const list = (await (await call("GET", "/api/scenarios?repo=r"))!.json()) as { scenarios: { name: string; text: string }[] };
+  expect(list.scenarios.map((s) => s.name)).toEqual(["checkout"]);
+  expect(list.scenarios[0]!.text).toContain("run: make checkout");
+  expect(await (await call("GET", "/api/scenarios/names?repo=r"))!.json()).toEqual({ names: [{ name: "checkout", kind: "command" }], errors: [] });
+  const onMain = (await (await call("POST", "/api/scenarios/run", { repo: "r" }))!.json()) as ScenarioRun;
+  expect([onMain.total, onMain.passed, onMain.at]).toEqual([1, 1, 42]);
+  await call("POST", "/api/scenarios/run", { repo: "r", run: "run1" });
+  expect(calls).toEqual(["make checkout", "make checkout"]);
+  expect((await call("POST", "/api/scenarios/run", { repo: "r", run: "nope" }))!.status).toBe(404);
+  expect((await call("DELETE", "/api/scenarios?repo=r&name=checkout"))!.status).toBe(200);
+  expect((await call("DELETE", "/api/scenarios?repo=r&name=checkout"))!.status).toBe(404);
+  expect(existsSync(path)).toBe(false);
+  expect((await call("GET", "/api/scenarios?repo=zzz"))!.status).toBe(404);
+  expect((await call("GET", "/api/scenarios"))!.status).toBe(400);
+  expect(await call("GET", "/api/other")).toBeNull();
+});
+
+test("a repo on another host is refused", async () => {
+  const { call } = hub("ssh://mini/home/eric/dev/x");
+  const res = (await call("GET", "/api/scenarios/names?repo=r"))!;
+  expect(res.status).toBe(400);
+  expect(await res.json()).toEqual({ error: "scenarios run only for a repo on this backend" });
 });

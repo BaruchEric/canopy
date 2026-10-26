@@ -211,6 +211,7 @@ import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
@@ -331,6 +332,8 @@ interface ServerState {
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  /** the holdout scenario sets and a pass on demand (server/scenarios) */
+  scenarios: Scenarios;
   /** the PRs branch runs opened and the watch on them (server/prs) */
   prs: PrHub;
   /** what went idle, offered for closing, and the close (server/sweep) */
@@ -3115,6 +3118,8 @@ async function handleApi(
   if (kitRes) return kitRes;
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
+  const scenariosRes = await state.scenarios.handle(req, url);
+  if (scenariosRes) return scenariosRes;
   const prsRes = await state.prs.handle(req, url);
   if (prsRes) return prsRes;
   const sweepRes = await state.sweep.handle(req, url);
@@ -5205,6 +5210,12 @@ export async function startServer(opts: {
       openPr: (id) => state.prs.open(id),
       dropped: (id) => state.prs.forgetBranch(id),
       prHeld: (id) => state.prs.holds(id),
+    }),
+    scenarios: new Scenarios({
+      root: scenariosRoot(),
+      repo: (id) => state.result.repos.find((r) => r.id === id),
+      runDir: (id) => state.landing.record(id)?.dir,
+      run: runScenario,
     }),
     callers,
     callerSockets: new Set(),
