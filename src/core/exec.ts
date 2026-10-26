@@ -13,6 +13,10 @@ export interface ExecResult {
 export interface ExecOptions {
   cwd?: string;
   timeoutMs?: number;
+  /** ends the command once neither pipe has produced output for this long:
+   *  the bound for a transfer whose size is unknown (a fetch), which a
+   *  fixed timeout either cuts short or waits on for nothing */
+  idleMs?: number;
   /** variables laid over the server's own environment */
   env?: Record<string, string>;
   /** the environment `env` is laid over, in place of the server's live one */
@@ -30,8 +34,9 @@ export const firstLine = (s: string): string => s.trim().split("\n")[0] ?? "";
  *  after that before its pipes stop being waited on. */
 export const KILL_GRACE = 2_000;
 
-/** A pipe read to the end, keeping what arrived if it is given up on. */
-function collect(stream: ReadableStream<Uint8Array>) {
+/** A pipe read to the end, keeping what arrived if it is given up on;
+ *  `onChunk` hears every read. */
+function collect(stream: ReadableStream<Uint8Array>, onChunk?: () => void) {
   const chunks: Uint8Array[] = [];
   const reader = stream.getReader();
   const done = (async () => {
@@ -40,6 +45,7 @@ function collect(stream: ReadableStream<Uint8Array>) {
         const { done: end, value } = await reader.read();
         if (end) return;
         chunks.push(value);
+        onChunk?.();
       }
     } catch {
       // cancelled or broken: what arrived before stands
@@ -70,6 +76,29 @@ async function settles(p: Promise<unknown>, ms: number | undefined, signal?: Abo
   }
 }
 
+/** An abort that fires after `ms` without a `touch`, or when `outer`
+ *  aborts; `clear` once the command is done. */
+function idleWatch(ms: number, outer?: AbortSignal) {
+  const ctl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const touch = (): void => {
+    clearTimeout(timer);
+    timer = setTimeout(() => ctl.abort(), ms);
+  };
+  const relay = (): void => ctl.abort();
+  if (outer?.aborted) ctl.abort();
+  else outer?.addEventListener("abort", relay, { once: true });
+  touch();
+  return {
+    signal: ctl.signal,
+    touch,
+    clear: (): void => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", relay);
+    },
+  };
+}
+
 /** a signal to the command's whole process group, or to the command alone
  *  when the group is gone */
 function signal(proc: { pid: number; kill: (sig?: NodeJS.Signals) => void }, sig: NodeJS.Signals): void {
@@ -92,11 +121,13 @@ function signal(proc: { pid: number; kill: (sig?: NodeJS.Signals) => void }, sig
  *  runner a check line ran) holding the pipes, and the call waiting on them
  *  for as long as those lived. A process that leaves the group and keeps a
  *  pipe (a daemon) is stopped being waited on after `KILL_GRACE`. An
- *  aborted `signal` ends it the same way. */
+ *  aborted `signal` ends it the same way, and so does `idleMs` of silence
+ *  on both pipes. */
 export async function exec(
   cmd: string[],
   opts: ExecOptions = {},
 ): Promise<ExecResult> {
+  const idle = opts.idleMs ? idleWatch(opts.idleMs, opts.signal) : null;
   try {
     const proc = Bun.spawn(cmd, {
       cwd: opts.cwd,
@@ -108,12 +139,13 @@ export async function exec(
       stdout: "pipe",
       stderr: "pipe",
       stdin: opts.input === undefined ? "ignore" : new TextEncoder().encode(opts.input),
-      detached: !!opts.timeoutMs || !!opts.signal,
+      detached: !!opts.timeoutMs || !!opts.signal || !!idle,
     });
-    const out = collect(proc.stdout);
-    const err = collect(proc.stderr);
+    const out = collect(proc.stdout, idle?.touch);
+    const err = collect(proc.stderr, idle?.touch);
     const all = Promise.all([out.done, err.done, proc.exited]);
-    if ((opts.timeoutMs || opts.signal) && !(await settles(all, opts.timeoutMs || undefined, opts.signal))) {
+    const stop = idle?.signal ?? opts.signal;
+    if ((opts.timeoutMs || stop) && !(await settles(all, opts.timeoutMs || undefined, stop))) {
       signal(proc, "SIGTERM");
       if (!(await settles(all, KILL_GRACE))) {
         signal(proc, "SIGKILL");
@@ -127,6 +159,8 @@ export async function exec(
     return { code, stdout: out.text(), stderr: err.text() };
   } catch (err) {
     return { code: 127, stdout: "", stderr: String(err) };
+  } finally {
+    idle?.clear();
   }
 }
 
@@ -158,6 +192,7 @@ export async function onHost(
   return exec([...sshArgs(host, sshControlDir()), remoteCommand(cmd)], {
     timeoutMs: opts.timeoutMs,
     input: opts.input,
+    ...(opts.idleMs ? { idleMs: opts.idleMs } : {}),
     ...(opts.signal ? { signal: opts.signal } : {}),
   });
 }
@@ -211,6 +246,13 @@ export async function gitToFile(path: string, args: string[], file: string, time
   return { code, stdout: "", stderr };
 }
 
+/** How long a git call may run: a hard cap, and optionally how long it may
+ *  stay silent first (which needs output to watch: `--progress` on a fetch). */
+export interface GitTimeout {
+  total: number;
+  idle?: number;
+}
+
 /** git in a repo, wherever the repo's locator says it is.
  *
  *  `GIT_OPTIONAL_LOCKS=0`: canopy reads while the user works, and a status
@@ -221,11 +263,12 @@ export async function gitToFile(path: string, args: string[], file: string, time
 export async function git(
   repoPath: string,
   args: string[],
-  timeoutMs = 30_000,
+  timeout: number | GitTimeout = 30_000,
   env?: Record<string, string>,
 ): Promise<ExecResult> {
   const { host, path } = parseLocator(repoPath);
-  const opts = { timeoutMs, env: { GIT_OPTIONAL_LOCKS: "0", ...env } };
+  const t = typeof timeout === "number" ? { total: timeout } : timeout;
+  const opts = { timeoutMs: t.total, ...(t.idle ? { idleMs: t.idle } : {}), env: { GIT_OPTIONAL_LOCKS: "0", ...env } };
   if (host === null) {
     // A seed is written by agents: see seedgit.ts.
     const seeds = seedsRootOf(path, seedRootsNow());

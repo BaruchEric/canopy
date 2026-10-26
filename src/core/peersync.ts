@@ -268,17 +268,78 @@ export async function initRepo(repo: string, id: string, peers: Peer[], dry: boo
 
 export type FetchOutcome = "ok" | "missing" | "unreachable" | { error: string };
 
+/** A peer fetch ends after this long without a byte of progress, and at
+ *  the cap however busy it is. The fixed 60 s these replaced ended every
+ *  fetch of a big upstream update (openclaw's 6 GiB took 5 min from the
+ *  Mac), and each kill left its partial pack behind: 85 passes, 100 GiB,
+ *  a full root disk on the mini (2026-10-25). */
+export const FETCH_IDLE_MS = 90_000;
+export const FETCH_CAP_MS = 30 * 60_000;
+/** a tmp pack nothing has written for this long has no index-pack behind it */
+export const TMP_PACK_STALE_MS = 60 * 60_000;
+const FETCH_TIMEOUT = { total: FETCH_CAP_MS, idle: FETCH_IDLE_MS };
+
+const isTmpPack = (name: string): boolean => name.startsWith("tmp_pack_") || name.startsWith("tmp_idx_");
+const packDirOf = (repo: string): Promise<string> => gitPath(repo, "objects/pack");
+async function tmpPacks(packDir: string): Promise<Set<string>> {
+  try {
+    return new Set((await readdir(packDir)).filter(isTmpPack));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Removes what a killed fetch leaves in objects/pack: the tmp packs that
+ *  appeared during a fetch of ours that failed (its process group is gone
+ *  by the time git() returns, so nothing writes them any more), and any tmp
+ *  pack older than TMP_PACK_STALE_MS from an earlier kill. A live
+ *  index-pack writes its pack continuously, so a fresh one that is not
+ *  ours (the user's own fetch) stays. Returns the names removed. */
+export async function sweepTmpPacks(repo: string, before: ReadonlySet<string> | null, now = Date.now()): Promise<string[]> {
+  const packDir = await packDirOf(repo);
+  const gone: string[] = [];
+  for (const name of await tmpPacks(packDir)) {
+    const file = join(packDir, name);
+    let ours = before !== null && !before.has(name);
+    if (!ours) {
+      try {
+        ours = now - (await lstat(file)).mtimeMs > TMP_PACK_STALE_MS;
+      } catch {
+        continue; // gone already
+      }
+    }
+    if (!ours) continue;
+    try {
+      await rm(file, { force: true });
+      gone.push(name);
+    } catch {
+      // held by something else: the next pass looks again
+    }
+  }
+  return gone;
+}
+
+/** fetch's progress lines, which `--progress` puts on stderr so the idle
+ *  timeout has something to watch; not what an error should quote */
+const PROGRESS = /^(remote: )?(Enumerating|Counting|Compressing|Receiving|Resolving|Unpacking|Updating|Writing|Finding|Total)\b/;
+function fetchError(stderr: string, code: number): string {
+  const lines = stderr.split(/\r|\n/).map((l) => l.trim()).filter((l) => l && !PROGRESS.test(l));
+  return lines.pop() ?? `git fetch exited ${code} (silent ${FETCH_IDLE_MS / 1000}s, or past ${FETCH_CAP_MS / 60_000} min)`;
+}
+
 /** Fetches a peer by URL and explicit refspecs rather than by remote name,
  *  so it works whether or not `initRepo` has ever run: dry mode skips
  *  `initRepo`, and a named-remote fetch would then read every repo as
  *  "missing" for having no such remote. */
 export async function fetchPeer(repo: string, id: string, peer: Peer, env: Record<string, string>): Promise<FetchOutcome> {
   const [heads, wip] = peerRefspecs(peer.name);
-  const r = await git(repo, ["fetch", "--prune", "--no-tags", "--quiet", peerUrl(peer, id), heads, wip, PEER_SKIP_RUNS], 60_000, { GIT_TERMINAL_PROMPT: "0", ...env });
+  const before = await tmpPacks(await packDirOf(repo));
+  const r = await git(repo, ["fetch", "--prune", "--no-tags", "--progress", peerUrl(peer, id), heads, wip, PEER_SKIP_RUNS], FETCH_TIMEOUT, { GIT_TERMINAL_PROMPT: "0", ...env });
+  await sweepTmpPacks(repo, r.code === 0 ? null : before);
   if (r.code === 0) return "ok";
   if (peerUnreachable(r.stderr)) return "unreachable";
   if (peerMissing(r.stderr)) return "missing";
-  return { error: r.stderr.trim().split("\n").pop() || `git fetch exited ${r.code}` };
+  return { error: fetchError(r.stderr, r.code) };
 }
 
 export async function peerTips(repo: string, peers: string[]) {
@@ -409,7 +470,9 @@ export async function advanceUpstreams(
     if (old === hash) continue;
     const have = async () => (await git(repo, ["cat-file", "-e", `${hash}^{commit}`])).code === 0;
     if (!(await have())) {
-      await git(repo, ["fetch", "--no-tags", "--no-write-fetch-head", "--quiet", url, ref], 60_000, fetchEnv);
+      const before = await tmpPacks(await packDirOf(repo));
+      const f = await git(repo, ["fetch", "--no-tags", "--no-write-fetch-head", "--progress", url, ref], FETCH_TIMEOUT, fetchEnv);
+      if (f.code !== 0) await sweepTmpPacks(repo, before);
       if (!(await have())) continue; // the peer's ref moved between the two asks
     }
     if ((await git(repo, ["merge-base", "--is-ancestor", old, hash])).code !== 0) continue;

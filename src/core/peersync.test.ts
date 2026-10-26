@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile, mkdir, symlink, lstat } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile, mkdir, symlink, lstat, utimes } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -28,8 +28,10 @@ import {
   serveSeed,
   serveSeeds,
   snapshotWip,
+  sweepTmpPacks,
   syncAll,
   syncRepo,
+  TMP_PACK_STALE_MS,
   treeIs,
   isLinkedWorktree,
   WORKTREE_NOT_SERVED,
@@ -363,6 +365,22 @@ describe("initRepo", () => {
       "+refs/heads/*:refs/remotes/mini/*\n+refs/wip/*:refs/peer-wip/mini/*\n^refs/heads/run/*",
     );
     expect(await sh(mac, "config", "remote.mini.tagOpt")).toBe("--no-tags");
+  });
+});
+
+describe("sweepTmpPacks", () => {
+  test("a killed fetch's partial packs go, a stale one goes, a stranger's fresh one stays", async () => {
+    const r = await repo("sweep");
+    const packs = join(r, ".git", "objects", "pack");
+    await mkdir(packs, { recursive: true });
+    for (const n of ["tmp_pack_stale", "tmp_pack_fresh", "tmp_pack_ours", "tmp_idx_ours", "pack-real.pack"]) await writeFile(join(packs, n), "x");
+    const old = new Date(Date.now() - TMP_PACK_STALE_MS - 60_000);
+    await utimes(join(packs, "tmp_pack_stale"), old, old);
+    // no fetch of ours failed: only the stale one goes
+    expect(await sweepTmpPacks(r, null)).toEqual(["tmp_pack_stale"]);
+    // a fetch of ours that saw `fresh` before it started, then failed: what appeared during it goes
+    expect((await sweepTmpPacks(r, new Set(["tmp_pack_fresh"]))).sort()).toEqual(["tmp_idx_ours", "tmp_pack_ours"]);
+    expect((await readdir(packs)).sort()).toEqual(["pack-real.pack", "tmp_pack_fresh"]);
   });
 });
 

@@ -38,6 +38,18 @@ describe("exec", () => {
     expect(r.stdout).toBe("early\n");
   });
 
+  test("an idle timeout ends a command that goes quiet, and lets a talking one finish", async () => {
+    const start = Date.now();
+    const quiet = await exec(["sh", "-c", "echo early; sleep 30; true"], { idleMs: 300, timeoutMs: 60_000 });
+    expect(Date.now() - start).toBeLessThan(300 + 2 * KILL_GRACE);
+    expect(quiet.code).not.toBe(0);
+    expect(quiet.stdout).toBe("early\n");
+    // a line every 100 ms for 800 ms, against a 300 ms idle limit
+    const talking = await exec(["sh", "-c", "for i in 1 2 3 4 5 6 7 8; do echo $i; sleep 0.1; done"], { idleMs: 300 });
+    expect(talking.code).toBe(0);
+    expect(talking.stdout).toBe("1\n2\n3\n4\n5\n6\n7\n8\n");
+  });
+
   test("an abort ends the command and what it started, as the timeout does", async () => {
     const ctl = new AbortController();
     setTimeout(() => ctl.abort(), 200);
