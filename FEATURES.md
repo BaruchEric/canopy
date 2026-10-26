@@ -124,7 +124,7 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ### FR-032 · Holdout scenario gates in the landing queue
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
-End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` at HEAD sets the run line and the judge mode.
+End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` in the main checkout sets the run line and the judge mode.
 Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26 (command scenarios in the queue, the record, the sheet's line, canopy scenarios); plans 2 (judge scenarios) and 3 (the PR watch's pass, the repo panel's list) open.
 
 ### FR-016 · One Library across backends

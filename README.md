@@ -73,7 +73,7 @@ canopy health lint [dir]           # read .canopy/health.json, exit 1 on a bad e
 canopy health init [dir]           # write a starter file, the dev task when there is one
 # list, show, heal and watch ask every backend the home one lists (Mac and mini), by tailnet address first;
 # --on NAME keeps one, --backend URL asks only that address (default $CANOPY_API, else 127.0.0.1:7850)
-canopy land <run>                  # a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
+canopy land <run>                  # a ready branch run into its repo's landing queue: rebase, gates, scenarios, fast-forward; never a push
 canopy land <run> --approve <id>   # land a run that touches sensitive files, with the id `canopy land <run>` printed
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
