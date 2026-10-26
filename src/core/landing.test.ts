@@ -21,6 +21,8 @@ import {
   queueOf,
   restartWorking,
   retryWaiting,
+  scenarioOf,
+  SCENARIO_GATE,
   sentBack,
   TAIL_CHARS,
 } from "./landing";
@@ -275,5 +277,38 @@ describe("review rules in the queue", () => {
     const runs = [run("a", { review: review("auto") }), run("b", { review: review("land") }), run("c", { review: review("approve") }), run("d"), run("e", { state: "working" }), run("f", { repoId: "other" }), run("g", { review: review("auto"), pr: 4 })];
     const pick = landAllPick(runs, queued(["d"]), "canopy");
     expect([pick.take.map((r) => r.id), pick.skip.map((r) => r.id)]).toEqual([["a", "b"], ["c"]]);
+  });
+});
+
+describe("scenarios", () => {
+  test("after the last gate the entry moves through the scenarios, then lands", () => {
+    let e = advance(enqueue([], run("s1"), 1)[0]!, { t: "begin" }, 2);
+    e = advance(e, { t: "rebased", setup: false, first: "test", noGates: false }, 3);
+    e = advance(e, { t: "gate-ok", next: null }, 4);
+    expect(e.state).toBe("landing");
+    e = advance(e, { t: "scenarios", first: "checkout-flow" }, 5);
+    expect([e.state, e.gate, landWord(e, [e]), inQueue(e)]).toEqual(["scenarios", "checkout-flow", "scenario: checkout-flow", true]);
+    e = advance(e, { t: "scenario-ok", next: "refund" }, 6);
+    expect([e.state, e.gate]).toEqual(["scenarios", "refund"]);
+    e = advance(e, { t: "scenario-ok", next: null }, 7);
+    expect([e.state, e.gate]).toEqual(["landing", undefined]);
+  });
+  test("a red scenario reads as one, apart from a gate of the same name", () => {
+    const base = advance(advance(enqueue([], run("s2"), 1)[0]!, { t: "begin" }, 2), { t: "scenarios", first: "test" }, 3);
+    const e = advance(base, { t: "red", gate: `${SCENARIO_GATE}test`, output: "x".repeat(5000) + "\n2 fail" }, 4);
+    expect([e.state, e.gate, landWord(e, [e]), scenarioOf(e.gate)]).toEqual(["red", "scenario: test", "red: scenario: test", "test"]);
+    expect(e.reason?.length).toBe(TAIL_CHARS);
+    expect(scenarioOf("test")).toBeNull();
+    const p = fixPrompt(e);
+    expect(p).toContain("scenario test failed after a rebase onto main");
+    expect(p).toContain("is not shown");
+    expect(p.endsWith("2 fail\n\nRebase onto main, fix what the output shows, run the repo's checks, and commit. Do not push.")).toBe(true);
+    expect(p).not.toContain("the test gate failed");
+  });
+  test("a restart puts a mid-scenarios entry back in the queue", () => {
+    const e = advance(advance(enqueue([], run("s3"), 1)[0]!, { t: "begin" }, 2), { t: "scenarios", first: "a" }, 3);
+    const back = restartWorking([e], 9)[0]!;
+    expect(back.state).toBe("queued");
+    expect(back).not.toHaveProperty("gate");
   });
 });

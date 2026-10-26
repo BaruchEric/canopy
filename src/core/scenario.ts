@@ -15,6 +15,7 @@
 // browser-safe: no node or Bun imports, so the UI may import it.
 
 import { GATE_NAME } from "./gatename";
+import type { ScenarioResult } from "./types";
 import { frontmatter } from "./workflow";
 
 export const SCENARIOS_FILE = ".canopy/scenarios.json";
@@ -46,15 +47,6 @@ export interface ScenarioSettings {
   minimum: number;
   /** seconds */
   timeout: number;
-}
-
-/** One scenario's outcome. Task 2 moves this to types.ts. */
-export interface ScenarioResult {
-  name: string;
-  kind: "command" | "judge";
-  ok: boolean;
-  p?: number;
-  tail?: string;
 }
 
 export const DEFAULT_SETTINGS: ScenarioSettings = { run: DEFAULT_RUN, judge: "jev", minimum: 1, timeout: 600 };

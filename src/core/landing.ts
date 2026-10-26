@@ -5,7 +5,7 @@
  *
  *  One queue per repo. For each entry in order: rebase onto the main
  *  checkout's HEAD, run `setup` when the rebase changed a lockfile, run the
- *  gates one at a time, then fast-forward main. A conflict, a red gate, or
+ *  gates one at a time, then the repo's scenarios, then fast-forward main. A conflict, a red gate, or
  *  main moving under it three times sends the entry back to its run. */
 
 import type { LandEntry, LandingRun, LandNotice, LandState, RunReview } from "./types";
@@ -17,9 +17,14 @@ export const TAIL_CHARS = 4000;
 /** landed entries kept for the list, per repo */
 export const KEEP_LANDED = 10;
 
+/** the prefix a red entry's gate carries when a scenario sent it back */
+export const SCENARIO_GATE = "scenario: ";
+/** the scenario a red entry names, or null when a gate did */
+export const scenarioOf = (gate: string | undefined): string | null => (gate?.startsWith(SCENARIO_GATE) ? gate.slice(SCENARIO_GATE.length) : null);
+
 export const SENT_BACK: ReadonlySet<LandState> = new Set(["conflict", "red", "moved"]);
 /** the states the loop is working an entry through */
-export const WORKING: ReadonlySet<LandState> = new Set(["rebasing", "setup", "gate", "landing"]);
+export const WORKING: ReadonlySet<LandState> = new Set(["rebasing", "setup", "gate", "scenarios", "landing"]);
 
 /** In the queue: waiting its turn, being worked, or holding its place. */
 export const inQueue = (e: Pick<LandEntry, "state">): boolean => e.state === "queued" || e.state === "waiting" || WORKING.has(e.state);
@@ -33,6 +38,8 @@ export type LandEvent =
   | { t: "set-up"; first: string | null }
   | { t: "red"; gate: string; output: string }
   | { t: "gate-ok"; next: string | null }
+  | { t: "scenarios"; first: string }
+  | { t: "scenario-ok"; next: string | null }
   | { t: "moved" }
   | { t: "busy"; files: string[] }
   | { t: "hold"; why: string }
@@ -62,6 +69,10 @@ export function advance(e: LandEntry, ev: LandEvent, now: number): LandEntry {
       return next("red", { gate: ev.gate, reason: tail(ev.output) });
     case "gate-ok":
       return ev.next ? next("gate", { gate: ev.next }) : next("landing");
+    case "scenarios":
+      return next("scenarios", { gate: ev.first });
+    case "scenario-ok":
+      return ev.next ? next("scenarios", { gate: ev.next }) : next("landing");
     case "moved": {
       const tries = e.tries + 1;
       return tries >= MAX_TRIES
@@ -228,6 +239,8 @@ export function landWord(e: LandEntry, entries: readonly LandEntry[]): string {
     }
     case "gate":
       return `gate: ${e.gate ?? "?"}`;
+    case "scenarios":
+      return `scenario: ${e.gate ?? "?"}`;
     case "setup":
       return "setting up";
     case "landing":
@@ -259,8 +272,13 @@ export function fixPrompt(e: LandEntry): string {
   switch (e.state) {
     case "conflict":
       return `${head}: rebasing it onto ${e.target} conflicts in ${(e.files ?? []).join(", ")}. Rebase it onto ${e.target} yourself, resolve the conflicts, run the checks, and commit. Do not push.`;
-    case "red":
+    case "red": {
+      const scenario = scenarioOf(e.gate);
+      if (scenario !== null) {
+        return `${head}: scenario ${scenario} failed after a rebase onto ${e.target}. The scenario is kept outside the repository and is not shown; the end of what it observed is below:\n\n${e.reason ?? ""}\n\nRebase onto ${e.target}, fix what the output shows, run the repo's checks, and commit. Do not push.`;
+      }
       return `${head}: the ${e.gate ?? ""} gate failed after a rebase onto ${e.target}. The end of its output:\n\n${e.reason ?? ""}\n\nRebase onto ${e.target}, fix what failed, run that gate again, and commit. Do not push.`;
+    }
     case "moved":
       return `${head}: ${e.target} kept moving while its gates ran. Rebase it onto ${e.target}, run the checks, and commit. Do not push.`;
     default:
