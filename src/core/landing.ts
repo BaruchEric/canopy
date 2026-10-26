@@ -5,8 +5,9 @@
  *
  *  One queue per repo. For each entry in order: rebase onto the main
  *  checkout's HEAD, run `setup` when the rebase changed a lockfile, run the
- *  gates one at a time, then the repo's scenarios, then fast-forward main. A conflict, a red gate, or
- *  main moving under it three times sends the entry back to its run. */
+ *  gates one at a time, then the repo's scenarios, then fast-forward main.
+ *  A conflict, a red gate, or main moving under it three times sends the
+ *  entry back to its run. */
 
 import type { LandEntry, LandingRun, LandNotice, LandState, RunReview } from "./types";
 

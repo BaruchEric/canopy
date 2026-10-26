@@ -20,15 +20,26 @@ describe("parseScenario", () => {
     expect(parseScenario("a.md", "---\nname: a\nrun: cat $CANOPY_CONFIG_DIR/callers.json\n---\n")).toEqual({ error: "a.md: run must not name a CANOPY_ variable" });
   });
   test("evidence outside the repo, or on a command scenario, is refused", () => {
-    expect(parseScenario("a.md", "---\nname: a\nkind: judge\nevidence: /etc/passwd\n---\nstory\n")).toEqual({ error: "a.md: evidence must be paths inside the repo, not /etc/passwd" });
-    expect(parseScenario("a.md", "---\nname: a\nkind: judge\nevidence: src/../../x\n---\nstory\n")).toEqual({ error: "a.md: evidence must be paths inside the repo, not src/../../x" });
+    expect(parseScenario("a.md", "---\nname: a\nkind: judge\nevidence: /etc/passwd\n---\nstory\n")).toEqual({ error: "a.md: evidence must be paths inside the repo" });
+    expect(parseScenario("a.md", "---\nname: a\nkind: judge\nevidence: src/../../x\n---\nstory\n")).toEqual({ error: "a.md: evidence must be paths inside the repo" });
     expect(parseScenario("a.md", "---\nname: a\nevidence: src/x.ts\n---\n")).toEqual({ error: "a.md: evidence is only read by kind: judge" });
   });
   test("a judge scenario needs a story", () => {
     expect(parseScenario("a.md", "---\nname: a\nkind: judge\n---\n\n")).toEqual({ error: "a.md: a judge scenario needs a story below the frontmatter" });
   });
-  test("no frontmatter is the workflow parser's error", () => {
-    expect(parseScenario("a.md", "name: a\n")).toEqual({ error: "no frontmatter: the file must start with a --- block" });
+  test("no frontmatter, or one that never closes, names the file", () => {
+    expect(parseScenario("a.md", "name: a\n")).toEqual({ error: "a.md: no frontmatter: the file must start with a --- block" });
+    expect(parseScenario("a.md", "---\nname: a\n")).toEqual({ error: "a.md: frontmatter never closes: no second --- line" });
+  });
+  test("a bad kind names the file and not the value", () => {
+    expect(parseScenario("a.md", "---\nname: a\nkind: secret-word\n---\n")).toEqual({ error: "a.md: kind must be command or judge" });
+  });
+  test("a story line above the closing --- names the file and never quotes the line", () => {
+    const parsed = parseScenario("refund.md", "---\nname: refund\nkind: judge\nThe customer gets the refund within a day.\n---\n");
+    expect(parsed).toEqual({ error: "refund.md: frontmatter line is not key: value" });
+    const error = "error" in parsed ? parsed.error : "";
+    expect(error).not.toContain("customer");
+    expect(error).not.toContain("refund within a day");
   });
 });
 
@@ -36,7 +47,7 @@ describe("parseScenarioSet", () => {
   test("a bad file is named and the rest are kept, in file name order", () => {
     const set = parseScenarioSet([{ file: "b.md", text: cmd.replace("checkout-flow", "b") }, { file: "broken.md", text: "nope" }, { file: "a.md", text: cmd.replace("checkout-flow", "a") }]);
     expect(set.scenarios.map((s) => s.name)).toEqual(["a", "b"]);
-    expect(set.errors).toEqual([{ file: "broken.md", error: "no frontmatter: the file must start with a --- block" }]);
+    expect(set.errors).toEqual([{ file: "broken.md", error: "broken.md: no frontmatter: the file must start with a --- block" }]);
   });
   test("two files with one name: the second is an error", () => {
     const set = parseScenarioSet([{ file: "a.md", text: cmd }, { file: "b.md", text: cmd }]);

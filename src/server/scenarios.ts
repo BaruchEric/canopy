@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { GATE_NAME } from "../core/gatename";
 import { parseLocator } from "../core/host";
 import { tail } from "../core/landing";
-import { DEFAULT_SETTINGS, parseScenario, parseScenarioSet, parseScenariosFile, scenarioTemplate, scoreOf, SCENARIOS_FILE } from "../core/scenario";
+import { DEFAULT_SETTINGS, MAX_TIMEOUT, parseScenario, parseScenarioSet, parseScenariosFile, scenarioTemplate, scoreOf, SCENARIOS_FILE } from "../core/scenario";
 import type { Scenario, ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import { isForge } from "../core/types";
@@ -76,13 +76,21 @@ export interface ScenarioPass {
   run: ScenarioRunner;
   head: string;
   now: number;
+  /** the clock the set's budget reads, in ms; Date.now unless a test drives it */
+  clock?: () => number;
   /** after each scenario, with the next one's name or null */
   onDone?: (r: ScenarioResult, next: string | null) => void;
 }
 
+/** what a scenario reached after the set's budget is spent says */
+export const OUT_OF_TIME = "the set's time ran out";
+
 /** Runs the set's command scenarios in order and stops at the first red.
  *  A file in `errors` is a red result named by the file, listed first, and
- *  nothing runs after it. Judge scenarios are left out in plan 1. */
+ *  nothing runs after it. Judge scenarios are left out in plan 1. The whole
+ *  set runs under MAX_TIMEOUT seconds: each scenario gets the lesser of the
+ *  settings' timeout and what is left, and one reached with nothing left is
+ *  red without running, so the CLI's wait always outlasts a pass. */
 export async function runScenarioSet(p: ScenarioPass): Promise<ScenarioRun> {
   const commands: Scenario[] = p.set.scenarios.filter((s) => s.kind === "command");
   const results: ScenarioResult[] = p.set.errors.map((e) => ({ name: e.file, kind: "command", ok: false, tail: e.error }));
@@ -92,16 +100,19 @@ export async function runScenarioSet(p: ScenarioPass): Promise<ScenarioRun> {
   if (commands.length === 0) return { head: p.head, at: p.now, total: 0, passed: 0, score: 1, results: [] };
 
   let passed = 0;
+  const clock = p.clock ?? Date.now;
+  const deadline = clock() + MAX_TIMEOUT * 1000;
   const copy = await copySet(p.setDir);
   try {
     for (const [i, s] of commands.entries()) {
-      const r = await p.run(p.dir, s.run ?? p.settings.run, copy, p.settings.timeout * 1000);
-      const result: ScenarioResult = {
-        name: s.name,
-        kind: "command",
-        ok: r.exit === 0,
-        tail: tail(r.output || `exited ${r.exit ?? "on a signal"}`),
-      };
+      const left = deadline - clock();
+      let result: ScenarioResult;
+      if (left <= 0) {
+        result = { name: s.name, kind: "command", ok: false, tail: OUT_OF_TIME };
+      } else {
+        const r = await p.run(p.dir, s.run ?? p.settings.run, copy, Math.min(p.settings.timeout * 1000, left));
+        result = { name: s.name, kind: "command", ok: r.exit === 0, tail: tail(r.output || `exited ${r.exit ?? "on a signal"}`) };
+      }
       results.push(result);
       if (result.ok) passed++;
       p.onDone?.(result, commands[i + 1]?.name ?? null);
@@ -154,7 +165,8 @@ export class Scenarios {
         if (req.method === "GET" && path === "/api/scenarios") return json(await this.list(repo));
         if (req.method === "GET" && path === "/api/scenarios/names") {
           const set = await readScenarioSet(this.deps.root, repo.path);
-          return json({ names: set.scenarios.map((s) => ({ name: s.name, kind: s.kind })), errors: set.errors });
+          // a read caller gets names and kinds only, so an error file is its file name and no message
+          return json({ names: set.scenarios.map((s) => ({ name: s.name, kind: s.kind })), errors: set.errors.map((e) => ({ file: e.file })) });
         }
         if (req.method === "DELETE" && path === "/api/scenarios") return await this.remove(repo, url.searchParams.get("name"));
         return json({ error: "not found" }, 404);
@@ -238,6 +250,6 @@ export class Scenarios {
     // a folder with no git, or no folder at all, has no head; the pass still runs
     const head = (await revOf(dir, "HEAD").catch(() => null)) ?? "";
     const now = (this.deps.now ?? Date.now)();
-    return json(await runScenarioSet({ dir, setDir: setDirOf(this.deps.root, repo.path), set, settings, run: this.deps.run, head, now }));
+    return json(await runScenarioSet({ dir, setDir: setDirOf(this.deps.root, repo.path), set, settings, run: this.deps.run, head, now, ...(this.deps.now ? { clock: this.deps.now } : {}) }));
   }
 }

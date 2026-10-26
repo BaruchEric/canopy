@@ -106,7 +106,59 @@ test("a file that cannot be read is a red result before anything runs, and no co
   const r = runner({});
   const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 });
   expect(r.calls).toEqual([]);
-  expect(out).toMatchObject({ total: 2, passed: 0, score: 0, results: [{ name: "broken.md", kind: "command", ok: false, tail: "no frontmatter: the file must start with a --- block" }] });
+  expect(out).toMatchObject({ total: 2, passed: 0, score: 0, results: [{ name: "broken.md", kind: "command", ok: false, tail: "broken.md: no frontmatter: the file must start with a --- block" }] });
+});
+
+test("the set runs under one budget: each scenario gets what is left, and one reached with none left is red and not run", async () => {
+  const repo = join(root, "r11");
+  const dir = await setFor(repo, { "a.md": cmd("a", "make a"), "b.md": cmd("b", "make b"), "c.md": cmd("c", "make c") });
+  const set = await readScenarioSet(root, repo);
+  let clock = 1_000_000;
+  const handed: [string, number][] = [];
+  // a takes 1000 s of the 1800 s budget, b takes the 800 s left
+  const spends: Record<string, number> = { "make a": 1_000_000, "make b": 800_000 };
+  const run: ScenarioRunner = async (_cwd, line, _setDir, ms) => {
+    handed.push([line, ms]);
+    clock += spends[line] ?? 0;
+    return { exit: 0, output: "" };
+  };
+  const done: [string, string | null][] = [];
+  const out = await runScenarioSet({
+    dir: "/wt",
+    setDir: dir,
+    set,
+    settings: { ...DEFAULT_SETTINGS, timeout: 1800 },
+    run,
+    head: "h",
+    now: 1,
+    clock: () => clock,
+    onDone: (x, next) => done.push([x.name, next]),
+  });
+  expect(handed).toEqual([["make a", 1_800_000], ["make b", 800_000]]);
+  expect(out.results).toEqual([
+    { name: "a", kind: "command", ok: true, tail: "exited 0" },
+    { name: "b", kind: "command", ok: true, tail: "exited 0" },
+    { name: "c", kind: "command", ok: false, tail: "the set's time ran out" },
+  ]);
+  expect([out.total, out.passed, out.score]).toEqual([3, 2, 2 / 3]);
+  expect(done).toEqual([["a", "b"], ["b", "c"], ["c", null]]);
+});
+
+test("the budget stops the pass at the scenario it runs out on; later ones stay unrun", async () => {
+  const repo = join(root, "r12");
+  const dir = await setFor(repo, { "a.md": cmd("a", "make a"), "b.md": cmd("b", "make b"), "c.md": cmd("c", "make c") });
+  const set = await readScenarioSet(root, repo);
+  let clock = 0;
+  const lines: string[] = [];
+  const run: ScenarioRunner = async (_cwd, line) => {
+    lines.push(line);
+    clock += 1_800_000;
+    return { exit: 0, output: "" };
+  };
+  const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run, head: "h", now: 1, clock: () => clock });
+  expect(lines).toEqual(["make a"]);
+  expect(out.results.map((r) => [r.name, r.ok, r.tail])).toEqual([["a", true, "exited 0"], ["b", false, "the set's time ran out"]]);
+  expect([out.total, out.passed, out.score]).toEqual([3, 1, 1 / 3]);
 });
 
 test("judge scenarios are left out of the pass in plan 1", async () => {
@@ -196,6 +248,21 @@ test("the routes: add writes a template, list and names, run against main and ag
   expect((await call("GET", "/api/scenarios?repo=zzz"))!.status).toBe(404);
   expect((await call("GET", "/api/scenarios"))!.status).toBe(400);
   expect(await call("GET", "/api/other")).toBeNull();
+});
+
+test("names lists an unreadable file by its file name only, never the parser's message", async () => {
+  const repo = join(root, "r13");
+  await mkdir(repo, { recursive: true });
+  await setFor(repo, { "a.md": cmd("a"), "story.md": "---\nname: story\nkind: judge\nThe customer gets the refund within a day.\n---\n" });
+  const { call } = hub(repo);
+  const res = (await call("GET", "/api/scenarios/names?repo=r"))!;
+  const text = await res.text();
+  expect(JSON.parse(text)).toEqual({ names: [{ name: "a", kind: "command" }], errors: [{ file: "story.md" }] });
+  expect(text).not.toContain("customer");
+  expect(text).not.toContain("frontmatter");
+  // the admin list keeps the message
+  const list = (await (await call("GET", "/api/scenarios?repo=r"))!.json()) as { errors: { file: string; error: string }[] };
+  expect(list.errors).toEqual([{ file: "story.md", error: "story.md: frontmatter line is not key: value" }]);
 });
 
 test("a repo on another host is refused", async () => {

@@ -37,7 +37,7 @@ export interface Scenario {
 export interface ScenarioSet {
   /** in file name order */
   scenarios: Scenario[];
-  /** files that could not be read, named with why; a pass counts each as red */
+  /** files that could not be read, named with why (never a line of the file); a pass counts each as red */
   errors: { file: string; error: string }[];
 }
 
@@ -58,7 +58,11 @@ export function parseScenario(file: string, text: string): Scenario | { error: s
   try {
     fm = frontmatter(text);
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    // the parser's message may quote a line of the file; name the problem, never the text
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.startsWith("no frontmatter")) return { error: `${file}: no frontmatter: the file must start with a --- block` };
+    if (msg.startsWith("frontmatter never closes")) return { error: `${file}: frontmatter never closes: no second --- line` };
+    return { error: `${file}: frontmatter line is not key: value` };
   }
   const { keys } = fm;
   const name = keys.get("name");
@@ -66,14 +70,14 @@ export function parseScenario(file: string, text: string): Scenario | { error: s
     return { error: `${file}: name must be a short name of letters, digits, dots, dashes or underscores` };
   }
   const k = keys.get("kind") || "command";
-  if (k !== "command" && k !== "judge") return { error: `${file}: kind must be command or judge, not ${k}` };
+  if (k !== "command" && k !== "judge") return { error: `${file}: kind must be command or judge` };
   const run = keys.get("run") || "";
   if (run.includes("CANOPY_")) return { error: `${file}: run must not name a CANOPY_ variable` };
   const evidence = (keys.get("evidence") ?? "").split(/\s+/).filter(Boolean);
   if (evidence.length > 0 && k !== "judge") return { error: `${file}: evidence is only read by kind: judge` };
   for (const p of evidence) {
     if (p.startsWith("/") || p.split("/").includes("..")) {
-      return { error: `${file}: evidence must be paths inside the repo, not ${p}` };
+      return { error: `${file}: evidence must be paths inside the repo` };
     }
   }
   const body = fm.body.trim();
