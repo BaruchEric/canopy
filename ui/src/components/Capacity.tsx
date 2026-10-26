@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { hitStands } from "../../../src/core/capacity";
 import { AGENT_NAME } from "../runs";
 import { leavesPop, useFitPop } from "../pop";
+import { useNow } from "./Registry";
 import { useStore, idText } from "../store";
 import { escapeCloses } from "../surface";
 import { ageWord, CAPACITY_GLYPH, capacityRows, capacityWord, rowsTone } from "../capacity";
@@ -14,7 +15,8 @@ export function CapacityChip() {
     .filter((run) => run.status === "limited")
     .sort((a, b) => (b.limited?.at ?? b.startedAt) - (a.limited?.at ?? a.startedAt))));
   const repos = useStore((s) => s.repos);
-  const rows = useMemo(() => capacityRows(capacity, order, Date.now()), [capacity, order]);
+  const now = useNow();
+  const rows = useMemo(() => capacityRows(capacity, order, now), [capacity, order, now]);
   const word = capacityWord(rows);
   const tone = rowsTone(rows);
   const [open, setOpen] = useState(false);
@@ -36,7 +38,6 @@ export function CapacityChip() {
   }, [open]);
 
   if (rows.length === 0) return null;
-  const now = Date.now();
   return (
     <div className="settings capacity" ref={ref}>
       <button

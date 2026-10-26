@@ -137,6 +137,14 @@ describe("childOutcome", () => {
     expect(childOutcome(child({ proposalState: "turned down", branch: branch({ state: "nothing" }) }))).toEqual({ state: "failed", outcome: "plan turned down" });
     expect(childOutcome(child({ proposalState: "sent back", branch: branch({ state: "nothing" }) }))).toEqual({ state: "done", outcome: "no change" });
   });
+
+  test("a limited child waits for capacity whether its branch is empty or ready", () => {
+    const text = "You've hit your limit · resets 3pm";
+    const limited = child({ status: "limited", error: text, limited: { at: 3, text } });
+    const outcome = { state: "failed", outcome: "waiting for capacity" } as const;
+    expect(childOutcome({ ...limited, branch: branch({ state: "nothing" }) })).toEqual(outcome);
+    expect(childOutcome({ ...limited, branch: branch({ state: "ready" }) }, { prUrl: "https://github.com/x/web/pull/7" })).toEqual(outcome);
+  });
 });
 
 describe("settleNote", () => {
@@ -167,6 +175,20 @@ describe("settleNote", () => {
     expect(line.length).toBe("result: ".length + 600);
     expect(line.endsWith("…")).toBe(true);
     expect(note).toContain("branch: run/fix-login-ab12cd34, no commits");
+  });
+
+  test("a limited child note says it waits for capacity and keeps the limit text", () => {
+    const text = "You've hit your limit · resets 3pm";
+    const note = settleNote(t, child({
+      status: "limited",
+      error: text,
+      limited: { at: 3, text },
+      result: { text: "Partial work before the limit.", durationMs: 1, turns: 1 },
+      branch: branch({ state: "ready" }),
+    }));
+    expect(note).toContain("outcome: waiting for capacity");
+    expect(note).toContain(`result: ${text}`);
+    expect(note).not.toContain("result: Partial work before the limit.");
   });
 
   test("a PR is named by its address, and a result keeps to one line", () => {
