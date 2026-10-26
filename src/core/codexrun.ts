@@ -13,7 +13,7 @@
  *  - `initialize {clientInfo, capabilities}`, then the `initialized`
  *    notification. The answer's `userAgent` is `<client name>/<codex
  *    version> (...)`, which is where the version check reads the version.
- *  - `thread/start {cwd, model?, approvalPolicy, sandbox, config?,
+ *  - `thread/start {cwd, model?, modelProvider?, approvalPolicy, sandbox, config?,
  *    developerInstructions?}`. The thread's id is the run's session: what
  *    `codex resume <id>` takes later.
  *  - `turn/start {threadId, input: [{type: "text", text, text_elements}],
@@ -39,6 +39,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
+import { takesProvider } from "./harness";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
@@ -241,6 +242,7 @@ export function threadParams(cwd: string, agent: DriveAgent, opts: ThreadOptions
   return {
     cwd,
     ...(model ? { model } : {}),
+    ...(takesProvider("codex", agent.provider) ? { modelProvider: agent.provider } : {}),
     ...threadPolicy(agent, opts.rules),
     ...override,
     ...(Object.keys(config).length ? { config } : {}),
@@ -826,6 +828,8 @@ export class CodexDriver implements RunDriver {
   private tokens: DriveTokens | undefined;
   /** the model thread/start answered with, for the cost ledger */
   private model = "";
+  /** the provider thread/start answered with, for the cost ledger */
+  private provider = "";
   /** item id → its tool step */
   private steps = new Map<string, RunStep>();
   /** item id → the last item seen under it, for approvals about it */
@@ -950,6 +954,7 @@ export class CodexDriver implements RunDriver {
       if (!id) throw new Error("codex started a thread without an id");
       this.thread = id;
       this.model = str(started, "model");
+      this.provider = str(started, "modelProvider");
       ctx.session(id);
       if (this.interrupting) {
         rpc.kill();
@@ -1161,6 +1166,7 @@ export class CodexDriver implements RunDriver {
       Date.now() - this.turnAt,
     );
     if (this.model) result.model = this.model;
+    if (this.provider) result.provider = this.provider;
     // canopy's own interrupt at the limit says why, rather than "interrupted"
     ctx.result(result, problem && this.capped ? this.capped : problem);
     // a job is one turn; a chat keeps the thread for the next message

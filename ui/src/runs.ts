@@ -31,14 +31,12 @@ export function tokenCount(n: number): string {
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }
 
-/** The console footer's line: turns and time, then the tokens where the
- *  harness reports those (Codex), else the cost where it reports one
- *  (Claude Code). A Codex result also carries a zero cost for pages older
- *  than harnesses, which the tokens win over. */
+/** The console footer's line: turns and time, then tokens and any reported
+ *  dollars. Codex's compatibility zero is hidden when it also reports tokens. */
 export function resultLine(r: RunResult): string {
   const parts = [`${r.turns} turn${r.turns === 1 ? "" : "s"}`, clock(r.durationMs)];
   if (r.tokens) parts.push(`${tokenCount(r.tokens.total)} tokens`);
-  else if (r.costUsd !== undefined) parts.push(`$${r.costUsd.toFixed(2)}`);
+  if (r.costUsd !== undefined && (!r.tokens || r.costUsd > 0)) parts.push(`$${r.costUsd.toFixed(2)}`);
   return parts.join(" · ");
 }
 

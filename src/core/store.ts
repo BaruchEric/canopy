@@ -9,6 +9,7 @@ import {
   normalizeRepoAgent,
   normalizeRepoAgents,
   normalizeRoles,
+  normalizeNamedPicks,
   resolveAgent,
   withDefaultProfile,
 } from "./route";
@@ -29,6 +30,7 @@ import {
   type AgentRole,
   type AgentRoutes,
   type AgentSettings,
+  type AgentScope,
   type CanopyConfig,
   type LaunchPick,
   type RepoAgent,
@@ -178,6 +180,8 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     agents: normalizeRepoAgents(cfg.agents),
     profiles: normalizeProfiles(cfg.profiles),
     agentRoles: normalizeRoles(cfg.agentRoles),
+    agentWorkflows: normalizeNamedPicks(cfg.agentWorkflows),
+    agentTasks: normalizeNamedPicks(cfg.agentTasks),
     launchers: normalizeLaunchers(cfg.launchers),
     tasks: normalizeTasks(cfg.tasks),
     health: normalizeHealth(cfg.health),
@@ -351,12 +355,26 @@ export const agentRoutes = (cfg: CanopyConfig): AgentRoutes => ({
   profiles: withDefaultProfile(cfg.profiles),
   roles: cfg.agentRoles,
   repos: cfg.agents,
+  ...(Object.keys(cfg.agentWorkflows ?? {}).length ? { workflows: cfg.agentWorkflows } : {}),
+  ...(Object.keys(cfg.agentTasks ?? {}).length ? { tasks: cfg.agentTasks } : {}),
 });
 
 /** The settings a repo path gets for a role (an interactive shell unless
  *  said), through every layer of core/route. */
-export const agentFor = (cfg: CanopyConfig, path: string, role: AgentRole = "shell", explicit?: LaunchPick): AgentSettings =>
-  resolveAgent(agentRoutes(cfg), path, role, explicit).settings;
+export const agentFor = (cfg: CanopyConfig, path: string, role: AgentRole = "shell", explicit?: LaunchPick, scope?: AgentScope): AgentSettings =>
+  resolveAgent(agentRoutes(cfg), path, role, explicit, scope).settings;
+
+/** A named workflow or agent task default, persisted on this backend. */
+export async function setAgentScope(scope: AgentScope, pick: AgentPick | null): Promise<AgentRoutes> {
+  return withConfig((cfg) => {
+    const key = scope.kind === "workflow" ? "agentWorkflows" : "agentTasks";
+    const next = { ...cfg[key] };
+    if (pick) next[scope.name] = pick;
+    else delete next[scope.name];
+    cfg[key] = normalizeNamedPicks(next);
+    return agentRoutes(cfg);
+  });
+}
 
 /** Stores a repo's override; an empty one removes the entry. Returns the
  *  whole routing, which is what the browsers hold. */

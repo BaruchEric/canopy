@@ -45,7 +45,7 @@ const KEEP_FINISHED = 60;
 
 /** The settings a step's run starts with, given the agent profile the step
  *  names (its `agent:` line), or undefined for the repo's own flow route. */
-export type StepAgent = (profile: string | undefined) => AgentSettings;
+export type StepAgent = (profile: string | undefined, workflow?: string, role?: "flow" | "job") => AgentSettings;
 
 const stepAgent = (agent: AgentSettings | StepAgent): StepAgent => (typeof agent === "function" ? agent : () => agent);
 
@@ -890,7 +890,15 @@ export class Flows {
       await this.check(live);
       return;
     }
-    const agent = live.agent(def.agent);
+    let agent: AgentSettings;
+    try {
+      agent = live.agent(def.agent, live.workflow.name, live.workflow.agentRole ?? "flow");
+    } catch (err) {
+      step.status = "failed";
+      step.reason = errText(err);
+      this.end(live, "failed", step.reason);
+      return;
+    }
     // A restart resumes the step's Claude session, which holds the prompt
     // and the work so far; anything else starts fresh with the restart note.
     const resume = restarted && step.session && step.harness === "claude" && agent.harness === "claude" ? step.session : undefined;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentArgs, agentArgv, continueArgv, HARNESS, presentHarnesses, resumeArgv, takesEffort, takesModel } from "./harness";
+import { agentArgs, agentArgv, continueArgv, HARNESS, presentHarnesses, resumeArgv, resumeKindArgv, takesEffort, takesModel, takesProvider } from "./harness";
 import { AGENT_EFFORTS, DEFAULT_AGENT, type AgentEffort, type AgentSettings } from "./types";
 
 const claude = (over: Partial<AgentSettings> = {}): AgentSettings => ({ ...DEFAULT_AGENT, ...over });
@@ -35,6 +35,17 @@ describe("the argv table", () => {
       "--no-daemon",
       "--search",
     ]);
+  });
+
+  test("a named Codex provider overrides model_provider for shells, resumes and continues", () => {
+    const selected = codex({ provider: "team_1", yolo: false });
+    expect(agentArgv(selected)).toEqual(["codex", "-c", 'model_provider="team_1"', "-a", "on-request", "-s", "workspace-write", "--no-daemon"]);
+    expect(resumeArgv(selected, U)).toEqual(["codex", "resume", "-c", 'model_provider="team_1"', "-a", "on-request", "-s", "workspace-write", "--no-daemon", U]);
+    expect(resumeKindArgv("codex", U, selected)).toEqual(["codex", "resume", "-c", 'model_provider="team_1"', "-a", "on-request", "-s", "workspace-write", "--no-daemon", U]);
+    expect(continueArgv("codex", selected)).toEqual(["codex", "resume", "--last", "-c", 'model_provider="team_1"', "-a", "on-request", "-s", "workspace-write", "--no-daemon"]);
+    expect(agentArgs(codex({ provider: "default" }))).not.toContain('model_provider="default"');
+    expect(agentArgs(codex({ provider: "bad provider" }))).not.toContain('model_provider="bad provider"');
+    expect(agentArgs(claude({ provider: "team_1" }))).not.toContain('model_provider="team_1"');
   });
 
   test("a launch's folders come last, one --add-dir each, in both harnesses", () => {
@@ -130,6 +141,14 @@ describe("the argv table", () => {
     expect(takesModel("codex", "sonnet")).toBe(false);
     expect(takesModel("codex", "default")).toBe(true);
     expect(takesModel("codex", 5)).toBe(false);
+  });
+
+  test("only Codex takes a valid configured provider ID", () => {
+    expect(takesProvider("codex", "team_1")).toBe(true);
+    expect(takesProvider("codex", "-team")).toBe(false);
+    expect(takesProvider("codex", "default")).toBe(false);
+    expect(takesProvider("claude", "team_1")).toBe(false);
+    expect(takesProvider("codex", null)).toBe(false);
   });
 
   test("the harnesses a machine has, off a lookup by binary", () => {

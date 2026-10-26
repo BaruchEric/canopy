@@ -86,6 +86,12 @@ describe("the process and the thread", () => {
     expect(yolo).toEqual({ cwd: "/r", model: "gpt-x", approvalPolicy: "never", sandbox: "danger-full-access" });
   });
 
+  test("thread/start selects a named provider and ignores default or malformed IDs", () => {
+    expect(threadParams("/r", { ...AGENT, provider: "team_1" }, { askQuestions: false })).toMatchObject({ modelProvider: "team_1" });
+    expect(threadParams("/r", { ...AGENT, provider: "default" }, { askQuestions: false })).not.toHaveProperty("modelProvider");
+    expect(threadParams("/r", { ...AGENT, provider: "bad provider" }, { askQuestions: false })).not.toHaveProperty("modelProvider");
+  });
+
   test("only a bare Edit, Write or MultiEdit rule opens the sandbox for writing", () => {
     expect(allowsEdits(GIT_READ)).toBe(false);
     expect(allowsEdits(["Write"])).toBe(true);
@@ -721,7 +727,7 @@ describe("a Codex run", () => {
           ],
         ],
       }),
-      { agent: { model: "gpt-x", effort: "high", extra: "-c foo=1 --search" }, message: "edit a.ts" },
+      { agent: { model: "gpt-x", provider: "team_1", effort: "high", extra: "-c foo=1 --search" }, message: "edit a.ts" },
     );
     const run = await d.until(d.ended, "the end");
     expect(run.status).toBe("done");
@@ -733,6 +739,7 @@ describe("a Codex run", () => {
       turns: 1,
       tokens: { input: 100, cachedInput: 40, output: 20, reasoning: 5, total: 120 },
       model: "fake-model",
+      provider: "openai",
     });
     expect(run.steps.map((s) => (s.kind === "tool" ? `${s.tool?.name}:${s.tool?.title}:${s.tool?.status}` : `${s.kind}:${s.text}`))).toEqual([
       "text:Looking first.",
@@ -757,7 +764,7 @@ describe("a Codex run", () => {
     expect(init.params.capabilities.optOutNotificationMethods).toContain("item/agentMessage/delta");
     expect(requests(log, "initialized")).toHaveLength(1);
     const thread = requests(log, "thread/start")[0]?.["params"] as Record<string, unknown>;
-    expect(thread).toMatchObject({ cwd: d.repo, model: "gpt-x", approvalPolicy: "untrusted", sandbox: "read-only" });
+    expect(thread).toMatchObject({ cwd: d.repo, model: "gpt-x", modelProvider: "team_1", approvalPolicy: "untrusted", sandbox: "read-only" });
     const turn = requests(log, "turn/start")[0]?.["params"] as Record<string, unknown>;
     expect(turn).toEqual({ threadId: "thr-1", input: [{ type: "text", text: "edit a.ts", text_elements: [] }], effort: "high" });
     // the tested version says nothing

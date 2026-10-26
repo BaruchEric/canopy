@@ -142,8 +142,9 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
   const repos = new Map<string, CostLine>();
   const runs = new Map<string, CostLine>();
   const runServices = new Map<string, Set<string>>();
+  const runDetails = new Map<string, Set<string>>();
 
-  const claudeLine = line("claude:anthropic", SERVICE_NAME.claude, archive ? "anthropic · claude-history's sessions in these repos, synced hourly" : "anthropic · canopy's runs only: claude-history did not answer");
+  const claudeLine = line("claude:anthropic", SERVICE_NAME.claude, archive ? "claude-history's sessions across configured providers, synced hourly" : "anthropic · canopy's runs only: claude-history did not answer");
   for (const [key, usd] of claude) {
     claudeLine.usd += usd;
     const card = cards.find((c) => c.key === key);
@@ -156,16 +157,19 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
 
   for (const r of rows) {
     const card = r.qid ? cardOf.get(r.qid) : undefined;
-    // the archive already counts canopy's Claude runs where it has the repo
-    const counted = !(r.service === "claude" && card !== undefined && claude.has(card.key));
-    if (r.service === "claude") {
+    // claude-history indexes every Claude Code transcript for a repo. Its
+    // totals do not separate providers, so all matching Claude rows overlap.
+    const archivedClaude = r.service === "claude" && card !== undefined && claude.has(card.key);
+    const counted = !archivedClaude;
+    if (r.service === "claude" && (r.provider === "anthropic" || archivedClaude)) {
       canopyClaude++;
       canopyClaudeUsd += r.usd ?? 0;
     }
     if (counted) {
       const sk = `${r.service}:${r.provider}`;
-      const s = r.service === "claude" ? claudeLine : (services.get(sk) ?? line(sk, `${SERVICE_NAME[r.service]} · ${r.provider}`));
-      if (r.service !== "claude") services.set(sk, s);
+      const firstPartyClaude = r.service === "claude" && r.provider === "anthropic";
+      const s = firstPartyClaude ? claudeLine : (services.get(sk) ?? line(sk, `${SERVICE_NAME[r.service]} · ${r.provider}`));
+      if (!firstPartyClaude) services.set(sk, s);
       add(s, r);
       if (r.model) models.set(sk, (models.get(sk) ?? new Set()).add(r.model));
 
@@ -173,7 +177,12 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
       const rl = repos.get(rk) ?? line(rk, card?.name ?? r.repoName ?? "no repo", rk === NO_REPO ? "dictation and calls made outside a repo" : "");
       repos.set(rk, rl);
       add(rl, r);
-    } else claudeLine.at = Math.max(claudeLine.at, r.at);
+    } else {
+      // Archive dollars replace this duplicate Claude cost, while the
+      // canopy row remains the source for token usage.
+      claudeLine.tokens += r.tokens?.total ?? 0;
+      claudeLine.at = Math.max(claudeLine.at, r.at);
+    }
 
     if (r.run) {
       const k = `${r.backend}:${r.run}`;
@@ -182,13 +191,25 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
       add(l, r);
       const where = (r.qid ? cardOf.get(r.qid)?.name : undefined) ?? r.repoName;
       if (where && !l.detail) l.detail = where;
-      runServices.set(k, (runServices.get(k) ?? new Set()).add(SERVICE_NAME[r.service]));
+      const customAgentProvider =
+        (r.service === "claude" && r.provider !== "anthropic") || (r.service === "codex" && r.provider !== "openai");
+      const serviceName = customAgentProvider ? `${SERVICE_NAME[r.service]} · ${r.provider}` : SERVICE_NAME[r.service];
+      runServices.set(k, (runServices.get(k) ?? new Set()).add(serviceName));
+      const settings = r.agentSettings;
+      const runDetail = runDetails.get(k) ?? new Set<string>();
+      const model = r.model ?? (settings?.model !== "default" ? settings?.model : undefined);
+      if (model) runDetail.add(model);
+      if (settings?.effort && settings.effort !== "default") runDetail.add(`${settings.effort} effort`);
+      if (r.flowStep) runDetail.add(`${r.flowStep.workflow} / ${r.flowStep.step}`);
+      if (runDetail.size) runDetails.set(k, runDetail);
     }
   }
 
   for (const [k, s] of services) s.detail = [...(models.get(k) ?? [])].join(", ") || s.label.split(" · ")[1] || "";
   if (canopyClaude > 0) claudeLine.detail += ` (canopy's ${canopyClaude} ${canopyClaude === 1 ? "reply" : "replies"}: $${canopyClaudeUsd.toFixed(2)})`;
-  for (const [k, l] of runs) l.detail = [l.detail, [...(runServices.get(k) ?? [])].join(" + ")].filter(Boolean).join(" · ");
+  for (const [k, l] of runs) {
+    l.detail = [l.detail, [...(runServices.get(k) ?? [])].join(" + "), [...(runDetails.get(k) ?? [])].join(" · ")].filter(Boolean).join(" · ");
+  }
 
   const serviceLines = [...(claudeLine.usd > 0 || claudeLine.at > 0 ? [claudeLine] : []), ...[...services.values()].sort(byWorth)];
   return {

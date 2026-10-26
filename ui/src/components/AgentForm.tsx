@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { describeAgent, normalizeAgent, withHarness } from "../../../src/core/agent";
-import { HARNESS, takesModel } from "../../../src/core/harness";
+import { HARNESS, takesModel, takesProvider } from "../../../src/core/harness";
 import { hasProfile, isProfilePick, roleRefusal, roleTakes } from "../../../src/core/route";
 import { HARNESSES, type AgentPick, type AgentRole, type AgentRoutes, type AgentSettings, type Harness } from "../../../src/core/types";
 import { harnessWord, pickOf, pickValue, profileNames, ROLE_LABEL, ROLE_TITLE, slotHarnesses, type EffectiveRow } from "../agents";
@@ -31,10 +31,14 @@ export function AgentSettingsForm({
   machine: string;
 }) {
   const h = HARNESS[value.harness];
+  const formId = useId();
   const [model, setModel] = useState(value.model);
+  const [provider, setProviderDraft] = useState(value.provider ?? "");
   const [extra, setExtra] = useState(value.extra);
   const [modelError, setModelError] = useState(false);
+  const [providerError, setProviderError] = useState(false);
   useEffect(() => setModel(value.model), [value.model]);
+  useEffect(() => setProviderDraft(value.provider ?? ""), [value.provider]);
   useEffect(() => setExtra(value.extra), [value.extra]);
   const set = <K extends keyof AgentSettings>(key: K, v: AgentSettings[K]) => onChange(normalizeAgent({ ...value, [key]: v }));
   const saveModel = () => {
@@ -47,11 +51,21 @@ export function AgentSettingsForm({
     setModelError(false);
     set("model", m);
   };
+  const saveProvider = () => {
+    const p = provider.trim();
+    if (p !== "" && p !== "default" && !takesProvider(value.harness, p)) {
+      setProviderError(true);
+      return;
+    }
+    setProviderError(false);
+    const next = p === "" || p === "default" ? undefined : p;
+    if (next !== value.provider) onChange(normalizeAgent({ ...value, provider: next }));
+  };
   const saveExtra = () => {
     if (extra.trim() !== value.extra) set("extra", extra.trim());
   };
   const missing = !has.includes(value.harness);
-  const listId = `models-${value.harness}`;
+  const listId = `${formId}-models-${value.harness}`;
   return (
     <div className="agent-settings">
       <section className="settings-row">
@@ -113,6 +127,36 @@ export function AgentSettingsForm({
         )}
       </section>
       <section className="settings-row">
+        <h3 className="panel-label">provider</h3>
+        {value.harness === "codex" ? (
+          <>
+            <input
+              type="text"
+              className="agent-extra"
+              value={provider}
+              placeholder="default"
+              aria-label="Configured Codex provider ID"
+              aria-invalid={providerError}
+              onChange={(e) => {
+                setProviderDraft(e.target.value);
+                setProviderError(false);
+              }}
+              onBlur={saveProvider}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveProvider();
+              }}
+            />
+            <p className={providerError ? "settings-hint error" : "settings-hint"}>
+              {providerError
+                ? "Use a provider ID of up to 64 letters, numbers, underscores, or hyphens, starting with a letter."
+                : `Use an ID from ${machine}'s Codex config. Blank or default follows that config; Canopy stores only the ID, not credentials.`}
+            </p>
+          </>
+        ) : (
+          <p className="settings-hint">Claude Code uses the provider in its own CLI configuration.</p>
+        )}
+      </section>
+      <section className="settings-row">
         <h3 className="panel-label">effort</h3>
         <Seg
           label="Effort"
@@ -171,6 +215,8 @@ export function PickEditor({
   onChange,
   compact = false,
   profiles = true,
+  label,
+  allowed,
 }: {
   slot: AgentRole | "all";
   pick: AgentPick | undefined;
@@ -187,24 +233,26 @@ export function PickEditor({
   /** offer the profiles; off for a backend older than routing, which keeps
    *  plain settings only */
   profiles?: boolean;
+  label?: string;
+  allowed?: readonly Harness[];
 }) {
   const value = pickValue(pick);
   const gone = pick && isProfilePick(pick) && !hasProfile(routes.profiles, pick.profile) ? pick.profile : null;
-  const allowed = slotHarnesses(slot);
+  const allowedHarnesses = allowed ?? slotHarnesses(slot);
   return (
     <div className="pick-editor">
       <select
         className="settings-input pick-select"
         value={value}
-        aria-label={slot === "all" ? "Whole repo" : ROLE_LABEL[slot]}
+        aria-label={label ?? (slot === "all" ? "Whole repo" : ROLE_LABEL[slot])}
         onChange={(e) => onChange(pickOf(e.target.value, pick, seed))}
       >
         <option value="">{inherit}</option>
         {(profiles ? profileNames(routes) : []).map((name) => {
           const s = routes.profiles[name]!;
-          const passed = slot !== "all" && !roleTakes(slot, s.harness);
+          const passed = !allowedHarnesses.includes(s.harness);
           return (
-            <option key={name} value={`profile:${name}`}>
+            <option key={name} value={`profile:${name}`} disabled={allowed !== undefined && passed}>
               {HARNESS[s.harness].glyph} {name} · {describeAgent(s, false)}
               {passed ? " (passed over here)" : ""}
             </option>
@@ -214,7 +262,7 @@ export function PickEditor({
         <option value="custom">settings of its own…</option>
       </select>
       {pick && !isProfilePick(pick) && !compact && (
-        <AgentSettingsForm value={pick} onChange={(next) => onChange(next)} has={has} allowed={allowed} machine={machine} />
+        <AgentSettingsForm value={pick} onChange={(next) => onChange(next)} has={has} allowed={allowedHarnesses} machine={machine} />
       )}
       {pick && !isProfilePick(pick) && compact && (
         <span className="pick-own">

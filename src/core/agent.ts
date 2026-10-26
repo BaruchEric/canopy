@@ -2,7 +2,7 @@
  *  so the form and the menu can read and describe them; the openers and the
  *  runner turn them into command-line flags through core/harness. */
 
-import { HARNESS, splitArgs, takesEffort, takesModel } from "./harness";
+import { HARNESS, splitArgs, takesEffort, takesModel, takesProvider } from "./harness";
 import { DEFAULT_AGENT, isHarness, type AgentSettings } from "./types";
 
 export { splitArgs };
@@ -16,10 +16,12 @@ export function normalizeAgent(v: unknown): AgentSettings {
   if (!v || typeof v !== "object") return { ...DEFAULT_AGENT };
   const o = v as Record<string, unknown>;
   const harness = isHarness(o["harness"]) ? o["harness"] : DEFAULT_AGENT.harness;
+  const provider = typeof o["provider"] === "string" ? o["provider"].trim() : "";
   return {
     harness,
     model: takesModel(harness, o["model"]) ? o["model"] : "default",
     effort: takesEffort(harness, o["effort"]) ? o["effort"] : "default",
+    ...(provider !== "default" && takesProvider(harness, provider) ? { provider } : {}),
     yolo: typeof o["yolo"] === "boolean" ? o["yolo"] : DEFAULT_AGENT.yolo,
     // no control character reaches a command line: a terminal would act on
     // it, and a shell line has no use for one
@@ -31,10 +33,16 @@ export function normalizeAgent(v: unknown): AgentSettings {
 /** Settings carried over to another harness: what the new one takes stays,
  *  the rest goes back to its default. The form's harness picker uses it. */
 export const withHarness = (a: AgentSettings, harness: AgentSettings["harness"]): AgentSettings =>
-  normalizeAgent({ ...a, harness });
+  normalizeAgent({ ...a, harness, ...(a.harness !== harness ? { provider: undefined } : {}) });
 
 export const sameAgent = (a: AgentSettings, b: AgentSettings): boolean =>
-  a.harness === b.harness && a.model === b.model && a.effort === b.effort && a.yolo === b.yolo && a.extra === b.extra;
+  a.harness === b.harness &&
+  a.model === b.model &&
+  a.effort === b.effort &&
+  (a.provider === undefined || a.provider === "default" ? undefined : a.provider) ===
+    (b.provider === undefined || b.provider === "default" ? undefined : b.provider) &&
+  a.yolo === b.yolo &&
+  a.extra === b.extra;
 
 export const isDefaultAgent = (a: AgentSettings): boolean => sameAgent(a, DEFAULT_AGENT);
 
@@ -48,6 +56,7 @@ export function describeAgent(a: AgentSettings, harness = true): string {
     ...(!harness || a.harness === DEFAULT_AGENT.harness ? [] : [HARNESS[a.harness].label]),
     ...(a.model === "default" ? [] : [a.model]),
     ...(a.effort === "default" ? [] : [a.effort]),
+    ...(a.provider === undefined || a.provider === "default" ? [] : [`provider ${a.provider}`]),
     a.yolo ? "yolo" : "ask",
     ...(a.extra ? [a.extra] : []),
   ].join(" · ");

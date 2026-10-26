@@ -19,7 +19,7 @@ import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
 import { noteCliCommands } from "./mentions";
-import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo, type RunTokens } from "./types";
 import { TODO_TOOLS, todoCreated, todoUpdated, todoWritten } from "./todos";
 
 /** characters of tool output kept per step */
@@ -42,6 +42,46 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === "string" ? o[k] : "");
 
 const num = (o: Record<string, unknown>, k: string): number => (typeof o[k] === "number" ? o[k] : 0);
+
+function nonnegative(o: Record<string, unknown>, k: string): number {
+  const n = o[k];
+  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** The result's modelUsage is cumulative across the query pipeline (including
+ *  subagents); the top-level `usage` only covers the main loop and is not a
+ *  safe substitute for session accounting. */
+export function claudeAccounting(m: Record<string, unknown>): { tokens?: RunTokens; model?: string; provider?: string } {
+  const byModel = isRecord(m["modelUsage"]) ? m["modelUsage"] : null;
+  if (!byModel) return {};
+  let input = 0;
+  let cachedInput = 0;
+  let output = 0;
+  let hasTokens = false;
+  const models = new Set<string>();
+  const providers = new Set<string>();
+  for (const [name, raw] of Object.entries(byModel)) {
+    if (!isRecord(raw)) continue;
+    const model = typeof raw["canonicalModel"] === "string" ? raw["canonicalModel"] : name;
+    if (model) models.add(model);
+    if (typeof raw["provider"] === "string" && raw["provider"]) {
+      providers.add(raw["provider"] === "firstParty" ? "anthropic" : raw["provider"]);
+    }
+    const fresh = nonnegative(raw, "inputTokens");
+    const cached = nonnegative(raw, "cacheReadInputTokens");
+    const created = nonnegative(raw, "cacheCreationInputTokens");
+    const generated = nonnegative(raw, "outputTokens");
+    hasTokens ||= fresh + cached + created + generated > 0;
+    input += fresh + cached + created;
+    cachedInput += cached;
+    output += generated;
+  }
+  return {
+    ...(hasTokens ? { tokens: { input, cachedInput, output, reasoning: 0, total: input + output } } : {}),
+    ...(models.size === 1 ? { model: [...models][0] } : models.size > 1 ? { model: "multiple" } : {}),
+    ...(providers.size === 1 ? { provider: [...providers][0] } : providers.size > 1 ? { provider: "multiple" } : {}),
+  };
+}
 
 /** Whether a message is the CLI at work on a turn (a fresh init, a message,
  *  a prompt) rather than its bookkeeping about background tasks. A
@@ -668,10 +708,11 @@ export class ClaudeDriver implements RunDriver {
           : subtype === "error_max_budget_usd"
             ? "stopped at the spending limit"
             : text.trim() || "Claude Code reported an error";
+      const accounting = claudeAccounting(m);
       // A job ends with it; a chat's result ends one reply, not the
       // conversation, and a reply that failed is said in the timeline.
       ctx.result(
-        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns, ...(this.model ? { model: this.model } : {}) },
+        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns, ...(this.model ? { model: this.model } : {}), ...accounting },
         failure ?? (ok ? null : problem),
       );
     }

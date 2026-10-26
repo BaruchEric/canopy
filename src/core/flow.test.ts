@@ -420,7 +420,8 @@ describe("a step's own agent", () => {
   test("a step naming a profile starts on it; the rest follow the repo's route", async () => {
     const { runner, flows } = setup();
     const asked: (string | undefined)[] = [];
-    const flow = flows.start(repo(), PROFILED, "", (profile) => {
+    const flow = flows.start(repo(), PROFILED, "", (profile, workflow) => {
+      expect(workflow).toBe(PROFILED.name);
       asked.push(profile);
       return profile === "review" ? codex : DEFAULT_AGENT;
     });
@@ -437,6 +438,30 @@ describe("a step's own agent", () => {
     runner.end("run1", "done", "planned");
     await flush();
     expect(runner.agents).toEqual([codex, codex]);
+  });
+
+  test("restoring a trigger workflow keeps its name and job routing context", () => {
+    const a = setup();
+    const workflow: Workflow = { ...PROFILED, agentRole: "job" };
+    const flow = a.flows.start(repo(), workflow, "", DEFAULT_AGENT);
+    const b = setup();
+    const asked: unknown[] = [];
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), () => (profile, name, role) => {
+      asked.push({ profile, name, role });
+      return DEFAULT_AGENT;
+    });
+    expect(asked).toEqual([{ profile: undefined, name: workflow.name, role: "job" }]);
+  });
+
+  test("a restored workflow reports an incompatible new route as failed", () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), PROFILED, "", DEFAULT_AGENT);
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), () => () => {
+      throw new Error("a trigger workflow needs Claude Code");
+    });
+    expect(b.flows.get(flow.id)).toMatchObject({ status: "failed", steps: [{ status: "failed", reason: "a trigger workflow needs Claude Code" }, { status: "skipped" }] });
+    expect(b.runner.agents).toHaveLength(0);
   });
 
   test("a fleet asks per repo, with the step's profile", async () => {

@@ -42,6 +42,8 @@ describe("the suggestion's command lines", () => {
     ]);
     const tuned = codexSuggestArgs(codex({ model: "gpt-5.5", effort: "high", extra: "-c a=1 --search" }), "/r", "/o", "P");
     expect(tuned.slice(-7)).toEqual(["-m", "gpt-5.5", "-c", "model_reasoning_effort=high", "-c", "a=1", "P"]);
+    const provider = codexSuggestArgs(codex({ model: "gpt-5.5", provider: "team_1" }), "/r", "/o", "P");
+    expect(provider.slice(provider.indexOf("-o") + 2)).toEqual(["-m", "gpt-5.5", "-c", 'model_provider="team_1"', "P"]);
     // yolo never reaches a suggestion: it needs no tools
     expect(codexSuggestArgs(codex({ yolo: true }), "/r", "/o", "P")).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });

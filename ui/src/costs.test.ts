@@ -70,6 +70,56 @@ test("canopy's Claude rows sit on their runs but are not added to the archive's 
   expect(chat).toMatchObject({ label: "chat", usd: 0.4, seconds: 120, detail: "api · Claude Code + Voice" });
 });
 
+test("custom providers stay distinct in service and run usage lines", () => {
+  const sheet = costSheet(
+    [
+      row({
+        service: "codex",
+        provider: "team_1",
+        model: "gpt-custom",
+        tokens: { input: 1000, cachedInput: 200, output: 100, reasoning: 0, total: 1100 },
+        estUsd: 0.04,
+        run: "r-custom",
+        label: "review",
+        qid: "api",
+        agentSettings: { harness: "codex", model: "gpt-selected", effort: "high", provider: "team_1" },
+        flowStep: { workflow: "release", step: "review", source: "user" },
+      }),
+    ],
+    null,
+    7,
+    cards,
+  );
+  expect(sheet.services[0]).toMatchObject({ label: "Codex · team_1", detail: "gpt-custom", tokens: 1100, est: 0.04 });
+  expect(sheet.runs[0]).toMatchObject({ label: "review", detail: "api · Codex · team_1 · gpt-custom · high effort · release / review", tokens: 1100, est: 0.04 });
+});
+
+test("Claude rows can keep archive dollars and canopy token usage together", () => {
+  const sheet = costSheet(
+    [row({ service: "claude", provider: "anthropic", tokens: { input: 100, cachedInput: 20, output: 10, reasoning: 0, total: 110 }, run: "r-claude", qid: "api" })],
+    history,
+    1,
+    cards,
+  );
+  expect(sheet.services[0]).toMatchObject({ label: "Claude Code", usd: 3.5, tokens: 110 });
+});
+
+test("custom Claude provider usage is not added twice when its repo is in history", () => {
+  const sheet = costSheet(
+    [row({ service: "claude", provider: "bedrock", model: "claude-sonnet-5", usd: 0.25, run: "r-bedrock", qid: "api" })],
+    history,
+    1,
+    cards,
+  );
+  expect(sheet.usd).toBeCloseTo(3.5);
+  expect(sheet.services.map((line) => line.label)).toEqual(["Claude Code"]);
+  expect(sheet.services[0]?.detail).toContain("across configured providers");
+  expect(sheet.runs[0]).toMatchObject({ usd: 0.25, detail: "api · Claude Code · bedrock · claude-sonnet-5" });
+  const withoutArchive = costSheet([row({ service: "claude", provider: "bedrock", usd: 0.25 })], null, 1, cards);
+  expect(withoutArchive.usd).toBeCloseTo(0.25);
+  expect(withoutArchive.services[0]?.label).toBe("Claude Code · bedrock");
+});
+
 test("a Claude row the archive has nothing for counts: a repo it does not map, or no repo here", () => {
   const quiet: HistoryOverview = { ...history, repos: { api: hist([0, 0, 2]) } };
   const rows = [

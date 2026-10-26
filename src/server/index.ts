@@ -60,7 +60,7 @@ import { hasGatewayKey, jev, jevJudge } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
 import type { AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
-import { effectiveAgents, hasProfile, isProfileName, launchPick, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
+import { effectiveAgents, hasProfile, isAgentScopeName, isProfileName, launchPick, resolveAgent, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
 import { Incubator, IncubatorError, incubatorWorkflow, type NoteSink, type Transcriber } from "../core/incubator";
 import { seedOps } from "../core/seed";
@@ -127,6 +127,7 @@ import {
   setRepoAgent,
   setRepoAll,
   setRole,
+  setAgentScope,
   setWorkspaceLook,
   upsertWorkspace,
 } from "../core/store";
@@ -1059,7 +1060,7 @@ async function startRepoRun(
     const busy = state.runner.activeFor(repo.id);
     if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
   }
-  const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job");
+  const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
   // Before the workspace and install checks, so a workspace propose on
   // Codex hears what is wrong with the action, not with the workspace.
   if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
@@ -1232,7 +1233,7 @@ async function startFixRun(state: ServerState, rec: LandingRun, entry: LandEntry
 async function startBranchFix(state: ServerState, rec: LandingRun, reason: string, note: string, queueLine: boolean): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === rec.repoId);
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
-  const agent = agentFor(await loadConfig(), repo.path, "job");
+  const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: "ask" });
   await needHarness(state, agent.harness, repo.path);
   const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
@@ -1255,15 +1256,16 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
  *  branch, every step unattended the same way. Read from the bundled and
  *  user workflows only, like a fleet's, so a repo cannot rewrite what its
  *  own trigger runs. */
-async function triggerSpec(name: string): Promise<{ kind: "run"; spec: ActionSpec; workflow: string } | { kind: "flow"; workflow: Workflow } | string> {
+async function triggerSpec(name: string): Promise<{ kind: "run"; spec: ActionSpec; workflow: string; profile?: string } | { kind: "flow"; workflow: Workflow } | string> {
   const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
   if (!wf) return `unknown workflow: ${name}`;
   const step = triggerPlan(wf);
   if (typeof step === "string") return step;
-  if (step.kind === "flow") return { kind: "flow", workflow: { ...wf, unattended: TRIGGER_UNATTENDED } };
+  if (step.kind === "flow") return { kind: "flow", workflow: { ...wf, unattended: TRIGGER_UNATTENDED, agentRole: "job" } };
   return {
     kind: "run",
     workflow: wf.name,
+    ...(wf.steps[0]?.agent ? { profile: wf.steps[0].agent } : {}),
     spec: {
       ...ACTIONS.ask,
       label: wf.label,
@@ -1295,15 +1297,21 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
   const flowsGoing = state.flows.list().filter((f) => f.repoId === repo.id && f.branch && isFlowActive(f)).length;
   const going = runs + flowsGoing;
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
-  const agent = agentFor(await loadConfig(), repo.path, "job");
-  if (agent.harness !== "claude") throw new Error(`${repo.name}'s job route starts ${agent.harness}; a trigger run needs Claude Code`);
-  await needHarness(state, agent.harness, repo.path);
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, agent, `trigger ${event.rule}`, true, got.spec) };
-  // every step on the job route, whatever profile it names: a trigger's
-  // steps need Claude Code, checked above, for their unattended permissions
+  const cfg = await loadConfig();
+  const profiles = got.kind === "run" ? [got.profile] : got.workflow.steps.filter((s) => s.body).map((s) => s.agent);
+  for (const profile of profiles) {
+    if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new Error(`unknown agent profile ${profile}`);
+  }
+  const select = (profile: string | undefined) => agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "workflow", name: event.workflow });
+  for (const profile of profiles) {
+    const agent = select(profile);
+    if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
+    await needHarness(state, agent.harness, repo.path);
+  }
+  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, true, got.spec) };
   const start = await cutBranch(repo, event.note, true);
   try {
-    return { flow: state.flows.start(repo, got.workflow, event.note, agent, { branch: start }) };
+    return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: start }) };
   } catch (err) {
     await removeRunTree(repo.path, start.branch.dir, start.branch.name);
     throw err;
@@ -1331,7 +1339,7 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   // the runner's own count takes held branch runs too, so both are asked
   const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchRunsFor(repo.id).length);
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
-  const agent = agentFor(await loadConfig(), repo.path, "job");
+  const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
   if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
   try {
@@ -1364,8 +1372,11 @@ function stepProfileRefusal(cfg: CanopyConfig, wf: Workflow): string | null {
 
 /** The settings a workflow step's run starts with on a repo: the step's own
  *  `agent:` profile as the explicit pick, else the repo's flow route. */
-const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefined): AgentSettings =>
-  agentFor(cfg, path, "flow", profile ? { profile } : undefined);
+const stepAgentFor = (cfg: CanopyConfig, path: string, profile: string | undefined, workflow?: string, role: "flow" | "job" = "flow"): AgentSettings => {
+  const agent = agentFor(cfg, path, role, profile ? { profile } : undefined, workflow ? { kind: "workflow", name: workflow } : undefined);
+  if (role === "job" && agent.harness !== "claude") throw new Error("a trigger workflow needs Claude Code");
+  return agent;
+};
 
 /** No incubator stage runs with permissions bypassed, whatever the routes
  *  say: a seed may be a stranger's clone, and the stage is unattended. Yolo
@@ -1415,7 +1426,7 @@ export const isSeedPath = (root: string, path: string): boolean => path.startsWi
  *  installed here, checked before the first step starts. */
 async function needStepHarnesses(state: ServerState, cfg: CanopyConfig, wf: Workflow, paths: string[]): Promise<void> {
   const needed = new Map<Harness, string>();
-  for (const path of paths) for (const s of wf.steps) if (s.body) needed.set(stepAgentFor(cfg, path, s.agent).harness, path);
+  for (const path of paths) for (const s of wf.steps) if (s.body) needed.set(stepAgentFor(cfg, path, s.agent, wf.name).harness, path);
   for (const [h, path] of needed) await needHarness(state, h, path);
 }
 
@@ -3728,7 +3739,7 @@ async function handleApi(
     const refused = stepProfileRefusal(cfg, wf);
     if (refused) return json({ error: refused }, 400);
     await needStepHarnesses(state, cfg, wf, repos.filter((r) => !fleetSkipReason(r, wf)).map((r) => r.path));
-    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile), request), 201);
+    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile, wf.name), request), 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -3788,9 +3799,26 @@ async function handleApi(
     broadcast(state, { type: "agents", agents });
     return json(agents);
   }
+  if (path === "/api/agents/scope" && method === "POST") {
+    const b = await objectBody(req);
+    if ((b.kind !== "workflow" && b.kind !== "task") || !isAgentScopeName(b.name)) return json({ error: "a scope needs a workflow or task kind and a valid name" }, 400);
+    if (b.kind === "task" && b.name !== "ask" && b.name !== "propose") return json({ error: "unknown agent task" }, 400);
+    const pick = b.pick === null ? null : normalizePick(b.pick);
+    if (b.pick !== null && !pick) return json({ error: "a pick is a profile by name or settings of its own; null inherits" }, 400);
+    const agents = await setAgentScope({ kind: b.kind, name: b.name }, pick);
+    broadcast(state, { type: "agents", agents });
+    return json(agents);
+  }
   if (path === "/api/agents/resolve" && method === "GET") {
     const repo = repoById(state, url.searchParams.get("id") ?? "");
-    const table: AgentTable = { roles: effectiveAgents(agentRoutes(await loadConfig()), repo.path), harnesses: state.harnesses() };
+    const routes = agentRoutes(await loadConfig());
+    const kind = url.searchParams.get("kind");
+    const name = url.searchParams.get("name");
+    if (kind !== null || name !== null) {
+      if ((kind !== "workflow" && kind !== "task") || !isAgentScopeName(name)) return json({ error: "invalid scope" }, 400);
+      return json(resolveAgent(routes, repo.path, kind === "workflow" ? "flow" : "job", undefined, { kind, name }));
+    }
+    const table: AgentTable = { roles: effectiveAgents(routes, repo.path), harnesses: state.harnesses() };
     return json(table);
   }
   // What a registry card's session did, from its transcript on this
@@ -4224,7 +4252,7 @@ async function handleApi(
       // repo's per-role picks stay as they are either way.
       const raw: unknown = await req.json().catch(() => null);
       const legacy =
-        typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.keys(raw).length > 0 && !("all" in raw) && !("roles" in raw);
+        typeof raw === "object" && raw !== null && !Array.isArray(raw) && Object.keys(raw).length > 0 && !("all" in raw) && !("roles" in raw) && !("workflows" in raw) && !("tasks" in raw);
       if (legacy) {
         const all = normalizeAgent(raw);
         const agents = await setRepoAll(repo.path, isDefaultAgent(all) ? null : all);
@@ -4323,7 +4351,7 @@ async function handleApi(
       if (refused) return json({ error: refused }, 400);
       await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile), request ? { request } : {}), 201);
+        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), request ? { request } : {}), 201);
       } catch (err) {
         throw new HttpError(400, String(err instanceof Error ? err.message : err));
       }
@@ -5106,7 +5134,7 @@ export async function startServer(opts: {
             const refused = stepProfileRefusal(c, wf);
             if (refused) throw new Error(refused);
             await needStepHarnesses(state, c, wf, [repo.path]);
-            return state.flows.start(repo, wf, note, (profile) => stageAgent(stepAgentFor(c, repo.path, profile)));
+            return state.flows.start(repo, wf, note, (profile) => stageAgent(stepAgentFor(c, repo.path, profile, wf.name)));
           },
           get: (id) => state.flows.get(id),
           resume: (id, choice) => state.flows.resume(id, choice),
@@ -5778,11 +5806,12 @@ export async function startServer(opts: {
    *  that held it is gone */
   const adoptFlows = async (): Promise<void> => {
     flowFiles = new FlowFiles(root);
+    const restoreCfg = await loadConfig();
     state.flows.restore(
       await loadFlowRecords(root),
       (path) => state.result.repos.find((r) => r.path === path),
       // a seed's flow is an incubator stage, held to the same rule as a fresh one
-      (repo) => (profile) => (isSeedPath(root, repo.path) ? stageAgent(stepAgentFor(cfg, repo.path, profile)) : stepAgentFor(cfg, repo.path, profile)),
+      (repo) => (profile, workflow, role) => (isSeedPath(root, repo.path) ? stageAgent(stepAgentFor(restoreCfg, repo.path, profile, workflow, role)) : stepAgentFor(restoreCfg, repo.path, profile, workflow, role)),
     );
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)

@@ -138,6 +138,34 @@ describe("the agent routes", () => {
   });
 });
 
+describe("named workflow and task routes", () => {
+  test("persist, broadcast, resolve per repo, and inherit after reset", async () => {
+    const heard = await agentsEvent(() => post("/api/agents/scope", { kind: "workflow", name: "ship", pick: { profile: "deep" } }));
+    expect(heard.workflows).toEqual({ ship: { profile: "deep" } });
+    expect((await loadConfig()).agentWorkflows).toEqual(heard.workflows);
+    const effective = () => fetch(url("/api/agents/resolve?id=app&kind=workflow&name=ship")).then((r) => r.json());
+    expect(await effective()).toMatchObject({ settings: deep, from: "workflow" });
+    expect((await post("/api/repos/agent?id=app", { workflows: { ship: { profile: "review" } }, tasks: { ask: { profile: "deep" } } })).status).toBe(200);
+    expect(await effective()).toMatchObject({ settings: review, from: "repo-workflow" });
+    expect((await loadConfig()).agents[appPath]?.tasks).toEqual({ ask: { profile: "deep" } });
+    await post("/api/repos/agent?id=app", {});
+    await post("/api/agents/scope", { kind: "workflow", name: "ship", pick: null });
+    expect((await routes()).workflows).toBeUndefined();
+    expect(await effective()).toMatchObject({ from: "default" });
+    expect((await post("/api/agents/scope", { kind: "task", name: "ask", pick: review })).status).toBe(200);
+    expect((await loadConfig()).agentTasks).toEqual({ ask: review });
+    expect(await (await fetch(url("/api/agents/resolve?id=app&kind=task&name=ask"))).json()).toMatchObject({ settings: review, from: "task" });
+    await post("/api/agents/scope", { kind: "task", name: "ask", pick: null });
+  });
+
+  test("rejects malformed scopes and picks without changing saved routing", async () => {
+    for (const body of [null, { kind: "repo", name: "ship", pick: deep }, { kind: "workflow", name: "../ship", pick: deep }, { kind: "task", name: "unknown", pick: deep }, { kind: "workflow", name: "ship" }, { kind: "workflow", name: "ship", pick: { profile: "Bad!" } }]) {
+      expect((await post("/api/agents/scope", body)).status).toBe(400);
+    }
+    expect((await routes()).workflows).toBeUndefined();
+  });
+});
+
 describe("a registry card's activity", () => {
   test("is read from its transcript on this machine by harness and session id", async () => {
     const session = "0d0d0d0d-1111-4222-8333-444444444444";

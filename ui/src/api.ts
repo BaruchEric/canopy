@@ -29,6 +29,7 @@ import type {
   AgentKind,
   About,
   AgentPick,
+  AgentScope,
   AgentRole,
   AgentSession,
   AgentSettings,
@@ -411,6 +412,9 @@ export const api = {
   /** points a role at a pick on a backend, or back at the default with null */
   setRole: async (role: AgentRole, pick: AgentPick | null, b: string = homeName()) =>
     normalizeRoutes(await req<unknown>(b, "/api/agents/role", { method: "POST", body: JSON.stringify({ role, pick }) })),
+
+  setAgentScope: async (scope: AgentScope, pick: AgentPick | null, b: string = homeName()) =>
+    normalizeRoutes(await req<unknown>(b, "/api/agents/scope", { method: "POST", body: JSON.stringify({ ...scope, pick }) })),
   /** one repo's effective table, as its backend resolves it */
   resolveAgents: (id: string) => repoReq<AgentTable>(id, (p) => `/api/agents/resolve?${rq(p)}`),
   history: async (refresh = false, b: string = homeName()) =>

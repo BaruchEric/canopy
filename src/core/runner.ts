@@ -10,6 +10,7 @@
  *  (`driver.ts`), and the server broadcasts the `Run` whole on every change. */
 
 import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions";
+import { normalizeAgent } from "./agent";
 import { ClaudeDriver } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { CodexDriver, runsInside } from "./codexrun";
@@ -293,6 +294,7 @@ export class Runner {
     branch?: BranchStart,
     extras: StartExtras = {},
   ): Run {
+    const settings = normalizeAgent(agent);
     const coordinate = isCoordinate({ action });
     if (extras.id !== undefined && this.live.has(extras.id)) throw new Error(`a run ${extras.id} exists already`);
     if (coordinate) {
@@ -319,8 +321,8 @@ export class Runner {
     const client = coordinate ? (this.opts.coordExec?.() ?? null) : stage && this.opts.stageExec ? this.opts.stageExec() : undefined;
     if (client === null) throw new StageAwayError(coordinate ? this.opts.coordAway?.() : this.opts.stageAway?.());
     const make = this.opts.driver ?? ((h: Harness) => defaultDriver(h, this.opts.version));
-    const driver = make(agent.harness);
-    const missing = client ? stageRefusal(client, agent.harness) : driver.check();
+    const driver = make(settings.harness);
+    const missing = client ? stageRefusal(client, settings.harness) : driver.check();
     if (missing) throw new Error(missing);
     const chat = spec.mode === "chat";
     const run: Run = {
@@ -331,7 +333,13 @@ export class Runner {
       progress: spec.progress,
       expectsChange: spec.expectsChange,
       chat,
-      harness: agent.harness,
+      harness: settings.harness,
+      agentSettings: {
+        harness: settings.harness,
+        model: settings.model,
+        effort: settings.effort,
+        ...(settings.provider ? { provider: settings.provider } : {}),
+      },
       // a chat keeps its messages as steps; the note box is not its record
       note: chat ? "" : note.trim(),
       status: chat && !note.trim() ? "idle" : "working",
@@ -357,7 +365,7 @@ export class Runner {
       run,
       {
         cwd,
-        agent,
+        agent: settings,
         spec: driveSpec,
         env: runEnv(run, this.opts.backend, extras.env),
         ...(extras.env ? { pass: extras.env } : {}),

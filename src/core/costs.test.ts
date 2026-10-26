@@ -37,6 +37,23 @@ describe("runDelta", () => {
     expect(runDelta(run("claude", { costUsd: 0.002 }), { usd: 0.5, tokens: null })?.usd).toBeCloseTo(0.002);
   });
 
+  test("Claude records both dollar and cumulative modelUsage deltas", () => {
+    const first = runDelta(run("claude", { costUsd: 0.01, tokens: tokens(1000, 200, 50) }), undefined);
+    expect(first).toMatchObject({ usd: 0.01, tokens: tokens(1000, 200, 50) });
+    const second = runDelta(run("claude", { costUsd: 0.03, tokens: tokens(1500, 900, 80) }), first?.now);
+    expect(second).toMatchObject({ usd: expect.closeTo(0.02), tokens: tokens(500, 700, 30) });
+    expect(runDelta(run("claude", { costUsd: 0.03, tokens: tokens(1500, 900, 80) }), second?.now)).toBeNull();
+  });
+
+  test("tokens with no reported dollar delta can still be estimated", () => {
+    expect(runDelta(run("claude", { tokens: tokens(100, 20, 10) }), undefined)).toMatchObject({ usd: null, tokens: tokens(100, 20, 10) });
+  });
+
+  test("an explicit Claude zero is known cost, while Codex's compatibility zero is not", () => {
+    expect(runDelta(run("claude", { costUsd: 0, tokens: tokens(100, 20, 10) }), undefined)).toMatchObject({ usd: 0, tokens: tokens(100, 20, 10) });
+    expect(runDelta(run("codex", { costUsd: 0, tokens: tokens(100, 20, 10) }), undefined)).toMatchObject({ usd: null, tokens: tokens(100, 20, 10) });
+  });
+
   test("Codex's thread total becomes each reply's tokens, with no dollars", () => {
     const first = runDelta(run("codex", { costUsd: 0, tokens: tokens(1000, 200, 50) }), undefined);
     expect(first).toMatchObject({ usd: null, tokens: tokens(1000, 200, 50) });
@@ -81,6 +98,8 @@ describe("prices", () => {
 test("parseCostLine reads a row back and refuses what is not one", () => {
   const e = entry({ at: 5, run: "r1", tokens: tokens(1, 0, 1), seconds: 3 });
   expect(parseCostLine(JSON.stringify(e))).toEqual(e);
+  const routed = entry({ at: 6, agentSettings: { harness: "codex", model: "gpt-x", effort: "high", provider: "team_1" }, action: "flow", flowStep: { workflow: "release", step: "review", source: "user" } });
+  expect(parseCostLine(JSON.stringify(routed))).toEqual(routed);
   expect(parseCostLine("not json")).toBeNull();
   expect(parseCostLine(JSON.stringify({ ...e, service: "fax" }))).toBeNull();
   expect(parseCostLine(JSON.stringify({ ...e, at: "now" }))).toBeNull();

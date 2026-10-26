@@ -628,6 +628,8 @@ export interface CanopyConfig {
   profiles: Record<string, AgentSettings>;
   /** the route per role: a profile or settings of its own */
   agentRoles: Partial<Record<AgentRole, AgentPick>>;
+  agentWorkflows?: Record<string, AgentPick>;
+  agentTasks?: Record<string, AgentPick>;
   /** how a repo's builds are made and run, keyed like agents */
   launchers: Record<string, LaunchSettings>;
   /** per-machine task overrides by repo path (core/tasks) */
@@ -840,6 +842,8 @@ export interface AgentSettings {
   /** claude: one of AGENT_MODELS; codex: "default" or a model name */
   model: string;
   effort: AgentEffort;
+  /** a configured provider id for Codex; absent or "default" uses the CLI config */
+  provider?: string;
   /** skip every permission prompt (claude's --dangerously-skip-permissions,
    *  bypassPermissions mode for a run; codex's
    *  --dangerously-bypass-approvals-and-sandbox). On by default: canopy is a
@@ -875,7 +879,13 @@ export type AgentPick = { profile: string } | AgentSettings;
 export interface RepoAgent {
   all?: AgentPick;
   roles?: Partial<Record<AgentRole, AgentPick>>;
+  workflows?: Record<string, AgentPick>;
+  tasks?: Record<string, AgentPick>;
 }
+
+/** A named workflow or agent task. Shell commands in the Tasks panel do
+ *  not start agents and therefore do not use these routes. */
+export type AgentScope = { kind: "workflow" | "task"; name: string };
 
 /** A one-off choice at launch that beats every route: a profile by name, or
  *  a harness ("new codex shell"), which takes the route's own settings when
@@ -889,10 +899,12 @@ export interface AgentRoutes {
   roles: Partial<Record<AgentRole, AgentPick>>;
   /** the repo overrides by path */
   repos: Record<string, RepoAgent>;
+  workflows?: Record<string, AgentPick>;
+  tasks?: Record<string, AgentPick>;
 }
 
 /** Where resolved settings came from, first layer that answered winning. */
-export const AGENT_LAYERS = ["explicit", "repo-role", "repo", "role", "default", "builtin"] as const;
+export const AGENT_LAYERS = ["explicit", "repo-workflow", "workflow", "repo-task", "task", "repo-role", "repo", "role", "default", "builtin"] as const;
 export type AgentLayer = (typeof AGENT_LAYERS)[number];
 
 /** A layer that named something but was passed over, and why: a profile
@@ -1155,9 +1167,10 @@ export type RunAnswer =
   | { kind: "deny"; message?: string }
   | { kind: "answers"; answers: Record<string, string> };
 
-/** Token counts for a run, where the harness reports them (Codex does;
- *  Claude reports a cost instead). */
+/** Token counts for a run, where the harness reports them. Codex reports
+ *  thread usage; Claude reports cumulative modelUsage when available. */
 export interface RunTokens {
+  /** total input tokens, including cache reads and cache creation */
   input: number;
   /** the part of `input` served from the prompt cache */
   cachedInput: number;
@@ -1174,10 +1187,12 @@ export interface RunResult {
   costUsd?: number;
   durationMs: number;
   turns: number;
-  /** tokens spent, where the harness reports them (Codex) */
+  /** cumulative tokens spent, where the harness reports them */
   tokens?: RunTokens;
   /** the model the harness said it runs, where it said one */
   model?: string;
+  /** the provider that served this run, where the harness reports one */
+  provider?: string;
 }
 
 /** A run that spans a workspace: it works in the primary and may read and
@@ -1205,6 +1220,9 @@ export interface Run {
   chat: boolean;
   /** the agent doing the work: Claude Code or Codex */
   harness: Harness;
+  /** the normalized agent settings resolved when this run started; kept so
+   *  later cost rows and history do not depend on today's routing rules */
+  agentSettings?: Pick<AgentSettings, "harness" | "model" | "effort" | "provider">;
   /** Claude's session id or Codex's thread id, once the harness said it:
    *  what makes the run resumable in a shell later */
   session?: string;
@@ -1917,6 +1935,8 @@ export interface Workflow {
    *  runs, so every prompt is denied at once with this message (the
    *  incubator's retro). */
   unattended?: string;
+  /** Trigger workflows use the job route below their named workflow route. */
+  agentRole?: "job";
   steps: WorkflowStep[];
   /** null when the workflow sets none */
   budget: FlowBudget | null;

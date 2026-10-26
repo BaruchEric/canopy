@@ -11,7 +11,6 @@ import {
   hasRouting,
   missingProfiles,
   overrideRows,
-  pickLine,
   profileNames,
   profileUses,
   ROLE_LABEL,
@@ -21,6 +20,7 @@ import {
 import { backendOf } from "../registry";
 import { connOf, multi, routesOf, useStore } from "../store";
 import { AgentSettingsForm, EffectiveTable, PickEditor } from "./AgentForm";
+import { AgentScopes } from "./AgentScopes";
 import { BoardTab } from "./Board";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
@@ -107,7 +107,7 @@ export function AgentsView({ onGit }: { onGit?: () => void } = {}) {
   );
 }
 
-function Routing({ scope, routes, has, routing }: { scope: string; routes: AgentRoutes; has: readonly Harness[]; routing: boolean }) {
+export function Routing({ scope, routes, has, routing }: { scope: string; routes: AgentRoutes; has: readonly Harness[]; routing: boolean }) {
   const missing = missingProfiles(routes);
   if (!routing) {
     // an older backend keeps plain settings per repo, and nothing else
@@ -126,8 +126,8 @@ function Routing({ scope, routes, has, routing }: { scope: string; routes: Agent
   return (
     <>
       <p className="blurb agents-blurb">
-        A start resolves through these, the first that answers winning: a pick at launch, the repo's pick for the role, the repo's whole
-        pick, the role's route, the default profile, then claude as built in. A pick naming a profile that is gone is passed over, and the
+        System defaults and routes are saved on {scope} and shared by every browser connected to it. A start uses the first matching
+        route: launch or workflow step, repo workflow/task, system workflow/task, repo role, repo, work type, then the default profile. A pick naming a profile that is gone is passed over, and the
         effective table says so.
       </p>
       {missing.length > 0 && (
@@ -137,6 +137,7 @@ function Routing({ scope, routes, has, routing }: { scope: string; routes: Agent
       )}
       <Profiles scope={scope} routes={routes} has={has} />
       <Roles scope={scope} routes={routes} has={has} />
+      <AgentScopes key={scope} backend={scope} routes={routes} has={has} />
       <Overrides scope={scope} routes={routes} has={has} />
       <Effective scope={scope} routes={routes} has={has} />
       <Guards />
@@ -326,7 +327,7 @@ function Profiles({ scope, routes, has }: { scope: string; routes: AgentRoutes; 
   return (
     <section className="agents-section" aria-label="Profiles">
       <h3 className="panel-label">profiles</h3>
-      <p className="settings-hint">Named settings a route points at: change one and every route on it follows. default is the backend's own.</p>
+      <p className="settings-hint">Named settings a route points at: change one and every route on it follows. Edit default to set this system's agent, model, effort, provider and permissions.</p>
       <ul className="agents-list">
         {profileNames(routes).map((n) => {
           const p = routes.profiles[n]!;
@@ -392,19 +393,14 @@ function Profiles({ scope, routes, has }: { scope: string; routes: AgentRoutes; 
 
 /* ---------- roles ---------- */
 
-function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: readonly Harness[] }) {
+function Roles({ scope, routes, has }: { scope: string; routes: AgentRoutes; has: readonly Harness[] }) {
   const setRole = useStore((s) => s.setRole);
   // the coordinate role is read only where the backend runs coordinators
   const coordHere = useStore((s) => connOf(s, scope).about?.coordinator === true);
   const [error, setError] = useState<string | null>(null);
-  const choose = async (role: AgentRole, value: string) => {
+  const choose = async (role: AgentRole, pick: Parameters<typeof setRole>[2]) => {
     setError(null);
-    try {
-      if (value === "") await setRole(scope, role, null);
-      else if (value.startsWith("profile:")) await setRole(scope, role, { profile: value.slice("profile:".length) });
-    } catch (err) {
-      setError(errText(err));
-    }
+    try { await setRole(scope, role, pick); } catch (err) { setError(errText(err)); }
   };
   return (
     <section className="agents-section" aria-label="Roles">
@@ -413,7 +409,6 @@ function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: rea
       <ul className="agents-list">
         {AGENT_ROLES.map((role) => {
           const pick = routes.roles[role];
-          const value = !pick ? "" : isProfilePick(pick) ? `profile:${pick.profile}` : "custom";
           const named = pick && isProfilePick(pick) ? profileOf(routes.profiles, pick.profile) : undefined;
           const passed = named && !roleTakes(role, named.harness) ? roleRefusal(role, named.harness) : null;
           return (
@@ -422,18 +417,8 @@ function Roles({ scope, routes }: { scope: string; routes: AgentRoutes; has: rea
                 <span className="agents-name" title={ROLE_TITLE[role]}>
                   {ROLE_LABEL[role]}
                 </span>
-                <select className="settings-input pick-select" value={value} aria-label={`Route for ${ROLE_LABEL[role]}`} onChange={(e) => void choose(role, e.target.value)}>
-                  <option value="">default profile</option>
-                  {profileNames(routes).map((n) => (
-                    <option key={n} value={`profile:${n}`}>
-                      {HARNESS[routes.profiles[n]!.harness].glyph} {n}
-                    </option>
-                  ))}
-                  {pick && isProfilePick(pick) && !hasProfile(routes.profiles, pick.profile) && (
-                    <option value={`profile:${pick.profile}`}>{pick.profile} (gone: falls through)</option>
-                  )}
-                  {pick && !isProfilePick(pick) && <option value="custom">{pickLine(pick)} (its own settings)</option>}
-                </select>
+                <PickEditor slot={role} pick={pick} routes={routes} has={has} machine={scope} inherit="inherit system default"
+                  seed={resolveAgent(routes, "", role).settings} onChange={(p) => void choose(role, p)} />
               </div>
               {passed && <p className="settings-hint warn">{passed}; it is passed over.</p>}
               {role === "coordinate" && !coordHere && <p className="settings-hint">{scope} has no coordinator runner, so this route is not used there.</p>}

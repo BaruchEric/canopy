@@ -96,6 +96,7 @@ import {
   isRunActive,
   type About,
   type AgentPick,
+  type AgentScope,
   type AgentRole,
   type AgentRoutes,
   type AgentSettings,
@@ -1314,6 +1315,7 @@ export interface CanopyState {
   setProfile: (backend: string, name: string, settings: AgentSettings | null) => Promise<void>;
   /** points a role at a pick on a backend, or (null) back at the default */
   setRole: (backend: string, role: AgentRole, pick: AgentPick | null) => Promise<void>;
+  setAgentScope: (backend: string, scope: AgentScope, pick: AgentPick | null) => Promise<void>;
   /** archives a repo in canopy, or brings it back */
   archiveRepo: (repoId: string, archived: boolean) => Promise<void>;
   /** stars a repo in canopy; unstarring takes the star off every checkout
@@ -4216,6 +4218,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     const agents = await api.setRole(role, pick, backend);
     set((s) => ({ agents: { ...s.agents, [backend]: agents } }));
   },
+  setAgentScope: async (backend, scope, pick) => {
+    const agents = await api.setAgentScope(scope, pick, backend);
+    set((s) => ({ agents: { ...s.agents, [backend]: agents } }));
+  },
   archiveRepo: async (repoId, archived) => {
     const repo = await api.archive(repoId, archived);
     get().applyEvent({ type: "repo", repo }, backendOf(repoId));
@@ -4755,8 +4761,8 @@ export const routesOf = (s: CanopyState, backend: string): AgentRoutes => s.agen
 /** The settings a repo gets for a role on its own backend (an interactive
  *  shell unless said), through every layer of core/route. The object is
  *  the routing's own, so a selector over it settles. */
-export const agentFor = (s: CanopyState, repo: Repo, role: AgentRole = "shell"): AgentSettings =>
-  resolveAgent(routesOf(s, backendOf(repo.id)), repo.path, role).settings;
+export const agentFor = (s: CanopyState, repo: Repo, role: AgentRole = "shell", scope?: AgentScope): AgentSettings =>
+  resolveAgent(routesOf(s, backendOf(repo.id)), repo.path, role, undefined, scope).settings;
 
 /** What a launch pick puts on a tab: the harness it names, or the
  *  profile. */

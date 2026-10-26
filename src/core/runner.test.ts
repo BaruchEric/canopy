@@ -3,8 +3,9 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ACTIONS } from "./actions";
-import { cliArgs } from "./runner";
-import { DEFAULT_AGENT } from "./types";
+import { cliArgs, Runner } from "./runner";
+import type { RunDriver } from "./driver";
+import { DEFAULT_AGENT, type Repo } from "./types";
 
 describe("the print-mode command line", () => {
   test("the default is the bypass mode; ask goes through the prompt tool", () => {
@@ -29,6 +30,20 @@ describe("the print-mode command line", () => {
     // the prompt tool stays: questions still come to the browser
     expect(args).toContain("--permission-prompt-tool");
   });
+});
+
+test("a run keeps the resolved settings snapshot for its accounting row", () => {
+  const driver: RunDriver = { harness: "codex", label: "Codex", check: () => null, start: () => {}, say: () => {}, stop: () => {} };
+  const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver });
+  const repo = { id: "api", name: "api", path: "/r/api", status: null } as Repo;
+  const run = runner.start(repo, "chat", ACTIONS.chat, "", {
+    ...DEFAULT_AGENT,
+    harness: "codex",
+    model: "gpt-x",
+    effort: "high",
+    provider: "team_1",
+  });
+  expect(run.agentSettings).toEqual({ harness: "codex", model: "gpt-x", effort: "high", provider: "team_1" });
 });
 
 /* A stand-in for the claude CLI that never calls anything: it asks for two

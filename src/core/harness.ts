@@ -41,6 +41,8 @@ export interface HarnessInfo {
   /** whether a model outside `models` is taken, as long as it is a plain
    *  name (`MODEL_RE`); claude's list is closed, codex's is a hint */
   openModels: boolean;
+  /** a configured provider id's launch override, if this harness supports one */
+  providerArgs: (provider: string | undefined) => string[];
   /** the efforts it takes, "default" first */
   efforts: readonly AgentEffort[];
   modelArgs: (model: string) => string[];
@@ -65,6 +67,14 @@ export interface HarnessInfo {
  *  flag (no leading dash) and nothing a shell would split or expand. */
 export const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/;
 
+/** A configured provider name, kept deliberately to bare identifier words. */
+export const PROVIDER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
+
+/** Only Codex supports selecting a named provider in its launch protocol. */
+export function takesProvider(h: Harness, provider: unknown): provider is string {
+  return h === "codex" && typeof provider === "string" && provider !== "default" && PROVIDER_RE.test(provider);
+}
+
 const CLAUDE: HarnessInfo = {
   id: "claude",
   label: "claude",
@@ -72,6 +82,7 @@ const CLAUDE: HarnessInfo = {
   binary: "claude",
   models: AGENT_MODELS,
   openModels: false,
+  providerArgs: () => [],
   efforts: ["default", "low", "medium", "high", "xhigh", "max"],
   modelArgs: (m) => (m === "default" ? [] : ["--model", m]),
   effortArgs: (e) => (e === "default" ? [] : ["--effort", e]),
@@ -94,6 +105,7 @@ const CODEX: HarnessInfo = {
   // this was written; any plain name is taken
   models: ["default", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"],
   openModels: true,
+  providerArgs: (provider) => (takesProvider("codex", provider) ? ["-c", `model_provider=${tomlString(provider)}`] : []),
   efforts: ["default", "low", "medium", "high", "xhigh", "max", "ultra"],
   modelArgs: (m) => (m === "default" ? [] : ["-m", m]),
   effortArgs: (e) => (e === "default" ? [] : ["-c", `model_reasoning_effort=${e}`]),
@@ -185,6 +197,7 @@ export function agentArgs(a: AgentLaunch, env: AgentEnv = {}): string[] {
   const h = HARNESS[a.harness];
   return [
     ...h.modelArgs(a.model),
+    ...h.providerArgs(a.provider),
     ...h.effortArgs(a.effort),
     ...h.permissionArgs(a.yolo),
     ...h.always,

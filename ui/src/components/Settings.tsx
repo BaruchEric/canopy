@@ -1,8 +1,10 @@
 import { Fragment, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
-import { capsFor, connOf, multi, useStore } from "../store";
+import { capsFor, connOf, multi, routesOf, useStore } from "../store";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
+import { Routing } from "./AgentsView";
+import { harnessesOf, hasRouting } from "../agents";
 import { PopGrip } from "./PopGrip";
 import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
@@ -117,7 +119,7 @@ const KEYS = [
 
 /** A tab down Settings' rail. The first group holds this browser's own
  *  choices, the second the backend the picker names. */
-type Tab = "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "awake" | "ranger" | "sweep" | "about";
+type Tab = "agents" | "look" | "layout" | "opening" | "device" | "keys" | "desktop" | "signed" | "shells" | "awake" | "ranger" | "sweep" | "about";
 
 const BROWSER_TABS: readonly { tab: Tab; label: string }[] = [
   { tab: "look", label: "look" },
@@ -128,6 +130,7 @@ const BROWSER_TABS: readonly { tab: Tab; label: string }[] = [
 ];
 
 const BACKEND_TABS: readonly { tab: Tab; label: string }[] = [
+  { tab: "agents", label: "agent defaults" },
   { tab: "desktop", label: "desktop" },
   { tab: "signed", label: "signed in" },
   { tab: "shells", label: "shell history" },
@@ -175,6 +178,8 @@ export function SettingsMenu() {
   const client = useStore((s) => connOf(s, scope).client);
   const helpers = useStore((s) => connOf(s, scope).helpers);
   const base = useStore((s) => connOf(s, scope).base);
+  const routes = useStore((s) => routesOf(s, scope));
+  const backend = useStore((s) => connOf(s, scope).backend);
   const caps = useStore(useShallow((s) => capsFor(s, scope)));
   const keeping = useStore((s) => connOf(s, scope).keeping);
   const setKeeping = useStore((s) => s.setKeeping);
@@ -293,6 +298,8 @@ export function SettingsMenu() {
   const sections: { tab: Tab; key: string; words: string; node: ReactNode }[] = !open
     ? []
     : [
+        { tab: "agents", key: "agent-defaults", words: "agents default model models effort reasoning provider providers routing system workflow task repo profiles permissions",
+          node: <Routing key={scope} scope={scope} routes={routes} has={harnessesOf(backend)} routing={hasRouting(backend)} /> },
         {
           tab: "look",
           key: "theme",

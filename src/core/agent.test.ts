@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeAgent, isDefaultAgent, normalizeAgent, splitArgs, withHarness } from "./agent";
+import { describeAgent, isDefaultAgent, normalizeAgent, sameAgent, splitArgs, withHarness } from "./agent";
 import { DEFAULT_AGENT, type AgentSettings } from "./types";
 
 const codex = (over: Partial<AgentSettings> = {}): AgentSettings => ({ ...DEFAULT_AGENT, harness: "codex", ...over });
@@ -45,6 +45,14 @@ describe("agent settings", () => {
     expect(normalizeAgent({ harness: "codex", model: "gpt-6-astra", effort: "max" })).toEqual(codex({ model: "gpt-6-astra", effort: "max" }));
   });
 
+  test("a configured Codex provider is a plain ID; default and invalid or Claude values leave the old shape", () => {
+    expect(normalizeAgent({ harness: "codex", provider: "  team_1 " })).toEqual(codex({ provider: "team_1" }));
+    expect(normalizeAgent({ harness: "codex", provider: "default" })).toEqual(codex());
+    expect(normalizeAgent({ harness: "codex", provider: "team one" })).toEqual(codex());
+    expect(normalizeAgent({ harness: "codex", provider: "-team" })).toEqual(codex());
+    expect(normalizeAgent({ provider: "bedrock" })).toEqual(DEFAULT_AGENT);
+  });
+
   test("a stale value never reaches a command line: flags, spaces and claude's aliases are not codex models", () => {
     expect(normalizeAgent({ harness: "codex", model: "--dangerously-bypass-approvals-and-sandbox" }).model).toBe("default");
     expect(normalizeAgent({ harness: "codex", model: "gpt 5; rm -rf /" }).model).toBe("default");
@@ -61,6 +69,8 @@ describe("agent settings", () => {
       ...DEFAULT_AGENT,
       extra: "--search",
     });
+    expect(withHarness(codex({ provider: "team_1" }), "claude")).toEqual(DEFAULT_AGENT);
+    expect(withHarness(withHarness(codex({ provider: "team_1" }), "claude"), "codex")).toEqual(codex());
   });
 
   test("the defaults are recognised so the config can drop them", () => {
@@ -68,6 +78,8 @@ describe("agent settings", () => {
     expect(isDefaultAgent({ ...DEFAULT_AGENT, yolo: false })).toBe(false);
     expect(isDefaultAgent({ ...DEFAULT_AGENT, extra: "--x" })).toBe(false);
     expect(isDefaultAgent(codex())).toBe(false);
+    expect(isDefaultAgent({ ...DEFAULT_AGENT, provider: "default" })).toBe(true);
+    expect(sameAgent(codex(), codex({ provider: "team_1" }))).toBe(false);
   });
 
   test("extra flags split like a shell line", () => {
@@ -85,5 +97,6 @@ describe("agent settings", () => {
     expect(describeAgent({ ...DEFAULT_AGENT, effort: "max", yolo: false, extra: "--x" })).toBe("max · ask · --x");
     expect(describeAgent(codex({ model: "gpt-5.5", effort: "high", yolo: false }))).toBe("codex · gpt-5.5 · high · ask");
     expect(describeAgent(codex())).toBe("codex · yolo");
+    expect(describeAgent(codex({ provider: "team_1" }))).toBe("codex · provider team_1 · yolo");
   });
 });

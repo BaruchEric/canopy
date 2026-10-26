@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeDriver, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
+import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
 import { DEFAULT_AGENT } from "./types";
@@ -102,6 +102,28 @@ const responseTo = (log: Record<string, unknown>[], id: string) =>
   log.find((m) => m["type"] === "control_response" && (m["response"] as { request_id?: string }).request_id === id) as
     | { response: { subtype: string; response: { behavior: string; message?: string; updatedInput?: unknown } } }
     | undefined;
+
+test("Claude accounting reads cumulative per-model usage, including cached input", () => {
+  expect(
+    claudeAccounting({
+      modelUsage: {
+        "provider-alias": {
+          canonicalModel: "claude-sonnet-5",
+          provider: "firstParty",
+          inputTokens: 10,
+          cacheReadInputTokens: 20,
+          cacheCreationInputTokens: 30,
+          outputTokens: 5,
+          costUSD: 0.02,
+        },
+      },
+    }),
+  ).toEqual({
+    model: "claude-sonnet-5",
+    provider: "anthropic",
+    tokens: { input: 60, cachedInput: 20, output: 5, reasoning: 0, total: 65 },
+  });
+});
 
 test("cliArgs adds one --add-dir per extra folder", () => {
   const args = cliArgs({ allowedTools: [], maxTurns: 5, addDirs: ["/x", "/y z"] });

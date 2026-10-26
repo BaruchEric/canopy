@@ -81,6 +81,69 @@ test("RunCosts writes one row per reply that spent something, with the repo's pa
   expect(rows[0]).toMatchObject({ service: "claude", provider: "anthropic", run: "r1", label: "chat" });
 });
 
+test("accounting rows keep the resolved route and prefer reported Codex provider and model", async () => {
+  const rows: CostEntry[] = [];
+  const costs = new RunCosts((e) => rows.push(e), () => ({ path: "/r/api", name: "api" }));
+  const selected = {
+    id: "r-provider",
+    repoId: "api",
+    harness: "codex",
+    verb: "review",
+    action: "flow",
+    flowStep: { workflow: "release", step: "review", source: "user" },
+    agentSettings: { harness: "codex", model: "gpt-selected", effort: "high", provider: "team_selected" },
+  } as Run;
+  costs.onRun({
+    ...selected,
+    result: {
+      text: "done",
+      durationMs: 1,
+      turns: 1,
+      model: "gpt-reported",
+      provider: "team_actual",
+      tokens: { input: 100, cachedInput: 20, output: 10, reasoning: 2, total: 110 },
+    },
+  });
+  const fallback = {
+    ...selected,
+    id: "r-fallback",
+    agentSettings: { harness: "codex", model: "gpt-selected", effort: "medium", provider: "team_fallback" },
+    result: { text: "done", durationMs: 1, turns: 1, tokens: { input: 10, cachedInput: 0, output: 1, reasoning: 0, total: 11 } },
+  } as Run;
+  costs.onRun(fallback);
+  await costs.settled();
+  expect(rows[0]).toMatchObject({
+    service: "codex",
+    provider: "team_actual",
+    model: "gpt-reported",
+    agentSettings: selected.agentSettings,
+    action: "flow",
+    flowStep: { workflow: "release", step: "review" },
+    tokens: { total: 110 },
+  });
+  expect(rows[1]).toMatchObject({ service: "codex", provider: "team_fallback", model: "gpt-selected", tokens: { total: 11 } });
+});
+
+test("Claude rows retain both reported dollars and tokens", async () => {
+  const rows: CostEntry[] = [];
+  const costs = new RunCosts((e) => rows.push(e), () => null);
+  const run = { id: "r-claude-usage", repoId: "api", harness: "claude", verb: "chat", chat: true, session: "s-usage" } as Run;
+  costs.onRun({
+    ...run,
+    result: {
+      text: "done",
+      durationMs: 1,
+      turns: 1,
+      costUsd: 0.02,
+      model: "claude-sonnet-5",
+      provider: "anthropic",
+      tokens: { input: 200, cachedInput: 100, output: 50, reasoning: 0, total: 250 },
+    },
+  });
+  await costs.settled();
+  expect(rows[0]).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5", usd: 0.02, tokens: { total: 250 } });
+});
+
 test("a resumed session starts from its spend so far: in memory, or from the ledger after a restart", async () => {
   const rows: CostEntry[] = [];
   const write = (e: CostEntry) => rows.push(e);

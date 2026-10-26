@@ -15,6 +15,7 @@ import {
   type AgentRole,
   type AgentRoutes,
   type AgentSettings,
+  type AgentScope,
   type Backend,
   type Harness,
   type RepoAgent,
@@ -105,6 +106,10 @@ export function pickLine(pick: AgentPick | undefined): string {
 
 const FROM_WORD: Record<AgentLayer, string> = {
   explicit: "picked at launch",
+  "repo-workflow": "repo, this workflow",
+  workflow: "workflow route",
+  "repo-task": "repo, this task",
+  task: "task route",
   "repo-role": "repo, this role",
   repo: "repo",
   role: "role route",
@@ -155,9 +160,13 @@ export function missingProfiles(routes: AgentRoutes): string[] {
     if (p && isProfilePick(p) && !hasProfile(routes.profiles, p.profile)) out.push(`${where}: ${p.profile}`);
   };
   for (const role of AGENT_ROLES) check(`role ${role}`, routes.roles[role]);
+  for (const [name, p] of Object.entries(routes.workflows ?? {})) check(`workflow ${name}`, p);
+  for (const [name, p] of Object.entries(routes.tasks ?? {})) check(`task ${name}`, p);
   for (const [path, r] of Object.entries(routes.repos)) {
     check(`${path} (whole repo)`, r.all);
     for (const role of AGENT_ROLES) check(`${path} (${role})`, r.roles?.[role]);
+    for (const [name, p] of Object.entries(r.workflows ?? {})) check(`${path} (workflow ${name})`, p);
+    for (const [name, p] of Object.entries(r.tasks ?? {})) check(`${path} (task ${name})`, p);
   }
   return out;
 }
@@ -166,9 +175,11 @@ export function missingProfiles(routes: AgentRoutes): string[] {
 export function profileUses(routes: AgentRoutes, name: string): number {
   const is = (p: AgentPick | undefined) => !!p && isProfilePick(p) && p.profile === name;
   let n = AGENT_ROLES.filter((role) => is(routes.roles[role])).length;
+  n += [...Object.values(routes.workflows ?? {}), ...Object.values(routes.tasks ?? {})].filter(is).length;
   for (const r of Object.values(routes.repos)) {
     if (is(r.all)) n++;
     n += AGENT_ROLES.filter((role) => is(r.roles?.[role])).length;
+    n += [...Object.values(r.workflows ?? {}), ...Object.values(r.tasks ?? {})].filter(is).length;
   }
   return n;
 }
@@ -186,6 +197,15 @@ export function withPick(agent: RepoAgent, slot: AgentRole | "all", pick: AgentP
   const nextRoles = pick ? { ...roles, [slot]: pick } : roles;
   const { roles: _roles, ...rest } = agent;
   return Object.keys(nextRoles).length ? { ...rest, roles: nextRoles } : rest;
+}
+
+export function withScopePick(agent: RepoAgent, scope: AgentScope, pick: AgentPick | null): RepoAgent {
+  const key = scope.kind === "workflow" ? "workflows" : "tasks";
+  const { [key]: was, ...rest } = agent;
+  const next = { ...was };
+  if (pick) next[scope.name] = pick;
+  else delete next[scope.name];
+  return Object.keys(next).length ? { ...rest, [key]: next } : rest;
 }
 
 /** The harnesses a slot's settings may be: a role's own, or both for the

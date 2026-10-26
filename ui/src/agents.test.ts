@@ -15,6 +15,7 @@ import {
   slotHarnesses,
   startHarnesses,
   withPick,
+  withScopePick,
 } from "./agents";
 import { withDefaultProfile } from "../../src/core/route";
 import { DEFAULT_AGENT, type AgentRoutes, type AgentSettings } from "../../src/core/types";
@@ -29,6 +30,15 @@ const routes = (): AgentRoutes => ({
   profiles: withDefaultProfile({ review, deep }),
   roles: { chat: { profile: "deep" } },
   repos: { [P]: { all: { profile: "review" } }, "/dev/other": { roles: { job: { profile: "gone" } } } },
+});
+
+test("named routes count profile uses, report missing profiles and remove only their own override", () => {
+  const r = routes();
+  r.workflows = { ship: { profile: "deep" } };
+  r.repos[P] = { all: review, workflows: { ship: { profile: "gone" } }, tasks: { ask: { profile: "deep" } } };
+  expect(profileUses(r, "deep")).toBe(3);
+  expect(missingProfiles(r)).toContain(`${P} (workflow ship): gone`);
+  expect(withScopePick(r.repos[P], { kind: "workflow", name: "ship" }, null)).toEqual({ all: review, tasks: { ask: { profile: "deep" } } });
 });
 
 describe("a pick in a select", () => {

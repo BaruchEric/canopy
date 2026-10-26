@@ -42,6 +42,8 @@ export type DriveRun = Run;
  *  differently, and the Runner has already normalized them per harness. */
 export interface DriveAgent {
   model: string;
+  /** A named Codex model provider, when selected. */
+  provider?: string;
   effort: string;
   yolo: boolean;
   extra: string;

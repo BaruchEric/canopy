@@ -8,11 +8,13 @@
  * The first layer that is present wins:
  *   1. explicit: the launch picker ("new codex shell"), or a workflow
  *      step's own `agent:` profile
- *   2. repo × role: `agents[path].roles[role]`
- *   3. repo: `agents[path].all`
- *   4. role: `agentRoles[role]`
- *   5. default: `profiles.default`
- *   6. builtin: `DEFAULT_AGENT`
+ *   2. repo's named workflow or task
+ *   3. system's named workflow or task
+ *   4. repo × role: `agents[path].roles[role]`
+ *   5. repo: `agents[path].all`
+ *   6. role: `agentRoles[role]`
+ *   7. default: `profiles.default`
+ *   8. builtin: `DEFAULT_AGENT`
  * The repo beats the role on purpose: a repo override is the more
  * deliberate choice. A pick naming a missing profile, or settings of a
  * harness the role cannot run yet, falls through to the next layer and is
@@ -31,6 +33,7 @@ import {
   type AgentRole,
   type AgentRoutes,
   type AgentSettings,
+  type AgentScope,
   type AgentSkip,
   type Harness,
   type LaunchPick,
@@ -51,6 +54,25 @@ export const profileOf = (profiles: Readonly<Record<string, AgentSettings>>, nam
 
 /** Whether the routing holds a profile under `name`. */
 export const hasProfile = (profiles: Readonly<Record<string, AgentSettings>>, name: string): boolean => Object.hasOwn(profiles, name);
+
+export const isAgentScopeName = (v: unknown): v is string => typeof v === "string" && /^[a-z0-9][a-z0-9_-]{0,79}$/.test(v) && !(v in Object.prototype);
+
+export function normalizeNamedPicks(v: unknown): Record<string, AgentPick> {
+  if (!isRecord(v)) return {};
+  const out: Record<string, AgentPick> = {};
+  for (const [name, raw] of Object.entries(v)) {
+    const pick = isAgentScopeName(name) ? normalizePick(raw) : null;
+    if (pick) out[name] = pick;
+  }
+  return out;
+}
+
+/** Keep absent maps absent for older backends and existing saved configs. */
+export function normalizeScopes(v: Record<string, unknown>): Pick<RepoAgent, "workflows" | "tasks"> {
+  const workflows = normalizeNamedPicks(v["workflows"]);
+  const tasks = normalizeNamedPicks(v["tasks"]);
+  return { ...(Object.keys(workflows).length ? { workflows } : {}), ...(Object.keys(tasks).length ? { tasks } : {}) };
+}
 
 /** the profile that is always there: the backend's default */
 export const DEFAULT_PROFILE = "default";
@@ -109,11 +131,11 @@ export const isProfilePick = (p: AgentPick): p is { profile: string } => "profil
  *  valid pick and drops the rest. */
 export function normalizeRepoAgent(v: unknown): RepoAgent {
   if (!isRecord(v)) return {};
-  if (!("all" in v) && !("roles" in v)) {
+  if (!("all" in v) && !("roles" in v) && !("workflows" in v) && !("tasks" in v)) {
     // an old entry: settings, or nothing usable
     return Object.keys(v).length ? { all: normalizeAgent(v) } : {};
   }
-  const out: RepoAgent = {};
+  const out: RepoAgent = normalizeScopes(v);
   const all = normalizePick(v["all"]);
   if (all) out.all = all;
   const roles = normalizeRoles(v["roles"]);
@@ -121,7 +143,7 @@ export function normalizeRepoAgent(v: unknown): RepoAgent {
   return out;
 }
 
-export const isEmptyRepoAgent = (r: RepoAgent): boolean => !r.all && !(r.roles && Object.keys(r.roles).length);
+export const isEmptyRepoAgent = (r: RepoAgent): boolean => !r.all && ![r.roles, r.workflows, r.tasks].some((p) => p && Object.keys(p).length);
 
 /** The per-role picks, unknown roles and malformed picks left out. */
 export function normalizeRoles(v: unknown): Partial<Record<AgentRole, AgentPick>> {
@@ -172,6 +194,7 @@ export function normalizeRoutes(v: unknown): AgentRoutes {
       profiles: withDefaultProfile(normalizeProfiles(v["profiles"])),
       roles: normalizeRoles(v["roles"]),
       repos: normalizeRepoAgents(v["repos"]),
+      ...normalizeScopes(v),
     };
   }
   return { profiles: withDefaultProfile({}), roles: {}, repos: normalizeRepoAgents(v) };
@@ -214,9 +237,24 @@ function settle(
 }
 
 /** The routed layers for a repo and role, in order: what each names. */
-function layers(routes: AgentRoutes, path: string, role: AgentRole): [AgentLayer, AgentPick][] {
+function layers(routes: AgentRoutes, path: string, role: AgentRole, scope?: AgentScope): [AgentLayer, AgentPick][] {
   const repo = Object.hasOwn(routes.repos, path) ? routes.repos[path] : undefined;
   const out: [AgentLayer, AgentPick][] = [];
+  if (scope && isAgentScopeName(scope.name) && ((scope.kind === "workflow" && (role === "flow" || role === "job")) || (scope.kind === "task" && role === "job"))) {
+    const key = scope.kind === "workflow" ? "workflows" : "tasks";
+    const local = repo?.[key]?.[scope.name];
+    const global = routes[key]?.[scope.name];
+    if (local) out.push([scope.kind === "workflow" ? "repo-workflow" : "repo-task", local]);
+    if (global) out.push([scope.kind, global]);
+    // Triggers run workflow prompts as jobs. Keep their job defaults,
+    // including task:ask, below the workflow's more specific selection.
+    if (scope.kind === "workflow" && role === "job") {
+      const localTask = repo?.tasks?.["ask"];
+      const task = routes.tasks?.["ask"];
+      if (localTask) out.push(["repo-task", localTask]);
+      if (task) out.push(["task", task]);
+    }
+  }
   const rr = repo?.roles?.[role];
   if (rr) out.push(["repo-role", rr]);
   if (repo?.all) out.push(["repo", repo.all]);
@@ -227,8 +265,8 @@ function layers(routes: AgentRoutes, path: string, role: AgentRole): [AgentLayer
 }
 
 /** The layers' resolution with no launch pick. */
-function routed(routes: AgentRoutes, path: string, role: AgentRole, skipped: AgentSkip[]): ResolvedAgent {
-  for (const [from, pick] of layers(routes, path, role)) {
+function routed(routes: AgentRoutes, path: string, role: AgentRole, skipped: AgentSkip[], scope?: AgentScope): ResolvedAgent {
+  for (const [from, pick] of layers(routes, path, role, scope)) {
     const got = settle(routes, role, pick);
     if ("why" in got) {
       skipped.push({ from, why: got.why, ...(got.profile ? { profile: got.profile } : {}) });
@@ -255,7 +293,7 @@ function profilesOf(routes: AgentRoutes, h: Harness): [string, AgentSettings][] 
  * harness's defaults, and a harness the role cannot run is ignored with a
  * note.
  */
-export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole, explicit?: LaunchPick): ResolvedAgent {
+export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole, explicit?: LaunchPick, scope?: AgentScope): ResolvedAgent {
   const skipped: AgentSkip[] = [];
   const done = (r: ResolvedAgent): ResolvedAgent => {
     const out = role === "suggest" ? forSuggest(r) : role === "coordinate" ? forCoordinate(r) : r;
@@ -270,7 +308,7 @@ export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole,
     if (!roleTakes(role, h)) {
       skipped.push({ from: "explicit", why: roleRefusal(role, h) });
     } else {
-      for (const [, pick] of layers(routes, path, role)) {
+      for (const [, pick] of layers(routes, path, role, scope)) {
         const got = settle(routes, role, pick);
         if (!("why" in got) && got.settings.harness === h) {
           return done({ settings: got.settings, from: "explicit", ...(got.profile ? { profile: got.profile } : {}) });
@@ -281,7 +319,7 @@ export function resolveAgent(routes: AgentRoutes, path: string, role: AgentRole,
       return done({ settings: { ...DEFAULT_AGENT, harness: h }, from: "explicit" });
     }
   }
-  return done(routed(routes, path, role, skipped));
+  return done(routed(routes, path, role, skipped, scope));
 }
 
 /** The layers that choose settings for the commit message itself. */
@@ -298,8 +336,9 @@ const SUGGEST_LAYERS: readonly AgentLayer[] = ["explicit", "repo-role", "role"];
 function forSuggest(r: ResolvedAgent): ResolvedAgent {
   if (SUGGEST_LAYERS.includes(r.from)) return r;
   const h = r.settings.harness;
-  let settings = suggestDefaults.get(h);
-  if (!settings) suggestDefaults.set(h, (settings = { ...DEFAULT_AGENT, harness: h }));
+  const key = `${h}:${r.settings.provider ?? ""}`;
+  let settings = suggestDefaults.get(key);
+  if (!settings) suggestDefaults.set(key, (settings = { ...DEFAULT_AGENT, harness: h, ...(r.settings.provider ? { provider: r.settings.provider } : {}) }));
   return { ...r, settings };
 }
 
@@ -315,7 +354,7 @@ function forCoordinate(r: ResolvedAgent): ResolvedAgent {
 // The settings forSuggest and forCoordinate make, kept so the same routing
 // hands back the same object: the UI selects them straight from its store,
 // and a fresh object on every read loops React's render.
-const suggestDefaults = new Map<Harness, AgentSettings>();
+const suggestDefaults = new Map<string, AgentSettings>();
 const lowEffort = new WeakMap<AgentSettings, AgentSettings>();
 
 /** Every role's resolution for one repo: the effective table. */

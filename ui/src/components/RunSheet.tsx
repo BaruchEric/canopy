@@ -207,7 +207,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const spec = ACTIONS[action];
   const words = planWords(action, workspace);
   const coordinate = action === "coordinate";
-  const agent = useStore((s) => agentFor(s, repo, coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job"));
+  const agent = useStore((s) => agentFor(s, repo, coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job", { kind: "task", name: action }));
   const name = AGENT_NAME[agent.harness];
   const [note, setNote] = useState("");
   const noteBox = useRef<HTMLTextAreaElement>(null);

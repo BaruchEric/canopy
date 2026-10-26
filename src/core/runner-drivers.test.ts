@@ -395,6 +395,7 @@ describe("a Codex job through the Runner", () => {
       turns: 1,
       tokens: { input: 20, cachedInput: 5, output: 10, reasoning: 2, total: 30 },
       model: "fake-model",
+      provider: "openai",
     });
     const notes = run.steps.filter((s) => s.kind === "note").map((s) => s.text ?? "");
     expect(notes.filter((n) => n.includes("sandbox"))).toHaveLength(1);
