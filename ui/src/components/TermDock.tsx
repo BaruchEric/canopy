@@ -2156,14 +2156,24 @@ export function ShellSolo({ id }: { id: string }) {
                 ? [
                     {
                       label: "a section as a tab",
-                      entries: addable.map(
-                        (k): GearEntry => ({
+                      entries: addable.map((k): GearEntry => {
+                        // the tab is in the store once added, so the groups
+                        // read fresh keep it beside the shell
+                        const split = (edge: Edge) => {
+                          tabSection(id, k, "window");
+                          writeSplits((g) => splitIn(g, tab.id, sectionTabId("window", k, id), edge));
+                        };
+                        return {
                           type: "item",
                           label: SECTION_WORD[k],
                           title: `Moves ${SECTION_WORD[k]} out of the card into a tab beside this shell`,
                           run: () => tabSection(id, k, "window"),
-                        }),
-                      ),
+                          also: [
+                            { label: "→", aria: `${SECTION_WORD[k]} split right`, title: `Split right: ${SECTION_WORD[k]} beside this shell, on its right`, run: () => split("right") },
+                            { label: "↓", aria: `${SECTION_WORD[k]} split down`, title: `Split down: ${SECTION_WORD[k]} beside this shell, below`, run: () => split("bottom") },
+                          ],
+                        };
+                      }),
                     },
                   ]
                 : []),

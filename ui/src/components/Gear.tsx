@@ -33,7 +33,9 @@ export type GearEntry =
   | { type: "note"; label: string }
   /** something to do. `on` marks the current choice of a set; `stay` keeps
    *  the menu open, and whatever `run` resolves to shows at its foot, which
-   *  is how a copy or a capture says where it went */
+   *  is how a copy or a capture says where it went. `also` puts other ways
+   *  to do it after the line as small buttons: a section as a tab, split
+   *  right or down. */
   | {
       type: "item";
       label: string;
@@ -43,6 +45,7 @@ export type GearEntry =
       off?: string;
       title?: string;
       stay?: boolean;
+      also?: { label: string; aria: string; title: string; run: () => unknown }[];
     }
   /** a row of an ordered list that can be switched off: a panel's sections */
   | {
@@ -320,8 +323,8 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
           </button>
         </div>
       );
-    case "item":
-      return (
+    case "item": {
+      const item = (
         <button
           type="button"
           role={entry.on === undefined ? "menuitem" : "menuitemradio"}
@@ -339,6 +342,27 @@ function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay
           <span className="menu-text">{entry.label}</span>
         </button>
       );
+      if (!entry.also?.length) return item;
+      return (
+        <div className="gear-row">
+          {item}
+          {entry.also.map((a) => (
+            <button
+              key={a.aria}
+              type="button"
+              role="menuitem"
+              className="gear-move"
+              aria-label={a.aria}
+              title={entry.off ?? a.title}
+              disabled={entry.off !== undefined}
+              onClick={() => act(a.run, entry.stay ?? false)}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      );
+    }
     case "note":
       return <p className="gear-line">{entry.label}</p>;
     case "forget":

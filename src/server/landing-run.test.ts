@@ -113,7 +113,8 @@ describe("branch runs over the API", () => {
     const landed = await until(async () => (await landing()).entries.find((e) => e.state === "landed"), "the entry to land");
     expect(landed.noGates).toBe(true);
     expect(await git(proj, "log", "-1", "--format=%s")).toBe("the work");
-    expect(existsSync(run.branch!.dir)).toBe(false);
+    // the worktree goes after the entry is marked landed, so wait for it
+    await until(async () => !existsSync(run.branch!.dir), "the worktree to go");
   });
 
   test("propose goes on a branch by default, and branch: false keeps it in the checkout", async () => {
