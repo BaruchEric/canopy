@@ -74,6 +74,12 @@ test("a finished run past 3d is offered unless landing or a flow holds it", () =
   expect(it).toMatchObject({ key: "run:d1", kind: "run", closable: true, checked: true, handOnly: false, why: "finished 4d ago" });
   expect(planSweep({ ...base, runs: [r], heldRuns: new Set(["d1"]) }, DEFAULT_SWEEP, now)).toEqual([]);
 });
+test("a limited run is a finished run for sweeping", () => {
+  const r = run({ id: "l1", status: "limited", endedAt: now - 4 * 24 * H });
+  expect(planSweep({ ...base, runs: [r] }, DEFAULT_SWEEP, now)).toMatchObject([
+    { key: "run:l1", kind: "run", closable: true, checked: true, why: "finished 4d ago" },
+  ]);
+});
 test("an outside agent is listed, never closable or checked", () => {
   const [it] = planSweep({ ...base, outside: [card()] }, DEFAULT_SWEEP, now);
   expect(it).toMatchObject({ kind: "outside", closable: false, checked: false, handOnly: false, idleSince: now - 25 * H });

@@ -2,7 +2,7 @@
  *
  *  A run is the same thing whichever agent does the work: a timeline of
  *  steps, prompts that park it until the browser answers, a result, and a
- *  status that ends in done, failed or stopped. What differs is the wire:
+ *  status that ends in done, failed, limited or stopped. What differs is the wire:
  *  Claude Code speaks stream-json on stdio, Codex speaks JSON-RPC through
  *  `codex app-server`. A `RunDriver` owns one run's process and its wire, and
  *  reports everything through the `DriveCtx` the Runner hands it.
@@ -17,6 +17,7 @@
 import type { RpcProc, RpcSpawn } from "./codexrpc";
 // a type alone: codexrun imports this module at run time
 import type { ApprovalFacts } from "./codexrun";
+import { isLimitText } from "./capacity";
 import { stageEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
@@ -150,8 +151,9 @@ export interface DriveCtx {
   proposal(plan: string): void;
   /** the agent's checklist as it now stands, which replaces the one before */
   todos(next: RunTodo[]): void;
-  /** A turn's result. A job ends with it: done, or failed with `problem`. A
-   *  chat goes idle, the problem said as a note. */
+  /** A turn's result. A job ends with it: done, failed with `problem`, or
+   *  limited when the problem is the plan's usage limit. A chat goes idle,
+   *  the problem said as a note. */
   result(result: DriveResult, problem: string | null): void;
   /** The process is gone. Called once, whatever ended it. Whether that is a
    *  stop, the end of a chat, or a failure is the Runner's call. */
@@ -238,13 +240,14 @@ export function exitOutcome(
   flags: { stopping: boolean; ending: boolean },
   exit: DriveExit,
   label: string,
-): { status: "done" | "failed" | "stopped"; error?: string } {
+): { status: "done" | "failed" | "stopped" | "limited"; error?: string } {
   if (flags.stopping) return { status: "stopped" };
   const tail = exit.stderr.trim();
   if (exit.error !== undefined) {
     return { status: "failed", error: tail ? `${exit.error}\n${tail}` : exit.error };
   }
   if (flags.ending && exit.code === 0) return { status: "done" };
+  if (isLimitText(tail)) return { status: "limited", error: tail };
   return {
     status: "failed",
     error: `${label} exited (code ${exit.code}) without a result${tail ? `: ${tail}` : ""}`,
@@ -339,6 +342,8 @@ export class RunCtx implements DriveCtx {
   /** numbers the prompts, so no two share an id */
   private prompts = 0;
   private seq = 0;
+  /** limited replies in a row on this process; a good reply starts it over */
+  private limitedRow = 0;
   private label: string;
   private remember: RememberHook | null;
 
@@ -539,6 +544,11 @@ export class RunCtx implements DriveCtx {
 
   result(result: DriveResult, problem: string | null): void {
     this.run.result = result;
+    if (problem !== null && isLimitText(problem)) {
+      this.limited(problem);
+      return;
+    }
+    this.limitedRow = 0;
     if (this.run.chat) {
       // A chat's result ends one reply, not the conversation: the process
       // stays, and the next message continues it. A prompt still waiting
@@ -558,8 +568,34 @@ export class RunCtx implements DriveCtx {
     this.finish(problem ? "failed" : "done");
   }
 
+  private limited(text: string): void {
+    this.run.limited = { at: Date.now(), text };
+    this.limitedRow += 1;
+    if (this.run.chat) {
+      if (this.limitedRow >= 2) {
+        this.finish("failed", text);
+        return;
+      }
+      this.step({ kind: "note", text: `the plan's usage limit: ${text}` });
+      this.denyAll();
+      if (activeStatus(this.run.status)) {
+        this.run.status = "idle";
+        this.run.prompt = null;
+      }
+      this.changed();
+      return;
+    }
+    this.finish("limited", text);
+  }
+
   exited(exit: DriveExit): void {
     const out = exitOutcome({ stopping: this.stopping, ending: this.ending }, exit, this.label);
+    if (out.status === "limited") {
+      const text = out.error ?? "";
+      this.run.limited = { at: Date.now(), text };
+      this.finish("limited", text);
+      return;
+    }
     const away = this.away && out.status === "failed";
     // the words are for people; a flow parks on the flag alone
     if (away) this.run.away = true;
@@ -568,7 +604,7 @@ export class RunCtx implements DriveCtx {
   }
 
   /** Ends the run once; later calls do nothing. */
-  finish(status: "done" | "failed" | "stopped", error?: string): void {
+  finish(status: "done" | "failed" | "stopped" | "limited", error?: string): void {
     if (!activeStatus(this.run.status)) return;
     this.run.status = status;
     this.run.endedAt = Date.now();

@@ -639,7 +639,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     }
     driver.stop();
   };
-  const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "stopped";
+  const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
   return { run, ctx, driver, repo, until, sent, stop, ended };
 }
 
@@ -1154,11 +1154,20 @@ describe("a Codex run", () => {
 
   test("a failed turn fails a job with codex's error", async () => {
     const d = await drive(() => ({
-      turns: [[{ complete: "failed", error: { message: "usage limit reached", codexErrorInfo: null, additionalDetails: null } }]],
+      turns: [[{ complete: "failed", error: { message: "turn failed", codexErrorInfo: null, additionalDetails: null } }]],
     }));
     const run = await d.until(d.ended, "the failure");
     expect(run.status).toBe("failed");
-    expect(run.error).toBe("usage limit reached");
+    expect(run.error).toBe("turn failed");
+  });
+
+  // Synthetic P4-shaped text from the plan; no live Codex output was probed.
+  test("a failed turn whose error is the plan's usage limit ends the job limited, not failed (FR-036)", async () => {
+    const d = await drive(() => ({
+      turns: [[{ complete: "failed", error: { message: "usage limit reached", codexErrorInfo: null, additionalDetails: "try later" } }]],
+    }));
+    const run = await d.until(d.ended, "the limit");
+    expect([run.status, run.error, run.limited?.text]).toEqual(["limited", "usage limit reached\ntry later", "usage limit reached\ntry later"]);
   });
 
   test("a codex outside the tested range says so in the run's first note", async () => {

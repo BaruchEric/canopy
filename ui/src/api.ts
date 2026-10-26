@@ -14,6 +14,7 @@ import type {
   KitInstallResult,
   KitMcpPreview,
   HealthInfo,
+  CapacityInfo,
   SecretAuditEntry,
   SecretProposalIn,
   SecretsInfo,
@@ -647,6 +648,8 @@ export const api = {
     const r = await req<Partial<HealthInfo> | null>(b, "/api/health");
     return fromAll(b, Array.isArray(r?.checks) ? r.checks : [], qCheck);
   },
+  /** this backend's usage windows and any starts held for capacity */
+  capacity: (b: string = homeName()) => req<CapacityInfo>(b, "/api/capacity"),
   /** the kit on one backend: the machines it reaches, their cells and plans */
   kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),

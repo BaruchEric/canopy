@@ -3,7 +3,7 @@ import { allows, needs } from "./callers";
 
 describe("needs", () => {
   test("a GET needs read, bar the two upgrades and the Library", () => {
-    for (const p of ["/api/runs", "/api/repos", "/api/events"]) {
+    for (const p of ["/api/runs", "/api/repos", "/api/events", "/api/capacity"]) {
       expect(needs("GET", p)).toBe("read");
     }
     expect(needs("GET", "/api/term")).toBe("shell");

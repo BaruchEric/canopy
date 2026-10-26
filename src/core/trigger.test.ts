@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   activityFor,
   afterRestart,
+  eventLive,
   existing,
   fromFlow,
   fromLanding,
@@ -546,6 +547,17 @@ describe("fromRun", () => {
     const e = event({ runId: "r1", status: "working" });
     expect(fromRun(e, run({ status: "stopped" }), 5).reason).toContain("stopped");
     expect(fromRun(e, run({ status: "failed", error: "boom" }), 5)).toMatchObject({ status: "failed", reason: "boom" });
+  });
+  test("a limited run stops its trigger event, names capacity, and frees the slot", () => {
+    const e = event({ runId: "r1", status: "working", branch: "br1", session: "session-1" });
+    const text = "You've hit your limit · resets 3pm";
+    const next = fromRun(
+      e,
+      run({ status: "limited", error: text, limited: { at: 1, text }, branch: { ...branch, state: "working" } }),
+      5,
+    );
+    expect(next).toMatchObject({ status: "stopped", reason: `waiting for capacity: ${text}`, branch: "br1", session: "session-1", runId: "r1" });
+    expect(eventLive(next)).toBe(false);
   });
   test("another run, or an event with a PR, is left alone", () => {
     const e = event({ runId: "r2", status: "working" });

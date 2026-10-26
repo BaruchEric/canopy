@@ -209,6 +209,7 @@ import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./rang
 import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
+import { CapacityHub, capacityFile } from "./capacity";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { PrHub } from "./prs";
@@ -327,6 +328,8 @@ interface ServerState {
   ranger: RangerHub;
   /** what is broken here and what canopy is fixing (server/health) */
   health: HealthHub;
+  /** the usage windows, remembered plan hits and settings (server/capacity) */
+  capacity: CapacityHub;
   /** the kit: shared skills for every agent (server/kit) */
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
@@ -3127,6 +3130,8 @@ async function handleApi(
   if (coordRes) return coordRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
+  const capacityRes = await state.capacity.handle(req, url);
+  if (capacityRes) return capacityRes;
   const secretsRes = await state.secrets.handle(req, url);
   if (secretsRes) return secretsRes;
   const repoHealthRes = await state.repoHealth.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
@@ -4764,6 +4769,7 @@ export async function startServer(opts: {
     onChange: (run) => {
       broadcast(state, { type: "run", run });
       state.costs.onRun(run);
+      state.capacity.onRun(run);
       state.flows.onRun(run);
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
@@ -4937,6 +4943,13 @@ export async function startServer(opts: {
     if (ledgerOff) return;
     appendCost(e).catch((err: unknown) => console.error(`costs: could not write the ledger: ${err instanceof Error ? err.message : String(err)}`));
   };
+  const capacity = new CapacityHub({
+    broadcast: (event) => broadcast(state, event),
+    ledger: (since) => (ledgerOff ? Promise.resolve([]) : readCosts(since)),
+    config: loadConfig,
+    file: capacityFile(),
+    reader: null,
+  });
   // the Library itself is built after the state, so its rebuild is reached through this
   let refreshLibrary: () => Promise<void> = async () => {};
   const state: ServerState = {
@@ -4993,6 +5006,7 @@ export async function startServer(opts: {
     flows,
     launcher,
     health,
+    capacity,
     repoHealth: new RepoHealth({
       hub: health,
       repos: () => state.result.repos,
@@ -5938,6 +5952,7 @@ export async function startServer(opts: {
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
+  if (process.env["NODE_ENV"] !== "test") void state.capacity.start().catch((err) => console.error("canopy: capacity", err));
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
   // a test server never fires the schedule on whatever config it finds
   if (process.env["NODE_ENV"] !== "test") void state.sweep.start().catch((err) => console.error("canopy: sweep", err));
@@ -5983,6 +5998,7 @@ export async function startServer(opts: {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);
       state.health.stop();
+      state.capacity.stop();
       state.kit.stop();
       state.landing.stop();
       state.prs.stop();

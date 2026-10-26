@@ -102,6 +102,10 @@ describe("failedRows", () => {
     ]);
   });
 
+  test("a limited run is not a failed row (FR-036)", () => {
+    expect(failedRows([run("a", "limited", 5), run("b", "failed", 6)], {}, [])).toMatchObject([{ kind: "run", id: "b" }]);
+  });
+
   test("a ranger that gave up, and none that runs or is off", () => {
     const ranger = (state: RangerInfo["state"], on = true): RangerInfo =>
       ({ on, state, handle: "ranger", why: "it exited 5 times in a row; restart it by hand", lastExit: { at: 400, code: 1 } }) as RangerInfo;

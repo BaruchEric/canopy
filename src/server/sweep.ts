@@ -72,7 +72,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
-const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
+const ENDED = new Set<Run["status"]>(["done", "failed", "limited", "stopped"]);
 
 /** how often the schedule looks at its cron */
 const TICK_MS = 60_000;

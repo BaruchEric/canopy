@@ -50,6 +50,7 @@ const STATUS_WORD: Record<Run["status"], string> = {
   idle: "your turn",
   done: "done",
   failed: "failed",
+  limited: "waiting for capacity",
   stopped: "stopped",
 };
 
@@ -467,6 +468,12 @@ export function Timeline({
       {chat && run.status === "done" && (
         <div className="outcome dim">
           <p>Chat ended.</p>
+        </div>
+      )}
+      {run.status === "limited" && (
+        <div className="outcome warn">
+          <p>The plan's usage limit: {run.error}</p>
+          <p>The work is sound; it waits for the reset.</p>
         </div>
       )}
       {run.status === "failed" && (

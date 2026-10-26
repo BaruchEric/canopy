@@ -48,11 +48,13 @@ import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
 import { runPanel } from "./itempanel";
 import { itemTabId } from "./sectiontabs";
+import { DEFAULT_CAPACITY, emptyCapacity } from "../../src/core/capacity";
 import {
   DEFAULT_AGENT,
   type AgentCard,
   type AgentSettings,
   type Ask,
+  type CapacityInfo,
   type KeptShell,
   type PeerSeen,
   type RangerInfo,
@@ -795,6 +797,14 @@ function backendAnswers(tree: unknown, runs: unknown[], extra: Record<string, un
 }
 
 const twoBackends = { self: "a", backends: [{ name: "a", tailnet: "http://a.test" }, { name: "b", tailnet: "http://b.test" }] };
+const capacityInfo = (used: number): CapacityInfo => ({
+  capacity: [
+    { ...emptyCapacity("claude"), fiveHour: { used, resetsAt: null, readAt: 1 }, source: "observed" },
+    emptyCapacity("codex"),
+  ],
+  held: [],
+  settings: DEFAULT_CAPACITY,
+});
 
 describe("several backends", () => {
   const pristine = useStore.getState();
@@ -842,6 +852,7 @@ describe("several backends", () => {
       [
         "/api/about",
         "/api/backends",
+        "/api/capacity",
         "/api/tree",
         "/api/workspaces",
         "/api/runs",
@@ -914,6 +925,41 @@ describe("several backends", () => {
     expect(bs?.url.startsWith("http://b.test/api/events")).toBe(true);
     expect(bs?.opts?.withCredentials).toBe(true);
     expect(connOf(s, "b").status.state).toBe("online");
+  });
+
+  test("a newer capacity event survives a pending read on that backend", async () => {
+    const homeCapacity = capacityInfo(0.25);
+    const oldRemoteCapacity = capacityInfo(0.1);
+    const newerRemoteCapacity = capacityInfo(0.8);
+    let releaseRemote: ((response: Response) => void) | undefined;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/capacity": homeCapacity }),
+      (path, init) => {
+        if (path.split("?")[0] === "/api/capacity") {
+          return new Promise<Response>((resolve) => (releaseRemote = resolve));
+        }
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    if (!releaseRemote) throw new Error("the remote capacity read did not reach the fetch stub");
+
+    useStore.getState().applyEvent({ type: "capacity", capacity: newerRemoteCapacity }, "b");
+    releaseRemote(new Response(JSON.stringify(oldRemoteCapacity), { status: 200 }));
+    await settle();
+
+    expect(useStore.getState().capacity).toEqual({ a: homeCapacity, b: newerRemoteCapacity });
+  });
+
+  test("a backend without the capacity route has no capacity entry", async () => {
+    const homeCapacity = capacityInfo(0.25);
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/capacity": homeCapacity }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/capacity": new Response("not found", { status: 404 }) }),
+    );
+    await settle();
+
+    expect(useStore.getState().capacity).toEqual({ a: homeCapacity });
   });
 
   test("remembered rules are read per backend, kept by each one's event, and forgotten where they live", async () => {

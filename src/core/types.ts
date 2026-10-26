@@ -1,5 +1,6 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
+import type { Capacity, CapacitySettings } from "./capacity";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -637,6 +638,8 @@ export interface CanopyConfig {
   /** per-machine health checks by repo path, over the repo's own
    *  `.canopy/health.json` (core/repohealth) */
   health: Record<string, RepoCheckDef[]>;
+  /** the capacity governor's thresholds and observed dollar figure (FR-036) */
+  capacity: CapacitySettings;
   /** the repos archived in canopy, by path like agents */
   archived: string[];
   /** the repos starred in canopy, by path like agents */
@@ -822,6 +825,11 @@ export const HARNESSES = ["claude", "codex"] as const;
 export type Harness = (typeof HARNESSES)[number];
 
 export const isHarness = (v: unknown): v is Harness => typeof v === "string" && (HARNESSES as readonly string[]).includes(v);
+
+/** who may go first when the plan's window runs low (FR-036); plan 2 puts
+ *  one on every start, this plan only defines it */
+export const PRIORITIES = ["interactive", "normal", "low"] as const;
+export type Priority = (typeof PRIORITIES)[number];
 
 /** Model aliases the claude CLI takes; "default" leaves the choice to it.
  *  Codex takes any model name (core/harness has the rule). */
@@ -1025,6 +1033,9 @@ export type RunStatus =
   | "idle"
   | "done"
   | "failed"
+  /** the harness reported the plan's usage limit: the work is sound and
+   *  waits for the reset (FR-036); `error` is the limit text */
+  | "limited"
   | "stopped";
 
 export interface RunTool {
@@ -1250,6 +1261,9 @@ export interface Run {
   result?: RunResult;
   /** why a failed run failed */
   error?: string;
+  /** the last usage limit the harness reported on this run, as it said it;
+   *  a job ends `limited` on it, a chat stays idle and carries it (FR-036) */
+  limited?: { at: number; text: string };
   /** a stage run that failed because the stage runner went away under it,
    *  as a hello confirmed; a flow parks on this, never on the error's words,
    *  which carry the stage's own stderr. Also set when the runner refused
@@ -1646,6 +1660,8 @@ export type ServerEvent =
   | { type: "sweep" }
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
+  /** each backend's usage windows, the reported hit and held starts */
+  | { type: "capacity"; capacity: CapacityInfo }
   | { type: "kit"; kit: KitInfo }
   | { type: "secrets"; info: SecretsInfo }
   /** keep awake, whole, whenever its mode or hold changes (core/awake) */
@@ -2429,10 +2445,10 @@ export interface Flow {
   budget?: FlowBudget;
   /** agent step runs started and working time so far */
   spent?: { runs: number; workMs: number };
-  /** set while the flow is parked because its budget is spent, or because
-   *  the stage runner was not answering when its step was to run; either
-   *  way continuing runs the step again */
-  parkedFor?: "budget" | "stage";
+  /** set while the flow is parked because its budget is spent, the stage
+   *  runner was not answering, or its step's run ended `limited`; continuing
+   *  runs the step again */
+  parkedFor?: "budget" | "stage" | "capacity";
   /** with `parkedFor` "stage": it was the step's check, not its run, that
    *  found the stage runner away, so continuing runs the check alone */
   stageCheck?: boolean;
@@ -3291,6 +3307,23 @@ export interface HealthCheck {
 /** `GET /api/health` */
 export interface HealthInfo {
   checks: HealthCheck[];
+}
+
+/** a start a pump holds for capacity (plan 2 fills it; this plan serves none) */
+export interface HeldStart {
+  id: string;
+  what: string;
+  repoId: string;
+  priority: Priority;
+  why: string;
+  since: number;
+}
+
+/** `GET /api/capacity` and the `capacity` event */
+export interface CapacityInfo {
+  capacity: Capacity[];
+  held: HeldStart[];
+  settings: CapacitySettings;
 }
 
 /** What a repo's health check looks at (core/repohealth). */

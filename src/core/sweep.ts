@@ -176,7 +176,7 @@ function ago(ms: number): string {
   return h < 48 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
+const ENDED = new Set<Run["status"]>(["done", "failed", "limited", "stopped"]);
 
 /**
  * The things idle past their kind's span, sorted by kind and then oldest

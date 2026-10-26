@@ -96,6 +96,10 @@ describe("runNotice", () => {
   test("an end is a channel line with its outcome or its error", () => {
     expect(runNotice(run({ status: "done", outcome: "changed" }), "working", "canopy")).toEqual({ to: "channel", text: "canopy: commit done, changed" });
     expect(runNotice(run({ status: "failed", error: "boom" }), "working", "canopy")?.text).toBe("canopy: commit failed: boom");
+    expect(runNotice(run({ status: "limited", error: "usage limit reached" }), "working", "canopy")).toEqual({
+      to: "channel",
+      text: "canopy: commit limited: usage limit reached",
+    });
     expect(runNotice(run({ status: "stopped" }), "done", "canopy")).toBeNull();
   });
   test("working and a chat between turns say nothing", () => {

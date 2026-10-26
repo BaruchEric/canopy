@@ -52,7 +52,7 @@ import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -765,6 +765,9 @@ export interface CanopyState {
   /** each backend's health checks, by backend name; an older backend that
    *  has none is missing (server/health) */
   health: Record<string, HealthCheck[]>;
+  /** each backend's usage windows and held starts; an older backend that
+   *  has no capacity route is missing (server/capacity) */
+  capacity: Record<string, CapacityInfo>;
   /** each backend's kit: the machines it reaches and their skills (server/kit) */
   kit: Record<string, KitInfo>;
   /** each backend's branch runs and landing queue (server/landing); an
@@ -1154,6 +1157,8 @@ export interface CanopyState {
   resumeSwept: (runId: string) => Promise<void>;
   /** reads one backend's health checks, home by default */
   loadHealth: (backend?: string) => Promise<void>;
+  /** reads one backend's capacity, home by default; an older backend has none */
+  loadCapacity: (backend?: string) => Promise<void>;
   /** reads one backend's kit, home by default */
   loadKit: (backend?: string) => Promise<void>;
   /** reads one backend's landing queue, home by default */
@@ -1688,6 +1693,8 @@ let sweepEvents = 0;
 let sweepPicks = 0;
 /* and each backend's health events, the same way */
 const healthEvents = new Map<string, number>();
+/* and each backend's capacity events, so a list read while events land passes over them */
+const capacityEvents = new Map<string, number>();
 /* and each backend's kit events, the same way */
 const kitEvents = new Map<string, number>();
 /* and each backend's landing events */
@@ -1866,6 +1873,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadSprouts(b);
   void get().loadRanger(b);
   void get().loadHealth(b);
+  void get().loadCapacity(b);
   void get().loadKit(b);
   void get().loadLanding(b);
   void get().loadPrs(b);
@@ -2061,6 +2069,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   sweep: null,
   sweepEnded: [],
   health: {},
+  capacity: {},
   kit: {},
   landing: {},
   prs: {},
@@ -2276,6 +2285,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRanger();
     if (signedIn(home)) void get().loadSweep();
     void get().loadHealth();
+    void get().loadCapacity();
     void get().loadKit();
     void get().loadLanding();
     void get().loadPrs();
@@ -2439,6 +2449,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadSprouts(name);
     void get().loadRanger(name);
     void get().loadHealth(name);
+    void get().loadCapacity(name);
     void get().loadKit(name);
     void get().loadLanding(name);
     void get().loadPrs(name);
@@ -2483,6 +2494,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     sproutLoads.set(name, (sproutLoads.get(name) ?? 0) + 1);
     // a load still on its way for it lands nothing
     connecting.set(name, (connecting.get(name) ?? 0) + 1);
+    capacityEvents.set(name, (capacityEvents.get(name) ?? 0) + 1);
     const mine = mineOf(name);
     const not = <T>(idOf: (t: T) => string) => (t: T) => !mine(idOf(t));
     const terms = s.terms.filter(not((t: TermTab) => t.id));
@@ -2497,6 +2509,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _awake, ...awake } = s.awake;
     const { [name]: _health, ...health } = s.health;
+    const { [name]: _capacity, ...capacity } = s.capacity;
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
     const { [name]: _prs, ...prs } = s.prs;
@@ -2528,6 +2541,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       rangers,
       awake,
       health,
+      capacity,
       kit,
       landing,
       prs,
@@ -3067,6 +3081,12 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ health: { ...st.health, [b]: ev.checks } }));
       return;
     }
+    if (ev.type === "capacity") {
+      if (!isShown(get(), b)) return;
+      capacityEvents.set(b, (capacityEvents.get(b) ?? 0) + 1);
+      set((st) => ({ capacity: { ...st.capacity, [b]: ev.capacity } }));
+      return;
+    }
     if (ev.type === "advice") {
       adviceEvents += 1;
       set({ advice: ev.advice });
@@ -3445,6 +3465,16 @@ export const useStore = create<CanopyState>((set, get) => ({
       if ((healthEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ health: { ...s.health, [b]: checks } }));
     } catch {
       // an older backend has no health; nothing shows for it
+    }
+  },
+  loadCapacity: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = capacityEvents.get(b) ?? 0;
+    try {
+      const capacity = await api.capacity(b);
+      if ((capacityEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ capacity: { ...s.capacity, [b]: capacity } }));
+    } catch {
+      // an older backend has no capacity route; it remains out of the chip
     }
   },
   loadKit: async (backend) => {

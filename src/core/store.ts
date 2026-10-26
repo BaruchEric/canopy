@@ -21,6 +21,7 @@ import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } fr
 import { normalizeRanger } from "./ranger";
 import { normalizeSweep } from "./sweep";
 import { LIBRARY_SYNC_MODES } from "./libsync";
+import { normalizeCapacity } from "./capacity";
 import {
   AWAKE_MODES,
   DEFAULT_LAUNCH,
@@ -64,6 +65,7 @@ const defaults = (): CanopyConfig => ({
   launchers: {},
   tasks: {},
   health: {},
+  capacity: normalizeCapacity(undefined),
   archived: [],
   favorites: [],
   fetch: true,
@@ -185,6 +187,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     launchers: normalizeLaunchers(cfg.launchers),
     tasks: normalizeTasks(cfg.tasks),
     health: normalizeHealth(cfg.health),
+    capacity: normalizeCapacity(cfg.capacity),
     archived: paths(cfg.archived),
     favorites: paths(cfg.favorites),
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
