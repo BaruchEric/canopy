@@ -14,7 +14,7 @@
 // may tune the set in .canopy/scenarios.json. This file is pure and
 // browser-safe: no node or Bun imports, so the UI may import it.
 
-import { GATE_NAME } from "./gates";
+import { GATE_NAME } from "./gatename";
 import { frontmatter } from "./workflow";
 
 export const SCENARIOS_FILE = ".canopy/scenarios.json";
