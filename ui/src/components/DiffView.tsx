@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { anchorOf, noteOn, parseDiff, type DiffLine, type Note } from "../reviewnotes";
 import { useStore } from "../store";
+import { useMentions } from "./Mentions";
 
 /** where a diff's notes belong: the repo, the file, and "working tree" or
  *  the commit it was read from */
@@ -95,6 +96,9 @@ export function NotedLines({
   const [editing, setEditing] = useState<number | null>(null);
   const [draft, setDraft] = useState("");
   const gutters = useRef(new Map<number, HTMLButtonElement>());
+  // one box is open at a time, so one ref serves every line
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  const mentions = useMentions({ box: noteBox, text: draft, setText: setDraft, repoId: at.repoId, side: "below" });
 
   // the focus goes back to the line's button, so the keyboard keeps its place
   const refocus = (i: number) => requestAnimationFrame(() => gutters.current.get(i)?.focus());
@@ -167,14 +171,18 @@ export function NotedLines({
             {editing === i && (
               <span className="dl-edit">
                 <textarea
+                  ref={noteBox}
                   autoFocus
                   rows={2}
                   value={draft}
                   placeholder="what the agent should do about this line"
                   aria-label={`Note on ${where}`}
                   onChange={(e) => setDraft(e.target.value)}
-                  onKeyDown={(e) => keys(e, i, l)}
+                  onKeyDown={(e) => {
+                    if (!mentions.onKeyDown(e)) keys(e, i, l);
+                  }}
                 />
+                {mentions.menu}
                 <span className="dl-edit-row">
                   <button type="button" className="mini strong" disabled={!draft.trim()} onClick={() => save(i, l)}>
                     save

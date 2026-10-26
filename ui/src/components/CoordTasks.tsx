@@ -1,10 +1,11 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { isSeedId } from "../../../src/core/sprout";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
 import { canStartCards, cardCounts, cardStatus, parentCard, type CoordEdit, type CoordView } from "../coord";
 import { ciChip, prLine } from "../prs";
 import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
+import { useMentions } from "./Mentions";
 
 /** a run-sheet write: its error shows in the sheet, and `propagate` throws
  *  it on so the caller can keep its form open */
@@ -169,6 +170,10 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
   const [repo, setRepo] = useState(task.repo);
   const [action, setAction] = useState<CoordTask["action"]>(task.action);
   const [busy, setBusy] = useState(false);
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  // the card's repo's files at @; the child run's harness is the repo's
+  // routing's, not known here, so no commands
+  const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo, side: "below" });
 
   const change: CoordEdit = {
     ...(title.trim() !== task.title ? { title: title.trim() } : {}),
@@ -221,6 +226,7 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
         </select>
       </div>
       <textarea
+        ref={noteBox}
         className="plan-note"
         rows={5}
         value={note}
@@ -228,9 +234,11 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
         aria-label="What the run is told"
         onChange={(e) => setNote(e.target.value)}
         onKeyDown={(e) => {
+          if (mentions.onKeyDown(e)) return;
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void save();
         }}
       />
+      {mentions.menu}
       <div className="coord-actions">
         <span className="spacer" />
         <button type="button" className="mini" onClick={onDone}>

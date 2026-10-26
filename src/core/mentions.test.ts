@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BUILTIN_MENTIONS, enabledPlugins, firstLine, frontmatter, mentionsOf, parseScan, scanMentions, sortMentions } from "./mentions";
+import { BUILTIN_MENTIONS, builtinMentions, enabledPlugins, firstLine, frontmatter, mentionsOf, noteCliCommands, parseScan, scanMentions, sortMentions } from "./mentions";
 
 describe("frontmatter", () => {
   test("plain, quoted and folded values", () => {
@@ -159,5 +159,19 @@ describe("scanMentions", () => {
 
   test("a repo that is not there", async () => {
     await expect(scanMentions(join(scratch, "nope"), home)).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("a run's init names the built-ins the CLI has; the rest are dropped", async () => {
+    const names = BUILTIN_MENTIONS.map((w) => w.name);
+    noteCliCommands("claude", names);
+    expect(builtinMentions().map((w) => w.name)).toEqual(names);
+    noteCliCommands("claude", ["compact", "clear", "model", "zq"]);
+    expect(builtinMentions().map((w) => w.name)).toEqual(["compact", "clear"]);
+    // Codex's list says nothing about Claude's
+    noteCliCommands("codex", []);
+    const words = await scanMentions(repo, home);
+    expect(words.filter((w) => w.kind === "builtin").map((w) => w.name)).toEqual(["clear", "compact"]);
+    noteCliCommands("claude", names);
+    expect(builtinMentions()).toEqual([...BUILTIN_MENTIONS]);
   });
 });

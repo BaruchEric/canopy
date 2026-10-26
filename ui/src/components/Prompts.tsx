@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { explainPrompt, FLAG_WORDS, type Explained } from "../../../src/core/explain";
 import { rememberOffer } from "../../../src/core/offer";
@@ -8,6 +8,7 @@ import type { ScopeOffer } from "../inbox";
 import { agentWord, reviseAnswer } from "../runs";
 import { INBOX_TEXT } from "../settings";
 import { useStore } from "../store";
+import { useMentions } from "./Mentions";
 
 /* ---------- prompts: permission and questions, a run's and the inbox's ---------- */
 
@@ -248,6 +249,7 @@ export function PermissionForm({
 export function RunPromptForm({
   prompt,
   harness,
+  repoId,
   onAnswer,
   root,
   scopes,
@@ -255,6 +257,8 @@ export function RunPromptForm({
   prompt: RunPrompt;
   /** whose prompt it is, for its heading */
   harness: Harness;
+  /** the run's repo, whose files a revise note may name at @ */
+  repoId?: string;
   onAnswer: (a: RunAnswer, promptId: string) => void;
   /** the run's project folder, for "outside the project" */
   root?: string;
@@ -286,6 +290,7 @@ export function RunPromptForm({
         plan={prompt.plan}
         auto={prompt.auto}
         who={agentWord(harness)}
+        {...(repoId ? { repoId } : {})}
         onApprove={(auto) => onAnswer({ kind: "approve", auto }, id)}
         onRevise={(note) => onAnswer(reviseAnswer(note), id)}
         onDecline={() => onAnswer({ kind: "deny" }, id)}
@@ -305,6 +310,7 @@ export function ProposalForm({
   plan,
   auto,
   who,
+  repoId,
   onApprove,
   onRevise,
   onDecline,
@@ -314,12 +320,16 @@ export function ProposalForm({
   auto: boolean;
   /** the agent's word, for the heading */
   who: string;
+  /** the repo whose files the note may name at @ */
+  repoId?: string;
   onApprove: (auto: boolean) => void;
   onRevise: (note: string) => void;
   onDecline: () => void;
 }) {
   const [note, setNote] = useState("");
   const noteId = useId();
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId, side: "below" });
   return (
     <div className="ask proposal-form">
       <div className="eyebrow">{who} proposes a plan</div>
@@ -341,12 +351,14 @@ export function ProposalForm({
       </label>
       <textarea
         id={noteId}
+        ref={noteBox}
         className="other proposal-note"
         rows={3}
         placeholder="a note for the agent, which plans again"
         value={note}
         onChange={(e) => setNote(e.target.value)}
         onKeyDown={(e) => {
+          if (mentions.onKeyDown(e)) return;
           // a note runs to several lines, so only Cmd/Ctrl+Enter sends it
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
@@ -354,6 +366,7 @@ export function ProposalForm({
           }
         }}
       />
+      {mentions.menu}
       <div className="ask-row proposal-row">
         <button type="button" className="mini" title="Send the plan back with your note (⌘↩)" onClick={() => onRevise(note)}>
           revise

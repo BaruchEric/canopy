@@ -448,6 +448,7 @@ export function Timeline({
           key={run.prompt.id}
           prompt={run.prompt}
           harness={harness}
+          repoId={run.repoId}
           onAnswer={onAnswer}
           {...(repo && !repo.host ? { root: repo.path } : {})}
           scopes={scopeOffers({ ...(run.flowStep ? { flowStep: run.flowStep } : {}), repo: repo?.name ?? idText(run.repoId), ...(repo && !repo.host ? { repoPath: repo.path } : {}) })}
@@ -580,6 +581,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
           repoId={run.repoId}
           harness={harness}
           ready={run.status === "idle"}
+          first={run.steps.length === 0}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           hidden={cardsOnly}
           {...(draft ? { draft } : {})}
@@ -772,6 +774,7 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
           repoId={run.repoId}
           harness={harnessOf(run)}
           ready={run.status === "idle"}
+          first={run.steps.length === 0}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           quiet
           {...(draft ? { draft } : {})}
@@ -792,6 +795,7 @@ function Composer({
   draft = "",
   quiet = false,
   hidden = false,
+  first = false,
 }: {
   /** the agent's name, for the box's placeholder while it replies */
   who: string;
@@ -807,12 +811,15 @@ function Composer({
   quiet?: boolean;
   /** out of sight but kept, with what was typed (a coordinator's cards view) */
   hidden?: boolean;
+  /** nothing has been said yet: this message starts the agent inside
+   *  canopy's prompt, where the CLI reads no slash command */
+  first?: boolean;
 }) {
   const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const can = ready && !busy && text.trim().length > 0;
-  const mentions = useMentions({ box, text, setText, repoId, harness });
+  const mentions = useMentions({ box, text, setText, repoId, harness, bare: !first });
 
   // Back to the box as soon as the agent has answered, unless it is out of
   // sight. Coming back into sight is no answer, so it takes no focus: on a

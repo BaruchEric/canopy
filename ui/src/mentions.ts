@@ -22,11 +22,22 @@ export const MENU_CAP = 12;
 
 const blank = (c: string | undefined): boolean => c === undefined || /\s/.test(c);
 
-/** The `/word`, `$word` or `@path` the caret is in, if any. `/` opens a
- *  command only as the message's first character, as the CLI reads it, and
- *  only for Claude Code; `$` names a Codex skill at the start of any word;
- *  `@` a file at the start of any word, for either. */
-export function mentionAt(text: string, caret: number, harness: Harness): MentionAt | null {
+/** Which sigils a box offers. `@` names a file at the start of any word,
+ *  for either agent; `$` a Codex skill, at the start of any word too; `/`
+ *  a Claude Code command, which the CLI reads only as a message's first
+ *  character, so only a box whose text goes to the agent as a message of
+ *  its own (`bare`) offers it. A note is folded into canopy's prompt, and
+ *  a chat's first message too, so neither does. */
+export function sigilsFor(harness: Harness | null, bare = false): Sigil[] {
+  const out: Sigil[] = ["@"];
+  if (harness === "codex") out.push("$");
+  if (harness === "claude" && bare) out.push("/");
+  return out;
+}
+
+/** The `/word`, `$word` or `@path` the caret is in, if any, among the
+ *  `sigils` the box offers; `/` only as the first character. */
+export function mentionAt(text: string, caret: number, sigils: readonly Sigil[]): MentionAt | null {
   const at = Math.max(0, Math.min(caret, text.length));
   let start = at;
   while (start > 0 && !blank(text[start - 1])) start--;
@@ -34,10 +45,10 @@ export function mentionAt(text: string, caret: number, harness: Harness): Mentio
   while (end < text.length && !blank(text[end])) end++;
   const sigil = text[start];
   if (sigil === "/") {
-    if (start !== 0 || harness !== "claude") return null;
+    if (start !== 0 || !sigils.includes("/")) return null;
   } else if (sigil === "$") {
-    if (harness !== "codex") return null;
-  } else if (sigil !== "@") {
+    if (!sigils.includes("$")) return null;
+  } else if (sigil !== "@" || !sigils.includes("@")) {
     return null;
   }
   return { sigil, start, end, query: text.slice(start + 1, at) };

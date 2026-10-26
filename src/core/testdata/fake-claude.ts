@@ -71,7 +71,8 @@ const sys = (subtype: string, extra: Record<string, unknown>) => out({ type: "sy
 const tasks = (list: { task_id: string; task_type: string }[]) => sys("background_tasks_changed", { tasks: list });
 
 record({ argv: process.argv.slice(2) });
-out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd() });
+// the CLI's command list, less one built-in canopy offers (security-review)
+out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd(), slash_commands: ["compact", "clear", "init", "code-review", "simplify", "model", "rename"] });
 
 let turns = 0;
 /** the modes that start one background Agent and send a result while it runs */

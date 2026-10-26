@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { Harness, Mention } from "../../../src/core/types";
 import { api } from "../api";
-import { applyPick, mentionAt, rankFiles, rankWords, withFolders, type MentionAt } from "../mentions";
+import { applyPick, mentionAt, rankFiles, rankWords, sigilsFor, withFolders, type MentionAt } from "../mentions";
 
 /** how long one repo's lists are good for before the next open reads again */
 const WORDS_TTL = 30_000;
@@ -41,7 +41,7 @@ interface Row {
 
 const tagOf = (w: Mention): string => w.from.replace(":", " ");
 
-const rowsOf = (at: MentionAt, list: readonly Mention[], paths: readonly string[], harness: Harness): Row[] =>
+const rowsOf = (at: MentionAt, list: readonly Mention[], paths: readonly string[], harness: Harness | null): Row[] =>
   at.sigil === "@"
     ? rankFiles(paths, at.query).map((p) => ({ value: p, hint: "", tag: p.endsWith("/") ? "folder" : "" }))
     : rankWords(
@@ -56,10 +56,10 @@ const sameAt = (a: MentionAt | null, b: MentionAt | null): boolean =>
 
 /**
  * The menu for one textarea. `text` and `setText` are the box's state;
- * `repoId` says whose files and commands; `harness` which agent's words.
- * Wrap the box and the menu in `.mention-host` (the menu sits in the flow:
- * before the box for `above`, after it for `below`), call `onKeyDown` first
- * in the box's handler and stop when it answers true.
+ * `repoId` says whose files and commands; `harness` which agent's words,
+ * and none means files alone. Draw the menu in the flow beside the box
+ * (before it for `above`, after it for `below`), call `onKeyDown` first in
+ * the box's handler and stop when it answers true.
  */
 export function useMentions({
   box,
@@ -67,13 +67,17 @@ export function useMentions({
   setText,
   repoId,
   harness,
+  bare = false,
   side = "above",
 }: {
   box: RefObject<HTMLTextAreaElement | null>;
   text: string;
   setText: (text: string) => void;
   repoId: string | undefined;
-  harness: Harness;
+  harness?: Harness;
+  /** the text goes to the agent as a message of its own, so `/` runs a
+   *  command; a note folded into canopy's prompt is not */
+  bare?: boolean;
   /** where the menu sits: over the box (a chat's, at the bottom) or under
    *  it (a note's); the caller places it in the DOM on that side */
   side?: "above" | "below";
@@ -85,19 +89,26 @@ export function useMentions({
   const [pick, setPick] = useState(0);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const sigils = useMemo(() => sigilsFor(harness ?? null, bare), [harness, bare]);
+
+  // the box itself, once it is there: a note's mounts when its line or
+  // element is picked, after the hook first ran
+  const [el, setEl] = useState<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    if (box.current !== el) setEl(box.current);
+  });
 
   // where the caret stands: after every change of the text, and after it
   // moves on its own (arrows, a click)
   const place = useCallback(() => {
-    const el = box.current;
-    const next = el && repoId ? mentionAt(el.value, el.selectionStart ?? el.value.length, harness) : null;
+    const b = box.current;
+    const next = b && repoId ? mentionAt(b.value, b.selectionStart ?? b.value.length, sigils) : null;
     // the same word stays the same object, so a key's own keyup (an arrow
     // moving the pick) changes nothing below
     setAt((prev) => (sameAt(prev, next) ? prev : next));
-  }, [box, repoId, harness]);
+  }, [box, repoId, sigils]);
   useEffect(place, [place, text]);
   useEffect(() => {
-    const el = box.current;
     if (!el) return;
     const focus = () => setFocused(true);
     const blur = () => setFocused(false);
@@ -112,7 +123,7 @@ export function useMentions({
       el.removeEventListener("focus", focus);
       el.removeEventListener("blur", blur);
     };
-  }, [box, place]);
+  }, [el, place]);
 
   // the lists, read when a sigil first opens and held per repo
   useEffect(() => {
@@ -139,7 +150,7 @@ export function useMentions({
     };
   }, [sigil, repoId]);
 
-  const rows = useMemo(() => (at ? rowsOf(at, wordList ?? [], fileList ?? [], harness) : []), [at, wordList, fileList, harness]);
+  const rows = useMemo(() => (at ? rowsOf(at, wordList ?? [], fileList ?? [], harness ?? null) : []), [at, wordList, fileList, harness]);
   // back to the first row when the rows change, not when they are recomputed
   const rowsKey = rows.map((r) => r.value).join("\n");
   useEffect(() => setPick(0), [rowsKey]);

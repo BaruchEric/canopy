@@ -254,13 +254,35 @@ export async function scanMentions(repoPath: string, home = ""): Promise<Mention
     const p = await onHost(host, pluginCommand(plugins), { timeoutMs: 30_000 });
     if (p.code === 0) words.push(...mentionsOf(parseScan(p.stdout)));
   }
-  return sortMentions([...words, ...BUILTIN_MENTIONS]);
+  return sortMentions([...words, ...builtinMentions()]);
 }
 
 /** how long one repo's list is good for */
 export const MENTIONS_TTL = 20_000;
 
 const cache = new Map<string, { at: number; got: Promise<Mention[]> }>();
+
+/** the CLI's own command names, as a run's init message last listed them */
+const cliCommands = new Map<Harness, ReadonlySet<string>>();
+
+/** What a run's init message listed as the CLI's commands: from then on
+ *  the built-ins offered are those among them, and the held lists go when
+ *  the set changed. The list itself is not taken as the source, since it
+ *  mixes in the terminal's own (/model, /rename) and comes only once a
+ *  turn has begun. */
+export function noteCliCommands(harness: Harness, names: readonly string[]): void {
+  const next = new Set(names);
+  const prev = cliCommands.get(harness);
+  if (prev && prev.size === next.size && [...next].every((n) => prev.has(n))) return;
+  cliCommands.set(harness, next);
+  cache.clear();
+}
+
+/** The built-ins to offer: all of them until a run's init has said which
+ *  the CLI has, then those it named. */
+export function builtinMentions(): Mention[] {
+  return BUILTIN_MENTIONS.filter((w) => cliCommands.get(w.harness)?.has(w.name) ?? true);
+}
 
 /** `scanMentions`, held for `MENTIONS_TTL` per repo so a menu that opens on
  *  every keystroke reads the folders once. A failed read is not held. */

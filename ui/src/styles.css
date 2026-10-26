@@ -5760,6 +5760,8 @@ a.sweep-title:hover {
   margin: 0;
   padding: 4px 6px;
   list-style: none;
+  /* a diff's note box sits in a pre */
+  white-space: normal;
   max-height: min(320px, 40vh);
   overflow-y: auto;
   overscroll-behavior: contain;

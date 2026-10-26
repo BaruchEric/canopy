@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { repoFacts } from "../../../src/core/actions";
@@ -9,6 +9,7 @@ import { agentFor, idText, pickedIds, useStore } from "../store";
 import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
 import { AGENT_NAME, harnessOf } from "../runs";
+import { useMentions } from "./Mentions";
 import { Timeline } from "./RunSheet";
 import { PopGear } from "./PopGrip";
 
@@ -34,6 +35,8 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo.id, harness: agent.harness, side: "below" });
   if (!entry || !entry.ok) {
     return (
       <>
@@ -85,14 +88,19 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
           ))}
         </ol>
         <textarea
+          ref={noteBox}
           className="plan-note"
           rows={w.noteRequired ? 5 : 3}
           placeholder={w.notePlaceholder}
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go(); }}
+          onKeyDown={(e) => {
+            if (mentions.onKeyDown(e)) return;
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go();
+          }}
           aria-label={w.noteRequired ? "What the agent should do" : "Note for the agent"}
         />
+        {mentions.menu}
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">

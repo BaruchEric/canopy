@@ -5,6 +5,7 @@ import { api } from "../api";
 import { backendOf, isHome } from "../registry";
 import { tasksOf, useStore } from "../store";
 import { devTask, quietPreview } from "../tasks";
+import { useMentions } from "./Mentions";
 import { Section, useSectionClosed } from "./Surface";
 import { TermGrip } from "./TermDock";
 import { flipMode, type SurfaceMode } from "../surface";
@@ -182,6 +183,8 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const picking = mode === "pick";
   const [pending, setPending] = useState<Pending | null>(null);
   const [pickNote, setPickNote] = useState("");
+  // the note names files at @; the repo's agent is routed later, so no commands
+  const pickMentions = useMentions({ box: noteBox, text: pickNote, setText: setPickNote, repoId: repo.id, side: "below" });
   const [intent, setIntent] = useState<Intent>("change");
   // notes left on elements and pictures, sent together (FR-027, FR-029)
   const [notes, setNotes] = useState<Annotation[]>([]);
@@ -745,12 +748,14 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                             value={pickNote}
                             onChange={(e) => setPickNote(e.target.value)}
                             onKeyDown={(e) => {
+                              if (pickMentions.onKeyDown(e)) return;
                               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                                 e.preventDefault();
                                 addPick(e.shiftKey ? "send" : "pick");
                               } else if (e.key === "Escape") cancelPending();
                             }}
                           />
+                          {pickMentions.menu}
                           <div className="preview-pick-row">
                             <button type="submit" className="mini" disabled={!pickNote.trim() || pickBusy} title="Add the note and pick the next element (Ctrl+Enter)">
                               add

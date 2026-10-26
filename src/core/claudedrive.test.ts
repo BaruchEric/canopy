@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeDriver, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
+import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
 import { DEFAULT_AGENT } from "./types";
 import { RunCtx, type DriveRun } from "./driver";
@@ -628,4 +629,15 @@ test("a subagent's steps carry their Agent step as parent", async () => {
   expect(agentStep?.parent).toBeUndefined();
   d.ctx.answer(w.prompt?.id ?? "", { kind: "allow" });
   await d.until(d.done, "the end");
+});
+
+test("the init's slash commands say which built-ins the CLI has", async () => {
+  const d = await drive("chat", "hello");
+  await d.until((r) => r.status === "idle", "the first reply");
+  const names = builtinMentions().map((w) => w.name);
+  expect(names).toContain("compact");
+  expect(names).not.toContain("security-review");
+  d.ctx.ending = true;
+  d.driver.stop();
+  noteCliCommands("claude", BUILTIN_MENTIONS.map((w) => w.name));
 });

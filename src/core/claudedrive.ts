@@ -18,6 +18,7 @@ import { normalizeAgent } from "./agent";
 import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { agentArgs } from "./harness";
+import { noteCliCommands } from "./mentions";
 import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo } from "./types";
 import { TODO_TOOLS, todoCreated, todoUpdated, todoWritten } from "./todos";
 
@@ -332,7 +333,11 @@ export class ClaudeDriver implements RunDriver {
       await this.send(userMessage(message));
 
       for await (const m of lines(proc.stdout)) {
-        if (m["type"] === "system" && str(m, "subtype") === "init") this.model = str(m, "model") || this.model;
+        if (m["type"] === "system" && str(m, "subtype") === "init") {
+          this.model = str(m, "model") || this.model;
+          const cmds = m["slash_commands"];
+          if (Array.isArray(cmds)) noteCliCommands("claude", cmds.filter((c): c is string => typeof c === "string"));
+        }
         const session = str(m, "session_id");
         if (session && !this.sessionSeen) {
           this.sessionSeen = true;
