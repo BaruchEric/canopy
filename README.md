@@ -56,6 +56,8 @@ canopy helper [--backend URL]      # lend this machine's desktop openers to a sh
 canopy helper --pair [--code C]    # first get a helper token from the backend, then dial
 canopy auth login [--backend URL] [--code C]   # sign this CLI in to a backend
 canopy auth status | logout        # the mode and who you are | revoke this CLI's session
+canopy mcp                         # an MCP server on stdio: canopy's tools with $CANOPY_TOKEN's rights (claude mcp add canopy -- canopy mcp)
+canopy mcp tools                   # the tools that token holds
 canopy <any command> --token T     # send this caller token (default: the token file, else $CANOPY_TOKEN)
                                    # except canopy source: there --token is source add --forgejo's own token file
 canopy spec status [dir]           # every local repo against the shared repo spec
@@ -378,7 +380,7 @@ canopy library sync --accept mac               # let a held mass deletion throug
 
 ## Caller tokens
 
-Under `enforce`, every write to the API needs a caller token in `X-Canopy-Token`; in the default `log` mode a write without one is logged, not refused. Reads stay open. A page, the CLI and a helper get theirs by pairing: the asker shows a code, a page that is already signed in approves it from the inbox, and `canopy auth login` or `canopy helper --pair` writes the token to a 0600 file in the config dir. While nobody is signed in, the backend prints a one-time first code to its log, which the sign-in strip (or `--code`) takes in place of an approval. Shells and the ranger carry their own token as `$CANOPY_TOKEN`. `CANOPY_CALLERS=off|log|enforce` sets the mode; `log`, the default, counts what `enforce` would refuse and refuses nothing. `canopy auth status` and `GET /api/auth` show the count. See `docs/deploy.md`, "Caller tokens", for the rollout.
+Under `enforce`, every write to the API needs a caller token in `X-Canopy-Token`; in the default `log` mode a write without one is logged, not refused. Reads stay open. A page, the CLI and a helper get theirs by pairing: the asker shows a code, a page that is already signed in approves it from the inbox, and `canopy auth login` or `canopy helper --pair` writes the token to a 0600 file in the config dir. While nobody is signed in, the backend prints a one-time first code to its log, which the sign-in strip (or `--code`) takes in place of an approval. Shells and the ranger carry their own token as `$CANOPY_TOKEN`. `canopy mcp` exposes the tools that token allows to the agent in the shell, through `claude mcp add canopy -- canopy mcp` or the kit, which writes the entry on each backend machine. `CANOPY_CALLERS=off|log|enforce` sets the mode; `log`, the default, counts what `enforce` would refuse and refuses nothing. `canopy auth status` and `GET /api/auth` show the count. See `docs/deploy.md`, "Caller tokens", for the rollout.
 
 ## A public name
 

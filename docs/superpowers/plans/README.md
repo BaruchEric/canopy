@@ -7,7 +7,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 | [Scenario gates, plan 1: command scenarios in the landing queue](2026-10-26-scenario-gates-1.md) | planned | | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
 | [Scenario gates, plan 2: judge scenarios, the hold and the score](2026-10-26-scenario-gates-2.md) | planned | | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
 | [Capacity governor, plan 1: the probes, the model and the limited status](2026-10-26-capacity-governor-1.md) | planned | | [capacity governor](../specs/2026-10-25-capacity-governor-design.md) |
-| [Agent surface, plan 1: canopy mcp for shells and the ranger](2026-10-26-agent-surface-1.md) | planned | | [agent surface](../specs/2026-10-25-agent-surface-design.md) |
+| [Agent surface, plan 1: canopy mcp for shells and the ranger](2026-10-26-agent-surface-1.md) | in progress | | [agent surface](../specs/2026-10-25-agent-surface-design.md) |
 | [Work until merged, plan 1: issue intake from GitHub and Forgejo](2026-10-26-work-until-merged-1.md) | planned | | [work until merged](../specs/2026-10-25-work-until-merged-design.md) |
 | [Collision warnings: a live touched set per run and a chip when two overlap](2026-10-26-collision-warnings.md) | planned | | [collision warnings](../specs/2026-10-25-collision-warnings-design.md) |
 | [Best-of-N, plan 1: groups of one profile, a compare run and the winner lands](2026-10-26-best-of-n-1.md) | planned | | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |

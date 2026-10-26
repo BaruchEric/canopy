@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7.
+**Status:** implementation in progress 2026-10-26, based on main at 0fabbb3. Runtime and integration tests are in place; full verification and image validation pending. Deployment and interactive shell/ranger checks remain separate from local validation.
 
 **Goal:** `canopy mcp` is a stdio MCP server over canopy's API that acts with
 the token in its environment and offers the tools that token's rights allow;

@@ -511,14 +511,11 @@ services:
       - ${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds:${HOST_HOME:-/home/eric}/.local/share/canopy-coord/seeds
       # the secrets service's socket, shared with that service alone
       - secrets-sock:/run/canopy-secrets
+    # Refresh the MCP bundle without recreating the shells container.
     command:
-      - bun
-      - bin/canopy.ts
-      - ui
-      - ${DEV_ROOT:-/home/eric/dev}
-      - --port
-      - "7850"
-      - --no-open
+      - sh
+      - -c
+      - mkdir -p /config/bin && cp /app/dist/canopy-mcp.js /config/bin/canopy-mcp.js && exec bun bin/canopy.ts ui "${DEV_ROOT:-/home/eric/dev}" --port 7850 --no-open
     restart: unless-stopped
 
   # A Cloudflare Tunnel to canopy for a public name (canopy.beric.ca), for

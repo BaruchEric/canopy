@@ -42,10 +42,6 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coa
 `warm: N` in gates.json keeps prepared worktrees per repo so a branch run starts without `bun install`; a branch run may run the repo's dev task in its own worktree on allotted ports and preview it; a compose task runs per worktree under its own project name and is torn down on land or drop. canopy's own stack on the mini is refused.
 Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25).
 
-### FR-038 · The agent surface: `canopy mcp` and run tokens
-P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)
-`canopy mcp` is a stdio MCP server whose tools (status, runs, start a branch run, the queue, land, a work note, say, a wake, health) are filtered by the caller's kind; shells and the ranger use it with the tokens they have. A `run` caller kind, minted per run only when the profile turns it on and delivered through a 0600 `--mcp-config` file, lets a run start a child in its own repo (depth 2, three children) and post notes, and can never land, push, open a PR or answer a prompt.
-Spec: docs/superpowers/specs/2026-10-25-agent-surface-design.md (2026-10-25).
 
 ### FR-037 · A durable work ledger
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
@@ -126,6 +122,12 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-038 · The agent surface: `canopy mcp` and run tokens
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)
+`canopy mcp` is a stdio MCP server whose tools (status, runs, start a branch run, the queue, land, a work note, say, a wake, health) are filtered by the caller's kind; shells and the ranger use it with the tokens they have. A `run` caller kind, minted per run only when the profile turns it on and delivered through a 0600 `--mcp-config` file, lets a run start a child in its own repo (depth 2, three children) and post notes, and can never land, push, open a PR or answer a prompt.
+Spec: docs/superpowers/specs/2026-10-25-agent-surface-design.md (2026-10-25).
+Plan 1 implemented locally 2026-10-26: eight MCP tools, CLI, kit entry, shells launcher and ranger brief. Deployment and interactive agent checks pending; plans 2 and 3 remain open.
 
 ### FR-016 · One Library across backends
 P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)

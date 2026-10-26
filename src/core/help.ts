@@ -83,6 +83,8 @@ usage:
   canopy health rm <repo> <name>     take one of canopy's checks away
   canopy kit [status|apply]          the skills every agent has on every machine, and linking them
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
+  canopy mcp                         an MCP server on stdio for the agent that started it: canopy's tools with the rights of $CANOPY_TOKEN
+  canopy mcp tools                   the tools that token holds, one per line
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
   canopy pr <run> [--draft]          push a ready branch run and open a PR on GitHub in place of landing it

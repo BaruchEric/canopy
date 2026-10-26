@@ -3,7 +3,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { onHost } from "../core/exec";
-import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf, wantLink } from "../core/kit";
+import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf, wantLink, withCanopyServer } from "../core/kit";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp, seeTools } from "../core/kitscan";
 import type {
@@ -110,7 +110,7 @@ export class KitHub {
     }
     const r = parseKit(raw);
     if ("errors" in r) throw new KitError(`kit.json: ${r.errors.join("; ")}`, 500);
-    return r.kit;
+    return withCanopyServer(r.kit);
   }
 
   scan(): Promise<KitInfo> {

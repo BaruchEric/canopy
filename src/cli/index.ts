@@ -50,6 +50,7 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { kitCommand } from "./kit";
+import { mcpCommand } from "./mcp";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
@@ -105,6 +106,7 @@ const COMMANDS = new Set([
   "awake",
   "health",
   "kit",
+  "mcp",
   "land",
   "queue",
   "pr",
@@ -850,6 +852,8 @@ export async function main(argv: string[]): Promise<void> {
       return healthCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
+    case "mcp":
+      return mcpCommand(args, { fail });
     case "auth":
       return authCommand(args, { fail });
     case "land":

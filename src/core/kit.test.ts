@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildEntry, cellsOf, expandHome, hasSecrets, installLine, maskEntry, mcpCells, mcpDefOf, mcpHash, needsSudo, parseKit, parseMcpValue, planKit, planMcp, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, toolCells, wanted } from "./kit";
+import { buildEntry, cellsOf, expandHome, hasSecrets, installLine, maskEntry, mcpCells, mcpDefOf, mcpHash, needsSudo, parseKit, parseMcpValue, planKit, planMcp, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, toolCells, wanted, withCanopyServer } from "./kit";
 import { codexTable } from "./kitmcp";
 import { parseMcpScan } from "./kitscan";
 import type { KitAction, KitCell, KitManifest, KitMcpCtx, KitMcpOwned, KitSeen, KitSeenTarget, SecretKeyState, SecretsInfo } from "./types";
@@ -28,6 +28,18 @@ function kit(): KitManifest {
   if ("errors" in r) throw new Error(r.errors.join("; "));
   return r.kit;
 }
+
+test("the kit adds canopy for backend machines and preserves an explicit override", () => {
+  const k = withCanopyServer(kit());
+  expect(k.mcp).toEqual([{ name: "canopy", command: "canopy", args: ["mcp"], url: null, env: {}, headers: {}, agents: null, machines: ["mac", "mini"], options: {} }]);
+  const server = k.mcp[0];
+  if (!server) throw new Error("missing canopy server");
+  expect(buildEntry(server, "claude", "claude-json", "/h", {})).toEqual({ entry: { type: "stdio", command: "canopy", args: ["mcp"] } });
+  expect(buildEntry(server, "codex", "codex-toml", "/h", {})).toEqual({ entry: { command: "canopy", args: ["mcp"] } });
+  const own = parseKit({ ...RAW, mcp: { canopy: { command: "~/.bun/bin/canopy", args: ["mcp"], machines: ["mac"] } } });
+  if ("errors" in own) throw new Error(own.errors.join("; "));
+  expect(withCanopyServer(own.kit).mcp.map((s) => [s.name, s.command, s.machines])).toEqual([["canopy", "~/.bun/bin/canopy", ["mac"]]]);
+});
 
 const tgt = (agent: string, dir: string, over: Partial<KitSeenTarget> = {}): KitSeenTarget => ({
   agent, dir, exists: true, parentExists: true, entries: [], placed: {}, ...over,
