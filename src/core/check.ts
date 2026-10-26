@@ -10,6 +10,7 @@ import { exec, firstLine, git, onHost, type ExecResult } from "./exec";
 import type { CheckResult } from "./flow";
 import { GATES_FILE, gatesScript, packageGates, parseGatesFile, type Gate, type Gates } from "./gates";
 import { parseLocator, shellQuote } from "./host";
+import { SCENARIO_DIR_VAR } from "./scenario";
 import type { StageClient } from "./stageclient";
 import { STAGE_AWAY } from "./stagewire";
 import type { Repo } from "./types";
@@ -118,6 +119,19 @@ export async function gateTools(repoPath: string): Promise<string[]> {
  *  and no reach into the server's config dir, tmux server or sockets. */
 export async function runGate(dir: string, command: string): Promise<CheckResult> {
   const r = await exec(ledLine(command), { cwd: dir, timeoutMs: CHECK_TIMEOUT, base: gateEnv(process.env) });
+  return { exit: r.code, output: capped(r) };
+}
+
+/** A scenario's line in a branch run's worktree: `runGate`'s environment
+ *  with `SCENARIO_DIR` laid over it, pointing at the set's temp copy, under
+ *  the set's own timeout. */
+export async function runScenario(dir: string, command: string, setDir: string, timeoutMs: number): Promise<CheckResult> {
+  const r = await exec(ledLine(command), {
+    cwd: dir,
+    timeoutMs,
+    base: gateEnv(process.env),
+    env: { [SCENARIO_DIR_VAR]: setDir },
+  });
   return { exit: r.code, output: capped(r) };
 }
 
