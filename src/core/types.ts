@@ -823,6 +823,11 @@ export type Harness = (typeof HARNESSES)[number];
 
 export const isHarness = (v: unknown): v is Harness => typeof v === "string" && (HARNESSES as readonly string[]).includes(v);
 
+/** who may go first when the plan's window runs low (FR-036); plan 2 puts
+ *  one on every start, this plan only defines it */
+export const PRIORITIES = ["interactive", "normal", "low"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
 /** Model aliases the claude CLI takes; "default" leaves the choice to it.
  *  Codex takes any model name (core/harness has the rule). */
 export const AGENT_MODELS = ["default", "fable", "opus", "sonnet", "haiku"] as const;
