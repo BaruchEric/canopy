@@ -583,6 +583,9 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
   else if (run.status === "stopped") {
     next.status = "stopped";
     next.reason = "stopped before it finished";
+  } else if (run.status === "limited") {
+    next.status = "stopped";
+    next.reason = `waiting for capacity: ${run.limited?.text || run.error || "the plan's usage limit"}`;
   } else if (run.status === "failed") {
     next.status = "failed";
     next.reason = run.error ?? "the run failed";
