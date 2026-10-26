@@ -19,6 +19,7 @@ import { KeysSheet } from "./Keys";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
 import { DictateButton } from "./Dictate";
+import { useMentions } from "./Mentions";
 import { CoordTasks, ParentLine } from "./CoordTasks";
 import { coordView, isCoordinator, type CoordView } from "../coord";
 import { PHONE, useMedia } from "../media";
@@ -28,6 +29,7 @@ import {
   DEFAULT_LAUNCH,
   isRunActive,
   type AgentRole,
+  type Harness,
   type LaunchSettings,
   type RepoAgent,
   type Repo,
@@ -208,6 +210,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const agent = useStore((s) => agentFor(s, repo, coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job"));
   const name = AGENT_NAME[agent.harness];
   const [note, setNote] = useState("");
+  const noteBox = useRef<HTMLTextAreaElement>(null);
+  const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo.id, harness: agent.harness, side: "below" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ready = !busy && (!spec.noteRequired || note.trim().length > 0);
@@ -268,17 +272,22 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           )}
         </div>
         <p className="blurb">{words.blurb}</p>
-        <textarea
-          className="plan-note"
-          rows={spec.noteRequired ? 5 : 3}
-          placeholder={words.notePlaceholder}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go();
-          }}
-          aria-label={spec.noteRequired ? `What ${name} should do` : `Note for ${name}`}
-        />
+        <div className="mention-host">
+          <textarea
+            ref={noteBox}
+            className="plan-note"
+            rows={spec.noteRequired ? 5 : 3}
+            placeholder={words.notePlaceholder}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (mentions.onKeyDown(e)) return;
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go();
+            }}
+            aria-label={spec.noteRequired ? `What ${name} should do` : `Note for ${name}`}
+          />
+          {mentions.menu}
+        </div>
         {branchable && onBranch && (
           <p className="plan-issue">
             {issue && (
@@ -568,6 +577,8 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
       {chat && active && (
         <Composer
           who={name}
+          repoId={run.repoId}
+          harness={harness}
           ready={run.status === "idle"}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           hidden={cardsOnly}
@@ -758,6 +769,8 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
       {run.chat && isRunActive(run) && (
         <Composer
           who={AGENT_NAME[harnessOf(run)]}
+          repoId={run.repoId}
+          harness={harnessOf(run)}
           ready={run.status === "idle"}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           quiet
@@ -768,9 +781,12 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
   );
 }
 
-/** The chat's message box. Enter sends, shift-enter breaks a line. */
+/** The chat's message box. Enter sends, shift-enter breaks a line; `/`,
+ *  `$` and `@` open the agent's commands, skills and the repo's files. */
 function Composer({
   who,
+  repoId,
+  harness,
   ready,
   onSend,
   draft = "",
@@ -779,6 +795,9 @@ function Composer({
 }: {
   /** the agent's name, for the box's placeholder while it replies */
   who: string;
+  /** whose files and commands the menu offers */
+  repoId: string;
+  harness: Harness;
   ready: boolean;
   onSend: (text: string) => Promise<void>;
   /** what the box starts with: an accepted retro lesson, for the user to read and send */
@@ -793,6 +812,7 @@ function Composer({
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const can = ready && !busy && text.trim().length > 0;
+  const mentions = useMentions({ box, text, setText, repoId, harness });
 
   // Back to the box as soon as the agent has answered, unless it is out of
   // sight. Coming back into sight is no answer, so it takes no focus: on a
@@ -822,29 +842,34 @@ function Composer({
 
   return (
     <div className="composer" hidden={hidden}>
-      <textarea
-        ref={box}
-        className="composer-box"
-        // a draft is read before it is sent, so it gets room
-        rows={draft ? 10 : 2}
-        placeholder={ready ? "say something…" : `${who} is replying…`}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            void send();
-          }
-        }}
-        aria-label="Your message"
-        data-mic
-      />
+      <div className="mention-host">
+        {/* first, so it opens over the box; the timeline gives it room */}
+        {mentions.menu}
+        <textarea
+          ref={box}
+          className="composer-box"
+          // a draft is read before it is sent, so it gets room
+          rows={draft ? 10 : 2}
+          placeholder={ready ? "say something…" : `${who} is replying…`}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (mentions.onKeyDown(e)) return;
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          aria-label="Your message"
+          data-mic
+        />
+      </div>
       <DictateButton target={box} />
       <button
         type="button"
         className="mini strong"
         disabled={!can}
-        title="↩ sends, shift-↩ for a new line"
+        title={`↩ sends, shift-↩ for a new line; ${harness === "codex" ? "$ for a skill" : "/ for a command or skill"}, @ for a file`}
         onClick={() => void send()}
       >
         send

@@ -96,6 +96,7 @@ import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
+import { listMentions } from "../core/mentions";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -4037,6 +4038,10 @@ async function handleApi(
     // the files section: the working tree's files, and one file's bytes
     if (method === "GET" && action === "ls") {
       return json(await finding(() => listFiles(repo.path)));
+    }
+    // a prompt box's words after / and $: the agents' commands and skills
+    if (method === "GET" && action === "mentions") {
+      return json(await finding(() => listMentions(repo.path)));
     }
     // one folder straight off the disk, ignored entries included
     if (method === "GET" && action === "dir") {

@@ -58,6 +58,7 @@ import type {
   GrepResult,
   RepoFiles,
   DirEntry,
+  Mention,
   HistoryHit,
   HistoryOverview,
   HistorySession,
@@ -450,6 +451,8 @@ export const api = {
   },
   /** every file of a repo's working tree that git does not ignore */
   files: (id: string) => repoReq<RepoFiles>(id, (p) => `/api/repos/ls?${rq(p)}`),
+  /** the commands and skills a prompt box offers after / and $ */
+  mentions: (id: string) => repoReq<Mention[]>(id, (p) => `/api/repos/mentions?${rq(p)}`),
   /** one folder straight off the disk, what git ignores included */
   dir: (id: string, path: string) => repoReq<DirEntry[]>(id, (p) => `/api/repos/dir?${rq(p, { path })}`),
   /** one file's bytes, refused (413) past `max` */

@@ -1832,6 +1832,22 @@ export interface DirEntry {
   dir: boolean;
 }
 
+/** One word a prompt box offers after `/` (Claude Code's slash commands
+ *  and skills, the ones the CLI takes headless too) or `$` (Codex's
+ *  skills): what the agent would list itself, read off the same folders. */
+export interface Mention {
+  /** what gets typed after the sigil: "commit", "superpowers:brainstorming" */
+  name: string;
+  kind: "command" | "skill" | "builtin";
+  harness: Harness;
+  /** where it came from: "user", "project", "plugin:<name>" or "builtin",
+   *  a command's subfolder after a colon ("user:frontend") */
+  from: string;
+  description: string;
+  /** what its SKILL.md calls it, when that differs from the folder's name */
+  alias?: string;
+}
+
 /** one repo's row in a search across many */
 export interface GrepRepoResult extends GrepResult {
   /** the repo id */

@@ -5746,6 +5746,77 @@ a.sweep-title:hover {
   color: var(--ink-faint);
 }
 
+/* a prompt box's menu at /, $ and @: commands, skills and files. It sits in
+   the flow, over a chat's box (the timeline gives way) or under a
+   pre-flight's note: a sheet clips what hangs past its edge, and a short
+   one (a chat just opened) would show two rows of a floating menu */
+.composer .mention-host {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mention-menu {
+  margin: 0;
+  padding: 4px 6px;
+  list-style: none;
+  max-height: min(320px, 40vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--float);
+  border: 1px solid var(--float-edge);
+  border-radius: 10px;
+  box-shadow:
+    0 2px 6px -2px var(--float-shadow),
+    0 22px 48px -16px var(--float-shadow);
+}
+.mention-menu.above {
+  margin-bottom: 6px;
+}
+.mention-menu.below {
+  margin-top: 6px;
+}
+.mention-row {
+  display: grid;
+  grid-template-columns: 12px minmax(0, max-content) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 4px 10px;
+  border-radius: var(--r);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.mention-row.on {
+  background: var(--wash);
+}
+.mention-row.on .mention-name {
+  color: var(--moss);
+}
+.mention-sigil {
+  color: var(--ink-faint);
+  font-family: var(--mono);
+  text-align: center;
+}
+.mention-name {
+  color: var(--ink);
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-hint {
+  color: var(--ink-faint);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mention-tag {
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 /* the per-repo agent settings: the popover's rows, in a sheet */
 .agent-form {
   padding: 8px 0 10px;
