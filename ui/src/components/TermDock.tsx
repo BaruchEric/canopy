@@ -56,7 +56,7 @@ import { splitKey } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
 import { OVER_PAGE, SECTION_WORD } from "../surface";
 import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, moveTo, openedSince, takes, termIds, usePaneDrag, useSplits } from "./SessionPanes";
-import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabLabel, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
+import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabId, sectionTabLabel, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
 import { PageTabView, SectionTabView } from "./SectionTab";
 
 /** The design tokens the terminal paints with, resolved through a probe
@@ -2018,7 +2018,12 @@ export function PanelShells({ repo }: { repo: Repo }) {
             pages={pages}
             onUntab={closePane}
             sectionsFor={() => tabbableKeys(allSectionTabs, repo, order, hiddenSections)}
-            onAddSection={(id, k) => tabSection(id, k, "panel")}
+            onAddSection={(id, k, edge) => {
+              tabSection(id, k, "panel");
+              // the tab is in the store now, so the groups read fresh keep
+              // it; the newest page shows, so the group does
+              if (edge) writeSplits((gs) => splitIn(gs, menu.id, sectionTabId("panel", k, id), edge));
+            }}
             moveOut={takes(menu.id, STRIP) ? { label: "to the shells strip", run: (id) => void moveTo(id, STRIP) } : undefined}
           />
         )}

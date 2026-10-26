@@ -558,9 +558,10 @@ export function TabMenu({
   pages?: readonly PageTab[];
   /** a page tab closed, a section back in its card */
   onUntab?: (id: string) => void;
-  /** the sections a shell's repo can add as a tab here, and the add */
+  /** the sections a shell's repo can add as a tab here, and the add: a
+   *  tab of its own, or with `edge`, split in beside the shell on it */
   sectionsFor?: (repoId: string) => SectionKey[];
-  onAddSection?: (repoId: string, key: SectionKey) => void;
+  onAddSection?: (repoId: string, key: SectionKey, edge?: Edge) => void;
   /** the tab into another shell window on the page, when one takes it
    *  (FR-031): the strip from a card, a card from the strip */
   moveOut?: { label: string; run: (id: string) => void };
@@ -658,9 +659,31 @@ export function TabMenu({
       {adding && (
         <div className="ss-tabmenu-sub">
           {addable.map((k) => (
-            <button key={k} type="button" role="menuitem" onClick={act(() => onAddSection?.(tab.repoId, k))}>
-              {SECTION_WORD[k]}
-            </button>
+            <div key={k} className="ss-tabmenu-row">
+              <button type="button" role="menuitem" title={`${SECTION_WORD[k]} as a tab of its own`} onClick={act(() => onAddSection?.(tab.repoId, k))}>
+                {SECTION_WORD[k]}
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="ss-tabmenu-edge"
+                aria-label={`${SECTION_WORD[k]} split right`}
+                title={`Split right: ${SECTION_WORD[k]} beside this shell, on its right`}
+                onClick={act(() => onAddSection?.(tab.repoId, k, "right"))}
+              >
+                →
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="ss-tabmenu-edge"
+                aria-label={`${SECTION_WORD[k]} split down`}
+                title={`Split down: ${SECTION_WORD[k]} beside this shell, below`}
+                onClick={act(() => onAddSection?.(tab.repoId, k, "bottom"))}
+              >
+                ↓
+              </button>
+            </div>
           ))}
         </div>
       )}

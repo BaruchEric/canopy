@@ -6598,6 +6598,24 @@ button.ss-scope:hover {
   padding-left: 4px;
   border-left: 1px solid var(--hair);
 }
+/* a section in the submenu: its name adds it as a tab of its own, the two
+   arrows split it in beside the shell, right or down (FR-030) */
+.ss-tabmenu-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.ss-tabmenu-row > button:first-child {
+  flex: 1;
+}
+.ss-tabmenu button.ss-tabmenu-edge {
+  padding: 4px 6px;
+  color: var(--ink-faint);
+}
+.ss-tabmenu button.ss-tabmenu-edge:hover,
+.ss-tabmenu button.ss-tabmenu-edge:focus-visible {
+  color: var(--ink);
+}
 .ss-pane-head {
   flex: none;
   display: flex;

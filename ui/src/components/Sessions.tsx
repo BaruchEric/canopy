@@ -9,7 +9,7 @@ import { backendOf, qual } from "../registry";
 import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, splitKey, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
 import { connOf, idText, useStore } from "../store";
-import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
+import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabId, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
 import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
@@ -596,7 +596,11 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
             const repo = repos.find((r) => r.id === repoId);
             return repo ? tabbableKeys(allSectionTabs, repo, order, hiddenSections) : [];
           }}
-          onAddSection={(repoId, k) => tabSection(repoId, k, "strip")}
+          onAddSection={(repoId, k, edge) => {
+            tabSection(repoId, k, "strip");
+            // the tab is in the store now, so the groups read fresh keep it
+            if (edge) writeSplits((gs) => splitIn(gs, menu.id, sectionTabId("strip", k, repoId), edge));
+          }}
           moveOut={cardOf(menu.id)}
         />
       )}
