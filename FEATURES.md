@@ -48,10 +48,6 @@ P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Bea
 A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
 Spec: docs/superpowers/specs/2026-10-25-work-ledger-design.md (2026-10-25).
 
-### FR-036 · Capacity governor: subscription-limit-aware dispatch
-P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)
-Every start carries a priority (interactive, normal, low); a pure governor holds `low` work past 70% of the five-hour window and `normal` past 90%, never a chat or an ask, and a limit hit makes a run `limited` and retried after the reset rather than failed. A top-bar chip shows each login's windows and their resets (FR-028). The credits lane (an API key funded by the plan's monthly credits for the ranger and low work) is written out and held for Eric, since it reverses the 2026-08-24 decision.
-Spec: docs/superpowers/specs/2026-10-25-capacity-governor-design.md (2026-10-25).
 
 ### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
@@ -73,9 +69,6 @@ P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Str
 End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` at HEAD sets the run line and the judge mode.
 Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25).
 
-### FR-028 · What is left on each subscription, in the status line
-P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
-Orca's status bar shows each subscription's usage beside its reset ("3% used 4h 32m", "24% used 6d 6h") for Claude, Codex and Grok. The costs view shows what was spent after the fact; this is the quota left now, so a long run can go to the harness with room.
 
 ### FR-025 · Copy the branch, PR link or run id from the keyboard
 P3 · added 2026-10-23 · source: Eric (Linear UX study)
@@ -122,6 +115,17 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-036 · Capacity governor: subscription-limit-aware dispatch
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)
+Every start carries a priority (interactive, normal, low); a pure governor holds `low` work past 70% of the five-hour window and `normal` past 90%, never a chat or an ask, and a limit hit makes a run `limited` and retried after the reset rather than failed. A top-bar chip shows each login's windows and their resets (FR-028). The credits lane (an API key funded by the plan's monthly credits for the ranger and low work) is written out and held for Eric, since it reverses the 2026-08-24 decision.
+Spec: docs/superpowers/specs/2026-10-25-capacity-governor-design.md (2026-10-25).
+Plan 1 implemented locally 2026-10-26: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded; live-window and credential checks remain unobserved. Plan 2 dispatch holds/retries and plan 3 credits lane remain open and unwired.
+
+### FR-028 · What is left on each subscription, in the status line
+P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
+Orca's status bar shows each subscription's usage beside its reset ("3% used 4h 32m", "24% used 6d 6h") for Claude, Codex and Grok. The costs view shows what was spent after the fact; this is the quota left now, so a long run can go to the harness with room.
+Folded into FR-036 plan 1. The local chip shows Claude/Codex readings and resets by backend; unknown readings stay visible as unknown. Deployment and live subscription observations remain pending.
 
 ### FR-038 · The agent surface: `canopy mcp` and run tokens
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)

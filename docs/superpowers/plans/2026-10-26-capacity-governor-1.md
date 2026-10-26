@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7.
+**Status:** implementation in progress 2026-10-26, based on main at 0fabbb3. The model, drivers, flow handling, hub and chip are implemented; combined verification is pending. The probes record explicitly leaves live quota and credential/refresh observations unobserved. Endpoint reads, dispatch holds/retries and the credits lane remain unwired.
 
 **Goal:** canopy can tell when a harness has hit the Max plan's usage window and
 how much of it is left: a run whose reply is the limit text ends `limited`, not
