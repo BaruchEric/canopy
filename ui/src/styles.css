@@ -13471,3 +13471,32 @@ body.resizing-nesw {
   inset: 0;
   height: auto;
 }
+/* the panel's head names the popup, so the body's own first heading (the
+   inbox's, the ranger's, a first section's) would say it twice */
+.popup-panel-body > .popup-tab > .panel-label:first-child,
+.popup-panel-body > .popup-tab > :first-child > .panel-label:first-child {
+  display: none;
+}
+.popup-panel-body > .popup-tab > .inbox-top {
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+/* a chat in a window of its own (RunSolo): the console fills the window
+   under its bar, as it fills a dock panel */
+.run-solo-main {
+  position: relative;
+  min-height: 0;
+  background: var(--bark0);
+}
+.run-solo-main > .run-tab {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.run-solo-main > .empty {
+  padding: 24px;
+}

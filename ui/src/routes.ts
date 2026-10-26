@@ -27,6 +27,9 @@ export interface Route {
    *  board's focus popped out; `card` names it, `follow=1` makes it show
    *  whichever agent the board focuses */
   agent: { card: string | null; follow: boolean } | null;
+  /** `?view=run&run=<id>`: one chat in a window of its own, the dock's
+   *  run panel popped out (FR-047) */
+  run: string | null;
 }
 
 /** a registry card's id: a harness and a session, or a scan's */
@@ -43,6 +46,7 @@ export function parseRoute(search: string): Route {
   const term = q.get("term");
   const section = q.get("section");
   const task = q.get("task");
+  const run = runOf(q);
   return {
     repo: repo || null,
     solo: view === "solo",
@@ -51,9 +55,20 @@ export function parseRoute(search: string): Route {
     section: view === "section" && isSectionKey(section) ? section : null,
     task: view === "shell" && task && /^[a-z0-9][a-z0-9._-]{0,39}$/.test(task) ? task : null,
     ask: askOf(q),
-    popped: view === "solo" && q.get("popped") === "1",
+    popped: (view === "solo" || run !== null) && q.get("popped") === "1",
     agent: agentOf(q),
+    run,
   };
+}
+
+/** a run's id: the backend's short id, after another backend's name for
+ *  one of its runs */
+const RUN_ID = /^[A-Za-z0-9][\w:.|-]{0,99}$/;
+
+function runOf(q: URLSearchParams): string | null {
+  if (q.get("view") !== "run" || q.get("repo")) return null;
+  const run = q.get("run");
+  return run && RUN_ID.test(run) ? run : null;
 }
 
 function agentOf(q: URLSearchParams): Route["agent"] {
@@ -183,6 +198,24 @@ export function openElsewhere(id: string, target: "tab" | "window") {
  *  does not land in it. The window, or null when the browser blocked it. */
 export function popOutWindow(id: string): Window | null {
   return openNamed(`canopy:pop:${id}`, soloUrl(id, { popped: true }), "window");
+}
+
+/** one chat in a window of its own (RunSolo.tsx) */
+export function runUrl(runId: string, opts?: { popped?: boolean }): string {
+  const u = new URL(window.location.href);
+  u.search = "";
+  u.hash = "";
+  u.searchParams.set("view", "run");
+  u.searchParams.set("run", runId);
+  if (opts?.popped) u.searchParams.set("popped", "1");
+  return u.toString();
+}
+
+/** A chat's panel popped out of the dock (FR-047): its window joins the
+ *  panes protocol under the panel's id as a repo's does. The window, or
+ *  null when the browser blocked it. */
+export function popOutRun(runId: string): Window | null {
+  return openNamed(`canopy:pop:run:${runId}`, runUrl(runId, { popped: true }), "window");
 }
 
 /** A shell at a repo in a tab or window of its own. Every click is a new

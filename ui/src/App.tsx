@@ -19,6 +19,7 @@ import { triggersBadge } from "./triggers";
 import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
 import { AgentSolo } from "./components/AgentSolo";
+import { RunSolo } from "./components/RunSolo";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
 import { Crowns, TopBar } from "./components/TopBar";
@@ -26,6 +27,7 @@ import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { OVER_PAGE } from "./surface";
 import { CHORD_MS, chordView, pressOf, shortcutFor } from "./shortcuts";
+import { runPanel } from "./itempanel";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, useStore, type CanopyState } from "./store";
@@ -290,9 +292,10 @@ export function App() {
   // Pop out and back, the pop-out's side: only a solo window opened with
   // popped=1 joins, so a plain solo tab never takes a panel from the dock.
   // It says hello from its first render, before the grove has loaded, so a
-  // reload's hello lands inside the dock's wait on its bye.
+  // reload's hello lands inside the dock's wait on its bye. A chat's
+  // window speaks under its panel's id (FR-047).
   useEffect(() => {
-    const id = route.repo;
+    const id = route.run ? runPanel(route.run) : route.repo;
     if (!route.popped || !id || typeof BroadcastChannel === "undefined") return;
     const ch = new BroadcastChannel(PANES_CHANNEL);
     const hello: PaneMsg = { type: "hello", id };
@@ -359,8 +362,8 @@ export function App() {
       }
       const sc = press === null ? null : shortcutFor(press, view);
       if (!sc || (box && !sc.anywhere)) return;
-      // a window holding one panel or one shell has no prompt
-      const whole = !(route.repo && (route.solo || route.shell || route.section));
+      // a window holding one panel, one shell or one chat has no prompt
+      const whole = !route.run && !(route.repo && (route.solo || route.shell || route.section));
       const st = useStore.getState();
       const over = !!document.querySelector(OVER_PAGE);
       switch (sc.action) {
@@ -486,6 +489,8 @@ export function App() {
   // a window of one thing keeps the mic that follows focus
   const solo = route.agent ? (
     <AgentSolo card={route.agent.card} follow={route.agent.follow} />
+  ) : route.run ? (
+    <RunSolo id={route.run} popped={route.popped} />
   ) : route.solo && route.repo ? (
     <Solo id={route.repo} />
   ) : route.shell && route.repo ? (

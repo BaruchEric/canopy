@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRoute, popupFeatures, soloUrl, sproutHere } from "./routes";
+import { parseRoute, popupFeatures, runUrl, soloUrl, sproutHere } from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -35,7 +35,7 @@ describe("parseRoute", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=solo&section=history").section).toBeNull();
     expect(parseRoute("?view=section&section=history").section).toBeNull();
   });
-  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false, agent: null };
+  const none = { repo: null, solo: false, shell: false, term: null, section: null, task: null, ask: null, popped: false, agent: null, run: null };
   test("reads the repo and the shell view", () => {
     expect(parseRoute("?repo=web-apps/ripe&view=shell")).toEqual({
       repo: "web-apps/ripe",
@@ -47,6 +47,7 @@ describe("parseRoute", () => {
       ask: null,
       popped: false,
       agent: null,
+      run: null,
     });
     expect(parseRoute("?view=shell")).toEqual(none);
   });
@@ -72,6 +73,7 @@ describe("parseRoute", () => {
       ask: null,
       popped: false,
       agent: null,
+      run: null,
     });
     expect(parseRoute("?repo=web-apps/ripe")).toEqual({
       repo: "web-apps/ripe",
@@ -83,11 +85,36 @@ describe("parseRoute", () => {
       ask: null,
       popped: false,
       agent: null,
+      run: null,
     });
     // solo needs a repo to be solo about
     expect(parseRoute("?view=solo")).toEqual(none);
     expect(parseRoute("")).toEqual(none);
   });
+});
+
+test("a chat's window names its run, and is popped only when it says so (FR-047)", () => {
+  expect(parseRoute("?view=run&run=1a2b3c4d").run).toBe("1a2b3c4d");
+  expect(parseRoute("?view=run&run=1a2b3c4d").popped).toBe(false);
+  expect(parseRoute("?view=run&run=1a2b3c4d&popped=1").popped).toBe(true);
+  // another backend's run carries its name
+  expect(parseRoute("?view=run&run=mini|1a2b3c4d").run).toBe("mini|1a2b3c4d");
+  expect(parseRoute("?view=run").run).toBeNull();
+  expect(parseRoute("?view=run&run=../x").run).toBeNull();
+  expect(parseRoute("?view=run&run=").popped).toBe(false);
+  // a repo's window is never a chat's
+  expect(parseRoute("?repo=a/b&view=run&run=1a2b3c4d").run).toBeNull();
+  expect(parseRoute("?view=solo&run=1a2b3c4d").run).toBeNull();
+  const g = globalThis as unknown as { window?: unknown };
+  g.window = { location: { href: "http://x/" } };
+  try {
+    const u = new URL(runUrl("1a2b3c4d", { popped: true }));
+    expect([u.searchParams.get("view"), u.searchParams.get("run"), u.searchParams.get("popped")]).toEqual(["run", "1a2b3c4d", "1"]);
+    expect(parseRoute(u.search)).toMatchObject({ run: "1a2b3c4d", popped: true, repo: null, solo: false });
+    expect(parseRoute(new URL(runUrl("1a2b3c4d")).search).popped).toBe(false);
+  } finally {
+    delete g.window;
+  }
 });
 
 test("a popped solo window says so in its URL, and only then", () => {

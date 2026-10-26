@@ -35,7 +35,7 @@ import {
   type DockLayout,
   type Zone,
 } from "./grid";
-import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutWindow, soloUrl } from "./routes";
+import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutRun, popOutWindow, soloUrl } from "./routes";
 import { poppedOf, poppedOut, without } from "./panes";
 import { loadSettings, saveSettings, SCREEN_SETTINGS, shellPlace, type Settings, type ShellPlace } from "./settings";
 import { snapshot, watch, type Note as Notice, type Watch } from "./notify";
@@ -55,7 +55,7 @@ import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
-import { isReservedPanel, panelOfItem, runPanel } from "./itempanel";
+import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
@@ -2893,9 +2893,13 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   popOut: (id) => {
-    // the window first: a blocked popup leaves the panel where it was
-    // a reserved panel is no repo's and has no window of its own
-    if (isReservedPanel(id) || !get().panels.includes(id) || !popOutWindow(id)) return;
+    // the window first: a blocked popup leaves the panel where it was.
+    // A chat's panel has a window of its own (RunSolo, FR-047); any other
+    // reserved panel is no repo's and has none
+    if (!get().panels.includes(id)) return;
+    const runId = runOfPanel(id);
+    const win = runId !== null ? popOutRun(runId) : isReservedPanel(id) ? null : popOutWindow(id);
+    if (!win) return;
     get().claimPanel(id);
     // a window closed before it loads never says hello: then it comes back
     poppedOut(id);
@@ -2906,8 +2910,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (slot === undefined) return {};
       // a home repo gone from the scan has no panel to show; its slot stays
       // for the next tree to prune. Before the first tree, no repos says
-      // nothing yet.
-      if (s.loaded && ownerOf(id) === registry().home && !s.repos.some((r) => r.id === id)) return {};
+      // nothing yet. A chat's panel is no repo's and always comes back.
+      if (s.loaded && !isReservedPanel(id) && ownerOf(id) === registry().home && !s.repos.some((r) => r.id === id)) return {};
       // The slot is a hint: the panel lands beside the one that sat after
       // it, a column to its left side by side or a tab before it in its
       // cell. A split it was part of is not put back. Past the end, or

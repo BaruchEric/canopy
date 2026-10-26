@@ -2323,7 +2323,11 @@ function ItemGear({
   const panels = useStore((s) => s.panels);
   const dockLayout = useStore((s) => s.dockLayout);
   const movePanel = useStore((s) => s.movePanel);
+  const popOut = useStore((s) => s.popOut);
   const phone = useMedia(PHONE);
+  // a chat's panel can go to a window of its own and come back to its
+  // slot, as a repo's can (not on a phone, for the same reason)
+  const windows: GearEntry[] = !phone && isRunPanel(id) ? [{ type: "item", label: "pop out", run: () => popOut(id) }] : [];
   const layout: GearEntry[] = [
     { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
     { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
@@ -2334,6 +2338,7 @@ function ItemGear({
           ...stepEntries(id, panels, dockLayout, movePanel),
         ] satisfies GearEntry[])),
     ...(tab ? tabEntries(tab, "the dock") : []),
+    ...windows,
     closeEntry(panelClose, setSetting),
   ];
   return (

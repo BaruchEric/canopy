@@ -46,6 +46,7 @@ import { setBase, setRegistry } from "./registry";
 import type { BackendAuth } from "./callerToken";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
+import { runPanel } from "./itempanel";
 import { itemTabId } from "./sectiontabs";
 import {
   DEFAULT_AGENT,
@@ -2872,6 +2873,45 @@ describe("chats, agents and popups as dock panels (FR-047)", () => {
       stripPage: pristine.stripPage,
       settings: pristine.settings,
     });
+  });
+
+  test("a chat's panel pops out to a window of its own and comes back to its slot", () => {
+    const w = globalThis as unknown as { window?: unknown };
+    const opened: { url: string; name: string }[] = [];
+    let win: { focus: () => void } | null = { focus: () => {} };
+    w.window = { location: { href: "http://a.test/", search: "" }, open: (url: string, name: string) => (opened.push({ url, name }), win) };
+    const chat = runPanel("1a2b3c4d");
+    try {
+      useStore.setState({ repos: [repo("a")], loaded: true, popped: {}, recalled: [] });
+      useStore.getState().openPanel("a");
+      useStore.getState().openPanel(chat);
+      useStore.getState().popOut(chat);
+      let s = useStore.getState();
+      expect(opened).toHaveLength(1);
+      expect(opened[0]?.name).toBe("canopy:pop:run:1a2b3c4d");
+      const u = new URL(opened[0]?.url ?? "");
+      expect([u.searchParams.get("view"), u.searchParams.get("run"), u.searchParams.get("popped")]).toEqual(["run", "1a2b3c4d", "1"]);
+      expect(s.panels).toEqual(["a"]);
+      expect(s.popped).toEqual({ [chat]: 1 });
+      // back at its slot, though no repo is its
+      useStore.getState().returnPanel(chat);
+      s = useStore.getState();
+      expect(s.panels).toEqual(["a", chat]);
+      expect(s.popped).toEqual({});
+      // a blocked window leaves the panel where it was; the other reserved
+      // panels have no window of their own
+      win = null;
+      useStore.getState().popOut(chat);
+      expect(useStore.getState().panels).toEqual(["a", chat]);
+      win = { focus: () => {} };
+      useStore.getState().openPanel(WAITING_PANEL);
+      useStore.getState().popOut(WAITING_PANEL);
+      expect(opened).toHaveLength(2);
+      expect(useStore.getState().panels).toContain(WAITING_PANEL);
+    } finally {
+      delete w.window;
+      useStore.setState({ repos: [], loaded: false, popped: {}, recalled: [] });
+    }
   });
 
   test("openPanel's into places a new panel as a tab or a column whatever the arrangement", () => {
