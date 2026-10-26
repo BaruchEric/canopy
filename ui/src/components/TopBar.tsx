@@ -1,4 +1,5 @@
 import { HealthChip } from "./Health";
+import { CapacityChip } from "./Capacity";
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
@@ -811,6 +812,7 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
               <RangerChip compact />
             </Cluster>
             <Cluster label="Health">
+              <CapacityChip />
               <HealthChip />
             </Cluster>
           </div>
@@ -885,6 +887,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <RangerChip compact={narrow} />
           </Cluster>
           <Cluster label="This backend">
+            <CapacityChip />
             <HealthChip />
             <BackendMenu />
           </Cluster>

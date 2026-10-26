@@ -4583,6 +4583,9 @@ button.dl-gut.has {
 .st-stopped {
   --tone: var(--ink-faint);
 }
+.st-limited {
+  --tone: var(--lichen);
+}
 /* a chat between turns: Claude has answered and the next word is yours */
 .st-idle {
   --tone: var(--moss);
@@ -12041,6 +12044,92 @@ span.effective-flag:not(:first-child) {
 }
 .health-count {
   font-variant-numeric: tabular-nums;
+}
+.capacity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.capacity-chip.lichen {
+  color: var(--lichen);
+}
+.capacity-chip.rust {
+  color: var(--rust);
+}
+.capacity-pop {
+  width: 360px;
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  padding: 8px 14px 10px;
+}
+@media (max-width: 760px) {
+  .capacity-pop {
+    width: auto;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+.capacity-rows {
+  display: grid;
+  gap: 12px;
+  align-self: stretch;
+}
+.capacity-row {
+  display: grid;
+  gap: 4px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.capacity-row + .capacity-row {
+  border-top: 1px solid var(--hair);
+}
+.capacity-row h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.capacity-row .moss {
+  color: var(--moss);
+}
+.capacity-row .lichen {
+  color: var(--lichen);
+}
+.capacity-row .rust {
+  color: var(--rust);
+}
+.capacity-source,
+.capacity-hint,
+.capacity-limited-error {
+  color: var(--ink-faint);
+}
+.capacity-hit,
+.capacity-limited-error {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.capacity-limited {
+  margin-top: 8px;
+}
+.capacity-limited .panel-label {
+  margin-bottom: 4px;
+}
+.capacity-limited ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.capacity-limited li {
+  display: grid;
+  gap: 2px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.capacity-limited li + li {
+  border-top: 1px solid var(--hair);
+}
+.capacity-limited-name {
+  font-weight: 600;
 }
 .health-pop {
   width: 420px;
