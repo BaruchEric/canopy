@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { advance, enqueue } from "../../src/core/landing";
 import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, type OpenedRun, runLanding, verdictTone, verdictWord } from "./landing";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, type OpenedRun, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -192,4 +192,20 @@ describe("a branch that opened a PR, in the landing section", () => {
   test("no drop while a run on the branch is still working", () => {
     expect(openedRow(opened("a", { state: "working" }), []).canDrop).toBe(false);
   });
+});
+
+test("scenarioLine and scenarioTone", () => {
+  expect(scenarioLine({ total: 8, passed: 7, score: 0.875 })).toBe("scenarios 7/8 · 0.88");
+  expect(scenarioLine({ total: 2, passed: 2, score: 1 })).toBe("scenarios 2/2 · 1.00");
+  expect(scenarioTone({ total: 8, passed: 7 })).toBe("rust");
+  expect(scenarioTone({ total: 2, passed: 2 })).toBe("moss");
+});
+
+test("runLanding carries the record's scenarios for a queued entry and a ready run", () => {
+  const pass = { head: "h", at: 1, total: 1, passed: 1, score: 1, results: [] };
+  const r = rec("a", { scenarios: pass });
+  const entries = enqueue([], r, 1);
+  const branchRun = run("a");
+  expect(runLanding(branchRun, { runs: [r], entries, orphans: [] })?.scenarios).toEqual(pass);
+  expect(runLanding(branchRun, { runs: [r], entries: [], orphans: [] })?.scenarios).toEqual(pass);
 });

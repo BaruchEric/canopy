@@ -6,7 +6,7 @@ import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
 import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
-import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
+import { branchByDefault, runLanding, scenarioLine, scenarioTone, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
@@ -638,6 +638,21 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
       {l.verdict && <span className="run-branch-why">{l.verdict}</span>}
       {l.why && <span className="run-branch-why">{l.why}</span>}
       {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
+      {l.scenarios && (
+        <details className="run-scenarios">
+          <summary className={`run-branch-why ${scenarioTone(l.scenarios)}`} title="The repo's holdout scenarios over this branch; their text stays on the server">
+            {scenarioLine(l.scenarios)}
+          </summary>
+          <ul>
+            {l.scenarios.results.map((r) => (
+              <li key={r.name} className={r.ok ? "" : "rust"}>
+                <span>{r.ok ? "ok" : "red"}</span> <span>{r.name}</span> <span className="dim">{r.kind}</span>
+                {r.tail && <pre>{r.tail}</pre>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <span className="spacer" />
       {l.canLand && l.approve && (
         <button type="button" className="mini strong" title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(b.origin)}>
