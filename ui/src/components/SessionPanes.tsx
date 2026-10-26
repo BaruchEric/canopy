@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, RefObject } from "react";
 import { HARNESS } from "../../../src/core/harness";
 import { harnessesOf } from "../agents";
@@ -595,8 +595,18 @@ export function TabMenu({
     onClose();
     f();
   };
-  const left = Math.max(8, Math.min(at.left, window.innerWidth - 200));
-  const top = Math.max(8, Math.min(at.bottom + 2, window.innerHeight - 280));
+  // under the tab, kept 8px inside the window by the menu's measured size,
+  // so a long submenu on a low tab moves up instead of running off the
+  // bottom; measured again when the submenu opens or closes
+  const [spot, setSpot] = useState(() => ({ top: at.bottom + 2, left: at.left }));
+  useLayoutEffect(() => {
+    const r = box.current?.getBoundingClientRect();
+    if (!r) return;
+    const left = Math.max(8, Math.min(at.left, window.innerWidth - r.width - 8));
+    const top = Math.max(8, Math.min(at.bottom + 2, window.innerHeight - r.height - 8));
+    setSpot((s) => (s.top === top && s.left === left ? s : { top, left }));
+  }, [at, adding]);
+  const { top, left } = spot;
   if (page)
     return (
       <div ref={box} className="ss-tabmenu" role="menu" aria-label={`The ${isItemTab(page) ? page.label : SECTION_WORD[page.key]} tab`} style={{ top, left }}>
