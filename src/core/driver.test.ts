@@ -64,6 +64,49 @@ describe("how an exit becomes a status", () => {
   });
 });
 
+describe("the plan's usage limit (FR-036)", () => {
+  const LIMIT = "You've hit your limit · resets 3pm";
+  const reply = { text: "", costUsd: 0, durationMs: 1, turns: 1 };
+  test("a job's result whose problem is the limit ends the run limited, with the text", () => {
+    const { run, ctx, ended } = makeCtx();
+    ctx.result({ ...reply, text: LIMIT }, LIMIT);
+    expect([run.status, run.error, run.limited?.text, ended]).toEqual(["limited", LIMIT, LIMIT, ["limited"]]);
+  });
+  test("a chat's limited reply goes idle with a note; a second in a row fails the run", () => {
+    const { run, ctx } = makeCtx(true);
+    ctx.result(reply, "usage limit reached\ntry later");
+    expect([run.status, notes(run), run.limited?.text]).toEqual(["idle", ["the plan's usage limit: usage limit reached\ntry later"], "usage limit reached\ntry later"]);
+    run.status = "working";
+    ctx.result(reply, "usage limit reached");
+    expect([run.status, run.error]).toEqual(["failed", "usage limit reached"]);
+  });
+  test("a good reply between two limited ones starts the count over", () => {
+    const { run, ctx } = makeCtx(true);
+    ctx.result(reply, LIMIT);
+    run.status = "working";
+    ctx.result({ ...reply, text: "fine" }, null);
+    run.status = "working";
+    ctx.result(reply, LIMIT);
+    expect(ctx.status()).toBe("idle");
+  });
+  test("a reply that mentions a limit in passing, or fails for another reason, is not one", () => {
+    const a = makeCtx();
+    a.ctx.result({ ...reply, text: "I checked the rate limit handling; usage limit tests pass" }, null);
+    expect(a.run.status).toBe("done");
+    const b = makeCtx();
+    b.ctx.result(reply, "stopped after 3 turns without finishing");
+    expect([b.run.status, b.run.limited]).toEqual(["failed", undefined]);
+  });
+  test("a process that dies with the limit on stderr is limited too, unless it was stopped", () => {
+    expect(exitOutcome({ stopping: false, ending: false }, { code: 1, stderr: `${LIMIT}\n` }, "Claude Code")).toEqual({ status: "limited", error: LIMIT });
+    expect(exitOutcome({ stopping: true, ending: false }, { code: 1, stderr: LIMIT }, "Claude Code")).toEqual({ status: "stopped" });
+    expect(exitOutcome({ stopping: false, ending: true }, { code: 0, stderr: LIMIT }, "Claude Code")).toEqual({ status: "done" });
+    const { run, ctx, ended } = makeCtx();
+    ctx.exited({ code: 1, stderr: "usage limit reached" });
+    expect([run.status, run.error, run.limited?.text, ended]).toEqual(["limited", "usage limit reached", "usage limit reached", ["limited"]]);
+  });
+});
+
 describe("the notes a settled prompt leaves", () => {
   test("in the words the runner has always used", () => {
     expect(settleNote(perm("git push"), { kind: "allow" })).toBe("allowed: git push");

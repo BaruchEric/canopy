@@ -1030,6 +1030,9 @@ export type RunStatus =
   | "idle"
   | "done"
   | "failed"
+  /** the harness reported the plan's usage limit: the work is sound and
+   *  waits for the reset (FR-036); `error` is the limit text */
+  | "limited"
   | "stopped";
 
 export interface RunTool {
@@ -1255,6 +1258,9 @@ export interface Run {
   result?: RunResult;
   /** why a failed run failed */
   error?: string;
+  /** the last usage limit the harness reported on this run, as it said it;
+   *  a job ends `limited` on it, a chat stays idle and carries it (FR-036) */
+  limited?: { at: number; text: string };
   /** a stage run that failed because the stage runner went away under it,
    *  as a hello confirmed; a flow parks on this, never on the error's words,
    *  which carry the stage's own stderr. Also set when the runner refused
@@ -2434,10 +2440,10 @@ export interface Flow {
   budget?: FlowBudget;
   /** agent step runs started and working time so far */
   spent?: { runs: number; workMs: number };
-  /** set while the flow is parked because its budget is spent, or because
-   *  the stage runner was not answering when its step was to run; either
-   *  way continuing runs the step again */
-  parkedFor?: "budget" | "stage";
+  /** set while the flow is parked because its budget is spent, the stage
+   *  runner was not answering, or its step's run ended `limited`; continuing
+   *  runs the step again */
+  parkedFor?: "budget" | "stage" | "capacity";
   /** with `parkedFor` "stage": it was the step's check, not its run, that
    *  found the stage runner away, so continuing runs the check alone */
   stageCheck?: boolean;

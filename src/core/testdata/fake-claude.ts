@@ -14,6 +14,8 @@
  *          is `env:$CANOPY_RUN`
  *    chat  answers every user message with a text and a result
  *    die   writes "boom" to stderr and exits 3 before any result
+ *    limited answers every user message with a synthetic usage-limit result
+ *    limitdie writes a synthetic usage limit to stderr and exits 1
  *    async starts a background Agent and sends a result while it runs, then
  *          a permission request from inside the subagent; once that is
  *          answered, the task notification and the real result
@@ -131,6 +133,14 @@ function onUser(): void {
   if (mode === "die") {
     process.stderr.write("boom\n");
     process.exit(3);
+  }
+  if (mode === "limitdie") {
+    process.stderr.write("You've hit your limit · resets 3pm\n");
+    process.exit(1);
+  }
+  if (mode === "limited") {
+    out({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 3pm", num_turns: 1, total_cost_usd: 0, duration_ms: 2, session_id: "sess-1" });
+    return;
   }
   if (mode === "chat") {
     out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: `reply ${turns}` }] } });

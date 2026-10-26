@@ -50,6 +50,7 @@ const STATUS_WORD: Record<Run["status"], string> = {
   idle: "your turn",
   done: "done",
   failed: "failed",
+  limited: "waiting for capacity",
   stopped: "stopped",
 };
 

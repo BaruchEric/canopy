@@ -23,7 +23,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
   message = "do the thing",
   unattended?: string,
   opts: {
@@ -94,7 +94,7 @@ async function drive(
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l) as Record<string, unknown>);
-  const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "stopped";
+  const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
   return { run, ctx, driver, until, sent, done, ended };
 }
 
@@ -147,6 +147,32 @@ test("cliArgs: a plan-mode run on a yolo agent may switch to bypass later", () =
 /** canopy's own control requests in the fake's log, in the order sent */
 const modesAsked = (log: Record<string, unknown>[]) =>
   log.filter((m) => m["type"] === "control_request").map((m) => (m["request"] as { mode?: string }).mode);
+
+describe("the plan's usage limit (FR-036)", () => {
+  const LIMIT = "You've hit your limit · resets 3pm";
+  test("a job whose result is the limit ends limited with the text", async () => {
+    const d = await drive("limited");
+    const run = await d.until(d.done, "the limit");
+    expect([run.status, run.error, run.limited?.text, run.result?.costUsd]).toEqual(["limited", LIMIT, LIMIT, 0]);
+    expect(d.ended).toEqual(["limited"]);
+  });
+  test("a chat's limited reply goes idle and is said in the timeline; the second in a row fails the run", async () => {
+    const d = await drive("limited", "hello", undefined, { chat: true });
+    await d.until((r) => r.status === "idle", "the first reply");
+    expect(d.run.steps.filter((s) => s.kind === "note").map((s) => s.text)).toEqual([`the plan's usage limit: ${LIMIT}`]);
+    d.run.status = "working";
+    d.driver.say("again");
+    const run = await d.until(d.done, "the second reply");
+    expect([run.status, run.error]).toEqual(["failed", LIMIT]);
+    // The fake is still up: a chat's failure kills nothing here, the Runner would.
+    d.driver.stop();
+  });
+  test("a CLI that exits with the limit on stderr ends limited", async () => {
+    const d = await drive("limitdie");
+    const run = await d.until(d.done, "the exit");
+    expect([run.status, run.error]).toEqual(["limited", LIMIT]);
+  });
+});
 
 describe("a propose run: ExitPlanMode is a proposal", () => {
   test("approve allows first, then sets acceptEdits (spec P8)", async () => {

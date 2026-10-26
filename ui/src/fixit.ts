@@ -36,6 +36,7 @@ export const FIX_WATCH: Record<RunStatus, string> = {
   idle: "the agent answered",
   done: "the agent is done",
   failed: "the agent failed",
+  limited: "the agent hit the plan's limit",
   stopped: "the agent was stopped",
 };
 
