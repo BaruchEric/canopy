@@ -210,6 +210,13 @@ describe("describeEvent", () => {
       "commit done, changed in 4s",
     ]);
   });
+  test("a limited run says it waits for capacity", () => {
+    const before = run();
+    const limited = run({ status: "limited", error: "usage limit reached", limited: { at: 1, text: "usage limit reached" } });
+    expect(describeEvent({ type: "run", run: limited }, snap({ runs: { r1: before } }), 5).map((l) => l.text)).toEqual([
+      "commit waits for capacity: usage limit reached",
+    ]);
+  });
   test("a workspace run says which workspace it spans", () => {
     const ask = run({ note: "look around", workspace: "bike-trips" });
     expect(describeEvent({ type: "run", run: ask }, snap(), 5).map((l) => l.text)).toEqual([

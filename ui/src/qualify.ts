@@ -185,6 +185,14 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return ev;
     case "health":
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
+    case "capacity":
+      return {
+        ...ev,
+        capacity: {
+          ...ev.capacity,
+          held: ev.capacity.held.map((h) => ({ ...h, id: q(h.id), repoId: q(h.repoId) })),
+        },
+      };
     case "landing":
       return { ...ev, landing: qLanding(q, ev.landing) };
     case "prs":

@@ -37,6 +37,10 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
           ? long
             ? `${verb} done`
             : "done"
+          : run.status === "limited"
+            ? long
+              ? `${verb} waits for capacity`
+              : "limited"
           : run.status === "failed"
             ? long
               ? `${verb} failed`

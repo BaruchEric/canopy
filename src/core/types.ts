@@ -1,5 +1,6 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
+import type { Capacity, CapacitySettings } from "./capacity";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -637,6 +638,8 @@ export interface CanopyConfig {
   /** per-machine health checks by repo path, over the repo's own
    *  `.canopy/health.json` (core/repohealth) */
   health: Record<string, RepoCheckDef[]>;
+  /** the capacity governor's thresholds and observed dollar figure (FR-036) */
+  capacity: CapacitySettings;
   /** the repos archived in canopy, by path like agents */
   archived: string[];
   /** the repos starred in canopy, by path like agents */
@@ -1657,6 +1660,8 @@ export type ServerEvent =
   | { type: "sweep" }
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
+  /** each backend's usage windows, the reported hit and held starts */
+  | { type: "capacity"; capacity: CapacityInfo }
   | { type: "kit"; kit: KitInfo }
   | { type: "secrets"; info: SecretsInfo }
   /** keep awake, whole, whenever its mode or hold changes (core/awake) */
@@ -3302,6 +3307,23 @@ export interface HealthCheck {
 /** `GET /api/health` */
 export interface HealthInfo {
   checks: HealthCheck[];
+}
+
+/** a start a pump holds for capacity (plan 2 fills it; this plan serves none) */
+export interface HeldStart {
+  id: string;
+  what: string;
+  repoId: string;
+  priority: Priority;
+  why: string;
+  since: number;
+}
+
+/** `GET /api/capacity` and the `capacity` event */
+export interface CapacityInfo {
+  capacity: Capacity[];
+  held: HeldStart[];
+  settings: CapacitySettings;
 }
 
 /** What a repo's health check looks at (core/repohealth). */

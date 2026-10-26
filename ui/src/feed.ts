@@ -311,6 +311,8 @@ function runLines(ev: Extract<ServerEvent, { type: "run" }>, prev: FeedSnapshot,
     } else if (run.status === "done") {
       const tail = run.outcome ? `, ${run.outcome}` : "";
       say(`${run.verb} done${tail}${run.result ? ` in ${Math.round(run.result.durationMs / 1000)}s` : ""}`);
+    } else if (run.status === "limited") {
+      say(`${run.verb} waits for capacity${run.error ? `: ${clip(run.error, 100)}` : ""}`);
     } else if (run.status === "failed") {
       say(`${run.verb} failed${run.error ? `: ${clip(run.error, 100)}` : ""}`);
     } else if (run.status === "stopped") {
@@ -536,6 +538,8 @@ export function describeEvent(
     case "ranger":
     // health has its own chip, panel and page
     case "health":
+    // capacity has its own chip and popover
+    case "capacity":
     // a run's own timeline says what a remembered rule let through
     case "remembered":
     // the kit has its own page

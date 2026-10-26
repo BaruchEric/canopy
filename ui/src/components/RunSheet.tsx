@@ -470,6 +470,12 @@ export function Timeline({
           <p>Chat ended.</p>
         </div>
       )}
+      {run.status === "limited" && (
+        <div className="outcome warn">
+          <p>The plan's usage limit: {run.error}</p>
+          <p>The work is sound; it waits for the reset.</p>
+        </div>
+      )}
       {run.status === "failed" && (
         <div className="outcome err">
           <p>{run.error ?? "The run failed."}</p>

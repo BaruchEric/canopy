@@ -4,6 +4,7 @@
  *  tests drive it with a fake runner. */
 
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
+import { limitHit, resetWord } from "./capacity";
 import type { BranchStart } from "./runner";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
@@ -381,6 +382,13 @@ export class Flows {
       void this.runStep(live);
       return;
     }
+    if (run.status === "limited") {
+      const now = this.now();
+      const hit = limitHit(run.error ?? "", now);
+      live.flow.parkedFor = "capacity";
+      this.park(live, hit ? `waiting for capacity (resets ${resetWord(hit.resetsAt, now)})` : "waiting for capacity");
+      return;
+    }
     if (run.status === "failed") {
       step.status = "failed";
       step.reason = run.error ?? "the run failed";
@@ -428,6 +436,12 @@ export class Flows {
       }
       // a step a restart cut short keeps its session for the rerun
       this.resetStep(step, live.flow.restarted === true);
+      void this.runStep(live);
+      return live.flow;
+    }
+    if (live.flow.parkedFor === "capacity" && choice !== "stop") {
+      delete live.flow.parkedFor;
+      this.resetStep(step);
       void this.runStep(live);
       return live.flow;
     }

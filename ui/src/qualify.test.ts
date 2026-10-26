@@ -183,6 +183,17 @@ describe("qEvent", () => {
       expect(qEvent(q, ev)).toBe(ev);
     }
   });
+  test("a capacity event qualifies held start identifiers", () => {
+    const info = {
+      capacity: [],
+      held: [{ id: "h1", what: "run", repoId: "a/b", priority: "normal" as const, why: "low window", since: 1 }],
+      settings: { lowHold: 0.7, normalHold: 0.9, weeklyLowHold: 0.85, observedFiveHourUsd: null },
+    };
+    expect(qEvent(q, { type: "capacity", capacity: info })).toMatchObject({
+      type: "capacity",
+      capacity: { held: [{ id: "mac|h1", repoId: "mac|a/b" }] },
+    });
+  });
 });
 
 describe("mergeHistory", () => {

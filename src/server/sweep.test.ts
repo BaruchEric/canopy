@@ -300,6 +300,14 @@ describe("the sweep hub", () => {
     ]);
   });
 
+  test("a limited chat is gone when a stored chat key is rechecked", async () => {
+    const w = world();
+    w.runs = [run({ id: "c1", chat: true, status: "limited", endedAt: NOW })];
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["chat:c1"], "eric")).toEqual([{ key: "chat:c1", result: "gone" }]);
+    expect(w.calls.stopChat).toEqual([]);
+  });
+
   test("two closes at once run in turn; the second reports gone", async () => {
     const w = world();
     w.shells = [shell()];

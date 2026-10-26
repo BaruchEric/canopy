@@ -342,11 +342,12 @@ export interface Notice {
   text: string;
 }
 
-const ENDED = new Set<string>(["done", "failed", "stopped"]);
+const ENDED = new Set<string>(["done", "failed", "limited", "stopped"]);
 
 /** a run's words for its end: "done, changed", "failed: <why>" */
 function ending(status: string, outcome?: string, error?: string): string {
   if (status === "failed") return error ? `failed: ${error}` : "failed";
+  if (status === "limited") return error ? `limited: ${error}` : "limited";
   return outcome ? `${status}, ${outcome}` : status;
 }
 

@@ -181,6 +181,25 @@ describe("summaryOf", () => {
 });
 
 describe("Flows", () => {
+  test("a step run that ends limited parks the flow for capacity; continue runs the step again (FR-036)", async () => {
+    const NOW = Date.UTC(2026, 9, 26, 12);
+    const { runner, flows } = setup({ now: () => NOW });
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    runner.end("run1", "limited", "", "You've hit your limit · resets 3pm");
+    await flush();
+    const parked = flows.get(flow.id);
+    expect([parked?.status, parked?.parkedFor, parked?.steps[0]?.status, parked?.steps[0]?.reason]).toEqual(["gated", "capacity", "gated", "waiting for capacity (resets 15:00)"]);
+    flows.resume(flow.id, "continue");
+    await flush();
+    expect([flows.get(flow.id)?.steps[0]?.status, flows.get(flow.id)?.parkedFor, runner.specs.length]).toEqual(["running", undefined, 2]);
+
+    const b = setup({ now: () => NOW });
+    const fallback = b.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    b.runner.end("run1", "limited", "", "usage limit reached");
+    await flush();
+    expect(b.flows.get(fallback.id)?.steps[0]?.reason).toBe("waiting for capacity (resets 13:00)");
+  });
+
   test("runs steps in order, parks at an ask gate, continues on resume, and settles the outcome", async () => {
     const st = { branch: "main", upstream: "o/main", ahead: 0, behind: 0, files: [], lastCommit: null } as unknown as Repo["status"];
     const { runner, flows } = setup({ status: async () => st });
