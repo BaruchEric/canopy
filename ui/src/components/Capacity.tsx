@@ -61,7 +61,9 @@ export function CapacityChip() {
                 {row.lines.length === 0 ? (
                   <>
                     <span className="capacity-reading">no reading</span>
-                    <span className="capacity-hint">set capacity.observedFiveHourUsd in config.json to estimate from the ledger</span>
+                    {row.cap.harness === "claude" && (
+                      <span className="capacity-hint">set capacity.observedFiveHourUsd in config.json to estimate from the ledger</span>
+                    )}
                   </>
                 ) : row.lines.map((line) => (
                   <span className={`capacity-reading ${row.tone}`} key={line}>{line}</span>
