@@ -28,7 +28,7 @@ export const GATES_FILE = ".canopy/gates.json";
 /** the package.json scripts used when the repo has no gates file, in order */
 export const PACKAGE_GATES = ["typecheck", "lint", "test", "build"] as const;
 
-const GATE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/;
+export const GATE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,39}$/;
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
