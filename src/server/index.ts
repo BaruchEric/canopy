@@ -45,7 +45,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
-import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
+import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -5197,6 +5197,7 @@ export async function startServer(opts: {
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
       startFix: (rec, entry) => startFixRun(state, rec, entry),
+      scenario: runScenario,
       runActive: (id) => {
         const run = state.runner.get(id);
         return run !== undefined && isRunActive(run);
