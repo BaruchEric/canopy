@@ -85,6 +85,8 @@ canopy scenarios <repo> run [<run>]         # run the set against a branch run's
 # a repo's gates come from .canopy/gates.json, else package.json's typecheck, lint, test and build; they run in the
 # branch's worktree in their own shell, without canopy's logins (GH_TOKEN, git's credential helper) or CANOPY_ settings
 # the ship workflow's Gates step checks the same list (.canopy/gates.json as the last commit holds it)
+# after the gates, the queue runs the repo's holdout scenarios kept under the config dir, which a run never sees; a red
+# one sends the branch back with the scenario's name and output
 canopy pr <run> [--draft]          # push a ready branch run and open a PR on GitHub in place of landing it; never a force push
 canopy prs [repo]                  # every PR branch runs opened: open, merged or closed, its checks, auto-fix and auto-merge
 # canopy polls each open PR with gh; auto-fix starts a fix run on a red check or a review comment from someone with

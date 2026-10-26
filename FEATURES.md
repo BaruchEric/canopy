@@ -72,11 +72,6 @@ P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orc
 The pre-flight runs one note two or three times, across profiles if asked; the members share a group, gates and FR-032 scenarios dry-run on each ready one, a read-only `compare` run ranks them, and the winner is offered "land" by its own sort while the rest drop when it lands. A group sheet shows the members side by side with their diffstat, gates, score and cost. `canopy run --times`.
 Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25).
 
-### FR-032 · Holdout scenario gates in the landing queue
-P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
-End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` at HEAD sets the run line and the judge mode.
-Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25).
-
 ### FR-028 · What is left on each subscription, in the status line
 P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
 Orca's status bar shows each subscription's usage beside its reset ("3% used 4h 32m", "24% used 6d 6h") for Claude, Codex and Grok. The costs view shows what was spent after the fact; this is the quota left now, so a long run can go to the harness with room.
@@ -126,6 +121,11 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-032 · Holdout scenario gates in the landing queue
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
+End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` at HEAD sets the run line and the judge mode.
+Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26 (command scenarios in the queue, the record, the sheet's line, canopy scenarios); plans 2 (judge scenarios) and 3 (the PR watch's pass, the repo panel's list) open.
 
 ### FR-016 · One Library across backends
 P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)

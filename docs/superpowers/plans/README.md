@@ -4,7 +4,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 
 | Plan | Status | Shipped | Spec |
 | --- | --- | --- | --- |
-| [Scenario gates, plan 1: command scenarios in the landing queue](2026-10-26-scenario-gates-1.md) | planned | | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
+| [Scenario gates, plan 1: command scenarios in the landing queue](2026-10-26-scenario-gates-1.md) | shipped | 2026-10-26 | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
 | [Scenario gates, plan 2: judge scenarios, the hold and the score](2026-10-26-scenario-gates-2.md) | planned | | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
 | [Capacity governor, plan 1: the probes, the model and the limited status](2026-10-26-capacity-governor-1.md) | planned | | [capacity governor](../specs/2026-10-25-capacity-governor-design.md) |
 | [Agent surface, plan 1: canopy mcp for shells and the ranger](2026-10-26-agent-surface-1.md) | planned | | [agent surface](../specs/2026-10-25-agent-surface-design.md) |

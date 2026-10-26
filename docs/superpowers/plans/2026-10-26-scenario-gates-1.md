@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written in the worktree
+**Status:** shipped 2026-10-26 (command scenarios in the queue, the record, the sheet's line, canopy scenarios); plans 2 and 3 open. Written in the worktree
 `.claude/worktrees/specs-2026-10-25` on branch `worktree-specs-2026-10-25`.
 
 **Goal:** a repo's holdout scenarios, kept under `<configDir>/scenarios/<repo key>/`
