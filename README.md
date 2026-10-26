@@ -77,6 +77,9 @@ canopy land <run>                  # a ready branch run into its repo's landing 
 canopy land <run> --approve <id>   # land a run that touches sensitive files, with the id `canopy land <run>` printed
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
+canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
+canopy scenarios <repo> add <name> [--judge] [--run CMD]   # a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
+canopy scenarios <repo> run [<run>]         # run the set against a branch run's worktree, else against the main checkout
 # a repo's .canopy/review.json ({"autoLand": ["docs", "comments", "format"], "approve": [globs]}) lets a run of
 # prose, comments or whitespace land on its own once its gates pass, and holds the globs for an approval
 # a repo's gates come from .canopy/gates.json, else package.json's typecheck, lint, test and build; they run in the

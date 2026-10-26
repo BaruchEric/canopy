@@ -85,6 +85,9 @@ usage:
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
+  canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
+  canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
+  canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout
   canopy pr <run> [--draft]          push a ready branch run and open a PR on GitHub in place of landing it
   canopy prs [repo]                  every PR branch runs opened: where it stands, its checks, auto-fix and auto-merge
   canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
