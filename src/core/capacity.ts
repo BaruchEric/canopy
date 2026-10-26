@@ -99,7 +99,17 @@ const resetTimestamp = (value: unknown): number | null => {
     const ms = value * 1000;
     return Number.isFinite(ms) && Number.isFinite(new Date(ms).getTime()) ? ms : null;
   }
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/i.test(value)) return null;
+  if (typeof value !== "string") return null;
+  const iso = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(Z|([+-])(\d{2}):?(\d{2}))?)?$/i.exec(value);
+  if (!iso) return null;
+  const year = Number(iso[1]);
+  const month = Number(iso[2]);
+  const day = Number(iso[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = month === 2 ? (leap ? 29 : 28) : [4, 6, 9, 11].includes(month) ? 30 : 31;
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth) return null;
+  if (iso[4] !== undefined && (Number(iso[4]) > 23 || Number(iso[5]) > 59 || Number(iso[6] ?? "0") > 59)) return null;
+  if (iso[9] !== undefined && (Number(iso[9]) > 23 || Number(iso[10]) > 59)) return null;
   const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : null;
 };
@@ -238,6 +248,7 @@ const windowHold = (windowName: "5-hour" | "weekly", window: Window, now: number
 /** Decide whether the priority can start from the current reading. */
 export function decide(capacity: Capacity, priority: Priority, settings: CapacitySettings, now: number): Decision {
   if (priority === "interactive") return "go";
+  if (capacity.source === "unknown") return "go";
   const hit = capacity.hit;
   if (hitStands(hit, now) && hit !== null) {
     const windowName = hit.window === "fiveHour" ? "5-hour" : "weekly";
@@ -247,7 +258,6 @@ export function decide(capacity: Capacity, priority: Priority, settings: Capacit
       why: `the ${windowName} window is spent (resets ${resetWord(hit.resetsAt, now)})`,
     };
   }
-  if (capacity.source === "unknown") return "go";
   const fiveHour = capacity.source === "endpoint" && stale(capacity.fiveHour, now) ? null : capacity.fiveHour;
   const weekly = capacity.source === "endpoint" && stale(capacity.weekly, now) ? null : capacity.weekly;
   if (priority === "normal") {

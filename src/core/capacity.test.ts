@@ -28,6 +28,17 @@ describe("readUsage", () => {
     expect(readUsage("nope", NOW)).toEqual({ fiveHour: null, weekly: null });
     expect(readUsage(null, NOW)).toEqual({ fiveHour: null, weekly: null });
   });
+  test("an impossible ISO reset leaves the window readable without a reset", () => {
+    expect(readUsage({ five_hour: { utilization: 32, resets_at: "2026-02-30T14:10:00Z" } }, NOW)).toEqual({
+      fiveHour: { used: 0.32, resetsAt: null, readAt: NOW },
+      weekly: null,
+    });
+    expect(readUsage({ five_hour: { utilization: 32, resets_at: "2026-10-26T25:10:00Z" } }, NOW).fiveHour?.resetsAt).toBeNull();
+  });
+  test("ISO offsets convert to the same instant; unix seconds remain supported", () => {
+    expect(readUsage({ five_hour: { utilization: 32, resets_at: "2026-10-26T16:10:00+02:00" } }, NOW).fiveHour?.resetsAt).toBe(Date.UTC(2026, 9, 26, 14, 10));
+    expect(readUsage({ five_hour: { utilization: 32, resets_at: 1793026800 } }, NOW).fiveHour?.resetsAt).toBe(AT_3PM);
+  });
 });
 
 describe("isLimitText and limitHit", () => {
@@ -92,6 +103,7 @@ describe("decide", () => {
     const hit = limitHit(SPENT, NOW);
     expect(decide(cap({ hit, fiveHour: win(1) }), "interactive", S, NOW)).toBe("go");
     expect(decide(cap(), "low", S, NOW)).toBe("go");
+    expect(decide(cap({ hit }), "low", S, NOW)).toBe("go");
   });
   test("the thresholds, per priority", () => {
     expect(decide(cap({ fiveHour: win(0.69), source: "endpoint" }), "low", S, NOW)).toBe("go");
