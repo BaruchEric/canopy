@@ -5214,7 +5214,10 @@ export async function startServer(opts: {
     scenarios: new Scenarios({
       root: scenariosRoot(),
       repo: (id) => state.result.repos.find((r) => r.id === id),
-      runDir: (id) => state.landing.record(id)?.dir,
+      runDir: (id, repoPath) => {
+        const rec = state.landing.record(id);
+        return rec && rec.repoPath === repoPath ? rec.dir : undefined;
+      },
       run: runScenario,
     }),
     callers,

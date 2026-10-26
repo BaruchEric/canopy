@@ -145,13 +145,19 @@ test("readScenarioSettings hands out a copy of the defaults, never the shared ob
   expect(a).not.toBe(DEFAULT_SETTINGS);
 });
 
-function hub(repoPath: string, runDir?: string, answers: Record<string, { exit: number; output: string }> = {}) {
-  const repo: Repo = { id: "r", name: "r", path: repoPath, group: "", source: "root", status: null };
+/** `run1` is a branch run of `runRepo`, the repo itself unless a test says otherwise */
+function hub(
+  repoPath: string,
+  runDir?: string,
+  answers: Record<string, { exit: number; output: string }> = {},
+  opts: { runRepo?: string; repo?: Partial<Repo> } = {},
+) {
+  const repo: Repo = { id: "r", name: "r", path: repoPath, group: "", source: "root", status: null, ...opts.repo };
   const calls: string[] = [];
   const s = new Scenarios({
     root,
     repo: (id) => (id === "r" ? repo : undefined),
-    runDir: (id) => (id === "run1" ? runDir : undefined),
+    runDir: (id, rp) => (id === "run1" && rp === (opts.runRepo ?? repoPath) ? runDir : undefined),
     run: async (_cwd, line) => {
       calls.push(line);
       return answers[line] ?? { exit: 0, output: "" };
@@ -197,4 +203,22 @@ test("a repo on another host is refused", async () => {
   const res = (await call("GET", "/api/scenarios/names?repo=r"))!;
   expect(res.status).toBe(400);
   expect(await res.json()).toEqual({ error: "scenarios run only for a repo on this backend" });
+});
+
+test("a forge-only repo is refused", async () => {
+  const forge = { kind: "forgejo", slug: "eric/x", clone: "ssh://git@forge/eric/x.git", branch: "main", updated: 0, private: false, empty: false } as const;
+  const { call } = hub("https://git.beric.ca/eric/x", undefined, {}, { repo: { forge } });
+  const res = (await call("POST", "/api/scenarios/run", { repo: "r" }))!;
+  expect(res.status).toBe(400);
+  expect(await res.json()).toEqual({ error: "scenarios run only for a repo on this backend" });
+});
+
+test("a branch run of another repo is no run here", async () => {
+  const repo = join(root, "r10");
+  await mkdir(repo, { recursive: true });
+  const { call, calls } = hub(repo, "/wt/run1", {}, { runRepo: join(root, "other") });
+  const res = (await call("POST", "/api/scenarios/run", { repo: "r", run: "run1" }))!;
+  expect(res.status).toBe(404);
+  expect(await res.json()).toEqual({ error: "no branch run by that id" });
+  expect(calls).toEqual([]);
 });

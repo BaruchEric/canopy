@@ -9,6 +9,7 @@ import { tail } from "../core/landing";
 import { DEFAULT_SETTINGS, parseScenario, parseScenarioSet, parseScenariosFile, scenarioTemplate, scoreOf, SCENARIOS_FILE } from "../core/scenario";
 import type { Scenario, ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
+import { isForge } from "../core/types";
 import type { Repo, ScenarioResult, ScenarioRun } from "../core/types";
 import { repoKey, revOf } from "../core/worktree";
 import type { CheckOutcome } from "./landing";
@@ -116,8 +117,8 @@ export interface ScenarioDeps {
   root: string;
   /** the scan's repo by id */
   repo: (id: string) => Repo | undefined;
-  /** a branch run's worktree by the run's id, else undefined */
-  runDir: (run: string) => string | undefined;
+  /** a branch run's worktree by the run's id, when the run is on that repo, else undefined */
+  runDir: (run: string, repoPath: string) => string | undefined;
   run: ScenarioRunner;
   now?: () => number;
 }
@@ -137,7 +138,8 @@ export class Scenarios {
     if (typeof id !== "string" || id === "") return json({ error: "repo is required" }, 400);
     const repo = this.deps.repo(id);
     if (!repo) return json({ error: "no repo by that id" }, 404);
-    if (parseLocator(repo.path).host !== null) return json({ error: "scenarios run only for a repo on this backend" }, 400);
+    // a forge-only repo has a web address for a path and no checkout here
+    if (parseLocator(repo.path).host !== null || isForge(repo)) return json({ error: "scenarios run only for a repo on this backend" }, 400);
     return repo;
   }
 
@@ -222,7 +224,7 @@ export class Scenarios {
     if (run !== undefined && typeof run !== "string") return json({ error: "run must be a branch run's id" }, 400);
     let dir = repo.path;
     if (run !== undefined) {
-      const found = this.deps.runDir(run);
+      const found = this.deps.runDir(run, repo.path);
       if (found === undefined) return json({ error: "no branch run by that id" }, 404);
       dir = found;
     }
