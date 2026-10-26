@@ -35,10 +35,14 @@ import {
   dockless,
   waitingCount,
 } from "../store";
-import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isReservedPanel, isWaitingPanel } from "../waiting";
+import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isWaitingPanel } from "../waiting";
 import { CLI_GLYPH, CLI_NAME, CLI_PANEL, isCliPanel } from "../cli";
 import { HEALTH_GLYPH, HEALTH_NAME, HEALTH_PANEL, isHealthPanel } from "../health";
 import { AGENT_GLYPH, cardOfPanel, isAgentPanel } from "../agentpanel";
+import { ITEM_GLYPH, isPopupPanel, isReservedPanel, isRunPanel, popupOfPanel, runOfPanel } from "../itempanel";
+import { Console } from "./RunSheet";
+import { PopupTabView } from "./PopupTab";
+import { tabEntries } from "./PopGrip";
 import { machineOf } from "../agentcards";
 import { AgentScreen, AskHere, pageIds, useAgentCard, useShellProbe } from "./AgentFocus";
 import { AgentActions, useNow } from "./Registry";
@@ -95,7 +99,7 @@ import {
   zoomStyle,
 } from "./Surface";
 import { SECTION_WORD, foldKeys, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
-import { POPUP_WORD, sectionApplies, tabbedKeys } from "../sectiontabs";
+import { POPUP_WORD, sectionApplies, tabbedKeys, type TabRef } from "../sectiontabs";
 import { openElsewhere, soloUrl } from "../routes";
 import { enterFull, fullWord, leaveFull, lockEscape, unlockKeys, useFullscreenExit } from "../fullscreen";
 import { copyText } from "../share";
@@ -2017,9 +2021,34 @@ function PanelWaiting({
 
 const WAITING_NAME = "waiting on you";
 
-/** a panel's name for a label: its repo's id, or the waiting panel's name */
+/** a panel's name for a label: its repo's id, or a reserved panel's name */
 const panelText = (id: string): string =>
-  isWaitingPanel(id) ? WAITING_NAME : isCliPanel(id) ? CLI_NAME : isHealthPanel(id) ? HEALTH_NAME : isAgentPanel(id) ? agentPanelName(id) : idText(id);
+  isWaitingPanel(id)
+    ? WAITING_NAME
+    : isCliPanel(id)
+      ? CLI_NAME
+      : isHealthPanel(id)
+        ? HEALTH_NAME
+        : isAgentPanel(id)
+          ? agentPanelName(id)
+          : isRunPanel(id)
+            ? runPanelName(id)
+            : isPopupPanel(id)
+              ? popupPanelName(id)
+              : idText(id);
+
+/** what a run's panel is called: its verb and its repo (FR-047) */
+function runPanelName(id: string): string {
+  const s = useStore.getState();
+  const run = s.runs[runOfPanel(id) ?? ""];
+  return run ? `${run.verb} · ${s.repos.find((r) => r.id === run.repoId)?.name ?? idText(run.repoId)}` : "chat";
+}
+
+/** what a popup's panel is called: the popup's word (FR-047) */
+function popupPanelName(id: string): string {
+  const name = popupOfPanel(id);
+  return name ? POPUP_WORD[name] : "popup";
+}
 
 /** what an agent's panel is called: its repo, else its handle */
 function agentPanelName(id: string): string {
@@ -2265,9 +2294,27 @@ function HealthPanel({
   );
 }
 
-/** An agent's panel's gear: its zoom, the dock's layout and moves, the
- *  close setting, and sharing it. */
-function AgentGear({ id, name, zoom, body }: { id: string; name: string; zoom: GearEntry; body: () => HTMLElement | null }) {
+/** The gear of a panel that is no repo's and holds one thing, an agent's,
+ *  a chat's or a popup's: its zoom, the dock's layout and moves, the ways
+ *  out into a shell window's tab (`tab`, FR-030), the close setting, and
+ *  sharing it. `label` names it for the menu, `share` for a capture. */
+function ItemGear({
+  id,
+  name,
+  label,
+  share,
+  tab,
+  zoom,
+  body,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  share: string;
+  tab?: TabRef;
+  zoom: GearEntry;
+  body: () => HTMLElement | null;
+}) {
   const arranged = useStore(arrangementOf);
   const arrangeDock = useStore((s) => s.arrangeDock);
   const setSetting = useStore((s) => s.setSetting);
@@ -2286,15 +2333,16 @@ function AgentGear({ id, name, zoom, body }: { id: string; name: string; zoom: G
           { type: "item", label: "carousel", on: carousel, run: () => setSetting("dockCarousel", !carousel) },
           ...stepEntries(id, panels, dockLayout, movePanel),
         ] satisfies GearEntry[])),
+    ...(tab ? tabEntries(tab, "the dock") : []),
     closeEntry(panelClose, setSetting),
   ];
   return (
     <Gear
-      label={`the agent at ${name}`}
+      label={label}
       groups={[
         { label: name, entries: [zoom] },
         { label: "layout", entries: layout },
-        { label: "share", entries: shareEntries({ el: body, label: `agent ${name}` }) },
+        { label: "share", entries: shareEntries({ el: body, label: share }) },
       ]}
     />
   );
@@ -2363,7 +2411,15 @@ function AgentPanel({
               <AgentActions card={card} />
             </span>
           )}
-          <AgentGear id={id} name={name} zoom={zoomEntry} body={() => bodyRef.current} />
+          <ItemGear
+            id={id}
+            name={name}
+            label={`the agent at ${name}`}
+            share={`agent ${name}`}
+            tab={card ? { kind: "agent", ref: card.id, label: name } : undefined}
+            zoom={zoomEntry}
+            body={() => bodyRef.current}
+          />
           {closable && (
             <button type="button" className="mini close" onClick={() => closePanel(id)} aria-label={`Close the agent at ${name}`}>
               ✕
@@ -2379,6 +2435,155 @@ function AgentPanel({
           ) : (
             <p className="agent-panel-gone">This agent is no longer on the registry. Close the panel when you are done with it.</p>
           )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** A run as a dock panel (`/run/<run id>`, FR-047): an agent's chat or a
+ *  coordinator as the run sheet shows it, docked to tab, move and size like
+ *  a repo's panel. The console's ✕ and its hide close the panel. A run the
+ *  server no longer has says so and waits to be closed. */
+function RunPanel({
+  id,
+  hidden,
+  order,
+  area,
+  cell,
+  strip,
+  movable,
+}: {
+  id: string;
+  hidden?: boolean;
+  order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
+  movable?: boolean;
+}) {
+  const runId = runOfPanel(id) ?? "";
+  const run = useStore((s) => s.runs[runId]);
+  const repo = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId) : undefined));
+  const closable = useStore((s) => s.settings.panelClose);
+  const closePanel = useStore((s) => s.closePanel);
+  const wasTab = useWasTab(strip);
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("chat");
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = (area !== undefined && !hidden) || order !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide, area]);
+  const name = run ? `${run.verb} · ${repo?.name ?? idText(run.repoId)}` : "chat";
+  const tab: TabRef | undefined = run ? { kind: "run", ref: runId, label: name, repoId: run.repoId } : undefined;
+  const close = () => closePanel(id);
+  return (
+    <section
+      ref={box}
+      className={`panel run-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      aria-label={`chat ${name}`}
+      hidden={hidden}
+      data-cell={cell}
+      style={{ order, gridArea: area }}
+    >
+      <div className="panel-body">
+        <header className="panel-head" {...panelHead(id, name, movable)}>
+          <span className="glyph" {...(movable && dragHandle(id, name))}>
+            {ITEM_GLYPH}
+          </span>
+          <span className="panel-name" {...(movable && dragHandle(id, name))}>
+            {name}
+          </span>
+          <span className="spacer" />
+          <ItemGear id={id} name={name} label={`the chat ${name}`} share={`chat ${name}`} tab={tab} zoom={zoomEntry} body={() => bodyRef.current} />
+          {closable && (
+            <button type="button" className="mini close" onClick={close} aria-label={`Close the chat ${name}`}>
+              ✕
+            </button>
+          )}
+        </header>
+        <div className="run-panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
+          {run ? (
+            <div className="sheet run-tab">
+              <Console run={run} repo={repo} onClose={close} />
+            </div>
+          ) : (
+            <p className="agent-panel-gone">That run is not on the server now. Close the panel when you are done with it.</p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** A top-bar popup as a dock panel (`/popup/<name>`, FR-047): the inbox,
+ *  the tasks, the shells, the shells from before, the ranger or tailchan,
+ *  the same body its popover draws, docked to tab, move and size like a
+ *  repo's panel. Waiting on you and health have panels of their own. */
+function PopupPanel({
+  id,
+  hidden,
+  order,
+  area,
+  cell,
+  strip,
+  movable,
+}: {
+  id: string;
+  hidden?: boolean;
+  order?: number;
+  area?: string;
+  cell?: string;
+  strip?: boolean;
+  movable?: boolean;
+}) {
+  const popup = popupOfPanel(id);
+  const name = popup ? POPUP_WORD[popup] : "popup";
+  const closable = useStore((s) => s.settings.panelClose);
+  const closePanel = useStore((s) => s.closePanel);
+  const wasTab = useWasTab(strip);
+  const box = useRef<HTMLElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const { zoom, entry: zoomEntry } = useZoom("popup");
+  const forward = useStore((s) => s.activePanel === id);
+  const sideBySide = (area !== undefined && !hidden) || order !== undefined;
+  useEffect(() => {
+    if (!forward || !sideBySide) return;
+    const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
+    return () => cancelAnimationFrame(frame);
+  }, [forward, sideBySide, area]);
+  const tab: TabRef | undefined = popup ? { kind: "popup", ref: popup, label: name } : undefined;
+  return (
+    <section
+      ref={box}
+      className={`panel popup-panel${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}`}
+      aria-label={name}
+      hidden={hidden}
+      data-cell={cell}
+      style={{ order, gridArea: area }}
+    >
+      <div className="panel-body">
+        <header className="panel-head" {...panelHead(id, name, movable)}>
+          <span className="glyph" {...(movable && dragHandle(id, name))}>
+            {ITEM_GLYPH}
+          </span>
+          <span className="panel-name" {...(movable && dragHandle(id, name))}>
+            {name}
+          </span>
+          <span className="spacer" />
+          <ItemGear id={id} name={name} label={`the ${name} panel`} share={name} tab={tab} zoom={zoomEntry} body={() => bodyRef.current} />
+          {closable && (
+            <button type="button" className="mini close" onClick={() => closePanel(id)} aria-label={`Close ${name}`}>
+              ✕
+            </button>
+          )}
+        </header>
+        <div className="popup-panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
+          {popup && !hidden && <PopupTabView name={popup} />}
         </div>
       </div>
     </section>
@@ -3092,7 +3297,17 @@ function CellStrip({
             }}
           >
             <span className="glyph" aria-hidden="true">
-              {isCliPanel(id) ? CLI_GLYPH : isHealthPanel(id) ? HEALTH_GLYPH : isAgentPanel(id) ? AGENT_GLYPH : waiting ? WAITING_GLYPH : GLYPH[state]}
+              {isCliPanel(id)
+                ? CLI_GLYPH
+                : isHealthPanel(id)
+                  ? HEALTH_GLYPH
+                  : isAgentPanel(id)
+                    ? AGENT_GLYPH
+                    : isRunPanel(id) || isPopupPanel(id)
+                      ? ITEM_GLYPH
+                      : waiting
+                        ? WAITING_GLYPH
+                        : GLYPH[state]}
             </span>
             <span className="dock-tab-name">
               {waiting ? name : <IdLabel id={id} />}
@@ -3471,6 +3686,12 @@ export function Dock() {
         }
         if (isAgentPanel(id)) {
           return <AgentPanel key={id} id={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
+        }
+        if (isRunPanel(id)) {
+          return <RunPanel key={id} id={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
+        }
+        if (isPopupPanel(id)) {
+          return <PopupPanel key={id} id={id} area={p?.area} cell={p?.cell} order={p?.order} hidden={p?.hidden} strip={p?.strip} movable={movable} />;
         }
         return (
           <RepoPanel

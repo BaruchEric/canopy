@@ -13447,3 +13447,27 @@ body.resizing-nesw {
 .popup-tab[data-popup="waiting"] {
   --state: var(--lichen);
 }
+
+/* ---------- chats and popups as dock panels (FR-047) ---------- */
+/* a run's console or a popup's body under the panel's head, filling the
+   panel and scrolling inside it, as it does in a shell window's tab */
+.run-panel-body,
+.popup-panel-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.run-panel-body > .run-tab {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.popup-panel-body > .popup-tab {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}

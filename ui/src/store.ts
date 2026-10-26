@@ -55,6 +55,7 @@ import { convOf, isUnread, mergeMessages } from "./chan";
 import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
+import { isReservedPanel, panelOfItem, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
@@ -78,7 +79,6 @@ import {
   attentionRepos,
   behindRepos,
   failedRows,
-  isReservedPanel,
   isUnpushed,
   isWaitingPanel,
   turnRows,
@@ -1003,8 +1003,10 @@ export interface CanopyState {
   saveTaskDef: (repoId: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => Promise<void>;
   /** opening a panel starts its tasks flagged to start with it */
   startPanelTasks: (repoId: string) => void;
-  /** opens a repo's panel in the dock, or brings its tab forward */
-  openPanel: (id: string) => void;
+  /** opens a repo's panel in the dock, or brings its tab forward; `into`
+   *  makes a new panel a column of its own or a tab of the showing cell
+   *  whatever the dock's arrangement (FR-047) */
+  openPanel: (id: string, into?: Arrangement) => void;
   /** brings an open panel's tab forward without opening anything */
   showPanel: (id: string) => void;
   /** opens a repo where the settings say to; modifier keys override that
@@ -1091,6 +1093,10 @@ export interface CanopyState {
   /** a chat or a popup as a tab at a shell window (FR-030), out of any
    *  other place it was a tab; the strip shows it */
   tabItem: (place: SectionPlace, item: TabRef) => void;
+  /** a chat, an agent or a popup as a dock panel of its own (FR-047), a
+   *  column or a tab of the showing cell by `into`, out of any shell
+   *  window's tab and off the sheet it was in */
+  dockItem: (item: TabRef, into?: Arrangement) => void;
   /** a section's or an item's tab closed; a section goes back in its card */
   untab: (id: string) => void;
   /** shows a section's or an item's tab in the strip and the sessions view */
@@ -2008,10 +2014,11 @@ function loneColumn(l: DockLayout, id: string) {
  *  more (`recall`). Every way into the dock by hand goes through this, so
  *  it writes the layout too: a new panel becomes a column, or a tab of the
  *  cell that was showing (the previous active, not the new one, which no
- *  cell holds yet), and then shows. */
-function dockPanel(s: DockState & Pick<CanopyState, "popped" | "recalled">, id: string) {
+ *  cell holds yet), by the dock's arrangement or `into` when given, and
+ *  then shows. */
+function dockPanel(s: DockState & Pick<CanopyState, "popped" | "recalled">, id: string, into: Arrangement = arrangementOf(s)) {
   const next = focusPanel(s.panels, id);
-  const dockLayout = activate(placeAll(laidOut(s), next.panels, s.activePanel, arrangementOf(s), widthOf(s)), id);
+  const dockLayout = activate(placeAll(laidOut(s), next.panels, s.activePanel, into, widthOf(s)), id);
   return { panels: panelsFor(s, dockLayout), activePanel: next.activePanel, dockLayout, ...recall(s, id) };
 }
 
@@ -2746,9 +2753,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       .then((r) => set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks } })))
       .catch(() => {});
   },
-  openPanel: (id) =>
+  openPanel: (id, into) =>
     set((s) => {
-      const next = dockPanel(s, id);
+      const next = dockPanel(s, id, into);
       // a panel shell another device opened here waits for its panel
       return { ...next, terms: dockless() ? s.terms : adoptTerms(s.terms, s.shells, s.repos, next.panels, skipped(s.hiddenTerms)) };
     }),
@@ -4002,6 +4009,22 @@ export const useStore = create<CanopyState>((set, get) => ({
     const id = itemTabId(place, item.kind, item.ref);
     if (place === "strip") set({ stripPage: id });
     if (place === "panel" && item.repoId && closedIn(s, item.repoId, "shell")) s.toggleSection(item.repoId, "shell");
+    // one place only: the item leaves the dock panel it had (FR-047)
+    const panel = panelOfItem(item);
+    if (panel && s.panels.includes(panel)) s.closePanel(panel);
+  },
+  dockItem: (item, into) => {
+    const s = get();
+    const panel = panelOfItem(item);
+    if (!panel) return;
+    // one place only: out of every shell window's tab, and off its sheet
+    const same = (t: { kind: string; ref: string }) => t.kind === item.kind && t.ref === item.ref;
+    if (s.settings.itemTabs.some(same)) {
+      s.setSetting("itemTabs", s.settings.itemTabs.filter((t) => !same(t)));
+      if (s.stripPage === itemTabId("strip", item.kind, item.ref)) set({ stripPage: null });
+    }
+    if (item.kind === "run" && s.sheet?.kind === "run" && s.sheet.runId === item.ref) set({ sheet: null });
+    s.openPanel(panel, into);
   },
   untab: (id) => {
     const s = get();
@@ -4289,7 +4312,14 @@ export const useStore = create<CanopyState>((set, get) => ({
   syncPeers: async (repoId) => {
     applyPeerRepo(get, await api.peerAction(repoId, { action: "sync" }));
   },
-  showRun: (runId) => set({ sheet: { kind: "run", runId } }),
+  showRun: (runId) => {
+    // a chat docked as a panel of its own (FR-047) comes forward there
+    // instead of over the page, while the dock is the view
+    const panel = runPanel(runId);
+    const onDock = typeof window !== "undefined" && !new URLSearchParams(window.location.search).get("view");
+    if (onDock && get().panels.includes(panel)) get().showPanel(panel);
+    else set({ sheet: { kind: "run", runId } });
+  },
   closeSheet: () => set({ sheet: null }),
   openSearch: () => set({ sheet: { kind: "search" } }),
   openKeys: (view) => set({ sheet: { kind: "keys", view } }),
@@ -4353,6 +4383,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   coordStart: (runId) => api.coordStart(runId),
   dismissRun: async (runId) => {
     await api.dismissRun(runId);
+    // a chat docked as a panel (FR-047) goes with its run
+    const panel = runPanel(runId);
+    if (get().panels.includes(panel)) get().closePanel(panel);
     set((s) => {
       const { [runId]: _gone, ...runs } = s.runs;
       const sheet =

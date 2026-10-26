@@ -6,6 +6,8 @@ import { type PopAnchor, type PopSize, gripSize, popRoom } from "../pop";
 import { ZOOM_MAX, ZOOM_MIN, zoomStep, zoomWord } from "../surface";
 import { Gear, type GearEntry } from "./Gear";
 import type { TabRef } from "../sectiontabs";
+import type { Arrangement } from "../grid";
+import { openView } from "../clirun";
 
 const KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"]);
 
@@ -56,18 +58,34 @@ export interface PopSpec {
  *  into a tab closes it, whichever kind it is. */
 const closePopup = () => requestAnimationFrame(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
 
-/** The gear lines that move a popup into a tab: the strip's, and a run's
- *  card's shells too. */
-function tabEntries(tab: TabRef): GearEntry[] {
+/** The gear lines that move a popup, a sheet or a dock panel into a tab
+ *  in a shell window: the strip's, and a run's card's shells too. `from`
+ *  says what it leaves, and `after` runs once it has moved. */
+export function tabEntries(tab: TabRef, from = "the popup", after?: () => void): GearEntry[] {
   const to = (place: "strip" | "panel") => () => {
     useStore.getState().tabItem(place, tab);
-    closePopup();
+    after?.();
   };
   return [
-    { type: "item", label: "a tab in the shells strip", title: "Out of the popup into a tab in the strip and the sessions view", run: to("strip") },
+    { type: "item", label: "a tab in the shells strip", title: `Out of ${from} into a tab in the strip and the sessions view`, run: to("strip") },
     ...(tab.repoId
-      ? [{ type: "item" as const, label: "a tab in its card's shells", title: "Out of the popup into a tab beside the card's shells", run: to("panel") }]
+      ? [{ type: "item" as const, label: "a tab in its card's shells", title: `Out of ${from} into a tab beside the card's shells`, run: to("panel") }]
       : []),
+  ];
+}
+
+/** The gear lines that move a popup or a sheet into the dock (FR-047): a
+ *  card of its own beside the rest, or a tab of the cell that is showing.
+ *  The dock is on the git view, so the page goes there. */
+function dockEntries(tab: TabRef, after: () => void): GearEntry[] {
+  const to = (into: Arrangement) => () => {
+    useStore.getState().dockItem(tab, into);
+    openView("git");
+    after();
+  };
+  return [
+    { type: "item", label: "a card in the dock", title: "Out of the popup into a panel of its own in the dock, side by side with the rest", run: to("columns") },
+    { type: "item", label: "a tab in the dock", title: "Out of the popup into a tab of the dock's showing cell", run: to("tabs") },
   ];
 }
 
@@ -243,7 +261,7 @@ export function usePopEntries({ name, anchor, gap = 8, tab }: PopSpec, pop: () =
       ...(off || !sized ? { off: off ?? "It is at its own size" } : {}),
       run: () => saveSize(name, null),
     },
-    ...(tab ? tabEntries(tab) : []),
+    ...(tab ? [...dockEntries(tab, closePopup), ...tabEntries(tab, "the popup", closePopup)] : []),
   ];
   if (!zoomed) return size;
   return [

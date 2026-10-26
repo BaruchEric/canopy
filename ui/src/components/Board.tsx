@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { flushSync } from "react-dom";
 import { isLiveAgent, type AgentCard, type Run } from "../../../src/core/types";
 import { cardName, clockWord, durationWord, machineOf, registrySummary, timelineOf, whereWord, type Timeline, type TrailMark } from "../agentcards";
-import { agentPanel } from "../agentpanel";
 import {
   BOARD_GROUPINGS,
   BOARD_LAYOUTS,
@@ -418,8 +417,9 @@ function BoardTile({
     if (e.target instanceof Element && e.target.closest("button, a, input, select, textarea, summary, .xterm, .inbox-list")) return;
     if (!(term && focused)) onPick(card.id);
   };
+  // through dockItem, so the agent leaves any shell window's tab it sat in
   const toDock = () => {
-    useStore.getState().openPanel(agentPanel(card.id));
+    useStore.getState().dockItem({ kind: "agent", ref: card.id, label: name });
     onGit?.();
   };
   const swipeHead = narrow && term && focused;

@@ -46,6 +46,7 @@ import { setBase, setRegistry } from "./registry";
 import type { BackendAuth } from "./callerToken";
 import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
+import { itemTabId } from "./sectiontabs";
 import {
   DEFAULT_AGENT,
   type AgentCard,
@@ -2843,5 +2844,77 @@ describe("a sweep event", () => {
     gates[0]?.();
     await settle();
     expect(useStore.getState().sweep?.lastRun?.at).toBe(9);
+  });
+});
+
+describe("chats, agents and popups as dock panels (FR-047)", () => {
+  const pristine = useStore.getState();
+  const g = globalThis as unknown as { localStorage?: unknown };
+  beforeEach(() => {
+    const kept = new Map<string, string>();
+    g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+    useStore.setState({
+      panels: [],
+      activePanel: null,
+      dockLayout: { columns: [] },
+      sheet: null,
+      stripPage: null,
+      settings: { ...pristine.settings, itemTabs: [], openIn: "dock" },
+    });
+  });
+  afterEach(() => {
+    delete g.localStorage;
+    useStore.setState({
+      panels: pristine.panels,
+      activePanel: pristine.activePanel,
+      dockLayout: pristine.dockLayout,
+      sheet: pristine.sheet,
+      stripPage: pristine.stripPage,
+      settings: pristine.settings,
+    });
+  });
+
+  test("openPanel's into places a new panel as a tab or a column whatever the arrangement", () => {
+    useStore.getState().openPanel("a");
+    useStore.getState().openPanel("b", "tabs");
+    expect(cellOf(useStore.getState().dockLayout, "a")?.panels).toEqual(["a", "b"]);
+    expect(useStore.getState().activePanel).toBe("b");
+    useStore.getState().openPanel("c", "columns");
+    const l = useStore.getState().dockLayout;
+    expect(l.columns.length).toBe(2);
+    expect(cellOf(l, "c")?.panels).toEqual(["c"]);
+  });
+
+  test("dockItem opens the item's panel, out of every shell window's tab and off its sheet", () => {
+    const s = useStore.getState();
+    const inbox = { kind: "popup" as const, ref: "inbox", label: "inbox" };
+    s.tabItem("strip", inbox);
+    expect(useStore.getState().settings.itemTabs.map((t) => t.ref)).toEqual(["inbox"]);
+    expect(useStore.getState().stripPage).toBe(itemTabId("strip", "popup", "inbox"));
+    s.dockItem(inbox);
+    expect(useStore.getState().panels).toEqual(["/popup/inbox"]);
+    expect(useStore.getState().settings.itemTabs).toEqual([]);
+    expect(useStore.getState().stripPage).toBeNull();
+    // a run's sheet closes as its panel opens, here as a tab of the showing cell
+    useStore.setState({ sheet: { kind: "run", runId: "r1" } });
+    s.dockItem({ kind: "run", ref: "r1", label: "ask · demo", repoId: "demo" }, "tabs");
+    expect(useStore.getState().sheet).toBeNull();
+    expect(cellOf(useStore.getState().dockLayout, "/popup/inbox")?.panels).toEqual(["/popup/inbox", "/run/r1"]);
+    // waiting on you keeps the panel it had
+    s.dockItem({ kind: "popup", ref: "waiting", label: "waiting on you" });
+    expect(useStore.getState().panels).toContain(WAITING_PANEL);
+    // a popup by a name it has not opens nothing
+    s.dockItem({ kind: "popup", ref: "weather", label: "weather" });
+    expect(useStore.getState().panels.length).toBe(3);
+  });
+
+  test("tabItem takes the item out of the dock, so it sits in one place", () => {
+    const s = useStore.getState();
+    const agent = { kind: "agent" as const, ref: "claude:abc", label: "claude" };
+    s.dockItem(agent);
+    expect(useStore.getState().panels).toEqual(["/agent/claude:abc"]);
+    s.tabItem("strip", agent);
+    expect(useStore.getState().panels).toEqual([]);
+    expect(useStore.getState().settings.itemTabs.map((t) => t.id)).toEqual([itemTabId("strip", "agent", "claude:abc")]);
   });
 });

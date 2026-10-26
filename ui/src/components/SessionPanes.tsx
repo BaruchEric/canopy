@@ -6,7 +6,8 @@ import { otherHarness } from "../handoff";
 import { backendOf } from "../registry";
 import { canMove, movableOf, movedId, movePage, type Spot } from "../panemove";
 import { atFrom, dropBox, edgeAt, leaveGroup, pruneGroups, setAt, seamsOf, splitIn, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
-import { connOf, useStore } from "../store";
+import { connOf, dockless, useStore } from "../store";
+import { openView } from "../clirun";
 import type { TermTab } from "../term";
 import { isItemTab, itemTabsAt, sectionTabsAt, type ItemTab, type PageTab, type SectionPlace, type SectionTab } from "../sectiontabs";
 import { SECTION_WORD, type SectionKey } from "../surface";
@@ -628,9 +629,24 @@ export function TabMenu({
         )}
         {onUntab &&
           (isItemTab(page) ? (
-            <button type="button" role="menuitem" title="Closes the tab; what it showed carries on" onClick={act(() => onUntab(id))}>
-              close the tab
-            </button>
+            <>
+              {!dockless() && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  title="Out of the tab into a panel of its own in the dock, on the git view (FR-047)"
+                  onClick={act(() => {
+                    useStore.getState().dockItem(page);
+                    openView("git");
+                  })}
+                >
+                  a card in the dock
+                </button>
+              )}
+              <button type="button" role="menuitem" title="Closes the tab; what it showed carries on" onClick={act(() => onUntab(id))}>
+                close the tab
+              </button>
+            </>
           ) : (
             <button type="button" role="menuitem" title="Closes the tab and puts the section back in its card" onClick={act(() => onUntab(id))}>
               back to the card
