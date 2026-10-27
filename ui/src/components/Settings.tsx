@@ -21,6 +21,7 @@ import { RangerRow } from "./Ranger";
 import { AwakeRow } from "./AwakeRow";
 import { SweepRow } from "./Sweep";
 import { NotifyRow } from "./NotifyRow";
+import { InstallRow } from "./InstallRow";
 import type { Palette } from "../settings";
 
 const LEVEL = [
@@ -441,6 +442,12 @@ export function SettingsMenu() {
           key: "notify",
           words: "notifications notify alert system desktop title count waiting hidden tab permission",
           node: <NotifyRow />,
+        },
+        {
+          tab: "device",
+          key: "install",
+          words: "install installed home screen app standalone offline service worker pwa manifest",
+          node: <InstallRow />,
         },
         {
           tab: "keys",
