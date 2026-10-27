@@ -870,6 +870,7 @@ export class LandingHub {
             set,
             settings,
             run: this.deps.scenario,
+            judge: null,
             head: after ?? "",
             now: this.now(),
             onDone: (r, next) => {

@@ -4,9 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../core/scenario";
-import type { Repo, ScenarioRun } from "../core/types";
+import type { Repo, ScenarioAnswers, ScenarioRun } from "../core/types";
 import { repoKey } from "../core/worktree";
-import { copySet, readScenarioSet, readScenarioSettings, runScenarioSet, Scenarios, setDirOf, type ScenarioRunner } from "./scenarios";
+import { copySet, readScenarioSet, readScenarioSettings, runScenarioSet, Scenarios, setDirOf, JUDGE_OFF, NO_JUDGE_KEY, OUT_OF_TIME, type ScenarioRunner } from "./scenarios";
 
 let root = "";
 beforeAll(async () => {
@@ -77,7 +77,7 @@ test("the pass: order, the default line, SCENARIO_DIR is a copy that is gone aft
   const set = await readScenarioSet(root, repo);
   const r = runner({ "make a": { exit: 0, output: "a ok" } });
   const done: [string, string | null][] = [];
-  const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: { ...DEFAULT_SETTINGS, timeout: 7 }, run: r.run, head: "h1", now: 5, onDone: (x, next) => done.push([x.name, next]) });
+  const out = await runScenarioSet({ judge: null, dir: "/wt", setDir: dir, set, settings: { ...DEFAULT_SETTINGS, timeout: 7 }, run: r.run, head: "h1", now: 5, onDone: (x, next) => done.push([x.name, next]) });
   expect(r.calls.map(([cwd, line, , ms]) => [cwd, line, ms])).toEqual([["/wt", "make a", 7000], ["/wt", DEFAULT_SETTINGS.run, 7000]]);
   expect(r.seen).toEqual(["copy there", "copy there"]);
   expect(existsSync(r.calls[0]![2])).toBe(false);
@@ -91,7 +91,7 @@ test("the pass stops at the first red and keeps its output tail", async () => {
   const dir = await setFor(repo, { "a.md": cmd("a", "make a"), "b.md": cmd("b", "make b"), "c.md": cmd("c", "make c") });
   const set = await readScenarioSet(root, repo);
   const r = runner({ "make b": { exit: 1, output: "x".repeat(5000) + "\n1 fail" } });
-  const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 });
+  const out = await runScenarioSet({ judge: null, dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 });
   expect(r.calls.map((c) => c[1])).toEqual(["make a", "make b"]);
   expect([out.total, out.passed, out.score]).toEqual([3, 1, 1 / 3]);
   expect(out.results[1]).toMatchObject({ name: "b", ok: false });
@@ -104,7 +104,7 @@ test("a file that cannot be read is a red result before anything runs, and no co
   const dir = await setFor(repo, { "a.md": cmd("a"), "broken.md": "x" });
   const set = await readScenarioSet(root, repo);
   const r = runner({});
-  const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 });
+  const out = await runScenarioSet({ judge: null, dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 });
   expect(r.calls).toEqual([]);
   expect(out).toMatchObject({ total: 2, passed: 0, score: 0, results: [{ name: "broken.md", kind: "command", ok: false, tail: "broken.md: no frontmatter: the file must start with a --- block" }] });
 });
@@ -123,7 +123,7 @@ test("the set runs under one budget: each scenario gets what is left, and one re
     return { exit: 0, output: "" };
   };
   const done: [string, string | null][] = [];
-  const out = await runScenarioSet({
+  const out = await runScenarioSet({ judge: null,
     dir: "/wt",
     setDir: dir,
     set,
@@ -155,20 +155,10 @@ test("the budget stops the pass at the scenario it runs out on; later ones stay 
     clock += 1_800_000;
     return { exit: 0, output: "" };
   };
-  const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run, head: "h", now: 1, clock: () => clock });
+  const out = await runScenarioSet({ judge: null, dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run, head: "h", now: 1, clock: () => clock });
   expect(lines).toEqual(["make a"]);
   expect(out.results.map((r) => [r.name, r.ok, r.tail])).toEqual([["a", true, "exited 0"], ["b", false, "the set's time ran out"]]);
   expect([out.total, out.passed, out.score]).toEqual([3, 1, 1 / 3]);
-});
-
-test("judge scenarios are left out of the pass in plan 1", async () => {
-  const repo = join(root, "r6");
-  const dir = await setFor(repo, { "a.md": cmd("a"), "j.md": "---\nname: j\nkind: judge\n---\nstory\n" });
-  const set = await readScenarioSet(root, repo);
-  const r = runner({});
-  const out = await runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 });
-  expect(r.calls).toHaveLength(1);
-  expect([out.total, out.passed]).toEqual([1, 1]);
 });
 
 test("a runner that throws still loses the copy, and the throw carries", async () => {
@@ -176,7 +166,7 @@ test("a runner that throws still loses the copy, and the throw carries", async (
   const dir = await setFor(repo, { "a.md": cmd("a", "make a") });
   const set = await readScenarioSet(root, repo);
   const r = runner({ "make a": () => { throw new Error("worktree gone"); } });
-  await expect(runScenarioSet({ dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 })).rejects.toThrow("worktree gone");
+  await expect(runScenarioSet({ judge: null, dir: "/wt", setDir: dir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 1 })).rejects.toThrow("worktree gone");
   expect(existsSync(r.calls[0]![2])).toBe(false);
 });
 
@@ -185,7 +175,7 @@ test("a repo with no set folder runs the pass without a copy and without a throw
   const setDir = setDirOf(root, repo);
   const set = await readScenarioSet(root, repo);
   const r = runner({});
-  const out = await runScenarioSet({ dir: "/wt", setDir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 3 });
+  const out = await runScenarioSet({ judge: null, dir: "/wt", setDir, set, settings: DEFAULT_SETTINGS, run: r.run, head: "h", now: 3 });
   expect(r.calls).toEqual([]);
   expect(existsSync(setDir)).toBe(false);
   expect(out).toEqual({ head: "h", at: 3, total: 0, passed: 0, score: 1, results: [] });
@@ -202,12 +192,13 @@ function hub(
   repoPath: string,
   runDir?: string,
   answers: Record<string, { exit: number; output: string }> = {},
-  opts: { runRepo?: string; repo?: Partial<Repo> } = {},
+  opts: { runRepo?: string; repo?: Partial<Repo>; judge?: (state: string) => Promise<ScenarioAnswers> } = {},
 ) {
   const repo: Repo = { id: "r", name: "r", path: repoPath, group: "", source: "root", status: null, ...opts.repo };
   const calls: string[] = [];
   const s = new Scenarios({
     root,
+    judge: opts.judge ?? null,
     repo: (id) => (id === "r" ? repo : undefined),
     runDir: (id, rp) => (id === "run1" && rp === (opts.runRepo ?? repoPath) ? runDir : undefined),
     run: async (_cwd, line) => {
@@ -288,4 +279,85 @@ test("a branch run of another repo is no run here", async () => {
   expect(res.status).toBe(404);
   expect(await res.json()).toEqual({ error: "no branch run by that id" });
   expect(calls).toEqual([]);
+});
+
+const judgeStory = (name: string, line?: string) => `---\nname: ${name}\nkind: judge\n${line ? `run: ${line}\n` : ""}evidence: src/refund.ts\n---\nSECRET STORY ${name}\n`;
+const YES: ScenarioAnswers = { satisfied: { choice: "yes", probabilities: { yes: 0.9 } }, evidence: { probability: 0.8 } };
+
+test("commands precede judges; nonzero observation, story and real evidence reach only the evaluator", async () => {
+  const repo = join(root, "judge20");
+  const dir = await setFor(repo, { "a.md": judgeStory("refund", "observe"), "z.md": cmd("command", "check") });
+  await mkdir(join(repo, "src"), { recursive: true });
+  await writeFile(join(repo, "src", "refund.ts"), "evidence file");
+  const run = runner({ observe: { exit: 7, output: "refund granted" } });
+  const states: string[] = [];
+  const done: [string, string | null][] = [];
+  const result = await runScenarioSet({ dir: repo, setDir: dir, set: await readScenarioSet(root, repo), settings: DEFAULT_SETTINGS, run: run.run, head: "h", now: 1, judge: async state => { states.push(state); return YES; }, onDone: (r,next) => {done.push([r.name,next]);} });
+  expect(run.calls.map(c=>c[1])).toEqual(["check", "observe"]);
+  expect(states[0]).toContain("SECRET STORY refund");
+  expect(states[0]).toContain("<<<\nrefund granted\n>>>");
+  expect(states[0]).toContain("File src/refund.ts:\nevidence file");
+  expect(done).toEqual([["command", "refund"], ["refund", null]]);
+  expect(result.results).toEqual([{ name: "command", kind: "command", ok: true, tail: "exited 0" }, { name: "refund", kind: "judge", ok: true, p: 0.9, tail: "refund granted" }]);
+  expect(result.score).toBeCloseTo(0.95);
+  expect(JSON.stringify(result)).not.toContain("SECRET STORY");
+  expect(run.calls.every(c=>!existsSync(c[2]))).toBe(true);
+});
+
+test("missing, disabled and failed judges hold safely, while skipJudge excludes them entirely", async () => {
+  const repo = join(root, "judge21");
+  const dir = await setFor(repo, { "j.md": judgeStory("refund", "observe") });
+  const run = runner({ observe: { exit: 1, output: "seen" } });
+  const base = { dir: repo, setDir: dir, set: await readScenarioSet(root, repo), settings: DEFAULT_SETTINGS, run: run.run, head: "h", now: 1 };
+  const noKey = await runScenarioSet({ ...base, judge: null });
+  expect(noKey).toMatchObject({ total: 1, passed: 0, score: 0, results: [{ ok: false, unjudged: NO_JUDGE_KEY, tail: "seen" }] });
+  const off = await runScenarioSet({ ...base, settings: { ...DEFAULT_SETTINGS, judge: "off" }, judge: async () => {throw Error("should not call");} });
+  expect(off.results[0]?.unjudged).toBe(JUDGE_OFF);
+  const failed = await runScenarioSet({ ...base, evidence: async () => [], judge: async state => { throw Error(state); } });
+  expect(failed.results[0]?.unjudged).toBe("the judge did not answer");
+  expect(JSON.stringify(failed)).not.toContain("SECRET STORY");
+  const skipped = await runScenarioSet({ ...base, run: async () => {throw Error("must not run");}, judge: null, skipJudge: true });
+  expect(skipped).toEqual({ head: "h", at: 1, total: 0, passed: 0, score: 1, results: [], skipped: ["refund"] });
+});
+
+test("a red command prevents judging but unrun judges still count zero", async () => {
+  const repo = join(root, "judge22");
+  const dir = await setFor(repo, { "a.md": cmd("check", "check"), "j.md": judgeStory("refund") });
+  const result = await runScenarioSet({ dir: repo, setDir: dir, set: await readScenarioSet(root, repo), settings: DEFAULT_SETTINGS, run: runner({ check: { exit: 1, output: "red" } }).run, head: "h", now: 1, judge: async () => {throw Error("must not judge");} });
+  expect([result.total, result.passed, result.score, result.results.length]).toEqual([2, 0, 0, 1]);
+});
+
+test("the set-wide deadline also bounds evidence and a judge that never settles", async () => {
+  const repo = join(root, "judge23");
+  const dir = await setFor(repo, { "j.md": judgeStory("refund") });
+  let reads = 0;
+  const result = await runScenarioSet({ dir: repo, setDir: dir, set: await readScenarioSet(root, repo), settings: DEFAULT_SETTINGS, run: runner({}).run, head: "h", now: 1, clock: () => reads++ === 0 ? 0 : 1_799_950, evidence: async () => [], judge: async () => new Promise<ScenarioAnswers>(() => {}) });
+  expect(result.results[0]).toMatchObject({ ok: false, unjudged: OUT_OF_TIME });
+});
+
+test("the run route uses its injected evaluator without publishing the story", async () => {
+  const repo = join(root, "judge24");
+  await mkdir(repo, { recursive: true });
+  await setFor(repo, { "j.md": judgeStory("refund") });
+  const { call } = hub(repo, undefined, {}, { judge: async state => {expect(state).toContain("SECRET STORY refund"); return YES;} });
+  const response = await call("POST", "/api/scenarios/run", { repo: "r" });
+  if (!response) throw Error("run route was not handled");
+  expect(response.status).toBe(200);
+  const body: unknown = await response.json();
+  expect(body).toMatchObject({ results: [{ name: "refund", kind: "judge", ok: true, p: 0.9 }] });
+  expect(JSON.stringify(body)).not.toContain("SECRET STORY");
+});
+
+test("an unsatisfied judge keeps its probability and does not prevent later judgments", async () => {
+  const repo = join(root, "judge25");
+  await mkdir(repo, { recursive: true });
+  const dir = await setFor(repo, { "a.md": judgeStory("a"), "b.md": judgeStory("b") });
+  const seen: string[] = [];
+  const result = await runScenarioSet({ dir: repo, setDir: dir, set: await readScenarioSet(root, repo), settings: DEFAULT_SETTINGS, run: async () => {throw Error("no observation line");}, head: "h", now: 1, judge: async state => { seen.push(state); return state.includes("SECRET STORY a") ? { ...YES, satisfied: { choice: "partly", probabilities: { yes: 0.3 } } } : YES; } });
+  expect(seen).toHaveLength(2);
+  expect(result.results[0]).toMatchObject({ name: "a", ok: false, p: 0.3, why: "the judge says what was observed only partly satisfies the story" });
+  expect(result.results[1]).toMatchObject({ name: "b", ok: true, p: 0.9 });
+  expect(result.passed).toBe(1);
+  expect(result.score).toBeCloseTo(0.6);
+  expect(JSON.stringify(result)).not.toContain("SECRET STORY");
 });

@@ -56,7 +56,7 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../cor
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, toLocator, TOKEN_REF } from "../core/host";
 import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
-import { hasGatewayKey, jev, jevJudge } from "../core/jev";
+import { hasGatewayKey, jev, jevJudge, jevScenario } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
 import type { AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
@@ -5227,6 +5227,7 @@ export async function startServer(opts: {
     }),
     scenarios: new Scenarios({
       root: scenariosRoot(),
+      judge: hasGatewayKey() ? jevScenario : null,
       repo: (id) => state.result.repos.find((r) => r.id === id),
       runDir: (id, repoPath) => {
         const rec = state.landing.record(id);
