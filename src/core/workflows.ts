@@ -6,6 +6,8 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { configDir } from "./store";
 import { parseWorkflow } from "./workflow";
+import { showAtHead } from "./worktree";
+import { FLOW_MODES_FILE, parseFlowModes, type FlowModes } from "./flowmodes";
 import type { Repo, Workflow, WorkflowEntry, WorkflowSource } from "./types";
 
 export const BUNDLED_DIR = join(import.meta.dir, "../../lib/workflows");
@@ -53,4 +55,17 @@ export async function loadWorkflows(repo: Pick<Repo, "path" | "host">): Promise<
 export function findWorkflow(entries: WorkflowEntry[], name: string): Workflow | undefined {
   const e = entries.find((x) => entryName(x) === name);
   return e?.ok ? e.workflow : undefined;
+}
+
+function isFlowModesError(value: FlowModes | { error: string }): value is { error: string } {
+  return typeof value["error"] === "string";
+}
+
+/** The repo's `.canopy/workflows.json` at HEAD; empty when absent, invalid text throws. */
+export async function readFlowModes(repoPath: string): Promise<FlowModes> {
+  const text = await showAtHead(repoPath, FLOW_MODES_FILE);
+  if (text === null) return {};
+  const parsed = parseFlowModes(text);
+  if (isFlowModesError(parsed)) throw new Error(parsed.error);
+  return parsed;
 }
