@@ -12,11 +12,6 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25)
 The queue's pure model (states, review sorting, gates reading) and its git half (worktree add, rebase, fast-forward) become a Bun workspace package with no canopy types and a small `land` CLI, so Paseo, Orca or anyone with a CI can run the sort and the gates. No-go by default: go when a second consumer is real. Needs a licence and a name without "canopy" in it (github.com/juliensimon/canopy exists).
 Spec: docs/superpowers/specs/2026-10-25-landing-package-design.md (2026-10-25).
 
-### FR-043 · Run transcripts, replay and fork
-P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
-canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacted and kept 30 days, so a finished run opens after a restart and replays in the sheet. "Fork from here" starts a new branch run from the original's base with `--fork-session`; a fork onto the other harness is a fenced summary handoff. `canopy run export` writes a markdown transcript.
-Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25).
-
 ### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
@@ -67,6 +62,11 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-043 · Run transcripts, replay and fork
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
+Canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacts sensitive values and keeps transcripts for 30 days by default, so finished runs open read-only after a restart. Plan 2 will replay the wire in the sheet. Plan 3 adds “Fork from here” as a new branch run from the original's base with `--fork-session`; a fork onto the other harness will use a fenced summary handoff. `canopy run export` writes a Markdown report.
+Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch` 2026-10-27 (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction); final batch verification pending; not shipped on `main`. Plans 2 (replay from the wire) and 3 (fork) remain open.
 
 ### FR-033 · Best-of-N branch runs
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
