@@ -14,14 +14,10 @@ Each plan here is a checklist written before the work began, for the agent or pe
 | [Agent surface, plan 1: canopy mcp for shells and the ranger](2026-10-26-agent-surface-1.md) | implemented locally | | [agent surface](../specs/2026-10-25-agent-surface-design.md) |
 | [Work until merged, plan 1: issue intake from GitHub and Forgejo](2026-10-26-work-until-merged-1.md) | implemented locally; batch verification pending | | [work until merged](../specs/2026-10-25-work-until-merged-design.md) |
 | [Collision warnings: a live touched set per run and a chip when two overlap](2026-10-26-collision-warnings.md) | implemented locally; batch verification pending | | [collision warnings](../specs/2026-10-25-collision-warnings-design.md) |
-| [Best-of-N, plan 1: groups of one profile, a compare run and the winner lands](2026-10-26-best-of-n-1.md) | planned | | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
-| [Spec converge, plan 1: the schedule trigger source](2026-10-26-spec-converge-1.md) | planned | | [spec converge](../specs/2026-10-25-spec-converge-design.md) |
 | [Workflow graph, plan 1: after, when and mode in the parser and the flow engine](2026-10-26-workflow-graph-1.md) | implemented locally 2026-10-27; combined verification pending | | [workflow graph](../specs/2026-10-25-workflow-graph-design.md) |
 | [Work ledger, plan 1: a work item per branch, minted at start and carried by git](2026-10-26-work-ledger-1.md) | implemented locally; batch verification pending | | [work ledger](../specs/2026-10-25-work-ledger-design.md) |
 | [PWA and push, plan 1: an installable page with a shell-only service worker](2026-10-26-pwa-push-1.md) | implemented locally; phone/Access checks pending | 2026-10-26 | [PWA and push](../specs/2026-10-25-pwa-push-design.md) |
-| [Worktree stacks, plan 1: a warm worktree pool per repo](2026-10-26-worktree-stacks-1.md) | planned | | [worktree stacks](../specs/2026-10-25-worktree-stacks-design.md) |
 | [Run replay, plan 1: the wire on disk, kept for 30 days and redacted](2026-10-26-run-replay-1.md) | planned | | [run replay](../specs/2026-10-25-run-replay-design.md) |
-| [Harness share: how much of the spend goes into canopy itself](2026-10-26-harness-share.md) | planned | | [harness share](../specs/2026-10-25-harness-share-design.md) |
 | [The coordinator: one chat splits a goal into branch runs](2026-10-17-coordinator.md) | shipped | 2026-10-17 | [coordinator](../specs/2026-10-16-coordinator-design.md) |
 | [PR watch: a branch run opens a PR and keeps watching it](2026-10-16-pr-watch.md) | shipped | 2026-10-16 | [PR watch](../specs/2026-10-16-pr-watch-design.md) |
 | [Landing queue, plan 2: review rules and auto-land](2026-10-16-landing-queue-2.md) | shipped | 2026-10-16 | [landing queue](../specs/2026-10-15-landing-queue-design.md) |
