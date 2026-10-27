@@ -782,12 +782,15 @@ export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent
 }
 
 /** What an open PR waits on Eric for, as a sentence, or nothing: the head
- *  his review rules hold for his approval, auto-fix that gave up, or a
- *  review comment from someone without write access while no fix and no
- *  rebase goes (the newest such comment's author). */
+ *  his review rules hold for his approval, auto-fix that gave up, a head
+ *  canopy did not push while auto-fix or auto-merge is on (both stop on
+ *  it, so the PR is his from there), or a review comment from someone
+ *  without write access while no fix and no rebase goes (the newest such
+ *  comment's author). */
 export function needsYouFromPr(w: PrWatch): string | undefined {
   if (w.approve && w.approve.head === w.state?.head) return `it touches files that need your approval (${w.approve.why}); merge it on GitHub yourself`;
   if (w.gaveUp !== undefined) return `auto-fix gave up: ${w.gaveUp}`;
+  if ((w.autoFix || w.autoMerge) && w.state && w.state.head !== w.pushed) return "the branch has a commit canopy did not push; from here you rebase, fix and merge it yourself";
   const c = w.untrusted?.[w.untrusted.length - 1];
   if (c && !w.fixing && !w.rebasing) return `a review comment by ${c.author}, who has no write access, waits for you`;
   return undefined;
@@ -884,7 +887,11 @@ export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent):
     case "ready":
       return { type: "thought", body: "Committed on the branch; canopy opens the pull request once its checks pass." };
     case "review":
-      if (prev?.status === "rebasing" || prev?.status === "conflict") return { type: "response", body: `Rebased and pushed ${pr}.` };
+      if (prev?.status === "rebasing" || prev?.status === "conflict") {
+        // the step ends on review either way: pushed, or stopped with what it needs of Eric
+        if (next.needsYou) return { type: "error", body: `${next.needsYou.charAt(0).toUpperCase()}${next.needsYou.slice(1)} (${pr}).` };
+        return { type: "response", body: `Rebased and pushed ${pr}.` };
+      }
       return { type: "response", body: said(`Opened ${pr}.`) };
     case "rebasing":
       return { type: "thought", body: `Rebasing the branch: ${pr} fell behind its target.` };

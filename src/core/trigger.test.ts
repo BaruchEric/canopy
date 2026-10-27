@@ -606,6 +606,14 @@ describe("activityFor", () => {
     expect(activityFor(ag({ status: "conflict", pr }), ag({ status: "review", pr }))).toEqual({ type: "response", body: "Rebased and pushed [pull request #9](https://github.com/a/b/pull/9)." });
     expect(activityFor(ag({ status: "rebasing", pr }), ag({ status: "review", pr }))).toEqual({ type: "response", body: "Rebased and pushed [pull request #9](https://github.com/a/b/pull/9)." });
   });
+
+  test("a return to review that needs Eric is told as what it needs, never as a push that went", () => {
+    const pr = { number: 9, url: "https://github.com/a/b/pull/9" };
+    const moved = "auto-fix gave up: the branch moved on GitHub since canopy pushed; rebase it yourself";
+    const told = { type: "error" as const, body: "Auto-fix gave up: the branch moved on GitHub since canopy pushed; rebase it yourself ([pull request #9](https://github.com/a/b/pull/9))." };
+    expect(activityFor(ag({ status: "rebasing", pr }), ag({ status: "review", pr, needsYou: moved }))).toEqual(told);
+    expect(activityFor(ag({ status: "conflict", pr }), ag({ status: "review", pr, needsYou: moved }))).toEqual(told);
+  });
 });
 
 describe("issueNoteFor", () => {
@@ -880,6 +888,13 @@ describe("fromPr", () => {
     expect(needsYouFromPr(watch({ untrusted: [comment("ann")], fixing: { run: "f", key: "check:test" } }))).toBeUndefined();
     expect(needsYouFromPr(watch({ untrusted: [comment("ann")], rebasing: { from: "h1" } }))).toBeUndefined();
     expect(needsYouFromPr(watch())).toBeUndefined();
+  });
+  test("needsYou from the PR: a head canopy did not push stops auto-fix and auto-merge, so it is Eric's", () => {
+    const line = "the branch has a commit canopy did not push; from here you rebase, fix and merge it yourself";
+    expect(needsYouFromPr(watch({ autoFix: true, pushed: "h0" }))).toBe(line);
+    expect(needsYouFromPr(watch({ autoMerge: true, pushed: "h0" }))).toBe(line);
+    expect(needsYouFromPr(watch({ pushed: "h0" }))).toBeUndefined();
+    expect(needsYouFromPr(watch({ autoFix: true, pushed: "h0", gaveUp: "x" }))).toBe("auto-fix gave up: x");
     const e = event({ branch: "br1" });
     const needy = fromPr(e, watch({ gaveUp: "x" }), 5);
     expect(needy.needsYou).toBe("auto-fix gave up: x");

@@ -492,6 +492,19 @@ describe("the rebase step", () => {
 
   const remoteBranch = (w: World): Promise<string> => sh(w.bare, "rev-parse", `refs/heads/${w.rec.branch}`);
 
+  test("a rebase a restart interrupted is not still going: the next read rebases and pushes", async () => {
+    const { w, pushed } = await behind();
+    // the last server saved the watch mid-step and died before the push
+    (w.hub as unknown as { save: (x: PrWatch) => void }).save({ ...w.hub.info()[0]!, rebasing: { from: pushed } });
+    await w.hub.idle();
+    const h = await w.restart();
+    expect(h.info()[0]!.rebasing).toBeUndefined();
+    const pr = await pollNow(w, h);
+    expect(pr.rebasing).toBeUndefined();
+    expect(pr.pushed).not.toBe(pushed);
+    expect(await remoteBranch(w)).toBe(pr.pushed);
+  });
+
   test("BEHIND on the head canopy pushed: fetched, rebased and pushed with a lease; the new head is pushed and read at the fresh pace", async () => {
     const { w, mainHead, pushed } = await behind();
     const pr = await pollNow(w);

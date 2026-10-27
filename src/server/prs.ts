@@ -309,7 +309,9 @@ export class PrHub {
       try {
         const v: unknown = JSON.parse(await readFile(join(this.dir, n), "utf8"));
         if (isRecord(v) && typeof v["id"] === "string" && typeof v["number"] === "number" && !this.watches.has(v["id"])) {
-          const w = v as unknown as PrWatch;
+          // a rebase the last server was in the middle of died with it: the
+          // next read runs the step again, so the watch must not say it goes
+          const { rebasing: _r, ...w } = v as unknown as PrWatch;
           this.watches.set(w.id, w);
         }
       } catch (err) {
