@@ -447,6 +447,28 @@ export class PrHub {
     });
   }
 
+  /** The rebase step by hand (`POST /api/prs/rebase`), auto-fix on or off:
+   *  refused while a fix or a rebase goes, or when the PR as last read is
+   *  not behind on the head canopy pushed. The watch after the step is the
+   *  answer, with what stopped it in `gaveUp` or `error` when it did. */
+  rebaseNow(id: string): Promise<PrWatch> {
+    return this.queue(async () => {
+      const had = this.find(id);
+      if (!had) throw new PrError("no PR by that id", 404);
+      if (had.fixing) throw new PrError("a fix is going; stop it first", 409);
+      if (had.rebasing) throw new PrError("a rebase is going", 409);
+      if (!had.state) throw new PrError("the PR has not been read yet", 409);
+      const ready = readyToRebase(had.state, had);
+      if (!ready.ok) throw new PrError(ready.why, 409);
+      const w = { ...(await this.rebase(had)), updatedAt: this.now() };
+      this.save(w);
+      if (w.pushed !== had.pushed) this.fresh.set(w.id, this.now() + FRESH_FOR);
+      if (pace(w) !== null) this.due.set(w.id, this.now() + POLL_BUSY);
+      this.publish();
+      return w;
+    });
+  }
+
   /** Changing course: the PR closes and its remote branch goes, and the run
    *  waits as ready to land here again. */
   close(id: string): Promise<void> {
@@ -717,7 +739,9 @@ export class PrHub {
     if (!head) return { ...rest, error: "the rebased worktree has no HEAD" };
     const pushed = await pushBranchLease(w.dir, w.remote, w.branch, w.pushed);
     if ("rejected" in pushed) return { ...rest, error: MOVED, gaveUp: MOVED };
-    return { ...rest, pushed: head };
+    // a push that went clears what stopped auto-fix, for the step run by hand
+    const { gaveUp: _g, ...went } = rest;
+    return { ...went, pushed: head };
   }
 
   /** Starts a fix run for a key, counting the attempt. */
@@ -900,6 +924,7 @@ export class PrHub {
         await this.close(run);
         return json({ ok: true });
       }
+      if (path === "/api/prs/rebase") return json(await this.rebaseNow(run));
       return json({ error: "not found" }, 404);
     } catch (err) {
       const status = (err as { status?: unknown } | null)?.status;

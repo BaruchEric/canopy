@@ -161,7 +161,7 @@ says only that the issue is still labelled, so a failed, closed or ignored
 issue stays until its event is dismissed, which lets the poll take it
 again), make an `Incoming` as the hook would and run it through the same
 `take`. A poll is skipped while the previous one has not returned, and a
-listing that fails is one health line (`canopy:triggers`), never an event.
+listing that fails is one health line (the rule's `canopy:triggers:<rule>`), never an event.
 The readers list up to `LIST_ISSUES` (500) issues per label, oldest first
 (`forgejoListIssues` pages by `FORGE_PAGE`, 50); the hub drops the known
 ones and reads the oldest `POLL_ISSUES` (50) of the rest in full, so fifty

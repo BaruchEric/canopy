@@ -44,6 +44,22 @@ describe("issueLines", () => {
     expect(issueLines({ events }, "web/api", "mini")).toEqual(["web/api on mini", "  #13        failed   -            -      no worktree"]);
     expect(issueLines({ events }, "web/none")).toEqual([]);
   });
+
+  test("the last column is what the issue needs, and --needs-you keeps only those", () => {
+    const events = [
+      ev({ id: "a", status: "review", branch: "br1", pr: { number: 3, url: "u" }, needsYou: "auto-fix gave up: x", lastAt: 5 }),
+      ev({ id: "b", key: "7", short: "#7", status: "ready", branch: "br2", reason: "main moved under it", lastAt: 9 }),
+      ev({ id: "c", key: "13", short: "#13", status: "rebasing", branch: "br3", pr: { number: 4, url: "u" }, lastAt: 2 }),
+    ];
+    expect(issueLines({ events }, null)).toEqual([
+      "web/shop",
+      "  #7         ready    br2          -      main moved under it",
+      "  #12        review   br1          #3     auto-fix gave up: x",
+      "  #13        rebasing br3          #4     -",
+    ]);
+    expect(issueLines({ events }, null, "", true)).toEqual(["web/shop", "  #12        review   br1          #3     auto-fix gave up: x"]);
+    expect(issueLines({ events }, "web/none", "", true)).toEqual([]);
+  });
 });
 
 describe("issuesCommand", () => {
@@ -77,6 +93,16 @@ describe("issuesCommand", () => {
     ]);
     // --backend asks that one address alone
     expect(await logging(() => issuesCommand(["--backend", "http://x:1"], { fail, ask: askFake }))).toEqual(["web/shop", "  #12        working  br1          -      -"]);
+  });
+
+  test("--needs-you keeps only the issues that wait on you, and says so when none do", async () => {
+    const askFake: typeof ask = async <T,>(_t: Target, _method: string, path: string): Promise<T> => {
+      if (path === "/api/backends") return {} as T;
+      return { events: [ev({ status: "working", branch: "br1" }), ev({ id: "n", key: "9", short: "#9", status: "review", branch: "br2", needsYou: "auto-fix gave up: x" })] } as T;
+    };
+    expect(await logging(() => issuesCommand(["--needs-you"], { fail, ask: askFake }))).toEqual(["web/shop", "  #9         review   br2          -      auto-fix gave up: x"]);
+    expect(await logging(() => issuesCommand(["web/api", "--needs-you"], { fail, ask: askFake }))).toEqual(["no GitHub or Forgejo issues wait on you in web/api"]);
+    expect(ISSUES_USAGE).toBe("usage: canopy issues [repo] [--needs-you] [--backend URL]");
   });
 
   test("a backend's refusal is printed as its own line, a repo nobody took says so, and a second word is the usage", async () => {

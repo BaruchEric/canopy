@@ -88,11 +88,15 @@ canopy scenarios <repo> run [<run>]         # run the set against a branch run's
 # after the gates, the queue runs the repo's holdout scenarios kept under the config dir, which a run never sees; a red
 # one sends the branch back with the scenario's name and output
 canopy pr <run> [--draft]          # push a ready branch run and open a PR on GitHub in place of landing it; never a force push
+canopy pr rebase <run>             # rebase a PR's branch onto its target by hand and push it with a lease on the commit canopy pushed last
 canopy prs [repo]                  # every PR branch runs opened: open, merged or closed, its checks, auto-fix and auto-merge
 # canopy polls each open PR with gh; auto-fix starts a fix run on a red check or a review comment from someone with
 # write access (3 tries each) and pushes its commits, auto-merge merges once every check passes and GitHub says clean;
 # a repo's .canopy/prs.json ({"autoMerge": true}) turns auto-merge on for its new PRs
-canopy issues [repo]               # every GitHub or Forgejo issue a trigger rule took: its state, branch id, PR and why it waits; --backend URL asks one address
+# a PR read BEHIND or DIRTY on the head canopy pushed is rebased in its worktree and pushed again with a lease on that
+# head, the one forced push canopy makes; a conflict is a fix run (3 per base commit), and a lease the remote refuses
+# stops auto-fix for the PR until it is turned on again
+canopy issues [repo] [--needs-you] # every GitHub or Forgejo issue a trigger rule took: its state, branch id, PR and what it needs of you, else why it waits; --needs-you keeps the ones waiting on you; --backend URL asks one address
 canopy sweep                       # what went idle on a backend: shells, chats, finished runs, your PRs, and agents canopy did not start
 canopy sweep --yes [--kind shell,chat,run,pr]   # close the ones the plan ticks, or all a named kind may close (--kind pr: the PRs, never a draft)
 canopy awake [off|always|working]  # keep this backend's machine from idle sleep: never, always, or while an agent of its own works

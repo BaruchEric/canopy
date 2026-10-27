@@ -601,6 +601,33 @@ describe("the rebase step", () => {
     expect(pr.rebasing).toBeUndefined();
     expect(await revOf(w.dir, "HEAD")).toBe(pushed);
   });
+
+  test("POST rebase runs the step by hand with auto-fix off, and refuses while a fix goes or when the head moved", async () => {
+    const { w, pushed } = await behind({ autoFix: false });
+    await pollNow(w);
+    const post = (hub: PrHub, run: string) => hub.handle(new Request("http://x/api/prs/rebase", { method: "POST", body: JSON.stringify({ run }) }), new URL("http://x/api/prs/rebase"));
+    const res = await post(w.hub, w.rec.id);
+    expect(res?.status).toBe(200);
+    const pr = (await res!.json()) as PrWatch;
+    const head = (await revOf(w.dir, "HEAD"))!;
+    expect(head).not.toBe(pushed);
+    expect(pr.pushed).toBe(head);
+    expect(await remoteBranch(w)).toBe(head);
+    expect(w.hub.info()[0]!.pushed).toBe(head);
+    // GitHub still shows the head from before, so it is not the one canopy pushed
+    const again = await post(w.hub, w.rec.id);
+    expect(again?.status).toBe(409);
+    expect(await again!.json()).toEqual({ error: "the head moved since canopy pushed" });
+    expect((await post(w.hub, "nope"))?.status).toBe(404);
+    // a fix going refuses it before anything else
+    const d = await dirty();
+    await pollNow(d.w);
+    expect(d.w.hub.info()[0]!.fixing).toBeDefined();
+    const busy = await post(d.w.hub, d.w.rec.id);
+    expect(busy?.status).toBe(409);
+    expect(await busy!.json()).toEqual({ error: "a fix is going; stop it first" });
+    expect(d.w.fixes).toHaveLength(1);
+  });
 });
 
 describe("auto-merge", () => {

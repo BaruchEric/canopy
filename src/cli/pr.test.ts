@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import type { PrState, PrWatch } from "../core/types";
-import { prsLines } from "./pr";
+import type { ask, Target } from "./health";
+import { PR_USAGE, prCommand, prsLines } from "./pr";
 
 const state = (over: Partial<PrState> = {}): PrState => ({
   number: 12,
@@ -59,4 +60,47 @@ test("each repo's PRs: number, where it stands, its checks, the toggles and what
   ]);
   expect(prsLines(prs, "tally", "mini")[0]).toBe("web-apps/tally on mini");
   expect(prsLines(prs, "other")).toEqual([]);
+});
+
+const lines: string[] = [];
+/** runs `fn` with console.log captured */
+const logging = async (fn: () => Promise<void>): Promise<string[]> => {
+  lines.length = 0;
+  const orig = console.log;
+  console.log = (...a: unknown[]) => void lines.push(a.join(" "));
+  try {
+    await fn();
+  } finally {
+    console.log = orig;
+  }
+  return [...lines];
+};
+const fail = (msg: string): never => {
+  throw new Error(msg);
+};
+
+test("canopy pr rebase posts the run and prints the branch, target and new head", async () => {
+  const calls: [string, string, unknown][] = [];
+  const askFake: typeof ask = async <T,>(_t: Target, method: string, path: string, body?: unknown): Promise<T> => {
+    calls.push([method, path, body]);
+    return watch({ pushed: "h2h2h2h2h2h2h2h2h2h2" }) as T;
+  };
+  expect(await logging(() => prCommand("pr", ["rebase", "b1"], { fail, ask: askFake }))).toEqual(["run/x-b1: rebased onto main and pushed (h2h2h2h)"]);
+  expect(calls).toEqual([["POST", "/api/prs/rebase", { run: "b1" }]]);
+  await expect(prCommand("pr", ["rebase"], { fail, ask: askFake })).rejects.toThrow(PR_USAGE);
+  // the backend's refusal is the failure
+  const refused: typeof ask = async <T,>(): Promise<T> => {
+    throw new Error("the head moved since canopy pushed");
+  };
+  await expect(prCommand("pr", ["rebase", "b1"], { fail, ask: refused })).rejects.toThrow("the head moved since canopy pushed");
+  // the step ran and stopped: what stopped it is the failure
+  const stopped: typeof ask = async <T,>(): Promise<T> => watch({ gaveUp: "the branch moved on GitHub since canopy pushed; rebase it yourself" }) as T;
+  await expect(prCommand("pr", ["rebase", "b1"], { fail, ask: stopped })).rejects.toThrow("run/x-b1: the branch moved on GitHub since canopy pushed; rebase it yourself");
+  // a conflict started a fix run
+  const conflict: typeof ask = async <T,>(): Promise<T> => watch({ fixing: { run: "f9", key: "rebase:abc" } }) as T;
+  expect(await logging(() => prCommand("pr", ["rebase", "b1"], { fail, ask: conflict }))).toEqual(["run/x-b1: rebasing onto main stopped on conflicts; fix run f9 is on them"]);
+});
+
+test("the usage names rebase", () => {
+  expect(PR_USAGE).toContain("canopy pr rebase <run> [--backend URL]");
 });
