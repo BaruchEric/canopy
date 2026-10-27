@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DriveCtx, RunDriver } from "../core/driver";
+import type { DriveCtx, DriveExit, RunDriver } from "../core/driver";
 import { exec } from "../core/exec";
 import type { Harness, LandingInfo, Run } from "../core/types";
 import { startServer } from "./index";
@@ -17,31 +17,53 @@ import { startServer } from "./index";
 /** A driver that does the work itself: one commit in its cwd, then done. */
 class CommitDriver implements RunDriver {
   readonly label = "Claude Code";
+  private ctx: DriveCtx | null = null;
+  private stopping = false;
   constructor(readonly harness: Harness) {}
   check(): string | null {
     return null;
   }
   start(ctx: DriveCtx, message: string): void {
+    this.ctx = ctx;
+    this.stopping = false;
     void (async () => {
       prompts.push({ cwd: ctx.cwd, message, resume: ctx.spec.resume });
       if (!message.includes("leave it")) {
         await writeFile(join(ctx.cwd, `work-${prompts.length}.txt`), "work\n");
+        if (this.finishIfStopped()) return;
         await exec(["git", "-C", ctx.cwd, "add", "-A"]);
+        if (this.finishIfStopped()) return;
         await exec(["git", "-C", ctx.cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the work"]);
+        if (this.finishIfStopped()) return;
       }
+      if (this.finishIfStopped()) return;
       ctx.session("sess-1");
       ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+      this.finish({ code: 0, stderr: "" });
     })();
   }
   say(): void {}
-  stop(): void {}
+  stop(): void {
+    this.stopping = true;
+  }
+  private finishIfStopped(): boolean {
+    if (!this.stopping) return false;
+    this.finish({ code: null, stderr: "stopped" });
+    return true;
+  }
+  private finish(exit: DriveExit): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.ctx = null;
+    ctx.exited(exit);
+  }
 }
 
 const prompts: { cwd: string; message: string; resume: string | undefined }[] = [];
 let scratch: string;
 let root: string;
 let previousConfig: string | undefined;
-let server: { port: number; stop: () => void };
+let server: Awaited<ReturnType<typeof startServer>>;
 
 const url = (p: string) => `http://127.0.0.1:${server.port}${p}`;
 const call = (p: string, body: unknown) => fetch(url(p), { method: "POST", body: JSON.stringify(body) });
@@ -82,7 +104,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  server.stop();
+  await server.stop();
   if (previousConfig === undefined) delete process.env["CANOPY_CONFIG_DIR"];
   else process.env["CANOPY_CONFIG_DIR"] = previousConfig;
   await rm(scratch, { recursive: true, force: true });
