@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { VoiceEngine } from "./voicelive";
@@ -127,6 +128,7 @@ import {
   qKept,
   qRepo,
   qLanding,
+  qGroup,
   qPrs,
   qTriggers,
   qRun,
@@ -761,6 +763,12 @@ export const api = {
       qRun,
     );
   },
+  startGroup: async (id: string, action: RunAction, note: string, times: number, profile?: string, autoLand = false, pr = false) => {
+    const [b, plain] = on(id);
+    return from(b, await req<RunGroup>(b, `/api/repos/run?${rq(plain)}`, {
+      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profile ? { profiles: [profile] } : {}), autoLand, pr }),
+    }), qGroup);
+  },
   /** one backend's PRs that branch runs opened; an older backend has none */
   prs: async (b: string = homeName()) => {
     const r = await req<PrWatch[] | null>(b, "/api/prs");
@@ -827,6 +835,7 @@ export const api = {
       entries: Array.isArray(r?.entries) ? r.entries : [],
       orphans: Array.isArray(r?.orphans) ? r.orphans : [],
       notices: Array.isArray(r?.notices) ? r.notices : [],
+      ...(Array.isArray(r?.groups) ? { groups: r.groups } : {}),
       ...(Array.isArray(r?.collisions) ? { collisions: r.collisions } : {}),
     };
     return from(b, info, qLanding);

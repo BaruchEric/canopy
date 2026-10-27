@@ -1373,6 +1373,7 @@ export interface CanopyState {
   takePendingSearch: () => void;
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
+  startGroup: (repoId: string, action: RunAction, note: string, times: number, profile?: string, autoLand?: boolean, pr?: boolean) => Promise<void>;
   startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
@@ -1427,6 +1428,7 @@ export type Sheet =
   /** `workspace` makes it a run across that workspace; `repoId` is then its primary */
   | { kind: "plan"; repoId: string; action: RunAction; workspace?: string }
   | { kind: "run"; runId: string }
+  | { kind: "group"; groupId: string }
   | { kind: "agent"; repoId: string }
   /** `draft` fills the form, from the command line's `new` */
   | { kind: "new-sprout"; draft?: SproutDraft }
@@ -4372,6 +4374,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
+  startGroup: async (repoId, action, note, times, profile, autoLand = false, pr = false) => {
+    if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
+    const group = await api.startGroup(repoId, action, note, times, profile, autoLand, pr);
+    const b = backendOf(repoId);
+    set(s => {
+      const info = s.landing[b] ?? { runs: [], entries: [], orphans: [] };
+      return { landing: { ...s.landing, [b]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } }, sheet: { kind: "group", groupId: group.id } };
+    });
+  },
   startRun: async (repoId, action, note, branch, pr) => {
     const run = await api.run(repoId, action, note, clientId(), branch, pr);
     set((s) => ({

@@ -66,6 +66,15 @@ describe("a page with two backends", () => {
   const run = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done" }) as unknown as Run;
   const repo = (id: string) => ({ id, name: id, path: `/x/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
 
+  test("group start sends one shared profile to the owning backend", async () => {
+    reply = () => json({ id: "g", repoId: "x", members: [{ run: "r", origin: "o", profile: "fast" }] });
+    const group = await api.startGroup("b|x", "ask", "n", 2, "fast");
+    expect(calls[0]?.url).toBe("http://b.test/api/repos/run?id=x");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ action: "ask", note: "n", branch: true, times: 2, profiles: ["fast"], autoLand: false, pr: false });
+    expect(group.id).toBe("b|g");
+    expect(group.members[0]).toMatchObject({ run: "b|r", origin: "b|o" });
+  });
+
   test("a backend with no URL yet is never asked at the page's own origin", async () => {
     setBase("b", "");
     reply = () => json({ access: "unknown" });
