@@ -52,7 +52,7 @@ export const peerRefspecs = (name: string): [string, string] => [
   `+refs/wip/*:refs/peer-wip/${name}/*`,
 ];
 
-/** A branch run's branches (`run/<slug>-<id>`, the landing queue) never
+/** A branch run's branches (`run/<work id>-<slug>`, the landing queue) never
  *  ride peer sync: a half-done run stays on the machine it runs on. */
 export const RUN_BRANCH_PREFIX = "run/";
 export const isRunBranch = (branch: string): boolean => branch.startsWith(RUN_BRANCH_PREFIX);

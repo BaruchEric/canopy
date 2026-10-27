@@ -134,6 +134,10 @@ describe("task lines", () => {
 });
 
 describe("describeEvent", () => {
+  test("a work event updates the ledger without adding a feed line", () => {
+    expect(describeEvent({ type: "work", items: [] }, snap(), 5)).toEqual([]);
+  });
+
   test("a repo event with no change is quiet and names the repo", () => {
     const lines = describeEvent({ type: "repo", repo: repo() }, snap(), 5);
     expect(lines).toEqual([

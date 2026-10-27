@@ -1,6 +1,7 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
 import type { Capacity, CapacitySettings } from "./capacity";
+import type { WorkItem } from "./work";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -1020,6 +1021,8 @@ export interface CoordTask {
   state: "proposed" | "queued" | "running" | "done" | "failed" | "dropped";
   /** the child run's id, once it started */
   run?: string;
+  /** the child's work item, once it started (FR-037) */
+  work?: string;
   /** how it settled, in a word or two: "landed", "sent back", or a start's error */
   outcome?: string;
 }
@@ -1289,7 +1292,7 @@ export interface Run {
 export type RunBranchState = "working" | "ready" | "uncommitted" | "nothing" | "stopped";
 
 export interface RunBranch {
-  /** `run/<slug>-<run id>` */
+  /** `run/<work id>-<slug>` */
   name: string;
   /** the default branch it was cut from and lands on */
   target: string;
@@ -1302,6 +1305,8 @@ export interface RunBranch {
    *  on the branch (the first, and each "fix it") carries it, and the
    *  landing record is kept under it */
   origin: string;
+  /** the work item this branch serves (FR-037), in its name too; every run on the branch carries it */
+  work?: string;
   /** the pre-flight said to open a PR when it settles ready, instead of
    *  landing here (FR-011) */
   openPr?: true;
@@ -1357,6 +1362,8 @@ export interface PrComment {
 export interface PrWatch {
   /** the branch's id (`RunBranch.origin`), as in the landing records */
   id: string;
+  /** the branch's work item (FR-037) */
+  work?: string;
   /** the latest run on the branch */
   runId: string;
   repoId: string;
@@ -1533,6 +1540,8 @@ export interface ScenarioRun {
 export interface LandingRun {
   /** the branch's id (`RunBranch.origin`) */
   id: string;
+  /** the branch's work item (FR-037); a record from before the ledger has none */
+  work?: string;
   /** the latest run on the branch: the origin or its last "fix it" */
   runId: string;
   repoId: string;
@@ -1639,6 +1648,8 @@ export type ServerEvent =
   | { type: "landing"; landing: LandingInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
+  /** every work item, whole, whenever one changes (FR-037) */
+  | { type: "work"; items: WorkItem[] }
   /** every trigger event kept, whole, whenever one changes */
   | { type: "triggers"; events: TriggerEvent[] }
   /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */

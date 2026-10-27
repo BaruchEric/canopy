@@ -132,6 +132,8 @@ export interface TriggerEvent {
   step?: string;
   /** the branch's id (`RunBranch.origin`), which the landing record and the PR watch use */
   branch?: string;
+  /** the branch's work item (FR-037) */
+  work?: string;
   pr?: { number: number; url: string };
   /** set once the merge marked the issue resolved where it came from, or why that failed */
   resolved?: { at: number } | { error: string };
@@ -524,7 +526,7 @@ export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: 
     inc.description ? `description:\n${inc.description}` : "",
     inc.context ? `context from Linear:\n${inc.context}` : "",
   ].filter(Boolean);
-  // the first words name the branch (run/<slug>-<id>), so they lead with the
+  // the first words name the branch (run/<work id>-<slug>), so they lead with the
   // id; Linear's GitHub integration links a PR to the issue its branch names
   const id = inc.short ?? inc.key;
   const from = source === "manual" ? `Trigger test ${id}, fired by hand to try the trigger.` : `${SERVICE_NAME[service]} issue ${id} came in.`;

@@ -518,6 +518,8 @@ export function describeEvent(
       const repo = prev.repos.find((r) => r.id === ev.repoId);
       return taskLines(prev.tasks?.[ev.repoId] ?? prev.taskAll?.filter((t) => t.repoId === ev.repoId), ev.tasks, at).map((text) => about(repo, "task", at, text));
     }
+    case "work":
+      return [];
     case "chan":
       // a channel line canopy marked silent is a quiet one
       return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];
