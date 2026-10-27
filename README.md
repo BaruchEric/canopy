@@ -91,6 +91,10 @@ canopy scenarios <repo> run [<run>]         # run the set against a branch run's
 # one sends the branch back with the scenario's name and output
 canopy pr <run> [--draft]          # push a ready branch run and open a PR on GitHub in place of landing it; never a force push
 canopy prs [repo]                  # every PR branch runs opened: open, merged or closed, its checks, auto-fix and auto-merge
+canopy work [--repo R] [--state S]  # every work item: id, state, repos, title and its newest line; one item per branch run, kept under <configDir>/work/
+canopy work show <id>              # the item in full: what served it and every line on it
+canopy work note [<id>] "<text>"   # a line on an item; inside a run's worktree the id is read off the branch
+canopy work close <id> --landed | --dropped [-m why]   # end an item by hand; refused while a run on it is going
 # canopy polls each open PR with gh; auto-fix starts a fix run on a red check or a review comment from someone with
 # write access (3 tries each) and pushes its commits, auto-merge merges once every check passes and GitHub says clean;
 # a repo's .canopy/prs.json ({"autoMerge": true}) turns auto-merge on for its new PRs

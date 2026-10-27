@@ -56,6 +56,7 @@ import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./
 import { landCommand } from "./land";
 import { scenariosCommand } from "./scenarios";
 import { prCommand } from "./pr";
+import { workCommand } from "./work";
 import { awakeCommand } from "./awake";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
@@ -113,6 +114,7 @@ const COMMANDS = new Set([
   "scenarios",
   "pr",
   "prs",
+  "work",
   "secrets",
   "library",
   "tree",
@@ -866,6 +868,8 @@ export async function main(argv: string[]): Promise<void> {
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });
+    case "work":
+      return workCommand(args, { fail });
     case "sweep":
       return sweepCommand(args, { fail });
     case "awake":

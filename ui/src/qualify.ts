@@ -164,6 +164,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "workspaces":
     case "agents":
     case "launchers":
+    case "work":
     // a repo scope is an absolute path, a step's a workflow's name: no id to qualify
     case "remembered":
     case "helpers":

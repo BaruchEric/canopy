@@ -176,6 +176,7 @@ describe("qEvent", () => {
       { type: "agents", agents: {} },
       { type: "launchers", launchers: {} },
       { type: "workspaces", workspaces: [] },
+      { type: "work", items: [] },
       { type: "helpers", helpers: [] },
       { type: "peers", seen: [] },
       { type: "registry", cards: [], gone: ["claude:s1"] },

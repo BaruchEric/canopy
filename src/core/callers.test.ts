@@ -197,6 +197,17 @@ describe("the coordinator's routes", () => {
   });
 });
 
+describe("the work ledger's routes", () => {
+  test("reads are read, a note or a close operate", () => {
+    expect(needs("GET", "/api/work")).toBe("read");
+    expect(needs("GET", "/api/work/one")).toBe("read");
+    expect(needs("POST", "/api/work/note")).toBe("operate");
+    expect(needs("POST", "/api/work/close")).toBe("operate");
+    expect(allows("shell", needs("POST", "/api/work/note"))).toBe(true);
+    expect(allows("coordinator", needs("POST", "/api/work/close"))).toBe(false);
+  });
+});
+
 describe("allows", () => {
   test("each kind holds what the table gives it", () => {
     expect(allows("page", "shell")).toBe(true);

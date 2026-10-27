@@ -10,6 +10,7 @@
 
 import { childSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { isFlowActive, isRunActive, type CoordTask, type Flow, type Run } from "../core/types";
+import type { WorkSink } from "../core/work";
 import type { Caller } from "./callers";
 
 /** how long a ready child's card waits for the landing queue to sort or
@@ -46,6 +47,8 @@ export interface CoordinatorDeps {
   landing: (run: Run) => ChildBranch;
   /** a coordinator's cards changed: send its run out again */
   broadcast: (run: Run) => void;
+  /** the work item's settle line; absent for pre-ledger cards */
+  work?: WorkSink;
   now?: () => number;
   readyWait?: number;
 }
@@ -247,7 +250,10 @@ export class CoordinatorHub {
           continue;
         }
         const child = out.run;
-        this.update(coordId, next.id, (x) => withOutcome({ ...x, state: "running", run: child.id }, undefined));
+        this.update(coordId, next.id, (x) => {
+          const { work: _work, ...rest } = x;
+          return withOutcome({ ...rest, state: "running", run: child.id, ...(child.branch?.work ? { work: child.branch.work } : {}) }, undefined);
+        });
         // a child can end inside its own start, before its card knew its id
         this.follow(child);
       }
@@ -298,6 +304,7 @@ export class CoordinatorHub {
     }
     this.cancel(child.id);
     this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
+    if (task.work) this.deps.work?.note(task.work, `card ${task.id} settled: ${got.outcome}`);
     this.queueNote(coord.id, settleNote(task, child, branch));
   }
 

@@ -5,6 +5,7 @@ import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateD
 import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
 import { resolveIssueNote } from "../core/issue";
+import { titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
@@ -216,13 +217,14 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
+import { WorkHub } from "./work";
 import { takeTriggerSecrets } from "../core/envnames";
 import { triggerPlan, type TriggerEvent } from "../core/trigger";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
-import { addRunTree, defaultBranch, removeRunTree, repoAtPath, revOf, runBranchName, runTreeDir } from "../core/worktree";
+import { addRunTree, defaultBranch, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
@@ -347,6 +349,8 @@ interface ServerState {
   triggers: TriggerHub;
   /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
   coordinator: CoordinatorHub;
+  /** the branch runs' ledger: an item per branch and the lines on it (server/work) */
+  work: WorkHub;
   /** the tokens this backend knows and the pairing that hands them out (server/callers) */
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
@@ -1074,7 +1078,10 @@ async function startRepoRun(
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
-  if (onBranch) return startBranchRun(state, repo, action, await issueNoteFor(repo, note), agent, by, pr);
+  if (onBranch) {
+    const resolved = await issueNoteFor(repo, note);
+    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], {}, resolved.work);
+  }
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
 }
 
@@ -1082,27 +1089,48 @@ async function startRepoRun(
  *  GitHub issue, read with gh off the repo's GitHub remote (core/issue).
  *  Only here, after every refusal, so a run that cannot start never calls
  *  gh; a chat in the checkout that opens with `#12` keeps its words. */
-async function issueNoteFor(repo: Repo, note: string): Promise<string> {
+async function issueNoteFor(repo: Repo, note: string): Promise<{ note: string; work?: WorkStart }> {
   const got = await resolveIssueNote(note, {
     slug: async () => (await githubRemote(repo))?.slug ?? null,
     gh: (args) => exec(["gh", ...args], { cwd: repo.path, timeoutMs: 30_000 }),
   });
   if ("error" in got) throw new HttpError(400, got.error);
-  return got.note;
+  return {
+    note: got.note,
+    ...(got.issue
+      ? { work: { title: got.issue.title, from: { kind: "issue", service: "github", key: `${got.issue.slug}#${got.issue.number}`, link: got.issue.url } } }
+      : {}),
+  };
 }
 
 /** A run on a branch of its own: a worktree under the config dir on
- *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
+ *  `run/<work id>-<slug>`, cut from the default branch's tip, where the gates'
  *  setup runs before the agent starts. The landing queue lands it later. */
-async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false, spec: ActionSpec = ACTIONS[action], extras: StartExtras = {}): Promise<Run> {
-  const start = await cutBranch(repo, note, pr);
+async function startBranchRun(
+  state: ServerState,
+  repo: Repo,
+  action: RunAction,
+  note: string,
+  agent: AgentSettings,
+  by: string | undefined,
+  pr = false,
+  spec: ActionSpec = ACTIONS[action],
+  extras: StartExtras = {},
+  work: WorkStart = { title: titleOf(note), from: { kind: "note" } },
+): Promise<Run> {
+  const item = state.work.mint({ ...work, repos: [repo.id] });
+  let start: BranchStart | undefined;
   try {
-    return state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
+    start = await cutBranch(repo, note, pr, item.id);
+    return await state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
   } catch (err) {
-    await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+    const message = err instanceof Error ? err.message : String(err);
+    state.work.close(item.id, "dropped", `the run did not start: ${message}`);
+    if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
-    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+    if (!start && err instanceof HttpError) throw err;
+    throw new HttpError(400, message);
   }
 }
 
@@ -1192,12 +1220,12 @@ async function dropCoordFolder(id: string): Promise<void> {
 /** A new branch off the default branch, its worktree made, and the setup
  *  line to run there before the first agent: what a branch run, or a flow
  *  on a branch, starts with. */
-async function cutBranch(repo: Repo, note: string, pr: boolean): Promise<BranchStart> {
+async function cutBranch(repo: Repo, note: string, pr: boolean, work: string): Promise<BranchStart> {
   const target = await defaultBranch(repo.path);
   const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
   if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
   const id = crypto.randomUUID().slice(0, 8);
-  const name = runBranchName(note, id);
+  const name = workBranchName(work, note);
   const dir = runTreeDir(repo.path, id);
   try {
     await addRunTree(repo.path, dir, name, base);
@@ -1220,7 +1248,7 @@ async function cutBranch(repo: Repo, note: string, pr: boolean): Promise<BranchS
     if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
   };
   return {
-    branch: { name, target, base, dir, state: "working", origin: id, ...(pr ? { openPr: true as const } : {}) },
+    branch: { name, target, base, dir, state: "working", origin: id, work, ...(pr ? { openPr: true as const } : {}) },
     prepare,
   };
 }
@@ -1241,7 +1269,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: "ask" });
   await needHarness(state, agent.harness, repo.path);
-  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id };
+  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}) };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
   const message = resume ? (queueLine ? `${reason}\n\n${branchLine(b)}` : reason) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b);
   try {
@@ -1314,12 +1342,17 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
     if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
     await needHarness(state, agent.harness, repo.path);
   }
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, true, got.spec) };
-  const start = await cutBranch(repo, event.note, true);
+  const work: WorkStart = { title: event.title, from: { kind: "trigger", event: event.id } };
+  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, true, got.spec, {}, work) };
+  const item = state.work.mint({ ...work, repos: [repo.id] });
+  let start: BranchStart | undefined;
   try {
+    start = await cutBranch(repo, event.note, true, item.id);
     return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: start }) };
   } catch (err) {
-    await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+    const message = err instanceof Error ? err.message : String(err);
+    state.work.close(item.id, "dropped", `the run did not start: ${message}`);
+    if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
     throw err;
   }
 }
@@ -1349,7 +1382,9 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
   try {
-    return { run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }) };
+    return {
+      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }, { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } }),
+    };
   } catch (err) {
     // another branch run took the last slot while this one got ready
     if (err instanceof SlotsFullError) return { busy: err.message };
@@ -3133,6 +3168,8 @@ async function handleApi(
   if (triggersRes) return triggersRes;
   const coordRes = await state.coordinator.handle(req, url, caller);
   if (coordRes) return coordRes;
+  const workRes = await state.work.handle(req, url, caller);
+  if (workRes) return workRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const capacityRes = await state.capacity.handle(req, url);
@@ -4782,6 +4819,7 @@ export async function startServer(opts: {
       state.prs.onRun(run);
       state.triggers.onRun(run);
       state.coordinator.onRun(run);
+      state.work.onRun(run);
       recountAwake(state);
       // a coordinator's token and folder live exactly as long as its run
       if (run.action === "coordinate" && !isRunActive(run)) {
@@ -5211,11 +5249,17 @@ export async function startServer(opts: {
         broadcast(state, ev);
         if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
         if (ev.type === "landing") state.coordinator.recheck();
+        if (ev.type === "landing") state.work.recheck();
       },
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
       startFix: (rec, entry) => startFixRun(state, rec, entry),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
       scenario: runScenario,
       runActive: (id) => {
         const run = state.runner.get(id);
@@ -5252,6 +5296,7 @@ export async function startServer(opts: {
         broadcast(state, ev);
         if (ev.type === "prs") state.triggers.onPrs(ev.prs);
         if (ev.type === "prs") state.coordinator.recheck();
+        if (ev.type === "prs") state.work.recheck();
       },
       record: (id) => state.landing.record(id),
       queueHold: (id) => state.landing.queueHold(id),
@@ -5265,6 +5310,11 @@ export async function startServer(opts: {
       // a run a restart took is unknown here, which counts as not finished
       runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
     }),
     librarySync: new LibrarySync({
       root,
@@ -5337,6 +5387,11 @@ export async function startServer(opts: {
         return { run: await startBranchFix(state, rec, said, "follow-up", true) };
       },
       ...(process.env["CANOPY_PUBLIC_ORIGIN"] ? { origin: process.env["CANOPY_PUBLIC_ORIGIN"] } : {}),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
     }),
     coordinator: new CoordinatorHub({
       run: (id) => state.runner.get(id),
@@ -5363,6 +5418,27 @@ export async function startServer(opts: {
         };
       },
       broadcast: (run) => broadcast(state, { type: "run", run }),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
+    }),
+    work: new WorkHub({
+      broadcast: (ev) => broadcast(state, ev),
+      facts: (item) => ({
+        active: item.runs.some((id) => {
+          const r = state.runner.get(id);
+          return r !== undefined && isRunActive(r);
+        }),
+        branches: item.branches.flatMap((id) => {
+          const rec = state.landing.record(id);
+          if (!rec) return [];
+          const entry = state.landing.info().entries.find((e) => e.id === id);
+          const pr = state.prs.info().find((w) => w.id === id);
+          return [{ state: rec.state, ...(entry ? { land: entry.state } : {}), ...(pr?.state ? { pr: pr.state.status } : {}) }];
+        }),
+      }),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),
@@ -5836,6 +5912,9 @@ export async function startServer(opts: {
    *  that held it is gone */
   const adoptFlows = async (): Promise<void> => {
     flowFiles = new FlowFiles(root);
+    // A restored flow can start a branch run synchronously. Adopt its work
+    // item first so the runner's onRun event is recorded instead of dropped.
+    await state.work.adopt();
     const restoreCfg = await loadConfig();
     state.flows.restore(
       await loadFlowRecords(root),
@@ -6010,7 +6089,7 @@ export async function startServer(opts: {
     endTerm: (id: string, opts?: { keep?: true }) => endTerm(state, id, opts),
     /** the sweep's end of a shell, with how it went; tests */
     sweepShell: (id: string, seen?: number) => sweepShell(state, id, seen),
-    stop: () => {
+    stop: async () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);
       state.health.stop();
@@ -6042,6 +6121,7 @@ export async function startServer(opts: {
       state.landing.detach();
       state.prs.detach();
       state.triggers.detach();
+      await state.work.detach();
       if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();

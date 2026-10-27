@@ -120,9 +120,11 @@ describe("fetchIssue", () => {
 
 describe("resolveIssueNote", () => {
   test("swaps a note that opens with a ref", async () => {
-    const got = await resolveIssueNote("#12 add a test", { slug: async () => "o/r", gh: fakeGh().gh });
+    const f = fakeGh();
+    const got = await resolveIssueNote("#12 add a test", { slug: async () => "o/r", gh: f.gh });
     expect("note" in got && got.note.startsWith("GitHub issue #12: Login redirect loops")).toBe(true);
     expect("note" in got && got.note.endsWith("add a test")).toBe(true);
+    expect("issue" in got && got.issue).toEqual({ number: 12, title: "Login redirect loops", url: "https://github.com/o/r/issues/12", slug: "o/r" });
   });
 
   test("a note with no ref, or a repo with no GitHub remote, is kept as typed and gh never runs", async () => {

@@ -48,6 +48,7 @@ import {
   type TriggersInfo,
 } from "../core/trigger";
 import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
+import type { WorkSink } from "../core/work";
 import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearNote, linearSessionLinks, type LinearInstall } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
@@ -125,6 +126,8 @@ export interface TriggerDeps {
   origin?: string;
   /** finishes a Linear app's install with the code Linear sent back; Linear's API unless a test says otherwise */
   install?: (rule: TriggerRule, secret: string, code: string, redirect: string) => Promise<LinearInstall>;
+  /** the work item's link and status lines; absent for pre-ledger events */
+  work?: WorkSink;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -279,6 +282,9 @@ export class TriggerHub {
     this.events.set(e.id, e);
     this.persist();
     this.publish();
+    if (e.work && e.status !== prev?.status && (e.status === "no-fix" || e.status === "failed" || e.status === "stopped")) {
+      this.deps.work?.note(e.work, `trigger event ${e.short ?? e.key} ${e.status}${e.reason ? `: ${e.reason}` : ""}`);
+    }
     const activity = activityFor(prev, e);
     if (activity && e.session) this.tell(e.rule, e.session, { activity });
     const note = issueNoteFor(prev, e, this.deps.origin);
@@ -378,16 +384,18 @@ export class TriggerHub {
         this.set(queued);
         return queued;
       }
+      const work = "flow" in out ? out.flow.branch?.work : out.run.branch?.work;
       const next: TriggerEvent =
         "flow" in out
-          ? { ...event, status: "working", flowId: out.flow.id, ...(out.flow.branch ? { branch: out.flow.branch.origin } : {}) }
-          : { ...event, status: "working", runId: out.run.id, ...(out.run.branch ? { branch: out.run.branch.origin } : {}) };
+          ? { ...event, status: "working", flowId: out.flow.id, ...(out.flow.branch ? { branch: out.flow.branch.origin } : {}), ...(work ? { work } : {}) }
+          : { ...event, status: "working", runId: out.run.id, ...(out.run.branch ? { branch: out.run.branch.origin } : {}), ...(work ? { work } : {}) };
       delete next.reason;
       delete next.endedAt;
       // a flow's first step can end inside its start, before the event knew
       // its id; the flow is the live object, so read where it is now
       const now = "flow" in out ? fromFlow(next, out.flow, this.now()) : next;
       this.set(now);
+      if (now.work) this.deps.work?.link(now.work, { event: now.id });
       return now;
     } catch (err) {
       const failed: TriggerEvent = { ...event, status: "failed", reason: errText(err), endedAt: this.now() };

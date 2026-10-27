@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
+import { ACTIONS, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
 import { isRunAction, RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
@@ -30,6 +30,17 @@ const SCOPE = {
   others: ["/w/trips-analysis"],
   skipped: [],
 };
+
+describe("branchLine", () => {
+  test("asks for the work trailer on every commit, and nothing of it without an item", () => {
+    const b = { name: "run/w-test2345-add-a-test", dir: "/w/x", target: "main", work: "w-test2345" };
+    const line = branchLine(b);
+    expect(line.startsWith("You work on the branch run/w-test2345-add-a-test, in a worktree of its own at /w/x, cut from main.")).toBe(true);
+    expect(line.endsWith('End every commit message with the line "Canopy-Work: w-test2345" after a blank line: the trailer that ties the commit to this work.')).toBe(true);
+    expect(branchLine({ name: "run/x", dir: "/w/x", target: "main" })).not.toContain("Canopy-Work");
+    expect(branchPrompt(repo(), ACTIONS.ask, "add a test", b)).toContain('"Canopy-Work: w-test2345"');
+  });
+});
 
 const file = { path: "a.ts", index: ".", worktree: "M", untracked: false, conflicted: false };
 

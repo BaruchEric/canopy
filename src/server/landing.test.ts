@@ -45,6 +45,8 @@ interface World {
   scenarios: [string, string, string, number][];
   /** scenario line → what it answers; a function may act first */
   scenAnswers: Map<string, CheckOutcome | (() => CheckOutcome | Promise<CheckOutcome>)>;
+  notes: string[];
+  closes: string[];
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
@@ -74,6 +76,8 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
     scenAnswers: new Map(),
+    notes: [],
+    closes: [],
     hub: null as unknown as LandingHub,
   };
   let fixN = 0;
@@ -107,11 +111,16 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     scenariosRoot: w.scenRoot,
     dir: w.dir,
     worktrees: w.wts,
+    work: {
+      note: (id, text) => w.notes.push(`${id} ${text}`),
+      close: (id, state, text) => w.closes.push(`${id} ${state} ${text}`),
+      link: () => {},
+    },
   });
   return w;
 }
 
-const fakeRun = (repoId: string, b: { name: string; target: string; base: string; dir: string; origin: string }, state: RunBranchState): Run => ({
+const fakeRun = (repoId: string, b: { name: string; target: string; base: string; dir: string; origin: string; work?: string }, state: RunBranchState): Run => ({
   id: b.origin,
   repoId,
   action: "propose",
@@ -131,13 +140,13 @@ const fakeRun = (repoId: string, b: { name: string; target: string; base: string
 });
 
 /** A finished branch run whose worktree holds one commit writing `file`. */
-async function readyRun(w: World, id: string, file: string, body: string): Promise<Run> {
+async function readyRun(w: World, id: string, file: string, body: string, work?: string): Promise<Run> {
   const dir = runTreeDir(w.repo.path, id, w.wts);
   const base = (await revOf(w.repo.path, "main"))!;
   const name = `run/x-${id}`;
   await addRunTree(w.repo.path, dir, name, base);
   await commit(dir, file, body);
-  const run = fakeRun(w.repo.id, { name, target: "main", base, dir, origin: id }, "ready");
+  const run = fakeRun(w.repo.id, { name, target: "main", base, dir, origin: id, ...(work ? { work } : {}) }, "ready");
   w.hub.onRun(run);
   return run;
 }
@@ -159,6 +168,11 @@ const rehub = (w: World): LandingHub =>
     scenariosRoot: w.scenRoot,
     dir: w.dir,
     worktrees: w.wts,
+    work: {
+      note: (id, text) => w.notes.push(`${id} ${text}`),
+      close: (id, state, text) => w.closes.push(`${id} ${state} ${text}`),
+      link: () => {},
+    },
   });
 
 /** A scenario file in the world's set: a command one running `run`, or `text` as written. */
@@ -368,6 +382,50 @@ describe("landing", () => {
     expect((await post("/api/landing/land", { run: "ll11" }))!.status).toBe(409);
     await w.hub.idle();
     expect(await w.hub.handle(new Request("http://x/api/other"), new URL("http://x/api/other"))).toBeNull();
+  });
+});
+
+describe("the work ledger (FR-037)", () => {
+  test("the record carries the branch's item, and the queue writes its lines on it", async () => {
+    const w = await world();
+    await readyRun(w, "wk1", "b.txt", "b\n", "w-test2345");
+    await w.hub.idle();
+    expect(w.hub.record("wk1")?.work).toBe("w-test2345");
+    expect(w.notes).toHaveLength(1);
+    expect(w.notes[0]).toMatch(/^w-test2345 branch ready, /);
+    await w.hub.land("wk1");
+    await w.hub.idle();
+    expect(w.notes.slice(1)).toEqual(["w-test2345 queued to land"]);
+    expect(w.closes).toEqual(["w-test2345 landed landed on main"]);
+  });
+
+  test("sent back, fix it and a drop each write a line; a record without an item writes none", async () => {
+    const w = await world();
+    await readyRun(w, "wk2", "a.txt", "two\n");
+    await readyRun(w, "wk3", "a.txt", "three\n", "w-fix23456");
+    await w.hub.idle();
+    await w.hub.land("wk2");
+    await w.hub.idle();
+    await w.hub.land("wk3");
+    await w.hub.idle();
+    expect(entryOf(w, "wk3")?.state).toBe("conflict");
+    expect(w.notes).toEqual([expect.stringMatching(/^w-fix23456 branch ready, /), "w-fix23456 queued to land", "w-fix23456 sent back: conflict in 1 file"]);
+    expect(w.closes).toEqual([]);
+    await w.hub.fix("wk3");
+    expect(w.notes.at(-1)).toBe("w-fix23456 fix started: conflict");
+    await w.hub.drop("wk3");
+    expect(w.closes).toEqual(["w-fix23456 dropped dropped with its worktree"]);
+  });
+
+  test("a working record read after a restart says it was cut off", async () => {
+    const w = await world();
+    await w.hub.adopt();
+    w.hub.onRun(fakeRun(w.repo.id, { name: "run/w-test2345-x", target: "main", base: "b", dir: join(w.wts, "x"), origin: "wk4", work: "w-test2345" }, "working"));
+    await w.hub.flushed();
+    const again = rehub(w);
+    await again.adopt();
+    expect(again.record("wk4")?.state).toBe("stopped");
+    expect(w.notes).toEqual(["w-test2345 cut off by a restart"]);
   });
 });
 
