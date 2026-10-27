@@ -4812,6 +4812,43 @@ button.dl-gut.has {
   color: var(--rust);
   overflow-wrap: anywhere;
 }
+/* the holdout scenarios' pass: a line that folds open to each result */
+.run-scenarios {
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: inherit;
+}
+.run-scenarios summary {
+  cursor: pointer;
+}
+.run-scenarios summary.moss {
+  color: var(--moss);
+}
+.run-scenarios ul {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
+.run-scenarios li.rust {
+  color: var(--rust);
+}
+.run-scenarios .dim {
+  color: var(--ink-dim);
+}
+.run-scenarios pre {
+  max-height: 14em;
+  overflow: auto;
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: var(--bark0);
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* a repo card's open PRs, toned by the worst one's checks */
 .pr-card {

@@ -1,9 +1,11 @@
 /** The landing queue's server half (FR-012, FR-013): the branch run
- *  records, one loop per repo that lands queued entries one at a time, the
- *  sort that decides what may join on its own, the routes, and the
- *  `landing` event. The model and its words are `core/landing.ts`; the git
- *  is `core/worktree.ts`; the gates are `core/gates.ts`; the review rules
- *  and the sort are `core/review.ts`.
+ *  records, one loop per repo that lands queued entries one at a time (the
+ *  rebase, the gates one at a time, then the repo's scenarios, then
+ *  fast-forward), the sort that decides what may join on its own, the
+ *  routes, and the `landing` event. The model and its words are
+ *  `core/landing.ts`; the git is `core/worktree.ts`; the gates are
+ *  `core/gates.ts`; the review rules and the sort are `core/review.ts`; the
+ *  scenario pass is `scenarios.ts` (FR-032).
  *
  *  Records live under `<configDir>/landing/`: `runs/<id>.json` per branch
  *  run, `queue/<repo key>.json` per repo and `notices.json`. Only the server
@@ -29,6 +31,7 @@ import {
   restartWorking,
   retryWaiting,
   reviewWord,
+  SCENARIO_GATE,
   sentBack,
   unqueue,
   WORKING,
@@ -36,11 +39,13 @@ import {
   type QueueFlags,
 } from "../core/landing";
 import { foldsCase, readRules, sortBranch } from "../core/review";
+import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
 import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, treeState, worktreesRoot } from "../core/worktree";
+import { readScenarioSet, readScenarioSettings, runScenarioSet, scenariosRoot, setDirOf, type ScenarioRunner } from "./scenarios";
 
 export const landingDir = (): string => join(configDir(), "landing");
 /** how often entries waiting on a busy checkout look again */
@@ -72,6 +77,10 @@ export interface LandingDeps {
   /** whether a PR watch still holds the branch: its PR open and not swept,
    *  so its worktree is the watch's to keep */
   prHeld?: (id: string) => boolean;
+  /** runs one scenario line in a worktree with the set's copy as SCENARIO_DIR (`runScenario`) */
+  scenario: ScenarioRunner;
+  /** where the sets live; `scenariosRoot()` unless a test says otherwise */
+  scenariosRoot?: string;
   dir?: string;
   worktrees?: string;
   now?: () => number;
@@ -79,11 +88,13 @@ export interface LandingDeps {
 }
 
 /** Sorts a branch run's worktree against its target, with the rules and
- *  gates its main checkout holds at this moment. */
-export async function sortRun(rec: LandingRun, now: number): Promise<RunReview> {
+ *  gates its main checkout holds at this moment. Command scenarios in the
+ *  repo's set count as gates. */
+export async function sortRun(rec: LandingRun, now: number, root = scenariosRoot()): Promise<RunReview> {
   const rules = await readRules(rec.repoPath);
+  const set = await readScenarioSet(root, rec.repoPath).catch((): ScenarioSet => ({ scenarios: [], errors: [] }));
   const hasGates = await readGates(rec.repoPath).then(
-    (g) => g.source !== "none",
+    (g) => g.source !== "none" || set.scenarios.some((s) => s.kind === "command"),
     () => false,
   );
   return sortBranch(rec.dir, rec.target, rules, hasGates, await foldsCase(rec.repoPath), now);
@@ -137,6 +148,10 @@ export class LandingHub {
 
   private get dir(): string {
     return this.deps.dir ?? landingDir();
+  }
+  /** where the scenario sets live */
+  private get root(): string {
+    return this.deps.scenariosRoot ?? scenariosRoot();
   }
   private now(): number {
     return this.deps.now?.() ?? Date.now();
@@ -370,7 +385,7 @@ export class LandingHub {
       const rec = this.runs.get(id);
       if (!rec || !existsSync(rec.dir)) return null;
       try {
-        const review = await (this.deps.sort ?? sortRun)(rec, this.now());
+        const review = await (this.deps.sort ?? ((r: LandingRun, n: number) => sortRun(r, n, this.root)))(rec, this.now());
         const cur = this.runs.get(id);
         if (cur) {
           const upd = { ...cur, review };
@@ -761,15 +776,17 @@ export class LandingHub {
         return;
       }
       let gates: Gates;
+      let scen: { set: ScenarioSet; settings: ScenarioSettings };
       try {
         gates = await readGates(e.repoPath);
+        scen = { settings: await readScenarioSettings(e.repoPath), set: await readScenarioSet(this.root, e.repoPath) };
       } catch (err) {
         this.entries = holdAll(this.entries, repoId, errText(err), this.now());
         void this.saveQueue(e.repoPath);
         this.publish();
         return;
       }
-      await this.turn(e, gates);
+      await this.turn(e, gates, scen);
     }
   }
 
@@ -787,8 +804,9 @@ export class LandingHub {
     return null;
   }
 
-  /** One entry's turn: rebase, setup, gates, fast-forward. */
-  private async turn(start: LandEntry, gates: Gates): Promise<void> {
+  /** One entry's turn: rebase, setup, gates, scenarios, fast-forward. */
+  private async turn(start: LandEntry, gates: Gates, { set, settings }: { set: ScenarioSet; settings: ScenarioSettings }): Promise<void> {
+    const commands = set.scenarios.filter((s) => s.kind === "command");
     let e = this.step(start, { t: "begin" });
     for (;;) {
       const head = await revOf(e.repoPath, "HEAD");
@@ -820,7 +838,7 @@ export class LandingHub {
       const moved = after && after !== before ? (await git(e.dir, ["diff", "--name-only", before, after])).stdout.split("\n").filter(Boolean) : [];
       const setup = gates.setup !== undefined && touchesLockfile(moved);
       const first = gates.gates[0]?.name ?? null;
-      e = this.step(e, { t: "rebased", setup, first, noGates: gates.source === "none" });
+      e = this.step(e, { t: "rebased", setup, first, noGates: gates.source === "none" && commands.length === 0 && set.errors.length === 0 });
       if (e.state === "setup" && gates.setup) {
         const r = await this.deps.check(e.dir, gates.setup);
         if (r.exit !== 0) {
@@ -837,6 +855,43 @@ export class LandingHub {
           return;
         }
         e = this.step(e, { t: "gate-ok", next: gates.gates[i + 1]?.name ?? null });
+      }
+      // the holdout scenarios (FR-032) run on a copy of the set the run never
+      // saw; a broken scenario file is the first red, and a set with no
+      // command scenarios and no broken files runs no pass
+      const firstScenario = set.errors[0]?.file ?? commands[0]?.name;
+      if (e.state === "landing" && firstScenario !== undefined) {
+        e = this.step(e, { t: "scenarios", first: firstScenario });
+        let pass: ScenarioRun;
+        try {
+          pass = await runScenarioSet({
+            dir: e.dir,
+            setDir: setDirOf(this.root, e.repoPath),
+            set,
+            settings,
+            run: this.deps.scenario,
+            head: after ?? "",
+            now: this.now(),
+            onDone: (r, next) => {
+              if (r.ok) e = this.step(e, { t: "scenario-ok", next });
+            },
+          });
+        } catch (err) {
+          this.step(e, { t: "hold", why: `scenarios could not run: ${errText(err)}` });
+          return;
+        }
+        const rec = this.runs.get(e.id);
+        if (rec) {
+          const upd = { ...rec, scenarios: pass };
+          this.runs.set(e.id, upd);
+          this.written.set(e.id, JSON.stringify(upd));
+          void this.saveRun(upd);
+        }
+        const red = pass.results.find((r) => !r.ok);
+        if (red) {
+          this.step(e, { t: "red", gate: SCENARIO_GATE + red.name, output: red.tail ?? "" });
+          return;
+        }
       }
       if ((await currentBranch(e.repoPath)) !== e.target) {
         this.step(e, { t: "hold", why: `checkout not on ${e.target}` });

@@ -144,6 +144,18 @@ describe("needs", () => {
     expect(needs("DELETE", "/api/triggers/events")).toBe("operate");
   });
 
+  test("scenario routes: the set's text needs admin, names read, a run operate", () => {
+    expect(needs("GET", "/api/scenarios")).toBe("admin");
+    expect(needs("GET", "/api/scenarios/names")).toBe("read");
+    expect(needs("POST", "/api/scenarios")).toBe("admin");
+    expect(needs("DELETE", "/api/scenarios")).toBe("admin");
+    expect(needs("POST", "/api/scenarios/run")).toBe("operate");
+    expect(allows("shell", needs("GET", "/api/scenarios"))).toBe(false);
+    expect(allows("shell", needs("GET", "/api/scenarios/names"))).toBe(true);
+    expect(allows("shell", needs("POST", "/api/scenarios/run"))).toBe(true);
+    expect(allows("cli", needs("GET", "/api/scenarios"))).toBe(true);
+  });
+
   test("sweep routes need admin", () => {
     // reads too: the plan names every shell and chat on the backend
     for (const m of ["GET", "POST"]) {

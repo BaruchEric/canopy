@@ -75,15 +75,20 @@ canopy health lint [dir]           # read .canopy/health.json, exit 1 on a bad e
 canopy health init [dir]           # write a starter file, the dev task when there is one
 # list, show, heal and watch ask every backend the home one lists (Mac and mini), by tailnet address first;
 # --on NAME keeps one, --backend URL asks only that address (default $CANOPY_API, else 127.0.0.1:7850)
-canopy land <run>                  # a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
+canopy land <run>                  # a ready branch run into its repo's landing queue: rebase, gates, scenarios, fast-forward; never a push
 canopy land <run> --approve <id>   # land a run that touches sensitive files, with the id `canopy land <run>` printed
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
+canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
+canopy scenarios <repo> add <name> [--judge] [--run CMD]   # a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
+canopy scenarios <repo> run [<run>]         # run the set against a branch run's worktree, else against the main checkout
 # a repo's .canopy/review.json ({"autoLand": ["docs", "comments", "format"], "approve": [globs]}) lets a run of
 # prose, comments or whitespace land on its own once its gates pass, and holds the globs for an approval
 # a repo's gates come from .canopy/gates.json, else package.json's typecheck, lint, test and build; they run in the
 # branch's worktree in their own shell, without canopy's logins (GH_TOKEN, git's credential helper) or CANOPY_ settings
 # the ship workflow's Gates step checks the same list (.canopy/gates.json as the last commit holds it)
+# after the gates, the queue runs the repo's holdout scenarios kept under the config dir, which a run never sees; a red
+# one sends the branch back with the scenario's name and output
 canopy pr <run> [--draft]          # push a ready branch run and open a PR on GitHub in place of landing it; never a force push
 canopy prs [repo]                  # every PR branch runs opened: open, merged or closed, its checks, auto-fix and auto-merge
 # canopy polls each open PR with gh; auto-fix starts a fix run on a red check or a review comment from someone with

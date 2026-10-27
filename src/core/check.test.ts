@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtinCheck } from "./builtincheck";
-import { runCheck, runGate } from "./check";
+import { runCheck, runGate, runScenario } from "./check";
 import { CANOPY_CLI_PATH } from "./cli";
 import { startStageRunner } from "../stage/runner";
 import { StageClient } from "./stageclient";
@@ -147,6 +147,30 @@ describe("a seed's check starts without canopy's GitHub login", () => {
     expect(gate.output).not.toContain("CANOPY_CLI=");
     expect(gate.output).not.toContain("CANOPY_BUN=");
     expect(gate.output).toContain("PATH=");
+  });
+
+  test("runScenario sees SCENARIO_DIR and none of canopy's settings", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-scenario-"));
+    scratch.push(dir);
+    const saved = process.env["CANOPY_CONFIG_DIR"];
+    process.env["CANOPY_CONFIG_DIR"] = "/secret";
+    try {
+      const r = await runScenario(dir, 'echo "set=$SCENARIO_DIR"; env | grep -c "^CANOPY_CONFIG_DIR=" || true', "/tmp/set copy", 10_000);
+      expect(r.exit).toBe(0);
+      expect(r.output).toBe("set=/tmp/set copy\n0");
+    } finally {
+      if (saved === undefined) delete process.env["CANOPY_CONFIG_DIR"];
+      else process.env["CANOPY_CONFIG_DIR"] = saved;
+    }
+  });
+
+  test("runScenario stops at the set's timeout", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-scenario-"));
+    scratch.push(dir);
+    const r = await runScenario(dir, "echo started; sleep 5; echo done", "/tmp/x", 500);
+    expect(r.exit).not.toBe(0);
+    expect(r.output).toContain("started");
+    expect(r.output).not.toContain("done");
   });
 });
 

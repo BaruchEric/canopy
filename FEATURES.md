@@ -64,12 +64,6 @@ P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orc
 The pre-flight runs one note two or three times, across profiles if asked; the members share a group, gates and FR-032 scenarios dry-run on each ready one, a read-only `compare` run ranks them, and the winner is offered "land" by its own sort while the rest drop when it lands. A group sheet shows the members side by side with their diffstat, gates, score and cost. `canopy run --times`.
 Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25).
 
-### FR-032 · Holdout scenario gates in the landing queue
-P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
-End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` at HEAD sets the run line and the judge mode.
-Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25).
-
-
 ### FR-025 · Copy the branch, PR link or run id from the keyboard
 P3 · added 2026-10-23 · source: Eric (Linear UX study)
 With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch.
@@ -115,6 +109,11 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-032 · Holdout scenario gates in the landing queue
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
+End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` in the main checkout sets the run line and the judge mode.
+Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26 (command scenarios in the queue, the record, the sheet's line, canopy scenarios); plans 2 (judge scenarios) and 3 (the PR watch's pass, the repo panel's list) open.
 
 ### FR-036 · Capacity governor: subscription-limit-aware dispatch
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)

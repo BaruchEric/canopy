@@ -54,6 +54,7 @@ import { mcpCommand } from "./mcp";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
+import { scenariosCommand } from "./scenarios";
 import { prCommand } from "./pr";
 import { awakeCommand } from "./awake";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
@@ -109,6 +110,7 @@ const COMMANDS = new Set([
   "mcp",
   "land",
   "queue",
+  "scenarios",
   "pr",
   "prs",
   "secrets",
@@ -859,6 +861,8 @@ export async function main(argv: string[]): Promise<void> {
     case "land":
     case "queue":
       return landCommand(cmd, args, { fail });
+    case "scenarios":
+      return scenariosCommand(args, { fail });
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });

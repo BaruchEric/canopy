@@ -41,7 +41,7 @@ function keyBlock(lines: string[]): { keys: Map<string, string>; rest: string[] 
   return { keys, rest: lines.slice(i) };
 }
 
-function frontmatter(text: string): { keys: Map<string, string>; body: string } {
+export function frontmatter(text: string): { keys: Map<string, string>; body: string } {
   const lines = text.split(/\r?\n/);
   if (lines[0]?.trim() !== "---") throw new Bad("no frontmatter: the file must start with a --- block");
   const end = lines.findIndex((l, i) => i > 0 && l.trim() === "---");

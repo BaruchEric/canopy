@@ -4,7 +4,7 @@
 
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction } from "../../src/core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioRun } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [] };
 
@@ -139,7 +139,15 @@ export interface RunLanding {
   stopped?: boolean;
   /** why a run a restart stopped cannot land */
   why?: string;
+  /** the set's latest pass over the branch */
+  scenarios?: ScenarioRun;
 }
+
+/** The scenarios' pass in one line: "scenarios 7/8 · 0.88". */
+export const scenarioLine = (s: Pick<ScenarioRun, "total" | "passed" | "score">): string => `scenarios ${s.passed}/${s.total} · ${s.score.toFixed(2)}`;
+
+/** "rust" when a scenario went red, else "moss". */
+export const scenarioTone = (s: Pick<ScenarioRun, "total" | "passed">): "moss" | "rust" => (s.passed < s.total ? "rust" : "moss");
 
 const BRANCH_WORD: Record<NonNullable<Run["branch"]>["state"], string> = {
   working: "working",
@@ -166,6 +174,7 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
       // a sent-back branch may change course to a PR
       canPr: back,
       entry,
+      scenarios: info.runs.find((r) => r.id === b.origin)?.scenarios,
     };
   }
   const rec = info.runs.find((r) => r.id === b.origin);
@@ -177,7 +186,7 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   const canLand = stopped || (state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle");
   const sorted = canLand && rec?.review ? { verdict: verdictWord(rec), approve: needsApproval(rec) } : {};
   const whole = state === "stopped" && rec?.whole && !rec.whole.ok ? { why: rec.whole.why } : {};
-  return { word: BRANCH_WORD[state], canLand, canFix: false, canPr: canLand && !stopped, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole };
+  return { word: BRANCH_WORD[state], canLand, canFix: false, canPr: canLand && !stopped, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole, scenarios: rec?.scenarios };
 }
 
 /** Whether a new run starts on a branch unless the toggle says otherwise:

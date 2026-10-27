@@ -1413,7 +1413,7 @@ export interface PrWatch {
 /** A queue entry's state. `conflict`, `red` and `moved` are sent back: the
  *  entry has left the queue and waits for "fix it". `waiting` holds its
  *  place until what it names clears. */
-export type LandState = "queued" | "rebasing" | "setup" | "gate" | "landing" | "landed" | "waiting" | "conflict" | "red" | "moved";
+export type LandState = "queued" | "rebasing" | "setup" | "gate" | "scenarios" | "landing" | "landed" | "waiting" | "conflict" | "red" | "moved";
 
 export interface LandEntry {
   /** the branch's id (`RunBranch.origin`) */
@@ -1507,6 +1507,28 @@ export interface LandNotice {
   at: number;
 }
 
+/** One scenario's outcome. */
+export interface ScenarioResult {
+  name: string;
+  kind: "command" | "judge";
+  ok: boolean;
+  /** a judge scenario's P(yes) (plan 2) */
+  p?: number;
+  /** the output's last TAIL_CHARS */
+  tail?: string;
+}
+/** what the set said about one head of a branch, written on its record */
+export interface ScenarioRun {
+  /** the branch head they ran against */
+  head: string;
+  at: number;
+  total: number;
+  passed: number;
+  /** the mean satisfaction, 0 to 1 */
+  score: number;
+  results: ScenarioResult[];
+}
+
 /** A branch run as the landing records keep it, across restarts. */
 export interface LandingRun {
   /** the branch's id (`RunBranch.origin`) */
@@ -1529,6 +1551,8 @@ export interface LandingRun {
   endedAt?: number;
   /** its diff's latest sort, once it settled ready (FR-013) */
   review?: RunReview;
+  /** the set's latest pass over this branch; a rebase runs it again */
+  scenarios?: ScenarioRun;
   /** a stopped run only: whether its work is whole as the hub last looked,
    *  so "land" applies. Never saved: the worktree can change after. */
   whole?: RunWhole;

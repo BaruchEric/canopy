@@ -7,6 +7,7 @@ import { exec } from "../core/exec";
 import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ServerEvent } from "../core/types";
 import { addRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { LandingHub, type CheckOutcome } from "./landing";
+import { setDirOf } from "./scenarios";
 
 let root = "";
 const sh = async (cwd: string, ...args: string[]): Promise<string> => {
@@ -38,6 +39,12 @@ interface World {
   opened: string[];
   dropped: string[];
   held: Set<string>;
+  /** where the scenario sets live */
+  scenRoot: string;
+  /** the scenario runner's calls: worktree, line, set copy, timeout */
+  scenarios: [string, string, string, number][];
+  /** scenario line → what it answers; a function may act first */
+  scenAnswers: Map<string, CheckOutcome | (() => CheckOutcome | Promise<CheckOutcome>)>;
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
@@ -64,6 +71,9 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     opened: [],
     dropped: [],
     held: new Set(),
+    scenRoot: join(root, `scen${n}`),
+    scenarios: [],
+    scenAnswers: new Map(),
     hub: null as unknown as LandingHub,
   };
   let fixN = 0;
@@ -89,6 +99,12 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     },
     dropped: (id) => w.dropped.push(id),
     prHeld: (id) => w.held.has(id),
+    scenario: async (cwd, line, setDir, ms) => {
+      w.scenarios.push([cwd, line, setDir, ms]);
+      const a = w.scenAnswers.get(line);
+      return typeof a === "function" ? await a() : (a ?? { exit: 0, output: "" });
+    },
+    scenariosRoot: w.scenRoot,
     dir: w.dir,
     worktrees: w.wts,
   });
@@ -139,9 +155,18 @@ const rehub = (w: World): LandingHub =>
       throw new Error("no fix here");
     },
     runActive: () => false,
+    scenario: async () => ({ exit: 0, output: "" }),
+    scenariosRoot: w.scenRoot,
     dir: w.dir,
     worktrees: w.wts,
   });
+
+/** A scenario file in the world's set: a command one running `run`, or `text` as written. */
+async function addScenario(w: World, name: string, run?: string, text?: string): Promise<void> {
+  const dir = setDirOf(w.scenRoot, w.repo.path);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, `${name}.md`), text ?? `---\nname: ${name}\nkind: command\n${run ? `run: ${run}\n` : ""}---\n`);
+}
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "canopy-land-"));
@@ -721,5 +746,124 @@ describe("PR runs (FR-011)", () => {
     await w.hub.forget("pr21");
     expect(recOf(w, "pr21")).toBeUndefined();
     expect(w.hub.record("pr21")).toBeUndefined();
+  });
+});
+
+describe("scenarios (FR-032)", () => {
+  test("the scenarios run after the last gate, in the worktree, with a copy of the set, then the branch lands", async () => {
+    const w = await world();
+    await addScenario(w, "checkout", "make checkout");
+    await addScenario(w, "refund");
+    const run = await readyRun(w, "sc11", "b.txt", "b\n");
+    const states: string[] = [];
+    w.scenAnswers.set("make checkout", () => {
+      states.push(entryOf(w, "sc11")?.state + ":" + entryOf(w, "sc11")?.gate);
+      return { exit: 0, output: "ok" };
+    });
+    await w.hub.land("sc11");
+    await w.hub.idle();
+    expect(w.checks.map((c) => c[1])).toEqual(["bun run lint", "bun run test"]);
+    expect(w.scenarios.map(([cwd, line, , ms]) => [cwd, line, ms])).toEqual([
+      [run.branch!.dir, "make checkout", 600_000],
+      [run.branch!.dir, 'bun test "$SCENARIO_DIR"', 600_000],
+    ]);
+    expect(states).toEqual(["scenarios:checkout"]);
+    expect(w.scenarios[0]![2]).not.toBe(setDirOf(w.scenRoot, w.repo.path));
+    expect(existsSync(w.scenarios[0]![2])).toBe(false);
+    expect(entryOf(w, "sc11")?.state).toBe("landed");
+    expect(entryOf(w, "sc11")?.noGates).toBeUndefined();
+  });
+
+  test("a red scenario comes back with its name and the output tail, never its text, and the record keeps the pass", async () => {
+    const w = await world();
+    // the hub writes records only once it holds them
+    await w.hub.adopt();
+    await addScenario(w, "checkout", "make checkout", "---\nname: checkout\nkind: command\nrun: make checkout\n---\nSECRET STORY\n");
+    await readyRun(w, "sc12", "b.txt", "b\n");
+    w.scenAnswers.set("make checkout", { exit: 1, output: "x".repeat(5000) + "\n1 fail" });
+    await w.hub.land("sc12");
+    await w.hub.idle();
+    const e = entryOf(w, "sc12")!;
+    expect([e.state, e.gate]).toEqual(["red", "scenario: checkout"]);
+    expect(e.reason?.length).toBe(4000);
+    expect(JSON.stringify(w.hub.info())).not.toContain("SECRET STORY");
+    const rec = w.hub.record("sc12")!;
+    expect(rec.scenarios).toMatchObject({ total: 1, passed: 0, score: 0, results: [{ name: "checkout", ok: false }] });
+    expect(rec.scenarios?.head).toBe((await revOf(runTreeDir(w.repo.path, "sc12", w.wts), "HEAD")) ?? "no worktree HEAD");
+    // the fix prompt carries the observation, not the story
+    await w.hub.fix("sc12");
+    expect(w.fixes).toHaveLength(1);
+    w.hub.stop();
+    await w.hub.flushed();
+    const again = rehub(w);
+    await again.adopt();
+    expect(again.record("sc12")?.scenarios?.results[0]?.name).toBe("checkout");
+  });
+
+  test("main moving under the entry runs the scenarios again on the new head", async () => {
+    const w = await world();
+    await addScenario(w, "a", "make a");
+    await readyRun(w, "sc13", "b.txt", "b\n");
+    let moved = false;
+    w.scenAnswers.set("make a", async () => {
+      if (!moved) {
+        moved = true;
+        await commit(w.repo.path, "c.txt", "c\n");
+      }
+      return { exit: 0, output: "" };
+    });
+    await w.hub.land("sc13");
+    await w.hub.idle();
+    expect(entryOf(w, "sc13")?.state).toBe("landed");
+    expect(w.scenarios.filter((c) => c[1] === "make a")).toHaveLength(2);
+  });
+
+  test("no set, or a set of judge scenarios only, runs no pass and leaves the record alone", async () => {
+    const w = await world({ noPackage: true });
+    await readyRun(w, "sc14", "b.txt", "b\n");
+    await w.hub.land("sc14");
+    await w.hub.idle();
+    expect([entryOf(w, "sc14")?.state, entryOf(w, "sc14")?.noGates, w.scenarios]).toEqual(["landed", true, []]);
+    const w2 = await world({ noPackage: true });
+    await addScenario(w2, "j", undefined, "---\nname: j\nkind: judge\n---\nstory\n");
+    await readyRun(w2, "sc15", "b.txt", "b\n");
+    await w2.hub.land("sc15");
+    await w2.hub.idle();
+    expect([entryOf(w2, "sc15")?.state, entryOf(w2, "sc15")?.noGates, w2.scenarios]).toEqual(["landed", true, []]);
+  });
+
+  test("a docs run with scenarios and no gates joins on its own and lands", async () => {
+    const w = await world({ noPackage: true });
+    await rulesOn(w, RULES);
+    await addScenario(w, "a", "make a");
+    await readyRun(w, "sc16", "notes.md", "words\n");
+    await w.hub.idle();
+    expect(entryOf(w, "sc16")?.auto).toBe(true);
+    expect(entryOf(w, "sc16")?.state).toBe("landed");
+    expect(w.scenarios.map((c) => c[1])).toEqual(["make a"]);
+  });
+
+  test("a broken .canopy/scenarios.json holds the queue with its reason", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"timeout": 5000}');
+    await readyRun(w, "sc17", "b.txt", "b\n");
+    await w.hub.land("sc17");
+    await w.hub.idle();
+    expect(entryOf(w, "sc17")?.state).toBe("waiting");
+    expect(entryOf(w, "sc17")?.reason).toContain("timeout must be at most 1800 seconds");
+  });
+
+  test("a runner that throws holds the entry and nothing lands", async () => {
+    const w = await world();
+    await addScenario(w, "a", "make a");
+    await readyRun(w, "sc18", "b.txt", "b\n");
+    w.scenAnswers.set("make a", () => {
+      throw new Error("no worktree");
+    });
+    await w.hub.land("sc18");
+    await w.hub.idle();
+    expect(entryOf(w, "sc18")?.state).toBe("waiting");
+    expect(entryOf(w, "sc18")?.reason).toBe("scenarios could not run: no worktree");
+    expect(await revOf(w.repo.path, "HEAD")).not.toBe(await revOf(runTreeDir(w.repo.path, "sc18", w.wts), "HEAD"));
   });
 });

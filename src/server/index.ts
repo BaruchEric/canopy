@@ -45,7 +45,7 @@ import {
 } from "../core/history";
 import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse";
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
-import { gatesCheck, gateTools, runCheck, runGate } from "../core/check";
+import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -212,6 +212,7 @@ import { HealthHub, rangerResult, streamResult } from "./health";
 import { CapacityHub, capacityFile } from "./capacity";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
@@ -334,6 +335,8 @@ interface ServerState {
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  /** the holdout scenario sets and a pass on demand (server/scenarios) */
+  scenarios: Scenarios;
   /** the PRs branch runs opened and the watch on them (server/prs) */
   prs: PrHub;
   /** what went idle, offered for closing, and the close (server/sweep) */
@@ -3118,6 +3121,8 @@ async function handleApi(
   if (kitRes) return kitRes;
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
+  const scenariosRes = await state.scenarios.handle(req, url);
+  if (scenariosRes) return scenariosRes;
   const prsRes = await state.prs.handle(req, url);
   if (prsRes) return prsRes;
   const sweepRes = await state.sweep.handle(req, url);
@@ -5211,6 +5216,7 @@ export async function startServer(opts: {
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
       startFix: (rec, entry) => startFixRun(state, rec, entry),
+      scenario: runScenario,
       runActive: (id) => {
         const run = state.runner.get(id);
         return run !== undefined && isRunActive(run);
@@ -5218,6 +5224,15 @@ export async function startServer(opts: {
       openPr: (id) => state.prs.open(id),
       dropped: (id) => state.prs.forgetBranch(id),
       prHeld: (id) => state.prs.holds(id),
+    }),
+    scenarios: new Scenarios({
+      root: scenariosRoot(),
+      repo: (id) => state.result.repos.find((r) => r.id === id),
+      runDir: (id, repoPath) => {
+        const rec = state.landing.record(id);
+        return rec && rec.repoPath === repoPath ? rec.dir : undefined;
+      },
+      run: runScenario,
     }),
     callers,
     callerSockets: new Set(),
