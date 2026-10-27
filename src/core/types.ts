@@ -2011,6 +2011,22 @@ export interface Verdict {
 
 export type JudgeFit = "meets" | "partly" | "misses";
 
+export type ScenarioSatisfied = "yes" | "partly" | "no";
+
+/** The judge's answers about one holdout scenario. */
+export interface ScenarioAnswers {
+  satisfied: { choice: ScenarioSatisfied; probabilities?: Record<string, number> };
+  evidence: { probability: number };
+}
+
+export interface ScenarioJudgment {
+  answers: ScenarioAnswers;
+  /** P(yes), carried to the branch's satisfaction score. */
+  p: number;
+  ok: boolean;
+  reason: string | null;
+}
+
 export interface JudgeAnswers {
   fit: { choice: JudgeFit; probabilities?: Record<string, number> };
   evidence: { probability: number };

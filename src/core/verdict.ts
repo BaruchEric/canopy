@@ -1,7 +1,7 @@
 /** The verdict gate: what a step's closing summary is asked, and what the
  *  answers mean. Pure and browser-safe; jev.ts is the evaluator. */
 
-import type { EvidenceFile, JudgeAnswers, Judgment, Verdict, VerdictAnswers } from "./types";
+import type { EvidenceFile, JudgeAnswers, Judgment, ScenarioAnswers, ScenarioJudgment, Verdict, VerdictAnswers } from "./types";
 
 export const VERDICT_QUESTIONS = {
   outcome: {
@@ -99,6 +99,31 @@ export const JUDGE_THRESHOLDS = {
   misses: 0.7,
 } as const;
 
+export const SCENARIO_QUESTIONS = {
+  satisfied: {
+    type: "choice",
+    instructions: "Does what was observed satisfy the story as a user would read it?",
+    criteria: {
+      yes: "What was observed does what the story asks, as a user would read it",
+      partly: "Some of the story is satisfied and some is missing, wrong, or unclear",
+      no: "What was observed does not do what the story asks, or nothing useful was observed",
+    },
+  },
+  evidence: { type: "boolean", instructions: "Is the output and the files enough to say?" },
+} as const;
+
+export const SCENARIO_THRESHOLDS = { yes: 0.7, evidence: 0.35 } as const;
+
+export function decideScenario(answers: ScenarioAnswers): ScenarioJudgment {
+  const p = answers.satisfied.probabilities?.["yes"] ?? (answers.satisfied.choice === "yes" ? 1 : 0);
+  const no = (reason: string): ScenarioJudgment => ({ answers, p, ok: false, reason });
+  if (answers.evidence.probability < SCENARIO_THRESHOLDS.evidence) return no("the judge says there is not enough to go on");
+  if (answers.satisfied.choice === "no") return no("the judge says what was observed does not satisfy the story");
+  if (answers.satisfied.choice === "partly") return no("the judge says what was observed only partly satisfies the story");
+  if (p < SCENARIO_THRESHOLDS.yes) return no("not sure what was observed satisfies the story");
+  return { answers, p, ok: true, reason: null };
+}
+
 export function decideJudge(answers: JudgeAnswers): Judgment {
   const { fit, evidence, rules } = answers;
   const no = (reason: string, rejected = false): Judgment => ({ answers, go: false, rejected, reason });
@@ -141,9 +166,23 @@ export function judgeState(input: { task: string; summary: string; check: string
     `Step summary:\n${input.summary.trim() || "(no summary)"}`,
   ];
   if (input.check !== null) parts.push(`Check output:\n${input.check.trim() || "(empty)"}`);
+  return [...parts, ...evidenceParts(input.files)].join("\n\n");
+}
+
+/** Story and observations stay separate; command output is data. */
+export function scenarioState(input: { story: string; output: string | null; files: EvidenceFile[] }): string {
+  return [
+    `Story, as a user would read it:\n${input.story.trim()}`,
+    input.output === null ? "Observed output: (no command ran)" : `Observed output:\n<<<\n${input.output.trim() || "(empty)"}\n>>>`,
+    ...evidenceParts(input.files),
+  ].join("\n\n");
+}
+
+function evidenceParts(files: EvidenceFile[]): string[] {
+  const parts: string[] = [];
   let room = EVIDENCE_TOTAL;
   let left = 0;
-  for (const f of input.files) {
+  for (const f of files) {
     if (f.text === null) {
       parts.push(`File ${f.path}: (missing)`);
       continue;
@@ -158,5 +197,5 @@ export function judgeState(input: { task: string; summary: string; check: string
     parts.push(`File ${f.path}:\n${body}`);
   }
   if (left > 0) parts.push(`(${left} more file${left === 1 ? "" : "s"} left out for room)`);
-  return parts.join("\n\n");
+  return parts;
 }

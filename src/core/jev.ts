@@ -3,8 +3,8 @@
 
 import { createGateway } from "@ai-sdk/gateway";
 import { APICallError, experimental_evaluate as evaluate } from "ai";
-import { JUDGE_QUESTIONS, VERDICT_QUESTIONS } from "./verdict";
-import type { JudgeAnswers, JudgeFit, VerdictAnswers, VerdictOutcome } from "./types";
+import { JUDGE_QUESTIONS, SCENARIO_QUESTIONS, VERDICT_QUESTIONS } from "./verdict";
+import type { JudgeAnswers, JudgeFit, ScenarioAnswers, ScenarioSatisfied, VerdictAnswers, VerdictOutcome } from "./types";
 
 export const JEV_MODEL = "typesafe-ai/jev";
 /** Jev answers in a few hundred ms; the gateway occasionally hangs, so each
@@ -88,5 +88,27 @@ export const jevJudge: JudgeEvaluator = (state) =>
       fit: { choice, probabilities: a.fit.probabilities },
       evidence: { probability: a.evidence.probability },
       rules: { probability: a.rules.probability },
+    };
+  });
+
+export type ScenarioEvaluator = (state: string) => Promise<ScenarioAnswers>;
+const isSatisfied = (value: unknown): value is ScenarioSatisfied => value === "yes" || value === "partly" || value === "no";
+
+export const jevScenario: ScenarioEvaluator = (state) =>
+  withRetries(async (abortSignal) => {
+    const gateway = createGateway({ apiKey: gatewayApiKey() });
+    const result = await evaluate({
+      model: gateway.evaluationModel(JEV_MODEL),
+      state,
+      questions: SCENARIO_QUESTIONS,
+      maxRetries: 0,
+      abortSignal,
+    });
+    const answers = result.answers;
+    const choice = answers.satisfied.choice;
+    if (!isSatisfied(choice)) throw new Error(`unexpected satisfied: ${String(choice)}`);
+    return {
+      satisfied: { choice, probabilities: answers.satisfied.probabilities },
+      evidence: { probability: answers.evidence.probability },
     };
   });
