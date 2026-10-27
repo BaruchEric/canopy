@@ -950,7 +950,9 @@ export class LandingHub {
           return;
         }
         if (pass.score < settings.minimum) {
-          this.step(e, { t: "red", gate: scoreGate(pass.score, settings.minimum), output: scoreOutput(pass.results) });
+          const gate = scoreGate(pass.score, settings.minimum);
+          const sentBack = this.step(e, { t: "red", gate, output: scoreOutput(pass.results) });
+          this.tell(sentBack.id, `sent back: ${gate} failed`);
           return;
         }
       }

@@ -995,7 +995,7 @@ describe("judge scenarios plan 2", () => {
     await addScenario(w,"refund",undefined,judgeStory("refund","observe"));
     w.judgeAnswer = { satisfied: { choice: "yes", probabilities: { yes: 0.9 } }, evidence: { probability: 0.8 } };
     w.scenAnswers.set("observe",{exit:0,output:"refund granted"});
-    await readyRun(w,"sj4","b.txt","b");
+    await readyRun(w,"sj4","b.txt","b","w-score234");
     await w.hub.land("sj4");
     await w.hub.idle();
     const entry = entryOf(w,"sj4");
@@ -1004,6 +1004,8 @@ describe("judge scenarios plan 2", () => {
     expect(fixPrompt(entry)).toContain("holdout scenarios scored satisfaction 0.90 < 1");
     expect(fixPrompt(entry)).not.toContain("SECRET STORY");
     expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+    expect(w.notes).toContain("w-score234 sent back: satisfaction 0.90 < 1 failed");
+    expect(JSON.stringify(w.notes)).not.toContain("SECRET STORY");
   });
   test("judge off permits drop; land anyway and route types are strictly checked", async () => {
     const w = await world();
