@@ -93,6 +93,7 @@ describe("writtenPaths", () => {
     expect(wp("cd src | cat; touch x.ts")).toEqual({ paths: ["x.ts"], ...none });
     expect(wp("cd src | touch piped.ts; touch after.ts")).toEqual({ paths: ["piped.ts", "after.ts"], ...none });
     expect(wp("(cd src; touch inside.ts); touch outside.ts")).toEqual({ paths: ["src/inside.ts", "outside.ts"], ...none });
+    expect(wp("echo hi | (cd src; touch x.ts)")).toEqual({ paths: ["src/x.ts"], ...none });
   });
   test("reads add nothing; an opaque or vague line adds nothing and says so", () => {
     expect(wp("cat a.ts && grep x src && git diff")).toEqual({ paths: [], ...none });

@@ -1152,13 +1152,20 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
   };
 
   for (const cmd of splitShell(command)) {
-    for (const scope of cmd.cwdScopeStarts ?? []) scopeCwds.set(scope, { cwd: currentCwd, previousCwd });
-    let commandCwd = currentCwd;
+    let pipelineCwd: string | undefined;
     if (cmd.cwdPipeline !== undefined) {
-      const pipelineCwd = pipelineCwds.get(cmd.cwdPipeline);
-      if (pipelineCwd === undefined) pipelineCwds.set(cmd.cwdPipeline, currentCwd);
-      else commandCwd = pipelineCwd;
+      pipelineCwd = pipelineCwds.get(cmd.cwdPipeline);
+      if (pipelineCwd === undefined) {
+        pipelineCwd = currentCwd;
+        pipelineCwds.set(cmd.cwdPipeline, pipelineCwd);
+      }
     }
+    const inheritedScope = [...(cmd.cwdScopes ?? [])].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined);
+    const scopeBase = inheritedScope?.cwd ?? pipelineCwd ?? currentCwd;
+    const previousBase = inheritedScope?.previousCwd ?? previousCwd;
+    for (const scope of cmd.cwdScopeStarts ?? []) scopeCwds.set(scope, { cwd: scopeBase, previousCwd: previousBase });
+    const localScope = [...(cmd.cwdScopes ?? [])].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined);
+    const commandCwd = localScope?.cwd ?? pipelineCwd ?? currentCwd;
     for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path, false, commandCwd);
     const words = normalizeCommandWords(cmd.words).words;
     const prog = words[0] ?? "";
@@ -1167,7 +1174,26 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
 
     if (base === "cd") {
       const to = args.includes("-") ? "-" : operands(args)[0];
-      if (cmd.cwdPipeline === undefined) {
+      if (localScope) {
+        if (to === "-") {
+          if (localScope.previousCwd === undefined) {
+            localScope.cwd = "?";
+            unknown = true;
+          } else {
+            const prior = localScope.cwd;
+            localScope.cwd = localScope.previousCwd;
+            localScope.previousCwd = prior;
+          }
+        } else {
+          localScope.previousCwd = commandCwd;
+          if (to === undefined) localScope.cwd = HOME;
+          else if (to.startsWith("~")) localScope.cwd = normalizeHomePath(to);
+          else if (to.startsWith("/")) localScope.cwd = norm(to, "/");
+          else if (commandCwd === "?") localScope.cwd = "?";
+          else if (commandCwd.startsWith("~")) localScope.cwd = normalizeHomePath(to, commandCwd);
+          else localScope.cwd = norm(to, commandCwd);
+        }
+      } else if (cmd.cwdPipeline === undefined) {
         if (to === "-") {
           if (previousCwd === undefined) {
             currentCwd = "?";
@@ -1213,12 +1239,7 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
       } else if (sub === "restore") add(operands(rest, ["-s", "--source", "--pathspec-from-file"]), false, commandCwd);
     }
     for (const scope of cmd.cwdScopeEnds ?? []) {
-      const saved = scopeCwds.get(scope);
-      if (saved) {
-        currentCwd = saved.cwd;
-        previousCwd = saved.previousCwd;
-        scopeCwds.delete(scope);
-      }
+      scopeCwds.delete(scope);
     }
   }
   return { paths: [...paths], dirs: [...dirs], unknown };
