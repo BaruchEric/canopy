@@ -6,7 +6,7 @@ import type { RunGroup } from "../../src/core/group";
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, SCORE_GATE, sentBack, stoppedWhole } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
 import { withName } from "../../src/core/touch";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioResult, ScenarioRun } from "../../src/core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioResult, ScenarioRun, WorktreeRepoInfo, WorktreesInfo } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [], collisions: [] };
 
@@ -139,6 +139,44 @@ export const hasLanding = (l: RepoLanding): boolean =>
 
 /** The orphaned worktrees of one repo, by its main checkout's path. */
 export const repoOrphans = (info: LandingInfo, repoPath: string): LandingOrphan[] => info.orphans.filter((o) => o.repoPath === repoPath);
+
+/** The pool entry across shown backends; ids were qualified at ingress. */
+export function repoWorktrees(byBackend: Readonly<Record<string, WorktreesInfo>>, repoId: string): WorktreeRepoInfo | undefined {
+  for (const info of Object.values(byBackend)) {
+    const repo = info.repos.find(r => r.repoId === repoId);
+    if (repo) return repo;
+  }
+  return undefined;
+}
+
+/** The machine's pool choice supplies the head, never the repo's default. */
+export function warmWords(r: WorktreeRepoInfo | undefined): string | null {
+  if (!r || r.want === 0) return null;
+  const count = r.warm.length;
+  const words = count === r.want ? `${count} warm` : `${count} of ${r.want} warm`;
+  if (r.refilling) return `${words}, refilling`;
+  if (r.fails.some(f => !r.warm.some(t => t.name === f.name))) return `${words}, refill failed`;
+  return words;
+}
+
+function warmAge(madeAt: number, now: number): string {
+  const minutes = Math.max(0, Math.floor((now - madeAt) / 60_000));
+  return minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1440)}d`;
+}
+
+function warmSize(size: number): string {
+  return size >= 1073741824 ? `${Math.round(size / 1073741824 * 10) / 10} GB` : `${Math.round(size / 1048576)} MB`;
+}
+
+/** Each occupied, refilling or failed slot gets one row. */
+export function warmRows(r: WorktreeRepoInfo, now: number): { name: string; words: string; tone: "" | "rust" }[] {
+  if (r.want === 0) return [];
+  const rows = new Map<string, { name: string; words: string; tone: "" | "rust" }>();
+  for (const f of r.fails) rows.set(f.name, { name: f.name, words: `refill failed: ${f.why}`, tone: "rust" });
+  for (const t of r.warm) rows.set(t.name, { name: t.name, words: `${warmAge(t.madeAt, now)} · ${warmSize(t.size)}`, tone: "" });
+  if (r.refilling) rows.set(r.refilling, { name: r.refilling, words: "refilling", tone: "" });
+  return [...rows.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+}
 
 /** The card chip's words, or null when the repo has nothing queued or sent back. */
 export function chipWords(info: LandingInfo, repoId: string, shownGroup?: string): { text: string; title: string; tone: "queued" | "back" } | null {

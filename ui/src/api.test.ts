@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { Repo, Run } from "../../src/core/types";
+import type { Repo, Run, WorktreesInfo } from "../../src/core/types";
 import { api, onBackendSignal, PartialFleetError, readFrame, socketUrl, STREAM_STALE, streamAction } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
@@ -65,6 +65,17 @@ describe("a page with two backends", () => {
   const header = (c: Call | undefined, name: string): string | null => new Headers(c?.init?.headers).get(name);
   const run = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done" }) as unknown as Run;
   const repo = (id: string) => ({ id, name: id, path: `/x/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
+
+  test("worktrees GET qualifies a foreign backend's repo and runs once", async () => {
+    const info: WorktreesInfo = { root: "/b/worktrees", free: 42, repos: [{ repoId: "proj", repoPath: "/b/proj", want: 1, fileWarm: 2, runs: [{ id: "branch", runId: "run", branch: "run/x", dir: "/b/branch", state: "working" }], warm: [], refilling: "warm-1", fails: [], orphans: [] }] };
+    reply = () => json(info);
+    const got = await api.worktrees("b");
+    expect(calls[0]?.url).toBe("http://b.test/api/worktrees");
+    expect(got).toEqual({ ...info, repos: info.repos.map(r => ({ ...r, repoId: "b|proj", runs: r.runs.map(run => ({ ...run, id: "b|branch", runId: "b|run" })) })) });
+    expect(info.repos[0]?.repoId).toBe("proj");
+    expect(await api.worktrees()).toEqual(info);
+    expect(calls[1]?.url).toBe("/api/worktrees");
+  });
 
   test("a scheduled manual fire sends the selected backend's plain repo id", async () => {
     reply = () => json({ kind: "fired", events: [], skipped: [] });

@@ -54,7 +54,7 @@ import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -785,6 +785,8 @@ export interface CanopyState {
   /** each backend's branch runs and landing queue (server/landing); an
    *  older backend that has none is missing */
   landing: Record<string, LandingInfo>;
+  /** Warm pools, with qualified ids, by shown backend. */
+  worktrees: Record<string, WorktreesInfo>;
   /** each backend's PRs that branch runs opened (server/prs); an older
    *  backend that has none is missing */
   prs: Record<string, PrWatch[]>;
@@ -1177,6 +1179,7 @@ export interface CanopyState {
   loadKit: (backend?: string) => Promise<void>;
   /** reads one backend's landing queue, home by default */
   loadLanding: (backend?: string) => Promise<void>;
+  loadWorktrees: (backend?: string) => Promise<void>;
   /** "land" on a ready branch run, by its run's or branch's id; `approve`
    *  is the sensitive patch id the approve sheet showed */
   landRun: (id: string, approve?: string, skipJudge?: boolean) => Promise<void>;
@@ -1726,6 +1729,9 @@ const capacityEvents = new Map<string, number>();
 const kitEvents = new Map<string, number>();
 /* and each backend's landing events */
 const landingEvents = new Map<string, number>();
+const worktreeEvents = new Map<string, number>();
+/* Pool reads may overlap across a stream reconnect; only the newest may land. */
+const worktreeLoads = new Map<string, number>();
 /* and each backend's PR events */
 const prsEvents = new Map<string, number>();
 /* and each backend's trigger events */
@@ -1903,6 +1909,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadCapacity(b);
   void get().loadKit(b);
   void get().loadLanding(b);
+  void get().loadWorktrees(b);
   void get().loadPrs(b);
   void get().loadTriggers(b);
   void get().loadAuth(b);
@@ -2099,6 +2106,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   capacity: {},
   kit: {},
   landing: {},
+  worktrees: {},
   prs: {},
   triggers: {},
   authByBackend: {},
@@ -2316,6 +2324,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadCapacity();
     void get().loadKit();
     void get().loadLanding();
+    void get().loadWorktrees();
     void get().loadPrs();
     void get().loadTriggers();
     void get().loadAuth();
@@ -2480,6 +2489,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadCapacity(name);
     void get().loadKit(name);
     void get().loadLanding(name);
+    void get().loadWorktrees(name);
     void get().loadPrs(name);
     void get().loadTriggers(name);
     void get().loadAuth(name);
@@ -2540,6 +2550,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _capacity, ...capacity } = s.capacity;
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
+    const { [name]: _worktrees, ...worktrees } = s.worktrees;
+    worktreeEvents.set(name, (worktreeEvents.get(name) ?? 0) + 1);
     const { [name]: _prs, ...prs } = s.prs;
     const { [name]: _triggers, ...triggers } = s.triggers;
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
@@ -2572,6 +2584,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       capacity,
       kit,
       landing,
+      worktrees,
       prs,
       triggers,
       authByBackend,
@@ -3080,6 +3093,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ landing: { ...st.landing, [b]: ev.landing } }));
       return;
     }
+    if (ev.type === "worktrees") {
+      worktreeEvents.set(b, (worktreeEvents.get(b) ?? 0) + 1);
+      set((st) => ({ worktrees: { ...st.worktrees, [b]: ev.worktrees } }));
+      return;
+    }
     if (ev.type === "triggers") {
       triggersEvents.set(b, (triggersEvents.get(b) ?? 0) + 1);
       set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events } } }));
@@ -3525,6 +3543,18 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no landing queue; nothing shows for it
     }
   },
+  loadWorktrees: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = worktreeEvents.get(b) ?? 0;
+    const load = (worktreeLoads.get(b) ?? 0) + 1;
+    worktreeLoads.set(b, load);
+    try {
+      const worktrees = await api.worktrees(b);
+      if (worktreeLoads.get(b) === load && (worktreeEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ worktrees: { ...s.worktrees, [b]: worktrees } }));
+    } catch {
+      // An older backend has no pool endpoint; nothing shows for it.
+    }
+  },
   landRun: async (id, approve, skipJudge) => {
     await api.land(id, approve, skipJudge);
   },
@@ -3544,6 +3574,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   orphanLanding: async (backend, dir, action) => {
     await api.orphanLanding(backend, dir, action);
     await get().loadLanding(backend);
+    await get().loadWorktrees(backend);
   },
   loadPrs: async (backend) => {
     const b = backend ?? get().home;

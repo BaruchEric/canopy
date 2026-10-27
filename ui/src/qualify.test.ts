@@ -17,6 +17,7 @@ import {
   qSproutDetail,
   qTask,
   qTerm,
+  qWorktrees,
 } from "./qualify";
 import type {
   Device,
@@ -195,6 +196,7 @@ describe("qEvent", () => {
     };
     const worktrees: WorktreesInfo = { root: "/config/worktrees", free: 42, repos: [repoInfo] };
     const event: ServerEvent = { type: "worktrees", worktrees };
+    expect(qEvent(q, event)).toEqual({ type: "worktrees", worktrees: qWorktrees(q, worktrees) });
     expect(qEvent(q, event)).toEqual({
       type: "worktrees",
       worktrees: {

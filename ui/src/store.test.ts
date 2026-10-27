@@ -74,6 +74,7 @@ import {
   type SweepLogEntry,
   type TaskInfo,
   type TermInfo,
+  type WorktreesInfo,
 } from "../../src/core/types";
 import type { Collision } from "../../src/core/touch";
 
@@ -913,6 +914,7 @@ describe("several backends", () => {
         "/api/layouts",
         "/api/kit",
         "/api/landing",
+        "/api/worktrees",
         "/api/secrets",
       ].sort(),
     );
@@ -954,6 +956,112 @@ describe("several backends", () => {
     expect(bs?.url.startsWith("http://b.test/api/events")).toBe(true);
     expect(bs?.opts?.withCredentials).toBe(true);
     expect(connOf(s, "b").status.state).toBe("online");
+  });
+
+  test("worktrees loads at init and connect, then SSE replaces it without feed or queue counts", async () => {
+    const info: WorktreesInfo = { root: "/w", free: 42, repos: [{ repoId: "proj", repoPath: "/dev/proj", want: 1, runs: [], warm: [], refilling: "warm-1", fails: [], orphans: [] }] };
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": info }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": info }),
+    );
+    await settle();
+    expect(useStore.getState().worktrees.a).toEqual(info);
+    expect(useStore.getState().worktrees.b?.repos[0]?.repoId).toBe("b|proj");
+    const before = useStore.getState();
+    const fresh: WorktreesInfo = { ...info, free: 99, repos: info.repos.map(r => ({ ...r, refilling: null })) };
+    FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"))?.onmessage?.({ data: JSON.stringify({ type: "worktrees", worktrees: fresh }) });
+    expect(useStore.getState().worktrees.b).toEqual({ ...fresh, repos: fresh.repos.map(r => ({ ...r, repoId: "b|proj" })) });
+    expect(useStore.getState().feed).toBe(before.feed);
+    expect(inboxItems(useStore.getState())).toEqual(inboxItems(before));
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    const reads = calls.filter(u => u === "http://b.test/api/worktrees").length;
+    stream?.onopen?.();
+    stream?.onopen?.();
+    await settle();
+    expect(calls.filter(u => u === "http://b.test/api/worktrees").length).toBe(reads + 1);
+    useStore.getState().hideBackend("b", true);
+    expect(useStore.getState().worktrees.b).toBeUndefined();
+  });
+
+  test("late worktrees GET cannot replace newer SSE or restore a hidden backend", async () => {
+    const empty: WorktreesInfo = { root: "/w", free: 1, repos: [] };
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": empty }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": empty }),
+    );
+    await settle();
+    let finish: (r: Response) => void = () => { throw new Error("no worktrees request"); };
+    globalThis.fetch = Object.assign(async () => new Promise<Response>(resolve => { finish = resolve; }), { preconnect: realFetch.preconnect });
+    const pending = useStore.getState().loadWorktrees("b");
+    useStore.getState().applyEvent({ type: "worktrees", worktrees: { ...empty, free: 2 } }, "b");
+    finish(new Response(JSON.stringify(empty)));
+    await pending;
+    expect(useStore.getState().worktrees.b?.free).toBe(2);
+    const hidden = useStore.getState().loadWorktrees("b");
+    useStore.getState().hideBackend("b", true);
+    finish(new Response(JSON.stringify(empty)));
+    await hidden;
+    expect(useStore.getState().worktrees.b).toBeUndefined();
+    useStore.getState().applyEvent({ type: "worktrees", worktrees: empty }, "b");
+    expect(useStore.getState().worktrees.b).toBeUndefined();
+  });
+
+  test("a reconnect worktrees GET wins over an older initial GET completed last", async () => {
+    const initial: WorktreesInfo = { root: "/w", free: 1, repos: [] };
+    const current: WorktreesInfo = { ...initial, free: 3 };
+    const pending: ((r: Response) => void)[] = [];
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": initial }),
+      (path, init) => {
+        if (path === "/api/worktrees") return new Promise<Response>(resolve => { pending.push(resolve); });
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    if (!stream) throw new Error("no foreign stream");
+    stream.onopen?.();
+    stream.onopen?.();
+    const [older, newer] = pending;
+    if (!older || !newer || pending.length !== 2) throw new Error("expected initial and reconnect pool reads");
+    newer(new Response(JSON.stringify(current)));
+    await settle();
+    expect(useStore.getState().worktrees.b).toEqual(current);
+    older(new Response(JSON.stringify(initial)));
+    await settle();
+    expect(useStore.getState().worktrees.b).toEqual(current);
+  });
+
+  test("a worktrees GET from before removal cannot overwrite a reconnected backend", async () => {
+    const fresh: WorktreesInfo = { root: "/w", free: 3, repos: [] };
+    let reads = 0;
+    let releaseOld: ((r: Response) => void) | undefined;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": fresh }),
+      (path, init) => {
+        if (path === "/api/worktrees" && ++reads === 2) return new Promise<Response>(resolve => { releaseOld = resolve; });
+        return backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": fresh })(path, init);
+      },
+    );
+    await settle();
+    const old = useStore.getState().loadWorktrees("b");
+    if (!releaseOld) throw new Error("no old pool read");
+    useStore.getState().hideBackend("b", true);
+    useStore.getState().hideBackend("b", false);
+    await settle();
+    expect(reads).toBe(3);
+    releaseOld(new Response(JSON.stringify({ ...fresh, free: 1 })));
+    await old;
+    expect(useStore.getState().worktrees.b).toEqual(fresh);
+  });
+
+  test("an older backend without worktrees stays quiet", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": new Response("not found", { status: 404 }) }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": new Response("not found", { status: 404 }) }),
+    );
+    await settle();
+    expect(useStore.getState().worktrees).toEqual({});
   });
 
   test("history sends a window to its backend and qualifies the overview's repo ids", async () => {
