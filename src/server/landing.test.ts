@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
-import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
+import { fixPrompt } from "../core/landing";
 import { addRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { LandingHub, type CheckOutcome } from "./landing";
 import { setDirOf } from "./scenarios";
@@ -45,12 +46,14 @@ interface World {
   scenarios: [string, string, string, number][];
   /** scenario line → what it answers; a function may act first */
   scenAnswers: Map<string, CheckOutcome | (() => CheckOutcome | Promise<CheckOutcome>)>;
+  judged: string[];
+  judgeAnswer: ScenarioAnswers | (() => ScenarioAnswers | Promise<ScenarioAnswers>);
   notes: string[];
   closes: string[];
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
-async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Promise<World> {
+async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: false } = {}): Promise<World> {
   const path = join(root, `repo${++n}`);
   await exec(["git", "init", "-q", "-b", "main", path]);
   await sh(path, "config", "user.email", "t@t");
@@ -76,6 +79,8 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
     scenAnswers: new Map(),
+    judged: [],
+    judgeAnswer: { satisfied: { choice: "yes", probabilities: { yes: 1 } }, evidence: { probability: 0.8 } },
     notes: [],
     closes: [],
     hub: null as unknown as LandingHub,
@@ -109,6 +114,10 @@ async function world(opts: { gates?: string[]; noPackage?: boolean } = {}): Prom
       return typeof a === "function" ? await a() : (a ?? { exit: 0, output: "" });
     },
     scenariosRoot: w.scenRoot,
+    judge: opts.judge === false ? null : async state => {
+      w.judged.push(state);
+      return typeof w.judgeAnswer === "function" ? await w.judgeAnswer() : w.judgeAnswer;
+    },
     dir: w.dir,
     worktrees: w.wts,
     work: {
@@ -166,6 +175,7 @@ const rehub = (w: World): LandingHub =>
     runActive: () => false,
     scenario: async () => ({ exit: 0, output: "" }),
     scenariosRoot: w.scenRoot,
+    judge: null,
     dir: w.dir,
     worktrees: w.wts,
     work: {
@@ -876,7 +886,7 @@ describe("scenarios (FR-032)", () => {
     expect(w.scenarios.filter((c) => c[1] === "make a")).toHaveLength(2);
   });
 
-  test("no set, or a set of judge scenarios only, runs no pass and leaves the record alone", async () => {
+  test("no set runs no pass; a judge-only set is judged without a command", async () => {
     const w = await world({ noPackage: true });
     await readyRun(w, "sc14", "b.txt", "b\n");
     await w.hub.land("sc14");
@@ -887,7 +897,8 @@ describe("scenarios (FR-032)", () => {
     await readyRun(w2, "sc15", "b.txt", "b\n");
     await w2.hub.land("sc15");
     await w2.hub.idle();
-    expect([entryOf(w2, "sc15")?.state, entryOf(w2, "sc15")?.noGates, w2.scenarios]).toEqual(["landed", true, []]);
+    expect([entryOf(w2, "sc15")?.state, entryOf(w2, "sc15")?.noGates, w2.scenarios]).toEqual(["landed", undefined, []]);
+    expect(w2.judged).toHaveLength(1);
   });
 
   test("a docs run with scenarios and no gates joins on its own and lands", async () => {
@@ -923,5 +934,93 @@ describe("scenarios (FR-032)", () => {
     expect(entryOf(w, "sc18")?.state).toBe("waiting");
     expect(entryOf(w, "sc18")?.reason).toBe("scenarios could not run: no worktree");
     expect(await revOf(w.repo.path, "HEAD")).not.toBe(await revOf(runTreeDir(w.repo.path, "sc18", w.wts), "HEAD"));
+  });
+});
+
+const judgeStory = (name: string, run?: string) => `---\nname: ${name}\nkind: judge\n${run ? `run: ${run}\n` : ""}evidence: b.txt\n---\nSECRET STORY ${name}\n`;
+const lastScenarioPass = (w: World, id: string): ScenarioRun | undefined => w.events.flatMap(ev=>ev.type === "landing" ? ev.landing.runs : []).filter(rec=>rec.id===id && rec.scenarios).at(-1)?.scenarios;
+
+describe("judge scenarios plan 2", () => {
+  test("a judged-only set counts as a pass and can land at its configured minimum", async () => {
+    const w = await world({ noPackage: true });
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.9}');
+    await addScenario(w, "refund", undefined, judgeStory("refund", "observe"));
+    w.judgeAnswer = { satisfied: { choice: "yes", probabilities: { yes: 0.9 } }, evidence: { probability: 0.8 } };
+    w.scenAnswers.set("observe", { exit: 7, output: "refund granted" });
+    await readyRun(w, "sj1", "b.txt", "refund implementation");
+    await w.hub.land("sj1");
+    await w.hub.idle();
+    expect(entryOf(w,"sj1")?.state).toBe("landed");
+    expect(entryOf(w,"sj1")?.noGates).toBeUndefined();
+    expect(w.judged[0]).toContain("SECRET STORY refund");
+    expect(w.judged[0]).toContain("refund implementation");
+    expect(lastScenarioPass(w,"sj1")).toMatchObject({ total: 1, passed: 1, score: 0.9 });
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+  });
+  test("a missing judge holds through retry and adoption; land anyway reruns commands only", async () => {
+    const w = await world({ judge: false });
+    await w.hub.adopt();
+    await addScenario(w, "command", "check");
+    await addScenario(w, "refund", undefined, judgeStory("refund", "observe"));
+    await readyRun(w, "sj2", "b.txt", "b");
+    await w.hub.land("sj2");
+    await w.hub.idle();
+    const held = entryOf(w,"sj2");
+    expect(held).toMatchObject({ state: "judge", reason: "scenario refund needs a judge: no gateway key" });
+    w.hub.retry();
+    await w.hub.idle();
+    expect(entryOf(w,"sj2")?.state).toBe("judge");
+    await readyRun(w,"sj3","c.txt","c");
+    await w.hub.land("sj3");
+    await w.hub.idle();
+    expect(entryOf(w,"sj3")?.state).toBe("judge");
+    await w.hub.flushed();
+    const restored = rehub(w);
+    await restored.adopt();
+    await restored.idle();
+    expect(restored.info().entries.find(e=>e.id==="sj2")?.state).toBe("judge");
+    restored.detach();
+    const before = w.scenarios.length;
+    const queued = await w.hub.land("sj2", undefined, true);
+    expect(queued).toMatchObject({ skipJudge: true, queuedAt: held?.queuedAt });
+    await w.hub.idle();
+    expect(entryOf(w,"sj2")?.state).toBe("landed");
+    expect(w.scenarios.slice(before).map(c=>c[1])).toEqual(["check"]);
+    expect(lastScenarioPass(w,"sj2")).toMatchObject({ total: 1, score: 1, skipped: ["refund"] });
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+    w.hub.detach();
+  });
+  test("minimum still applies when each judge passed; fix prompts carry only observations", async () => {
+    const w = await world();
+    await addScenario(w,"refund",undefined,judgeStory("refund","observe"));
+    w.judgeAnswer = { satisfied: { choice: "yes", probabilities: { yes: 0.9 } }, evidence: { probability: 0.8 } };
+    w.scenAnswers.set("observe",{exit:0,output:"refund granted"});
+    await readyRun(w,"sj4","b.txt","b");
+    await w.hub.land("sj4");
+    await w.hub.idle();
+    const entry = entryOf(w,"sj4");
+    expect(entry).toMatchObject({ state:"red",gate:"satisfaction 0.90 < 1", reason:"scenario refund: satisfaction 0.90\nrefund granted" });
+    if(!entry) throw Error("missing red entry");
+    expect(fixPrompt(entry)).toContain("holdout scenarios scored satisfaction 0.90 < 1");
+    expect(fixPrompt(entry)).not.toContain("SECRET STORY");
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+  });
+  test("judge off permits drop; land anyway and route types are strictly checked", async () => {
+    const w = await world();
+    await commit(w.repo.path,".canopy/scenarios.json",'{"judge":"off"}');
+    await addScenario(w,"refund",undefined,judgeStory("refund"));
+    await readyRun(w,"sj5","b.txt","b");
+    await expect(w.hub.land("sj5",undefined,true)).rejects.toThrow("no entry by that id");
+    await w.hub.land("sj5");
+    await w.hub.idle();
+    expect(entryOf(w,"sj5")?.state).toBe("judge");
+    expect(w.judged).toEqual([]);
+    const url = new URL("http://x/api/landing/land");
+    const response = await w.hub.handle(new Request(url.href,{method:"POST",body:JSON.stringify({run:"sj5",skipJudge:"yes"})}),url);
+    expect(response?.status).toBe(400);
+    await w.hub.drop("sj5");
+    expect(entryOf(w,"sj5")).toBeUndefined();
+    expect(existsSync(runTreeDir(w.repo.path,"sj5",w.wts))).toBe(false);
+    await expect(w.hub.land("missing",undefined,true)).rejects.toThrow("no entry by that id");
   });
 });

@@ -5245,6 +5245,7 @@ export async function startServer(opts: {
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
     landing: new LandingHub({
+      judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
         broadcast(state, ev);
         if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);

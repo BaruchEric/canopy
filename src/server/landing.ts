@@ -23,6 +23,7 @@ import {
   enqueue,
   holdAll,
   inQueue,
+  landAnyway,
   LandError,
   landWord,
   MAX_NOTICES,
@@ -33,6 +34,8 @@ import {
   retryWaiting,
   reviewWord,
   SCENARIO_GATE,
+  scoreGate,
+  scoreOutput,
   sentBack,
   unqueue,
   WORKING,
@@ -42,12 +45,12 @@ import {
 import { foldsCase, readRules, sortBranch } from "../core/review";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
+import type { EvidenceFile, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
 import type { WorkSink } from "../core/work";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
 import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, treeState, worktreesRoot } from "../core/worktree";
-import { readScenarioSet, readScenarioSettings, runScenarioSet, scenariosRoot, setDirOf, type ScenarioRunner } from "./scenarios";
+import { readScenarioSet, readScenarioSettings, runScenarioSet, scenariosRoot, setDirOf, type ScenarioJudge, type ScenarioRunner } from "./scenarios";
 
 export const landingDir = (): string => join(configDir(), "landing");
 /** how often entries waiting on a busy checkout look again */
@@ -83,6 +86,8 @@ export interface LandingDeps {
   work?: WorkSink;
   /** runs one scenario line in a worktree with the set's copy as SCENARIO_DIR (`runScenario`) */
   scenario: ScenarioRunner;
+  judge: ScenarioJudge | null;
+  evidence?: (dir: string, paths: string[]) => Promise<EvidenceFile[]>;
   /** where the sets live; `scenariosRoot()` unless a test says otherwise */
   scenariosRoot?: string;
   dir?: string;
@@ -627,7 +632,19 @@ export class LandingHub {
    *  approval lands only with `approve`, the sensitive patch id the sheet
    *  showed, and the entry keeps it. A run a restart stopped lands the same
    *  way once its worktree, looked at now, is whole. */
-  async land(id: string, approve?: string): Promise<LandEntry> {
+  async land(id: string, approve?: string, skipJudge?: boolean): Promise<LandEntry> {
+    if (skipJudge) {
+      const key = this.find(id)?.id ?? id;
+      this.entries = landAnyway(this.entries, key, this.now());
+      for (const entry of this.entries) {
+        if (entry.id !== key) continue;
+        void this.saveQueue(entry.repoPath);
+        this.publish();
+        this.kick(entry.repoId);
+        return entry;
+      }
+      throw new LandError("no entry by that id", 404);
+    }
     const rec = this.landable(id);
     if (rec.state === "stopped") {
       const whole = await wholeOf(rec);
@@ -705,7 +722,7 @@ export class LandingHub {
     const rec = this.find(id);
     if (rec?.pr !== undefined && this.deps.prHeld?.(rec.id)) throw new LandError(`PR #${rec.pr} is open and canopy watches it; close the PR from its run's sheet first`);
     const entry = this.entries.find((e) => e.id === (rec?.id ?? id));
-    if (entry && inQueue(entry)) throw new LandError("it is in the queue; wait for it to land or come back");
+    if (entry && inQueue(entry) && entry.state !== "judge") throw new LandError("it is in the queue; wait for it to land or come back");
     if (rec && this.deps.runActive(rec.runId)) throw new LandError("the run is still going");
     const target = rec ?? entry;
     if (!target) throw new LandError("nothing by that id", 404);
@@ -867,7 +884,7 @@ export class LandingHub {
       const moved = after && after !== before ? (await git(e.dir, ["diff", "--name-only", before, after])).stdout.split("\n").filter(Boolean) : [];
       const setup = gates.setup !== undefined && touchesLockfile(moved);
       const first = gates.gates[0]?.name ?? null;
-      e = this.step(e, { t: "rebased", setup, first, noGates: gates.source === "none" && commands.length === 0 && set.errors.length === 0 });
+      e = this.step(e, { t: "rebased", setup, first, noGates: gates.source === "none" && set.scenarios.length === 0 && set.errors.length === 0 });
       if (e.state === "setup" && gates.setup) {
         const r = await this.deps.check(e.dir, gates.setup);
         if (r.exit !== 0) {
@@ -888,9 +905,8 @@ export class LandingHub {
         e = this.step(e, { t: "gate-ok", next: gates.gates[i + 1]?.name ?? null });
       }
       // the holdout scenarios (FR-032) run on a copy of the set the run never
-      // saw; a broken scenario file is the first red, and a set with no
-      // command scenarios and no broken files runs no pass
-      const firstScenario = set.errors[0]?.file ?? commands[0]?.name;
+      // saw; a broken file is the first red, commands precede judges.
+      const firstScenario = set.errors[0]?.file ?? commands[0]?.name ?? set.scenarios.find(s => s.kind === "judge")?.name;
       if (e.state === "landing" && firstScenario !== undefined) {
         e = this.step(e, { t: "scenarios", first: firstScenario });
         let pass: ScenarioRun;
@@ -901,11 +917,13 @@ export class LandingHub {
             set,
             settings,
             run: this.deps.scenario,
-            judge: null,
+            judge: this.deps.judge,
+            ...(this.deps.evidence ? { evidence: this.deps.evidence } : {}),
+            skipJudge: e.skipJudge === true,
             head: after ?? "",
             now: this.now(),
             onDone: (r, next) => {
-              if (r.ok) e = this.step(e, { t: "scenario-ok", next });
+              if (r.ok || r.kind === "judge") e = this.step(e, { t: "scenario-ok", next });
             },
           });
         } catch (err) {
@@ -919,11 +937,20 @@ export class LandingHub {
           this.written.set(e.id, JSON.stringify(upd));
           void this.saveRun(upd);
         }
-        const red = pass.results.find((r) => !r.ok);
+        const red = pass.results.find((r) => r.kind === "command" && !r.ok);
         if (red) {
           const gate = SCENARIO_GATE + red.name;
           const sentBack = this.step(e, { t: "red", gate, output: red.tail ?? "" });
           this.tell(sentBack.id, `sent back: ${gate} failed`);
+          return;
+        }
+        const unjudged = pass.results.find(r => r.unjudged !== undefined);
+        if (unjudged?.unjudged !== undefined) {
+          this.step(e, { t: "unjudged", name: unjudged.name, why: unjudged.unjudged });
+          return;
+        }
+        if (pass.score < settings.minimum) {
+          this.step(e, { t: "red", gate: scoreGate(pass.score, settings.minimum), output: scoreOutput(pass.results) });
           return;
         }
       }
@@ -1012,7 +1039,9 @@ export class LandingHub {
         if (typeof body["run"] !== "string") return json({ error: "run is required" }, 400);
         const approve = body["approve"];
         if (approve !== undefined && typeof approve !== "string") return json({ error: "approve must be the id the sheet showed" }, 400);
-        return json(await this.land(body["run"], approve));
+        const skipJudge = body["skipJudge"];
+        if (skipJudge !== undefined && typeof skipJudge !== "boolean") return json({ error: "skipJudge must be true or false" }, 400);
+        return json(await this.land(body["run"], approve, skipJudge === true));
       }
       if (path === "/api/landing/land-all") {
         if (typeof body["repo"] !== "string") return json({ error: "repo is required" }, 400);
