@@ -4,11 +4,13 @@
  *  and the event's state read off its run and its PR. Browser-safe and pure;
  *  the hub in server/triggers.ts keeps the records and starts the runs. */
 
-import { CRON_MAX, parseCron } from "./cron";
+import { CRON_MAX, nextFire, parseCron } from "./cron";
+import { checkWhen } from "./actions";
+import { isSeedRepoId } from "./sprout";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { fence } from "./pr";
 import { unattendedRefusal } from "./workflow";
-import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
+import type { Flow, LandNotice, PrWatch, Repo, Run, Workflow } from "./types";
 
 export const TRIGGER_SOURCES = ["sentry", "linear", "schedule"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
@@ -837,5 +839,114 @@ export function sampleIncoming(title: string, now: number, service: TriggerSourc
     ...(service === "sentry" ? { level: "error" } : {}),
     detail: ["fired by hand from canopy"],
     frames: [],
+  };
+}
+
+
+/* ---------- the schedule source (FR-041) ---------- */
+
+export const SCHEDULE_CATCH_UP = 60 * 60 * 1000;
+export const SKIPS_KEPT = 20;
+export const fireMinute = (at: number): number => Math.floor(at / 60_000) * 60_000;
+export const scheduleKey = (repoKey: string, at: number): string => `${repoKey}@${new Date(fireMinute(at)).toISOString()}`;
+
+/** Creation time, rather than later run/PR updates, anchors a rule's next fire. */
+export function lastFire(rule: string, events: readonly TriggerEvent[]): number | null {
+  let latest: number | null = null;
+  for (const event of events) {
+    if (event.rule === rule && event.service === "schedule" && Number.isFinite(event.firstAt)) latest = Math.max(latest ?? event.firstAt, event.firstAt);
+  }
+  return latest;
+}
+
+export function nextFireOf(rule: TriggerRule, last: number): number | null {
+  if (rule.source !== "schedule" || !rule.cron || !Number.isFinite(last)) return null;
+  const cron = parseCron(rule.cron);
+  return "error" in cron ? null : nextFire(cron, last);
+}
+
+/** All wildcard filters must hold; an unreadable repo never qualifies. */
+export function takesRepo(rule: TriggerRule, repo: Repo): boolean {
+  if (repo.error) return false;
+  return rule.only.every((only) => {
+    switch (only) {
+      case "spec-adopted": return repo.spec !== undefined && repo.spec !== "not-adopted";
+      case "dirty": return checkWhen(repo, "dirty").ok;
+      case "unpushed": return checkWhen(repo, "unpushed").ok;
+      case "clean": return !checkWhen(repo, "dirty").ok;
+    }
+  });
+}
+
+export function scheduleRepos(rule: TriggerRule, repos: readonly Repo[]): Repo[] {
+  const local = repos.filter((repo) => !repo.host && !repo.forge && !isSeedRepoId(repo.id) && !repo.error);
+  return rule.repo === "*" ? local.filter((repo) => takesRepo(rule, repo)) : local.filter((repo) => repo.id === rule.repo || repo.path === rule.repo);
+}
+
+export function scheduleBusy(events: readonly TriggerEvent[], rule: string, repoId: string): boolean {
+  let latest: TriggerEvent | undefined;
+  for (const event of events) {
+    if (event.rule === rule && event.repoId === repoId && (!latest || event.lastAt > latest.lastAt)) latest = event;
+  }
+  return latest !== undefined && ["queued", "working", "waiting", "ready", "review"].includes(latest.status);
+}
+
+export interface ScheduleClock {
+  since: number;
+  marks: ReadonlyMap<string, number>;
+}
+export interface ScheduleFire {
+  rule: TriggerRule;
+  at: number;
+  repos: Repo[];
+  skipped: ScheduleSkip[];
+  waits?: number;
+}
+
+/** One due slot per rule; the hub records a mark even when it starts nothing. */
+export function dueRules(rules: readonly TriggerRule[], events: readonly TriggerEvent[], now: number, repos: readonly Repo[], clock: ScheduleClock): ScheduleFire[] {
+  const fires: ScheduleFire[] = [];
+  for (const rule of rules) {
+    if (rule.source !== "schedule") continue;
+    const eventAt = lastFire(rule.name, events);
+    const mark = clock.marks.get(rule.name);
+    if (eventAt === null && mark === undefined) continue;
+    const last = Math.max(eventAt ?? Number.NEGATIVE_INFINITY, mark ?? Number.NEGATIVE_INFINITY);
+    const next = nextFireOf(rule, last);
+    if (next === null || next > now) continue;
+    let at = next;
+    if (next < clock.since) {
+      at = fireMinute(now);
+      const upcoming = nextFireOf(rule, now);
+      if (upcoming !== null && upcoming - now < SCHEDULE_CATCH_UP) {
+        fires.push({ rule, at, repos: [], skipped: [], waits: upcoming });
+        continue;
+      }
+    }
+    const matching = scheduleRepos(rule, repos);
+    const skipped: ScheduleSkip[] = [];
+    const free: Repo[] = [];
+    for (const repo of matching) {
+      if (scheduleBusy(events, rule.name, repo.id)) skipped.push({ repo: repo.name, why: "last run still going", at });
+      else free.push(repo);
+    }
+    if (rule.repo !== "*" && matching.length === 0) skipped.push({ repo: rule.repo, why: `no repo ${rule.repo} in the tree`, at });
+    fires.push({ rule, at, repos: free, skipped });
+  }
+  return fires;
+}
+
+export function scheduleNote(rule: TriggerRule, repo: Pick<Repo, "name">, at: number): string {
+  return `${rule.workflow} on ${repo.name}: scheduled by canopy's ${rule.name} rule (${rule.cron ?? ""}) for ${new Date(fireMinute(at)).toISOString()}. No outside issue came in; work from the repository as it is.`;
+}
+
+export function scheduleEvent(rule: TriggerRule, repo: Pick<Repo, "id" | "name">, repoKey: string, at: number, now: number, source: "schedule" | "manual"): TriggerEvent {
+  const date = new Date(at);
+  const day = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  return {
+    id: crypto.randomUUID().slice(0, 8), rule: rule.name, source, service: "schedule",
+    key: scheduleKey(repoKey, at), short: day, title: `${rule.workflow} on ${repo.name}, ${day}`,
+    note: scheduleNote(rule, repo, at), repoId: repo.id, workflow: rule.workflow,
+    land: rule.land, status: "queued", count: 1, firstAt: now, lastAt: now,
   };
 }

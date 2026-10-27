@@ -22,6 +22,8 @@ import {
   pruneEvents,
   sampleIncoming,
   SERVICE_NAME,
+  dueRules, fireMinute, lastFire, nextFireOf, scheduleBusy, scheduleEvent, scheduleKey, scheduleRepos,
+  type ScheduleClock,
   KEEP_EVENTS,
   MAX_DESCRIPTION,
   triggerPlan,
@@ -29,7 +31,7 @@ import {
   type TriggerEvent,
   type TriggerRule,
 } from "./trigger";
-import type { Flow, LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
+import type { Flow, LandNotice, PrWatch, Repo, RepoStatus, Run, Workflow, WorkflowStep } from "./types";
 
 const RULE: TriggerRule = {
   name: "shop",
@@ -757,5 +759,85 @@ describe("schedule rule configuration", () => {
   test("new events retain their selected landing path", () => {
     expect(newEvent(RULE, INC, "web/shop", "sentry", 1, null).land).toBe("pr");
     expect(newEvent({ ...RULE, land: "queue" }, INC, "web/shop", "sentry", 1, null).land).toBe("queue");
+  });
+});
+
+
+describe("schedule clock", () => {
+  const monday = Date.parse("2026-11-02T05:00:00Z");
+  const hour = 3_600_000;
+  const week = 7 * 86_400_000;
+  const sched: TriggerRule = { name: "weekly", source: "schedule", repo: "*", workflow: "spec-converge", cron: "0 5 * * 1", land: "queue", only: [], projects: [], levels: [], labels: [], ignore: [], api: "" };
+  const status = (over: Partial<RepoStatus> = {}): RepoStatus => ({ branch: "main", upstream: "origin/main", ahead: 0, behind: 0, files: [], lastCommit: null, user: null, ...over });
+  const repo = (id: string, over: Partial<Repo> = {}): Repo => ({ id, name: id, path: `/dev/${id}`, group: "", source: "root", status: status(), ...over });
+  const shop = repo("shop", { spec: "in-sync" });
+  const blog = repo("blog");
+  const repos = [shop, blog];
+  const clock = (since: number, mark?: number): ScheduleClock => ({ since, marks: new Map(mark === undefined ? [] : [[sched.name, mark]]) });
+  const fired = (at: number, over: Partial<TriggerEvent> = {}): TriggerEvent => ({ ...scheduleEvent(sched, shop, "shop-key", at, at, "schedule"), status: "merged", ...over });
+
+  test("steady ticks use the cron slot even when late, and do not refire a taken slot", () => {
+    const c = clock(monday - 86_400_000, monday - 86_400_000);
+    expect(dueRules([sched], [], monday - 1, repos, c)).toEqual([]);
+    expect(dueRules([sched], [], monday + 3 * 60_000, repos, c)).toEqual([{ rule: sched, at: monday, repos, skipped: [] }]);
+    expect(dueRules([sched], [fired(monday)], monday + 3 * 60_000, repos, c)).toEqual([]);
+    expect(dueRules([sched], [fired(monday)], monday + week, repos, c)[0]?.at).toBe(monday + week);
+    expect(dueRules([sched], [], monday, repos, clock(monday - 1))).toEqual([]);
+  });
+
+  test("startup catches one missed slot, or forgives it when the next is under an hour away", () => {
+    const now = monday + 2 * hour + 30_000;
+    expect(dueRules([sched], [fired(monday - week)], now, repos, clock(now))[0]).toEqual({ rule: sched, at: monday + 2 * hour, repos, skipped: [] });
+    const hourly = { ...sched, cron: "0 * * * *" };
+    const near = monday + 50 * 60_000;
+    expect(dueRules([hourly], [fired(monday - hour)], near, repos, clock(near))).toEqual([{ rule: hourly, at: near, repos: [], skipped: [], waits: monday + hour }]);
+    expect(dueRules([hourly], [fired(monday - hour)], near + 60_000, repos, clock(near, near))).toEqual([]);
+    expect(dueRules([hourly], [fired(monday - hour)], monday + hour, repos, clock(near, near))[0]?.at).toBe(monday + hour);
+  });
+
+  test("cron edits use the latest mark or event, and impossible schedules have no fire", () => {
+    const daily = { ...sched, cron: "0 5 * * *" };
+    const events = [fired(monday, { firstAt: monday + 10_000, lastAt: monday + 8 * hour })];
+    expect(lastFire(sched.name, events)).toBe(monday + 10_000);
+    expect(nextFireOf(daily, monday + 10_000)).toBe(monday + 86_400_000);
+    expect(dueRules([daily], events, monday + 86_400_000, repos, clock(monday - week))[0]?.at).toBe(monday + 86_400_000);
+    expect(dueRules([sched], [fired(monday - week)], monday, repos, clock(monday - week, monday))).toEqual([]);
+    const never = { ...sched, cron: "0 5 31 2 *" };
+    expect(nextFireOf(never, monday)).toBeNull();
+    expect(nextFireOf({ ...sched, cron: "bad" }, monday)).toBeNull();
+    expect(dueRules([never], events, monday + week, repos, clock(monday - week))).toEqual([]);
+  });
+
+  test("local wildcard filters exclude remote, forge, seed and errored repos", () => {
+    const dirty = repo("dirty", { status: status({ files: [{ path: "a.md", index: ".", worktree: "M", untracked: false, conflicted: false }] }) });
+    const ahead = repo("ahead", { status: status({ ahead: 2 }) });
+    const all = [...repos, dirty, ahead, repo("ssh", { host: "remote" }), repo("forge", { forge: { kind: "forgejo", slug: "o/n", clone: "ssh://forge.invalid/o/n.git", branch: "main", updated: 0, private: false, empty: false } }), repo("_incubator/seed"), repo("bad", { error: "unreadable" })];
+    expect(scheduleRepos(sched, all).map(r => r.id)).toEqual(["shop", "blog", "dirty", "ahead"]);
+    for (const [only, expected] of [["spec-adopted", ["shop"]], ["dirty", ["dirty"]], ["unpushed", ["ahead"]], ["clean", ["shop", "blog", "ahead"]]] as const) {
+      expect(scheduleRepos({ ...sched, only: [only] }, all).map(r => r.id)).toEqual([...expected]);
+    }
+    expect(scheduleRepos({ ...sched, only: ["clean", "spec-adopted"] }, all)).toEqual([shop]);
+    expect(scheduleRepos({ ...sched, repo: blog.path, only: ["dirty"] }, all)).toEqual([blog]);
+    expect(dueRules([{ ...sched, repo: "gone" }], [], monday, all, clock(monday - 1, monday - 1))[0]?.skipped).toEqual([{ repo: "gone", why: "no repo gone in the tree", at: monday }]);
+  });
+
+  test("a live last event is skipped without making an event, while terminal history frees it", () => {
+    for (const state of ["queued", "working", "waiting", "ready", "review"] as const) {
+      const prior = fired(monday - week, { status: state });
+      expect(scheduleBusy([prior], sched.name, shop.id)).toBe(true);
+      expect(dueRules([sched], [prior], monday, repos, clock(monday - 1, monday - 1))[0]).toMatchObject({ repos: [blog], skipped: [{ repo: shop.name, why: "last run still going", at: monday }] });
+    }
+    for (const state of ["merged", "failed", "no-fix", "stopped", "closed", "ignored"] as const) expect(scheduleBusy([fired(monday, { status: state })], sched.name, shop.id)).toBe(false);
+    expect(scheduleBusy([fired(monday, { rule: "other", status: "working" })], sched.name, shop.id)).toBe(false);
+  });
+
+  test("events identify the repo and scheduled minute without carrying issue fields", () => {
+    const e = scheduleEvent(sched, shop, "shop-key", monday + 15_000, monday + 20_000, "schedule");
+    expect(e).toMatchObject({ rule: "weekly", service: "schedule", source: "schedule", key: "shop-key@2026-11-02T05:00:00.000Z", short: "2026-11-02", title: "spec-converge on shop, 2026-11-02", land: "queue", status: "queued", firstAt: monday + 20_000, lastAt: monday + 20_000 });
+    expect([e.link, e.project, e.level, e.culprit]).toEqual([undefined, undefined, undefined, undefined]);
+    expect(e.note).toContain("for 2026-11-02T05:00:00.000Z. No outside issue came in");
+    expect(scheduleKey("x", monday + 59_999)).toBe("x@2026-11-02T05:00:00.000Z");
+    expect(fireMinute(monday + 59_999)).toBe(monday);
+    expect(scheduleEvent(sched, shop, "k", monday, monday, "manual").source).toBe("manual");
   });
 });
