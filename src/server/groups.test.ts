@@ -1477,3 +1477,22 @@ test("adoption replaces a cancelled reviewer after ownership is lost during atta
     review: { run: "review-1" },
   });
 });
+
+test("bulk landing eligibility is owned, picked, non-PR and bound to the member origin and repo", async () => {
+  const w = await world();
+  const id = await w.create();
+  const member = { group: id, id: "a", repoId: "repo" };
+  expect(w.hub.canBulkLand(member)).toBe(false);
+  expect((await w.post("pick", { group: id, run: "a" })).status).toBe(200);
+  expect(w.hub.canBulkLand(member)).toBe(true);
+  expect(w.hub.canBulkLand({ ...member, id: "b" })).toBe(false);
+  expect(w.hub.canBulkLand({ ...member, repoId: "other" })).toBe(false);
+  expect(w.hub.canBulkLand({ ...member, group: "missing" })).toBe(false);
+  w.hub.detach();
+  expect(w.hub.canBulkLand(member)).toBe(false);
+  await w.hub.adopt();
+  expect(w.hub.canBulkLand(member)).toBe(true);
+  const pr = await world();
+  const prId = await pr.create(["a"], { pr: true });
+  expect(pr.hub.canBulkLand({ group: prId, id: "a", repoId: "repo" })).toBe(false);
+});

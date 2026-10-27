@@ -93,7 +93,7 @@ test("real group sheet renders origin-scored columns, failed gates and safe winn
   } finally { useStore.setState(state); Object.assign(useStore.getInitialState(), initial); }
 });
 
-test("land all in a grouped repo sends only eligible origins and never repo-wide losers", async () => {
+test("grouped bulk landing keeps one backend request so the server owns selection", async () => {
   const state = useStore.getState();
   const all = api.landAll;
   const land = api.land;
@@ -103,7 +103,7 @@ test("land all in a grouped repo sends only eligible origins and never repo-wide
   useStore.setState({ landing: { "": { ...empty, groups: [sampleGroup({ state: "picked", winner: "a" })], runs: [landingMember, { ...landingMember, id: "b", runId: "r-b" }, { ...landingMember, id: "standalone", group: undefined }] } } });
   try {
     await useStore.getState().landAll("repo");
-    expect(calls).toEqual(["a", "standalone"]);
+    expect(calls).toEqual(["repo-wide"]);
   } finally { api.land = land; api.landAll = all; useStore.setState(state); }
 });
 

@@ -5407,6 +5407,7 @@ export async function startServer(opts: {
       openPr: (id) => state.prs.open(id),
       dropped: (id) => state.prs.forgetBranch(id),
       prHeld: (id) => state.prs.holds(id),
+      groupBulkEligible: rec => state.groups.canBulkLand(rec),
       collisions: () => state.collisions.list(),
       working: (repoId) => state.collisions.working(repoId),
     }),

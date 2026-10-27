@@ -58,7 +58,7 @@ import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
-import { landAllOf, mergeLanding } from "./landing";
+import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
@@ -3507,20 +3507,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   landRun: async (id, approve) => {
     await api.land(id, approve);
   },
-  landAll: async repoId => {
-    const info = landingAll(get());
-    if (!(info.groups ?? []).some(g => g.repoId === repoId)) return api.landAll(repoId);
-    // The older repo-wide route cannot distinguish a group's selected winner.
-    // Send the visible eligible origins through the same individual land gates.
-    const eligible = landAllOf(info, repoId);
-    const queued: string[] = [];
-    const skipped = eligible.skip.map(r => ({ id: r.id, branch: r.branch, why: "needs your approval" }));
-    for (const r of eligible.take) {
-      try { await api.land(r.id); queued.push(r.id); }
-      catch (error: unknown) { skipped.push({ id: r.id, branch: r.branch, why: error instanceof Error ? error.message : String(error) }); }
-    }
-    return { queued, skipped };
-  },
+  landAll: (repoId) => api.landAll(repoId),
   landingDiff: async (id, path) => (await api.landingDiff(id, path)).diff,
   seenLanding: async (ids) => {
     await api.seenLanding(ids);

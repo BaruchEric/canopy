@@ -976,3 +976,47 @@ for (const invalidation of ["detach", "drop", "fix"] as const)
       );
     }
   });
+
+test("repo land-all queues a standalone and only a picked non-PR group winner", async () => {
+  const w = await world();
+  const group = groupBody(await (await w.start()).json());
+  const single: unknown = await (await w.start({ times: 1 })).json();
+  if (!isRecord(single) || !isRecord(single["branch"]) || typeof single["branch"]["origin"] !== "string") throw new Error("standalone branch missing");
+  const standalone = single["branch"]["origin"];
+  await w.finish(0);
+  await w.finish(1);
+  await w.finish(2);
+  await until(() => w.starts.length === 4, "group reviewer");
+  const before = await w.post("/api/landing/land-all", { repo: "app" });
+  expect(before.status).toBe(200);
+  const unpicked: unknown = await before.json();
+  expect(unpicked).toMatchObject({ queued: [standalone], skipped: group.members.map(m => ({ id: m.origin })) });
+  const winner = group.members[0];
+  const loser = group.members[1];
+  if (!winner || !loser) throw new Error("members missing");
+  expect((await w.post("/api/groups/pick", { group: group.id, run: winner.origin })).status).toBe(200);
+  const picked: unknown = await (await w.post("/api/landing/land-all", { repo: "app" })).json();
+  expect(picked).toMatchObject({ queued: [winner.origin], skipped: [{ id: loser.origin }] });
+  const entries = (await w.landing()).entries;
+  expect(entries).not.toContainEqual(expect.objectContaining({ id: loser.origin }));
+});
+
+test("a bulk-picked group winner still runs current command gates and cannot fast-forward red work", async () => {
+  const w = await world();
+  const group = groupBody(await (await w.start()).json());
+  await w.finish(0);
+  await w.finish(1);
+  await until(() => w.starts.length === 3, "reviewer");
+  const winner = group.members[0];
+  const loser = group.members[1];
+  if (!winner || !loser) throw new Error("members missing");
+  expect((await w.post("/api/groups/pick", { group: group.id, run: winner.origin })).status).toBe(200);
+  await mkdir(join(w.repo, ".canopy"), { recursive: true });
+  await writeFile(join(w.repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "current-test", run: "false" }] }));
+  await git(w.repo, "add", "-A");
+  await git(w.repo, "commit", "-qm", "require a failing gate");
+  const head = await git(w.repo, "rev-parse", "HEAD");
+  expect(await (await w.post("/api/landing/land-all", { repo: "app" })).json()).toMatchObject({ queued: [winner.origin], skipped: [{ id: loser.origin }] });
+  await until(async () => (await w.landing()).entries.find(e => isRecord(e) && e["id"] === winner.origin && e["state"] === "red"), "winner's current gate goes red");
+  expect(await git(w.repo, "rev-parse", "HEAD")).toBe(head);
+});

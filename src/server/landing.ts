@@ -87,6 +87,9 @@ export interface LandingDeps {
   prHeld?: (id: string) => boolean;
   /** the work ledger: one line per move of a branch that has an item (FR-037) */
   work?: WorkSink;
+  /** Bulk landing may include only the owning group's picked non-PR winner.
+   *  Missing group facts deny grouped records; individual land is unchanged. */
+  groupBulkEligible?: (rec: LandingRun) => boolean;
   /** the live collisions, for the info (FR-040) */
   collisions?: () => Collision[];
   /** the touched sets of a repo's live runs, for the mark at enqueue */
@@ -774,16 +777,27 @@ export class LandingHub {
   async landAll(repoId: string): Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }> {
     const has = new Set(this.entries.filter((e) => e.repoId === repoId).map((e) => e.id));
     const ready = [...this.runs.values()].filter((r) => r.repoId === repoId && r.state === "ready" && r.pr === undefined && !has.has(r.id) && !this.deps.runActive(r.runId));
+    const groupEligible = (r: LandingRun): boolean => r.group === undefined || this.deps.groupBulkEligible?.(r) === true;
     const queued: string[] = [];
     const skipped: { id: string; branch: string; why: string }[] = [];
     for (const r of ready.sort((a, b) => (a.endedAt ?? a.startedAt) - (b.endedAt ?? b.startedAt))) {
+      if (!groupEligible(r)) {
+        skipped.push({ id: r.id, branch: r.branch, why: "only a picked non-PR group winner may land in bulk" });
+        continue;
+      }
       const review = await this.resort(r.id);
       if (!review || review.verdict === "approve") {
         skipped.push({ id: r.id, branch: r.branch, why: review ? reviewWord(review) : "its diff could not be sorted" });
         continue;
       }
+      const current = this.runs.get(r.id);
+      // Sorting yields: selection or group ownership may have changed meanwhile.
+      if ((r.group !== undefined || current?.group !== undefined) && (!current || current.group !== r.group || !groupEligible(current))) {
+        skipped.push({ id: r.id, branch: r.branch, why: "group selection changed while sorting" });
+        continue;
+      }
       try {
-      this.entries = enqueue(this.entries, this.runs.get(r.id) ?? r, this.now(), {}, this.deps.working?.(r.repoId) ?? []);
+        this.entries = enqueue(this.entries, current ?? r, this.now(), {}, this.deps.working?.(r.repoId) ?? []);
         this.tell(r.id, "queued to land");
         queued.push(r.id);
       } catch (err) {

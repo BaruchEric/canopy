@@ -61,7 +61,7 @@ interface World {
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
-async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: false; evidence?: boolean } = {}): Promise<World> {
+async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: false; evidence?: boolean; groupBulkEligible?: (rec: LandingRun) => boolean } = {}): Promise<World> {
   const path = join(root, `repo${++n}`);
   await exec(["git", "init", "-q", "-b", "main", path]);
   await sh(path, "config", "user.email", "t@t");
@@ -115,6 +115,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
       return run;
     },
     runActive: (id) => w.active.has(id),
+    ...(opts.groupBulkEligible ? { groupBulkEligible: opts.groupBulkEligible } : {}),
     openPr: (id) => {
       w.opened.push(id);
     },
@@ -147,7 +148,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
   return w;
 }
 
-const fakeRun = (repoId: string, b: { name: string; target: string; base: string; dir: string; origin: string; work?: string }, state: RunBranchState): Run => ({
+const fakeRun = (repoId: string, b: { name: string; target: string; base: string; dir: string; origin: string; work?: string; group?: string }, state: RunBranchState): Run => ({
   id: b.origin,
   repoId,
   action: "propose",
@@ -167,13 +168,13 @@ const fakeRun = (repoId: string, b: { name: string; target: string; base: string
 });
 
 /** A finished branch run whose worktree holds one commit writing `file`. */
-async function readyRun(w: World, id: string, file: string, body: string, work?: string): Promise<Run> {
+async function readyRun(w: World, id: string, file: string, body: string, work?: string, group?: string): Promise<Run> {
   const dir = runTreeDir(w.repo.path, id, w.wts);
   const base = (await revOf(w.repo.path, "main"))!;
   const name = `run/x-${id}`;
   await addRunTree(w.repo.path, dir, name, base);
   await commit(dir, file, body);
-  const run = fakeRun(w.repo.id, { name, target: "main", base, dir, origin: id, ...(work ? { work } : {}) }, "ready");
+  const run = fakeRun(w.repo.id, { name, target: "main", base, dir, origin: id, ...(work ? { work } : {}), ...(group ? { group } : {}) }, "ready");
   w.hub.onRun(run);
   return run;
 }
@@ -1274,4 +1275,30 @@ describe("best-of-N member dispatch belongs to selection", () => {
     expect(w.hub.record(origin)).toMatchObject({ state: "ready", group: "g-a1b2c3d4", review: { verdict: "auto" } });
     expect(w.hub.info().entries).toEqual([]); expect(w.opened).toEqual([]);
   });
+});
+
+test("bulk landing default-denies grouped records without selection facts, preserving individual land", async () => {
+  const w = await world();
+  await readyRun(w, "bulk-group", "group.md", "group\n", undefined, "g-missing");
+  await readyRun(w, "bulk-single", "single.md", "single\n");
+  await w.hub.idle();
+  w.hub.stop();
+  expect(await w.hub.landAll(w.repo.id)).toMatchObject({ queued: ["bulk-single"], skipped: [{ id: "bulk-group" }] });
+  expect((await w.hub.land("bulk-group")).id).toBe("bulk-group");
+});
+
+test("bulk group winner selection is rechecked after sorting and approval stays mandatory", async () => {
+  let checks = 0;
+  const w = await world({ groupBulkEligible: () => ++checks === 1 });
+  await readyRun(w, "bulk-race", "race.md", "race\n", undefined, "g-race");
+  await w.hub.idle();
+  w.hub.stop();
+  expect((await w.hub.landAll(w.repo.id)).queued).toEqual([]);
+  expect(checks).toBeGreaterThanOrEqual(2);
+  const approved = await world({ groupBulkEligible: () => true });
+  await rulesOn(approved, RULES);
+  await readyRun(approved, "bulk-approve", "secret/k.txt", "k\n", undefined, "g-picked");
+  await approved.hub.idle();
+  approved.hub.stop();
+  expect(await approved.hub.landAll(approved.repo.id)).toEqual({ queued: [], skipped: [{ id: "bulk-approve", branch: "run/x-bulk-approve", why: "needs your approval: 1 sensitive file" }] });
 });

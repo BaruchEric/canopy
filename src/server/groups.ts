@@ -28,6 +28,7 @@ import {
   isRunAction,
   isRunActive,
   type LandingInfo,
+  type LandingRun,
   type PrWatch,
   type Repo,
   type Run,
@@ -282,6 +283,14 @@ export class GroupHub {
     return [...this.groups.values()]
       .sort((a, b) => b.startedAt - a.startedAt)
       .map(publicGroup);
+  }
+  /** A bulk request cannot stand in for choosing a member. Fail closed while
+   *  group ownership is unavailable, including adoption and detach windows. */
+  canBulkLand(rec: Pick<LandingRun, "id" | "repoId" | "group">): boolean {
+    const group = rec.group !== undefined ? this.groups.get(rec.group) : undefined;
+    return this.keeping && group !== undefined && group.state === "picked" &&
+      !group.pr && group.repoId === rec.repoId && group.winner === rec.id &&
+      group.members.some(member => member.origin === rec.id);
   }
   private publish(): void {
     this.deps.publish({
