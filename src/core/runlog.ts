@@ -392,8 +392,10 @@ export class DiskRunLogger implements RunLogger {
   private dir: string;
   private env: () => Readonly<Record<string, string | undefined>>;
   private appliedFile: string;
-  constructor(private opts: { dir?: string; env?: () => Readonly<Record<string, string | undefined>>; appliedFile?: string; now?: () => number; max?: number } = {}) {
+  private retainedSecrets: readonly Secret[];
+  constructor(private opts: { dir?: string; env?: () => Readonly<Record<string, string | undefined>>; appliedFile?: string; retainedSecrets?: readonly Secret[]; now?: () => number; max?: number } = {}) {
     this.dir = opts.dir ?? runsDir(); this.env = opts.env ?? (() => process.env); this.appliedFile = opts.appliedFile ?? join(configDir(), "secrets-applied.json");
+    this.retainedSecrets = (opts.retainedSecrets ?? []).map(({ name, value }) => ({ name, value }));
   }
   async refresh(): Promise<void> { this.refreshNow(); }
   private refreshNow(): void {
@@ -426,7 +428,7 @@ export class DiskRunLogger implements RunLogger {
     return this.knownSecrets(env);
   }
   private knownSecrets(env: Readonly<Record<string, string>>): RunLogPrivacy {
-    const secrets = secretValues({ ...this.env(), ...env }, this.applied);
+    const secrets = [...secretValues(this.env(), this.applied), ...secretValues(env, this.applied), ...this.retainedSecrets];
     const applied = new Set(Object.values(this.applied).flatMap(Object.keys));
     return { secrets, credentials: secrets.filter((s) => credentialName(s.name) || applied.has(s.name)) };
   }

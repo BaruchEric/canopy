@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeDriver } from "../core/claudedrive";
-import type { DriveCtx, RunDriver } from "../core/driver";
+import { spawnEnv, type DriveCtx, type RunDriver } from "../core/driver";
 import type { FlowFile } from "../core/flowstore";
 import { parseWorkflow } from "../core/workflow";
 import { RunLog } from "../core/runlog";
@@ -280,4 +280,55 @@ test.each(["startup", "takeover"])("a saved active flow is logged before its fir
   expect(wire).toContain('"type":"result"');
   expect(wire).toContain('"canopy":"end"');
   expect(JSON.parse(await readFile(join(scratch, "config/runs", id, "run.json"), "utf8"))).toMatchObject({ id, status: "done", flowStep: { workflow: "saved-replay", step: "Inspect" }, result: { text: "reply 1" } });
+});
+
+
+test("early removed private and inherited values stay redacted on disk and export across chat turns", async () => {
+  await server.stop();
+  const credential = "scratch-private-credential-572839";
+  const inherited = "scratch-inherited-term-615298";
+  const triggerRaw = "  scratch-trigger-effective-917264  ";
+  const echo = `${credential} ${inherited} ${triggerRaw}`;
+  process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"] = credential;
+  process.env["CANOPY_TERM"] = inherited;
+  process.env["CANOPY_TRIGGER_EARLY"] = triggerRaw;
+  const childChecks: unknown[] = [];
+  class Echo implements RunDriver {
+    readonly harness = "claude";
+    readonly label = "Inert privacy echo";
+    ctx: DriveCtx | null = null;
+    check() { return null; }
+    start(ctx: DriveCtx) {
+      this.ctx = ctx;
+      const child = Bun.spawnSync([process.execPath, "-e", 'process.stdout.write(JSON.stringify([process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"] ?? null, process.env["CANOPY_TERM"] ?? null, process.env["CANOPY_TRIGGER_EARLY"] ?? null]))'], { env: spawnEnv(ctx), stdout: "pipe" });
+      expect(child.exitCode).toBe(0);
+      childChecks.push(JSON.parse(new TextDecoder().decode(child.stdout)));
+      this.turn();
+    }
+    turn() { const ctx = this.ctx; if (!ctx) throw new Error("no chat"); ctx.wire("out", JSON.stringify({ type: "assistant", text: echo })); ctx.note(echo); ctx.step({ kind: "tool", tool: { name: "Echo", title: echo, output: echo, status: "ok" } }); ctx.result({ text: echo, durationMs: 1, turns: 1 }, null); }
+    say() { this.turn(); }
+    stop() { this.ctx?.wire("out", JSON.stringify({ type: "final", text: echo })); this.ctx?.exited({ code: 0, stderr: "" }); }
+  }
+  server = await startServer({ ...options(), runner: { driver: () => new Echo() } });
+  expect(process.env["CANOPY_TAILCHAN_ANSWER_TOKEN"]).toBeUndefined();
+  expect(process.env["CANOPY_TERM"]).toBeUndefined();
+  expect(process.env["CANOPY_TRIGGER_EARLY"]).toBeUndefined();
+  const id = await startChat(echo);
+  expect(childChecks).toEqual([[null, null, null]]);
+  const folder = join(scratch, "config/runs", id);
+  const firstWire = await readFile(join(folder, "wire.jsonl"), "utf8");
+  for (const value of [credential, inherited, triggerRaw.trim()]) expect(firstWire).not.toContain(value);
+  expect((await call("/api/runs/say", { id, text: echo })).status).toBe(200);
+  await until(async () => (await runOf(id))?.status === "idle", "second echo turn");
+  const exported = await (await fetch(url(`/api/runs/${id}/export`))).text();
+  expect((await call("/api/runs/stop", { id })).status).toBe(200);
+  await until(async () => existsSync(join(folder, "wire.jsonl.gz")), "echo settlement");
+  const wire = new TextDecoder().decode(Bun.gunzipSync(await readFile(join(folder, "wire.jsonl.gz"))));
+  const stored = await readFile(join(folder, "run.json"), "utf8");
+  for (const text of [wire, stored, exported]) {
+    for (const value of [credential, inherited, triggerRaw.trim()]) expect(text).not.toContain(value);
+    expect(text).toContain("<redacted:CANOPY_TAILCHAN_ANSWER_TOKEN>");
+    expect(text).toContain("<redacted:CANOPY_TERM>");
+  }
+  expect(JSON.parse(stored)).toMatchObject({ id, repoId: "proj", status: "done" });
 });
