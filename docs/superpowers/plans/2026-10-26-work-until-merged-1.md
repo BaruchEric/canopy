@@ -407,46 +407,46 @@ git commit -m "feat(triggers): write issue results back"
 - Consumes: GET /api/triggers and TriggerEvent from Tasks 1-5; Target helpers and ask from cli/health.ts; the output shape of canopy queue from cli/land.ts.
 - Produces: canopy issues [repo] [--backend URL], listing GitHub and Forgejo events with issue, state, branch, PR, and reason columns. The --needs-you filter waits for plan 2's needsYou field.
 
-- [ ] **Step 1: Write failing tests** for empty results, GitHub and Forgejo rows, missing branch or PR, a repo filter, a backend error, and the exact issue/state/branch/PR/reason columns.
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 1: Write failing tests** for empty results, GitHub and Forgejo rows, missing branch or PR, a repo filter, a backend error, and the exact issue/state/branch/PR/reason columns.
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: bun test src/cli/issues.test.ts
 Expected: FAIL because canopy issues is not a command.
 
-- [ ] **Step 3: Implement src/cli/issues.ts**
+- [x] **Step 3: Implement src/cli/issues.ts**
 
 Read trigger info using the same backend targeting rules as canopy queue. Keep only github and forgejo events. Print issue short or key, status, branch or "-", PR number or "-", and reason or "-". Accept one repo id and --backend URL.
 
-- [ ] **Step 4: Register the command and document it**
+- [x] **Step 4: Register the command and document it**
 
 Add issues to COMMANDS and dispatch. Add its usage line to core/help.ts and README.md. Update the triggers architecture section, the SPEC.md triggers.json state description, and the FR-035 status to say plan 1 shipped while plans 2 and 3 remain planned. After merge, change this plan's Status line to shipped with the merge commit and leave docs/superpowers/plans/README.md for the orchestrator to update in the index.
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: bun test src/cli/issues.test.ts
 Expected: PASS for issue rows and filtering.
 
-- [ ] **Step 6: Run typecheck**
+- [x] **Step 6: Run typecheck**
 
 Run: bun run typecheck
 Expected: PASS.
 
-- [ ] **Step 7: Run lint**
+- [x] **Step 7: Run lint**
 
 Run: bun run lint
 Expected: PASS.
 
-- [ ] **Step 8: Run the full test suite**
+- [x] **Step 8: Run the full test suite**
 
 Run: bun test
 Expected: PASS.
 
-- [ ] **Step 9: Build**
+- [x] **Step 9: Build**
 
 Run: bun run build
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ~~~sh
 git add src/cli/issues.ts src/cli/issues.test.ts src/cli/index.ts src/core/help.ts README.md docs/architecture.md SPEC.md FEATURES.md

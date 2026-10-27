@@ -53,6 +53,7 @@ import { kitCommand } from "./kit";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
+import { issuesCommand } from "./issues";
 import { scenariosCommand } from "./scenarios";
 import { prCommand } from "./pr";
 import { awakeCommand } from "./awake";
@@ -111,6 +112,7 @@ const COMMANDS = new Set([
   "scenarios",
   "pr",
   "prs",
+  "issues",
   "secrets",
   "library",
   "tree",
@@ -862,6 +864,8 @@ export async function main(argv: string[]): Promise<void> {
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });
+    case "issues":
+      return issuesCommand(args, { fail });
     case "sweep":
       return sweepCommand(args, { fail });
     case "awake":
