@@ -6,7 +6,7 @@ import type { RememberedRule } from "./types";
 const AGENT = { model: "default", effort: "default", yolo: false, extra: "" };
 const SPEC = { allowedTools: [], maxTurns: 10 };
 
-function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook, stage = false) {
+function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook, stage = false, tap = false) {
   const run: DriveRun = {
     id: "r1",
     repoId: "fx",
@@ -22,14 +22,15 @@ function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number;
     steps: [],
     prompt: null,
   };
+  const wire: [string, string][] = [];
   const emits: string[] = [];
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
-    { cwd: "/r", agent: AGENT, spec, label: "Codex", stage, ...(remember ? { remember } : {}) },
+    { cwd: "/r", agent: AGENT, spec, label: "Codex", stage, ...(tap ? { wire: (d: string, l: string) => { wire.push([d, l]); } } : {}), ...(remember ? { remember } : {}) },
     { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status) },
   );
-  return { run, ctx, emits, ended };
+  return { run, ctx, emits, ended, wire };
 }
 
 const perm = (title: string) => ({ kind: "permission" as const, tool: "Bash", title, detail: title });
@@ -487,4 +488,18 @@ test("settle notes for a proposal", () => {
   expect(settleNote(p, { kind: "approve", auto: true })).toBe("approved the plan, running on its own");
   expect(settleNote(p, { kind: "deny", message: "split step 2" })).toBe("sent the plan back: split step 2");
   expect(settleNote(p, { kind: "deny" })).toBe("turned the plan down");
+});
+
+describe("the wire seam", () => {
+  test("no hook drops wire lines without changing the run", () => {
+    const { ctx, run } = makeCtx();
+    ctx.wire("out", '{"type":"result"}');
+    expect(run.steps).toEqual([]);
+  });
+  test("a hook receives every line in direction order", () => {
+    const { ctx, wire } = makeCtx(false, SPEC, undefined, false, true);
+    ctx.wire("in", "a");
+    ctx.wire("out", "b");
+    expect(wire).toEqual([["in", "a"], ["out", "b"]]);
+  });
 });

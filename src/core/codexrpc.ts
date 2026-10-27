@@ -191,7 +191,7 @@ export class RpcClient {
 
   constructor(
     private proc: RpcProc,
-    private opts: { stderrCap?: number } = {},
+    private opts: { stderrCap?: number; tap?: (dir: "in" | "out", line: string) => void } = {},
   ) {
     const reading = this.read();
     const draining = this.drainStderr();
@@ -273,7 +273,9 @@ export class RpcClient {
   private send(msg: unknown): void {
     if (this.ended) return;
     try {
-      this.proc.stdin.write(JSON.stringify(msg) + "\n");
+      const text = JSON.stringify(msg);
+      this.opts.tap?.("in", text);
+      this.proc.stdin.write(text + "\n");
       const flushed = this.proc.stdin.flush?.();
       if (flushed instanceof Promise) flushed.catch(() => {});
     } catch {
@@ -285,12 +287,18 @@ export class RpcClient {
     const split = new LineSplitter();
     try {
       for await (const chunk of this.proc.stdout) {
-        for (const line of split.push(chunk)) this.dispatch(line);
+        for (const line of split.push(chunk)) {
+          this.opts.tap?.("out", line);
+          this.dispatch(line);
+        }
       }
     } catch {
       // a broken pipe ends the stream the same way EOF does
     }
-    for (const line of split.flush()) this.dispatch(line);
+    for (const line of split.flush()) {
+      this.opts.tap?.("out", line);
+      this.dispatch(line);
+    }
     // No more answers can come; later sends go nowhere.
     this.ended = true;
   }
