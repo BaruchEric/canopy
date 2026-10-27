@@ -1,8 +1,42 @@
 import { describe, expect, test } from "bun:test";
 import { advance, enqueue, entryFor } from "../../src/core/landing";
 import { touchedOf, type Collision } from "../../src/core/touch";
-import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
+import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview, WorktreeRepoInfo, WorktreesInfo } from "../../src/core/types";
 import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, runOverlaps, type OpenedRun, resultWord, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
+import { repoWorktrees, warmRows, warmWords } from "./landing";
+
+describe("the warm pool in the section", () => {
+  const r = (over: Partial<WorktreeRepoInfo> = {}): WorktreeRepoInfo => ({ repoId: "a", repoPath: "/r/a", want: 1, runs: [], warm: [], refilling: null, fails: [], orphans: [], ...over });
+  const t = { dir: "/w/a/warm-1", name: "warm-1", base: "b", madeAt: 1000 - 2 * 3_600_000, size: 312 * 1048576, lockfile: null };
+  test("warmWords uses the machine's choice, including when the file defaults to warm", () => {
+    expect(warmWords(undefined)).toBeNull();
+    expect(warmWords(r({ want: 0, fileWarm: 2 }))).toBeNull();
+    expect(warmWords(r({ warm: [t] }))).toBe("1 warm");
+    expect(warmWords(r({ want: 2, warm: [t], refilling: "warm-2" }))).toBe("1 of 2 warm, refilling");
+    expect(warmWords(r({ fails: [{ name: "warm-1", why: "x", at: 1, fails: 1 }] }))).toBe("0 of 1 warm, refill failed");
+    expect(warmWords(r())).toBe("0 of 1 warm");
+  });
+  test("warmRows shows age, size, refill and failure", () => {
+    expect(warmRows(r({ want: 2, warm: [t], refilling: "warm-2" }), 1000)).toEqual([
+      { name: "warm-1", words: "2h · 312 MB", tone: "" },
+      { name: "warm-2", words: "refilling", tone: "" },
+    ]);
+    expect(warmRows(r({ fails: [{ name: "warm-1", why: "bun install exited 1", at: 1, fails: 2 }] }), 1000)).toEqual([{ name: "warm-1", words: "refill failed: bun install exited 1", tone: "rust" }]);
+    expect(warmRows(r({ warm: [{ ...t, madeAt: 1000, size: 2 * 1073741824 }] }), 1000)).toEqual([{ name: "warm-1", words: "0m · 2 GB", tone: "" }]);
+    expect(warmRows(r({ warm: [{ ...t, madeAt: 1000 - 2 * 86400000 }] }), 1000)[0]?.words).toBe("2d · 312 MB");
+  });
+  test("a slot retry shows its current refill once", () => {
+    expect(warmRows(r({ refilling: "warm-1", fails: [{ name: "warm-1", why: "old failure", at: 1, fails: 1 }] }), 1000)).toEqual([{ name: "warm-1", words: "refilling", tone: "" }]);
+  });
+  test("repoWorktrees finds already-qualified ids without adding a second prefix", () => {
+    const info: WorktreesInfo = { root: "/w", free: 1, repos: [r()] };
+    const foreign: WorktreesInfo = { ...info, repos: [r({ repoId: "mini|a", repoPath: "/mini/a" })] };
+    expect(repoWorktrees({ home: info, mini: foreign }, "a")?.repoPath).toBe("/r/a");
+    expect(repoWorktrees({ home: info, mini: foreign }, "mini|a")?.repoPath).toBe("/mini/a");
+    expect(repoWorktrees({ home: info, mini: foreign }, "mini|mini|a")).toBeUndefined();
+    expect(repoWorktrees({ home: info }, "zzz")).toBeUndefined();
+  });
+});
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,

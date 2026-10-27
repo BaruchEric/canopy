@@ -11,6 +11,7 @@ import type {
   KitInfo,
   LandEntry,
   LandingInfo,
+  WorktreesInfo,
   PrWatch,
   KitInstallResult,
   KitMcpPreview,
@@ -128,6 +129,7 @@ import {
   qKept,
   qRepo,
   qLanding,
+  qWorktrees,
   qGroup,
   qPrs,
   qTriggers,
@@ -873,6 +875,8 @@ export const api = {
     };
     return from(b, info, qLanding);
   },
+  /** One backend's worktree pool; qualify ids at the same boundary as SSE. */
+  worktrees: async (b: string = homeName()): Promise<WorktreesInfo> => from(b, await req<WorktreesInfo>(b, "/api/worktrees"), qWorktrees),
   /** "land" on a ready branch run, by its run's or its branch's id;
    *  `approve` is the sensitive patch id the approve sheet showed */
   land: async (id: string, approve?: string, skipJudge?: boolean) => {

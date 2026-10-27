@@ -2,6 +2,7 @@ import { groupWord } from "../groups";
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
 import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
+import { repoWorktrees, warmRows, warmWords } from "../landing";
 import { backendOf } from "../registry";
 import { idText, landingAll, prsAll, runFor, useStore } from "../store";
 import { repoPrChip } from "../prs";
@@ -80,6 +81,8 @@ export function PrChip({ repoId }: { repoId: string }) {
  *  something. */
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
+  const pool = useStore((s) => repoWorktrees(s.worktrees, repo.id));
+  const warm = warmWords(pool);
   const showGroup = useStore(s => s.showGroup);
   const landRun = useStore((s) => s.landRun);
   const landAll = useStore((s) => s.landAll);
@@ -96,7 +99,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
   const l = repoLanding(info, repo.id);
   const all = landAllOf(info, repo.id);
   const orphans = repo.host ? [] : repoOrphans(info, repo.path);
-  if (!hasLanding(l) && orphans.length === 0) return null;
+  if (!hasLanding(l) && orphans.length === 0 && warm === null) return null;
   const act = (key: string, fn: () => Promise<void>) => {
     setError("");
     setBusy(key);
@@ -127,7 +130,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
       k="landing"
       className="landing-section"
       label="Landing"
-      head={words ? <span className={words.tone === "back" ? "rust" : "lichen"}>{words.text}</span> : ""}
+      head={<>{words && <span className={words.tone === "back" ? "rust" : "lichen"}>{words.text}</span>}{words && warm && " · "}{warm}</>}
       title="Branch runs and the queue that lands them on main: rebase, the repo's gates, then a fast-forward. Nothing is pushed."
       copy={() =>
         [
@@ -136,6 +139,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
           ...l.ready.map((r) => `${r.branch}  ready`),
           ...l.other.filter(stoppedWhole).map((r) => `${r.branch}  stopped, can land`),
           ...l.opened.map((r) => `${r.branch}  ${openedRow(r, watches).word}`),
+          ...(pool ? warmRows(pool, Date.now()).map(r => `${r.name}  ${r.words}`) : []),
         ].join("\n")
       }
     >
@@ -357,6 +361,16 @@ export function LandingSection({ repo }: { repo: Repo }) {
                     remove
                   </button>
                 </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {warm !== null && pool && (
+          <ul className="landing-list landing-warm">
+            {warmRows(pool, Date.now()).map(row => (
+              <li key={row.name} className={`landing-row${row.tone ? ` ${row.tone}` : ""}`}>
+                <span className="landing-branch">{row.name}</span>
+                <span className="dim">{row.words}</span>
               </li>
             ))}
           </ul>

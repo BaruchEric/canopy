@@ -19,6 +19,7 @@ import type {
   Sprout,
   SproutDetail,
   TermInfo,
+  WorktreesInfo,
 } from "../../src/core/types";
 import type { TriggerEvent } from "../../src/core/trigger";
 import type { Collision } from "../../src/core/touch";
@@ -89,6 +90,16 @@ export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
           : collision.with,
     })),
   } : {}),
+});
+
+/** Pool and run ids belong to the backend; paths and warm slots stay local. */
+export const qWorktrees = (q: Q, info: WorktreesInfo): WorktreesInfo => ({
+  ...info,
+  repos: info.repos.map(repo => ({
+    ...repo,
+    repoId: q(repo.repoId),
+    runs: repo.runs.map(run => ({ ...run, id: q(run.id), runId: q(run.runId) })),
+  })),
 });
 
 /** The PR watches: a branch's id, its run's and its repo's under the
@@ -224,17 +235,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "landing":
       return { ...ev, landing: qLanding(q, ev.landing) };
     case "worktrees":
-      return {
-        ...ev,
-        worktrees: {
-          ...ev.worktrees,
-          repos: ev.worktrees.repos.map((repo) => ({
-            ...repo,
-            repoId: q(repo.repoId),
-            runs: repo.runs.map((run) => ({ ...run, id: q(run.id), runId: q(run.runId) })),
-          })),
-        },
-      };
+      return { ...ev, worktrees: qWorktrees(q, ev.worktrees) };
     case "prs":
       return { ...ev, prs: qPrs(q, ev.prs) };
     case "triggers":
