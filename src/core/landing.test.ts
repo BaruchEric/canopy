@@ -4,6 +4,7 @@ import {
   advance,
   canLand,
   enqueue,
+  entryFor,
   fixPrompt,
   landAllPick,
   MAX_NOTICES,
@@ -15,6 +16,7 @@ import {
   landCounts,
   LandError,
   landWord,
+  landAnyway,
   MAX_TRIES,
   nextEntry,
   pruneLanded,
@@ -23,6 +25,8 @@ import {
   retryWaiting,
   scenarioOf,
   SCENARIO_GATE,
+  scoreGate,
+  scoreOutput,
   sentBack,
   TAIL_CHARS,
 } from "./landing";
@@ -310,5 +314,46 @@ describe("scenarios", () => {
     const back = restartWorking([e], 9)[0]!;
     expect(back.state).toBe("queued");
     expect(back).not.toHaveProperty("gate");
+  });
+});
+
+describe("judge scenarios plan 2", () => {
+  const held = (id = "j"): LandEntry => advance(entryFor(run(id), 1), { t: "unjudged", name: "refund", why: "no gateway key" }, 2);
+  test("a judge hold survives retries and restart without becoming runnable", () => {
+    const e = held();
+    expect(e).toMatchObject({ state: "judge", gate: "refund", reason: "scenario refund needs a judge: no gateway key" });
+    expect([inQueue(e), sentBack(e), landWord(e, [e])]).toEqual([true, false, "needs a judge"]);
+    expect(retryWaiting([e], "canopy", 3)).toEqual([e]);
+    expect(restartWorking([e], 3)).toEqual([e]);
+    expect(holdAll([e], "canopy", "checkout busy", 3)).toEqual([e]);
+    expect(nextEntry([e], "canopy")).toBeUndefined();
+    expect(queueOf([e], "canopy")).toEqual([e]);
+    expect(landCounts([e], "canopy")).toEqual({ queued: 1, back: 0 });
+  });
+  test("land anyway preserves order and refuses every non-hold", () => {
+    const a = entryFor(run("a"), 0);
+    const e = held("b");
+    const out = landAnyway([a, e], "b", 9);
+    expect(out.find(x => x.id === "b")).toMatchObject({ state: "queued", skipJudge: true, queuedAt: 1, updatedAt: 9 });
+    expect(out.find(x => x.id === "b")?.reason).toBeUndefined();
+    expect(out.find(x => x.id === "b")?.gate).toBeUndefined();
+    expect(nextEntry(out, "canopy")?.id).toBe("a");
+    for (const state of ["queued", "rebasing", "setup", "gate", "scenarios", "landing", "landed", "waiting", "conflict", "red", "moved"] as const) {
+      expect(() => landAnyway([{ ...a, state }], "a", 10)).toThrow("it is not held for a judge");
+    }
+    expect(() => landAnyway([], "missing", 10)).toThrow("no entry by that id");
+  });
+  test("a below-minimum score explains both failing and confident judge results", () => {
+    const why = "the judge says what was observed only partly satisfies the story";
+    expect(scoreOutput([{ name: "command", kind: "command", ok: false, tail: "ignore" }, { name: "refund", kind: "judge", ok: false, p: 0.3, why, tail: "observed no refund" }])).toBe(`scenario refund: ${why}\nobserved no refund`);
+    expect(scoreOutput([{ name: "mail", kind: "judge", ok: true, p: 0.9, tail: "sent" }])).toBe("scenario mail: satisfaction 0.90\nsent");
+    expect(scoreOutput([{ name: "missing", kind: "judge", ok: false, unjudged: "no gateway key" }])).toBe("scenario missing: no gateway key");
+    expect(scoreGate(2 / 3, 0.8)).toBe("satisfaction 0.67 < 0.8");
+    const e = advance(entryFor(run("j"), 1), { t: "red", gate: scoreGate(0.5, 1), output: "scenario refund: partly\nno refund" }, 2);
+    expect(scenarioOf(e.gate)).toBeNull();
+    expect(fixPrompt(e)).toContain("holdout scenarios scored satisfaction 0.50 < 1");
+    expect(fixPrompt(e)).toContain("are not shown");
+    expect(fixPrompt(e)).toContain("scenario refund: partly\nno refund");
+    expect(fixPrompt(e)).toContain("Do not push.");
   });
 });

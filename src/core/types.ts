@@ -1413,7 +1413,8 @@ export interface PrWatch {
 /** A queue entry's state. `conflict`, `red` and `moved` are sent back: the
  *  entry has left the queue and waits for "fix it". `waiting` holds its
  *  place until what it names clears. */
-export type LandState = "queued" | "rebasing" | "setup" | "gate" | "scenarios" | "landing" | "landed" | "waiting" | "conflict" | "red" | "moved";
+/** judge is held until Eric explicitly chooses land anyway. */
+export type LandState = "queued" | "rebasing" | "setup" | "gate" | "scenarios" | "landing" | "landed" | "waiting" | "judge" | "conflict" | "red" | "moved";
 
 export interface LandEntry {
   /** the branch's id (`RunBranch.origin`) */
@@ -1451,6 +1452,8 @@ export interface LandEntry {
   auto?: true;
   /** the sensitive files' patch id Eric approved when he landed it */
   approved?: string;
+  /** Eric's land anyway: leave judge scenarios out of this pass. */
+  skipJudge?: true;
 }
 
 /** What one file in a branch run's diff is, for the review rules (FR-013):
@@ -1512,10 +1515,14 @@ export interface ScenarioResult {
   name: string;
   kind: "command" | "judge";
   ok: boolean;
-  /** a judge scenario's P(yes) (plan 2) */
+  /** a judge scenario's P(yes) */
   p?: number;
   /** the output's last TAIL_CHARS */
   tail?: string;
+  /** The judge's reason for an unsatisfied scenario. */
+  why?: string;
+  /** A missing judge counts zero and holds the entry. */
+  unjudged?: string;
 }
 /** what the set said about one head of a branch, written on its record */
 export interface ScenarioRun {
@@ -1527,6 +1534,8 @@ export interface ScenarioRun {
   /** the mean satisfaction, 0 to 1 */
   score: number;
   results: ScenarioResult[];
+  /** Judge scenarios explicitly skipped by land anyway. */
+  skipped?: string[];
 }
 
 /** A branch run as the landing records keep it, across restarts. */
