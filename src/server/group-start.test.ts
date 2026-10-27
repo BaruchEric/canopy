@@ -1024,6 +1024,11 @@ test("repo land-all queues a standalone and only a picked non-PR group winner", 
   await w.finish(1);
   await w.finish(2);
   await until(() => w.starts.length === 4, "group reviewer");
+  await until(async () => {
+    const info: unknown = await (await fetch(w.url("/api/landing"))).json();
+    if (!isRecord(info) || !Array.isArray(info["runs"])) throw new Error("landing runs absent");
+    return info["runs"].find((run: unknown) => isRecord(run) && run["id"] === standalone && run["state"] === "ready");
+  }, "standalone landing record ready");
   const before = await w.post("/api/landing/land-all", { repo: "app" });
   expect(before.status).toBe(200);
   const unpicked: unknown = await before.json();

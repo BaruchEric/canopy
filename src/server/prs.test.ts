@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecResult } from "../core/exec";
 import { POLL_BUSY } from "../core/pr";
+import { needsYouFromPr } from "../core/trigger";
 import type { LandingRun, PrWatch, Run, ServerEvent } from "../core/types";
 import { addRunTree, revOf, runTreeDir } from "../core/worktree";
 import { PrHub } from "./prs";
@@ -528,6 +529,72 @@ describe("the rebase step", () => {
   };
 
   const remoteBranch = (w: World): Promise<string> => sh(w.bare, "rev-parse", `refs/heads/${w.rec.branch}`);
+
+  const resolveConflict = async (w: World): Promise<string> => {
+    expect((await exec(["git", "rebase", "origin/main"], { cwd: w.dir, env: editorOff })).code).not.toBe(0);
+    await writeFile(join(w.dir, "a.txt"), "theirs\nmine\n");
+    await sh(w.dir, "add", "a.txt");
+    expect((await exec(["git", "rebase", "--continue"], { cwd: w.dir, env: editorOff })).code).toBe(0);
+    return sh(w.dir, "rev-parse", "HEAD");
+  };
+
+  test("a manual conflict fix whose lease is refused preserves the human commit and reaches Needs you", async () => {
+    const w = await world();
+    await commit(w.dir, "a.txt", "mine\n");
+    const opened = await w.hub.open(w.rec.id);
+    w.gh.head = opened.pushed;
+    await commit(w.path, "a.txt", "theirs\n");
+    await sh(w.path, "push", "-q", "origin", "main");
+    w.gh.mergeState = "DIRTY";
+    await pollNow(w);
+    const started = await w.hub.rebaseNow(w.rec.id);
+    expect(started.autoFix).toBe(false);
+    expect(started.autoMerge).toBe(false);
+    expect(started.fixing?.run).toBe("fix1");
+    await resolveConflict(w);
+
+    const other = join(root, `human${++n}`);
+    await sh(root, "clone", "-q", "-b", w.rec.branch, w.bare, other);
+    await sh(other, "config", "user.email", "t@t");
+    await sh(other, "config", "user.name", "t");
+    const human = await commit(other, "human.txt", "human\n");
+    await sh(other, "push", "-q", "origin", w.rec.branch);
+    w.gh.head = human;
+
+    await endFix(w, "fix1");
+    const [pr] = w.hub.info();
+    if (!pr) throw new Error("the conflict-fix watch disappeared");
+    expect(await remoteBranch(w)).toBe(human);
+    expect(pr.pushed).toBe(opened.pushed);
+    expect(pr.error).toBe(MOVED);
+    expect(pr.gaveUp).toBe(MOVED);
+    expect(needsYouFromPr(pr)).toContain("auto-fix gave up");
+    expect(pr.fixing).toBeUndefined();
+  });
+
+  test("a successful manual conflict recovery clears Needs you and allows later auto-fixes", async () => {
+    const { w } = await dirty();
+    await pollNow(w);
+    await endFix(w, "fix1", undefined, true);
+    expect(w.hub.info()[0]?.gaveUp).toContain("did not finish");
+
+    const retried = await w.hub.rebaseNow(w.rec.id);
+    expect(retried.fixing?.run).toBe("fix2");
+    const fixed = await resolveConflict(w);
+    w.gh.mergeState = "UNKNOWN";
+    await endFix(w, "fix2");
+    w.gh.head = fixed;
+    w.gh.mergeState = "CLEAN";
+    const pr = await pollNow(w);
+    expect(pr.pushed).toBe(fixed);
+    expect(await remoteBranch(w)).toBe(fixed);
+    expect(pr.error).toBeUndefined();
+    expect(pr.gaveUp).toBeUndefined();
+    expect(needsYouFromPr(pr)).toBeUndefined();
+
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    expect((await pollNow(w)).fixing?.run).toBe("fix3");
+  });
 
   test("a rebase a restart interrupted is not still going: the next read rebases and pushes", async () => {
     const { w, pushed } = await behind();

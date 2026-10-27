@@ -723,9 +723,12 @@ export class PrHub {
     const head = await revOf(w.dir, "HEAD");
     if (!head || head === w.pushed) return failed("the fix ended with nothing new to push");
     // a conflict fix rebased the branch, so its push goes with the lease
-    const pushed = fixing.key.startsWith("rebase:") ? await pushBranchLease(w.dir, w.remote, w.branch, w.pushed) : await pushBranch(w.dir, w.remote, w.branch);
-    if ("rejected" in pushed) return failed(`the push was refused: ${pushed.rejected}`);
-    return { ...done, pushed: head };
+    const rebased = fixing.key.startsWith("rebase:");
+    const pushed = rebased ? await pushBranchLease(w.dir, w.remote, w.branch, w.pushed) : await pushBranch(w.dir, w.remote, w.branch);
+    if ("rejected" in pushed) return rebased ? { ...done, error: MOVED, gaveUp: MOVED } : failed(`the push was refused: ${pushed.rejected}`);
+    // A successful manual recovery also clears the earlier stop state.
+    const { gaveUp: _g, ...went } = done;
+    return { ...went, pushed: head };
   }
 
   /** The PR fell behind its target, or conflicts with it, on the head

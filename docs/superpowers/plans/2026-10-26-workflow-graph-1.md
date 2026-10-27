@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Live checks remain pending; plans 2 and 3 remain open. Written on main at 1ac8fe7.
+**Status:** plan 1 implemented and independently reviewed locally 2026-10-27 on `main`. Live API checks with real Claude jobs passed 2026-10-27 for parallel steps, manual release, repo mode overrides, stopping at a gate and malformed modes. See the [review follow-up](../../verification/2026-10-27-review-fixes.md). Plans 2 and 3 remain open. Written on main at 1ac8fe7.
 
 **Goal:** a workflow step can say what it waits for (`after:`), when it runs
 (`when:`) and whether a person releases it (`mode:`); the flow engine runs the
