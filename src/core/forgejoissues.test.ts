@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { closedBody, fixedComment, forgejoCommentsPath, forgejoIssuePath, forgejoIssuesPath, openedComment, parseIssueComments, parseIssueList, parseIssueView } from "./forgejoissues";
+import { closedBody, fixedComment, forgejoCommentsPath, forgejoIssuePath, forgejoIssuesPath, landedComment, openedComment, parseIssueComments, parseIssueList, parseIssueView } from "./forgejoissues";
 
 /** One issue as Forgejo's issues API answers it, the fields canopy reads. */
 const issue = (over: Record<string, unknown> = {}) => ({
@@ -16,10 +16,11 @@ const issue = (over: Record<string, unknown> = {}) => ({
 });
 
 describe("the API paths", () => {
-  test("the list asks for open issues with the label, oldest first, one page of fifty", () => {
+  test("the list asks for open issues with the label, oldest first, a page of fifty, the first unless told which", () => {
     const u = new URL(forgejoIssuesPath("https://git.example.com", "acme/shop", "canopy"));
     expect(u.origin + u.pathname).toBe("https://git.example.com/api/v1/repos/acme/shop/issues");
     expect(Object.fromEntries(u.searchParams)).toEqual({ labels: "canopy", state: "open", type: "issues", sort: "oldest", limit: "50", page: "1" });
+    expect(new URL(forgejoIssuesPath("https://git.example.com", "acme/shop", "canopy", 3)).searchParams.get("page")).toBe("3");
   });
 
   test("one issue, and its comments", () => {
@@ -120,5 +121,10 @@ describe("the words written back", () => {
     expect(openedComment(12, "run/fix")).toBe("Opened #12 from run/fix.");
     expect(fixedComment(12)).toBe("Fixed by #12.");
     expect(closedBody()).toEqual({ state: "closed" });
+  });
+
+  test("the close after a landing names the commit, and the remote that lacks it when one does", () => {
+    expect(landedComment("1a2b3c4d5e6f7890", "main", null)).toBe("Fixed by 1a2b3c4 on main.");
+    expect(landedComment("1a2b3c4d5e6f7890", "main", "origin")).toBe("Fixed by 1a2b3c4 on main, not yet pushed to origin.");
   });
 });

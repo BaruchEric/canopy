@@ -159,15 +159,22 @@ function parseListedIssues(json: unknown): (IssueView & { createdAt: string })[]
   return out;
 }
 
+/** How many open labelled issues a poll's listing looks at per rule, oldest
+ *  first. It reaches well past `POLL_ISSUES` (core/trigger.ts), the number
+ *  one poll reads in full: the hub drops the issues it already knows before
+ *  it caps, so known ones in front of the list hide none behind them. A
+ *  repo with more labelled issues than this has only its oldest looked at. */
+export const LIST_ISSUES = 500;
+
 /** The open issues on `slug` carrying one of `labels`, oldest first and at
- *  most `limit` of them: one `gh issue list` per label, merged by number.
- *  Each is a view with no comments; `fetchIssue` reads one in full. */
+ *  most `LIST_ISSUES` of them: one `gh issue list` per label, merged by
+ *  number. Each is a view with no comments; `fetchIssue` reads one in full. */
 export async function listLabelledIssues(
   slug: string,
   labels: readonly string[],
   gh: GhRun,
-  limit: number,
 ): Promise<{ issues: (IssueView & { createdAt: string })[] } | { error: string }> {
+  const limit = LIST_ISSUES;
   const lists: (IssueView & { createdAt: string })[][] = [];
   for (const label of labels) {
     let r: GhResult;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { closeIssue, commentIssue, fetchIssue, issueNote, listLabelledIssues, oldestIssues, parseIssueRef, parseIssueView, resolveIssueNote, type GhResult, type IssueView } from "./issue";
+import { closeIssue, commentIssue, fetchIssue, issueNote, LIST_ISSUES, listLabelledIssues, oldestIssues, parseIssueRef, parseIssueView, resolveIssueNote, type GhResult, type IssueView } from "./issue";
 import { branchSlug } from "./worktree";
 
 const ok = (stdout: string): GhResult => ({ code: 0, stdout, stderr: "" });
@@ -151,7 +151,7 @@ describe("oldestIssues", () => {
 
 describe("listLabelledIssues", () => {
   const listed = (number: number, createdAt: string, labels = ["canopy"]) => ({ number, title: `Issue ${number}`, body: "", url: `https://github.com/o/r/issues/${number}`, labels: labels.map((name) => ({ name })), createdAt });
-  test("one gh issue list per label, oldest first and capped, as issue views", async () => {
+  test("one gh issue list per label, oldest first and LIST_ISSUES at most, as issue views", async () => {
     const answers: Record<string, GhResult> = {
       canopy: ok(JSON.stringify([listed(1, "2026-10-01T00:00:00Z"), listed(3, "2026-10-03T00:00:00Z")])),
       "fix me": ok(JSON.stringify([listed(1, "2026-10-01T00:00:00Z", ["canopy", "fix me"]), listed(2, "2026-10-02T00:00:00Z", ["fix me"])])),
@@ -161,19 +161,19 @@ describe("listLabelledIssues", () => {
       calls.push(args);
       return answers[args[args.indexOf("--label") + 1] ?? ""] ?? no("no such label");
     };
-    const got = await listLabelledIssues("o/r", ["canopy", "fix me"], gh, 50);
+    const got = await listLabelledIssues("o/r", ["canopy", "fix me"], gh);
     expect("issues" in got && got.issues.map((i) => i.number)).toEqual([1, 2, 3]);
     expect("issues" in got && got.issues[0]).toEqual({ number: 1, title: "Issue 1", body: "", url: "https://github.com/o/r/issues/1", labels: ["canopy"], comments: [], createdAt: "2026-10-01T00:00:00Z" });
-    expect(calls[0]).toEqual(["issue", "list", "-R", "o/r", "--label", "canopy", "--state", "open", "--search", "sort:created-asc", "--limit", "50", "--json", "number,title,body,url,labels,createdAt"]);
+    // the listing reaches past the poll's fifty: the hub drops the issues it knows before it caps, so known ones in front hide none
+    expect(calls[0]).toEqual(["issue", "list", "-R", "o/r", "--label", "canopy", "--state", "open", "--search", "sort:created-asc", "--limit", String(LIST_ISSUES), "--json", "number,title,body,url,labels,createdAt"]);
+    expect(LIST_ISSUES).toBe(500);
     expect(calls).toHaveLength(2);
-    const two = await listLabelledIssues("o/r", ["canopy", "fix me"], gh, 2);
-    expect("issues" in two && two.issues.map((i) => i.number)).toEqual([1, 2]);
   });
 
   test("gh's last line on a failure, and an answer that is not a list", async () => {
-    expect(await listLabelledIssues("o/r", ["canopy"], async () => no("noise\nHTTP 502: Bad gateway\n"), 50)).toEqual({ error: "HTTP 502: Bad gateway" });
-    expect(await listLabelledIssues("o/r", ["canopy"], async () => ok("nope"), 50)).toEqual({ error: "gh's answer for the canopy issues is not JSON" });
-    expect(await listLabelledIssues("o/r", ["canopy"], async () => ok("{}"), 50)).toEqual({ error: "gh's answer for the canopy issues is not a list" });
+    expect(await listLabelledIssues("o/r", ["canopy"], async () => no("noise\nHTTP 502: Bad gateway\n"))).toEqual({ error: "HTTP 502: Bad gateway" });
+    expect(await listLabelledIssues("o/r", ["canopy"], async () => ok("nope"))).toEqual({ error: "gh's answer for the canopy issues is not JSON" });
+    expect(await listLabelledIssues("o/r", ["canopy"], async () => ok("{}"))).toEqual({ error: "gh's answer for the canopy issues is not a list" });
     expect(
       await listLabelledIssues(
         "o/r",
@@ -181,7 +181,6 @@ describe("listLabelledIssues", () => {
         async () => {
           throw new Error("ENOENT");
         },
-        50,
       ),
     ).toEqual({ error: "gh did not run: ENOENT" });
   });

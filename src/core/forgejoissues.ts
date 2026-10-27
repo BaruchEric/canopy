@@ -4,7 +4,9 @@
  *  requests. Gitea speaks the same API. */
 
 import type { IssueView } from "./issue";
-import { POLL_ISSUES } from "./trigger";
+
+/** issues per list page: Forgejo's default ceiling, so asking for more gets no more */
+export const FORGE_PAGE = 50;
 
 /** One issue as the API gives it, with the comments read separately. */
 export interface ForgejoIssue extends IssueView {
@@ -18,11 +20,11 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 /** `owner/name`, each part encoded as a path segment */
 const repoPath = (api: string, slug: string): string => `${api.replace(/\/+$/, "")}/api/v1/repos/${slug.split("/").map(encodeURIComponent).join("/")}`;
 
-/** The open issues carrying `label`, oldest first, one page of `POLL_ISSUES`.
- *  `type=issues` leaves pull requests out server-side; `parseIssueList`
- *  drops any that come anyway. */
-export function forgejoIssuesPath(api: string, slug: string, label: string): string {
-  const q = new URLSearchParams({ labels: label, state: "open", type: "issues", sort: "oldest", limit: String(POLL_ISSUES), page: "1" });
+/** The open issues carrying `label`, oldest first, one page of `FORGE_PAGE`
+ *  (the first unless `page` says which). `type=issues` leaves pull requests
+ *  out server-side; `parseIssueList` drops any that come anyway. */
+export function forgejoIssuesPath(api: string, slug: string, label: string, page = 1): string {
+  const q = new URLSearchParams({ labels: label, state: "open", type: "issues", sort: "oldest", limit: String(FORGE_PAGE), page: String(page) });
   return `${repoPath(api, slug)}/issues?${q.toString()}`;
 }
 
@@ -71,6 +73,13 @@ export const openedComment = (pr: number, branch: string): string => `Opened #${
 
 /** the comment that closes the issue once its PR merged */
 export const fixedComment = (pr: number): string => `Fixed by #${pr}.`;
+
+/** The comment that closes the issue once its branch landed through the
+ *  queue, which fast-forwards the backend's own `target` and never pushes:
+ *  it names the commit, and the remote when that still lacks it, so a
+ *  reader of the closed issue knows where the fix is. */
+export const landedComment = (head: string, target: string, unpushed: string | null): string =>
+  `Fixed by ${head.slice(0, 7)} on ${target}${unpushed ? `, not yet pushed to ${unpushed}` : ""}.`;
 
 /** the body that closes an issue: `PATCH .../issues/{n}` */
 export const closedBody = (): { state: "closed" } => ({ state: "closed" });

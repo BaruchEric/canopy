@@ -64,6 +64,7 @@ function hub(over: Partial<TriggerDeps> = {}): TriggerHub {
     writeIssue: async (_rule, _repo, e, write) => {
       written.push(`${e.key}:${write.kind}:${write.kind === "comment" ? write.body : (write.comment ?? "")}`);
     },
+    missingFrom: async () => null,
     file: join(dir, "triggers.json"),
     dir: join(dir, "triggers"),
     now: () => 1000,
@@ -842,7 +843,33 @@ describe("github and forgejo hooks", () => {
     expect(h.list()[0]?.count).toBe(2);
   });
 
-  test("an issue canopy cannot read in full makes no event: the hook says so and health hears once", async () => {
+  test("a Forgejo label update on an issue whose run failed bumps that event rather than starting another", async () => {
+    await fjRules();
+    const h = issueHub();
+    await h.adopt();
+    await h.handle(forgejoReq(fjBody()), forgejoUrl);
+    h.onRun({ ...(runs[0] as Run), status: "failed", error: "no worktree" });
+    // the delivery names every label the issue has, not the one that changed: a bug label added says nothing about canopy's
+    expect(await (await h.handle(forgejoReq(fjBody()), forgejoUrl))?.json()).toMatchObject({ kind: "duplicate" });
+    expect(h.list()).toHaveLength(1);
+    expect(h.list()[0]).toMatchObject({ status: "failed", count: 2 });
+    expect(runs).toHaveLength(1);
+    expect(reads).toEqual(["7"]);
+  });
+
+  test("a GitHub label put back on an issue whose run failed starts it over, since that delivery names the label added", async () => {
+    await ghRules();
+    const h = issueHub();
+    await h.adopt();
+    await h.handle(githubReq(ghBody()), githubUrl);
+    h.onRun({ ...(runs[0] as Run), status: "failed", error: "no worktree" });
+    expect(await (await h.handle(githubReq(ghBody()), githubUrl))?.json()).toMatchObject({ kind: "started" });
+    expect(h.list()).toHaveLength(2);
+    expect(runs).toHaveLength(2);
+    expect(reads).toEqual(["12", "12"]);
+  });
+
+  test("an issue canopy cannot read in full starts from the delivery's own text, and health hears why", async () => {
     await ghRules();
     const h = issueHub({
       readIssue: async () => {
@@ -851,10 +878,16 @@ describe("github and forgejo hooks", () => {
     });
     await h.adopt();
     const res = await h.handle(githubReq(ghBody()), githubUrl);
-    expect(res?.status).toBe(502);
-    expect(await res?.json()).toEqual({ error: "cannot read issue #12 in full: gh answered 502" });
-    expect(h.list()).toEqual([]);
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toMatchObject({ kind: "started", unread: "cannot read issue #12 in full: gh answered 502" });
+    const [e] = h.list();
+    expect(e).toMatchObject({ key: "12", status: "working", runId: "r1" });
+    expect(e?.note).toContain("description:\nSteps: open the settings page.");
+    expect(e?.note).toContain("comments: not read; cannot read issue #12 in full: gh answered 502");
     expect(reports).toEqual([{ state: "down", why: "gh: cannot read issue #12 in full: gh answered 502" }]);
+    // a redelivery finds the event, so a read that keeps failing starts nothing twice
+    expect(await (await h.handle(githubReq(ghBody()), githubUrl))?.json()).toMatchObject({ kind: "duplicate" });
+    expect(runs).toHaveLength(1);
   });
 });
 
@@ -1031,6 +1064,48 @@ describe("polling", () => {
     expect((await post(cold, { rule: "tracker" }))?.status).toBe(503);
     expect(listed).toBe(1);
   });
+
+  test("an issue with an event in any state is left alone by the next poll; a dismiss lets the poll take it again", async () => {
+    const h = pollHub({ listIssues: async () => candidates(1) });
+    await h.adopt();
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(1);
+    h.onRun({ ...(runs[0] as Run), status: "failed", error: "no worktree" });
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(1);
+    expect(h.list()[0]).toMatchObject({ status: "failed", count: 1 });
+    expect(reads).toEqual(["1"]);
+    expect(runs).toHaveLength(1);
+    await h.dismiss(h.list()[0]?.id ?? "");
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(1);
+    expect(h.list()[0]).toMatchObject({ status: "working", count: 1 });
+    expect(runs).toHaveLength(2);
+  });
+
+  test("an ignored issue is one ignored event, not one per poll", async () => {
+    await pollRules({ ignore: ["issue 1"] });
+    const h = pollHub({ listIssues: async () => candidates(1) });
+    await h.adopt();
+    await h.poll("tracker");
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(1);
+    expect(h.list()[0]).toMatchObject({ status: "ignored", count: 1 });
+    expect(reads).toEqual(["1"]);
+  });
+
+  test("fifty known issues in front of a new one do not hide it: the known are dropped before the cap", async () => {
+    let n = 50;
+    const h = pollHub({ listIssues: async () => candidates(n) });
+    await h.adopt();
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(50);
+    n = 51;
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(51);
+    expect(reads).toHaveLength(51);
+    expect(reads[50]).toBe("51");
+  });
 });
 
 describe("landing", () => {
@@ -1089,7 +1164,7 @@ describe("writing back", () => {
   const ready = (h: TriggerHub, r: Run) => h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "ready" } });
   const prOf = (r: Run, status: "open" | "merged") => ({ id: r.branch!.origin, runId: r.id, branch: r.branch!.name, number: 3, url: "https://github.com/o/r/pull/3", state: { status } }) as PrWatch;
   const landedEntry = (r: Run): LandEntry =>
-    ({ id: r.branch!.origin, repoId: "web/shop", repoPath: "/dev/web/shop", branch: r.branch!.name, target: "main", dir: "/d", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9 }) as LandEntry;
+    ({ id: r.branch!.origin, repoId: "web/shop", repoPath: "/dev/web/shop", branch: r.branch!.name, target: "main", dir: "/d", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9, head: "1a2b3c4d5e6f7890" }) as LandEntry;
 
   test("a GitHub PR's open is commented on the issue once, and its merge closes the issue", async () => {
     await ghRule();
@@ -1125,9 +1200,15 @@ describe("writing back", () => {
     expect(written[1]).toBe(`13:comment:canopy's run on this issue failed: no worktree.${retry}`);
   });
 
-  test("a Forgejo event's landing closes the issue, with no PR to name", async () => {
+  test("a Forgejo event's landing closes the issue naming the landed commit, once", async () => {
     await fjRule();
-    const h = writeHub();
+    const asked: string[] = [];
+    const h = writeHub({
+      missingFrom: async (repo, target, head) => {
+        asked.push(`${repo.id}:${target}:${head}`);
+        return null;
+      },
+    });
     await h.adopt();
     await deliver(h, "forgejo", 7);
     const r = runs[0] as Run;
@@ -1135,8 +1216,21 @@ describe("writing back", () => {
     h.onLanding([], [landedEntry(r)]);
     h.onLanding([], [landedEntry(r)]);
     await h.idle();
-    expect(written).toEqual(["7:close:"]);
+    expect(written).toEqual(["7:close:Fixed by 1a2b3c4 on main."]);
+    expect(asked).toEqual(["web/shop:main:1a2b3c4d5e6f7890"]);
     expect(h.list()[0]).toMatchObject({ status: "merged", resolved: { at: 1000 } });
+  });
+
+  test("a landing the remote has not got yet says so in the close, since the queue never pushes", async () => {
+    await fjRule();
+    const h = writeHub({ missingFrom: async () => "origin" });
+    await h.adopt();
+    await deliver(h, "forgejo", 7);
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onLanding([], [landedEntry(r)]);
+    await h.idle();
+    expect(written).toEqual(["7:close:Fixed by 1a2b3c4 on main, not yet pushed to origin."]);
   });
 
   test("write: false writes nothing", async () => {

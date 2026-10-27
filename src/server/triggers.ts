@@ -17,19 +17,20 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextFire, parseCron } from "../core/cron";
-import { fixedComment, openedComment } from "../core/forgejoissues";
+import { fixedComment, landedComment, openedComment } from "../core/forgejoissues";
 import { fail, pass, type ProbeResult } from "../core/health";
 import { configDir } from "../core/store";
 import {
   activityFor,
   afterRestart,
-  existing,
+  anyEvent,
   fromFlow,
   fromLanding,
   fromPr,
   fromRun,
   ignoreReason,
   issueNoteFor,
+  knownEvent,
   linearFresh,
   linearInstallUrl,
   newEvent,
@@ -145,7 +146,7 @@ export interface TriggerDeps {
   /** finishes a Linear app's install with the code Linear sent back; Linear's API unless a test says otherwise */
   install?: (rule: TriggerRule, secret: string, code: string, redirect: string) => Promise<LinearInstall>;
   /** github and forgejo: the repo's open issues carrying one of the rule's
-   *  labels, oldest first and at most `POLL_ISSUES`, as a hook would deliver
+   *  labels, oldest first and at most `LIST_ISSUES`, as a hook would deliver
    *  them (no comments yet); a poll's list call */
   listIssues: (rule: TriggerRule, repo: Repo) => Promise<Incoming[]>;
   /** github and forgejo: the issue read in full, its newest comments with
@@ -158,6 +159,11 @@ export interface TriggerDeps {
    *  `tokenEnv` sets GH_TOKEN) or through Forgejo's API with the rule's
    *  token; what it throws is kept on the event */
   writeIssue: (rule: TriggerRule, repo: Repo, event: TriggerEvent, write: IssueWrite) => Promise<void>;
+  /** the remote whose `target` still lacks `head`, a commit the landing
+   *  queue put on the repo's own `target`; null when the remote has it,
+   *  there is none, or it could not be asked. The close on a landed
+   *  issue says so, since the queue never pushes. */
+  missingFrom: (repo: Repo, target: string, head: string) => Promise<string | null>;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -179,8 +185,9 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "obj
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 const issuesSource = (source: TriggerSource): boolean => source === "github" || source === "forgejo";
 
-/** An issue a hook or a poll could not read in full: no event is made, the
- *  hook answers 502 and health hears why. */
+/** An issue a hook or a poll could not read in full: health hears why, a
+ *  poll leaves it for the next tick, and a hook starts it from what the
+ *  delivery carried. */
 class ReadFailed extends TriggerError {
   constructor(message: string) {
     super(message, 502);
@@ -448,7 +455,7 @@ export class TriggerHub {
       const repo = this.deps.repo(rule.repo);
       if (!repo) throw new TriggerError(`no repo ${rule.repo} in the tree`, 404);
       const now = this.now();
-      const had = existing(this.list(), rule.name, inc.key);
+      const had = knownEvent(this.list(), rule, inc.key);
       if (had) {
         this.set({ ...had, count: had.count + 1, lastAt: now, ...(session ? { session } : {}) });
         if (session) {
@@ -529,9 +536,13 @@ export class TriggerHub {
       this.deps.reportPoll(fail(`${name}: ${errText(err)}`));
       return;
     }
-    // the issues with an event are skipped before any read; the cap is the
-    // reader's too, so a repo with more labelled issues waits for the next poll
-    const fresh = listed.filter((inc) => !existing(this.list(), rule.name, inc.key)).slice(0, POLL_ISSUES);
+    // an issue with an event in any state is skipped before any read: a
+    // listing says only that it is still labelled, not that it is meant
+    // again (a failed, closed or ignored one would otherwise start over
+    // every tick). The listing (LIST_ISSUES) reaches past the read cap,
+    // so the known issues in front of it hide none behind them; the rest
+    // of what is fresh waits for the next poll
+    const fresh = listed.filter((inc) => !anyEvent(this.list(), rule.name, inc.key)).slice(0, POLL_ISSUES);
     const failed: string[] = [];
     for (const inc of fresh) {
       try {
@@ -547,7 +558,7 @@ export class TriggerHub {
    *  again, finds its event and bumps the count; a new one is read in full
    *  (the comments ride in the note) and delivered. */
   private async take(rule: TriggerRule, repo: Repo, inc: Incoming): Promise<Delivery> {
-    if (existing(this.list(), rule.name, inc.key)) return this.deliver(rule, inc, rule.source);
+    if (knownEvent(this.list(), rule, inc.key)) return this.deliver(rule, inc, rule.source);
     let full: Incoming;
     try {
       full = await this.deps.readIssue(rule, repo, inc);
@@ -631,7 +642,9 @@ export class TriggerHub {
       const next = fromLanding(e, notices, entries);
       if (next === e) continue;
       this.set(next);
-      if (this.keeping && next.status === "merged" && !next.resolved) void this.resolveIssue(next.id);
+      if (!this.keeping || next.status !== "merged" || next.resolved) continue;
+      const entry = entries.find((x) => x.id === next.branch && x.state === "landed");
+      void this.resolveIssue(next.id, entry?.head ? { head: entry.head, target: entry.target } : undefined);
     }
   }
 
@@ -703,9 +716,12 @@ export class TriggerHub {
   }
 
   /** Marks the event's issue done where it came from, once: closed on its
-   *  forge (naming the PR when there is one), resolved in Sentry, done in
-   *  Linear. A refusal stays on the event; nothing tries again. */
-  private resolveIssue(id: string): Promise<void> {
+   *  forge, resolved in Sentry, done in Linear. The close names the PR when
+   *  there is one, else the commit the queue `landed` on the repo's own
+   *  target, and the remote when that still lacks it (`missingFrom`), since
+   *  the queue never pushes. A refusal stays on the event; nothing tries
+   *  again. */
+  private resolveIssue(id: string, landed?: { head: string; target: string }): Promise<void> {
     return this.queue(async () => {
       const e = this.events.get(id);
       if (!e || e.status !== "merged" || e.resolved) return;
@@ -713,7 +729,8 @@ export class TriggerHub {
         if (onForge(e)) {
           const w = await this.forgeWriter(e);
           if (!w) return;
-          await this.deps.writeIssue(w.rule, w.repo, e, { kind: "close", ...(e.pr ? { comment: fixedComment(e.pr.number) } : {}) });
+          const comment = e.pr ? fixedComment(e.pr.number) : landed ? landedComment(landed.head, landed.target, await this.deps.missingFrom(w.repo, landed.target, landed.head)) : undefined;
+          await this.deps.writeIssue(w.rule, w.repo, e, { kind: "close", ...(comment ? { comment } : {}) });
         } else {
           const w = await this.writer(e);
           if (!w) return;
@@ -942,23 +959,29 @@ export class TriggerHub {
   }
 
   /** A GitHub or Forgejo issues delivery: when the label added is one the
-   *  rule takes, the issue goes the way a polled one does (`take`). An
-   *  issue that cannot be read in full is a 502 and a health line, so the
-   *  service shows the delivery failed and a redelivery, or the rule's
-   *  poll, brings it in later. */
+   *  rule takes, the issue goes the way a polled one does (`take`). One
+   *  that cannot be read in full starts from the title and body the
+   *  delivery carried, its note saying the comments were not read, and
+   *  health hears why: neither forge sends a failed delivery again on its
+   *  own, and a rule with a hook polls only when told to, so a 502 would
+   *  lose the issue until someone relabelled it. */
   private async issueHook(rule: TriggerRule, payload: unknown): Promise<Response> {
     const inc = rule.source === "github" ? parseGithubIssue(payload, rule.labels) : parseForgejoIssue(payload, rule.labels);
     if (!inc) return json({ kind: "skip", why: "no label this rule takes was added to an open issue" });
     if (!this.keeping) return json({ error: "this backend does not hold the flows lock, so it starts no trigger" }, 503);
     const repo = this.deps.repo(rule.repo);
     if (!repo) return json({ error: `no repo ${rule.repo} in the tree` }, 404);
+    let d: Delivery;
+    let unread: string | undefined;
     try {
-      const d = await this.take(rule, repo, inc);
-      return json(d.kind === "skip" ? d : { kind: d.kind, event: d.event.id });
+      d = await this.take(rule, repo, inc);
     } catch (err) {
-      if (err instanceof ReadFailed) this.deps.reportPoll(fail(`${rule.name}: ${err.message}`));
-      throw err;
+      if (!(err instanceof ReadFailed)) throw err;
+      this.deps.reportPoll(fail(`${rule.name}: ${err.message}`));
+      unread = err.message;
+      d = await this.deliver(rule, { ...inc, detail: [...inc.detail, `comments: not read; ${err.message}`] }, rule.source);
     }
+    return json(d.kind === "skip" ? d : { kind: d.kind, event: d.event.id, ...(unread ? { unread } : {}) });
   }
 
   /** A Linear agent session event. Linear gives the hook 5 s and marks a

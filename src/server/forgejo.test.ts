@@ -41,6 +41,26 @@ describe("forgejoListIssues", () => {
     expect(calls[0]?.auth).toBe("token tok");
   });
 
+  test("a full page is followed by the next until a short one, so fifty known issues in front hide none behind them", async () => {
+    const page = (from: number, n: number) => Array.from({ length: n }, (_, i) => issue(from + i, 1));
+    answers["/api/v1/repos/o/r/issues?labels=canopy&state=open&type=issues&sort=oldest&limit=50&page=1"] = { body: page(1, 50) };
+    answers["/api/v1/repos/o/r/issues?labels=canopy&state=open&type=issues&sort=oldest&limit=50&page=2"] = { body: page(51, 50) };
+    answers["/api/v1/repos/o/r/issues?labels=canopy&state=open&type=issues&sort=oldest&limit=50&page=3"] = { body: page(101, 3) };
+    const got = await forgejoListIssues(API, "o/r", ["canopy"], "tok", fetchFake);
+    expect(got).toHaveLength(103);
+    expect(got[102]?.number).toBe(103);
+    expect(calls.map((c) => new URL(c.url).searchParams.get("page"))).toEqual(["1", "2", "3"]);
+  });
+
+  test("the listing stops at LIST_ISSUES, so a forge with more labelled issues than that is never paged forever", async () => {
+    for (let p = 1; p <= 11; p++) {
+      answers[`/api/v1/repos/o/r/issues?labels=canopy&state=open&type=issues&sort=oldest&limit=50&page=${p}`] = { body: Array.from({ length: 50 }, (_, i) => issue((p - 1) * 50 + i + 1, 1)) };
+    }
+    const got = await forgejoListIssues(API, "o/r", ["canopy"], "tok", fetchFake);
+    expect(got).toHaveLength(500);
+    expect(calls).toHaveLength(10);
+  });
+
   test("a refusal names the token, another status the server, and a list that is not one its shape", async () => {
     answers["/api/v1/repos/o/r/issues?labels=canopy&state=open&type=issues&sort=oldest&limit=50&page=1"] = { status: 401, body: { message: "token is required" } };
     await expect(forgejoListIssues(API, "o/r", ["canopy"], "tok", fetchFake)).rejects.toThrow(`${API} rejected the token`);

@@ -216,14 +216,14 @@ import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { takeTriggerSecrets } from "../core/envnames";
-import { incomingFromIssueView, opensPr, POLL_ISSUES, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
+import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
-import { addRunTree, defaultBranch, removeRunTree, repoAtPath, revOf, runBranchName, runTreeDir } from "../core/worktree";
+import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runBranchName, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
@@ -5358,7 +5358,7 @@ export async function startServer(opts: {
       listIssues: async (rule, repo) => {
         const forge = await issueForge(state, rule, repo, rule.tokenEnv ? triggerSecrets.get(rule.tokenEnv) : undefined);
         if (forge.kind === "github") {
-          const got = await listLabelledIssues(forge.slug, rule.labels, forge.gh, POLL_ISSUES);
+          const got = await listLabelledIssues(forge.slug, rule.labels, forge.gh);
           if ("error" in got) throw new Error(got.error);
           return got.issues.map(incomingFromIssueView);
         }
@@ -5392,6 +5392,17 @@ export async function startServer(opts: {
         }
         if (write.comment) await forgejoComment(rule.api, forge.slug, number, forge.token, write.comment);
         await forgejoClose(rule.api, forge.slug, number, forge.token);
+      },
+      // the landing queue fast-forwards the repo's own target and never
+      // pushes, so the close on a landed issue says when the remote still
+      // lacks the commit: one fetch of the target, then an ancestry check
+      // against what came back; a repo with no remote, or one that cannot
+      // be reached, is not claimed either way
+      missingFrom: async (repo, target, head) => {
+        const remote = await pushRemote(repo.path, target);
+        if (!remote) return null;
+        if ((await git(repo.path, ["fetch", "--quiet", remote, target], 60_000)).code !== 0) return null;
+        return (await git(repo.path, ["merge-base", "--is-ancestor", head, "FETCH_HEAD"])).code === 0 ? null : remote;
       },
       // a message written in a Linear agent session, read by a run on the
       // event's branch; fenced, since anyone in the workspace can write one

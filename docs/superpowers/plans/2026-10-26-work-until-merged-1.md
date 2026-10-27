@@ -464,3 +464,12 @@ Use a disposable GitHub issue labeled canopy and a disposable Forgejo issue labe
 - Keep canopy issues to the base listing in this plan. The spec lists --needs-you on the CLI while assigning needsYou to plan 2, so that flag ships with plan 2.
 - The spec's Forgejo polling probe names labels=canopy but does not confirm that the target Forgejo accepts a label name or sort and pagination values in that request. The implementation task should verify the configured instance's endpoint before relying on that query; resolve label names to IDs if the endpoint requires IDs.
 - A hook or poll result may not carry the newest comment bodies required by the issue note. Treat a detail-read failure as an intake failure: report it through canopy:triggers and create no partial event.
+
+## What the review changed (fix pass, 2026-10-27)
+
+The whole-branch review found four Important paths, fixed on the branch before merge. Each revises a line above or in the spec; plan 2's spec edit should carry them:
+
+- A poll dedupes against any event (`anyEvent`), not the spec's `existing`: a listing only says the issue is still labelled, so a failed, closed or ignored issue would start over every tick. The readers list up to `LIST_ISSUES` (500) and the hub drops known issues before it reads the oldest `POLL_ISSUES` (50), so fifty known labelled issues in front no longer hide a new one.
+- A Forgejo hook delivery dedupes against any event too (`knownEvent`): `label_updated` lists every label the issue has, not the one that changed. The spec's Intake section and probe P4 say `existing`; GitHub keeps `existing`, since `labeled` names the label put back on.
+- The detail-read decision above is reversed for hooks: a delivery whose full read fails starts from its own title and body with "comments: not read" in the fence, since neither forge resends a failed delivery and a rule with a secret has no default poll. A poll's failed read still waits for the next tick.
+- A Forgejo issue is still closed when its branch lands (the spec's "landed is the merge"), and the close names the landed commit and, after one fetch, the remote that still lacks it, since the landing queue never pushes. Closing only once the remote has the commit is a plan 2 call.

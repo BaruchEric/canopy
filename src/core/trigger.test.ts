@@ -11,6 +11,7 @@ import {
   ignoreReason,
   incomingFromIssueView,
   issueNoteFor,
+  knownEvent,
   linearFresh,
   linearInstallUrl,
   newEvent,
@@ -702,6 +703,22 @@ describe("existing", () => {
     const old = event({ status: "review", firstAt: 1 });
     const newer = event({ id: "n", status: "failed", firstAt: 2 });
     expect(existing([old, newer], "shop", "4242")).toBeUndefined();
+  });
+});
+
+describe("knownEvent", () => {
+  const FORGEJO: TriggerRule = { ...GITHUB, name: "fj-issues", source: "forgejo", api: "https://git.example.com" };
+  test("a GitHub rule's delivery starts over after a failed, merged, closed or ignored event, since a labeled delivery names the label put back on", () => {
+    for (const status of ["failed", "merged", "closed", "ignored"] as const) expect(knownEvent([event({ rule: "gh-issues", status })], GITHUB, "4242")).toBeUndefined();
+    const live = event({ rule: "gh-issues", status: "review" });
+    expect(knownEvent([live], GITHUB, "4242")).toBe(live);
+  });
+  test("a Forgejo rule's delivery finds the event in any state, since a label update names every label and not the one that changed", () => {
+    for (const status of ["failed", "merged", "closed", "ignored", "review"] as const) {
+      const e = event({ rule: "fj-issues", status });
+      expect(knownEvent([e], FORGEJO, "4242")).toBe(e);
+    }
+    expect(knownEvent([event({ rule: "fj-issues", status: "failed" })], FORGEJO, "other")).toBeUndefined();
   });
 });
 

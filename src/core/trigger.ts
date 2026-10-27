@@ -205,7 +205,9 @@ export const KEEP_EVENTS = 200;
 export const MAX_DESCRIPTION = 6000;
 /** the most of one comment the run's note carries */
 const MAX_COMMENT = 4000;
-/** how many open issues one poll takes per rule, oldest first; the rest wait for the next tick */
+/** how many open issues one poll reads in full per rule, oldest first, after
+ *  the ones it knows are dropped from a listing of `LIST_ISSUES`
+ *  (core/issue.ts); the rest wait for the next tick */
 export const POLL_ISSUES = 50;
 /** how far a Linear delivery's `webhookTimestamp` may sit from canopy's clock */
 export const LINEAR_SKEW = 60_000;
@@ -466,8 +468,9 @@ export function parseGithubIssue(body: unknown, labels: readonly string[]): Inco
 
 /** A Forgejo `issues` delivery as an issue: its labels were updated, or it
  *  was opened with labels on, and one of `labels` is on the open issue. The
- *  delivery names every label the issue has, not the one that changed, so a
- *  second update on the same issue finds its event through `existing`. */
+ *  delivery names every label the issue has, not the one that changed, so
+ *  any later update on the same issue finds its event through `knownEvent`
+ *  whatever state it is in. */
 export function parseForgejoIssue(body: unknown, labels: readonly string[]): Incoming | null {
   if (!isRecord(body)) return null;
   const action = str(body, "action");
@@ -607,10 +610,29 @@ export function ignoreReason(rule: TriggerRule, inc: Incoming): string | null {
  *  state, open or ended, keeps it to one event and one PR. */
 const AGAIN: readonly TriggerStatus[] = ["failed", "merged", "closed", "ignored"];
 
+/** The newest event this issue has under this rule, in any state. A poll
+ *  checks this one: an issue still labelled carries no word that it is
+ *  meant again, so it starts over only by Retry, a dismiss, or a hook's
+ *  delivery of the label. */
+export function anyEvent(events: readonly TriggerEvent[], rule: string, key: string): TriggerEvent | undefined {
+  return events.filter((e) => e.rule === rule && e.key === key).sort((a, b) => b.firstAt - a.firstAt)[0];
+}
+
 /** The event this issue already has under this rule, when one counts. */
 export function existing(events: readonly TriggerEvent[], rule: string, key: string): TriggerEvent | undefined {
-  const same = events.filter((e) => e.rule === rule && e.key === key).sort((a, b) => b.firstAt - a.firstAt)[0];
+  const same = anyEvent(events, rule, key);
   return same && !AGAIN.includes(same.status) ? same : undefined;
+}
+
+/** The event a delivery of this issue bumps instead of starting another:
+ *  `existing` as a rule, since Sentry's alert, Linear's label and GitHub's
+ *  `labeled` delivery each say the issue is meant again after an event in
+ *  `AGAIN`; but on Forgejo any event at all, since its `label_updated`
+ *  delivery lists every label the issue has and not the one that changed,
+ *  so a label edit says nothing about canopy's. A Forgejo issue starts
+ *  over by Retry or a dismiss, as a polled one does. */
+export function knownEvent(events: readonly TriggerEvent[], rule: TriggerRule, key: string): TriggerEvent | undefined {
+  return rule.source === "forgejo" ? anyEvent(events, rule.name, key) : existing(events, rule.name, key);
 }
 
 /** The run's first message after the workflow's task: the issue, fenced as
