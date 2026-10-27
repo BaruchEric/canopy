@@ -1,9 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeDriver } from "../core/claudedrive";
+import type { DriveCtx, RunDriver } from "../core/driver";
+import type { FlowFile } from "../core/flowstore";
+import { parseWorkflow } from "../core/workflow";
 import { RunLog } from "../core/runlog";
 import type { KeptRunHead, LandEntry, LandingRun, PrWatch, Run, SweepInfo } from "../core/types";
 import { startServer } from "./index";
@@ -190,4 +193,91 @@ test("recovery waits for current secrets and sanitizes landing hints captured be
   await writeFile(join(scratch, "config/secrets-applied.json"), "{}");
   expect(await (await fetch(url("/api/runs/orphan"))).json()).toMatchObject({ id: "orphan", branch: { origin: "hint-origin" }, note: "<redacted:CANOPY_TRIGGER_RECOVERY>", session: "<redacted:CANOPY_TRIGGER_RECOVERY>" });
   expect(await readFile(join(scratch, "config/runs/orphan/run.json"), "utf8")).not.toContain("recovery-private-value");
+});
+
+
+test.each(["visible terminal", "dismissed", "trimmed"])("retention preserves a %s pending log until driver exit", async (visibility) => {
+  await server.stop();
+  class Terminal implements RunDriver {
+    readonly harness = "claude";
+    readonly label = "Inert delayed exit";
+    ctx: DriveCtx | null = null;
+    constructor(private delayed: boolean) {}
+    check() { return null; }
+    start(ctx: DriveCtx) { this.ctx = ctx; ctx.wire("out", '{"type":"result","result":"done"}'); ctx.result({ text: "done", durationMs: 1, turns: 1 }, null); if (!this.delayed) this.exit(); }
+    say() {}
+    stop() {}
+    exit() { if (!this.ctx) return; const ctx = this.ctx; this.ctx = null; ctx.wire("out", '{"type":"final","text":"trailing protocol"}'); ctx.exited({ code: 0, stderr: "" }); }
+  }
+  const delayed = new Terminal(true);
+  let first = true;
+  server = await startServer({ ...options(), runner: { driver: () => { if (first) { first = false; return delayed; } return new Terminal(false); } } });
+  try {
+    const run = await (await call("/api/repos/run?id=proj", { action: "ask", note: "finish before exit" })).json() as Run;
+    const file = join(scratch, "config/runs", run.id, "wire.jsonl");
+    // Make the real pending head old enough to qualify for both retention paths.
+    const wire = await readFile(file, "utf8");
+    const at = wire.indexOf("\n");
+    const head: unknown = JSON.parse(wire.slice(0, at));
+    if (typeof head !== "object" || head === null) throw new Error("missing header");
+    await writeFile(file, JSON.stringify({ ...head, at: 1 }) + wire.slice(at));
+    await utimes(file, new Date(2), new Date(2));
+    await seed(kept("pending-alias", run.id));
+    if (visibility === "dismissed") await fetch(url(`/api/runs?id=${run.id}`), { method: "DELETE" });
+    if (visibility === "trimmed") for (let i = 0; i < 62; i++) expect((await call("/api/repos/run?id=proj", { action: "ask", note: "another" })).status).toBe(201);
+    expect(Boolean(await runOf(run.id))).toBe(visibility === "visible terminal");
+    const plan = await (await fetch(url("/api/sweep"))).json() as SweepInfo;
+    expect(plan.items.filter((i) => i.kind === "transcript").map((i) => i.id)).not.toContain(run.id);
+    expect(plan.items.filter((i) => i.kind === "transcript").map((i) => i.id)).not.toContain("pending-alias");
+    expect(await (await call("/api/sweep", { keys: [`transcript:${run.id}`, "transcript:pending-alias"] })).json()).toMatchObject({ outcomes: [{ key: `transcript:${run.id}`, result: "in use now" }, { key: "transcript:pending-alias", result: "in use now" }] });
+    expect((await (await call("/api/runs/prune")).json() as { removed: string[] }).removed).not.toContain(run.id);
+    expect(existsSync(file)).toBe(true);
+    delayed.exit();
+    const gzip = join(scratch, "config/runs", run.id, "wire.jsonl.gz");
+    await until(async () => existsSync(gzip), "pending log completion");
+    expect(new TextDecoder().decode(Bun.gunzipSync(await readFile(gzip)))).toContain("trailing protocol");
+    expect(JSON.parse(await readFile(join(scratch, "config/runs", run.id, "run.json"), "utf8"))).toMatchObject({ id: run.id, status: "done", result: { text: "done" } });
+    expect((await (await call("/api/runs/prune")).json() as { removed: string[] }).removed).toContain("pending-alias");
+  } finally { delayed.exit(); }
+});
+
+test.each(["startup", "takeover"])("a saved active flow is logged before its first restored event on %s", async (mode) => {
+  let driverStarts = 0;
+  class LoggedRestore extends ClaudeDriver {
+    override start(ctx: DriveCtx, message: string) {
+      expect(existsSync(join(scratch, "config/runs", ctx.env["CANOPY_RUN"] ?? "missing", "wire.jsonl"))).toBe(true);
+      driverStarts++;
+      super.start(ctx, message);
+    }
+  }
+  const restoreOptions = () => ({ ...options(), runner: { driver: () => new LoggedRestore({ command: [process.execPath, join(import.meta.dir, "../core/testdata/fake-claude.ts")] }) } });
+  const root = await realpath(join(scratch, "root"));
+  const parsed = parseWorkflow("---\nblurb: saved\n---\n\n## Inspect\n\ninspect\n", { name: "saved-replay", source: "user", file: join(scratch, "saved.md") });
+  if (!parsed.ok) throw new Error(parsed.error);
+  const record: FlowFile = { v: 1, root, repoPath: join(root, "proj"), before: "", savedAt: 1, workflow: parsed.workflow, flow: { id: "abcdef12", repoId: "proj", workflow: "saved-replay", verb: "Replay", note: "restore me", status: "working", steps: [{ name: "Inspect", status: "running", runId: "previous-run", session: "saved-session", harness: "claude" }], current: 0, startedAt: 1 } };
+  if (mode === "startup") await server.stop();
+  await mkdir(join(scratch, "config/flows"), { recursive: true });
+  await writeFile(join(scratch, "config/flows/abcdef12.json"), JSON.stringify(record));
+  if (mode === "takeover") {
+    const owner = server;
+    server = await startServer(restoreOptions());
+    others.push(owner);
+    await owner.stop(); others.splice(others.indexOf(owner), 1);
+    expect((await call("/api/health/heal?id=canopy%3Aflows")).status).toBe(200);
+  } else server = await startServer(restoreOptions());
+  let restored: Run | undefined;
+  await until(async () => { restored = (await (await fetch(url("/api/runs"))).json() as Run[]).find((r) => r.action === "saved-replay"); return restored !== undefined; }, "restored step");
+  if (!restored) throw new Error("restored run missing");
+  expect(driverStarts).toBe(1);
+  const id = restored.id;
+  await until(async () => (await runOf(id))?.status === "done", "restored step result");
+  await server.stop();
+  const gzip = join(scratch, "config/runs", id, "wire.jsonl.gz");
+  expect(existsSync(gzip)).toBe(true);
+  const wire = new TextDecoder().decode(Bun.gunzipSync(await readFile(gzip)));
+  expect(wire.split("\n")[0]).toContain('"canopy":"start"');
+  expect(wire).toContain('"type":"system"');
+  expect(wire).toContain('"type":"result"');
+  expect(wire).toContain('"canopy":"end"');
+  expect(JSON.parse(await readFile(join(scratch, "config/runs", id, "run.json"), "utf8"))).toMatchObject({ id, status: "done", flowStep: { workflow: "saved-replay", step: "Inspect" }, result: { text: "reply 1" } });
 });

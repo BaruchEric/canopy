@@ -905,7 +905,7 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   const seeds = new Set(state.result.repos.filter((r) => isSeedPath(state.root, r.path)).map((r) => r.id));
   const all = state.runner.list();
   const runs = all.filter((r) => r.action !== "coordinate" && !seeds.has(r.repoId));
-  const heldRuns = new Set<string>();
+  const heldRuns = new Set(state.runner.pendingLogHolds());
   for (const run of all) if (isRunActive(run)) { heldRuns.add(run.id); if (run.branch) heldRuns.add(run.branch.origin); }
   for (const r of state.landing.info().runs) {
     heldRuns.add(r.id);
@@ -5107,8 +5107,9 @@ export async function startServer(opts: {
   await runlog.refresh();
   let recordOwner = false;
   let recoveredRunlog = false;
+  let runlogFactsReady = false;
   let recoveringRunlog: Promise<void> | null = null;
-  const readyRunlog = async (): Promise<void> => {
+  const recoverRunlog = async (): Promise<void> => {
     if (ledgerOff || !recordOwner || stopped) throw new HttpError(503, "kept transcripts are unavailable on this backend");
     let privacy: ReturnType<DiskRunLogger["currentSecrets"]>;
     try { privacy = runlog.currentSecrets(); } catch { throw new HttpError(503, "current transcript secrets are unavailable"); }
@@ -5118,6 +5119,10 @@ export async function startServer(opts: {
       return rec ? { verb: rec.verb, note: rec.note, ...(rec.session ? { session: rec.session } : {}), branch: { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "stopped", origin: rec.id } } : undefined;
     }, privacy).then(() => { recoveredRunlog = true; }).finally(() => { recoveringRunlog = null; });
     await recoveringRunlog;
+  };
+  const readyRunlog = async (): Promise<void> => {
+    if (!runlogFactsReady) throw new HttpError(503, "kept transcripts await record adoption");
+    await recoverRunlog();
   };
   const ownedLog: RunLogger = { open: (...args) => {
     if (!recordOwner || stopped) return null;
@@ -6385,6 +6390,10 @@ export async function startServer(opts: {
     // A restored flow can start a branch run synchronously. Adopt its work
     // item first so the runner's onRun event is recorded instead of dropped.
     await state.work.adopt();
+    // Read hints without starting the landing queue before restored flows own their branches.
+    await state.landing.adoptRecords();
+    recordOwner = true;
+    if (!ledgerOff) await recoverRunlog().catch((err: unknown) => console.error(`transcripts: ${err instanceof Error ? err.message : String(err)}`));
     const restoreCfg = await loadConfig();
     state.flows.restore(
       await loadFlowRecords(root),
@@ -6399,10 +6408,9 @@ export async function startServer(opts: {
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
     await state.warm.adopt();
-    // and the PRs they opened
+    // Preserve PR activation order; public retention waits for these protection facts.
     await state.prs.adopt();
-    recordOwner = true;
-    if (!ledgerOff) await readyRunlog().catch((err: unknown) => console.error(`transcripts: ${err instanceof Error ? err.message : String(err)}`));
+    runlogFactsReady = true;
     // Group recovery must see the adopted queue and PR facts before retrying
     // a persisted winner's missing dispatch.
     state.groups.onLanding(state.landing.info());

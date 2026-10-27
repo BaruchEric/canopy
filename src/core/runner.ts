@@ -638,6 +638,11 @@ export class Runner {
     this.hooks.onGone(id);
   }
 
+  /** Retention protects owned wires and every alias until final storage completes. */
+  pendingLogHolds(): ReadonlySet<string> {
+    return new Set([...this.logged.values()].flatMap(({ ctx }) => ctx.run.branch ? [ctx.run.id, ctx.run.branch.origin] : [ctx.run.id]));
+  }
+
   /** Drains owned transcripts before the server releases its recovery lock. */
   async stopLoggedAndWait(): Promise<void> {
     await Promise.all([...this.logged.keys()].map((id) => this.stopAndWait(id)));

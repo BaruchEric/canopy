@@ -151,6 +151,8 @@ export class LandingHub {
   private pending = new Set<Promise<void>>();
   /** set while this server holds the flows lock: only then are records written */
   private keeping = false;
+  /** Recovery may read records before restored runs are allowed to dispatch work. */
+  private recovery: { kind: "active" } | { kind: "records"; observed: Map<string, Run> } = { kind: "active" };
   private loops = new Map<string, Promise<void>>();
   private again = new Set<string>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -214,6 +216,7 @@ export class LandingHub {
    *  restart. A whole one with no sort is sorted, as a ready one is at
    *  adopt. */
   private lookStopped(): Promise<void> {
+    if (this.recovery.kind === "records") return Promise.resolve();
     if (this.looking) {
       this.lookAgain = true;
       return this.looking;
@@ -330,12 +333,11 @@ export class LandingHub {
     return out;
   }
 
-  /** Takes the records the last server left, as the holder of the flows
-   *  lock: a run that was working reads `stopped` with its worktree kept,
-   *  an entry cut off mid-turn starts its turn again, a ready run with no
-   *  sort (a plan 1 record) is sorted, and a run worktree no record names
-   *  is an orphan. Writes from now on. */
-  async adopt(): Promise<void> {
+  /** Loads and normalizes owned records for recovery hints. Work waits for
+   *  adopt(), including observations made while flows are restored. */
+  async adoptRecords(): Promise<void> {
+    if (this.recovery.kind === "records") return;
+    this.recovery = { kind: "records", observed: new Map() };
     const kept = await readFile(join(this.dir, "notices.json"), "utf8").then(
       (t) => JSON.parse(t) as unknown,
       () => [],
@@ -357,6 +359,14 @@ export class LandingHub {
     const had = new Set(this.entries.map((e) => e.id));
     this.entries = restartWorking([...this.entries, ...entries.filter((e) => !had.has(e.id))], this.now());
     for (const p of new Set(this.entries.map((e) => e.repoPath))) await this.saveQueue(p);
+  }
+
+  /** Activates queue work after record recovery and flow ownership are ready. */
+  async adopt(): Promise<void> {
+    await this.adoptRecords();
+    const observed = this.recovery.kind === "records" ? this.recovery.observed : new Map<string, Run>();
+    this.recovery = { kind: "active" };
+    for (const run of observed.values()) this.onRun(run);
     await this.findOrphans();
     this.publish();
     for (const repoId of new Set(this.entries.map((e) => e.repoId))) this.kick(repoId);
@@ -420,6 +430,7 @@ export class LandingHub {
    *  the result on its record. Null when it has no record or worktree, or
    *  the sort failed (which the log says). */
   private resort(id: string): Promise<RunReview | null> {
+    if (this.recovery.kind === "records") return Promise.resolve(null);
     const prev = this.sorting.get(id) ?? Promise.resolve(null);
     const next = prev.then(async (): Promise<RunReview | null> => {
       const rec = this.runs.get(id);
@@ -509,6 +520,7 @@ export class LandingHub {
   onRun(run: Run): void {
     const b = run.branch;
     if (!b) return;
+    if (this.recovery.kind === "records") { this.recovery.observed.set(run.id, structuredClone(run)); return; }
     const had = this.runs.get(b.origin);
     let rec = had;
     if (!rec) {
@@ -924,6 +936,7 @@ export class LandingHub {
   /** Works a repo's queue, one loop at a time; a kick while it runs asks
    *  for another pass after it. */
   kick(repoId: string): void {
+    if (this.recovery.kind === "records") return;
     if (this.stopped) return;
     if (this.loops.has(repoId)) {
       this.again.add(repoId);

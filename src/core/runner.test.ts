@@ -575,6 +575,20 @@ describe("the run log (FR-043)", () => {
     expect(driver.stops).toBe(1);
   });
 
+  test("pending transcript retention holds both id and branch origin until storage finishes", async () => {
+    const { dir, log } = await disk();
+    const driver = new WireDriver("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {}, branchState: async () => "nothing" }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, { branch: { name: "run/alias", target: "main", base: "abc", dir: "/owned/replay-repo", origin: "branch-origin", state: "working" } });
+    driver.turn(); runner.dismiss(run.id);
+    expect(runner.pendingLogHolds()).toEqual(new Set([run.id, "branch-origin"]));
+    driver.exit();
+    expect(runner.pendingLogHolds()).toEqual(new Set([run.id, "branch-origin"]));
+    await runner.stopLoggedAndWait();
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ id: run.id, branch: { origin: "branch-origin" } });
+    expect(runner.pendingLogHolds()).toEqual(new Set());
+  });
+
   test("pending transcript ownership clears after soft storage failure", async () => {
     const { dir, log } = await disk();
     class Stops extends WireDriver { stops = 0; override stop() { this.stops++; super.stop(); } }
