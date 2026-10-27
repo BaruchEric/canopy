@@ -211,6 +211,10 @@ export class Unreachable extends Error {}
 
 export const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** One request to a backend at the first of its addresses that answers;
  *  a refusal by the backend is the answer, not a reason to try the next. */
 export async function ask<T>(t: Target, method: string, path: string, body?: unknown, timeoutMs = 8_000): Promise<T> {
@@ -240,6 +244,60 @@ export async function ask<T>(t: Target, method: string, path: string, body?: unk
     }
     if (!res.ok) throw new Error(out.error ?? `${t.name} answered ${res.status}`);
     return out;
+  }
+  throw new Unreachable(tried.join("; ") || "no address");
+}
+
+/** `ask` for a route that answers text: the same addresses and refusals, the body as it is. */
+export async function askText(t: Target, path: string, timeoutMs = 8_000): Promise<string> {
+  const tried: string[] = [];
+  for (const url of t.urls) {
+    let res: Response;
+    try {
+      res = await fetch(`${url}${path}`, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: callerHeaders(url),
+      });
+    } catch (err) {
+      tried.push(`${url}: ${errText(err)}`);
+      continue;
+    }
+
+    const redirected = res.status >= 300 && res.status < 400;
+    if (redirected) {
+      tried.push(`${url}: needs a sign-in`);
+      continue;
+    }
+
+    let authBody: Record<string, unknown> | undefined;
+    if (res.status === 401 || res.status === 403) {
+      const body: unknown = await res.clone().json().catch(() => undefined);
+      if (isRecord(body)) authBody = body;
+      if (typeof authBody?.need === "string") {
+        throw new Error(typeof authBody.error === "string" ? authBody.error : `${t.name} refused: it needs the ${authBody.need} right`);
+      }
+      if (res.status === 401) {
+        tried.push(`${url}: needs a sign-in`);
+        continue;
+      }
+    }
+
+    const text = await res.text();
+    if (!res.ok) {
+      if (res.status === 403) {
+        throw new Error(typeof authBody?.error === "string" ? authBody.error : `${t.name} answered ${res.status}`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = undefined;
+      }
+      const error = isRecord(parsed) && typeof parsed.error === "string" ? parsed.error : text;
+      throw new Error(error || `${t.name} answered ${res.status}`);
+    }
+    return text;
   }
   throw new Unreachable(tried.join("; ") || "no address");
 }

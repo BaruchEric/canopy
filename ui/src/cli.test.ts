@@ -85,6 +85,8 @@ describe("parseCommand", () => {
     for (const l of ["peers init", "peers gate --root x", "ui", "helper", "source add --forgejo u --token f"]) {
       expect(parse(l).kind).toBe("terminal");
     }
+    expect(parse("run show abc")).toMatchObject({ kind: "terminal" });
+    expect(VERBS).toContain("run");
   });
 
   test("views, help, and the unknown", () => {

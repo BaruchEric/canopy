@@ -375,6 +375,8 @@ export function parseCommand(input: string[]): Parsed {
     // --yes would close, and closes what is ticked
     case "sweep":
       return { kind: "sweep" };
+    case "run":
+      return { kind: "terminal", why: "canopy run reads kept transcripts on the backend's machine: use it in a terminal, or open the run from the costs or landing view" };
     case "awake": {
       const [word, ...more] = args;
       if (more.length > 0 || word === "--backend") return { kind: "error", text: "keep awake here is the home backend's; Settings has every backend's", usage: usageOf("awake") };
@@ -430,6 +432,7 @@ const SUBS: Record<string, readonly string[]> = {
   ws: ["create", "add", "rm", "open"],
   source: ["add", "rm"],
   peers: ["status", "sync", "take", "track", "seed"],
+  run: ["show", "export", "prune"],
   spec: ["status", "sync", "check"],
 };
 

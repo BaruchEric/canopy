@@ -67,6 +67,11 @@ usage:
   canopy sweep                       idle shells, chats, runs and PRs a backend offers for closing
   canopy sweep --yes [--kind shell,chat,run,transcript,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy run                         the runs kept on disk, newest first: id, when, repo, what, status, cost
+  canopy run show <id>               a kept run's head and timeline (a live run's too)
+  canopy run export <id> [--out f]   its transcript as markdown, to stdout or a file, secrets redacted
+  canopy run prune                   remove kept runs past the sweep's transcript span; a live branch's or an open PR's stays
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy costs [--days 1|7|30] [--share]
