@@ -4,7 +4,7 @@ import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
-import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, type GhRun } from "../core/issue";
+import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, trustedComments, type GhRun } from "../core/issue";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
@@ -5370,7 +5370,7 @@ export async function startServer(opts: {
         if (forge.kind === "github") {
           const got = await fetchIssue({ number, slug: null, rest: "" }, forge.slug, forge.gh);
           if ("error" in got) throw new Error(got.error);
-          return incomingFromIssueView(got.issue);
+          return incomingFromIssueView(trustedComments(got.issue));
         }
         return incomingFromIssueView(await forgejoReadIssue(rule.api, forge.slug, number, forge.token));
       },

@@ -14,14 +14,18 @@ export interface IssueRef {
   rest: string;
 }
 
-/** One issue as `gh issue view --json number,title,body,url,labels,comments` gives it. */
+/** One issue as `gh issue view --json number,title,body,url,labels,comments`
+ *  gives it. A comment's `association` is gh's `authorAssociation` (OWNER,
+ *  MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...); the Forgejo reader leaves it
+ *  out. `leftOut` is how many comments `trustedComments` dropped. */
 export interface IssueView {
   number: number;
   title: string;
   body: string;
   url: string;
   labels: string[];
-  comments: { author: string; body: string }[];
+  comments: { author: string; body: string; association?: string }[];
+  leftOut?: number;
 }
 
 /** what a gh call answers; the server passes exec's result through */
@@ -59,9 +63,28 @@ export function parseIssueView(json: unknown): IssueView | null {
   if (!isRecord(json) || typeof json["number"] !== "number" || typeof json["title"] !== "string") return null;
   const labels = Array.isArray(json["labels"]) ? json["labels"].map((l) => (isRecord(l) ? str(l["name"]) : "")).filter(Boolean) : [];
   const comments = Array.isArray(json["comments"])
-    ? json["comments"].filter(isRecord).map((c) => ({ author: isRecord(c["author"]) ? str(c["author"]["login"]) || "someone" : "someone", body: str(c["body"]) }))
+    ? json["comments"].filter(isRecord).map((c) => ({
+        author: isRecord(c["author"]) ? str(c["author"]["login"]) || "someone" : "someone",
+        body: str(c["body"]),
+        ...(typeof c["authorAssociation"] === "string" ? { association: c["authorAssociation"] } : {}),
+      }))
     : [];
   return { number: json["number"], title: json["title"], body: str(json["body"]), url: str(json["url"]), labels, comments };
+}
+
+/** gh author associations whose comments reach a run: people who can push to
+ *  the repo (its owner, a member of its org, a collaborator). Anyone can
+ *  comment on a public issue, and a comment is read by the run as text, so
+ *  the rest stay out of the note. Forgejo comments are not filtered: the
+ *  instances canopy polls are the user's own, behind their own sign-in. */
+export const TRUSTED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/** The issue with only its trusted comments, counting the dropped ones in
+ *  `leftOut`; the same object when nothing was dropped. */
+export function trustedComments(issue: IssueView): IssueView {
+  const kept = issue.comments.filter((c) => c.association !== undefined && TRUSTED_ASSOCIATIONS.has(c.association));
+  const dropped = issue.comments.length - kept.length;
+  return dropped ? { ...issue, comments: kept, leftOut: (issue.leftOut ?? 0) + dropped } : issue;
 }
 
 /** how many comments a note carries, the latest ones */

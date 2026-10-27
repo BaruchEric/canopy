@@ -505,7 +505,10 @@ export function incomingFromIssueView(issue: IssueView): Incoming {
     short: `#${issue.number}`,
     title: (title || "an untitled issue").slice(0, 300),
     ...(issue.url && /^https?:\/\//.test(issue.url) ? { link: issue.url } : {}),
-    detail: issue.labels.length ? [`labels: ${issue.labels.join(", ")}`] : [],
+    detail: [
+      ...(issue.labels.length ? [`labels: ${issue.labels.join(", ")}`] : []),
+      ...(issue.leftOut ? [`comments left out: ${issue.leftOut}, from outside the repo's collaborators`] : []),
+    ],
     frames: [],
     ...(description ? { description } : {}),
     ...(comments.length ? { comments } : {}),

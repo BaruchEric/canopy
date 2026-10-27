@@ -506,6 +506,12 @@ describe("incomingFromIssueView", () => {
     expect(bare.description).toBeUndefined();
     expect(bare.comments).toBeUndefined();
   });
+
+  test("comments left out as untrusted are counted in the detail, so the run knows there were more", () => {
+    const inc = incomingFromIssueView({ ...view, comments: comments.slice(0, 2), leftOut: 3 });
+    expect(inc.detail).toEqual(["labels: canopy", "comments left out: 3, from outside the repo's collaborators"]);
+    expect(inc.comments).toHaveLength(2);
+  });
 });
 
 describe("parseAgentEvent", () => {
