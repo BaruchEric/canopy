@@ -447,3 +447,33 @@ test("partial removal that erases the rejection marker cannot revive a surviving
   expect(await listKept(dir)).toEqual([]); expect(existsSync(folder)).toBe(false);
   expect(await readKeptRun(dir, "identity")).toBeNull();
 });
+
+
+test("merged group routing and priority enum survive a real snapshot with ordinary CANOPY collisions", async () => {
+  const dir = join(root, "merged-attribution");
+  const value = run({ group: "batch-route", priority: "low", branch: { name: "run/work", target: "main", base: "base", dir: "/owned", state: "ready", origin: "origin", group: "batch-route" }, note: "batch-route low" });
+  const log = open(dir, value, { secrets: [{ name: "CANOPY_GROUP", value: "batch-route" }, { name: "CANOPY_PRIORITY", value: "low" }] });
+  await log.settle(value);
+  expect(await readKeptRun(dir, value.id)).toMatchObject({ group: "batch-route", priority: "low", branch: { group: "batch-route" }, note: "<redacted:CANOPY_GROUP> <redacted:CANOPY_PRIORITY>" });
+});
+
+test("merged attribution never exempts private credential collisions", async () => {
+  for (const [field, value] of [["group", "batch-route"], ["priority", "low"]] as const) {
+    const dir = join(root, `merged-credential-${field}`); const errors: string[] = [];
+    const valueRun = run({ [field]: value });
+    const log = open(dir, valueRun, { secrets: [{ name: "CANOPY_TOKEN", value }], onError: (why) => errors.push(why) });
+    await log.settle(valueRun);
+    expect(errors).toHaveLength(1);
+    expect(await readKeptRun(dir, valueRun.id)).toBeNull();
+  }
+});
+
+
+test("kept snapshots reject malformed merged group and priority fields", async () => {
+  const dir = join(root, "merged-invalid"); const value = run();
+  const log = open(dir, value); await log.settle(value);
+  for (const invalid of [{ group: 42 }, { priority: "urgent" }]) {
+    await writeFile(join(log.folder, RUN_FILE), JSON.stringify({ ...value, ...invalid }));
+    expect(await readKeptRun(dir, value.id)).toBeNull();
+  }
+});

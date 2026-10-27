@@ -7,16 +7,18 @@
  *  Code's stream-json (`claudedrive.ts`) or Codex's app-server
  *  (`codexrun.ts`). Each run's half of the bookkeeping (steps, the prompt
  *  queue, the result, how an exit becomes a status) is a `RunCtx`
- *  (`driver.ts`), and the server broadcasts the `Run` whole on every change. */
+ *  (`driver.ts`), and the server broadcasts the `Run` whole on every change.
+ *  With a logger, each run keeps its wire on disk (`runlog.ts`). */
 
 import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
-import { ClaudeDriver } from "./claudedrive";
+import { ClaudeDriver, cliArgs } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
-import { CodexDriver, runsInside } from "./codexrun";
-import { answerMisfit, RunCtx, type RememberHook, type RunDriver } from "./driver";
+import { appServerArgs, CodexDriver, runsInside } from "./codexrun";
+import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver } from "./driver";
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
+import type { RunLog, RunLogger } from "./runlog";
 import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { StageAwayError } from "./stagewire";
@@ -106,6 +108,8 @@ export interface RunnerHooks {
 }
 
 export interface RunnerOptions {
+  /** Opens each run's disk transcript; absent, wire lines are not kept. */
+  log?: RunLogger;
   /** makes the driver for a run's harness; tests swap in a stand-in */
   driver?: (harness: Harness) => RunDriver;
   /** this backend's name, handed to every run as CANOPY_BACKEND */
@@ -152,6 +156,11 @@ export function defaultDriver(harness: Harness, version = "0"): RunDriver {
     : new ClaudeDriver();
 }
 
+/** The command line each driver builds from these same resolved settings. */
+export function startArgv(harness: Harness, spec: DriveSpec, agent: AgentSettings, stage: boolean): string[] {
+  return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent)];
+}
+
 /** What every run's process gets on top of canopy's own environment: which
  *  run, repo and backend it is, and any names the run was started with (a
  *  coordinator's API and token). A harness hook reads them (tailchan's
@@ -177,6 +186,7 @@ type DriverProcess =
 
 interface Live {
   ctx: RunCtx;
+  log: RunLog | null;
   flowOwner?: symbol;
   driver: RunDriver;
   /** the driver has its process: a chat that opened with nothing to say
@@ -390,15 +400,28 @@ export class Runner {
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
     const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume } : {}) };
+    const env = runEnv(run, this.opts.backend, extras.env);
+    // open can fail synchronously, before a context exists to receive its note.
+    let ctx: RunCtx | undefined;
+    let logError: string | undefined;
+    const transcriptError = (why: string): void => {
+      if (logError !== undefined) return;
+      logError = `transcript stopped: ${why}`;
+      ctx?.note(logError);
+    };
+    let log: RunLog | null = null;
+    try { log = this.opts.log?.open(run, startArgv(settings.harness, driveSpec, settings, stage), env, transcriptError) ?? null; }
+    catch (error) { transcriptError(error instanceof Error ? error.message : String(error)); }
     let markEnded = () => {};
     const ended = new Promise<void>(resolve => { markEnded = resolve; });
-    const ctx = new RunCtx(
+    ctx = new RunCtx(
       run,
       {
         cwd,
         agent: settings,
         spec: driveSpec,
-        env: runEnv(run, this.opts.backend, extras.env),
+        env,
+        ...(log ? { wire: (dir, line) => log.wire(dir, line) } : {}),
         ...(extras.env ? { pass: extras.env } : {}),
         stage,
         label: driver.label,
@@ -411,10 +434,11 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.settle(live).finally(markEnded); } },
+      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.finish(live).finally(markEnded); } },
     );
     const live: Live = {
       ctx,
+      log,
       ...(extras.flowOwner ? { flowOwner: extras.flowOwner } : {}),
       driver,
       started: false,
@@ -438,6 +462,7 @@ export class Runner {
       }
     };
     this.live.set(run.id, live);
+    if (logError !== undefined) ctx.note(logError);
     this.prune();
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
     if (branch) live.ctx.step({ kind: "note", text: `on branch ${branch.branch.name} in ${branch.branch.dir}` });
@@ -707,6 +732,20 @@ export class Runner {
     })();
     live.drains.push(exited.catch(() => null));
     return { stdin: proc.stdin, stdout: proc.stdout, stderr: proc.stderr, exited, kill: () => proc.kill() };
+  }
+
+  /** A result can end a job before stdout closes. Keep the transcript open
+   *  through actual driver exit and seed release, then store the final state.
+   *  Without a log, retain the existing result-time status read. */
+  private async finish(live: Live): Promise<void> {
+    if (live.log) {
+      const process = live.process;
+      if (process.kind === "running") await process.exited;
+      await Promise.all(live.drains);
+      await Promise.all(live.releases);
+    }
+    try { await this.settle(live); }
+    finally { await live.log?.settle(live.ctx.run).catch(() => {}); }
   }
 
   /** Reads git status once the run is over and records whether it moved.
