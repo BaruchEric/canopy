@@ -152,9 +152,14 @@ export interface TriggerDeps {
   /** github and forgejo: the issue read in full, its newest comments with
    *  it, before its event is made; a hook's delivery carries none */
   readIssue: (rule: TriggerRule, repo: Repo, issue: Incoming) => Promise<Incoming>;
-  /** how the last poll went, or a hook's read of an issue in full: the
-   *  `canopy:triggers` health check, fed one result per poll */
-  reportPoll: (result: ProbeResult) => void;
+  /** how a rule's last poll went, or a hook's read of one of its issues
+   *  in full: the rule's own `canopy:triggers:<rule>` health check, fed
+   *  one result per poll */
+  reportPoll: (rule: string, result: ProbeResult) => void;
+  /** the rule names, in file order, after a load of `triggers.json` that
+   *  changed the set of them; for the caller that keeps one health check
+   *  per rule */
+  rulesChanged?: (names: string[]) => void;
   /** github and forgejo: a write on the event's issue, as gh's login (a
    *  `tokenEnv` sets GH_TOKEN) or through Forgejo's API with the rule's
    *  token; what it throws is kept on the event */
@@ -248,6 +253,8 @@ async function sentryResolve(rule: TriggerRule, event: TriggerEvent, token: stri
 export class TriggerHub {
   private rules: TriggerRule[] = [];
   private problems: string[] = [];
+  /** the rule names of the last load, sorted and joined, to tell a change */
+  private lastNames: string | null = null;
   private events = new Map<string, TriggerEvent>();
   private keeping = false;
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -315,6 +322,12 @@ export class TriggerHub {
     const { rules, problems } = parseRules(text);
     this.rules = rules;
     this.problems = problems;
+    const names = rules.map((r) => r.name);
+    const sorted = [...names].sort().join("\n");
+    if (sorted !== this.lastNames) {
+      this.lastNames = sorted;
+      this.deps.rulesChanged?.(names);
+    }
   }
 
   private rule(name: string): TriggerRule | undefined {
@@ -526,14 +539,14 @@ export class TriggerHub {
     this.polled.set(name, this.now());
     const repo = this.deps.repo(rule.repo);
     if (!repo) {
-      this.deps.reportPoll(fail(`${name}: no repo ${rule.repo} in the tree`));
+      this.deps.reportPoll(name, fail(`no repo ${rule.repo} in the tree`));
       return;
     }
     let listed: Incoming[];
     try {
       listed = await this.deps.listIssues(rule, repo);
     } catch (err) {
-      this.deps.reportPoll(fail(`${name}: ${errText(err)}`));
+      this.deps.reportPoll(name, fail(errText(err)));
       return;
     }
     // an issue with an event in any state is skipped before any read: a
@@ -551,7 +564,7 @@ export class TriggerHub {
         failed.push(errText(err));
       }
     }
-    this.deps.reportPoll(failed.length ? fail(`${name}: ${failed[0]}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ""}`) : pass());
+    this.deps.reportPoll(name, failed.length ? fail(`${failed[0]}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ""}`) : pass());
   }
 
   /** One issue from a hook or a poll: a redelivery, or a poll listing it
@@ -977,7 +990,7 @@ export class TriggerHub {
       d = await this.take(rule, repo, inc);
     } catch (err) {
       if (!(err instanceof ReadFailed)) throw err;
-      this.deps.reportPoll(fail(`${rule.name}: ${err.message}`));
+      this.deps.reportPoll(rule.name, fail(err.message));
       unread = err.message;
       d = await this.deliver(rule, { ...inc, detail: [...inc.detail, `comments: not read; ${err.message}`] }, rule.source);
     }

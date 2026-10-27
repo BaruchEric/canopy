@@ -2527,10 +2527,10 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   // reported by the PR loop after each read; ok until it reads one
   state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
   state.health.report(PRS_CHECK, { state: "ok" });
-  // reported after each issue poll, and by a hook that could not read an
-  // issue in full; ok until a rule polls
-  state.health.add({ id: TRIGGERS_CHECK, label: "issue polls (triggers)", scope: canopy, heal: "self" });
-  state.health.report(TRIGGERS_CHECK, { state: "ok" });
+  // one check per trigger rule, added and removed as triggers.json changes
+  // (the hub's rulesChanged dep); this first load makes them before any
+  // poll, each ok until its rule polls
+  void state.triggers.loadRules();
   // reported after each pull; off until the first one says otherwise
   state.health.add({ id: LIBRARY_SYNC_CHECK, label: "Library sync", scope: canopy, heal: "self" });
   state.health.report(LIBRARY_SYNC_CHECK, { state: "off", why: "librarySync is off" });
@@ -2575,7 +2575,9 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
 }
 
 const PRS_CHECK = "canopy:prs";
-const TRIGGERS_CHECK = "canopy:triggers";
+/** the prefix of the per-rule issue-poll checks, `canopy:triggers:<rule>` */
+const TRIGGERS_CHECK = "canopy:triggers:";
+const triggerCheckId = (rule: string): string => `${TRIGGERS_CHECK}${rule}`;
 const LIBRARY_SYNC_CHECK = "canopy:library-sync";
 const CALLERS_CHECK = "canopy:callers";
 
@@ -5374,7 +5376,20 @@ export async function startServer(opts: {
         }
         return incomingFromIssueView(await forgejoReadIssue(rule.api, forge.slug, number, forge.token));
       },
-      reportPoll: (r) => state.health.report(TRIGGERS_CHECK, r),
+      reportPoll: (rule, r) => state.health.report(triggerCheckId(rule), r),
+      rulesChanged: (names) => {
+        const kept = state.health.ids(TRIGGERS_CHECK);
+        const wanted = new Set(names.map(triggerCheckId));
+        for (const id of kept) if (!wanted.has(id)) state.health.remove(id);
+        for (const name of names) {
+          const id = triggerCheckId(name);
+          if (kept.includes(id)) continue;
+          // reported after each of the rule's polls, and by a hook that
+          // could not read one of its issues in full; ok until then
+          state.health.add({ id, label: `issue polls: ${name}`, scope: { kind: "canopy" }, heal: "self" });
+          state.health.report(id, { state: "ok" });
+        }
+      },
       writeIssue: async (rule, repo, event, write) => {
         const number = Number(event.key);
         const own = rule.tokenEnv ? triggerSecrets.get(rule.tokenEnv) : undefined;

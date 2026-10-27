@@ -755,7 +755,7 @@ describe("github and forgejo hooks", () => {
     new Request(githubUrl.href, { method: "POST", body, headers: { "x-hub-signature-256": sig, "x-github-event": event } });
   const forgejoReq = (body: string, headers: Record<string, string> = { "x-forgejo-signature": sign(body, HOOK), "x-forgejo-event": "issues" }) =>
     new Request(forgejoUrl.href, { method: "POST", body, headers });
-  let reports: ProbeResult[];
+  let reports: [string, ProbeResult][];
   let reads: string[];
   const issueHub = (over: Partial<TriggerDeps> = {}) =>
     hub({
@@ -764,7 +764,7 @@ describe("github and forgejo hooks", () => {
         reads.push(inc.key);
         return { ...inc, comments: [{ author: "eric", body: "Still happens on main." }] };
       },
-      reportPoll: (r) => reports.push(r),
+      reportPoll: (rule, r) => reports.push([rule, r]),
       ...over,
     });
 
@@ -884,7 +884,7 @@ describe("github and forgejo hooks", () => {
     expect(e).toMatchObject({ key: "12", status: "working", runId: "r1" });
     expect(e?.note).toContain("description:\nSteps: open the settings page.");
     expect(e?.note).toContain("comments: not read; cannot read issue #12 in full: gh answered 502");
-    expect(reports).toEqual([{ state: "down", why: "gh: cannot read issue #12 in full: gh answered 502" }]);
+    expect(reports).toEqual([["gh", { state: "down", why: "cannot read issue #12 in full: gh answered 502" }]]);
     // a redelivery finds the event, so a read that keeps failing starts nothing twice
     expect(await (await h.handle(githubReq(ghBody()), githubUrl))?.json()).toMatchObject({ kind: "duplicate" });
     expect(runs).toHaveLength(1);
@@ -892,13 +892,13 @@ describe("github and forgejo hooks", () => {
 });
 
 describe("polling", () => {
-  let reports: ProbeResult[];
+  let reports: [string, ProbeResult][];
   let listed: number;
   let reads: string[];
   const candidates = (n: number): Incoming[] => Array.from({ length: n }, (_, i) => ({ key: String(i + 1), short: `#${i + 1}`, title: `Issue ${i + 1}`, detail: [], frames: [] }));
-  /** a rule with no hook secret, so it polls every 15 minutes by default */
-  const pollRules = (extra: Record<string, unknown> = {}) =>
-    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "tracker", source: "github", repo: "web/shop", ...extra }] }));
+  /** a rule with no hook secret, so it polls every 15 minutes by default; a list is the whole file */
+  const pollRules = (extra: Record<string, unknown> | Record<string, unknown>[] = {}) =>
+    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: Array.isArray(extra) ? extra : [{ name: "tracker", source: "github", repo: "web/shop", ...extra }] }));
   const pollHub = (over: Partial<TriggerDeps> = {}) =>
     hub({
       listIssues: async () => {
@@ -909,7 +909,7 @@ describe("polling", () => {
         reads.push(inc.key);
         return inc;
       },
-      reportPoll: (r) => reports.push(r),
+      reportPoll: (rule, r) => reports.push([rule, r]),
       ...over,
     });
 
@@ -931,7 +931,7 @@ describe("polling", () => {
     expect(listed).toBe(1);
     expect(reads).toEqual(oldest.map((i) => i.key));
     expect(runs).toHaveLength(50);
-    expect(reports).toEqual([{ state: "ok" }]);
+    expect(reports).toEqual([["tracker", { state: "ok" }]]);
     // the next poll lists the same sixty: the fifty with events are skipped before any read
     await h.poll("tracker");
     expect(h.list()).toHaveLength(60);
@@ -982,7 +982,7 @@ describe("polling", () => {
     await h.adopt();
     await h.poll("tracker");
     expect(h.list()).toEqual([]);
-    expect(reports).toEqual([{ state: "down", why: "tracker: gh: HTTP 502" }]);
+    expect(reports).toEqual([["tracker", { state: "down", why: "gh: HTTP 502" }]]);
   });
 
   test("an issue that cannot be read in full is left out, and health hears once", async () => {
@@ -996,7 +996,7 @@ describe("polling", () => {
     await h.adopt();
     await h.poll("tracker");
     expect(h.list().map((e) => e.key)).toEqual(["1", "3"]);
-    expect(reports).toEqual([{ state: "down", why: "tracker: cannot read issue #2 in full: gh answered 500" }]);
+    expect(reports).toEqual([["tracker", { state: "down", why: "cannot read issue #2 in full: gh answered 500" }]]);
   });
 
   test("the tick polls a rule when its cron comes due, and info says when next", async () => {
@@ -1105,6 +1105,41 @@ describe("polling", () => {
     expect(h.list()).toHaveLength(51);
     expect(reads).toHaveLength(51);
     expect(reads[50]).toBe("51");
+  });
+
+  test("a failed listing is reported under its own rule, and the other rule's poll stays clean", async () => {
+    const h = pollHub({
+      listIssues: async (rule) => {
+        if (rule.name === "a") throw new Error("gh: 502");
+        return [];
+      },
+    });
+    await pollRules([
+      { name: "a", source: "github", repo: "web/shop" },
+      { name: "b", source: "github", repo: "web/shop" },
+    ]);
+    await h.adopt();
+    await h.poll("a");
+    await h.poll("b");
+    expect(reports).toEqual([
+      ["a", { state: "down", why: "gh: 502" }],
+      ["b", { state: "ok" }],
+    ]);
+  });
+
+  test("rulesChanged fires with the names when triggers.json changes, once per change", async () => {
+    const changes: string[][] = [];
+    const h = pollHub({ rulesChanged: (names) => changes.push(names) });
+    await h.loadRules();
+    await h.loadRules();
+    expect(changes).toEqual([["tracker"]]);
+    await pollRules([
+      { name: "a", source: "github", repo: "web/shop" },
+      { name: "b", source: "github", repo: "web/shop" },
+    ]);
+    await h.loadRules();
+    await h.loadRules();
+    expect(changes).toEqual([["tracker"], ["a", "b"]]);
   });
 });
 
