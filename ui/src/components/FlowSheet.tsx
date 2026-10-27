@@ -4,7 +4,7 @@ import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
 import { isFlowActive, type Fleet, type Flow, type FlowStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
-import { budgetWord, fleetCounts, flowWord, oldestParked, rewindLines, stepWord } from "../flows";
+import { budgetWord, continueWord, fleetCounts, flowWord, oldestParked, rewindLines, stepWord } from "../flows";
 import { agentFor, idText, pickedIds, useStore } from "../store";
 import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
@@ -187,7 +187,6 @@ function JudgeBars({ judgment }: { judgment: Judgment }) {
 }
 
 function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: (c: "continue" | "retry" | "stop") => void }) {
-  const last = flow.current + 1 >= flow.steps.length;
   const budget = budgetWord(flow);
   const rewinds = rewindLines(flow);
   const overBudget = flow.parkedFor === "budget";
@@ -214,15 +213,7 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
       )}
       <div className="gate-buttons">
         <button type="button" className="mini strong" onClick={() => onChoose("continue")}>
-          {overBudget
-            ? "allow one more step"
-            : stageAway
-              ? flow.stageCheck
-                ? "run the check again"
-                : "run the step again"
-              : last
-                ? "accept and finish"
-                : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`}
+          {continueWord(flow)}
         </button>
         {!overBudget && !stageAway && (
           <button type="button" className="mini" onClick={() => onChoose("retry")}>retry this step</button>

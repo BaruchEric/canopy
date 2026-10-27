@@ -1066,7 +1066,7 @@ async function startRepoRun(
   if (onBranch && seed) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
   if (pr && !onBranch) throw new HttpError(400, "only a run on a branch of its own can open a PR");
   if (onBranch) {
-    const going = state.runner.branchRunsFor(repo.id).length;
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
   } else {
     // A workflow owns the repo while it runs, gate included: a second
@@ -1334,9 +1334,7 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
   const got = await triggerSpec(event.workflow, repo);
   if (typeof got === "string") throw new Error(got);
-  const runs = state.runner.branchRunsFor(repo.id).filter((r) => !r.branch?.held).length;
-  const flowsGoing = state.flows.list().filter((f) => f.repoId === repo.id && f.branch && isFlowActive(f)).length;
-  const going = runs + flowsGoing;
+  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const cfg = await loadConfig();
   const profiles = got.kind === "run" ? [got.profile] : got.workflow.steps.filter((s) => s.body).map((s) => s.agent);
@@ -1367,8 +1365,9 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
 /** The repo's branch slots taken, as a trigger counts them: its branch runs
  *  outside a flow, and each branch flow from its start to its end. */
 function branchSlotsTaken(state: ServerState, repoId: string): number {
-  const runs = state.runner.branchRunsFor(repoId).filter((r) => !r.branch?.held).length;
-  return runs + state.flows.list().filter((f) => f.repoId === repoId && f.branch && isFlowActive(f)).length;
+  const runs = state.runner.branchRunsFor(repoId).flatMap((run) => run.branch && !run.branch.held ? [run.branch.origin] : []);
+  const flows = state.flows.list().flatMap((flow) => flow.repoId === repoId && flow.branch && isFlowActive(flow) ? [flow.branch.origin] : []);
+  return new Set([...runs, ...flows]).size;
 }
 
 /** A coordinator's card as a branch run (FR-010): the repo's agent on its
@@ -1383,7 +1382,7 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
   // the runner's own count takes held branch runs too, so both are asked
-  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchRunsFor(repo.id).length);
+  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
   if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
@@ -4981,7 +4980,9 @@ export async function startServer(opts: {
     },
     fingerprint: async (repo) => {
       try {
-        if (isSeedPath(root, repo.path)) await runner.whenQuiet(repo.path);
+        // Fingerprints are optional evidence, not the final outcome. A lingering
+        // stage makes this read unknown; the outcome hook still waits for quiet.
+        if (isSeedPath(root, repo.path) && seedBusy(repo.path)) return null;
         return statusFingerprint(await getStatus(repo.path));
       } catch { return null; }
     },

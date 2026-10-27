@@ -1,7 +1,7 @@
 /** Runs: one headless agent session per job, driven over stdio.
  *
  *  The Runner keeps what every run shares whichever agent does the work: the
- *  map of live runs, one at a time per repo, the chat's turn-taking, stops,
+ *  map of live runs, one checkout job or flow per repo, the chat's turn-taking, stops,
  *  pruning, and the git status read that says whether a run changed
  *  anything. The wire is a `RunDriver` picked by the run's harness: Claude
  *  Code's stream-json (`claudedrive.ts`) or Codex's app-server
@@ -36,11 +36,11 @@ import {
   type WorkspaceScope,
 } from "./types";
 
-/** at most this many branch runs going at once in one repo */
+/** At most this many distinct branch worktrees active in one repo. */
 export const BRANCH_RUNS_PER_REPO = 3;
 
 /** A branch run refused because its repo has `BRANCH_RUNS_PER_REPO` going.
- *  The runner counts every active branch run, held ones too, which a
+ *  The runner counts distinct active worktrees, held ones too, which a
  *  caller's own slot count may not. */
 export class BranchCapError extends Error {
   override name = "BranchCapError";
@@ -62,6 +62,8 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** Private in-memory identity for steps belonging to one flow. */
+  flowOwner?: symbol;
   /** the coordinator that started it, set before the run's first change is
    *  heard, so every listener sees a child as one */
   parent?: string;
@@ -166,6 +168,7 @@ const isCoordinate = (run: Pick<Run, "action">): boolean => run.action === "coor
 
 interface Live {
   ctx: RunCtx;
+  flowOwner?: symbol;
   driver: RunDriver;
   /** the driver has its process: a chat that opened with nothing to say
    *  starts it with the first message */
@@ -241,6 +244,11 @@ export class Runner {
     return [...this.live.values()].map((l) => l.ctx.run).filter((r) => r.repoId === repoId && r.branch && isRunActive(r));
   }
 
+  /** Active worktrees take capacity once, even when a flow has several step runs. */
+  branchSlotsFor(repoId: string): number {
+    return new Set(this.branchRunsFor(repoId).flatMap((run) => run.branch ? [run.branch.origin] : [])).size;
+  }
+
   /** Whether a stage run's process (or a coordinator's, by its folder) is
    *  alive in the repo at `path`: from its
    *  spawn until it has exited and the stage runner says nothing is left
@@ -302,14 +310,19 @@ export class Runner {
       if (this.coordinatorFor(repo.id)) throw new Error(`${repo.name} already has a coordinator going`);
     } else if (branch) {
       if (scope) throw new Error("a workspace run works in its folders, not on a branch");
-      if (this.branchRunsFor(repo.id).length >= BRANCH_RUNS_PER_REPO) {
+      const sibling = extras.flowOwner !== undefined && [...this.live.values()].some((live) =>
+        live.flowOwner === extras.flowOwner && live.repo.id === repo.id &&
+        live.ctx.run.branch?.origin === branch.branch.origin && isRunActive(live.ctx.run));
+      if (!sibling && this.branchSlotsFor(repo.id) >= BRANCH_RUNS_PER_REPO) {
         throw new BranchCapError(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
       }
     } else {
-      const busy = this.activeFor(repo.id);
-      if (busy) {
-        throw new Error(busyWith(repo.name, busy.verb));
-      }
+      const busy = [...this.live.values()].find((live) => {
+        const run = live.ctx.run;
+        return run.repoId === repo.id && !run.branch && !isCoordinate(run) && !live.ctx.ending && isRunActive(run) &&
+          (extras.flowOwner === undefined || live.flowOwner !== extras.flowOwner);
+      })?.ctx.run;
+      if (busy) throw new Error(busyWith(repo.name, busy.verb));
     }
     if (spec.noteRequired && !note.trim() && !branch?.message && !spec.message) {
       throw new Error("write what the agent should do first");
@@ -384,6 +397,7 @@ export class Runner {
     );
     const live: Live = {
       ctx,
+      ...(extras.flowOwner ? { flowOwner: extras.flowOwner } : {}),
       driver,
       started: false,
       repo,

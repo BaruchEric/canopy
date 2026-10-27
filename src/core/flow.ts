@@ -5,7 +5,7 @@
 import { chained, readOnlyStep, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
 import { limitHit, resetWord } from "./capacity";
-import type { BranchStart } from "./runner";
+import type { BranchStart, StartExtras } from "./runner";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
@@ -188,7 +188,7 @@ export const STOP_GRACE = 10_000;
 /** What Flows needs from the Runner; the real one satisfies it. A flow on a
  *  branch passes the branch as the runner's last argument. */
 export interface FlowRunner {
-  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart): Run;
+  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner">): Run;
   get(id: string): Run | undefined;
   activeFor(repoId: string): Run | undefined;
   stop(id: string): Run;
@@ -253,6 +253,8 @@ interface StepStart {
 
 interface LiveFlow {
   flow: Flow;
+  /** Private dispatch ownership, never recorded or accepted from HTTP. */
+  owner: symbol;
   repo: Repo;
   workflow: Workflow;
   /** each step's settings, by the profile it names */
@@ -439,6 +441,7 @@ export class Flows {
     };
     const live: LiveFlow = {
       flow,
+      owner: Symbol(),
       repo,
       workflow,
       agent: stepAgent(agent),
@@ -725,6 +728,7 @@ export class Flows {
     if (repo) flow.repoId = repo.id;
     const live: LiveFlow = {
       flow,
+      owner: Symbol(),
       repo: repo ?? { id: flow.repoId, name: flow.repoId, path: rec.repoPath, group: "", source: "", status: null },
       workflow: chained(rec.workflow),
       agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
@@ -1173,7 +1177,7 @@ export class Flows {
       : undefined;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch);
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { flowOwner: live.owner });
       delete live.prepare;
     } catch (err) {
       // The stage runner is away: the step waits for it, and keeps the

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { budgetWord, fleetCounts, flowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
+import { budgetWord, continueWord, fleetCounts, flowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
 import type { Fleet, Flow, FlowStep, Repo, Run } from "../../src/core/types";
 
 const flow = (o: Partial<Flow> = {}): Flow => ({
@@ -93,5 +93,19 @@ describe("rewindLines", () => {
         }),
       ),
     ).toEqual(["Test tried again: check failed", "Accept sent it back to Build: only partly"]);
+  });
+});
+
+describe("continueWord", () => {
+  test("held middle and final steps name the step that will actually start", () => {
+    expect(continueWord(flow({ status: "gated", steps: [{ name: "Build", status: "passed" }, { name: "Lint", status: "held" }, { name: "Docs", status: "passed" }], current: 1 }))).toBe("start Lint");
+    expect(continueWord(flow({ status: "gated", steps: [{ name: "Ship", status: "held" }], current: 0 }))).toBe("start Ship");
+  });
+  test("existing gate, budget and stage actions keep their labels", () => {
+    expect(continueWord(flow({ status: "gated" }))).toBe("continue to Push");
+    expect(continueWord(flow({ status: "gated", current: 2 }))).toBe("accept and finish");
+    expect(continueWord(flow({ status: "gated", parkedFor: "budget" }))).toBe("allow one more step");
+    expect(continueWord(flow({ status: "gated", parkedFor: "stage" }))).toBe("run the step again");
+    expect(continueWord(flow({ status: "gated", parkedFor: "stage", stageCheck: true }))).toBe("run the check again");
   });
 });
