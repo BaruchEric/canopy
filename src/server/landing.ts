@@ -39,6 +39,7 @@ import {
   type QueueFlags,
 } from "../core/landing";
 import { foldsCase, readRules, sortBranch } from "../core/review";
+import type { Collision, Touched } from "../core/touch";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
@@ -77,6 +78,10 @@ export interface LandingDeps {
   /** whether a PR watch still holds the branch: its PR open and not swept,
    *  so its worktree is the watch's to keep */
   prHeld?: (id: string) => boolean;
+  /** the live collisions, for the info (FR-040) */
+  collisions?: () => Collision[];
+  /** the touched sets of a repo's live runs, for the mark at enqueue */
+  working?: (repoId: string) => readonly Touched[];
   /** runs one scenario line in a worktree with the set's copy as SCENARIO_DIR (`runScenario`) */
   scenario: ScenarioRunner;
   /** where the sets live; `scenariosRoot()` unless a test says otherwise */
@@ -162,13 +167,18 @@ export class LandingHub {
       const whole = r.state === "stopped" ? this.whole.get(r.id) : undefined;
       return whole ? { ...r, whole } : r;
     });
-    return { runs, entries: this.entries, orphans: this.orphans, notices: this.notices };
+    return { runs, entries: this.entries, orphans: this.orphans, notices: this.notices, collisions: this.deps.collisions?.() ?? [] };
   }
 
   /** Sends the info, then looks at the stopped runs' worktrees again. */
   private publish(): void {
     this.deps.broadcast({ type: "landing", landing: this.info() });
     void this.lookStopped();
+  }
+
+  /** sends the info again after the live collisions changed */
+  republish(): void {
+    this.publish();
   }
 
   /** Looks at the worktree of every stopped run with no entry, after any
@@ -255,7 +265,7 @@ export class LandingHub {
   }
 
   /** A quiet line: a run that landed on its own, or one held back. */
-  private notify(n: Omit<LandNotice, "id" | "at">): void {
+  notice(n: Omit<LandNotice, "id" | "at">): void {
     this.notices = addNotice(this.notices, { ...n, id: crypto.randomUUID().slice(0, 8), at: this.now() });
     void this.saveNotices();
   }
@@ -418,7 +428,7 @@ export class LandingHub {
         await this.deps.openPr?.(id);
       } catch (err) {
         // it waits as ready; the notice says why its PR did not open
-        this.notify({ entry: id, repoId: opening.repoId, branch: opening.branch, note: opening.note, kind: "held", why: `its PR did not open: ${errText(err)}` });
+        this.notice({ entry: id, repoId: opening.repoId, branch: opening.branch, note: opening.note, kind: "held", why: `its PR did not open: ${errText(err)}` });
         this.publish();
       }
       return;
@@ -427,7 +437,7 @@ export class LandingHub {
     const rec = this.runs.get(id);
     if (!review || review.verdict !== "auto" || !rec || rec.state !== "ready") return;
     if (this.entries.some((e) => e.id === id) || this.deps.runActive(rec.runId)) return;
-    this.entries = enqueue(this.entries, rec, this.now(), { auto: true });
+    this.entries = enqueue(this.entries, rec, this.now(), { auto: true }, this.deps.working?.(rec.repoId) ?? []);
     void this.saveQueue(rec.repoPath);
     this.publish();
     this.kick(rec.repoId);
@@ -442,11 +452,11 @@ export class LandingHub {
     if (!rec || !entry || inQueue(entry) || rec.state !== "ready") return;
     const ok = review ? rejoins(review, entry) : { ok: false as const, why: "its diff could not be sorted" };
     if (ok.ok) {
-      this.entries = enqueue(this.entries, rec, this.now());
+      this.entries = enqueue(this.entries, rec, this.now(), undefined, this.deps.working?.(rec.repoId) ?? []);
       this.kick(rec.repoId);
     } else {
       this.entries = unqueue(this.entries, id);
-      this.notify({ entry: id, repoId: rec.repoId, branch: rec.branch, note: rec.note, kind: "held", why: ok.why });
+      this.notice({ entry: id, repoId: rec.repoId, branch: rec.branch, note: rec.note, kind: "held", why: ok.why });
     }
     void this.saveQueue(rec.repoPath);
     this.publish();
@@ -620,7 +630,7 @@ export class LandingHub {
     const cur = this.landable(rec.id);
     const flags: QueueFlags = review.verdict === "approve" && approve ? { approved: approve } : {};
     // a stopped run found whole joins as a ready one; its record stays stopped
-    this.entries = enqueue(this.entries, { ...cur, state: "ready" }, this.now(), flags);
+    this.entries = enqueue(this.entries, { ...cur, state: "ready" }, this.now(), flags, this.deps.working?.(cur.repoId) ?? []);
     void this.saveQueue(cur.repoPath);
     this.publish();
     this.kick(cur.repoId);
@@ -641,7 +651,7 @@ export class LandingHub {
         continue;
       }
       try {
-        this.entries = enqueue(this.entries, this.runs.get(r.id) ?? r, this.now(), {});
+      this.entries = enqueue(this.entries, this.runs.get(r.id) ?? r, this.now(), {}, this.deps.working?.(r.repoId) ?? []);
         queued.push(r.id);
       } catch (err) {
         skipped.push({ id: r.id, branch: r.branch, why: errText(err) });
@@ -829,7 +839,7 @@ export class LandingHub {
       const held = await this.recheck(e);
       if (held) {
         this.entries = unqueue(this.entries, e.id);
-        this.notify({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "held", why: held });
+        this.notice({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "held", why: held });
         void this.saveQueue(e.repoPath);
         this.publish();
         return;
@@ -921,7 +931,7 @@ export class LandingHub {
       }
       const landed = (await revOf(e.repoPath, "HEAD")) ?? after ?? "";
       this.step(e, { t: "landed", head: landed });
-      if (e.auto) this.notify({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "landed", head: landed });
+      if (e.auto) this.notice({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "landed", head: landed });
       await removeRunTree(e.repoPath, e.dir, e.branch);
       await this.dropRun(e.id);
       this.publish();

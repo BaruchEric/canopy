@@ -1313,6 +1313,8 @@ export interface RunBranch {
    *  on the branch (the first, and each "fix it") carries it, and the
    *  landing record is kept under it */
   origin: string;
+  /** the best-of-N group this run belongs to; members of a group share intended edits (FR-033) */
+  group?: string;
   /** the pre-flight said to open a PR when it settles ready, instead of
    *  landing here (FR-011) */
   openPr?: true;

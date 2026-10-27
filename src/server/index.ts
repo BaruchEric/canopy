@@ -210,6 +210,7 @@ import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { CapacityHub, capacityFile } from "./capacity";
+import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { Scenarios, scenariosRoot } from "./scenarios";
@@ -335,6 +336,8 @@ interface ServerState {
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  /** live file overlaps; warnings only, never a hold */
+  collisions: CollisionHub;
   /** the holdout scenario sets and a pass on demand (server/scenarios) */
   scenarios: Scenarios;
   /** the PRs branch runs opened and the watch on them (server/prs) */
@@ -2165,6 +2168,7 @@ async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo
   const idx = state.result.repos.findIndex((r) => r.id === id);
   if (idx !== -1) state.result.repos[idx] = fresh;
   broadcast(state, { type: "repo", repo: fresh });
+  state.collisions.onRepo(fresh);
   if (goneRepo(fresh)) healGone(state, fresh);
   return { repo: fresh, held: false };
 }
@@ -2688,7 +2692,10 @@ async function refreshPulls(state: ServerState): Promise<void> {
     // announcing it would pulse most of the board on every start.
     const was = before[i]?.pulls?.open ?? 0;
     const counted = was > 0 || (repo.pulls?.open ?? 0) > 0;
-    if (repo !== before[i] && (counted || repo.archived !== before[i]?.archived)) broadcast(state, { type: "repo", repo });
+    if (repo !== before[i] && (counted || repo.archived !== before[i]?.archived)) {
+      broadcast(state, { type: "repo", repo });
+      state.collisions.onRepo(repo);
+    }
   });
 }
 
@@ -2868,6 +2875,7 @@ function applyPeerState(state: ServerState, id: string, st: PeerState): void {
   const next = { ...repo, peers: st };
   state.result.repos[idx] = next;
   broadcast(state, { type: "repo", repo: next });
+  state.collisions.onRepo(next);
 }
 
 /** Best effort: `ctl` exists only where _control is installed. The PATH is
@@ -4779,6 +4787,7 @@ export async function startServer(opts: {
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
       state.landing.onRun(run);
+      state.collisions.onRun(run);
       state.prs.onRun(run);
       state.triggers.onRun(run);
       state.coordinator.onRun(run);
@@ -5211,6 +5220,7 @@ export async function startServer(opts: {
         broadcast(state, ev);
         if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
         if (ev.type === "landing") state.coordinator.recheck();
+        if (ev.type === "landing") state.collisions.onLanding(ev.landing);
       },
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
@@ -5224,6 +5234,19 @@ export async function startServer(opts: {
       openPr: (id) => state.prs.open(id),
       dropped: (id) => state.prs.forgetBranch(id),
       prHeld: (id) => state.prs.holds(id),
+      collisions: () => state.collisions.list(),
+      working: (repoId) => state.collisions.working(repoId),
+    }),
+    collisions: new CollisionHub({
+      runs: () => state.runner.list(),
+      repo: (id) => state.result.repos.find((repo) => repo.id === id),
+      landing: () => state.landing.info(),
+      note: (id, text) => state.runner.note(id, text),
+      say: (id, text) => void state.runner.say(id, text),
+      notify: (notice) => state.landing.notice(notice),
+      publish: () => state.landing.republish(),
+      sayOff: async (path) => (await loadConfig()).agents[path]?.collisionSay === false,
+      groupOf: (run) => run.branch?.group,
     }),
     scenarios: new Scenarios({
       root: scenariosRoot(),
