@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TriggerEvent, TriggerRuleInfo, TriggersInfo } from "../../src/core/trigger";
-import { eventActs, hookAddress, outcomeLine, pollWords, ruleIntake, triggerSections, triggersBadge } from "./triggers";
+import { eventActs, hookAddress, outcomeLine, pollWords, ruleIntake, ruleWrites, triggerSections, triggersBadge } from "./triggers";
 
 const ev = (over: Partial<TriggerEvent>): TriggerEvent => ({
   id: "e1",
@@ -56,6 +56,15 @@ describe("outcomeLine", () => {
     expect(outcomeLine(lin({ status: "review", linked: { error: "Linear answered 401" } }))).toBe("Linear refused the PR's link: Linear answered 401");
     expect(outcomeLine(lin({ status: "review", linked: { at: 3 } }))).toBeNull();
   });
+  test("a GitHub or Forgejo event names its service: the close, a refused close, a refused comment", () => {
+    const gh = (over: Partial<TriggerEvent>) => ev({ source: "github", service: "github", short: "#12", ...over });
+    expect(outcomeLine(gh({ status: "merged", resolved: { at: 3 } }))).toBe("Closed in GitHub");
+    expect(outcomeLine(gh({ status: "merged", service: "forgejo", source: "forgejo", resolved: { at: 3 } }))).toBe("Closed in Forgejo");
+    expect(outcomeLine(gh({ status: "merged" }))).toBe("merged; the rule does not write back, so the issue stays open in GitHub");
+    expect(outcomeLine(gh({ status: "merged", resolved: { error: "HTTP 403: Forbidden" } }))).toBe("merged, but GitHub refused the close: HTTP 403: Forbidden");
+    expect(outcomeLine(gh({ status: "review", linked: { error: "HTTP 403: Forbidden" } }))).toBe("GitHub refused the PR's link: HTTP 403: Forbidden");
+    expect(outcomeLine(gh({ status: "merged", source: "manual" }))).toBe("a test fire, so GitHub was not told");
+  });
   test("otherwise the reason, or nothing", () => {
     expect(outcomeLine(ev({ status: "stopped", reason: "a restart cut the run short" }))).toBe("a restart cut the run short");
     expect(outcomeLine(ev({ status: "working" }))).toBeNull();
@@ -85,24 +94,24 @@ test("hookAddress joins the origin and the hook's path", () => {
   expect(hookAddress("https://canopy.beric.ca/", "/api/hooks/sentry/shop")).toBe("https://canopy.beric.ca/api/hooks/sentry/shop");
 });
 
-describe("ruleIntake", () => {
-  const rule = (over: Partial<TriggerRuleInfo>): TriggerRuleInfo => ({
-    name: "tracker",
-    source: "github",
-    repo: "web/shop",
-    workflow: "issue-fix",
-    projects: [],
-    levels: [],
-    labels: ["canopy"],
-    ignore: [],
-    api: "https://api.github.com",
-    hook: "/api/hooks/github/tracker",
-    secretSet: false,
-    tokenSet: false,
-    agentSet: false,
-    ...over,
-  });
+const rule = (over: Partial<TriggerRuleInfo>): TriggerRuleInfo => ({
+  name: "tracker",
+  source: "github",
+  repo: "web/shop",
+  workflow: "issue-fix",
+  projects: [],
+  levels: [],
+  labels: ["canopy"],
+  ignore: [],
+  api: "https://api.github.com",
+  hook: "/api/hooks/github/tracker",
+  secretSet: false,
+  tokenSet: false,
+  agentSet: false,
+  ...over,
+});
 
+describe("ruleIntake", () => {
   test("a rule with a hook secret shows the hook's address; one without says how often it polls", () => {
     expect(ruleIntake(rule({ secretEnv: "CANOPY_TRIGGER_GH_HOOK", secretSet: true }), "https://canopy.beric.ca/")).toEqual({ hook: "https://canopy.beric.ca/api/hooks/github/tracker", poll: null });
     expect(ruleIntake(rule({ poll: "*/15 * * * *" }), "https://canopy.beric.ca")).toEqual({ hook: null, poll: "polls every 15 min" });
@@ -116,5 +125,19 @@ describe("ruleIntake", () => {
     expect(pollWords("0 * * * *")).toBe("polls every hour");
     expect(pollWords("0 */2 * * *")).toBe("polls every 2 hours");
     expect(pollWords("30 6 * * *")).toBe("polls on 30 6 * * *");
+  });
+});
+
+describe("ruleWrites", () => {
+  test("a GitHub or Forgejo rule writes back unless write is false", () => {
+    expect(ruleWrites(rule({ write: true }))).toEqual({ on: true, words: "writes back to GitHub", why: expect.stringContaining("closes it once the PR merges") });
+    expect(ruleWrites(rule({ write: false }))).toMatchObject({ on: false, words: "leaves issues open in GitHub" });
+    expect(ruleWrites(rule({ source: "forgejo", write: true }))).toMatchObject({ on: true, words: "writes back to Forgejo", why: expect.stringContaining("once its branch lands") });
+  });
+
+  test("a Sentry or Linear rule writes with its token or the app's", () => {
+    expect(ruleWrites(rule({ source: "sentry" }))).toMatchObject({ on: false, words: "leaves issues open in Sentry" });
+    expect(ruleWrites(rule({ source: "sentry", tokenSet: true }))).toMatchObject({ on: true, words: "resolves in Sentry" });
+    expect(ruleWrites(rule({ source: "linear", agentSet: true }))).toMatchObject({ on: true, words: "writes back to Linear" });
   });
 });

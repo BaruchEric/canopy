@@ -844,12 +844,17 @@ export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent):
   }
 }
 
-/** The comment a labeled Linear issue gets when its run ends without a PR,
- *  so whoever labeled it hears why, or null. An issue with an agent session
- *  hears through `activityFor` instead, and a test fire tells Linear nothing.
- *  `origin` is canopy's public address, for the way to retry. */
+/** The services whose issues canopy comments on: a note when a run ends
+ *  without a PR, the PR's link. Sentry's issues are only resolved. */
+const COMMENTED: ReadonlySet<string> = new Set<TriggerSource>(["linear", "github", "forgejo"]);
+
+/** The comment a labeled Linear, GitHub or Forgejo issue gets when its run
+ *  ends without a PR, so whoever labeled it hears why, or null. An issue
+ *  with an agent session hears through `activityFor` instead, and a test
+ *  fire tells the service nothing. `origin` is canopy's public address,
+ *  for the way to retry. */
 export function issueNoteFor(prev: TriggerEvent | undefined, next: TriggerEvent, origin?: string): string | null {
-  if (next.service !== "linear" || next.source === "manual" || next.session || prev?.status === next.status) return null;
+  if (!next.service || !COMMENTED.has(next.service) || next.source === "manual" || next.session || prev?.status === next.status) return null;
   const lead =
     next.status === "no-fix"
       ? "canopy ran on this issue and committed nothing."

@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { SAMPLE_TITLE, SERVICE_NAME, type TriggerRuleInfo, type TriggersInfo } from "../../../src/core/trigger";
+import { SAMPLE_TITLE, type TriggerRuleInfo, type TriggersInfo } from "../../../src/core/trigger";
 import { baseOf } from "../registry";
 import { copyText } from "../share";
 import { useStore } from "../store";
-import { STATUS_TONE, STATUS_WORD, eventActs, outcomeLine, ruleIntake, serviceOf, triggerSections, type TriggerRow } from "../triggers";
+import { STATUS_TONE, STATUS_WORD, eventActs, outcomeLine, ruleIntake, ruleWrites, serviceOf, triggerSections, type TriggerRow } from "../triggers";
 import { ago } from "../util";
 
 type Call = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; error: string };
@@ -162,13 +162,7 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
   const repo = useRepoName(rule.repo);
   const intake = ruleIntake(rule, origin);
   const [copied, setCopied] = useState(false);
-  const name = SERVICE_NAME[rule.source];
-  const writesBack =
-    rule.source === "linear"
-      ? "A Linear API key, or the Linear app's own token, lets canopy put the PR's link on the issue and move it to done once the fix merges"
-      : "A Sentry token lets canopy mark the issue resolved once the fix merges";
-  // the server writes back with the rule's key, else with the app's token
-  const writes = rule.tokenSet || rule.agentSet;
+  const writes = ruleWrites(rule);
   return (
     <li className="trigger-rule">
       <div className="trigger-main">
@@ -190,8 +184,8 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
               {intake.poll}
             </span>
           )}
-          <span className={writes ? "moss" : "faint"} title={writesBack}>
-            {writes ? (rule.source === "linear" ? "writes back to Linear" : "resolves in Sentry") : `leaves issues open in ${name}`}
+          <span className={writes.on ? "moss" : "faint"} title={writes.why}>
+            {writes.words}
           </span>
         </span>
       </div>

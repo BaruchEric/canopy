@@ -4,7 +4,7 @@ import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
-import { fetchIssue, listLabelledIssues, resolveIssueNote, type GhRun } from "../core/issue";
+import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, type GhRun } from "../core/issue";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
@@ -218,7 +218,7 @@ import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { takeTriggerSecrets } from "../core/envnames";
 import { incomingFromIssueView, opensPr, POLL_ISSUES, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
-import { forgejoListIssues, forgejoReadIssue } from "./forgejo";
+import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
@@ -5375,6 +5375,24 @@ export async function startServer(opts: {
         return incomingFromIssueView(await forgejoReadIssue(rule.api, forge.slug, number, forge.token));
       },
       reportPoll: (r) => state.health.report(TRIGGERS_CHECK, r),
+      writeIssue: async (rule, repo, event, write) => {
+        const number = Number(event.key);
+        const own = rule.tokenEnv ? triggerSecrets.get(rule.tokenEnv) : undefined;
+        const forge = await issueForge(state, rule, repo, own);
+        if (forge.kind === "github") {
+          // gh's login writes, unless the rule names a token of its own
+          const gh: GhRun = own ? (args) => exec(["gh", ...args], { cwd: repo.path, timeoutMs: 30_000, env: { GH_TOKEN: own } }) : forge.gh;
+          if (write.kind === "comment") await commentIssue(forge.slug, number, write.body, gh);
+          else await closeIssue(forge.slug, number, write.comment, gh);
+          return;
+        }
+        if (write.kind === "comment") {
+          await forgejoComment(rule.api, forge.slug, number, forge.token, write.body);
+          return;
+        }
+        if (write.comment) await forgejoComment(rule.api, forge.slug, number, forge.token, write.comment);
+        await forgejoClose(rule.api, forge.slug, number, forge.token);
+      },
       // a message written in a Linear agent session, read by a run on the
       // event's branch; fenced, since anyone in the workspace can write one
       followUp: async (event, text) => {

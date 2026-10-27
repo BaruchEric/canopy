@@ -611,6 +611,13 @@ describe("issueNoteFor", () => {
     expect(issueNoteFor(lin(), lin({ status: "stopped" }))).toBeNull();
     expect(issueNoteFor(lin(), lin({ status: "ready" }))).toBeNull();
   });
+  test("a GitHub or Forgejo issue gets the same note; Sentry's never does", () => {
+    const gh = (over: Partial<TriggerEvent> = {}): TriggerEvent => ({ ...event({ source: "github", service: "github", status: "working" }), ...over });
+    const fj = (over: Partial<TriggerEvent> = {}): TriggerEvent => ({ ...event({ source: "forgejo", service: "forgejo", status: "working" }), ...over });
+    expect(issueNoteFor(gh(), gh({ status: "no-fix" }))).toBe("canopy ran on this issue and committed nothing.");
+    expect(issueNoteFor(fj(), fj({ status: "failed", reason: "no worktree" }))).toBe("canopy's run on this issue failed: no worktree.");
+    expect(issueNoteFor(event({ service: "sentry", status: "working" }), event({ service: "sentry", status: "no-fix" }))).toBeNull();
+  });
 });
 
 describe("the workspace and the install", () => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { forgejoListIssues, forgejoReadIssue, type Fetch } from "./forgejo";
+import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue, type Fetch } from "./forgejo";
 
 const API = "https://git.example.com";
 
@@ -15,11 +15,11 @@ const issue = (number: number, day: number, labels = ["canopy"]) => ({
   created_at: `2026-10-${String(day).padStart(2, "0")}T10:00:00Z`,
 });
 
-let calls: { url: string; auth: string | null }[];
+let calls: { url: string; method: string; auth: string | null; type: string | null; body: string | null }[];
 /** answers by the url's path and query */
 let answers: Record<string, { status?: number; body: unknown }>;
 const fetchFake: Fetch = async (url, init) => {
-  calls.push({ url, auth: new Headers(init.headers).get("authorization") });
+  calls.push({ url, method: init.method ?? "GET", auth: new Headers(init.headers).get("authorization"), type: new Headers(init.headers).get("content-type"), body: typeof init.body === "string" ? init.body : null });
   const u = new URL(url);
   const a = answers[`${u.pathname}${u.search}`];
   if (!a) return new Response("not found", { status: 404 });
@@ -67,5 +67,30 @@ describe("forgejoReadIssue", () => {
     answers["/api/v1/repos/o/r/issues/8"] = { body: { ...issue(8, 8), pull_request: { merged: false } } };
     await expect(forgejoReadIssue(API, "o/r", 8, "tok", fetchFake)).rejects.toThrow("#8 is not an issue");
     await expect(forgejoReadIssue(API, "o/r", 9, "tok", fetchFake)).rejects.toThrow(`${API} answered 404`);
+  });
+});
+
+describe("forgejoComment and forgejoClose", () => {
+  test("a comment is posted as JSON with the token, and a close patches the issue's state", async () => {
+    answers["/api/v1/repos/o/r/issues/7/comments"] = { status: 201, body: { id: 1 } };
+    answers["/api/v1/repos/o/r/issues/7"] = { body: issue(7, 7) };
+    await forgejoComment(API, "o/r", 7, "tok", "Opened #3 from run/fix.", fetchFake);
+    await forgejoClose(API, "o/r", 7, "tok", fetchFake);
+    expect(calls.map((c) => [c.method, new URL(c.url).pathname, c.body])).toEqual([
+      ["POST", "/api/v1/repos/o/r/issues/7/comments", JSON.stringify({ body: "Opened #3 from run/fix." })],
+      ["PATCH", "/api/v1/repos/o/r/issues/7", JSON.stringify({ state: "closed" })],
+    ]);
+    expect(calls.map((c) => [c.auth, c.type])).toEqual([
+      ["token tok", "application/json"],
+      ["token tok", "application/json"],
+    ]);
+  });
+
+  test("a refusal names the token, and any other status the server", async () => {
+    answers["/api/v1/repos/o/r/issues/7/comments"] = { status: 403, body: { message: "no" } };
+    await expect(forgejoComment(API, "o/r", 7, "tok", "x", fetchFake)).rejects.toThrow(`${API} rejected the token`);
+    answers["/api/v1/repos/o/r/issues/7"] = { status: 500, body: {} };
+    await expect(forgejoClose(API, "o/r", 7, "tok", fetchFake)).rejects.toThrow(`${API} answered 500`);
+    await expect(forgejoClose(API, "o/r", 9, "tok", fetchFake)).rejects.toThrow(`${API} answered 404`);
   });
 });

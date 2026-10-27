@@ -17,6 +17,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextFire, parseCron } from "../core/cron";
+import { fixedComment, openedComment } from "../core/forgejoissues";
 import { fail, pass, type ProbeResult } from "../core/health";
 import { configDir } from "../core/store";
 import {
@@ -44,6 +45,7 @@ import {
   resumable,
   retryable,
   sampleIncoming,
+  SERVICE_NAME,
   eventLive,
   type AgentActivity,
   type AgentDelivery,
@@ -87,9 +89,17 @@ export type AgentSay = { activity: AgentActivity } | { links: { label: string; u
 const linearAgent = (rule: TriggerRule, token: string, session: string, say: AgentSay): Promise<void> =>
   "activity" in say ? linearActivity(rule, token, session, say.activity) : linearSessionLinks(rule, token, session, say.links);
 
+/** A write on a GitHub or Forgejo issue: a comment, or a close with a
+ *  closing comment when there is a PR to name. */
+export type IssueWrite = { kind: "comment"; body: string } | { kind: "close"; comment?: string };
+
 /** An event a message in its agent session can carry on: stopped, or ended
  *  with nothing committed, on a branch still kept. */
 export const followable = (e: TriggerEvent): boolean => e.branch !== undefined && (e.status === "stopped" || e.status === "no-fix");
+
+/** Whether an event's issue is on a forge canopy writes to itself, with gh
+ *  or Forgejo's API, rather than through a service token. */
+const onForge = (e: TriggerEvent): boolean => e.service === "github" || e.service === "forgejo";
 
 export interface TriggerDeps {
   broadcast: (ev: ServerEvent) => void;
@@ -144,6 +154,10 @@ export interface TriggerDeps {
   /** how the last poll went, or a hook's read of an issue in full: the
    *  `canopy:triggers` health check, fed one result per poll */
   reportPoll: (result: ProbeResult) => void;
+  /** github and forgejo: a write on the event's issue, as gh's login (a
+   *  `tokenEnv` sets GH_TOKEN) or through Forgejo's API with the rule's
+   *  token; what it throws is kept on the event */
+  writeIssue: (rule: TriggerRule, repo: Repo, event: TriggerEvent, write: IssueWrite) => Promise<void>;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -603,23 +617,27 @@ export class TriggerHub {
         this.set(next);
         if (!this.keeping) continue;
         // queued in this order, so the link lands before the move to done
-        if (next.service === "linear" && next.pr && !next.linked) void this.linkIssue(next.id);
+        if ((next.service === "linear" || next.service === "github") && next.pr && !next.linked) void this.linkIssue(next.id, w.branch);
         if (next.status === "merged" && !next.resolved) void this.resolveIssue(next.id);
       }
     }
   }
 
   /** The landing queue's every change: a committed event whose branch
-   *  landed is merged, and one the queue held back says why. */
+   *  landed is merged, which closes its issue, and one the queue held back
+   *  says why. */
   onLanding(notices: readonly LandNotice[], entries: readonly LandEntry[] = []): void {
     for (const e of this.events.values()) {
       const next = fromLanding(e, notices, entries);
-      if (next !== e) this.set(next);
+      if (next === e) continue;
+      this.set(next);
+      if (this.keeping && next.status === "merged" && !next.resolved) void this.resolveIssue(next.id);
     }
   }
 
-  /** The rule and its token, for a call that writes back to the service:
-   *  the rule's `tokenEnv`, else the Linear app's own token when the agent is on. */
+  /** The rule and its token, for a call that writes back to Sentry or
+   *  Linear: the rule's `tokenEnv`, else the Linear app's own token when
+   *  the agent is on. */
   private async writer(e: TriggerEvent): Promise<{ rule: TriggerRule; token: string } | null> {
     if (e.source === "manual") return null;
     await this.loadRules();
@@ -629,6 +647,19 @@ export class TriggerHub {
     if (token) return { rule, token };
     const app = await this.appTokenOf(rule).catch(() => undefined);
     return app ? { rule, token: app } : null;
+  }
+
+  /** The rule and repo a write on a GitHub or Forgejo issue is made for, or
+   *  null when the event is a test fire, its rule is gone, or the rule's
+   *  `write` is off. The token is the write's to pick. */
+  private async forgeWriter(e: TriggerEvent): Promise<{ rule: TriggerRule; repo: Repo } | null> {
+    if (e.source === "manual") return null;
+    await this.loadRules();
+    const rule = this.rule(e.rule);
+    if (!rule || rule.write === false) return null;
+    const repo = this.deps.repo(rule.repo);
+    if (!repo) throw new Error(`no repo ${rule.repo} in the tree`);
+    return { rule, repo };
   }
 
   /** The Linear app's token, or undefined when the rule has no app or its secret is unset. */
@@ -671,15 +702,24 @@ export class TriggerHub {
     if (now) this.set({ ...now, ...patch });
   }
 
+  /** Marks the event's issue done where it came from, once: closed on its
+   *  forge (naming the PR when there is one), resolved in Sentry, done in
+   *  Linear. A refusal stays on the event; nothing tries again. */
   private resolveIssue(id: string): Promise<void> {
     return this.queue(async () => {
       const e = this.events.get(id);
       if (!e || e.status !== "merged" || e.resolved) return;
-      const w = await this.writer(e);
-      if (!w) return;
-      const resolve = this.deps.resolve ?? (w.rule.source === "linear" ? linearDone : sentryResolve);
       try {
-        await resolve(w.rule, e, w.token);
+        if (onForge(e)) {
+          const w = await this.forgeWriter(e);
+          if (!w) return;
+          await this.deps.writeIssue(w.rule, w.repo, e, { kind: "close", ...(e.pr ? { comment: fixedComment(e.pr.number) } : {}) });
+        } else {
+          const w = await this.writer(e);
+          if (!w) return;
+          const resolve = this.deps.resolve ?? (w.rule.source === "linear" ? linearDone : sentryResolve);
+          await resolve(w.rule, e, w.token);
+        }
         this.mark(id, { resolved: { at: this.now() } });
       } catch (err) {
         this.mark(id, { resolved: { error: errText(err) } });
@@ -687,14 +727,20 @@ export class TriggerHub {
     });
   }
 
-  /** The PR's link goes to the issue: on its agent session when it has one,
-   *  else as a comment. */
-  private linkIssue(id: string): Promise<void> {
+  /** The PR's link goes to the issue, once: on its agent session when it
+   *  has one, else as a comment (Linear's API, or gh on a GitHub issue,
+   *  naming the branch it came from). */
+  private linkIssue(id: string, branch: string): Promise<void> {
     return this.queue(async () => {
       const e = this.events.get(id);
-      if (!e?.pr || e.linked || e.service !== "linear" || e.source === "manual") return;
+      if (!e?.pr || e.linked || e.source === "manual") return;
+      if (e.service !== "linear" && e.service !== "github") return;
       try {
-        if (e.session) {
+        if (e.service === "github") {
+          const w = await this.forgeWriter(e);
+          if (!w) return;
+          await this.deps.writeIssue(w.rule, w.repo, e, { kind: "comment", body: openedComment(e.pr.number, branch) });
+        } else if (e.session) {
           await this.sayNow(e.rule, e.session, { links: [{ label: `Pull request #${e.pr.number}`, url: e.pr.url }] });
         } else {
           const w = await this.writer(e);
@@ -708,18 +754,24 @@ export class TriggerHub {
     });
   }
 
-  /** Comments on a labeled Linear issue why its run ended without a PR. A
-   *  refusal is only logged: the event already says how the run ended. */
+  /** Comments on a labeled issue why its run ended without a PR. A refusal
+   *  is only logged: the event already says how the run ended. */
   private noteIssue(id: string, body: string): Promise<void> {
     return this.queue(async () => {
       const e = this.events.get(id);
       if (!e || !this.keeping) return;
-      const w = await this.writer(e);
-      if (!w) return;
       try {
-        await (this.deps.note ?? linearNote)(w.rule, e, w.token, body);
+        if (onForge(e)) {
+          const w = await this.forgeWriter(e);
+          if (!w) return;
+          await this.deps.writeIssue(w.rule, w.repo, e, { kind: "comment", body });
+        } else {
+          const w = await this.writer(e);
+          if (!w) return;
+          await (this.deps.note ?? linearNote)(w.rule, e, w.token, body);
+        }
       } catch (err) {
-        console.error(`triggers: Linear issue ${e.short}: ${errText(err)}`);
+        console.error(`triggers: ${SERVICE_NAME[e.service ?? "sentry"]} issue ${e.short}: ${errText(err)}`);
       }
     });
   }

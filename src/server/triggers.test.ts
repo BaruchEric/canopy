@@ -25,6 +25,7 @@ let runs: Run[];
 let busy: string | null;
 let stopped: string[];
 let resolved: string[];
+let written: string[];
 let events: TriggerEvent[][];
 let n: number;
 
@@ -60,6 +61,9 @@ function hub(over: Partial<TriggerDeps> = {}): TriggerHub {
     listIssues: async () => [],
     readIssue: async (_rule, _repo, inc) => inc,
     reportPoll: () => {},
+    writeIssue: async (_rule, _repo, e, write) => {
+      written.push(`${e.key}:${write.kind}:${write.kind === "comment" ? write.body : (write.comment ?? "")}`);
+    },
     file: join(dir, "triggers.json"),
     dir: join(dir, "triggers"),
     now: () => 1000,
@@ -79,6 +83,7 @@ beforeEach(async () => {
   busy = null;
   stopped = [];
   resolved = [];
+  written = [];
   events = [];
   n = 0;
   await rules();
@@ -1060,5 +1065,140 @@ describe("landing", () => {
     const h = await readyHub();
     h.onLanding([notice({ kind: "held", why: "main moved under it" })], [{ ...landed, state: "waiting" }]);
     expect(h.list()[0]).toMatchObject({ status: "ready", reason: "main moved under it" });
+  });
+});
+
+describe("writing back", () => {
+  const HOOK = "gh-s3cret";
+  const env = (name: string) => ({ CANOPY_TRIGGER_GH_HOOK: HOOK })[name];
+  const issue = (number: number) => ({ number, title: `Issue ${number}`, body: "Steps.", state: "open", html_url: `https://git.example.com/o/r/issues/${number}`, labels: [{ name: "canopy" }] });
+  const ghRule = (extra: Record<string, unknown> = {}) =>
+    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_GH_HOOK", ...extra }] }));
+  const fjRule = () =>
+    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "fj", source: "forgejo", repo: "web/shop", api: "https://git.example.com", secretEnv: "CANOPY_TRIGGER_GH_HOOK" }] }));
+  /** delivers issue `number` to the rule, GitHub's way or Forgejo's */
+  async function deliver(h: TriggerHub, source: "github" | "forgejo", number: number): Promise<void> {
+    const body = JSON.stringify(source === "github" ? { action: "labeled", label: { name: "canopy" }, issue: issue(number) } : { action: "label_updated", issue: issue(number) });
+    const headers: Record<string, string> = source === "github" ? { "x-hub-signature-256": `sha256=${sign(body, HOOK)}`, "x-github-event": "issues" } : { "x-forgejo-signature": sign(body, HOOK), "x-forgejo-event": "issues" };
+    const url = new URL(`http://x/api/hooks/${source}/${source === "github" ? "gh" : "fj"}`);
+    const res = await h.handle(new Request(url.href, { method: "POST", body, headers }), url);
+    expect(res?.status).toBe(200);
+  }
+  const writeHub = (over: Partial<TriggerDeps> = {}) => hub({ env, ...over });
+  /** the event's run, done and committed on its branch */
+  const ready = (h: TriggerHub, r: Run) => h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "ready" } });
+  const prOf = (r: Run, status: "open" | "merged") => ({ id: r.branch!.origin, runId: r.id, branch: r.branch!.name, number: 3, url: "https://github.com/o/r/pull/3", state: { status } }) as PrWatch;
+  const landedEntry = (r: Run): LandEntry =>
+    ({ id: r.branch!.origin, repoId: "web/shop", repoPath: "/dev/web/shop", branch: r.branch!.name, target: "main", dir: "/d", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9 }) as LandEntry;
+
+  test("a GitHub PR's open is commented on the issue once, and its merge closes the issue", async () => {
+    await ghRule();
+    const h = writeHub();
+    await h.adopt();
+    await deliver(h, "github", 12);
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onPrs([prOf(r, "open")]);
+    h.onPrs([prOf(r, "open")]);
+    await h.idle();
+    expect(written).toEqual(["12:comment:Opened #3 from run/x."]);
+    expect(h.list()[0]).toMatchObject({ status: "review", linked: { at: 1000 } });
+    h.onPrs([prOf(r, "merged")]);
+    h.onPrs([prOf(r, "merged")]);
+    await h.idle();
+    expect(written).toEqual(["12:comment:Opened #3 from run/x.", "12:close:Fixed by #3."]);
+    expect(h.list()[0]).toMatchObject({ status: "merged", resolved: { at: 1000 } });
+  });
+
+  test("a run that commits nothing, or fails, is explained on the issue", async () => {
+    await ghRule();
+    const h = writeHub({ origin: "https://canopy.example" });
+    await h.adopt();
+    await deliver(h, "github", 12);
+    h.onRun({ ...(runs[0] as Run), status: "done", branch: { ...(runs[0] as Run).branch!, state: "nothing" } });
+    await h.idle();
+    const retry = "\n\nTo try again, use Retry on [canopy's triggers page](https://canopy.example/?view=triggers).";
+    expect(written).toEqual([`12:comment:canopy ran on this issue and committed nothing.${retry}`]);
+    await deliver(h, "github", 13);
+    h.onRun({ ...(runs[1] as Run), status: "failed", error: "no worktree" });
+    await h.idle();
+    expect(written[1]).toBe(`13:comment:canopy's run on this issue failed: no worktree.${retry}`);
+  });
+
+  test("a Forgejo event's landing closes the issue, with no PR to name", async () => {
+    await fjRule();
+    const h = writeHub();
+    await h.adopt();
+    await deliver(h, "forgejo", 7);
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onLanding([], [landedEntry(r)]);
+    h.onLanding([], [landedEntry(r)]);
+    await h.idle();
+    expect(written).toEqual(["7:close:"]);
+    expect(h.list()[0]).toMatchObject({ status: "merged", resolved: { at: 1000 } });
+  });
+
+  test("write: false writes nothing", async () => {
+    await ghRule({ write: false });
+    const h = writeHub();
+    await h.adopt();
+    await deliver(h, "github", 12);
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onPrs([prOf(r, "open")]);
+    h.onPrs([prOf(r, "merged")]);
+    await h.idle();
+    expect(written).toEqual([]);
+    expect(h.list()[0]).toMatchObject({ status: "merged" });
+    expect(h.list()[0]?.resolved).toBeUndefined();
+    expect(h.list()[0]?.linked).toBeUndefined();
+  });
+
+  test("a test fire writes nothing either", async () => {
+    await ghRule();
+    const h = writeHub();
+    await h.adopt();
+    await h.fire("gh", "Show the last sync time");
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onPrs([prOf(r, "merged")]);
+    await h.idle();
+    expect(written).toEqual([]);
+    expect(h.list()[0]).toMatchObject({ status: "merged", source: "manual" });
+  });
+
+  test("a refused close stays on the event, and the next event still delivers", async () => {
+    await fjRule();
+    const h = writeHub({
+      writeIssue: async () => {
+        throw new Error("Forgejo answered 401");
+      },
+    });
+    await h.adopt();
+    await deliver(h, "forgejo", 7);
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onLanding([], [landedEntry(r)]);
+    await h.idle();
+    expect(h.list()[0]).toMatchObject({ status: "merged", resolved: { error: "Forgejo answered 401" } });
+    await deliver(h, "forgejo", 8);
+    expect(h.list().find((e) => e.key === "8")).toMatchObject({ status: "working", runId: "r2" });
+  });
+
+  test("a refused comment stays on the event as the link's error", async () => {
+    await ghRule();
+    const h = writeHub({
+      writeIssue: async () => {
+        throw new Error("HTTP 403: Forbidden");
+      },
+    });
+    await h.adopt();
+    await deliver(h, "github", 12);
+    const r = runs[0] as Run;
+    ready(h, r);
+    h.onPrs([prOf(r, "open")]);
+    await h.idle();
+    expect(h.list()[0]).toMatchObject({ status: "review", linked: { error: "HTTP 403: Forbidden" } });
   });
 });

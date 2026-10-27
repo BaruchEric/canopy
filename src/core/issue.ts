@@ -92,6 +92,24 @@ export function issueNote(issue: IssueView, rest: string): string {
 /** last line of what gh said, the words the run sheet shows on a failure */
 const lastLine = (r: GhResult): string => (r.stderr.trim() || r.stdout.trim()).split("\n").filter(Boolean).pop() ?? `gh exited ${r.code}`;
 
+/** One gh call that must exit 0; what it prints is not read. */
+async function ghDo(args: string[], gh: GhRun): Promise<void> {
+  let r: GhResult;
+  try {
+    r = await gh(args);
+  } catch (err) {
+    throw new Error(`gh did not run: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (r.code !== 0) throw new Error(lastLine(r));
+}
+
+/** Comments on an issue in the repo `slug`, as gh's login: `gh issue comment`. */
+export const commentIssue = (slug: string, number: number, body: string, gh: GhRun): Promise<void> => ghDo(["issue", "comment", String(number), "-R", slug, "-b", body], gh);
+
+/** Closes an issue in the repo `slug`, with a closing comment when given: `gh issue close`. */
+export const closeIssue = (slug: string, number: number, comment: string | undefined, gh: GhRun): Promise<void> =>
+  ghDo(["issue", "close", String(number), "-R", slug, ...(comment ? ["-c", comment] : [])], gh);
+
 /** Reads the issue a ref names from the repo `slug` (its GitHub remote). A
  *  URL naming another repo is refused: the run works on this one. */
 export async function fetchIssue(ref: IssueRef, slug: string, gh: GhRun): Promise<{ issue: IssueView } | { error: string }> {

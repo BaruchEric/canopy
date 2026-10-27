@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fetchIssue, issueNote, listLabelledIssues, oldestIssues, parseIssueRef, parseIssueView, resolveIssueNote, type GhResult, type IssueView } from "./issue";
+import { closeIssue, commentIssue, fetchIssue, issueNote, listLabelledIssues, oldestIssues, parseIssueRef, parseIssueView, resolveIssueNote, type GhResult, type IssueView } from "./issue";
 import { branchSlug } from "./worktree";
 
 const ok = (stdout: string): GhResult => ({ code: 0, stdout, stderr: "" });
@@ -184,5 +184,28 @@ describe("listLabelledIssues", () => {
         50,
       ),
     ).toEqual({ error: "gh did not run: ENOENT" });
+  });
+});
+
+describe("commentIssue and closeIssue", () => {
+  test("a comment and a close go through gh with the repo's slug", async () => {
+    const { calls, gh } = fakeGh(ok(""));
+    await commentIssue("o/r", 12, "Opened #3 from run/fix.", gh);
+    await closeIssue("o/r", 12, "Fixed by #3.", gh);
+    await closeIssue("o/r", 12, undefined, gh);
+    expect(calls).toEqual([
+      ["issue", "comment", "12", "-R", "o/r", "-b", "Opened #3 from run/fix."],
+      ["issue", "close", "12", "-R", "o/r", "-c", "Fixed by #3."],
+      ["issue", "close", "12", "-R", "o/r"],
+    ]);
+  });
+
+  test("gh's last line is the error, and a gh that does not run says so", async () => {
+    await expect(commentIssue("o/r", 12, "x", fakeGh(no("noise\nHTTP 404: Not Found\n")).gh)).rejects.toThrow("HTTP 404: Not Found");
+    await expect(
+      closeIssue("o/r", 12, undefined, async () => {
+        throw new Error("ENOENT");
+      }),
+    ).rejects.toThrow("gh did not run: ENOENT");
   });
 });

@@ -339,56 +339,56 @@ git commit -m "feat(triggers): route forgejo issue work to landing"
 - Produces in src/server/forgejo.ts: forgejoComment(rule: TriggerRule, slug: string, number: number, token: string, body: string): Promise<void>; forgejoClose(rule: TriggerRule, slug: string, number: number, token: string): Promise<void>.
 - GitHub callbacks use gh with the repo path and optional GH_TOKEN from tokenEnv. Forgejo chooses tokenEnv, then the token for the matching configured Forgejo source.
 
-- [ ] **Step 1: Write failing tests** for GitHub's exact "Opened #12 from run/fix." comment on a PR, "Fixed by #12." close comment after merge, and no-fix/failed comments; Forgejo POST comment and PATCH {state: "closed"} after a landing event becomes merged; write: false; absent Forgejo token; non-2xx errors; and a failed close retained as resolved.error while the next event still delivers.
+- [x] **Step 1: Write failing tests** for GitHub's exact "Opened #12 from run/fix." comment on a PR, "Fixed by #12." close comment after merge, and no-fix/failed comments; Forgejo POST comment and PATCH {state: "closed"} after a landing event becomes merged; write: false; absent Forgejo token; non-2xx errors; and a failed close retained as resolved.error while the next event still delivers.
 
 ```ts
 expect(openedComment(12, "run/fix")).toBe("Opened #12 from run/fix.");
 expect(fixedComment(12)).toBe("Fixed by #12.");
 expect(h.list()[0]).toMatchObject({ resolved: { error: "Forgejo answered 401" } });
 ```
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: bun test src/server/forgejo.test.ts src/server/triggers.test.ts ui/src/triggers.test.ts
 Expected: FAIL because the Forgejo writer and GitHub write-back paths are absent.
 
-- [ ] **Step 3: Implement the Forgejo writer**
+- [x] **Step 3: Implement the Forgejo writer**
 
 Build URLs through core/forgejoissues.ts. Send Bearer token and JSON. Treat every non-2xx response as an error. The comment body is the supplied text; the close body is {state: "closed"}.
 
-- [ ] **Step 4: Connect write-back to event transitions**
+- [x] **Step 4: Connect write-back to event transitions**
 
 When write is not false, comment once when a GitHub PR opens and close once when the GitHub PR merges or a Forgejo landing record lands. In onLanding, call resolveIssue after storing the Forgejo event as merged; mark the write once so duplicate broadcasts do not repeat it. For no-fix or failed, reuse issueNoteFor. Keep each service error on linked.error or resolved.error and let the hub continue to the next event. A test fire performs no writes. Use gh's login by default for GitHub; tokenEnv supplies GH_TOKEN when configured. Forgejo uses tokenEnv or readToken from the matching configured source.
 
-- [ ] **Step 5: Update the trigger outcome words**
+- [x] **Step 5: Update the trigger outcome words**
 
 Show GitHub and Forgejo results with their service names. Keep the existing Sentry and Linear lines unchanged.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: bun test src/server/forgejo.test.ts src/server/triggers.test.ts ui/src/triggers.test.ts
 Expected: PASS, including a refused write that leaves resolved.error on the event.
 
-- [ ] **Step 7: Run typecheck**
+- [x] **Step 7: Run typecheck**
 
 Run: bun run typecheck
 Expected: PASS.
 
-- [ ] **Step 8: Run lint**
+- [x] **Step 8: Run lint**
 
 Run: bun run lint
 Expected: PASS.
 
-- [ ] **Step 9: Run the full test suite**
+- [x] **Step 9: Run the full test suite**
 
 Run: bun test
 Expected: PASS.
 
-- [ ] **Step 10: Build**
+- [x] **Step 10: Build**
 
 Run: bun run build
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ~~~sh
 git add src/server/forgejo.ts src/server/forgejo.test.ts src/server/triggers.ts src/server/triggers.test.ts src/server/index.ts ui/src/triggers.ts ui/src/triggers.test.ts

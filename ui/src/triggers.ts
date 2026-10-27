@@ -83,14 +83,35 @@ export const serviceOf = (e: Pick<TriggerEvent, "service">): string => SERVICE_N
 export function outcomeLine(e: TriggerEvent): string | null {
   const name = serviceOf(e);
   const linear = e.service === "linear";
+  const forge = e.service === "github" || e.service === "forgejo";
   if (e.status === "merged") {
     if (e.source === "manual") return `a test fire, so ${name} was not told`;
-    if (!e.resolved) return `merged; the rule holds no token, so the issue stays open in ${name}`;
-    if ("at" in e.resolved) return linear ? "Moved to done in Linear" : "Resolved in Sentry";
-    return `merged, but ${name} refused ${linear ? "the move to done" : "the resolve"}: ${e.resolved.error}`;
+    if (!e.resolved) return `merged; the rule ${forge ? "does not write back" : "holds no token"}, so the issue stays open in ${name}`;
+    if ("at" in e.resolved) return forge ? `Closed in ${name}` : linear ? "Moved to done in Linear" : "Resolved in Sentry";
+    return `merged, but ${name} refused ${forge ? "the close" : linear ? "the move to done" : "the resolve"}: ${e.resolved.error}`;
   }
-  if (e.status === "review" && e.linked && "error" in e.linked) return `Linear refused the PR's link: ${e.linked.error}`;
+  if (e.status === "review" && e.linked && "error" in e.linked) return `${name} refused the PR's link: ${e.linked.error}`;
   return e.reason ?? null;
+}
+
+/** Whether a rule writes back to its service, the words the rule's card
+ *  shows for that, and why. A GitHub or Forgejo rule writes as gh's login
+ *  or with the forge's token unless its `write` is off; a Sentry or Linear
+ *  rule needs its token, or the Linear app's. */
+export function ruleWrites(rule: Pick<TriggerRuleInfo, "source" | "write" | "tokenSet" | "agentSet">): { on: boolean; words: string; why: string } {
+  const name = SERVICE_NAME[rule.source];
+  const forge = rule.source === "github" || rule.source === "forgejo";
+  const on = forge ? rule.write !== false : rule.tokenSet || rule.agentSet;
+  const why =
+    rule.source === "github"
+      ? "canopy comments the PR's link on the issue, or why a run ended without one, and closes it once the PR merges; write: false in the rule turns this off"
+      : rule.source === "forgejo"
+        ? "canopy comments on the issue when a run ends without a fix, and closes it once its branch lands; write: false in the rule turns this off"
+        : rule.source === "linear"
+          ? "A Linear API key, or the Linear app's own token, lets canopy put the PR's link on the issue and move it to done once the fix merges"
+          : "A Sentry token lets canopy mark the issue resolved once the fix merges";
+  const words = on ? (rule.source === "sentry" ? "resolves in Sentry" : `writes back to ${name}`) : `leaves issues open in ${name}`;
+  return { on, words, why };
 }
 
 /** What can be done to an event right now, in the order the row shows them. */
