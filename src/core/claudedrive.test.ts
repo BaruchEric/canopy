@@ -28,6 +28,8 @@ async function drive(
   unattended?: string,
   opts: {
     chat?: boolean;
+    spawn?: RpcSpawn;
+    onWire?: (run: DriveRun, line: string) => void;
     heldGraceMs?: number;
     requestMs?: number;
     agent?: typeof AGENT;
@@ -56,6 +58,7 @@ async function drive(
     steps: [],
     prompt: null,
   };
+  const wire: [string, string][] = [];
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
@@ -71,11 +74,16 @@ async function drive(
       },
       env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath, ...opts.env },
       label: "Claude Code",
+      wire: (d, l) => {
+        wire.push([d, l]);
+        if (d === "out") opts.onWire?.(run, l);
+      },
     },
     { emit: opts.emit ?? (() => {}), ended: (r) => ended.push(r.status) },
   );
   const driver = new ClaudeDriver({
     command: [process.execPath, FAKE],
+    ...(opts.spawn ? { spawn: opts.spawn } : {}),
     ...(opts.heldGraceMs !== undefined ? { heldGraceMs: opts.heldGraceMs } : {}),
     ...(opts.requestMs !== undefined ? { requestMs: opts.requestMs } : {}),
   });
@@ -95,7 +103,7 @@ async function drive(
       .filter(Boolean)
       .map((l) => JSON.parse(l) as Record<string, unknown>);
   const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
-  return { run, ctx, driver, until, sent, done, ended };
+  return { run, ctx, driver, until, sent, done, ended, wire };
 }
 
 const responseTo = (log: Record<string, unknown>[], id: string) =>
@@ -704,4 +712,44 @@ test("the init's slash commands say which built-ins the CLI has", async () => {
   d.ctx.ending = true;
   d.driver.stop();
   noteCliCommands("claude", BUILTIN_MENTIONS.map((w) => w.name));
+});
+
+test("wire records real fake-driver input counts and stdout before folding", async () => {
+  const h = await drive("job");
+  await h.until((r) => r.status === "waiting", "permission");
+  h.ctx.answer("p1", { kind: "allow" });
+  await h.until(h.done, "end");
+  const ins = h.wire.filter(([d]) => d === "in").map(([, l]): unknown => JSON.parse(l));
+  const out = h.wire.filter(([d]) => d === "out").map(([, l]): unknown => JSON.parse(l));
+  expect(ins[0]).toMatchObject({ type: "user" });
+  expect(ins.some((m: unknown) => typeof m === "object" && m !== null && "type" in m && m.type === "control_response")).toBe(true);
+  expect(out[0]).toMatchObject({ type: "system", subtype: "init" });
+  expect(out.at(-1)).toMatchObject({ type: "result" });
+  const logged = (await h.sent()).filter((m) => !("argv" in m) && !("eof" in m));
+  expect(ins.length).toBe(logged.length);
+  expect(ins).toEqual(logged);
+});
+
+test("wire includes non-JSON stdout and a final unterminated result", async () => {
+  const enc = new TextEncoder();
+  const result = JSON.stringify({ type: "result", subtype: "success", result: "tail é", num_turns: 1 });
+  const beforeFold: [string | undefined, string | undefined][] = [];
+  const h = await drive("job", "hello", undefined, {
+    onWire: (run) => { beforeFold.push([run.session, run.result?.text]); },
+    spawn: () => ({
+    stdin: { write() {}, end() {} },
+    stdout: new ReadableStream({ start(c) {
+      c.enqueue(enc.encode('  chatter  \n{"type":"system","subtype":"init","session_id":"tail-session"}\n' + result));
+      c.close();
+    } }),
+    exited: Promise.resolve(0), kill() {},
+  }) });
+  await h.until(h.done, "final flush");
+  expect(h.wire.filter(([d]) => d === "out").map(([, l]) => l)).toEqual([
+    "chatter", '{"type":"system","subtype":"init","session_id":"tail-session"}', result,
+  ]);
+  expect(beforeFold).toEqual([[undefined, undefined], [undefined, undefined], ["tail-session", undefined]]);
+  expect(h.run.status).toBe("done");
+  expect(h.run.session).toBe("tail-session");
+  expect(h.run.result?.text).toBe("tail é");
 });

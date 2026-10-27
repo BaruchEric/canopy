@@ -5,7 +5,8 @@
  *  status that ends in done, failed, limited or stopped. What differs is the wire:
  *  Claude Code speaks stream-json on stdio, Codex speaks JSON-RPC through
  *  `codex app-server`. A `RunDriver` owns one run's process and its wire, and
- *  reports everything through the `DriveCtx` the Runner hands it.
+ *  reports everything through the `DriveCtx` the Runner hands it, including
+ *  the raw wire, both ways, for the run's log.
  *
  *  `RunCtx` is the Runner's half of one run: the step cap, the prompt queue
  *  with its "allow all" sweep, the notes a settled prompt leaves, and how an
@@ -97,6 +98,8 @@ export interface DriveExit {
   error?: string;
 }
 
+export type WireDir = "in" | "out";
+
 /** What the Runner hands a driver for one run. */
 export interface DriveCtx {
   /** the repo's absolute path: where the process starts, and the prefix step
@@ -133,6 +136,8 @@ export interface DriveCtx {
   changed(): void;
   /** a one-line remark from canopy, broadcast at once */
   note(text: string): void;
+  /** Raw stdin or stdout line, before protocol parsing. */
+  wire(dir: WireDir, line: string): void;
   /** Parks the run on a prompt until the browser answers it, the driver
    *  withdraws it, or the run stops (a stop answers "deny"). `key` is the
    *  driver's own name for it, the wire's request id. After "allow all" a
@@ -287,6 +292,8 @@ export function promptFacts(p: PromptInput): ApprovalFacts {
 }
 
 export interface RunCtxInit {
+  /** Absent, wire lines go nowhere. */
+  wire?: (dir: WireDir, line: string) => void;
   cwd: string;
   agent: DriveAgent;
   spec: DriveSpec;
@@ -344,6 +351,7 @@ export class RunCtx implements DriveCtx {
   private seq = 0;
   /** limited replies in a row on this process; a good reply starts it over */
   private limitedRow = 0;
+  private wireTap: RunCtxInit["wire"];
   private label: string;
   private remember: RememberHook | null;
 
@@ -352,6 +360,7 @@ export class RunCtx implements DriveCtx {
     init: RunCtxInit,
     private hooks: RunCtxHooks,
   ) {
+    this.wireTap = init.wire;
     this.cwd = init.cwd;
     this.agent = init.agent;
     this.spec = init.spec;
@@ -394,6 +403,10 @@ export class RunCtx implements DriveCtx {
   note(text: string): void {
     this.step({ kind: "note", text });
     this.changed();
+  }
+
+  wire(dir: WireDir, line: string): void {
+    this.wireTap?.(dir, line);
   }
 
   session(id: string): void {

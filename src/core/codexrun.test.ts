@@ -613,6 +613,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     prompt: null,
     harness: "codex",
   };
+  const wire: [string, string][] = [];
   const ctx = new RunCtx(
     run,
     {
@@ -621,6 +622,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
       spec: { allowedTools: opts.allowedTools ?? [], maxTurns: opts.maxTurns ?? 10 },
       env: { FAKE_CODEX_SCENARIO: scenarioPath, FAKE_CODEX_LOG: logPath },
       label: "Codex",
+      wire: (d, l) => { wire.push([d, l]); },
     },
     { emit: () => {} },
   );
@@ -651,7 +653,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     driver.stop();
   };
   const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
-  return { run, ctx, driver, repo, until, sent, stop, ended };
+  return { run, ctx, driver, repo, until, sent, stop, ended, wire };
 }
 
 const replyTo = (log: Record<string, unknown>[], id: number) =>
@@ -1307,4 +1309,14 @@ describe.skipIf(!process.env["CANOPY_CODEX_IT"])("a real codex", () => {
     expect(run.session).toBeTruthy();
     expect(run.result?.tokens?.total ?? 0).toBeGreaterThan(0);
   }, 180_000);
+});
+
+test("wire hands the Codex protocol both ways to the ctx", async () => {
+  const h = await drive(() => ({ turns: [[agentMessage("answer", "done"), { complete: "completed" }]] }));
+  await h.until(h.ended, "end");
+  const ins = h.wire.filter(([d]) => d === "in").map(([, l]): unknown => JSON.parse(l));
+  expect(ins.slice(0, 3)).toMatchObject([{ method: "initialize" }, { method: "initialized" }, { method: "thread/start" }]);
+  expect(ins).toEqual((await h.sent()).filter((m) => !("argv" in m) && !("eof" in m)));
+  expect(h.wire.filter(([d]) => d === "out").length).toBeGreaterThan(0);
+  expect(h.run.result?.text).toBe("done");
 });

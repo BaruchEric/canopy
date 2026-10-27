@@ -920,7 +920,7 @@ export class CodexDriver implements RunDriver {
         cwd: ctx.cwd,
         env: spawnEnv(ctx),
       });
-      rpc = new RpcClient(ctx.track ? ctx.track(started) : started);
+      rpc = new RpcClient(ctx.track ? ctx.track(started) : started, { tap: (dir, line) => ctx.wire(dir, line) });
     } catch (err) {
       ctx.exited({ code: null, stderr: "", error: `could not start codex: ${errText(err)}` });
       return;

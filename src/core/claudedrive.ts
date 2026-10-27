@@ -15,7 +15,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
-import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
+import { bunSpawn, LineSplitter, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { writtenPaths } from "./explain";
 import { agentArgs } from "./harness";
@@ -383,7 +383,7 @@ export class ClaudeDriver implements RunDriver {
       });
       await this.send(userMessage(message));
 
-      for await (const m of lines(proc.stdout)) {
+      for await (const m of lines(proc.stdout, (line) => ctx.wire("out", line))) {
         if (m["type"] === "system" && str(m, "subtype") === "init") {
           this.model = str(m, "model") || this.model;
           const cmds = m["slash_commands"];
@@ -488,7 +488,9 @@ export class ClaudeDriver implements RunDriver {
     const proc = this.proc;
     if (!proc) return;
     try {
-      proc.stdin.write(JSON.stringify(msg) + "\n");
+      const text = JSON.stringify(msg);
+      this.ctx?.wire("in", text);
+      proc.stdin.write(text + "\n");
       // Awaited: the write must reach the pipe before the caller starts
       // draining stdout, or a resumed turn can begin before its own prompt
       // arrives and end empty.
@@ -731,23 +733,28 @@ export class ClaudeDriver implements RunDriver {
 }
 
 /** stdout as parsed JSON objects, one per line; anything else is skipped. */
-async function* lines(stream: ReadableStream<Uint8Array>): AsyncGenerator<Record<string, unknown>> {
-  const dec = new TextDecoder();
-  let buf = "";
-  for await (const chunk of stream) {
-    buf += dec.decode(chunk, { stream: true });
-    let nl = buf.indexOf("\n");
-    while (nl !== -1) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      nl = buf.indexOf("\n");
-      if (!line) continue;
-      try {
-        const parsed: unknown = JSON.parse(line);
-        if (isRecord(parsed)) yield parsed;
-      } catch {
-        // progress chatter that is not JSON
-      }
+async function* lines(stream: ReadableStream<Uint8Array>, tap?: (line: string) => void): AsyncGenerator<Record<string, unknown>> {
+  const split = new LineSplitter();
+  const parse = (raw: string): Record<string, unknown> | null => {
+    const line = raw.trim();
+    if (!line) return null;
+    tap?.(line);
+    try {
+      const parsed: unknown = JSON.parse(line);
+      return isRecord(parsed) ? parsed : null;
+    } catch {
+      // progress chatter that is not JSON still reaches the tap
+      return null;
     }
+  };
+  for await (const chunk of stream) {
+    for (const line of split.push(chunk)) {
+      const parsed = parse(line);
+      if (parsed) yield parsed;
+    }
+  }
+  for (const line of split.flush()) {
+    const parsed = parse(line);
+    if (parsed) yield parsed;
   }
 }

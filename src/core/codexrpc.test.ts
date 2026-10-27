@@ -222,3 +222,21 @@ describe("the client", () => {
     expect((await rpc.done).code).toBeNull();
   });
 });
+
+test("wire taps sends before writing and stdout before dispatch including non-JSON and flush", async () => {
+  const f = fakeProc();
+  const wire: [string, string][] = [];
+  const rpc = new RpcClient(f.proc, { tap: (d, l) => {
+    if (d === "in") expect(f.sent).toEqual([]);
+    wire.push([d, l]);
+  } });
+  rpc.onNotification(() => expect(wire.at(-1)).toEqual(["out", '{"method":"notice"}']));
+  rpc.notify("initialized");
+  f.emit('not JSON\n{"method":"notice"}\nlast chatter');
+  f.exit(0);
+  await rpc.done;
+  expect(wire).toEqual([
+    ["in", '{"method":"initialized"}'], ["out", "not JSON"],
+    ["out", '{"method":"notice"}'], ["out", "last chatter"],
+  ]);
+});
