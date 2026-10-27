@@ -214,8 +214,10 @@ import { CapacityHub, capacityFile } from "./capacity";
 import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { GroupHub } from "./groups";
+import { GROUP_MAX, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
-import { PrHub } from "./prs";
+import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
@@ -338,6 +340,9 @@ interface ServerState {
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  groups: GroupHub;
+  /** serial branch preflights/fanout for each repo */
+  branchStarts: Map<string, Promise<void>>;
   /** live file overlaps; warnings only, never a hold */
   collisions: CollisionHub;
   /** the holdout scenario sets and a pass on demand (server/scenarios) */
@@ -1043,6 +1048,7 @@ async function startRepoRun(
 ): Promise<Run> {
   // A coordinator runs only through its own start, in its sandbox with its
   // token; this path would spawn it here, unisolated.
+  if (action === "compare") throw new HttpError(400, "compare runs only inside a group");
   if (action === "coordinate") throw new HttpError(400, "a coordinator starts through its own path, not as a plain run");
   // The runner spawns the agent here, at the repo's path; there is no
   // agent to spawn at a folder on another host.
@@ -1088,6 +1094,77 @@ async function startRepoRun(
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
 }
 
+/** A group reserves its preflight through fanout against other API branch starts. */
+async function withBranchStart<T>(state: ServerState, repoId: string, start: () => Promise<T>): Promise<T> {
+  const previous = state.branchStarts.get(repoId) ?? Promise.resolve();
+  let release = () => {};
+  const done = new Promise<void>(resolve => { release = resolve; });
+  const pending = previous.then(() => done);
+  state.branchStarts.set(repoId, pending);
+  await previous;
+  try { return await start(); }
+  finally { release(); if (state.branchStarts.get(repoId) === pending) state.branchStarts.delete(repoId); }
+}
+
+async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: string[] | undefined, autoLand: boolean, pr: boolean): Promise<RunGroup> {
+  return withBranchStart(state, repo.id, async () => {
+    if (action === "compare" || action === "coordinate") throw new HttpError(400, "that action does not start a branch group");
+    if (repo.host || repo.forge) throw new HttpError(400, "branch groups run only in local checkouts");
+    if (isSeedPath(state.root, repo.path)) throw new HttpError(400, "an incubator seed works in its seed, not in branch groups");
+    if (ACTIONS[action].noteRequired && !note.trim()) throw new HttpError(400, "write what the agent should do first");
+    const going = state.runner.branchRunsFor(repo.id).length;
+    if (going + times > BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${BRANCH_RUNS_PER_REPO - going} free branch slots; this group needs ${times}`);
+    const cfg = await loadConfig();
+    const profile = profiles?.[0];
+    if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new HttpError(400, `unknown agent profile ${profile}`);
+    const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action });
+    if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
+    await needHarness(state, agent.harness, repo.path);
+    const resolved = await issueNoteFor(repo, note);
+    const group = await state.groups.create({ repoId: repo.id, repoPath: repo.path, action, note: resolved.note, autoLand, expectedMembers: times, startedAt: Date.now(), ...(pr ? { pr: true } : {}) });
+    const cuts: BranchStart[] = [];
+    const items: string[] = [];
+    const runs: Run[] = [];
+    const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    try {
+      for (let i = 0; i < times; i++) {
+        const item = state.work.mint({ ...(resolved.work ?? { title: titleOf(resolved.note), from: { kind: "note" } }), repos: [repo.id] });
+        items.push(item.id);
+        const cut = await cutBranch(repo, resolved.note, false, item.id);
+        cut.branch.group = group.id;
+        cuts.push(cut);
+      }
+      for (const cut of cuts) {
+        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, agent, by, undefined, cut, { group: group.id, priority: "low" });
+        runs.push(run);
+        await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: profile ?? null });
+      }
+      return state.groups.info().find(g => g.id === group.id) ?? group;
+    } catch (error: unknown) {
+      // Stop every member before removing any tree. Their final state events
+      // must settle before records are forgotten, or they could resurrect one.
+      const stopped = await Promise.allSettled(runs.map(run => state.runner.stopAndWait(run.id)));
+      for (const result of stopped) if (result.status === "rejected") console.error(`groups: rollback stop: ${String(result.reason)}`);
+      await state.landing.idle();
+      for (const cut of cuts) {
+        try { await removeRunTree(repo.path, cut.branch.dir, cut.branch.name); }
+        catch (cleanup: unknown) { console.error(`groups: rollback ${cut.branch.origin}: ${String(cleanup)}`); }
+        await state.landing.forget(cut.branch.origin).catch(cleanup => console.error(`groups: rollback record ${cut.branch.origin}: ${String(cleanup)}`));
+      }
+      for (const run of runs) {
+        try { state.runner.dismiss(run.id); }
+        catch (cleanup: unknown) { console.error(`groups: rollback run ${run.id}: ${String(cleanup)}`); }
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      for (const id of items) state.work.close(id, "dropped", `the group did not start: ${message}`);
+      await state.groups.remove(group.id).catch(cleanup => console.error(`groups: rollback group ${group.id}: ${String(cleanup)}`));
+      if (error instanceof HttpError) throw error;
+      if (error instanceof BranchCapError) throw new SlotsFullError(message);
+      throw new HttpError(400, message);
+    }
+  });
+}
+
 /** A branch run's note when it opens with `#123` or an issue's URL: the
  *  GitHub issue, read with gh off the repo's GitHub remote (core/issue).
  *  Only here, after every refusal, so a run that cannot start never calls
@@ -1121,20 +1198,24 @@ async function startBranchRun(
   extras: StartExtras = {},
   work: WorkStart = { title: titleOf(note), from: { kind: "note" } },
 ): Promise<Run> {
-  const item = state.work.mint({ ...work, repos: [repo.id] });
-  let start: BranchStart | undefined;
-  try {
-    start = await cutBranch(repo, note, pr, item.id);
-    return await state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    state.work.close(item.id, "dropped", `the run did not start: ${message}`);
-    if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
-    if (err instanceof Error && err.name === "StageAwayError") throw err;
-    if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
-    if (!start && err instanceof HttpError) throw err;
-    throw new HttpError(400, message);
-  }
+  return withBranchStart(state, repo.id, async () => {
+    const going = state.runner.branchRunsFor(repo.id).length;
+    if (going >= BRANCH_RUNS_PER_REPO) throw new SlotsFullError(`${repo.name} has ${going} branch runs going; wait for one to end`);
+    const item = state.work.mint({ ...work, repos: [repo.id] });
+    let start: BranchStart | undefined;
+    try {
+      start = await cutBranch(repo, note, pr, item.id);
+      return await state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.work.close(item.id, "dropped", `the run did not start: ${message}`);
+      if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+      if (err instanceof Error && err.name === "StageAwayError") throw err;
+      if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
+      if (!start && err instanceof HttpError) throw err;
+      throw new HttpError(400, message);
+    }
+  });
 }
 
 /** What a coordinate run says where no isolated coordinator runner is set
@@ -1230,9 +1311,12 @@ async function cutBranch(repo: Repo, note: string, pr: boolean, work: string): P
   const id = crypto.randomUUID().slice(0, 8);
   const name = workBranchName(work, note);
   const dir = runTreeDir(repo.path, id);
+  if (existsSync(dir) || await revOf(repo.path, `refs/heads/${name}`)) throw new HttpError(409, "the run's branch or worktree exists already");
   try {
     await addRunTree(repo.path, dir, name, base);
   } catch (err) {
+    // git can leave the new tree/branch behind when a checkout hook fails.
+    await removeRunTree(repo.path, dir, name).catch(() => {});
     throw new HttpError(500, `could not make the run's worktree: ${String(err instanceof Error ? err.message : err)}`);
   }
   // read from the main checkout, so a run cannot change its own setup
@@ -1272,7 +1356,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: "ask" });
   await needHarness(state, agent.harness, repo.path);
-  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}) };
+  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
   const message = resume ? (queueLine ? `${reason}\n\n${branchLine(b)}` : reason) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b);
   try {
@@ -1280,7 +1364,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
       branch: b,
       message,
       ...(resume ? { resume } : {}),
-    });
+    }, rec.group ? { group: rec.group, priority: "low" } : {});
   } catch (err) {
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
@@ -3162,6 +3246,9 @@ async function handleApi(
   if (rangerRes) return rangerRes;
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
+  const groupsRes = await state.groups.handle(req, url);
+  if (groupsRes) return groupsRes;
+  if (path === "/api/landing" && method === "GET") return json({ ...state.landing.info(), groups: state.groups.info() });
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
   const scenariosRes = await state.scenarios.handle(req, url);
@@ -3967,7 +4054,7 @@ async function handleApi(
   if (path === "/api/workspaces/run" && method === "POST") {
     const b = await objectBody(req);
     if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
-    if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+    if (!isRunAction(b.action) || b.action === "compare") return json({ error: "unknown action" }, 400);
     if (b.action === "coordinate") return json({ error: "a coordinator starts at a repo, not at a workspace" }, 400);
     const ws = (await loadConfig()).workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
@@ -4413,10 +4500,19 @@ async function handleApi(
     }
     if (method === "POST" && action === "run") {
       const b = await objectBody(req);
-      if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+      if (!isRunAction(b.action) || b.action === "compare") return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
       if (b.pr !== undefined && typeof b.pr !== "boolean") return json({ error: "pr must be true or false" }, 400);
+      const groupFields = b.times !== undefined || b.profiles !== undefined || b.autoLand !== undefined;
+      if (groupFields && b.branch !== true) return json({ error: "group settings require branch: true" }, 400);
+      const times = b.times ?? 1;
+      if (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX) return json({ error: `times must be 1 to ${GROUP_MAX}` }, 400);
+      if (b.autoLand !== undefined && typeof b.autoLand !== "boolean") return json({ error: "autoLand must be true or false" }, 400);
+      const rawProfiles = b.profiles;
+      if (rawProfiles !== undefined && (!Array.isArray(rawProfiles) || rawProfiles.length > 1 || !rawProfiles.every(isProfileName))) return json({ error: "profiles must contain at most one valid shared profile" }, 400);
+      const profiles = Array.isArray(rawProfiles) ? rawProfiles.filter(isProfileName) : undefined;
+      if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
@@ -4643,6 +4739,8 @@ export async function startServer(opts: {
     /** how often a park is looked at for its day-old retro */
     tickEvery?: number;
   };
+  /** GitHub reads/writes can be replaced while tests retain the real PR hub. */
+  prs?: Pick<PrDeps, "gh" | "slugOf" | "tickEvery">;
   /** the runner's driver per harness; tests swap in a stand-in agent */
   /** `quietWait` shortens how long a stage run's or check's end waits for
    *  the stage runner to call its seed quiet, for tests */
@@ -4824,6 +4922,7 @@ export async function startServer(opts: {
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
       state.landing.onRun(run);
+      state.groups.onRun(run);
       state.collisions.onRun(run);
       state.prs.onRun(run);
       state.triggers.onRun(run);
@@ -4855,6 +4954,7 @@ export async function startServer(opts: {
   const flows = new Flows(runner, {
     onChange: (flow) => {
       broadcast(state, { type: "flow", flow });
+      state.groups.recheck(flow.repoId);
       state.chan.onFlow(flow);
       state.incubator.onFlow(flow);
       state.triggers.onFlow(flow);
@@ -5253,10 +5353,33 @@ export async function startServer(opts: {
     ),
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
+    branchStarts: new Map(),
+    groups: new GroupHub({
+      broadcast: ev => broadcast(state, ev),
+      publish: ev => broadcast(state, ev),
+      repo: id => state.result.repos.find(repo => repo.id === id),
+      run: id => state.runner.get(id),
+      activeFor: id => state.runner.activeFor(id),
+      checkoutBusy: id => state.flows.activeFor(id) !== undefined,
+      dryGates: id => state.landing.dryGates(id),
+      landingInfo: () => state.landing.info(),
+      dropMember: (id, why) => state.landing.drop(id, why),
+      openPr: id => state.prs.open(id),
+      land: id => state.landing.land(id),
+      startReviewer: async (group, prompt) => {
+        const repo = state.result.repos.find(repo => repo.id === group.repoId);
+        if (!repo) throw new HttpError(404, "the group repo is no longer scanned");
+        const agent = { ...agentFor(await loadConfig(), repo.path, "flow"), yolo: false, extra: "" };
+        await needHarness(state, agent.harness, repo.path);
+        if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow owns this checkout");
+        return state.runner.start(repo, "compare", { ...ACTIONS.compare, message: prompt }, group.note, agent, undefined, undefined, undefined, { group: group.id, priority: "low" });
+      },
+    }),
     landing: new LandingHub({
       judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
-        broadcast(state, ev);
+        broadcast(state, ev.type === "landing" ? { ...ev, landing: { ...ev.landing, groups: state.groups.info() } } : ev);
+        if (ev.type === "landing") state.groups.onLanding(ev.landing);
         if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
         if (ev.type === "landing") state.coordinator.recheck();
         if (ev.type === "landing") state.work.recheck();
@@ -5291,7 +5414,7 @@ export async function startServer(opts: {
       notify: (notice) => state.landing.notice(notice),
       publish: () => state.landing.republish(),
       sayOff: async (path) => (await loadConfig()).agents[path]?.collisionSay === false,
-      groupOf: (run) => run.branch?.group,
+      groupOf: (run) => run.group ?? run.branch?.group,
     }),
     scenarios: new Scenarios({
       root: scenariosRoot(),
@@ -5316,8 +5439,10 @@ export async function startServer(opts: {
       },
     }),
     prs: new PrHub({
+      ...opts.prs,
       broadcast: (ev) => {
         broadcast(state, ev);
+        if (ev.type === "prs") state.groups.onPrs(ev.prs);
         if (ev.type === "prs") state.triggers.onPrs(ev.prs);
         if (ev.type === "prs") state.coordinator.recheck();
         if (ev.type === "prs") state.work.recheck();
@@ -5953,6 +6078,11 @@ export async function startServer(opts: {
     await state.landing.adopt();
     // and the PRs they opened
     await state.prs.adopt();
+    // Group recovery must see the adopted queue and PR facts before retrying
+    // a persisted winner's missing dispatch.
+    state.groups.onLanding(state.landing.info());
+    state.groups.onPrs(state.prs.info());
+    await state.groups.adopt();
     // and the trigger events waiting on both
     await state.triggers.adopt();
   };
@@ -6142,6 +6272,7 @@ export async function startServer(opts: {
       state.incubator.detach();
       state.flows.detach();
       flowFiles = null;
+      state.groups.detach();
       state.landing.detach();
       state.prs.detach();
       state.triggers.detach();

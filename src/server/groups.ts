@@ -39,6 +39,8 @@ export interface GroupDeps {
   repo: (id: string) => Repo | undefined;
   run: (id: string) => Run | undefined;
   activeFor: (repoId: string) => Run | undefined;
+  /** a workflow can own its checkout between runner steps */
+  checkoutBusy?: (repoId: string) => boolean;
   dryGates: (origin: string) => Promise<GroupDry>;
   startReviewer: (group: RunGroup, prompt: string) => Promise<Run>;
   dropMember: (origin: string, why: string) => Promise<void>;
@@ -52,11 +54,17 @@ export interface GroupDeps {
 }
 
 /** Private journal fields stay on disk, outside the browser-safe group model. */
-type DispatchIntent = {
-  winner: string;
-  kind: "land" | "pr";
-  status: "pending" | "done";
+type SentBackSnapshot = {
+  state: "red" | "conflict" | "moved";
+  queuedAt: number;
+  updatedAt: number;
+  tries: number;
 };
+type DispatchIntent = { winner: string; retry?: SentBackSnapshot } & (
+  | { kind: "land" | "pr"; status: "pending" | "done" }
+  | { kind: "wait"; status: "waiting" }
+);
+
 type StoredGroup = RunGroup & { _dispatch?: DispatchIntent };
 
 /** One projection for every public group boundary, without sharing mutable state. */
@@ -188,8 +196,22 @@ function isGroup(value: unknown): value is StoredGroup {
         record(v) &&
         typeof v["winner"] === "string" &&
         v["winner"] === value["winner"] &&
-        (v["kind"] === "land" || v["kind"] === "pr") &&
-        (v["status"] === "pending" || v["status"] === "done"),
+        (((v["kind"] === "land" || v["kind"] === "pr") &&
+          (v["status"] === "pending" || v["status"] === "done")) ||
+          (v["kind"] === "wait" && v["status"] === "waiting")) &&
+        optional(
+          v["retry"],
+          (r) =>
+            record(r) &&
+            (r["state"] === "red" ||
+              r["state"] === "conflict" ||
+              r["state"] === "moved") &&
+            finite(r["updatedAt"]) &&
+            finite(r["queuedAt"]) &&
+            finite(r["tries"]) &&
+            Number.isInteger(r["tries"]) &&
+            r["tries"] >= 0,
+        ),
     ) &&
     optional(
       value["keptUntil"],
@@ -438,6 +460,11 @@ export class GroupHub {
     await this.idle();
   }
 
+  /** Ownership changes outside the runner, such as workflow gates. */
+  recheck(repoId: string): void {
+    this.kick(repoId);
+  }
+
   onRun(run: Run): void {
     this.seenRuns.set(run.id, run);
     if (run.branch) this.memberRuns.set(run.branch.origin, run);
@@ -573,12 +600,19 @@ export class GroupHub {
     }
     if (group.state === "picked") {
       const entry = this.facts().entries.find((e) => e.id === group?.winner);
+      const retry =
+        (group._dispatch?.status === "pending" ||
+          group._dispatch?.kind === "wait") &&
+        group._dispatch.retry?.state === entry?.state &&
+        group._dispatch.retry?.updatedAt === entry?.updatedAt &&
+        group._dispatch.retry?.queuedAt === entry?.queuedAt &&
+        group._dispatch.retry?.tries === entry?.tries;
       if (
         (!group.pr && entry?.state === "landed") ||
         (group.pr && group.winner && this.merged.has(group.winner))
       )
         await this.finish(group, epoch);
-      else if (entry && sentBack(entry))
+      else if (entry && sentBack(entry) && !retry)
         await this.set(
           {
             ...group,
@@ -677,7 +711,11 @@ export class GroupHub {
       ? this.run(group.review.run)
       : this.startingReview.get(id);
     if (!review) {
-      if (this.deps.activeFor(group.repoId)) return;
+      if (
+        this.deps.activeFor(group.repoId) ||
+        this.deps.checkoutBusy?.(group.repoId)
+      )
+        return;
       const dry: Record<string, GroupDry> = {};
       for (const m of group.members) {
         const s = group.scores?.[m.origin];
@@ -695,10 +733,22 @@ export class GroupHub {
         };
       }
       const reviewGroup = group;
-      review = await this.deps.startReviewer(
-        structuredClone(group),
-        comparePrompt(group, dry),
-      );
+      try {
+        review = await this.deps.startReviewer(
+          structuredClone(group),
+          comparePrompt(group, dry),
+        );
+      } catch (error: unknown) {
+        // A checkout owner may arrive during the server's async preflight.
+        // Its next run/flow event wakes this review; real failures still surface.
+        if (
+          this.current(id, epoch, "reviewing") === reviewGroup &&
+          (this.deps.activeFor(group.repoId) ||
+            this.deps.checkoutBusy?.(group.repoId))
+        )
+          return;
+        throw error;
+      }
       if (this.groups.get(id) === reviewGroup)
         this.startingReview.set(id, review);
       group = this.current(id, epoch, "reviewing");
@@ -759,21 +809,41 @@ export class GroupHub {
     if (!group.winner) return;
     if (group.pr)
       return { winner: group.winner, kind: "pr", status: "pending" };
+    const entry = this.facts().entries.find((e) => e.id === group.winner);
+    const retry =
+      entry &&
+      (entry.state === "red" ||
+        entry.state === "conflict" ||
+        entry.state === "moved")
+        ? {
+            state: entry.state,
+            queuedAt: entry.queuedAt,
+            updatedAt: entry.updatedAt,
+            tries: entry.tries,
+          }
+        : undefined;
     if (
       group.autoLand &&
       this.facts().runs.find((r) => r.id === group.winner)?.review?.verdict ===
         "auto"
     )
-      return { winner: group.winner, kind: "land", status: "pending" };
+      return {
+        winner: group.winner,
+        kind: "land",
+        status: "pending",
+        ...(retry ? { retry } : {}),
+      };
+    // A new manual selection can acknowledge a repaired branch's old failure,
+    // while a later queue attempt/failure must still bring it back to needs-you.
+    if (retry)
+      return { winner: group.winner, kind: "wait", status: "waiting", retry };
   }
   private externalWork(origin: string): boolean {
     return (
       this.knownPrs.has(origin) ||
       this.facts().runs.some((r) => r.id === origin && r.pr !== undefined) ||
       this.facts().entries.some(
-        (e) =>
-          e.id === origin &&
-          (inQueue(e) || e.state === "landed" || sentBack(e)),
+        (e) => e.id === origin && (inQueue(e) || e.state === "landed"),
       )
     );
   }
@@ -781,7 +851,11 @@ export class GroupHub {
     return (
       this.dispatching.has(group.id) ||
       group._dispatch?.status === "done" ||
-      (!!group.winner && this.externalWork(group.winner))
+      (!!group.winner &&
+        (this.externalWork(group.winner) ||
+          this.facts().entries.some(
+            (e) => e.id === group.winner && sentBack(e),
+          )))
     );
   }
   private async pick(
@@ -815,7 +889,13 @@ export class GroupHub {
    * facts before retrying after an ownership change or process restart. */
   private async dispatch(group: StoredGroup, epoch: number): Promise<void> {
     const intent = group._dispatch;
-    if (group.state !== "picked" || !intent || intent.status === "done") return;
+    if (
+      group.state !== "picked" ||
+      !intent ||
+      intent.kind === "wait" ||
+      intent.status === "done"
+    )
+      return;
     const active = this.dispatching.get(group.id);
     if (active) {
       await active;

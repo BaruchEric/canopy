@@ -1167,3 +1167,217 @@ test("GET, SSE, and every successful POST omit the private journal while disk re
     _dispatch: { winner: "a", kind: "pr", status: "done" },
   });
 });
+
+test("a fresh post-fix winner intent requeues its sent-back branch exactly once across adoption", async () => {
+  const w = await world();
+  w.deps.land = async (origin) => {
+    w.landed.push(origin);
+    const entry = w.landing.entries.find((e) => e.id === origin);
+    if (entry) entry.state = "queued";
+    else
+      w.landing.entries.push({
+        ...recOf(origin),
+        state: "queued",
+        tries: 0,
+        queuedAt: 1,
+        updatedAt: 1,
+      });
+  };
+  const id = await w.create(["a", "b"], { autoLand: true });
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  const entry = w.landing.entries.find((e) => e.id === "a");
+  if (!entry) throw new Error("missing queue entry");
+  entry.state = "red";
+  entry.reason = "old gate failure";
+  entry.updatedAt = 2;
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("needs-you");
+  const branch = {
+    name: "run/a",
+    target: "main",
+    base: "base",
+    dir: "/no-tree",
+    origin: "a",
+  };
+  const fixing: Run = {
+    ...runOf("fix-a", "working"),
+    branch: { ...branch, state: "working" },
+  };
+  w.runs.set(fixing.id, fixing);
+  w.hub.onRun(fixing);
+  await w.hub.idle();
+  const ready: Run = {
+    ...fixing,
+    status: "done",
+    branch: { ...branch, state: "ready" },
+  };
+  w.runs.set(ready.id, ready);
+  w.hub.onRun(ready);
+  await w.hub.idle();
+  let detached = false;
+  w.deps.publish = (event) => {
+    if (
+      !detached &&
+      event.type === "landing" &&
+      event.landing.groups?.some((g) => g.id === id && g.state === "picked")
+    ) {
+      detached = true;
+      w.hub.detach();
+    }
+  };
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  expect(w.landed).toEqual(["a"]);
+  await w.hub.adopt();
+  await w.hub.idle();
+  expect(w.landed).toEqual(["a", "a"]);
+  expect(w.landing.entries.find((e) => e.id === "a")?.state).toBe("queued");
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  w.hub.detach();
+  await w.hub.adopt();
+  await w.hub.idle();
+  expect(w.landed).toEqual(["a", "a"]);
+  entry.state = "red";
+  entry.updatedAt = 3;
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("needs-you");
+  expect(w.landed).toEqual(["a", "a"]);
+});
+
+test("a manual post-fix selection acknowledges only its old sent-back snapshot and never dispatches", async () => {
+  const w = await world();
+  const id = await w.create();
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  const entry: import("../core/types").LandEntry = {
+    ...recOf("a"),
+    state: "red",
+    reason: "same gate failure",
+    tries: 0,
+    queuedAt: 1,
+    updatedAt: 2,
+  };
+  w.landing.entries.push(entry);
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  const branch = {
+    name: "run/a",
+    target: "main",
+    base: "base",
+    dir: "/no-tree",
+    origin: "a",
+  };
+  const fixing: Run = {
+    ...runOf("fix-a", "working"),
+    branch: { ...branch, state: "working" },
+  };
+  w.runs.set(fixing.id, fixing);
+  w.hub.onRun(fixing);
+  await w.hub.idle();
+  const ready: Run = {
+    ...fixing,
+    status: "done",
+    branch: { ...branch, state: "ready" },
+  };
+  w.runs.set(ready.id, ready);
+  w.hub.onRun(ready);
+  await w.hub.idle();
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("picked");
+  w.hub.detach();
+  await w.hub.adopt();
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("picked");
+  expect(w.landed).toEqual([]);
+  expect(w.opened).toEqual([]);
+  entry.updatedAt = 3;
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id)).toMatchObject({
+    state: "needs-you",
+    reason: "same gate failure",
+  });
+});
+
+for (const state of ["waiting", "judge"] as const)
+  test(`recovery never bypasses a current ${state} hold`, async () => {
+    const w = await world();
+    let detached = false;
+    w.deps.publish = (event) => {
+      if (
+        !detached &&
+        event.type === "landing" &&
+        event.landing.groups?.some((g) => g.state === "picked")
+      ) {
+        detached = true;
+        w.hub.detach();
+      }
+    };
+    const id = await w.create(["a"], { autoLand: true });
+    w.landing.entries.push({
+      ...recOf("a"),
+      state,
+      reason: "held for an explicit decision",
+      tries: 0,
+      queuedAt: 1,
+      updatedAt: 2,
+    });
+    await w.hub.adopt();
+    await w.hub.idle();
+    expect(w.current(id).state).toBe("picked");
+    expect(w.landed).toEqual([]);
+    expect(w.landing.entries[0]?.state).toBe(state);
+  });
+
+test("checkout ownership between runs holds one reviewer until explicitly rechecked", async () => {
+  let busy = true;
+  const w = await world({ checkoutBusy: () => busy });
+  const id = await w.create();
+  expect(w.current(id).state).toBe("reviewing");
+  expect(w.reviewers).toEqual([]);
+  busy = false;
+  w.hub.recheck("repo");
+  w.hub.recheck("repo");
+  await w.hub.idle();
+  expect(w.reviewers).toEqual([id]);
+});
+
+for (const supersede of ["drop", "remove", "detach"] as const)
+  test(`checkout-waiting work cannot start after ${supersede}`, async () => {
+    let busy = true;
+    const w = await world({ checkoutBusy: () => busy });
+    const id = await w.create();
+    if (supersede === "drop") await w.post("drop", { group: id });
+    else if (supersede === "remove") await w.hub.remove(id);
+    else w.hub.detach();
+    busy = false;
+    w.hub.recheck("repo");
+    await w.hub.idle();
+    expect(w.reviewers).toEqual([]);
+  });
+
+test("checkout ownership acquired during reviewer preflight defers instead of failing the review", async () => {
+  let busy = false;
+  let first = true;
+  const w = await world({ checkoutBusy: () => busy });
+  const start = w.deps.startReviewer;
+  w.deps.startReviewer = async (group, prompt) => {
+    if (first) {
+      first = false;
+      busy = true;
+      throw new Error("checkout became busy");
+    }
+    return start(group, prompt);
+  };
+  const id = await w.create();
+  expect(w.current(id).state).toBe("reviewing");
+  expect(w.current(id).reason).toBeUndefined();
+  expect(w.reviewers).toEqual([]);
+  busy = false;
+  w.hub.recheck("repo");
+  await w.hub.idle();
+  expect(w.reviewers).toEqual([id]);
+});

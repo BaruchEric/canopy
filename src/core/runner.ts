@@ -26,6 +26,7 @@ import {
   statusFingerprint,
   type AgentSettings,
   type Harness,
+  type Priority,
   type Repo,
   type RepoStatus,
   type RememberedRule,
@@ -62,6 +63,9 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** best-of-N attribution, including the first event and costs */
+  group?: string;
+  priority?: Priority;
   /** the coordinator that started it, set before the run's first change is
    *  heard, so every listener sees a child as one */
   parent?: string;
@@ -189,6 +193,9 @@ interface Live {
   branch?: BranchStart;
   /** a branch run's prepare is going and the driver has not started */
   preparing?: boolean;
+  preparation?: Promise<void>;
+  /** terminal status and its asynchronous branch-state update */
+  ended: Promise<void>;
 }
 
 export class Runner {
@@ -349,9 +356,12 @@ export class Runner {
     };
     if (by) run.by = by;
     if (extras.parent) run.parent = extras.parent;
+    const group = extras.group ?? branch?.branch.group;
+    if (group) run.group = group;
+    if (extras.priority) run.priority = extras.priority;
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
-    if (branch) run.branch = { ...branch.branch, state: "working" };
+    if (branch) run.branch = { ...branch.branch, state: "working", ...(group ? { group } : {}) };
     // a stage's run never takes a remembered rule (amendment 4, ruling 16):
     // a rule kept on one seed, or for one step, must not hold for the next.
     // A branch run's rules are judged by its worktree, so a repo rule kept
@@ -361,6 +371,8 @@ export class Runner {
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
     const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume } : {}) };
+    let markEnded = () => {};
+    const ended = new Promise<void>(resolve => { markEnded = resolve; });
     const ctx = new RunCtx(
       run,
       {
@@ -380,12 +392,13 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
+      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.settle(live).finally(markEnded); } },
     );
     const live: Live = {
       ctx,
       driver,
       started: false,
+      ended,
       repo,
       spec,
       ...(scope ? { scope } : {}),
@@ -534,6 +547,16 @@ export class Runner {
     return run;
   }
 
+  /** A rolled-back branch cannot be removed until its process/setup and final
+   * state update have stopped touching the worktree. */
+  async stopAndWait(id: string): Promise<void> {
+    const live = this.live.get(id);
+    if (!live) return;
+    this.stop(id);
+    await live.ended;
+    await live.preparation;
+  }
+
   /** Forgets a finished run. Active runs must be stopped first. */
   dismiss(id: string): void {
     const live = this.live.get(id);
@@ -561,7 +584,7 @@ export class Runner {
     // once: a chat's later turns never set up again
     live.branch = { ...live.branch!, prepare: undefined };
     live.preparing = true;
-    void prepare((text) => live.ctx.note(text)).then(
+    live.preparation = prepare((text) => live.ctx.note(text)).then(
       () => {
         live.preparing = false;
         if (isRunActive(live.ctx.run)) live.driver.start(live.ctx, message);

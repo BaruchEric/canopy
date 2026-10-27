@@ -1261,3 +1261,17 @@ describe("best-of-N quiet loser drops", () => {
     expect(w.hub.info().notices?.length).toBe(1);
   });
 });
+
+describe("best-of-N member dispatch belongs to selection", () => {
+  test("even an auto-sorted PR-marked member stays ready without opening or queueing", async () => {
+    const w = await world(); await w.hub.adopt();
+    await commit(w.repo.path, ".canopy/review.json", JSON.stringify({ autoLand: ["docs"], approve: [] }));
+    const base = await revOf(w.repo.path, "main"); if (!base) throw new Error("missing base");
+    const origin = "group-member"; const name = `run/${origin}`; const dir = runTreeDir(w.repo.path, origin, w.wts);
+    await addRunTree(w.repo.path, dir, name, base); await commit(dir, "member.md", "some documentation\n");
+    const run: Run = { ...fakeRun(w.repo.id, { name, target: "main", base, dir, origin }, "ready"), group: "g-a1b2c3d4", branch: { name, target: "main", base, dir, origin, state: "ready", group: "g-a1b2c3d4", openPr: true } };
+    w.hub.onRun(run); await w.hub.idle();
+    expect(w.hub.record(origin)).toMatchObject({ state: "ready", group: "g-a1b2c3d4", review: { verdict: "auto" } });
+    expect(w.hub.info().entries).toEqual([]); expect(w.opened).toEqual([]);
+  });
+});

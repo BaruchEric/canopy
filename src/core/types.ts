@@ -1236,6 +1236,10 @@ export interface WorkspaceScope {
 export interface Run {
   id: string;
   repoId: string;
+  /** the best-of-N group, set before the first run event */
+  group?: string;
+  /** requested priority; grouped members are marked low */
+  priority?: Priority;
   /** a built-in action's name, or the workflow's name for a flow's step */
   action: string;
   /** the words the chip and the sheet use, copied from the spec at start */

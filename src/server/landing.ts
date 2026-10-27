@@ -446,6 +446,12 @@ export class LandingHub {
    *  the sort says `auto` and nobody queued it meanwhile. */
   private async settled(id: string): Promise<void> {
     const opening = this.runs.get(id);
+    // Group selection owns all dispatch; every member still gets its sort.
+    if (opening?.group) {
+      const review = await this.resort(id);
+      if (review) this.tell(id, `branch ready, ${reviewWord(review)}`);
+      return;
+    }
     // a PR run lands on GitHub, never here (call 1)
     if (opening?.pr !== undefined) return;
     if (opening?.openPr) {
@@ -478,7 +484,7 @@ export class LandingHub {
     const rec = this.runs.get(id);
     const entry = this.entries.find((e) => e.id === id);
     if (review) this.tell(id, `fix ready, ${reviewWord(review)}`);
-    if (!rec || !entry || inQueue(entry) || rec.state !== "ready") return;
+    if (!rec || !entry || inQueue(entry) || rec.state !== "ready" || rec.group) return;
     const ok = review ? rejoins(review, entry) : { ok: false as const, why: "its diff could not be sorted" };
     if (ok.ok) {
       this.entries = enqueue(this.entries, rec, this.now(), undefined, this.deps.working?.(rec.repoId) ?? []);
@@ -519,6 +525,7 @@ export class LandingHub {
         startedAt: run.startedAt,
         ...(b.openPr ? { openPr: true as const } : {}),
         ...(b.work ? { work: b.work } : {}),
+        ...(run.group ?? b.group ? { group: run.group ?? b.group } : {}),
       };
     }
     const next: LandingRun = {
