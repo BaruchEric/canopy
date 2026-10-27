@@ -457,6 +457,16 @@ git commit -m "feat(cli): list github and forgejo issues"
 
 Use a disposable GitHub issue labeled canopy and a disposable Forgejo issue labeled canopy on a configured local clone. Poll both once. Confirm the GitHub event opens a PR, the Forgejo event joins the landing queue, a manual land moves its event to merged, and each service gets the exact comment and close action. Confirm a rule with no secretEnv shows polling and returns 404 from its hook path. Inspect the PR-watch diff and confirm it has no changed file.
 
+## Live check, done 2026-10-27
+
+Run from a scratch server on :7893 out of this branch's build, with fresh clones of the two test repos as its root and both rules polling with no secret:
+
+- GitHub, `BaruchEric/canopy-trigger-test`: issue #6 (labelled `canopy`, a new `cheapest()` bug) polled, run, PR #7, CI, auto-merge, the comments "Opened #7 from run/github-issue-6-came-in-the-issue-b619a35c." and "Fixed by #7.", issue closed; the event read `review`, then `merged` with `linked` and `resolved`. About 70 s.
+- Forgejo, `eric/canopy-trigger-test` on git.beric.ca (a throwaway seeded from the same tree): issue #1 polled, run, the event `ready`, `canopy land <run>`, main fast-forwarded to c1050ab, the comment "Fixed by c1050ab on main, not yet pushed to origin.", issue closed; the event `merged` with `resolved`.
+- Both rules showed `*/15 * * * *` and their hook paths answered 404 with "no such hook". No file under `src/server/prs.ts` or `src/core/pr.ts` changed between 0b87546 and the branch's head.
+- Not exercised: the trusted-comments filter, which needs a comment from an outside account on a public repo; and a hook delivery, since neither test repo has a webhook pointing at a reachable address.
+- Two things to carry: the branch slug takes "the issue" from the fence's preamble (`run/github-issue-6-came-in-the-issue-…`), and a Forgejo event's `ready` reason still says "canopy opens the PR".
+
 ## Decisions this plan makes beyond the spec
 
 - Use gh's login for GitHub comments and closes by default, with tokenEnv as the explicit GH_TOKEN override, following the spec's recommendation.
