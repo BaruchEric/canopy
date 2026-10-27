@@ -21,6 +21,7 @@ import type {
   TermInfo,
 } from "../../src/core/types";
 import type { TriggerEvent } from "../../src/core/trigger";
+import type { Collision } from "../../src/core/touch";
 
 /* What one backend sends, with every id it minted given the backend's name
    (through `q`), so two backends' ids never meet. Pure; the api layer is
@@ -63,6 +64,19 @@ export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
   entries: l.entries.map((e) => ({ ...e, id: q(e.id), repoId: q(e.repoId), ...(e.fixing !== undefined ? { fixing: q(e.fixing) } : {}) })),
   orphans: l.orphans,
   notices: (l.notices ?? []).map((n) => ({ ...n, id: q(n.id), entry: q(n.entry), repoId: q(n.repoId) })),
+  ...(l.collisions !== undefined ? {
+    collisions: l.collisions.map((collision): Collision => ({
+      ...collision,
+      id: q(collision.id),
+      repoId: q(collision.repoId),
+      run: q(collision.run),
+      with: collision.with.kind === "run"
+        ? { ...collision.with, run: q(collision.with.run) }
+        : collision.with.kind === "branch"
+          ? { ...collision.with, origin: q(collision.with.origin) }
+          : collision.with,
+    })),
+  } : {}),
 });
 
 /** The PR watches: a branch's id, its run's and its repo's under the

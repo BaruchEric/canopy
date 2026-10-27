@@ -131,9 +131,13 @@ export const isProfilePick = (p: AgentPick): p is { profile: string } => "profil
  *  valid pick and drops the rest. */
 export function normalizeRepoAgent(v: unknown): RepoAgent {
   if (!isRecord(v)) return {};
-  if (!("all" in v) && !("roles" in v) && !("workflows" in v) && !("tasks" in v) && !("collisionSay" in v)) {
+  if (!("all" in v) && !("roles" in v) && !("workflows" in v) && !("tasks" in v)) {
     // an old entry: settings, or nothing usable
-    return Object.keys(v).length ? { all: normalizeAgent(v) } : {};
+    const legacy = { ...v };
+    delete legacy["collisionSay"];
+    const out: RepoAgent = Object.keys(legacy).length ? { all: normalizeAgent(legacy) } : {};
+    if (v["collisionSay"] === false) out.collisionSay = false;
+    return out;
   }
   const out: RepoAgent = normalizeScopes(v);
   const all = normalizePick(v["all"]);

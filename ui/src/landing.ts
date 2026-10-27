@@ -4,7 +4,7 @@
 
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
-import { withName, type Collision } from "../../src/core/touch";
+import { withName } from "../../src/core/touch";
 import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioRun } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [], collisions: [] };
@@ -33,8 +33,15 @@ export function overlapChip(name: string, paths: readonly string[]): { text: str
   };
 }
 
-/** the live collisions from the run's own view */
-export const runOverlaps = (info: LandingInfo, runId: string): Collision[] => (info.collisions ?? []).filter((collision) => collision.run === runId);
+/** one live pair in this run's view, derived from the stored pair's orientation */
+export function runOverlaps(info: LandingInfo, runId: string): { id: string; name: string; paths: string[] }[] {
+  const overlaps: { id: string; name: string; paths: string[] }[] = [];
+  for (const collision of info.collisions ?? []) {
+    if (collision.run === runId) overlaps.push({ id: collision.id, name: withName(collision.with), paths: collision.paths });
+    else if (collision.with.kind === "run" && collision.with.run === runId) overlaps.push({ id: collision.id, name: collision.name, paths: collision.paths });
+  }
+  return overlaps;
+}
 
 /** A ready run's verdict in words; "sorting" until its sort is in. */
 export const verdictWord = (r: Pick<LandingRun, "review">): string => (r.review ? reviewWord(r.review) : "sorting");
@@ -186,7 +193,7 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   const entry = info.entries.find((e) => e.id === b.origin);
   const overlaps = [
     ...(entry?.overlap ? [{ name: entry.overlap.with, paths: entry.overlap.paths }] : []),
-    ...runOverlaps(info, run.id).map((collision) => ({ name: withName(collision.with), paths: collision.paths })),
+    ...runOverlaps(info, run.id).map(({ name, paths }) => ({ name, paths })),
   ];
   const overlapMark = overlaps.length > 0 ? { overlaps } : {};
   if (entry) {

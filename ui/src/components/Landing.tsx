@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { withName } from "../../../src/core/touch";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
 import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
@@ -149,7 +148,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
                 {e.reason && <span className="landing-why">{e.reason}</span>}
                 {e.noGates && <span className="landing-why">no gates to run</span>}
                 {e.overlap && <OverlapChip name={e.overlap.with} paths={e.overlap.paths} />}
-                {runOverlaps(info, entryRun(e).runId).map((collision) => <OverlapChip key={collision.id} name={withName(collision.with)} paths={collision.paths} />)}
+                {runOverlaps(info, entryRun(e).runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 <span className="landing-note">{e.note}</span>
               </li>
             ))}
@@ -269,7 +268,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
               <li key={r.id} className={`landing-row st-${r.state}`}>
                 {runLink(r)}
                 <span className="landing-state">{r.state === "working" ? "working" : r.state === "uncommitted" ? "changes left uncommitted" : r.state === "stopped" ? "stopped by a restart" : "no commits"}</span>
-                {runOverlaps(info, r.runId).map((collision) => <OverlapChip key={collision.id} name={withName(collision.with)} paths={collision.paths} />)}
+                {runOverlaps(info, r.runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 {stoppedWhole(r) && (
                   <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
                     {verdictWord(r)}

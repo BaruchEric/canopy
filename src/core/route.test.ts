@@ -224,6 +224,14 @@ describe("what is stored", () => {
     expect(isEmptyRepoAgent({ collisionSay: false })).toBe(false);
   });
 
+  test("collisionSay peels off without erasing a legacy repo pick", () => {
+    const pick = codex({ model: "gpt-5.5" });
+    expect(normalizeRepoAgent({ harness: "codex", model: "gpt-5.5", collisionSay: false })).toEqual({ all: pick, collisionSay: false });
+    expect(normalizeRepoAgent({ harness: "codex", model: "gpt-5.5", collisionSay: true })).toEqual({ all: pick });
+    expect(normalizeRepoAgent({ all: { harness: "codex", model: "gpt-5.5" }, collisionSay: false })).toEqual({ all: pick, collisionSay: false });
+    expect(normalizeRepoAgent({ all: { harness: "codex", model: "gpt-5.5" }, collisionSay: true })).toEqual({ all: pick });
+  });
+
   test("profiles: bad names out, and default only when it differs from the builtin", () => {
     expect(normalizeProfiles({ default: DEFAULT_AGENT, "Deep!": deep, deep, review: { harness: "codex", model: "opus" } })).toEqual({
       deep,

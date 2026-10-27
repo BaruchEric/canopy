@@ -827,6 +827,7 @@ export const api = {
       entries: Array.isArray(r?.entries) ? r.entries : [],
       orphans: Array.isArray(r?.orphans) ? r.orphans : [],
       notices: Array.isArray(r?.notices) ? r.notices : [],
+      ...(Array.isArray(r?.collisions) ? { collisions: r.collisions } : {}),
     };
     return from(b, info, qLanding);
   },
