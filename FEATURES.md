@@ -12,36 +12,15 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25)
 The queue's pure model (states, review sorting, gates reading) and its git half (worktree add, rebase, fast-forward) become a Bun workspace package with no canopy types and a small `land` CLI, so Paseo, Orca or anyone with a CI can run the sort and the gates. No-go by default: go when a second consumer is real. Needs a licence and a name without "canopy" in it (github.com/juliensimon/canopy exists).
 Spec: docs/superpowers/specs/2026-10-25-landing-package-design.md (2026-10-25).
 
-### FR-044 · Harness share in the costs view
-P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Yegge's "20-25% of all my work")
-Repos marked as the harness (canopy's own, by default) get a share figure in the costs view: the fraction of the window's dollars and Claude sessions that went into canopy itself, eight weeks of plain CSS bars, rust past a per-browser threshold (25%), one quiet inbox line a week at most, and `canopy costs --share`.
-Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25).
-
 ### FR-043 · Run transcripts, replay and fork
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
 canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacted and kept 30 days, so a finished run opens after a restart and replays in the sheet. "Fork from here" starts a new branch run from the original's base with `--fork-session`; a fork onto the other harness is a fenced summary handoff. `canopy run export` writes a markdown transcript.
 Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25).
 
-### FR-041 · Spec drift and convergence, on a schedule
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode)
-A third trigger source, `schedule` (a cron line, fired by the flows-lock holder, one event per repo per fire, `repo: "*"` for every local repo with a SPEC.md), and a bundled `spec-converge` workflow: a read-only Check step compares SPEC.md with the lockfile, the scripts, the files the code writes and the dated decisions, then a Fix step edits it on a branch. SPEC.md is on the sensitive list, so the fix always waits for a look.
-Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25).
-
-### FR-039 · Per-worktree runtime stacks and a warm worktree pool
-P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coasts, Treehouse)
-`warm: N` in gates.json keeps prepared worktrees per repo so a branch run starts without `bun install`; a branch run may run the repo's dev task in its own worktree on allotted ports and preview it; a compose task runs per worktree under its own project name and is torn down on land or drop. canopy's own stack on the mini is refused.
-Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25).
-
-
 ### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
 Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 implemented locally 2026-10-27 (github and forgejo rules, hooks and polling, issue-fix, the Forgejo landing path, write-back, canopy issues); batch verification and live-service checks pending; plans 2 (the rebase and conflict loop, needsYou, canopy pr rebase) and 3 (the stall watchdog and the digest) open. Plan 1's review left four spec corrections for plan 2 (the plan's last section).
-
-### FR-033 · Best-of-N branch runs
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
-The pre-flight runs one note two or three times, across profiles if asked; the members share a group, gates and FR-032 scenarios dry-run on each ready one, a read-only `compare` run ranks them, and the winner is offered "land" by its own sort while the rest drop when it lands. A group sheet shows the members side by side with their diffstat, gates, score and cost. `canopy run --times`.
-Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25).
 
 ### FR-025 · Copy the branch, PR link or run id from the keyboard
 P3 · added 2026-10-23 · source: Eric (Linear UX study)
@@ -88,6 +67,26 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-033 · Best-of-N branch runs
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
+The first group plan runs one action and note in two or three branch worktrees through one shared profile. It dry-runs gates and holdout scenarios on each ready member, starts one read-only compare run when multiple green members are ready, then sends a green winner through the landing queue before dropping the other members. The group sheet shows each member's diffstat, gates, score and cost. Profiles per member and a two-reviewer comparison remain open for plan 2.
+Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plan 2 remains open.
+
+### FR-039 · Per-worktree runtime stacks and a warm worktree pool
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coasts, Treehouse)
+Plan 1 adds a per-machine pool of prepared worktrees. `warm: N` in `.canopy/gates.json` supplies the default count for `canopy worktrees warm <repo> [N]`; a warm branch run reuses prepared setup when its lockfile is unchanged, while a cold start says `no warm worktree; setup will run` and runs setup. Per-worktree dev tasks and ports are plan 2; per-worktree compose stacks are plan 3.
+Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plans 2 and 3 remain open.
+
+### FR-041 · Spec drift and convergence, on a schedule
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode)
+Plan 1 adds schedule rules with a cron line, one event per matching local repo, `repo` and `only` filters, and `land` through the PR or landing queue path. Plan 2 adds the `spec-converge` workflow, its report, spec-drift check and chip.
+Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plan 2 remains open.
+
+### FR-044 · Harness share in the costs view
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Yegge's "20-25% of all my work")
+Repos marked as the harness contribute their dollars and Claude sessions to a share line in the costs view, with eight weeks of bars, a per-browser warning line (25% by default), one quiet inbox notice per week at most and `canopy costs --share`.
+Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`.
 
 ### FR-034 · Workflow graph: parallel, conditional and manual steps
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)

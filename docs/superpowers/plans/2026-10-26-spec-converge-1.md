@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7.
+**Status:** implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plan 2 remains open.
 
 **Goal:** a third trigger source, `schedule`: a rule in `triggers.json` with a
 cron line fires on the flows-lock holder's 30 s tick, makes one event per
