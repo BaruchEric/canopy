@@ -24,6 +24,7 @@ import {
   holdAll,
   inQueue,
   LandError,
+  landWord,
   MAX_NOTICES,
   nextEntry,
   pruneLanded,
@@ -42,6 +43,7 @@ import { foldsCase, readRules, sortBranch } from "../core/review";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
+import type { WorkSink } from "../core/work";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
 import { aheadOf, currentBranch, defaultBranch, dirtyFiles, ffMain, listRunTreeDirs, rebaseOnto, removeRunTree, repoKey, revOf, treeRepo, treeState, worktreesRoot } from "../core/worktree";
@@ -77,6 +79,8 @@ export interface LandingDeps {
   /** whether a PR watch still holds the branch: its PR open and not swept,
    *  so its worktree is the watch's to keep */
   prHeld?: (id: string) => boolean;
+  /** the work ledger: one line per move of a branch that has an item (FR-037) */
+  work?: WorkSink;
   /** runs one scenario line in a worktree with the set's copy as SCENARIO_DIR (`runScenario`) */
   scenario: ScenarioRunner;
   /** where the sets live; `scenariosRoot()` unless a test says otherwise */
@@ -169,6 +173,17 @@ export class LandingHub {
   private publish(): void {
     this.deps.broadcast({ type: "landing", landing: this.info() });
     void this.lookStopped();
+  }
+
+  /** a line on the item of a record, when it has one */
+  private tell(id: string, text: string): void {
+    const work = this.runs.get(id)?.work;
+    if (work) this.deps.work?.note(work, text);
+  }
+
+  private end(id: string, state: "landed" | "dropped", text: string): void {
+    const work = this.runs.get(id)?.work;
+    if (work) this.deps.work?.close(work, state, text);
   }
 
   /** Looks at the worktree of every stopped run with no entry, after any
@@ -311,7 +326,10 @@ export class LandingHub {
     for (const r of runs) {
       const rec = r.state === "working" ? { ...r, state: "stopped" as const } : r;
       if (!this.runs.has(rec.id)) this.runs.set(rec.id, rec);
-      if (rec !== r) await this.saveRun(rec);
+      if (rec !== r) {
+        this.tell(rec.id, "cut off by a restart");
+        await this.saveRun(rec);
+      }
     }
     const entries = await this.readDir("queue", (v) => (Array.isArray(v) ? (v.filter((e) => isRecord(e) && typeof e["id"] === "string") as LandEntry[]) : []));
     const had = new Set(this.entries.map((e) => e.id));
@@ -414,6 +432,7 @@ export class LandingHub {
     // a PR run lands on GitHub, never here (call 1)
     if (opening?.pr !== undefined) return;
     if (opening?.openPr) {
+      this.tell(id, "branch ready, opening a PR");
       try {
         await this.deps.openPr?.(id);
       } catch (err) {
@@ -425,9 +444,11 @@ export class LandingHub {
     }
     const review = await this.resort(id);
     const rec = this.runs.get(id);
+    if (review) this.tell(id, `branch ready, ${reviewWord(review)}`);
     if (!review || review.verdict !== "auto" || !rec || rec.state !== "ready") return;
     if (this.entries.some((e) => e.id === id) || this.deps.runActive(rec.runId)) return;
     this.entries = enqueue(this.entries, rec, this.now(), { auto: true });
+    this.tell(id, "joined the queue on its own");
     void this.saveQueue(rec.repoPath);
     this.publish();
     this.kick(rec.repoId);
@@ -439,10 +460,12 @@ export class LandingHub {
     const review = await this.resort(id);
     const rec = this.runs.get(id);
     const entry = this.entries.find((e) => e.id === id);
+    if (review) this.tell(id, `fix ready, ${reviewWord(review)}`);
     if (!rec || !entry || inQueue(entry) || rec.state !== "ready") return;
     const ok = review ? rejoins(review, entry) : { ok: false as const, why: "its diff could not be sorted" };
     if (ok.ok) {
       this.entries = enqueue(this.entries, rec, this.now());
+      this.tell(id, "back in the queue");
       this.kick(rec.repoId);
     } else {
       this.entries = unqueue(this.entries, id);
@@ -478,6 +501,7 @@ export class LandingHub {
         state: b.state,
         startedAt: run.startedAt,
         ...(b.openPr ? { openPr: true as const } : {}),
+        ...(b.work ? { work: b.work } : {}),
       };
     }
     const next: LandingRun = {
@@ -621,6 +645,7 @@ export class LandingHub {
     const flags: QueueFlags = review.verdict === "approve" && approve ? { approved: approve } : {};
     // a stopped run found whole joins as a ready one; its record stays stopped
     this.entries = enqueue(this.entries, { ...cur, state: "ready" }, this.now(), flags);
+    this.tell(cur.id, "queued to land");
     void this.saveQueue(cur.repoPath);
     this.publish();
     this.kick(cur.repoId);
@@ -642,6 +667,7 @@ export class LandingHub {
       }
       try {
         this.entries = enqueue(this.entries, this.runs.get(r.id) ?? r, this.now(), {});
+        this.tell(r.id, "queued to land");
         queued.push(r.id);
       } catch (err) {
         skipped.push({ id: r.id, branch: r.branch, why: errText(err) });
@@ -666,6 +692,7 @@ export class LandingHub {
     if (entry.fixing && this.deps.runActive(entry.fixing)) throw new LandError("a fix is going already");
     const run = await this.deps.startFix(rec, entry);
     this.entries = this.entries.map((e) => (e.id === entry.id ? { ...e, fixing: run.id, updatedAt: this.now() } : e));
+    this.tell(rec.id, `fix started: ${landWord(entry, this.entries)}`);
     void this.saveQueue(rec.repoPath);
     this.publish();
     return run;
@@ -684,6 +711,7 @@ export class LandingHub {
     if (!target) throw new LandError("nothing by that id", 404);
     await removeRunTree(target.repoPath, target.dir, target.branch);
     this.entries = this.entries.filter((e) => e.id !== target.id);
+    this.end(target.id, "dropped", "dropped with its worktree");
     await this.dropRun(target.id);
     await this.saveQueue(target.repoPath);
     this.deps.dropped?.(target.id);
@@ -817,7 +845,8 @@ export class LandingHub {
       }
       const rb = await rebaseOnto(e.dir, head);
       if ("conflict" in rb) {
-        this.step(e, { t: "conflict", files: rb.conflict });
+        const sentBack = this.step(e, { t: "conflict", files: rb.conflict });
+        this.tell(sentBack.id, `sent back: conflict in ${rb.conflict.length} file${rb.conflict.length === 1 ? "" : "s"}`);
         return;
       }
       if ("error" in rb) {
@@ -842,7 +871,8 @@ export class LandingHub {
       if (e.state === "setup" && gates.setup) {
         const r = await this.deps.check(e.dir, gates.setup);
         if (r.exit !== 0) {
-          this.step(e, { t: "red", gate: "setup", output: r.output });
+          const sentBack = this.step(e, { t: "red", gate: "setup", output: r.output });
+          this.tell(sentBack.id, "sent back: setup failed");
           return;
         }
         e = this.step(e, { t: "set-up", first });
@@ -851,7 +881,8 @@ export class LandingHub {
         const g = gates.gates[i]!;
         const r = await this.deps.check(e.dir, g.run);
         if (r.exit !== 0) {
-          this.step(e, { t: "red", gate: g.name, output: r.output || `exited ${r.exit ?? "on a signal"}` });
+          const sentBack = this.step(e, { t: "red", gate: g.name, output: r.output || `exited ${r.exit ?? "on a signal"}` });
+          this.tell(sentBack.id, `sent back: ${g.name} failed`);
           return;
         }
         e = this.step(e, { t: "gate-ok", next: gates.gates[i + 1]?.name ?? null });
@@ -889,7 +920,9 @@ export class LandingHub {
         }
         const red = pass.results.find((r) => !r.ok);
         if (red) {
-          this.step(e, { t: "red", gate: SCENARIO_GATE + red.name, output: red.tail ?? "" });
+          const gate = SCENARIO_GATE + red.name;
+          const sentBack = this.step(e, { t: "red", gate, output: red.tail ?? "" });
+          this.tell(sentBack.id, `sent back: ${gate} failed`);
           return;
         }
       }
@@ -899,7 +932,10 @@ export class LandingHub {
       }
       if ((await revOf(e.repoPath, "HEAD")) !== head) {
         e = this.step(e, { t: "moved" });
-        if (e.state === "moved") return;
+        if (e.state === "moved") {
+          this.tell(e.id, "sent back: main kept moving");
+          return;
+        }
         continue;
       }
       // a server going down lands nothing more: the next start takes the
@@ -912,7 +948,10 @@ export class LandingHub {
       }
       if ("moved" in ff) {
         e = this.step(e, { t: "moved" });
-        if (e.state === "moved") return;
+        if (e.state === "moved") {
+          this.tell(e.id, "sent back: main kept moving");
+          return;
+        }
         continue;
       }
       if ("error" in ff) {
@@ -922,6 +961,7 @@ export class LandingHub {
       const landed = (await revOf(e.repoPath, "HEAD")) ?? after ?? "";
       this.step(e, { t: "landed", head: landed });
       if (e.auto) this.notify({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "landed", head: landed });
+      this.end(e.id, "landed", `landed on ${e.target}`);
       await removeRunTree(e.repoPath, e.dir, e.branch);
       await this.dropRun(e.id);
       this.publish();
