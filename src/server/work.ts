@@ -17,6 +17,11 @@ export interface WorkDeps {
   now?: () => number;
   /** the ids minted; `mintId()` unless a test says otherwise */
   mintId?: () => string;
+  /** injectable persistence boundary; production uses the JSON work store */
+  store?: {
+    read: typeof readWorkItems;
+    write: typeof writeWorkItem;
+  };
 }
 
 const json = (data: unknown, status = 200): Response => new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
@@ -27,7 +32,10 @@ const isWorkState = (value: string): value is WorkState => WORK_STATES.some((sta
 export class WorkHub implements WorkSink {
   private items = new Map<string, WorkItem>();
   private serial: Promise<void> = Promise.resolve();
+  /** Newly created records stay pending until their latest version is durable. */
+  private pendingNew = new Map<string, WorkItem>();
   private keeping = false;
+  private ownership = 0;
 
   constructor(private deps: WorkDeps) {}
 
@@ -40,10 +48,11 @@ export class WorkHub implements WorkSink {
   }
 
   /** Every change derives state, keeps the item, queues its write and publishes the whole list. */
-  private set(item: WorkItem, at = this.now()): WorkItem {
+  private set(item: WorkItem, at = this.now(), isNew = false): WorkItem {
     const next: WorkItem = { ...item, state: stateOf(item, this.deps.facts(item)), updatedAt: at };
     this.items.set(next.id, next);
-    if (this.keeping) this.persist(next);
+    if (isNew || this.pendingNew.has(next.id)) this.pendingNew.set(next.id, next);
+    if (this.keeping) this.persist(next, this.ownership);
     this.publish();
     return next;
   }
@@ -52,8 +61,15 @@ export class WorkHub implements WorkSink {
     this.deps.broadcast({ type: "work", items: this.info().items });
   }
 
-  private persist(item: WorkItem): void {
-    const next = this.serial.then(() => writeWorkItem(this.dir, item)).catch((error: unknown) => {
+  private persist(item: WorkItem, ownership: number): void {
+    const write = this.deps.store?.write ?? writeWorkItem;
+    const next = this.serial.then(async () => {
+      // A detach revokes every queued write. Writes which passed this check
+      // are already in flight, and detach waits for the serial chain to drain.
+      if (!this.keeping || this.ownership !== ownership) return;
+      await write(this.dir, item);
+      if (this.pendingNew.get(item.id) === item) this.pendingNew.delete(item.id);
+    }).catch((error: unknown) => {
       console.error(`work: could not write ${item.id}: ${errText(error)}`);
     });
     this.serial = next;
@@ -92,7 +108,7 @@ export class WorkHub implements WorkSink {
       notes: [],
       createdAt: at,
       updatedAt: at,
-    }, at);
+    }, at, true);
   }
 
   note(id: string, text: string, by = "canopy"): void {
@@ -168,22 +184,37 @@ export class WorkHub implements WorkSink {
   }
 
   async adopt(): Promise<void> {
-    const restored = await readWorkItems(this.dir);
-    const pending = [...this.items.values()];
-    const pendingIds = new Set(pending.map((item) => item.id));
-    this.items = new Map(restored.map((item) => [item.id, item]));
-    for (const item of pending) this.items.set(item.id, item);
+    if (this.keeping) return;
+    const ownership = ++this.ownership;
+    // Finish any writes from an earlier ownership period before reading disk.
+    await this.serial;
+    if (ownership !== this.ownership) return;
+    const read = this.deps.store?.read ?? readWorkItems;
+    const restored = await read(this.dir);
+    if (ownership !== this.ownership) return;
+    const adopted = new Map(restored.map((item) => [item.id, item]));
+    // Only genuinely minted records may cross the lock handoff from memory.
+    // Restored records always come from the current durable copy, never cache.
+    for (const [id, item] of this.pendingNew) {
+      if (!adopted.has(id)) adopted.set(id, item);
+    }
+    this.items = adopted;
     this.keeping = true;
 
     for (const item of this.items.values()) {
       const state = stateOf(item, this.deps.facts(item));
-      if (pendingIds.has(item.id) || state !== item.state) this.set({ ...item, state });
+      if (this.pendingNew.has(item.id) || state !== item.state) {
+        this.set({ ...item, state });
+      }
     }
     this.publish();
   }
 
-  detach(): void {
+  /** Revoke ownership now, then wait for writes already in flight to finish. */
+  async detach(): Promise<void> {
+    this.ownership++;
     this.keeping = false;
+    await this.serial;
   }
 
   async idle(): Promise<void> {

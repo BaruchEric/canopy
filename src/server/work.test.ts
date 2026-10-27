@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Run, ServerEvent } from "../core/types";
 import { NOTE_CHARS, NOTES_MAX, type WorkFacts } from "../core/work";
+import { readWorkItems, writeWorkItem } from "../core/workstore";
 import type { Caller } from "./callers";
-import { WorkHub } from "./work";
+import { WorkHub, type WorkDeps } from "./work";
 
 let root = "";
 let n = 0;
@@ -19,7 +20,7 @@ afterAll(async () => {
 const IDS = ["w-testaaaa", "w-testbbbb", "w-testcccc"] as const;
 const page: Caller = { id: "p1", kind: "page", label: "page mac", created: 0, used: 0 };
 
-function hub(dir = join(root, `w${++n}`)) {
+function hub(dir = join(root, `w${++n}`), store?: WorkDeps["store"]) {
   const events: ServerEvent[] = [];
   const facts = new Map<string, WorkFacts>();
   let ids = 0;
@@ -28,6 +29,7 @@ function hub(dir = join(root, `w${++n}`)) {
     broadcast: (ev) => events.push(ev),
     facts: (item) => facts.get(item.id) ?? { active: false, branches: [] },
     dir,
+    ...(store ? { store } : {}),
     now: () => ++clock,
     mintId: () => {
       const id = IDS[ids++];
@@ -133,6 +135,89 @@ describe("the ledger", () => {
     const again = hub(first.dir);
     await again.h.adopt();
     expect(again.h.get(early.id)?.title).toBe("before the lock");
+  });
+
+  test("two hubs hand off and back without replacing a newer durable line with a stale cache", async () => {
+    const first = hub();
+    await first.h.adopt();
+    const item = first.h.mint({ title: "shared", from: { kind: "note" }, repos: ["r"] });
+    await first.h.idle();
+    await first.h.detach();
+
+    const second = hub(first.dir);
+    await second.h.adopt();
+    second.h.note(item.id, "written by the second holder");
+    await second.h.idle();
+    await second.h.detach();
+
+    await first.h.adopt();
+    expect(first.h.get(item.id)?.notes.at(-1)?.text).toBe("written by the second holder");
+    await first.h.idle();
+    expect((await readWorkItems(first.dir))[0]?.notes.at(-1)?.text).toBe("written by the second holder");
+  });
+
+  test("detach cancels a queued write but keeps the new item for the next adoption", async () => {
+    const { h, dir } = hub();
+    await h.adopt();
+    const item = h.mint({ title: "queued", from: { kind: "note" }, repos: ["r"] });
+    const detached = h.detach();
+    await detached;
+    await h.idle();
+    expect(await readWorkItems(dir)).toEqual([]);
+
+    await h.adopt();
+    await h.idle();
+    expect((await readWorkItems(dir)).map(({ id }) => id)).toEqual([item.id]);
+  });
+
+  test("detach waits for a write that already started", async () => {
+    let markStarted: (() => void) | undefined;
+    let allowWrite: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const continueWrite = new Promise<void>((resolve) => { allowWrite = resolve; });
+    const { h, dir } = hub(undefined, {
+      read: readWorkItems,
+      write: async (path, item) => {
+        markStarted?.();
+        await continueWrite;
+        await writeWorkItem(path, item);
+      },
+    });
+    await h.adopt();
+    const item = h.mint({ title: "started", from: { kind: "note" }, repos: ["r"] });
+    await started;
+    let finished = false;
+    const detaching = h.detach().then(() => { finished = true; });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    allowWrite?.();
+    await detaching;
+    expect((await readWorkItems(dir)).map(({ id }) => id)).toEqual([item.id]);
+  });
+
+  test("detach during an adoption read cannot restore write ownership", async () => {
+    let markReading: (() => void) | undefined;
+    let allowRead: (() => void) | undefined;
+    const reading = new Promise<void>((resolve) => { markReading = resolve; });
+    const continueRead = new Promise<void>((resolve) => { allowRead = resolve; });
+    const { h, dir } = hub(undefined, {
+      read: async (path) => {
+        markReading?.();
+        await continueRead;
+        return readWorkItems(path);
+      },
+      write: writeWorkItem,
+    });
+    const adoption = h.adopt();
+    await reading;
+    await h.detach();
+    allowRead?.();
+    await adoption;
+
+    const item = h.mint({ title: "must stay local", from: { kind: "note" }, repos: ["r"] });
+    await h.idle();
+    expect(h.get(item.id)?.id).toBe(item.id);
+    expect(await readWorkItems(dir)).toEqual([]);
   });
 });
 
