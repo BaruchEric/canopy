@@ -15,6 +15,7 @@ import {
   favoriteCount,
   inboxItems,
   isFavorite,
+  isHarness,
   isOnline,
   layoutOf,
   loadDock,
@@ -36,8 +37,10 @@ import {
   arrangementOf,
   failedItems,
   turnItems,
+  waitingCount,
   flowFor,
   activeFlowFor,
+  harnessNoticeOf,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -56,6 +59,8 @@ import {
   type AgentSettings,
   type Ask,
   type CapacityInfo,
+  type HistoryOverview,
+  type RepoHistory,
   type LandingInfo,
   type KeptShell,
   type PeerSeen,
@@ -949,6 +954,82 @@ describe("several backends", () => {
     expect(bs?.url.startsWith("http://b.test/api/events")).toBe(true);
     expect(bs?.opts?.withCredentials).toBe(true);
     expect(connOf(s, "b").status.state).toBe("online");
+  });
+
+  test("history sends a window to its backend and qualifies the overview's repo ids", async () => {
+    setRegistry("a", ["a", "b"]);
+    setBase("b", "http://b.test");
+    const overview: HistoryOverview = {
+      available: true,
+      days: [],
+      maxDay: 0,
+      fetchedAt: 1,
+      repos: {
+        proj: { project: "p1", sessions: 0, costUsd: 0, tokens: 0, commits: 0, first: null, last: null, days: [], daySessions: [] },
+      },
+    };
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, _init?: RequestInit) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify(overview), { status: 200 });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    const got = await api.history(true, "b", "90d");
+
+    expect(calls).toEqual(["http://b.test/api/history?refresh=1&window=90d"]);
+    if (!got.available) throw new Error(got.reason);
+    expect(Object.keys(got.repos)).toEqual(["b|proj"]);
+  });
+
+  test("harnessRepo marks one checkout and clears every marked checkout on the card", async () => {
+    setRegistry("a", ["a", "b"]);
+    setBase("b", "http://b.test");
+    useStore.setState({
+      home: "a",
+      backendOrder: ["a", "b"],
+      repos: [repo("proj", { harness: true }), repo("b|proj", { harness: true })],
+    });
+    const payloads: unknown[] = [];
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const target = String(input);
+        calls.push(target);
+        const body: unknown = JSON.parse(String(init?.body));
+        if (body === null || typeof body !== "object" || !("harness" in body) || typeof body.harness !== "boolean") {
+          throw new Error("the harness request did not contain a boolean");
+        }
+        payloads.push(body);
+        const url = new URL(target, "http://a.test");
+        const plain = url.searchParams.get("id");
+        if (!plain) throw new Error("the harness request had no repo id");
+        const id = url.origin === "http://b.test" ? `b|${plain}` : plain;
+        const found = useStore.getState().repos.find((r) => r.id === id);
+        if (!found) throw new Error(`no fixture repo for ${id}`);
+        const answer: Repo = { ...found, id: plain };
+        if (body.harness) answer.harness = true;
+        else delete answer.harness;
+        return new Response(JSON.stringify(answer), { status: 200 });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    await useStore.getState().harnessRepo("proj", false);
+
+    expect(calls).toEqual([
+      "/api/repos/harness?id=proj",
+      "http://b.test/api/repos/harness?id=proj",
+    ]);
+    expect(payloads).toEqual([{ harness: false }, { harness: false }]);
+    expect(useStore.getState().repos.map((r) => r.harness)).toEqual([undefined, undefined]);
+    expect(isHarness(useStore.getState(), "proj")).toBe(false);
+
+    await useStore.getState().harnessRepo("b|proj", true);
+
+    expect(calls[2]).toBe("http://b.test/api/repos/harness?id=proj");
+    expect(payloads[2]).toEqual({ harness: true });
+    expect(isHarness(useStore.getState(), "proj")).toBe(true);
   });
 
   test("a newer capacity event survives a pending read on that backend", async () => {
@@ -2048,6 +2129,15 @@ describe("cards over several backends", () => {
     expect(visibleCards(useStore.getState()).map((c) => c.checkouts.map((r) => r.id))).toEqual([["proj", "b|proj"]]);
   });
 
+  test("a card is the harness when any of its checkouts is marked", () => {
+    two();
+    useStore.setState((s) => ({ repos: s.repos.map((r) => (r.id === "b|proj" ? { ...r, harness: true as const } : r)) }));
+    const s = useStore.getState();
+    expect(isHarness(s, "proj")).toBe(true);
+    expect(isHarness(s, "b|proj")).toBe(true);
+    expect(isHarness(s, "other")).toBe(false);
+  });
+
   test("switchCheckout swaps the panel in place and leads the card with it", () => {
     two();
     useStore.setState({ panels: ["other", "proj"], activePanel: "proj" });
@@ -3026,5 +3116,70 @@ describe("chats, agents and popups as dock panels (FR-047)", () => {
     s.tabItem("strip", agent);
     expect(useStore.getState().panels).toEqual([]);
     expect(useStore.getState().settings.itemTabs.map((t) => t.id)).toEqual([itemTabId("strip", "agent", "claude:abc")]);
+  });
+});
+
+describe("the harness weekly inbox selector", () => {
+  const pristine = useStore.getState();
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  afterEach(() => {
+    useStore.setState({ repos: pristine.repos, history: pristine.history, harnessSaid: pristine.harnessSaid, settings: pristine.settings, activeWs: pristine.activeWs, workspaces: pristine.workspaces, backendOrder: pristine.backendOrder });
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  test("memoizes the quiet line and records acknowledgement outside inbox and waiting counts", () => {
+    const days = Array.from({ length: 16 }, (_, index) => `2026-10-${String(index + 12).padStart(2, "0")}`);
+    const weekly = (amount: number) => days.map((day) => (day >= "2026-10-19" && day <= "2026-10-25" ? amount / 7 : 0));
+    const archive = (project: string, amounts: number[]): RepoHistory => ({
+      project,
+      sessions: 0,
+      costUsd: amounts.reduce((sum, amount) => sum + amount, 0),
+      tokens: 0,
+      commits: 0,
+      first: null,
+      last: null,
+      days: amounts,
+      daySessions: amounts.map(() => 0),
+    });
+    const history: HistoryOverview = {
+      available: true,
+      days,
+      maxDay: 1,
+      fetchedAt: 1,
+      repos: { canopy: archive("canopy", weekly(17)), web: archive("web", weekly(33)) },
+    };
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    useStore.setState({
+      repos: [repo("canopy", { harness: true }), repo("web")],
+      history,
+      harnessSaid: null,
+      settings: { ...pristine.settings, harnessShareMax: 25 },
+      backendOrder: [pristine.home],
+    });
+
+    const before = useStore.getState();
+    const notice = harnessNoticeOf(before);
+    if (!notice) throw new Error("the harness notice fixture should cross the line");
+    expect(notice).toEqual({ key: "2026-W43", text: "last week 34% of Claude spend went into the harness (canopy)" });
+    expect(harnessNoticeOf(before)).toBe(notice);
+    const inbox = inboxItems(before);
+    const count = waitingCount(before);
+
+    before.sayHarness(notice.key);
+
+    const after = useStore.getState();
+    expect(after.harnessSaid).toBe("2026-W43");
+    expect(values.get("canopy.harnessSaid")).toBe("2026-W43");
+    expect(harnessNoticeOf(after)).toBeNull();
+    expect(inboxItems(after)).toBe(inbox);
+    expect(waitingCount(after)).toBe(count);
   });
 });

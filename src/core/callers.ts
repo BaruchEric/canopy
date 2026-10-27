@@ -39,7 +39,7 @@ type Rule = { methods: readonly string[]; paths: readonly string[]; right: Right
 const POST = ["POST"];
 const DEL = ["DELETE"];
 const POST_DEL = ["POST", "DELETE"];
-const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "pull", "unlock", "note", "favorite", "spec", "suggest", "refresh"];
+const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "pull", "unlock", "note", "favorite", "harness", "spec", "suggest", "refresh"];
 
 /** Paths are written without `/api/`. A trailing `/*` matches anything below. */
 const RULES: readonly Rule[] = [

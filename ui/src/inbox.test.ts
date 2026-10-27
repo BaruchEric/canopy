@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
+import type { HarnessWeek } from "../../src/core/harnessshare";
 import {
   askPermission,
   askWord,
@@ -17,6 +18,7 @@ import {
   toAskAnswer,
   toRunAnswer,
   scopeOffers,
+  harnessNotice,
 } from "./inbox";
 
 const ask = (over: Partial<Ask> = {}): Ask => ({
@@ -93,6 +95,31 @@ const flow = (over: Partial<Flow> = {}): Flow => ({
 
 const repos = [repo("app", { link: "https://github.com/me/app", remotes: ["git@github.com:me/app.git"] }), repo("mac|lib")];
 const ctx = { repos, cards: { "claude:s1": card }, backendOf: (id: string) => (id.includes("|") ? id.split("|")[0]! : "mini") };
+
+describe("the harness's weekly line", () => {
+  const weeks: HarnessWeek[] = [
+    { from: "2026-10-12", harness: 7, rest: 7, share: 0.5 },
+    { from: "2026-10-19", harness: 17, rest: 33, share: 0.34 },
+    { from: "2026-10-26", harness: 2, rest: 0, share: 1 },
+  ];
+
+  test("the newest full week at or over the line, once per week key", () => {
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 25, null)).toEqual({
+      key: "2026-W43",
+      text: "last week 34% of Claude spend went into the harness (canopy, devhub)",
+    });
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 34, null)?.key).toBe("2026-W43");
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 25, "2026-W43")).toBeNull();
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 25, "2026-W42")).not.toBeNull();
+  });
+
+  test("none under the line, at zero, without a full week, or without spend", () => {
+    expect(harnessNotice(weeks, ["canopy"], 35, null)).toBeNull();
+    expect(harnessNotice(weeks, ["canopy"], 0, null)).toBeNull();
+    expect(harnessNotice(weeks.slice(-1), ["canopy"], 25, null)).toBeNull();
+    expect(harnessNotice([{ from: "2026-10-19", harness: 0, rest: 0, share: null }, weeks[2]!], ["canopy"], 25, null)).toBeNull();
+  });
+});
 
 describe("mergeInbox", () => {
   test("a run's proposal is its own kind, with no permission or questions to answer from the inbox", () => {

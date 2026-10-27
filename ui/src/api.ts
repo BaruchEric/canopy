@@ -418,8 +418,14 @@ export const api = {
     normalizeRoutes(await req<unknown>(b, "/api/agents/scope", { method: "POST", body: JSON.stringify({ ...scope, pick }) })),
   /** one repo's effective table, as its backend resolves it */
   resolveAgents: (id: string) => repoReq<AgentTable>(id, (p) => `/api/agents/resolve?${rq(p)}`),
-  history: async (refresh = false, b: string = homeName()) =>
-    from(b, await req<HistoryOverview>(b, refresh ? "/api/history?refresh=1" : "/api/history"), qHistory),
+  history: async (refresh = false, b: string = homeName(), window?: HistoryWindow) => {
+    const params = new URLSearchParams();
+    if (refresh) params.set("refresh", "1");
+    if (window) params.set("window", window);
+    const query = params.toString();
+    const path = query ? `/api/history?${query}` : "/api/history";
+    return from(b, await req<HistoryOverview>(b, path), qHistory);
+  },
   sessions: (id: string, since: HistoryWindow) =>
     repoReq<HistorySession[]>(id, (p) => `/api/repos/sessions?${rq(p, { since })}`),
   session: (id: string, session: string) =>
@@ -1154,6 +1160,15 @@ export const api = {
     const got = await req<Repo>(b, `/api/repos/favorite?${rq(plain)}`, {
       method: "POST",
       body: JSON.stringify({ favorite }),
+    });
+    return from(b, got, qRepo);
+  },
+  /** marks a repo as the harness, or takes the mark off; answers the repo */
+  harness: async (id: string, harness: boolean) => {
+    const [b, plain] = on(id);
+    const got = await req<Repo>(b, `/api/repos/harness?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ harness }),
     });
     return from(b, got, qRepo);
   },

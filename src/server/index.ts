@@ -34,10 +34,11 @@ import {
 } from "../core/git";
 import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
-import { linkFavorites } from "../core/favorite";
+import { linkFavorites, linkHarness } from "../core/favorite";
 import { AUTHORED_QUERY, linkPulls, parseAuthoredPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
+  RING_DAYS,
   historyOverview,
   historySearch,
   historySession,
@@ -124,6 +125,8 @@ import {
   removeWorkspace,
   setArchived,
   setFavorite,
+  seedHarnessList,
+  setHarness,
   setAwake,
   setKeepShells,
   setLaunch,
@@ -317,10 +320,10 @@ interface ServerState {
   remembered: RememberedRules;
   /** workflow runs, step by step, over the runner's jobs */
   flows: Flows;
-  /** the claude-history overview, kept for HISTORY_TTL and for one scan */
-  history: HistoryCache | null;
-  /** an overview being built, so concurrent callers share it */
-  historyPending: Promise<HistoryCache> | null;
+  /** claude-history overviews, keyed by requested day count */
+  history: Map<number, HistoryCache>;
+  /** one overview per day count being built, shared by concurrent callers */
+  historyPending: Map<number, Promise<HistoryCache>>;
   /** the shells behind browser terminals, by the id the browser gave each;
    *  a shell outlives its socket, and the server too when tmux holds it */
   terms: Map<string, LiveTerm>;
@@ -379,6 +382,8 @@ interface ServerState {
   archived: Set<string>;
   /** the paths of the repos starred in canopy, kept the same way */
   favorites: Set<string>;
+  /** the paths of the repos marked as the harness, kept in step with config */
+  harness: Set<string>;
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
@@ -2047,8 +2052,11 @@ const isFlowChoice = (v: unknown): v is FlowChoice => v === "continue" || v === 
 const isHistoryWindow = (v: unknown): v is HistoryWindow =>
   typeof v === "string" && (HISTORY_WINDOWS as readonly string[]).includes(v);
 
-async function loadHistory(state: ServerState, force = false): Promise<HistoryCache> {
-  const c = state.history;
+/** Only the costs view's explicit 90-day window widens the archive strip. */
+const overviewDays = (window: string | null): number => (window === "90d" ? 90 : RING_DAYS);
+
+async function loadHistory(state: ServerState, force = false, days = RING_DAYS): Promise<HistoryCache> {
+  const c = state.history.get(days);
   if (
     !force &&
     c &&
@@ -2057,9 +2065,10 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
   ) {
     return c;
   }
-  if (state.historyPending) return state.historyPending;
+  const pending = state.historyPending.get(days);
+  if (pending) return pending;
   const scannedAt = state.result.scannedAt;
-  state.historyPending = (async () => {
+  const building = (async () => {
     const cfg = await loadConfig();
     const loc = locateHistory(cfg);
     let entry: HistoryCache;
@@ -2071,7 +2080,7 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
         value: { available: false, reason: loc.reason, fetchedAt: Date.now() },
       };
     } else {
-      const value = await historyOverview(loc.bin, state.result.repos).catch(
+      const value = await historyOverview(loc.bin, state.result.repos, new Date(), days).catch(
         (err: unknown): HistoryOverview => ({
           available: false,
           reason: String(err instanceof Error ? err.message : err),
@@ -2080,12 +2089,13 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
       );
       entry = { at: Date.now(), scannedAt, bin: loc.bin, value };
     }
-    state.history = entry;
+    state.history.set(days, entry);
     return entry;
   })().finally(() => {
-    state.historyPending = null;
+    state.historyPending.delete(days);
   });
-  return state.historyPending;
+  state.historyPending.set(days, building);
+  return building;
 }
 
 /** The CLI and the project id behind one repo's history routes. */
@@ -2351,17 +2361,42 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     // source is in the same list, so it is settled on the way out; the pull
     // request counts and the peer states ride along from the last activity
     // pass and the last peer pass.
-    repos: linkFavorites(
-      linkArchived(
-        linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
-        state.archived,
+    repos: linkHarness(
+      linkFavorites(
+        linkArchived(
+          linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
+          state.archived,
+        ),
+        state.favorites,
       ),
-      state.favorites,
+      state.harness,
     ),
     scannedAt: Date.now(),
     backend: backendCaps(state.harnesses()),
   };
   syncRepoHealthSoon(state);
+}
+
+/** Seeds the harness mark once, from local repos whose root package declares
+ *  the canopy name. A broken manifest skips that repo without leaving the
+ *  config eligible for a later guess. */
+async function seedHarness(state: ServerState): Promise<void> {
+  const cfg = await loadConfig();
+  if (cfg.harness !== null) return;
+  const found: string[] = [];
+  for (const repo of state.result.repos) {
+    if (repo.host || repo.forge) continue;
+    try {
+      const manifest: unknown = JSON.parse(await readFile(join(repo.path, "package.json"), "utf8"));
+      if (manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) && "name" in manifest && manifest.name === "canopy") {
+        found.push(repo.path);
+      }
+    } catch {
+      // Missing, unreadable, or malformed package files do not block seeding.
+    }
+  }
+  state.harness = new Set(await seedHarnessList(found));
+  rebuildResult(state, state.result.repos);
 }
 
 /** the folder the health file sits in: its removal takes the file too */
@@ -3400,7 +3435,8 @@ async function handleApi(
   }
 
   if (path === "/api/history" && method === "GET") {
-    const c = await loadHistory(state, url.searchParams.get("refresh") === "1");
+    const days = overviewDays(url.searchParams.get("window"));
+    const c = await loadHistory(state, url.searchParams.get("refresh") === "1", days);
     return json(c.value);
   }
 
@@ -4130,6 +4166,23 @@ async function handleApi(
       state.result.repos[idx] = starred!;
       broadcast(state, { type: "repo", repo: starred! });
       return json(starred);
+    }
+    // Harness membership is canopy's own path mark, so it can be set before
+    // the forge-only repo refusal just like the star and archive marks.
+    if (method === "POST" && action === "harness") {
+      const body: unknown = await req.json().catch(() => null);
+      if (body === null || typeof body !== "object" || Array.isArray(body) || !("harness" in body) || typeof body.harness !== "boolean") {
+        throw new HttpError(400, "harness must be true or false");
+      }
+      state.harness = new Set(await setHarness(repo.path, body.harness));
+      const idx = state.result.repos.findIndex((r) => r.id === repo.id);
+      const now = state.result.repos[idx];
+      if (!now) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      const marked = linkHarness([now], state.harness)[0];
+      if (!marked) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      state.result.repos[idx] = marked;
+      broadcast(state, { type: "repo", repo: marked });
+      return json(marked);
     }
     // A forge repo is a listing, not a checkout: git has nothing to run
     // against and no folder to open. Where the clone is known, say so — the
@@ -5150,8 +5203,8 @@ export async function startServer(opts: {
     helpers: new Map(),
     gateway: await defaultGateway(),
     timers: new Map(),
-    history: null,
-    historyPending: null,
+    history: new Map(),
+    historyPending: new Map(),
     terms: new Map(),
     tmux: tmuxBase(),
     runner,
@@ -5247,6 +5300,7 @@ export async function startServer(opts: {
     pulls: new Map(),
     archived: new Set(cfg.archived),
     favorites: new Set(cfg.favorites),
+    harness: new Set(cfg.harness ?? []),
     own: new Map(),
     // Seeded from settings at startup, not []: fetchLocal can run before
     // the first peer pass does (refreshActivity fetches, then peers), and
@@ -5699,6 +5753,7 @@ export async function startServer(opts: {
   // nothing to show. An extra source failing is a note on that source.
   const launch = state.sources[0];
   if (launch?.src.error) throw new Error(launch.src.error);
+  await seedHarness(state);
   // The shells the last server left on tmux, before listening, so a
   // browser rejoining finds them held. Said out loud, since a missing
   // tmux falls back to plain ptys and looks the same until a restart.

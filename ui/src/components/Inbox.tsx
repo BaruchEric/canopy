@@ -16,7 +16,7 @@ import { PopGrip, usePopEntries, type PopSpec } from "./PopGrip";
 import { POPUP_WORD } from "../sectiontabs";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
-import { canAnswer as canAnswerHere, inboxItems, prsAll, useStore } from "../store";
+import { canAnswer as canAnswerHere, harnessNoticeOf, inboxItems, prsAll, useStore } from "../store";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { LandingNotices } from "./Landing";
 import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
@@ -579,6 +579,22 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   );
 }
 
+/** A quiet weekly line outside the inbox's ask count. */
+export function HarnessNoticeLine() {
+  const notice = useStore(harnessNoticeOf);
+  const sayHarness = useStore((s) => s.sayHarness);
+  if (!notice) return null;
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">harness</h3>
+      <p className="settings-hint">{notice.text}</p>
+      <button type="button" className="mini" onClick={() => sayHarness(notice.key)}>
+        noted
+      </button>
+    </section>
+  );
+}
+
 /**
  * What the inbox popover shows: its head and gear, every item with the form
  * that answers it, how the last asks ended, and the away switch. The
@@ -660,6 +676,7 @@ export function InboxPopBody({ onGit, popEntries = [] }: { onGit?: () => void; p
         )}
       </section>
       <LandingNotices />
+      <HarnessNoticeLine />
       {recent.length > 0 && (
         <section className="settings-row">
           <h3 className="panel-label">lately</h3>

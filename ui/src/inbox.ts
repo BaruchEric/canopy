@@ -30,12 +30,32 @@ import type {
   SweepInfo,
   SweepItem,
 } from "../../src/core/types";
+import { pct, shareTone, weekKey, type HarnessWeek } from "../../src/core/harnessshare";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 import { handOffText } from "../../src/core/sprout";
 import { SCORE_GATE, sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 import { askTitle } from "./sweep";
+
+/** The browser's quiet harness line, kept to one notice per ISO week. */
+export const HARNESS_SAID_KEY = "canopy.harnessSaid";
+
+export interface HarnessNotice {
+  /** its ISO week, such as "2026-W43" */
+  key: string;
+  text: string;
+}
+
+/** The newest full week at or over the visible threshold, unless this
+ *  browser already noted that week. */
+export function harnessNotice(weeks: readonly HarnessWeek[], names: readonly string[], max: number, said: string | null): HarnessNotice | null {
+  const week = weeks.at(-2);
+  if (!week || week.share === null || shareTone(week.share, max) !== "rust") return null;
+  const key = weekKey(week.from);
+  if (said === key) return null;
+  return { key, text: `last week ${pct(week.share)} of Claude spend went into the harness (${names.join(", ")})` };
+}
 
 export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep";
 

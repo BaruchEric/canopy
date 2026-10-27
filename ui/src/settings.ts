@@ -29,6 +29,7 @@ import {
   type TermFonts,
   type Zooms,
 } from "./surface";
+import { HARNESS_SHARE_MAX } from "../../src/core/harnessshare";
 
 export const SORT_MODES = [
   "recent",
@@ -204,6 +205,8 @@ export interface Settings {
   /** system notifications while the tab is hidden, and the "(n)" count of
    *  what waits on you in the tab's title; off unless asked for */
   notify: boolean;
+  /** the costs view's harness line threshold, percent; 0 turns it off */
+  harnessShareMax: number;
 }
 
 /** the inbox command block's text size, px */
@@ -212,6 +215,17 @@ export const INBOX_TEXT = { min: 9, max: 18, size: 12 } as const;
 /** a saved command text size, whole px in range, else the default */
 export const inboxTextOf = (v: unknown): number =>
   typeof v === "number" && Number.isFinite(v) ? Math.min(INBOX_TEXT.max, Math.max(INBOX_TEXT.min, Math.round(v))) : INBOX_TEXT.size;
+
+/** the harness share's warning line, percent: 0 is off, else 5 to 90 */
+export const HARNESS_SHARE = { min: 5, max: 90, off: 0 } as const;
+
+/** a saved line: 0 kept, a whole percent clamped to the range, else the default */
+export const harnessShareMaxOf = (v: unknown): number =>
+  v === HARNESS_SHARE.off
+    ? HARNESS_SHARE.off
+    : typeof v === "number" && Number.isFinite(v)
+      ? Math.min(HARNESS_SHARE.max, Math.max(HARNESS_SHARE.min, Math.round(v)))
+      : HARNESS_SHARE_MAX;
 
 export const DEFAULT_SETTINGS: Settings = {
   sort: "recent",
@@ -260,6 +274,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sectionTabs: [],
   itemTabs: [],
   notify: false,
+  harnessShareMax: HARNESS_SHARE_MAX,
 };
 
 const KEY = "canopy.settings";
@@ -444,6 +459,7 @@ export function loadSettings(): Settings {
       sectionTabs: sectionTabsOf(saved.sectionTabs),
       itemTabs: itemTabsOf(saved.itemTabs),
       notify: typeof saved.notify === "boolean" ? saved.notify : DEFAULT_SETTINGS.notify,
+      harnessShareMax: harnessShareMaxOf(saved.harnessShareMax),
       ...levelOf(saved),
     };
   } catch {
