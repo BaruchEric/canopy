@@ -157,3 +157,30 @@ test("an active held branch owns its work before any Run exists and refuses manu
   expect(close.status).toBe(409);
   expect(await json(close)).toEqual({ error: "a run on it is still going" });
 });
+
+test("a malformed repo policy marks only its trigger rule and refuses firing without hiding healthy rules", async () => {
+  await writeFile(join(scratch, "config", "triggers.json"), JSON.stringify({ rules: [
+    { name: "healthy-rule", repo: "auto", workflow: "file-manual", secretEnv: "CANOPY_TRIGGER_TEST_SECRET" },
+    { name: "broken-rule", repo: "broken", workflow: "graph-modes", secretEnv: "CANOPY_TRIGGER_TEST_SECRET" },
+  ] }));
+  const before = starts.length;
+  const listing = await call("/api/triggers");
+  const body = await json(listing);
+  const rejected = await call("/api/triggers/fire", { rule: "broken-rule", title: "Broken modes must refuse this run" });
+  const rejection = await json(rejected);
+  expect({ listing: listing.status, fire: rejected.status, starts: starts.length - before }).toEqual({ listing: 200, fire: 400, starts: 0 });
+  expect(rejection).toEqual({ error: ".canopy/workflows.json must be an object" });
+  expect(body).toMatchObject({ rules: [
+    { name: "healthy-rule" },
+    { name: "broken-rule", problem: ".canopy/workflows.json must be an object" },
+  ] });
+  if (typeof body !== "object" || body === null || !("rules" in body) || !Array.isArray(body.rules)) throw new Error("missing rules");
+  const healthy: unknown = body.rules[0];
+  expect(healthy).not.toHaveProperty("problem");
+  const accepted = await call("/api/triggers/fire", { rule: "healthy-rule", title: "Healthy modes still start work" });
+  expect(accepted.status).toBe(201);
+  expect(await json(accepted)).toMatchObject({ kind: "started" });
+  const deadline = Date.now() + 5000;
+  while (starts.length === before && Date.now() < deadline) await Bun.sleep(10);
+  expect(starts.length).toBe(before + 1);
+});

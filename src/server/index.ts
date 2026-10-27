@@ -5405,8 +5405,12 @@ export async function startServer(opts: {
       broadcast: (ev) => broadcast(state, ev),
       repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
       workflowProblem: async (name, repo) => {
-        const got = await triggerSpec(name, repo);
-        return typeof got === "string" ? got : null;
+        try {
+          const got = await triggerSpec(name, repo);
+          return typeof got === "string" ? got : null;
+        } catch (err) {
+          return String(err instanceof Error ? err.message : err);
+        }
       },
       start: (event, repo) => startTriggerRun(state, event, repo),
       resume: async (event) => {
