@@ -10,16 +10,19 @@ import { CRON_MAX, isCron, parseCron } from "./cron";
 import { githubSlug } from "./github";
 import { isShellCommand } from "./shellname";
 import { SWEEP_KINDS } from "./types";
-import type { AgentCard, AgentState, AuthoredPr, Repo, Run, SweepItem, SweepKind, SweepSettings } from "./types";
+import type { KeptRunHead, AgentCard, AgentState, AuthoredPr, Repo, Run, SweepItem, SweepKind, SweepSettings } from "./types";
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 
+/** How long a transcript is kept by default. */
+export const RUNS_KEEP = 30 * DAY;
+
 export const DEFAULT_SWEEP: SweepSettings = {
   on: false,
   cron: "0 4 * * *",
-  spans: { shell: 24 * HOUR, chat: 12 * HOUR, run: 3 * DAY, pr: 14 * DAY, outside: 24 * HOUR },
-  auto: ["shell", "chat", "run"],
+  spans: { shell: 24 * HOUR, chat: 12 * HOUR, run: 3 * DAY, transcript: RUNS_KEEP, pr: 14 * DAY, outside: 24 * HOUR },
+  auto: ["shell", "chat", "run", "transcript"],
   prs: false,
 };
 
@@ -55,7 +58,10 @@ export function normalizeSweep(raw: unknown): SweepSettings {
       if (isSpan(v)) out.spans[k] = v;
     }
   }
-  if (Array.isArray(r["auto"])) out.auto = kindsOf(r["auto"]);
+  if (Array.isArray(r["auto"])) {
+    out.auto = kindsOf(r["auto"]);
+    if (!(spans && typeof spans === "object" && "transcript" in spans) && !out.auto.includes("transcript")) out.auto.push("transcript");
+  }
   out.prs = r["prs"] === true;
   return out;
 }
@@ -154,6 +160,10 @@ export interface PlanInputs {
   /** null when tmux did not answer */
   shells: ShellFacts[] | null;
   runs: Run[];
+  /** Kept transcripts, absent on older callers. */
+  kept?: readonly KeptRunHead[];
+  /** Branch origins with open or unread PR watches. */
+  livePrs?: ReadonlySet<string>;
   /** runs the landing queue or a flow still holds */
   heldRuns: ReadonlySet<string>;
   outside: OutsideFacts[];
@@ -217,6 +227,11 @@ export function planSweep(inputs: PlanInputs, s: SweepSettings, now: number): Sw
     } else if (ENDED.has(r.status) && r.endedAt !== undefined && !inputs.heldRuns.has(r.id)) {
       add("run", r.id, r.repoId, r.repoId, r.verb, r.endedAt, (i) => `finished ${ago(i)} ago`, true);
     }
+  }
+
+  for (const k of inputs.kept ?? []) {
+    if (inputs.heldRuns.has(k.id) || (k.origin && (inputs.heldRuns.has(k.origin) || inputs.livePrs?.has(k.origin)))) continue;
+    add("transcript", k.id, k.repo, k.repo, k.verb, k.ended, (i) => `kept ${ago(i)}`, true);
   }
 
   for (const c of inputs.outside) {

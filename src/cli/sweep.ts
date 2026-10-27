@@ -7,7 +7,7 @@ import { ago } from "../core/treelines";
 import { SWEEP_KINDS, type SweepInfo, type SweepItem, type SweepKind, type SweepOutcome } from "../core/types";
 import { ask, errText, has, take, type Target } from "./health";
 
-export const SWEEP_USAGE = "usage: canopy sweep [--yes [--kind shell,chat,run,pr]] [--backend URL]";
+export const SWEEP_USAGE = "usage: canopy sweep [--yes [--kind shell,chat,run,transcript,pr]] [--backend URL]";
 
 /** The keys --yes closes. With no kinds, the ones the sheet starts ticked
  *  (`checked` and closable), which is never a PR. With kinds named, every

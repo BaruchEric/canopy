@@ -1478,3 +1478,36 @@ test("removing an orphan tells the pool which repo lost a worktree", async () =>
   expect(w.treeRemoved).toEqual([await sh(w.repo.path, "rev-parse", "--show-toplevel")]);
   expect(existsSync(dir)).toBe(false);
 });
+
+
+test("record adoption makes hints available and defers observed run effects until activation", async () => {
+  const w = await world();
+  const record: LandingRun = { id: "paused-origin", runId: "paused-run", repoId: w.repo.id, repoPath: w.repo.path, branch: "run/paused", target: "main", base: "abc", dir: w.repo.path, note: "recovery hint", verb: "Build", harness: "claude", state: "ready", startedAt: 1, openPr: true };
+  const queue: LandEntry = { id: "paused-origin", repoId: w.repo.id, repoPath: w.repo.path, branch: "run/paused", target: "main", dir: w.repo.path, note: "queue", state: "queued", tries: 0, queuedAt: 1, updatedAt: 1 };
+  await mkdir(join(w.dir, "runs"), { recursive: true });
+  await mkdir(join(w.dir, "queue"), { recursive: true });
+  await writeFile(join(w.dir, "runs/paused-origin.json"), JSON.stringify(record));
+  await writeFile(join(w.dir, "runs/stopped-origin.json"), JSON.stringify({ ...record, id: "stopped-origin", runId: "stopped-run", state: "working", openPr: undefined } satisfies LandingRun));
+  await writeFile(join(w.dir, "queue/paused.json"), JSON.stringify([queue]));
+  let sorts = 0;
+  let checks = 0;
+  const opened: string[] = [];
+  const hub = new LandingHub({ broadcast: () => {}, repo: () => w.repo, repoByPath: () => w.repo, check: async () => { checks++; return { exit: 0, output: "" }; }, startFix: () => { throw new Error("no fix"); }, runActive: () => false, dir: w.dir, worktrees: w.wts, judge: null, scenario: async () => ({ exit: 0, output: "" }),
+    sort: async () => { sorts++; return { verdict: "land", why: "review", files: [], base: "abc", head: "def", at: 1 }; }, openPr: (id) => { opened.push(id); } });
+  await hub.adoptRecords();
+  expect(hub.record("paused-run")?.note).toBe("recovery hint");
+  // The restored run can report before ordinary adoption activates work.
+  hub.onRun({ ...fakeRun(w.repo.id, { name: "run/new", target: "main", base: "abc", dir: w.repo.path, origin: "new-origin" }, "ready"), branch: { name: "run/new", target: "main", base: "abc", dir: w.repo.path, origin: "new-origin", state: "ready", openPr: true } });
+  hub.republish(); hub.kick(w.repo.id);
+  await hub.idle();
+  expect(sorts).toBe(0); expect(opened).toEqual([]); expect(checks).toBe(0);
+  expect(hub.info().entries[0]?.state).toBe("queued");
+  expect(hub.info().runs.find((r) => r.id === "stopped-origin")?.whole).toBeUndefined();
+  // Keep this test's existing queue paused, while activation replays new observations.
+  hub.stop();
+  await hub.adopt(); await hub.idle();
+  expect(opened).toEqual(["new-origin"]);
+  expect(sorts).toBe(2); expect(checks).toBe(0);
+  expect(hub.info().runs.find((r) => r.id === "stopped-origin")?.whole).toBeDefined();
+  await hub.flushed();
+});

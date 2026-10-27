@@ -44,7 +44,7 @@ const OUT_TONE: Record<SweepOutcome["result"], string> = {
 };
 
 const outWord = (o: SweepOutcome, kind: SweepItem["kind"]): string => {
-  const word = o.result === "closed" && kind === "run" ? "dismissed" : o.result;
+  const word = o.result === "closed" && kind === "run" ? "dismissed" : o.result === "closed" && kind === "transcript" ? "removed" : o.result;
   return o.why ? `${word}: ${o.why}` : word;
 };
 
@@ -367,13 +367,14 @@ function Swept({ shells, chats, now }: { shells: KeptShell[]; chats: SweptChat[]
 
 /** the kinds the schedule may close on its own; agents canopy did not
  *  start are never closed, so they are not offered */
-const AUTO_KINDS = ["shell", "chat", "run", "pr"] as const satisfies readonly SweepKind[];
+const AUTO_KINDS = ["shell", "chat", "run", "transcript", "pr"] as const satisfies readonly SweepKind[];
 
 /** each span's label in the settings row */
 const SPAN_LABEL: Record<SweepKind, string> = {
   shell: "shells idle after",
   chat: "chats idle after",
   run: "finished runs after",
+  transcript: "transcripts kept for",
   pr: "PRs idle after",
   outside: "outside agents after",
 };

@@ -11,6 +11,7 @@ export const KIND_HEAD: Record<SweepKind, string> = {
   shell: "shells",
   chat: "chats",
   run: "finished runs",
+  transcript: "kept transcripts",
   pr: "PRs",
   outside: "agents canopy did not start",
 };
@@ -83,6 +84,7 @@ const kindOf = (key: string): string => key.slice(0, Math.max(0, key.indexOf(":"
 const count = (n: number, one: string, many = `${one}s`): string => `${n} ${n === 1 ? one : many}`;
 
 const NOUN: Partial<Record<SweepKind, [string, string]>> = {
+  transcript: ["transcript", "transcripts"],
   shell: ["shell", "shells"],
   chat: ["chat", "chats"],
   pr: ["PR", "PRs"],
@@ -98,12 +100,13 @@ export function sweepSummary(outcomes: readonly SweepOutcome[]): string {
   const closed: string[] = [];
   for (const kind of SWEEP_KINDS) {
     const noun = NOUN[kind];
-    if (!noun) continue;
+    if (!noun || kind === "transcript") continue;
     const n = done.filter((o) => kindOf(o.key) === kind).length;
     if (n > 0) closed.push(count(n, noun[0], noun[1]));
   }
   const runs = done.filter((o) => kindOf(o.key) === "run").length;
-  const head = [closed.length > 0 ? `closed ${closed.join(", ")}` : "", runs > 0 ? `dismissed ${count(runs, "run")}` : ""].filter(Boolean).join(", ");
+  const transcripts = done.filter((o) => kindOf(o.key) === "transcript").length;
+  const head = [closed.length > 0 ? `closed ${closed.join(", ")}` : "", transcripts > 0 ? `removed ${count(transcripts, "transcript", "transcripts")}` : "", runs > 0 ? `dismissed ${count(runs, "run")}` : ""].filter(Boolean).join(", ");
   const left = (["in use now", "gone", "failed"] as const)
     .map((r) => [r, outcomes.filter((o) => o.result === r).length] as const)
     .filter(([, n]) => n > 0)
@@ -204,6 +207,7 @@ const ASK_NOUN: Record<SweepKind, [string, string]> = {
   shell: ["shell", "shells"],
   chat: ["chat", "chats"],
   run: ["finished run", "finished runs"],
+  transcript: ["kept transcript", "kept transcripts"],
   pr: ["PR", "PRs"],
   outside: ["outside agent", "outside agents"],
 };

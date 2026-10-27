@@ -3313,7 +3313,7 @@ export interface RangerWake {
 
 /* ---------- the sweep: idle shells, chats, runs and agents offered for closing ---------- */
 
-export const SWEEP_KINDS = ["shell", "chat", "run", "pr", "outside"] as const;
+export const SWEEP_KINDS = ["shell", "chat", "run", "transcript", "pr", "outside"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
 
 /** The sweep's settings as stored: whether the schedule is on, its cron

@@ -36,6 +36,8 @@ export interface SweepDeps {
   stopChat(runId: string): Run;
   /** forgets a finished run */
   dismissRun(runId: string): void;
+  /** Removes a kept transcript folder, false when already gone. */
+  dropKept(runId: string): Promise<boolean>;
   /** starts a chat on the session a swept chat had */
   startChat(c: SweptChat): Promise<Run>;
   /** the swept shells on offer to restore */
@@ -466,6 +468,8 @@ export class SweepHub {
       case "run":
         this.deps.dismissRun(id);
         return { key, result: "closed" };
+      case "transcript":
+        return { key, result: await this.deps.dropKept(id) ? "closed" : "gone" };
       case "pr": {
         const pr = facts.prs.find((p) => prId(p) === id);
         if (!pr) return { key, result: "gone" };
@@ -588,6 +592,9 @@ function missing(key: string, facts: Facts): SweepOutcome {
     }
     case "run":
       there = run() !== undefined;
+      break;
+    case "transcript":
+      there = facts.kept?.some((k) => k.id === id) ?? false;
       break;
     case "outside":
       there = facts.outside.some((c) => c.id === id);

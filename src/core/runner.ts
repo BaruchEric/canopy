@@ -221,6 +221,8 @@ interface Live {
 
 export class Runner {
   private live = new Map<string, Live>();
+  /** Logged processes keep ownership through final storage, even after UI dismiss/trim. */
+  private logged = new Map<string, Live>();
   /** repo path → how many stage processes are alive there */
   private procs = new Map<string, number>();
   /** a coordinator's folder → how many of its processes are alive there;
@@ -436,7 +438,7 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.finish(live).finally(markEnded); } },
+      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.finish(live).finally(() => { this.logged.delete(run.id); markEnded(); }); } },
     );
     const live: Live = {
       ctx,
@@ -464,6 +466,7 @@ export class Runner {
       }
     };
     this.live.set(run.id, live);
+    if (log) this.logged.set(run.id, live);
     if (branch?.startNote) live.ctx.step({ kind: "note", text: branch.startNote });
     if (logError !== undefined) ctx.note(logError);
     this.prune();
@@ -608,10 +611,10 @@ export class Runner {
   /** A rolled-back branch cannot be removed until its process/setup and final
    * state update have stopped touching the worktree. */
   async stopAndWait(id: string): Promise<void> {
-    const live = this.live.get(id);
+    const live = this.live.get(id) ?? this.logged.get(id);
     if (!live) return;
     const active = isRunActive(live.ctx.run);
-    this.stop(id);
+    if (active) this.stop(id);
     const process = live.process;
     if (process.kind === "running") {
       // A terminal result ends the job before the driver's process exits.
@@ -633,6 +636,16 @@ export class Runner {
     if (isRunActive(live.ctx.run)) throw new Error("stop the run before dismissing it");
     this.live.delete(id);
     this.hooks.onGone(id);
+  }
+
+  /** Retention protects owned wires and every alias until final storage completes. */
+  pendingLogHolds(): ReadonlySet<string> {
+    return new Set([...this.logged.values()].flatMap(({ ctx }) => ctx.run.branch ? [ctx.run.id, ctx.run.branch.origin] : [ctx.run.id]));
+  }
+
+  /** Drains owned transcripts before the server releases its recovery lock. */
+  async stopLoggedAndWait(): Promise<void> {
+    await Promise.all([...this.logged.keys()].map((id) => this.stopAndWait(id)));
   }
 
   /** Stops everything, for server shutdown. */

@@ -65,7 +65,7 @@ usage:
     --cron "0 8 * * *" | --run <id>  on a cron line instead, or when a run ends
   canopy ranger unwake <id>          remove a wake
   canopy sweep                       idle shells, chats, runs and PRs a backend offers for closing
-  canopy sweep --yes [--kind shell,chat,run,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
+  canopy sweep --yes [--kind shell,chat,run,transcript,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)

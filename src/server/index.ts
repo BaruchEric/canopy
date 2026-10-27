@@ -231,7 +231,10 @@ import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
-import { takeTriggerSecrets } from "../core/envnames";
+import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
+import { exportRun } from "../core/export";
+import { sentBack } from "../core/landing";
+import { PRIVATE_ENV, TRIGGER_ENV_PREFIX, takeTriggerSecrets } from "../core/envnames";
 import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
@@ -322,6 +325,9 @@ interface ServerState {
   timers: Map<string, ReturnType<typeof setTimeout>>;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
+  runlog: DiskRunLogger;
+  /** Refuses shared transcript reads before owner recovery and current privacy are ready. */
+  readyRunlog(): Promise<void>;
   /** the rules an allow said to remember, answering runs' permissions */
   remembered: RememberedRules;
   /** workflow runs, step by step, over the runner's jobs */
@@ -899,7 +905,8 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   const seeds = new Set(state.result.repos.filter((r) => isSeedPath(state.root, r.path)).map((r) => r.id));
   const all = state.runner.list();
   const runs = all.filter((r) => r.action !== "coordinate" && !seeds.has(r.repoId));
-  const heldRuns = new Set<string>();
+  const heldRuns = new Set(state.runner.pendingLogHolds());
+  for (const run of all) if (isRunActive(run)) { heldRuns.add(run.id); if (run.branch) heldRuns.add(run.branch.origin); }
   for (const r of state.landing.info().runs) {
     heldRuns.add(r.id);
     heldRuns.add(r.runId);
@@ -914,9 +921,13 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   // a watched PR's fix run is held; a watched PR canopy works on (a fix,
   // its own auto-merge, a run on the branch) is never offered
   for (const w of state.prs.info()) if (w.fixing) heldRuns.add(w.fixing.run);
+  for (const run of all) if (heldRuns.has(run.id) && run.branch) heldRuns.add(run.branch.origin);
+  const livePrs = new Set(state.prs.info().filter((w) => w.state === undefined || w.state.status === "open").map((w) => w.id));
   const fixing = state.prs.busy();
   const outside = cards.map((c) => ({ ...c, idleSince: state.registry.stateSince(c.id) ?? serverStart }));
-  return { serverStart, shells, runs, heldRuns, outside, fixing, repos: state.result.repos };
+  let kept: Awaited<ReturnType<typeof listKeptRuns>> = [];
+  try { await state.readyRunlog(); kept = await listKeptRuns(runsDir()); } catch { /* shared or unsafe persisted transcripts stay unavailable */ }
+  return { serverStart, shells, runs, heldRuns, livePrs, kept, outside, fixing, repos: state.result.repos };
 }
 
 /** Starts a chat on the session the sweep stopped one on, as a chat started
@@ -3551,6 +3562,35 @@ async function handleApi(
     return json(c.value);
   }
 
+  if (path === "/api/runs/prune" && method === "POST") {
+    await state.readyRunlog();
+    const settings = (await loadConfig()).sweep;
+    const facts = await sweepFacts(state, state.about.startedAt);
+    return json(await pruneKept(runsDir(), settings.spans.transcript, new Set([...facts.heldRuns, ...(facts.livePrs ?? [])])));
+  }
+  if (path === "/api/runs" && method === "GET" && url.searchParams.get("kept") === "1") {
+    await state.readyRunlog();
+    return json((await listKeptRuns(runsDir())).sort((a, b) => b.ended - a.ended));
+  }
+  const keptRoute = /^\/api\/runs\/([^/]+)(\/export)?$/.exec(path);
+  if (keptRoute && method === "GET") {
+    const id = keptRoute[1] ?? "";
+    if (!RUN_ID.test(id)) return json({ error: "no run by that id" }, 404);
+    let run = state.runner.get(id) ?? null;
+    if (!run) { await state.readyRunlog(); run = await readKeptRun(runsDir(), id); }
+    if (!run) return json({ error: "no run by that id" }, 404);
+    if (!keptRoute[2]) return json(run);
+    const origin = run.branch?.origin ?? run.id;
+    const landing = state.landing.info().entries.find((e) => e.id === origin);
+    const pr = state.prs.info().find((w) => w.id === origin);
+    const where = landing?.state === "landed" ? `landed on ${landing.target}`
+      : landing && sentBack(landing) ? `sent back: ${landing.reason ?? ""}`
+      : pr ? `PR #${pr.number} ${pr.state?.status ?? "unknown"}` : undefined;
+    const repoName = state.result.repos.find((r) => r.id === run.repoId)?.name ?? run.repoId;
+    let secrets: ReturnType<DiskRunLogger["currentSecrets"]>["secrets"];
+    try { secrets = state.runlog.currentSecrets().secrets; } catch { throw new HttpError(503, "current transcript secrets are unavailable"); }
+    return new Response(exportRun(run, secrets, { repoName, ...(where ? { where } : {}) }), { headers: { "content-type": "text/markdown; charset=utf-8" } });
+  }
   if (path === "/api/runs" && method === "GET") {
     return json(state.runner.list());
   }
@@ -5060,7 +5100,37 @@ export async function startServer(opts: {
   const remembered = new RememberedRules();
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
+  // Preserve values removed from the live environment before any child starts.
+  const capturedSecrets = Object.fromEntries(Object.entries(process.env).filter(([name]) => PRIVATE_ENV.some((n) => n === name) || name.startsWith(TRIGGER_ENV_PREFIX)));
+  const ledgerOff = process.env["NODE_ENV"] === "test" && !process.env["CANOPY_CONFIG_DIR"];
+  const runlog = new DiskRunLogger({ env: () => ({ ...process.env, ...capturedSecrets }) });
+  await runlog.refresh();
+  let recordOwner = false;
+  let recoveredRunlog = false;
+  let runlogFactsReady = false;
+  let recoveringRunlog: Promise<void> | null = null;
+  const recoverRunlog = async (): Promise<void> => {
+    if (ledgerOff || !recordOwner || stopped) throw new HttpError(503, "kept transcripts are unavailable on this backend");
+    let privacy: ReturnType<DiskRunLogger["currentSecrets"]>;
+    try { privacy = runlog.currentSecrets(); } catch { throw new HttpError(503, "current transcript secrets are unavailable"); }
+    if (recoveredRunlog) return;
+    recoveringRunlog ??= closeOpen(runsDir(), (id) => {
+      const rec = state.landing.record(id);
+      return rec ? { verb: rec.verb, note: rec.note, ...(rec.session ? { session: rec.session } : {}), branch: { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "stopped", origin: rec.id } } : undefined;
+    }, privacy).then(() => { recoveredRunlog = true; }).finally(() => { recoveringRunlog = null; });
+    await recoveringRunlog;
+  };
+  const readyRunlog = async (): Promise<void> => {
+    if (!runlogFactsReady) throw new HttpError(503, "kept transcripts await record adoption");
+    await recoverRunlog();
+  };
+  const ownedLog: RunLogger = { open: (...args) => {
+    if (!recordOwner || stopped) return null;
+    if (!recoveredRunlog) { args[3]("current transcript secrets are unavailable"); return null; }
+    return runlog.open(...args);
+  } };
   const runnerOpts = {
+    ...(!ledgerOff ? { log: ownedLog } : {}),
     remembered: () => remembered.list(),
     backend: selfName(cfg.self, hostname()),
     version: readPkg().version ?? "0",
@@ -5251,6 +5321,8 @@ export async function startServer(opts: {
   for (const k of SECRET_ENV) delete process.env[k];
   // the trigger rules' secrets, the same way: the hub holds them, the env does not
   const triggerSecrets = takeTriggerSecrets(process.env);
+  // The trigger hub uses trimmed values, so retain that effective source too.
+  Object.assign(capturedSecrets, Object.fromEntries(triggerSecrets));
   if (process.env["NODE_ENV"] !== "test") {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed and the fields' mics stay off");
@@ -5270,7 +5342,6 @@ export async function startServer(opts: {
   const callers = new CallerBook();
   // a test server that never pointed CANOPY_CONFIG_DIR at a scratch folder
   // must not write the real ledger
-  const ledgerOff = process.env["NODE_ENV"] === "test" && !process.env["CANOPY_CONFIG_DIR"];
   const recordCost = (e: CostEntry): void => {
     if (ledgerOff) return;
     appendCost(e).catch((err: unknown) => console.error(`costs: could not write the ledger: ${err instanceof Error ? err.message : String(err)}`));
@@ -5286,6 +5357,7 @@ export async function startServer(opts: {
   let refreshLibrary: () => Promise<void> = async () => {};
   const state: ServerState = {
     root,
+    runlog, readyRunlog,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
     harnesses,
     harnessMissing,
@@ -5689,6 +5761,7 @@ export async function startServer(opts: {
       runStatus: (id) => state.runner.get(id)?.status,
       stopChat: (id) => state.runner.stop(id),
       dismissRun: (id) => state.runner.dismiss(id),
+      dropKept: async (id) => { await state.readyRunlog(); return dropKept(runsDir(), id); },
       startChat: (c) => startSweptChat(state, c),
       keptSwept: async () => state.kept.filter((k) => k.swept),
       authoredPrs: async () => {
@@ -6317,6 +6390,10 @@ export async function startServer(opts: {
     // A restored flow can start a branch run synchronously. Adopt its work
     // item first so the runner's onRun event is recorded instead of dropped.
     await state.work.adopt();
+    // Read hints without starting the landing queue before restored flows own their branches.
+    await state.landing.adoptRecords();
+    recordOwner = true;
+    if (!ledgerOff) await recoverRunlog().catch((err: unknown) => console.error(`transcripts: ${err instanceof Error ? err.message : String(err)}`));
     const restoreCfg = await loadConfig();
     state.flows.restore(
       await loadFlowRecords(root),
@@ -6331,8 +6408,9 @@ export async function startServer(opts: {
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
     await state.warm.adopt();
-    // and the PRs they opened
+    // Preserve PR activation order; public retention waits for these protection facts.
     await state.prs.adopt();
+    runlogFactsReady = true;
     // Group recovery must see the adopted queue and PR facts before retrying
     // a persisted winner's missing dispatch.
     state.groups.onLanding(state.landing.info());
@@ -6537,9 +6615,11 @@ export async function startServer(opts: {
       state.triggers.detach();
       await state.warm.idle();
       await state.work.detach();
-      if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();
       state.runner.stopAll();
+      await state.runner.stopLoggedAndWait();
+      recordOwner = false;
+      if (flowsLock.owner) flowsLock.release();
       for (const h of checkHolds) h.cancel();
       state.launcher.shutdown();
       state.chan.close();
