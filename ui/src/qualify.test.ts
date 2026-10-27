@@ -249,3 +249,9 @@ test("a task's repo and session ids are qualified", () => {
   expect(qTask(q, info)).toMatchObject({ repoId: "mini|app", termId: `mini|${"a".repeat(32)}` });
   expect(qEvent(q, { type: "tasks", repoId: "app", tasks: [info] })).toMatchObject({ repoId: "mini|app", tasks: [{ repoId: "mini|app" }] });
 });
+
+test("branch origins, flow slots and both run group pointers share foreign qualification", () => {
+  const branch = { name: "run/a", target: "main", base: "b", dir: "/a", state: "working" as const, origin: "a", group: "g", work: "work-a" };
+  expect(qRun(q, { ...run, group: "g", branch })).toMatchObject({ group: "mac|g", branch: { origin: "mac|a", group: "mac|g", work: "work-a", name: "run/a" } });
+  expect(qFlow(q, { ...flow, branch }).branch).toMatchObject({ origin: "mac|a", group: "mac|g" });
+});

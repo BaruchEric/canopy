@@ -234,3 +234,8 @@ describe("allows", () => {
     expect(allows("none", "open")).toBe(true);
   });
 });
+
+test("group mutations require operate while the group list requires read", () => {
+  expect(needs("GET", "/api/groups")).toBe("read");
+  for (const action of ["pick", "review", "drop"]) expect(needs("POST", `/api/groups/${action}`)).toBe("operate");
+});

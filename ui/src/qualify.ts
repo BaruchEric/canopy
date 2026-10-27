@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import type {
   Device,
   Fleet,
@@ -47,11 +48,21 @@ export const qScan = (q: Q, t: ScanResult): ScanResult => ({
   sources: t.sources.map((s) => qSource(q, s)),
 });
 
+export const qGroup = (q: Q, g: RunGroup): RunGroup => ({
+  ...g, id: q(g.id), repoId: q(g.repoId),
+  members: g.members.map(m => ({ ...m, run: q(m.run), origin: q(m.origin) })),
+  ...(g.winner ? { winner: q(g.winner) } : {}),
+  ...(g.scores ? { scores: Object.fromEntries(Object.entries(g.scores).map(([id, score]) => [q(id), score])) } : {}),
+  ...(g.review ? { review: { ...g.review, run: q(g.review.run) } } : {}),
+  ...(g.keptUntil ? { keptUntil: Object.fromEntries(Object.entries(g.keptUntil).map(([id, at]) => [q(id), at])) } : {}),
+});
+
 export const qRun = (q: Q, r: Run): Run => ({
   ...r,
   id: q(r.id),
   repoId: q(r.repoId),
-  ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin) } } : {}),
+  ...(r.group ? { group: q(r.group) } : {}),
+  ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin), ...(r.branch.group ? { group: q(r.branch.group) } : {}) } } : {}),
   // a coordinator's child names it, and its cards name their repos and runs
   ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
   ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}) })) } : {}),
@@ -60,7 +71,8 @@ export const qRun = (q: Q, r: Run): Run => ({
 /** The landing queue: a branch's id, its runs' and its repo's under the
  *  backend's name. Folders stay the backend's own. */
 export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
-  runs: l.runs.map((r) => ({ ...r, id: q(r.id), runId: q(r.runId), repoId: q(r.repoId) })),
+  runs: l.runs.map((r) => ({ ...r, id: q(r.id), runId: q(r.runId), repoId: q(r.repoId), ...(r.group ? { group: q(r.group) } : {}) })),
+  ...(l.groups ? { groups: l.groups.map(g => qGroup(q, g)) } : {}),
   entries: l.entries.map((e) => ({ ...e, id: q(e.id), repoId: q(e.repoId), ...(e.fixing !== undefined ? { fixing: q(e.fixing) } : {}) })),
   orphans: l.orphans,
   notices: (l.notices ?? []).map((n) => ({ ...n, id: q(n.id), entry: q(n.entry), repoId: q(n.repoId) })),
@@ -99,6 +111,7 @@ export const qFlow = (q: Q, f: Flow): Flow => ({
   ...f,
   id: q(f.id),
   repoId: q(f.repoId),
+  ...(f.branch ? { branch: { ...f.branch, origin: q(f.branch.origin), ...(f.branch.group ? { group: q(f.branch.group) } : {}) } } : {}),
   ...(f.fleetId !== undefined ? { fleetId: q(f.fleetId) } : {}),
   steps: f.steps.map((st) => (st.runId !== undefined ? { ...st, runId: q(st.runId) } : st)),
 });

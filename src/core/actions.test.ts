@@ -115,8 +115,17 @@ describe("the coordinate action", () => {
 test("isRunAction knows every run action and nothing else", () => {
   for (const a of RUN_ACTIONS) expect(isRunAction(a)).toBe(true);
   expect(isRunAction("coordinate")).toBe(true);
+  expect(isRunAction("compare")).toBe(true);
+  expect(RUN_ACTIONS).not.toContain("compare");
   expect(isRunAction("fleet")).toBe(false);
   expect(isRunAction(undefined)).toBe(false);
+});
+
+test("the compare action is internal, read-only and denied every other tool", () => {
+  expect(ACTIONS.compare).toMatchObject({ verb: "compare", maxTurns: 40, expectsChange: false, unattended: expect.any(String) });
+  expect(ACTIONS.compare.allowedTools).toContain("Read");
+  expect(ACTIONS.compare.allowedTools).toContain("Bash(git diff:*)");
+  expect(ACTIONS.compare.allowedTools).not.toContain("Bash(git commit:*)");
 });
 
 describe("checkWhen", () => {

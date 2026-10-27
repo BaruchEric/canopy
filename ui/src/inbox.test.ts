@@ -587,3 +587,12 @@ describe("the sweep's ask", () => {
     expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: null })).toEqual([]);
   });
 });
+
+test("a group needing a pick owns its sent-back members' inbox attention", () => {
+  const group = { id: "g", repoId: "app", repoPath: "/app", action: "ask", note: "repair", expectedMembers: 2, members: [{ origin: "b1", run: "r1", profile: null }], state: "needs-you", autoLand: false, startedAt: 1 } satisfies import("../../src/core/group").RunGroup;
+  const entry: LandEntry = { id: "b1", repoId: "app", repoPath: "/app", branch: "run/a", target: "main", dir: "/w/a", note: "n", state: "red", gate: "test", reason: "failed", tries: 0, queuedAt: 1, updatedAt: 2 };
+  const landing = { runs: [], entries: [entry], orphans: [], groups: [group] };
+  const items = mergeInbox([], {}, {}, 5, { repos: [repo("app")], cards: {}, landing });
+  expect(items.map(i => [i.source, i.title])).toEqual([["group", "best of 2 ready: pick"]]);
+  expect(mergeInbox([], {}, {}, 5, { repos: [], cards: {}, landing: { ...landing, groups: [{ ...group, state: "picked", winner: "b1" }] } })).toEqual([]);
+});

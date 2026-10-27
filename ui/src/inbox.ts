@@ -57,7 +57,7 @@ export function harnessNotice(weeks: readonly HarnessWeek[], names: readonly str
   return { key, text: `last week ${pct(week.share)} of Claude spend went into the harness (${names.join(", ")})` };
 }
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "group";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -66,7 +66,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep" | "group";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -473,7 +473,13 @@ export function mergeInbox(
   }
   const advice = adviceItem(ctx.advice ?? []);
   if (advice) items.push(advice);
+  for (const group of ctx.landing?.groups ?? []) if (group.state === "needs-you") {
+    const repo = ctx.repos.find(r => r.id === group.repoId);
+    const backend = ctx.backendOf?.(group.id) ?? "";
+    items.push({ key: `group:${group.id}`, source: "group", id: group.id, kind: "group", repoId: group.repoId, repo: repo?.name ?? group.repoPath.split("/").pop() ?? "", who: "comparison", where: backend, title: `best of ${group.expectedMembers} ready: pick`, detail: group.reason ?? group.note, at: group.endedAt ?? group.startedAt, left: null, until: null });
+  }
   for (const e of ctx.landing?.entries ?? []) {
+    if ((ctx.landing?.groups ?? []).some(g => g.state !== "dropped" && g.members.some(m => m.origin === e.id))) continue;
     const it = landingItem(e, ctx);
     if (it) items.push(it);
   }

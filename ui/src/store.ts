@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
@@ -1380,6 +1381,10 @@ export interface CanopyState {
   syncPeers: (repoId: string) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
+  showGroup: (groupId: string) => void;
+  pickRunGroup: (groupId: string, origin: string) => Promise<void>;
+  reviewGroup: (groupId: string) => Promise<void>;
+  dropGroup: (groupId: string, keep?: string[]) => Promise<void>;
   closeSheet: () => void;
   /** opens the search across every repo in view */
   openSearch: () => void;
@@ -1393,6 +1398,7 @@ export interface CanopyState {
   takePendingSearch: () => void;
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
+  startGroup: (repoId: string, action: RunAction, note: string, times: number, profile?: string, autoLand?: boolean, pr?: boolean) => Promise<void>;
   startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
@@ -1447,6 +1453,7 @@ export type Sheet =
   /** `workspace` makes it a run across that workspace; `repoId` is then its primary */
   | { kind: "plan"; repoId: string; action: RunAction; workspace?: string }
   | { kind: "run"; runId: string }
+  | { kind: "group"; groupId: string }
   | { kind: "agent"; repoId: string }
   /** `draft` fills the form, from the command line's `new` */
   | { kind: "new-sprout"; draft?: SproutDraft }
@@ -4417,6 +4424,28 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
+  showGroup: groupId => set({ sheet: { kind: "group", groupId } }),
+  pickRunGroup: async (id, origin) => {
+    const group = await api.pickRunGroup(id, origin);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  reviewGroup: async id => {
+    const group = await api.reviewGroup(id);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  dropGroup: async (id, keep) => {
+    const group = await api.dropGroup(id, keep);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  startGroup: async (repoId, action, note, times, profile, autoLand = false, pr = false) => {
+    if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
+    const group = await api.startGroup(repoId, action, note, times, profile, autoLand, pr);
+    const b = backendOf(repoId);
+    set(s => {
+      const info = s.landing[b] ?? { runs: [], entries: [], orphans: [] };
+      return { landing: { ...s.landing, [b]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } }, sheet: { kind: "group", groupId: group.id } };
+    });
+  },
   startRun: async (repoId, action, note, branch, pr) => {
     const run = await api.run(repoId, action, note, clientId(), branch, pr);
     set((s) => ({
@@ -5089,6 +5118,7 @@ let turnIn: {
   asks: Record<string, Ask>;
   repos: Repo[];
   rangers: Record<string, RangerInfo>;
+  landing: Record<string, LandingInfo>;
 } | null = null;
 let turnOut: TurnRow[] = [];
 
@@ -5097,11 +5127,11 @@ let turnOut: TurnRow[] = [];
  *  prompt by design (a permission it waits on is in the inbox). */
 export function turnItems(s: CanopyState): TurnRow[] {
   const t = turnIn;
-  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers) return turnOut;
-  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers };
+  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers && t.landing === s.landing) return turnOut;
+  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers, landing: s.landing };
   const rangers = rangerSessions(s.rangers);
   const cards = Object.values(s.registry).filter((c) => c.session === null || !rangers.has(c.session));
-  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos);
+  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos, landingAll(s));
   return turnOut;
 }
 
@@ -5123,7 +5153,8 @@ function showNote(n: Notice): void {
   shown.onclick = () => {
     window.focus();
     const s = useStore.getState();
-    if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
+    if (n.groupId) s.showGroup(n.groupId);
+    else if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
     shown.close();
   };
 }
@@ -5341,4 +5372,10 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === REVIEW_NOTES_STORE || e.key === null) useStore.setState({ reviewNotes: loadNotes() });
   });
+}
+
+/** A mutation can arrive before its SSE update, including immediately after fanout. */
+function withGroup(byBackend: Record<string, LandingInfo>, backend: string, group: RunGroup): Record<string, LandingInfo> {
+  const info = byBackend[backend] ?? { runs: [], entries: [], orphans: [] };
+  return { ...byBackend, [backend]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } };
 }

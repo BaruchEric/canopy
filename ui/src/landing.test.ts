@@ -252,3 +252,16 @@ test("judge hold offers only land anyway and preserves scenario results", () => 
   expect(resultWord({ name: "r", kind: "judge", ok: false, p: 0.3 })).toBe("0.30");
   expect(resultWord({ name: "r", kind: "judge", ok: false, unjudged: "no gateway key" })).toBe("unjudged");
 });
+
+test("group members fold into one row without losing collision/scenario words or normal rows", () => {
+  const group = { id: "g", repoId: "canopy", repoPath: "/r/canopy", action: "ask", note: "n", expectedMembers: 2, members: [{ run: "r-a", origin: "a", profile: null }, { run: "r-b", origin: "b", profile: null }], state: "needs-you", autoLand: false, startedAt: 1 } satisfies import("../../src/core/group").RunGroup;
+  const collision: Collision = { id: "pair", repoId: "canopy", run: "r-a", name: "run/x-a", with: { kind: "run", run: "r-other", verb: "Ask", name: "run/other" }, paths: ["a.ts"], at: 1 };
+  const landing = { ...info([rec("a"), rec("b"), rec("standalone")]), groups: [group], collisions: [collision] };
+  const rows = repoLanding(landing, "canopy");
+  expect(rows.groups).toEqual([group]);
+  expect(rows.ready.map(r => r.id)).toEqual(["standalone"]);
+  const member = run("a", { group: "g" });
+  expect(runLanding(member, landing)).toMatchObject({ word: "ready to land", canLand: false, canPr: false, overlaps: [{ name: "run/other", paths: ["a.ts"] }] });
+  expect(runLanding(run("standalone"), landing)?.canLand).toBe(true);
+  expect(landAllOf(landing, "canopy").take.map(r => r.id)).not.toContain("a");
+});

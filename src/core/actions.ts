@@ -166,6 +166,20 @@ export const ACTIONS: Record<RunAction, ActionSpec> = {
     // the server puts the brief (lib/coordinator.md) here when it starts one
     task: `Task: you are canopy's coordinator. Turn the user's goal into tasks, each one branch run's worth of work in one repo, and propose them to canopy. Start nothing yourself.`,
   },
+  compare: {
+    label: "compare branches",
+    verb: "compare",
+    blurb: "Read and rank the ready branches from a best-of-N run.",
+    notePlaceholder: "",
+    noteRequired: false,
+    allowedTools: [...READ, ...GIT_READ],
+    maxTurns: 40,
+    progress: "comparing",
+    expectsChange: false,
+    mode: "job",
+    unattended: "This comparison is read-only. Use only the listed reading tools; every other tool is refused.",
+    task: "Task: compare the best-of-N branch diffs and return the requested ranking.",
+  },
 };
 
 /** The plan sheet's words for a built-in action. A workspace run speaks of
@@ -193,6 +207,9 @@ export function planWords(action: RunAction, workspace?: string): { blurb: strin
     // a coordinator starts at a repo and works from no checkout, so a
     // workspace changes nothing it says
     case "coordinate":
+      return { blurb: spec.blurb, notePlaceholder: spec.notePlaceholder };
+    // a compare run is internal and always works from the repo checkout
+    case "compare":
       return { blurb: spec.blurb, notePlaceholder: spec.notePlaceholder };
   }
 }

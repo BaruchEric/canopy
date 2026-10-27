@@ -177,6 +177,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
   const nameOf = useMemo(() => new Map(all.map((r) => [r.id, r.name])), [all]);
   const [repos, unpushed] = useMemo(() => [attention.filter((r) => !isUnpushed(r)), attention.filter(isUnpushed)], [attention]);
   const openPanel = useStore((s) => s.openPanel);
+  const showGroup = useStore(s => s.showGroup);
   const showRun = useStore((s) => s.showRun);
   const openRanger = useStore((s) => s.openRanger);
   const showAgents = useStore((s) => s.showAgents);
@@ -215,10 +216,10 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
                   <span className="glyph" aria-hidden="true">
                     ▸
                   </span>
-                  <span className="waiting-name">{t.kind === "chat" ? <IdLabel id={t.repoId} /> : t.name}</span>
-                  <span className="waiting-state">{t.kind === "chat" ? "chat" : t.what}</span>
-                  <span className="waiting-detail" title={t.kind === "chat" ? t.what : undefined}>
-                    {t.kind === "chat" ? t.what : `${t.where}${t.repoId ? ` · ${repoName(t.repoId)}` : ""}`}
+                  <span className="waiting-name">{t.kind !== "agent" ? <IdLabel id={t.repoId} /> : t.name}</span>
+                  <span className="waiting-state">{t.kind === "group" ? "picked, waiting to land" : t.kind === "chat" ? "chat" : t.what}</span>
+                  <span className="waiting-detail" title={t.kind !== "agent" ? t.what : undefined}>
+                    {t.kind !== "agent" ? t.what : `${t.where}${t.repoId ? ` · ${repoName(t.repoId)}` : ""}`}
                   </span>
                   <span className="inbox-left dim">{agoMs(t.at, now)}</span>
                 </>
@@ -227,8 +228,8 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
               const card = t.kind === "agent" ? registry[t.id] : undefined;
               const term = card ? joinTarget(card, shown, qual) : null;
               const agents = t.kind === "agent" && t.repoId ? () => showAgents(t.repoId as string) : null;
-              const go = t.kind === "chat" ? () => showRun(t.id) : term ? () => useStore.getState().bringTerm(term) : agents;
-              const title = t.kind === "chat" ? "Open the chat" : term ? "Jump into its shell to answer it" : "Open its repo's agents";
+              const go = t.kind === "group" ? () => showGroup(t.id) : t.kind === "chat" ? () => showRun(t.id) : term ? () => useStore.getState().bringTerm(term) : agents;
+              const title = t.kind === "group" ? "Open the group comparison" : t.kind === "chat" ? "Open the chat" : term ? "Jump into its shell to answer it" : "Open its repo's agents";
               return (
                 <li key={`${t.kind}:${t.id}`} className="waiting-item">
                   {go ? (

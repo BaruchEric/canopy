@@ -241,3 +241,10 @@ describe("failedRows and health", () => {
     expect(rows.map((r) => (r.kind === "health" ? `${r.backend}:${r.name}:${r.repoId}` : r.kind))).toEqual(["mac:watching x:", "mini:site:mini|app"]);
   });
 });
+
+test("picked groups are one waiting turn; needs-you, PR and landed groups are not", () => {
+  const group = { id: "g", repoId: "app", repoPath: "/app", action: "ask", note: "repair", expectedMembers: 2, members: [{ origin: "a", run: "r1", profile: null }], state: "picked", winner: "a", autoLand: false, startedAt: 1 } satisfies import("../../src/core/group").RunGroup;
+  const landing = { runs: [], entries: [], orphans: [], groups: [group] };
+  expect(turnRows([], {}, [], [], [], landing)).toEqual([{ kind: "group", id: "g", repoId: "app", what: "best of 2: repair", at: 1 }]);
+  expect(turnRows([], {}, [], [], [], { ...landing, groups: [{ ...group, state: "needs-you" }, { ...group, id: "pr", pr: true }, { ...group, id: "landed", state: "landed" }] })).toEqual([]);
+});

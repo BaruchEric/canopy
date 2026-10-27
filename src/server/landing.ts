@@ -37,6 +37,7 @@ import {
   scoreGate,
   scoreOutput,
   sentBack,
+  tail,
   unqueue,
   WORKING,
   type LandEvent,
@@ -44,6 +45,7 @@ import {
 } from "../core/landing";
 import { foldsCase, readRules, sortBranch } from "../core/review";
 import type { Collision, Touched } from "../core/touch";
+import type { GroupDry } from "../core/group";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import type { EvidenceFile, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
@@ -85,6 +87,9 @@ export interface LandingDeps {
   prHeld?: (id: string) => boolean;
   /** the work ledger: one line per move of a branch that has an item (FR-037) */
   work?: WorkSink;
+  /** Bulk landing may include only the owning group's picked non-PR winner.
+   *  Missing group facts deny grouped records; individual land is unchanged. */
+  groupBulkEligible?: (rec: LandingRun) => boolean;
   /** the live collisions, for the info (FR-040) */
   collisions?: () => Collision[];
   /** the touched sets of a repo's live runs, for the mark at enqueue */
@@ -444,6 +449,12 @@ export class LandingHub {
    *  the sort says `auto` and nobody queued it meanwhile. */
   private async settled(id: string): Promise<void> {
     const opening = this.runs.get(id);
+    // Group selection owns all dispatch; every member still gets its sort.
+    if (opening?.group) {
+      const review = await this.resort(id);
+      if (review) this.tell(id, `branch ready, ${reviewWord(review)}`);
+      return;
+    }
     // a PR run lands on GitHub, never here (call 1)
     if (opening?.pr !== undefined) return;
     if (opening?.openPr) {
@@ -476,7 +487,7 @@ export class LandingHub {
     const rec = this.runs.get(id);
     const entry = this.entries.find((e) => e.id === id);
     if (review) this.tell(id, `fix ready, ${reviewWord(review)}`);
-    if (!rec || !entry || inQueue(entry) || rec.state !== "ready") return;
+    if (!rec || !entry || inQueue(entry) || rec.state !== "ready" || rec.group) return;
     const ok = review ? rejoins(review, entry) : { ok: false as const, why: "its diff could not be sorted" };
     if (ok.ok) {
       this.entries = enqueue(this.entries, rec, this.now(), undefined, this.deps.working?.(rec.repoId) ?? []);
@@ -517,6 +528,7 @@ export class LandingHub {
         startedAt: run.startedAt,
         ...(b.openPr ? { openPr: true as const } : {}),
         ...(b.work ? { work: b.work } : {}),
+        ...(run.group ?? b.group ? { group: run.group ?? b.group } : {}),
       };
     }
     const next: LandingRun = {
@@ -598,6 +610,87 @@ export class LandingHub {
     this.written.set(updated.id, JSON.stringify(updated));
     void this.saveRun(updated);
     return true;
+  }
+
+  /** Checks a ready member in its existing worktree. This dry pass reads the
+   *  main checkout's gates, settings and scenario set, and never queues,
+   *  rebases or lands the branch. */
+  async dryGates(origin: string): Promise<GroupDry> {
+    const rec = this.find(origin);
+    if (!rec) throw new Error("no branch by that id");
+    if (rec.state !== "ready") throw new Error("only a ready branch can be dry-checked");
+    const head = await revOf(rec.dir, "HEAD");
+    if (!head) throw new Error("the branch worktree has no HEAD");
+
+    const [gates, settings, set] = await Promise.all([
+      readGates(rec.repoPath),
+      readScenarioSettings(rec.repoPath),
+      readScenarioSet(this.root, rec.repoPath),
+    ]);
+    let gateResult: GroupDry["gates"] = { ok: true };
+    const changed = await git(rec.dir, ["diff", "--name-only", rec.base, head]);
+    if (changed.code !== 0) throw new Error("could not inspect branch changes for setup");
+    const changedPaths = changed.stdout.split("\n").filter(Boolean);
+    if (gates.setup !== undefined && touchesLockfile(changedPaths)) {
+      const setup = await this.deps.check(rec.dir, gates.setup);
+      if (setup.exit !== 0) {
+        gateResult = { ok: false, red: "setup", tail: tail(setup.output || `exited ${setup.exit ?? "on a signal"}`) };
+      }
+    }
+    if (gateResult.ok) {
+      for (const gate of gates.gates) {
+        const result = await this.deps.check(rec.dir, gate.run);
+        if (result.exit !== 0) {
+          gateResult = { ok: false, red: gate.name, tail: tail(result.output || `exited ${result.exit ?? "on a signal"}`) };
+          break;
+        }
+      }
+    }
+
+    let scenarios: ScenarioRun | undefined;
+    if (gateResult.ok && (set.scenarios.length > 0 || set.errors.length > 0)) {
+      scenarios = await runScenarioSet({
+        dir: rec.dir,
+        setDir: setDirOf(this.root, rec.repoPath),
+        set,
+        settings,
+        run: this.deps.scenario,
+        judge: this.deps.judge,
+        ...(this.deps.evidence ? { evidence: this.deps.evidence } : {}),
+        head,
+        now: this.now(),
+      });
+      const ineligible = scenarios.results.find((result) =>
+        (result.kind === "command" && !result.ok) ||
+        (result.kind === "judge" && result.unjudged !== undefined),
+      );
+      if (ineligible) {
+        const detail = ineligible.kind === "judge" ? ineligible.unjudged : ineligible.tail;
+        gateResult = {
+          ok: false,
+          red: `${SCENARIO_GATE}${ineligible.name}`,
+          ...(detail !== undefined ? { tail: detail } : {}),
+        };
+      }
+    }
+
+    const dry = { head, gates: gateResult, ...(scenarios ? { scenarios } : {}), minimum: settings.minimum };
+    const current = this.runs.get(rec.id);
+    if (!current) throw new Error("branch record disappeared during dry check");
+    const updated = { ...current, dry };
+    this.runs.set(updated.id, updated);
+    this.written.set(updated.id, JSON.stringify(updated));
+    await this.saveRun(updated);
+    this.publish();
+
+    return {
+      branch: rec.branch,
+      base: rec.base,
+      head,
+      gates: gateResult,
+      ...(scenarios ? { scenarios: { score: scenarios.score, passed: scenarios.passed, total: scenarios.total } } : {}),
+      minimum: settings.minimum,
+    };
   }
 
   /** Why the queue has a branch, so it may not open a PR: queued or
@@ -699,16 +792,27 @@ export class LandingHub {
   async landAll(repoId: string): Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }> {
     const has = new Set(this.entries.filter((e) => e.repoId === repoId).map((e) => e.id));
     const ready = [...this.runs.values()].filter((r) => r.repoId === repoId && r.state === "ready" && r.pr === undefined && !has.has(r.id) && !this.deps.runActive(r.runId));
+    const groupEligible = (r: LandingRun): boolean => r.group === undefined || this.deps.groupBulkEligible?.(r) === true;
     const queued: string[] = [];
     const skipped: { id: string; branch: string; why: string }[] = [];
     for (const r of ready.sort((a, b) => (a.endedAt ?? a.startedAt) - (b.endedAt ?? b.startedAt))) {
+      if (!groupEligible(r)) {
+        skipped.push({ id: r.id, branch: r.branch, why: "only a picked non-PR group winner may land in bulk" });
+        continue;
+      }
       const review = await this.resort(r.id);
       if (!review || review.verdict === "approve") {
         skipped.push({ id: r.id, branch: r.branch, why: review ? reviewWord(review) : "its diff could not be sorted" });
         continue;
       }
+      const current = this.runs.get(r.id);
+      // Sorting yields: selection or group ownership may have changed meanwhile.
+      if ((r.group !== undefined || current?.group !== undefined) && (!current || current.group !== r.group || !groupEligible(current))) {
+        skipped.push({ id: r.id, branch: r.branch, why: "group selection changed while sorting" });
+        continue;
+      }
       try {
-      this.entries = enqueue(this.entries, this.runs.get(r.id) ?? r, this.now(), {}, this.deps.working?.(r.repoId) ?? []);
+        this.entries = enqueue(this.entries, current ?? r, this.now(), {}, this.deps.working?.(r.repoId) ?? []);
         this.tell(r.id, "queued to land");
         queued.push(r.id);
       } catch (err) {
@@ -743,7 +847,7 @@ export class LandingHub {
   /** Drops a sent-back entry, its branch and its worktree: the work is
    *  given up. Not a branch whose PR is open and watched: the watch works
    *  in that worktree, and the PR is closed from its run's sheet. */
-  async drop(id: string): Promise<void> {
+  async drop(id: string, why?: string): Promise<void> {
     const rec = this.find(id);
     if (rec?.pr !== undefined && this.deps.prHeld?.(rec.id)) throw new LandError(`PR #${rec.pr} is open and canopy watches it; close the PR from its run's sheet first`);
     const entry = this.entries.find((e) => e.id === (rec?.id ?? id));
@@ -757,6 +861,10 @@ export class LandingHub {
     await this.dropRun(target.id);
     await this.saveQueue(target.repoPath);
     this.deps.dropped?.(target.id);
+    if (why !== undefined) {
+      this.notice({ entry: target.id, repoId: target.repoId, branch: target.branch, note: target.note, kind: "held", why: `not picked: ${target.branch}, ${why}` });
+      await this.saveNotices();
+    }
     this.publish();
   }
 

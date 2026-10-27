@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { VoiceEngine } from "./voicelive";
@@ -127,6 +128,7 @@ import {
   qKept,
   qRepo,
   qLanding,
+  qGroup,
   qPrs,
   qTriggers,
   qRun,
@@ -609,7 +611,10 @@ export const api = {
   voiceEnded: (engine: VoiceEngine, seconds: number, context: VoiceContext) =>
     req<{ ok: true }>(homeName(), "/api/voice/ended", { method: "POST", body: JSON.stringify({ engine, seconds, context }) }),
   /** a backend's cost ledger over the last `days` local days */
-  costs: (days: number, b: string) => req<CostReport>(b, `/api/costs?days=${days}`),
+  costs: async (days: number, b: string): Promise<CostReport> => {
+    const report = await req<CostReport>(b, `/api/costs?days=${days}`);
+    return { ...report, rows: report.rows.map(row => ({ ...row, run: row.run ? from(b, row.run, (q, id) => q(id)) : null, ...(row.group ? { group: from(b, row.group, (q, id) => q(id)) } : {}) })) };
+  },
   /** a client secret for one conversation, minted by the home backend */
   voiceSession: () => req<VoiceSession>(homeName(), "/api/voice/session", { method: "POST", body: "{}" }),
   /** a GPT-Live session for this page's WebRTC offer, started by the home backend with its key */
@@ -767,6 +772,32 @@ export const api = {
       qRun,
     );
   },
+  startGroup: async (id: string, action: RunAction, note: string, times: number, profile?: string, autoLand = false, pr = false) => {
+    const [b, plain] = on(id);
+    return from(b, await req<RunGroup>(b, `/api/repos/run?${rq(plain)}`, {
+      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profile ? { profiles: [profile] } : {}), autoLand, pr }),
+    }), qGroup);
+  },
+  groups: async (b: string = homeName()) => fromAll(b, await req<RunGroup[]>(b, "/api/groups"), qGroup),
+  pickRunGroup: async (id: string, origin: string) => {
+    const [b, plain] = on(id);
+    const [memberBackend, member] = on(origin);
+    if (memberBackend !== b) throw new Error("member belongs to another backend");
+    return from(b, await req<RunGroup>(b, "/api/groups/pick", { method: "POST", body: JSON.stringify({ group: plain, run: member }) }), qGroup);
+  },
+  reviewGroup: async (id: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<RunGroup>(b, "/api/groups/review", { method: "POST", body: JSON.stringify({ group: plain }) }), qGroup);
+  },
+  dropGroup: async (id: string, keep?: string[]) => {
+    const [b, plain] = on(id);
+    const members = keep?.map(origin => {
+      const [owner, member] = on(origin);
+      if (owner !== b) throw new Error("member belongs to another backend");
+      return member;
+    });
+    return from(b, await req<RunGroup>(b, "/api/groups/drop", { method: "POST", body: JSON.stringify({ group: plain, ...(members ? { keep: members } : {}) }) }), qGroup);
+  },
   /** one backend's PRs that branch runs opened; an older backend has none */
   prs: async (b: string = homeName()) => {
     const r = await req<PrWatch[] | null>(b, "/api/prs");
@@ -837,6 +868,7 @@ export const api = {
       entries: Array.isArray(r?.entries) ? r.entries : [],
       orphans: Array.isArray(r?.orphans) ? r.orphans : [],
       notices: Array.isArray(r?.notices) ? r.notices : [],
+      ...(Array.isArray(r?.groups) ? { groups: r.groups } : {}),
       ...(Array.isArray(r?.collisions) ? { collisions: r.collisions } : {}),
     };
     return from(b, info, qLanding);

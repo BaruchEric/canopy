@@ -174,3 +174,14 @@ test("sinceDays is local midnight, and hostOf names a speech server", () => {
   expect(hostOf("http://100.68.139.95:4000")).toBe("100.68.139.95");
   expect(hostOf("not a url")).toBe("speech");
 });
+
+test("group attribution follows members and the compare reviewer into cost rows", async () => {
+  const rows: CostEntry[] = [];
+  const costs = new RunCosts(row => rows.push(row), () => null);
+  for (const action of ["ask", "compare"]) {
+    const run: Run = { id: action, repoId: "app", action, verb: action, progress: "working", expectsChange: false, chat: false, harness: "claude", note: "task", status: "done", startedAt: 1, steps: [], prompt: null, group: "g-a1b2c3d4", result: { text: "done", turns: 1, durationMs: 1, costUsd: 0.01 } };
+    costs.onRun(run);
+  }
+  await costs.settled();
+  expect(rows.map(row => [row.action, row.group])).toEqual([["ask", "g-a1b2c3d4"], ["compare", "g-a1b2c3d4"]]);
+});

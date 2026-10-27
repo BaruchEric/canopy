@@ -3,6 +3,7 @@ import type { TriggerEvent } from "./trigger";
 import type { Capacity, CapacitySettings } from "./capacity";
 import type { WorkItem } from "./work";
 import type { Collision } from "./touch";
+import type { RunGroup } from "./group";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -1010,9 +1011,9 @@ export const AGENT_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
 export const RUN_ACTIONS = ["ask", "chat", "propose", "coordinate"] as const;
-export type RunAction = (typeof RUN_ACTIONS)[number];
+export type RunAction = (typeof RUN_ACTIONS)[number] | "compare";
 
-export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (v === "compare" || RUN_ACTIONS.some((action) => action === v));
 
 /** One card a coordinator proposed (FR-010): a branch run's worth of work in
  *  one repo. It waits as `proposed` until the user presses start these, then
@@ -1241,6 +1242,10 @@ export interface WorkspaceScope {
 export interface Run {
   id: string;
   repoId: string;
+  /** the best-of-N group, set before the first run event */
+  group?: string;
+  /** requested priority; grouped members are marked low */
+  priority?: Priority;
   /** a built-in action's name, or the workflow's name for a flow's step */
   action: string;
   /** the words the chip and the sheet use, copied from the spec at start */
@@ -1570,12 +1575,22 @@ export interface ScenarioRun {
   skipped?: string[];
 }
 
+/** A best-of-N member's read-only gate pass, before anyone lands it. */
+export interface LandingDry {
+  head: string;
+  gates: { ok: boolean; red?: string; tail?: string };
+  scenarios?: ScenarioRun;
+  minimum: number;
+}
+
 /** A branch run as the landing records keep it, across restarts. */
 export interface LandingRun {
   /** the branch's id (`RunBranch.origin`) */
   id: string;
   /** the branch's work item (FR-037); a record from before the ledger has none */
   work?: string;
+  /** the best-of-N group this branch belongs to (FR-033) */
+  group?: string;
   /** the latest run on the branch: the origin or its last "fix it" */
   runId: string;
   repoId: string;
@@ -1598,6 +1613,8 @@ export interface LandingRun {
   scenarios?: ScenarioRun;
   /** the last observed live run or branch overlap, retained until the branch leaves landing */
   overlap?: { with: string; paths: string[] };
+  /** a best-of-N dry pass, which never rebases or lands the branch */
+  dry?: LandingDry;
   /** a stopped run only: whether its work is whole as the hub last looked,
    *  so "land" applies. Never saved: the worktree can change after. */
   whole?: RunWhole;
@@ -1630,6 +1647,8 @@ export interface LandingInfo {
   notices?: LandNotice[];
   /** the live collisions on this backend (FR-040); an older backend has none */
   collisions?: Collision[];
+  /** best-of-N group records on this backend (FR-033) */
+  groups?: RunGroup[];
 }
 
 /** The parts of a status a run is expected to move: the working tree and

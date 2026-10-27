@@ -4,7 +4,9 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
-import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, RunStep, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
+import { pickWinner } from "../core/group";
+import type { GroupDry, RunGroup } from "../core/group";
+import type { EvidenceFile, LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, RunStep, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
 import { fixPrompt } from "../core/landing";
 import { touchedOf, type Touched } from "../core/touch";
 import { addRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
@@ -46,6 +48,10 @@ interface World {
   scenRoot: string;
   /** the scenario runner's calls: worktree, line, set copy, timeout */
   scenarios: [string, string, string, number][];
+  /** order of gate and scenario calls */
+  order: string[];
+  /** judge evidence reads: worktree and requested paths */
+  evidence: [string, string[]][];
   working: Touched[];
   /** scenario line → what it answers; a function may act first */
   scenAnswers: Map<string, CheckOutcome | (() => CheckOutcome | Promise<CheckOutcome>)>;
@@ -57,7 +63,7 @@ interface World {
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
-async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: false } = {}): Promise<World> {
+async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: false; evidence?: boolean; groupBulkEligible?: (rec: LandingRun) => boolean } = {}): Promise<World> {
   const path = join(root, `repo${++n}`);
   await exec(["git", "init", "-q", "-b", "main", path]);
   await sh(path, "config", "user.email", "t@t");
@@ -82,6 +88,8 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     held: new Set(),
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
+    order: [],
+    evidence: [],
     working: [],
     scenAnswers: new Map(),
     judged: [],
@@ -100,6 +108,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     repoByPath: (p) => repoAtPath([repo], p),
     check: async (cwd, line) => {
       w.checks.push([cwd, line]);
+      w.order.push(`check:${line}`);
       const a = w.answers.get(line);
       return a ? a(cwd) : { exit: 0, output: "" };
     },
@@ -111,6 +120,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
       return run;
     },
     runActive: (id) => w.active.has(id),
+    ...(opts.groupBulkEligible ? { groupBulkEligible: opts.groupBulkEligible } : {}),
     openPr: (id) => {
       w.opened.push(id);
     },
@@ -119,9 +129,14 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     working: () => w.working,
     scenario: async (cwd, line, setDir, ms) => {
       w.scenarios.push([cwd, line, setDir, ms]);
+      w.order.push(`scenario:${line}`);
       const a = w.scenAnswers.get(line);
       return typeof a === "function" ? await a() : (a ?? { exit: 0, output: "" });
     },
+    ...(opts.evidence ? { evidence: async (cwd: string, paths: string[]): Promise<EvidenceFile[]> => {
+      w.evidence.push([cwd, paths]);
+      return paths.map((path) => ({ path, text: `observed ${path}` }));
+    } } : {}),
     scenariosRoot: w.scenRoot,
     judge: opts.judge === false ? null : async state => {
       w.judged.push(state);
@@ -138,7 +153,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
   return w;
 }
 
-const fakeRun = (repoId: string, b: { name: string; target: string; base: string; dir: string; origin: string; work?: string }, state: RunBranchState): Run => ({
+const fakeRun = (repoId: string, b: { name: string; target: string; base: string; dir: string; origin: string; work?: string; group?: string }, state: RunBranchState): Run => ({
   id: b.origin,
   repoId,
   action: "propose",
@@ -158,13 +173,13 @@ const fakeRun = (repoId: string, b: { name: string; target: string; base: string
 });
 
 /** A finished branch run whose worktree holds one commit writing `file`. */
-async function readyRun(w: World, id: string, file: string, body: string, work?: string): Promise<Run> {
+async function readyRun(w: World, id: string, file: string, body: string, work?: string, group?: string): Promise<Run> {
   const dir = runTreeDir(w.repo.path, id, w.wts);
   const base = (await revOf(w.repo.path, "main"))!;
   const name = `run/x-${id}`;
   await addRunTree(w.repo.path, dir, name, base);
   await commit(dir, file, body);
-  const run = fakeRun(w.repo.id, { name, target: "main", base, dir, origin: id, ...(work ? { work } : {}) }, "ready");
+  const run = fakeRun(w.repo.id, { name, target: "main", base, dir, origin: id, ...(work ? { work } : {}), ...(group ? { group } : {}) }, "ready");
   w.hub.onRun(run);
   return run;
 }
@@ -1038,6 +1053,31 @@ describe("scenarios (FR-032)", () => {
 
 const judgeStory = (name: string, run?: string) => `---\nname: ${name}\nkind: judge\n${run ? `run: ${run}\n` : ""}evidence: b.txt\n---\nSECRET STORY ${name}\n`;
 const lastScenarioPass = (w: World, id: string): ScenarioRun | undefined => w.events.flatMap(ev=>ev.type === "landing" ? ev.landing.runs : []).filter(rec=>rec.id===id && rec.scenarios).at(-1)?.scenarios;
+const pickDryWinner = (dry: GroupDry, origin: string): string | null => {
+  const member: RunGroup["members"][number] = { run: origin, origin, profile: null };
+  const group: RunGroup = {
+    id: "g-dry-check",
+    repoId: "repo-dry-check",
+    repoPath: "/repo-dry-check",
+    action: "propose",
+    note: "dry check",
+    expectedMembers: 1,
+    members: [member],
+    state: "scoring",
+    autoLand: false,
+    startedAt: 1,
+    scores: {
+      [origin]: {
+        branch: dry.branch,
+        base: dry.base,
+        state: "ready",
+        gates: dry.gates,
+        ...(dry.scenarios ? { scenarios: dry.scenarios } : {}),
+      },
+    },
+  };
+  return pickWinner(group, [dry.branch], dry.minimum);
+};
 
 describe("judge scenarios plan 2", () => {
   test("a landed entry retains its skipped judge pass in the final API event and after adoption", async () => {
@@ -1157,4 +1197,227 @@ describe("judge scenarios plan 2", () => {
     expect(existsSync(runTreeDir(w.repo.path,"sj5",w.wts))).toBe(false);
     await expect(w.hub.land("missing",undefined,true)).rejects.toThrow("no entry by that id");
   });
+});
+
+describe("best-of-N dry gates", () => {
+  test("runs setup, gates, and scenarios on the ready worktree, then saves the dry pass", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/gates.json", JSON.stringify({ setup: "bun install", gates: [{ name: "lint", run: "bun run lint" }, { name: "test", run: "bun run test" }] }));
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.75,"timeout":2}');
+    await addScenario(w, "checkout", "make checkout");
+    const run = await readyRun(w, "dry1", "bun.lock", "lock\n");
+    const mainHead = await revOf(w.repo.path, "HEAD");
+    await w.hub.adopt();
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry1");
+    await w.hub.flushed();
+
+    const branch = run.branch;
+    if (!branch || !branch.base) throw new Error("missing branch base");
+    const head = await revOf(branch.dir, "HEAD");
+    if (!head) throw new Error("missing branch head");
+    expect(dry).toEqual({ branch: branch.name, base: branch.base, head, gates: { ok: true }, scenarios: { score: 1, passed: 1, total: 1 }, minimum: 0.75 });
+    expect(w.order).toEqual([
+      "check:bun install",
+      "check:bun run lint",
+      "check:bun run test",
+      'scenario:make checkout',
+    ]);
+    expect(w.scenarios).toMatchObject([[run.branch!.dir, "make checkout", expect.any(String), 2000]]);
+    expect(w.hub.record("dry1")).toMatchObject({ state: "ready", dry: { head, gates: { ok: true }, scenarios: { score: 1, passed: 1, total: 1 }, minimum: 0.75 } });
+    const saved = JSON.parse(await readFile(join(w.dir, "runs", "dry1.json"), "utf8")) as LandingRun;
+    expect(saved.dry).toMatchObject({ head, gates: { ok: true }, scenarios: { score: 1, passed: 1, total: 1 }, minimum: 0.75 });
+    expect(w.hub.info().entries).toEqual([]);
+    expect(await revOf(w.repo.path, "HEAD")).toBe(mainHead);
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(head);
+  });
+
+  test("setup failure is recorded red and leaves the branch ready", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/gates.json", JSON.stringify({ setup: "bun install", gates: [{ name: "test", run: "bun test" }] }));
+    await addScenario(w, "checkout", "make checkout");
+    const run = await readyRun(w, "dry2", "bun.lock", "lock\n");
+    const mainHead = await revOf(w.repo.path, "HEAD");
+    const branchHead = await revOf(run.branch!.dir, "HEAD");
+    await w.hub.idle();
+    w.answers.set("bun install", () => ({ exit: 1, output: "setup failed" }));
+
+    const dry = await w.hub.dryGates("dry2");
+
+    expect(dry.gates).toEqual({ ok: false, red: "setup", tail: "setup failed" });
+    expect(w.checks.map(([, line]) => line)).toEqual(["bun install"]);
+    expect(w.scenarios).toEqual([]);
+    expect(w.hub.record("dry2")).toMatchObject({ state: "ready", dry: { gates: { ok: false, red: "setup" } } });
+    expect(entryOf(w, "dry2")).toBeUndefined();
+    expect(await revOf(w.repo.path, "HEAD")).toBe(mainHead);
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(branchHead);
+  });
+
+  test("a red gate is recorded without landing or changing ready state", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/gates.json", JSON.stringify({ gates: [{ name: "lint", run: "bun run lint" }, { name: "test", run: "bun run test" }] }));
+    await addScenario(w, "checkout", "make checkout");
+    const run = await readyRun(w, "dry3", "b.txt", "b\n");
+    const mainHead = await revOf(w.repo.path, "HEAD");
+    const branchHead = await revOf(run.branch!.dir, "HEAD");
+    await w.hub.idle();
+    w.answers.set("bun run lint", () => ({ exit: 2, output: "lint failed" }));
+
+    const dry = await w.hub.dryGates("dry3");
+
+    expect(dry.gates).toEqual({ ok: false, red: "lint", tail: "lint failed" });
+    expect(w.checks.map(([, line]) => line)).toEqual(["bun run lint"]);
+    expect(w.scenarios).toEqual([]);
+    expect(w.hub.record("dry3")).toMatchObject({ state: "ready", dry: { gates: { ok: false, red: "lint" } } });
+    expect(entryOf(w, "dry3")).toBeUndefined();
+    expect(await revOf(w.repo.path, "HEAD")).toBe(mainHead);
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(branchHead);
+  });
+
+  test("scenario score below minimum is saved even when every judge passed", async () => {
+    const w = await world({ evidence: true });
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.9,"timeout":3}');
+    await addScenario(w, "refund-a", undefined, judgeStory("refund-a"));
+    await addScenario(w, "refund-b", undefined, judgeStory("refund-b"));
+    w.judgeAnswer = { satisfied: { choice: "yes", probabilities: { yes: 0.8 } }, evidence: { probability: 0.8 } };
+    const run = await readyRun(w, "dry4", "b.txt", "refund implementation\n");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry4");
+
+    expect(dry).toMatchObject({ gates: { ok: true }, scenarios: { score: 0.8, passed: 2, total: 2 }, minimum: 0.9 });
+    expect(w.hub.record("dry4")).toMatchObject({ state: "ready", dry: { minimum: 0.9, scenarios: { score: 0.8, passed: 2, total: 2, results: [{ ok: true, p: 0.8 }, { ok: true, p: 0.8 }] } } });
+    expect(w.evidence).toEqual([[run.branch!.dir, ["b.txt"]], [run.branch!.dir, ["b.txt"]]]);
+    expect(w.judged).toHaveLength(2);
+    expect(w.judged[0]).toContain("SECRET STORY refund-a");
+    expect(w.judged[0]).toContain("observed b.txt");
+    expect(JSON.stringify(w.hub.info())).not.toContain("SECRET STORY");
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+  });
+
+  test("an absent scenario set has no scenario score and does not run setup without a changed lockfile", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/gates.json", JSON.stringify({ setup: "bun install", gates: [{ name: "test", run: "bun test" }] }));
+    await readyRun(w, "dry5", "b.txt", "b\n");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry5");
+
+    expect(dry).toMatchObject({ gates: { ok: true }, minimum: 1 });
+    expect(dry.scenarios).toBeUndefined();
+    expect(w.checks.map(([, line]) => line)).toEqual(["bun test"]);
+    expect(w.scenarios).toEqual([]);
+    expect(w.hub.record("dry5")).toMatchObject({ state: "ready", dry: { gates: { ok: true }, minimum: 1 } });
+  });
+
+  test("a failed command scenario stays ineligible at a permissive minimum", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.5}');
+    await addScenario(w, "a-pass", "first passes");
+    await addScenario(w, "b-red", "second fails");
+    w.scenAnswers.set("first passes", () => ({ exit: 0, output: "passed" }));
+    w.scenAnswers.set("second fails", () => ({ exit: 1, output: "command failed" }));
+    const run = await readyRun(w, "dry6", "b.txt", "b\n");
+    const branchHead = await revOf(run.branch!.dir, "HEAD");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry6");
+
+    expect(dry).toMatchObject({ gates: { ok: false, red: "scenario: b-red", tail: "command failed" }, scenarios: { score: 0.5, passed: 1, total: 2 }, minimum: 0.5 });
+    expect(pickDryWinner(dry, "dry6")).toBeNull();
+    expect(w.hub.record("dry6")).toMatchObject({ state: "ready", dry: { scenarios: { score: 0.5, passed: 1, total: 2 } } });
+    expect(entryOf(w, "dry6")).toBeUndefined();
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(branchHead);
+  });
+
+  test("an unjudged scenario stays ineligible when the minimum is zero", async () => {
+    const w = await world({ judge: false });
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0}');
+    await addScenario(w, "refund", undefined, judgeStory("refund"));
+    const run = await readyRun(w, "dry7", "b.txt", "b\n");
+    const branchHead = await revOf(run.branch!.dir, "HEAD");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry7");
+
+    expect(dry).toMatchObject({ gates: { ok: false, red: "scenario: refund", tail: "no gateway key" }, scenarios: { score: 0, passed: 0, total: 1 }, minimum: 0 });
+    expect(pickDryWinner(dry, "dry7")).toBeNull();
+    expect(w.hub.record("dry7")).toMatchObject({ state: "ready", dry: { scenarios: { results: [{ unjudged: "no gateway key" }] } } });
+    expect(JSON.stringify(w.hub.info())).not.toContain("SECRET STORY");
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+    expect(entryOf(w, "dry7")).toBeUndefined();
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(branchHead);
+  });
+
+  test("a known partial judgment can win when its mean meets the minimum", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.5}');
+    await addScenario(w, "refund", undefined, judgeStory("refund"));
+    w.judgeAnswer = { satisfied: { choice: "partly", probabilities: { yes: 0.6 } }, evidence: { probability: 0.8 } };
+    await readyRun(w, "dry8", "b.txt", "b\n");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry8");
+
+    expect(dry).toMatchObject({ gates: { ok: true }, scenarios: { score: 0.6, passed: 0, total: 1 }, minimum: 0.5 });
+    expect(pickDryWinner(dry, "dry8")).toBe("dry8");
+    expect(w.hub.record("dry8")).toMatchObject({ state: "ready", dry: { scenarios: { results: [{ ok: false, p: 0.6 }] } } });
+  });
+});
+
+describe("best-of-N quiet loser drops", () => {
+  test("a group drop records a held-style quiet line while normal drops stay quiet", async () => {
+    const w = await world();
+    await w.hub.adopt();
+    const loser = await readyRun(w, "not-picked", "loser.txt", "loser");
+    await w.hub.idle();
+    await w.hub.drop(loser.id, "another member won");
+    expect(w.hub.info().notices).toEqual([expect.objectContaining({ kind: "held", entry: loser.id, why: `not picked: ${loser.branch?.name}, another member won` })]);
+    expect(JSON.parse(await readFile(join(w.dir, "notices.json"), "utf8"))).toEqual(w.hub.info().notices);
+    const normal = await readyRun(w, "normal-drop", "normal.txt", "normal");
+    await w.hub.idle();
+    await w.hub.drop(normal.id);
+    expect(w.hub.info().notices?.length).toBe(1);
+  });
+});
+
+describe("best-of-N member dispatch belongs to selection", () => {
+  test("even an auto-sorted PR-marked member stays ready without opening or queueing", async () => {
+    const w = await world(); await w.hub.adopt();
+    await commit(w.repo.path, ".canopy/review.json", JSON.stringify({ autoLand: ["docs"], approve: [] }));
+    const base = await revOf(w.repo.path, "main"); if (!base) throw new Error("missing base");
+    const origin = "group-member"; const name = `run/${origin}`; const dir = runTreeDir(w.repo.path, origin, w.wts);
+    await addRunTree(w.repo.path, dir, name, base); await commit(dir, "member.md", "some documentation\n");
+    const run: Run = { ...fakeRun(w.repo.id, { name, target: "main", base, dir, origin }, "ready"), group: "g-a1b2c3d4", branch: { name, target: "main", base, dir, origin, state: "ready", group: "g-a1b2c3d4", openPr: true } };
+    w.hub.onRun(run); await w.hub.idle();
+    expect(w.hub.record(origin)).toMatchObject({ state: "ready", group: "g-a1b2c3d4", review: { verdict: "auto" } });
+    expect(w.hub.info().entries).toEqual([]); expect(w.opened).toEqual([]);
+  });
+});
+
+test("bulk landing default-denies grouped records without selection facts, preserving individual land", async () => {
+  const w = await world();
+  await readyRun(w, "bulk-group", "group.md", "group\n", undefined, "g-missing");
+  await readyRun(w, "bulk-single", "single.md", "single\n");
+  await w.hub.idle();
+  w.hub.stop();
+  expect(await w.hub.landAll(w.repo.id)).toMatchObject({ queued: ["bulk-single"], skipped: [{ id: "bulk-group" }] });
+  expect((await w.hub.land("bulk-group")).id).toBe("bulk-group");
+});
+
+test("bulk group winner selection is rechecked after sorting and approval stays mandatory", async () => {
+  let checks = 0;
+  const w = await world({ groupBulkEligible: () => ++checks === 1 });
+  await readyRun(w, "bulk-race", "race.md", "race\n", undefined, "g-race");
+  await w.hub.idle();
+  w.hub.stop();
+  expect((await w.hub.landAll(w.repo.id)).queued).toEqual([]);
+  expect(checks).toBeGreaterThanOrEqual(2);
+  const approved = await world({ groupBulkEligible: () => true });
+  await rulesOn(approved, RULES);
+  await readyRun(approved, "bulk-approve", "secret/k.txt", "k\n", undefined, "g-picked");
+  await approved.hub.idle();
+  approved.hub.stop();
+  expect(await approved.hub.landAll(approved.repo.id)).toEqual({ queued: [], skipped: [{ id: "bulk-approve", branch: "run/x-bulk-approve", why: "needs your approval: 1 sensitive file" }] });
 });

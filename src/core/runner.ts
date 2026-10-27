@@ -26,6 +26,7 @@ import {
   statusFingerprint,
   type AgentSettings,
   type Harness,
+  type Priority,
   type Repo,
   type RepoStatus,
   type RememberedRule,
@@ -64,6 +65,9 @@ export interface BranchStart {
 export interface StartExtras {
   /** Private in-memory identity for steps belonging to one flow. */
   flowOwner?: symbol;
+  /** best-of-N attribution, including the first event and costs */
+  group?: string;
+  priority?: Priority;
   /** the coordinator that started it, set before the run's first change is
    *  heard, so every listener sees a child as one */
   parent?: string;
@@ -166,6 +170,11 @@ export function runEnv(run: Pick<Run, "id" | "repoId">, backend?: string, extra?
  *  the run going there, and no status read judges its end. */
 const isCoordinate = (run: Pick<Run, "action">): boolean => run.action === "coordinate";
 
+type DriverProcess =
+  | { kind: "idle" }
+  | { kind: "running"; exited: Promise<void>; markExited: () => void }
+  | { kind: "exited" };
+
 interface Live {
   ctx: RunCtx;
   flowOwner?: symbol;
@@ -192,6 +201,10 @@ interface Live {
   branch?: BranchStart;
   /** a branch run's prepare is going and the driver has not started */
   preparing?: boolean;
+  preparation?: Promise<void>;
+  /** terminal status and its asynchronous branch-state update */
+  ended: Promise<void>;
+  process: DriverProcess;
 }
 
 export class Runner {
@@ -362,9 +375,12 @@ export class Runner {
     };
     if (by) run.by = by;
     if (extras.parent) run.parent = extras.parent;
+    const group = extras.group ?? branch?.branch.group;
+    if (group) run.group = group;
+    if (extras.priority) run.priority = extras.priority;
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
-    if (branch) run.branch = { ...branch.branch, state: "working" };
+    if (branch) run.branch = { ...branch.branch, state: "working", ...(group ? { group } : {}) };
     // a stage's run never takes a remembered rule (amendment 4, ruling 16):
     // a rule kept on one seed, or for one step, must not hold for the next.
     // A branch run's rules are judged by its worktree, so a repo rule kept
@@ -374,6 +390,8 @@ export class Runner {
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
     const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume } : {}) };
+    let markEnded = () => {};
+    const ended = new Promise<void>(resolve => { markEnded = resolve; });
     const ctx = new RunCtx(
       run,
       {
@@ -393,13 +411,15 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
+      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.settle(live).finally(markEnded); } },
     );
     const live: Live = {
       ctx,
       ...(extras.flowOwner ? { flowOwner: extras.flowOwner } : {}),
       driver,
       started: false,
+      ended,
+      process: { kind: "idle" },
       repo,
       spec,
       ...(scope ? { scope } : {}),
@@ -407,6 +427,15 @@ export class Runner {
       before: statusFingerprint(repo.status),
       drains: [],
       releases: [],
+    };
+    const exited = ctx.exited.bind(ctx);
+    ctx.exited = (result) => {
+      try { exited(result); }
+      finally {
+        const process = live.process;
+        live.process = { kind: "exited" };
+        if (process.kind === "running") process.markExited();
+      }
     };
     this.live.set(run.id, live);
     this.prune();
@@ -548,6 +577,27 @@ export class Runner {
     return run;
   }
 
+  /** A rolled-back branch cannot be removed until its process/setup and final
+   * state update have stopped touching the worktree. */
+  async stopAndWait(id: string): Promise<void> {
+    const live = this.live.get(id);
+    if (!live) return;
+    const active = isRunActive(live.ctx.run);
+    this.stop(id);
+    const process = live.process;
+    if (process.kind === "running") {
+      // A terminal result ends the job before the driver's process exits.
+      if (!active) live.driver.stop();
+      await process.exited;
+    }
+    await live.preparation;
+    await live.ended;
+    await Promise.all(live.drains);
+    await Promise.all(live.releases);
+    // Work may have changed after the early result but before actual exit.
+    await this.settle(live);
+  }
+
   /** Forgets a finished run. Active runs must be stopped first. */
   dismiss(id: string): void {
     const live = this.live.get(id);
@@ -565,20 +615,27 @@ export class Runner {
     }
   }
 
+  private drive(live: Live, message: string): void {
+    let markExited = () => {};
+    const exited = new Promise<void>(resolve => { markExited = resolve; });
+    live.process = { kind: "running", exited, markExited };
+    live.driver.start(live.ctx, message);
+  }
+
   private begin(live: Live, message: string): void {
     live.started = true;
     const prepare = live.branch?.prepare;
     if (!prepare) {
-      live.driver.start(live.ctx, message);
+      this.drive(live, message);
       return;
     }
     // once: a chat's later turns never set up again
     live.branch = { ...live.branch!, prepare: undefined };
     live.preparing = true;
-    void prepare((text) => live.ctx.note(text)).then(
+    live.preparation = prepare((text) => live.ctx.note(text)).then(
       () => {
         live.preparing = false;
-        if (isRunActive(live.ctx.run)) live.driver.start(live.ctx, message);
+        if (isRunActive(live.ctx.run)) this.drive(live, message);
       },
       (err: unknown) => {
         live.preparing = false;
