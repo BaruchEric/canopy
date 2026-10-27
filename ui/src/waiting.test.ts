@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Collision } from "../../src/core/touch";
 import type { AgentCard, Ask, CoordTask, HealthCheck, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
 import { WAITING_PANEL, attentionRepos, behindRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
 
@@ -19,6 +20,13 @@ describe("the waiting panel's id", () => {
 });
 
 describe("attentionRepos", () => {
+  test("a repo whose uncommitted files overlap a branch run says so in its detail (FR-040)", () => {
+    const c: Collision = { id: "a+checkout", repoId: "beta", run: "a", name: "run/x-a", with: { kind: "checkout" }, paths: ["x.ts"], at: 1 };
+    const rows = attentionRepos([repo("beta", { files: [file()] })], [c]);
+    expect(rows[0]?.detail).toBe("1 file · your uncommitted changes to x.ts overlap run/x-a; the landing will wait for them");
+    expect(attentionRepos([repo("beta", { files: [file()] })], [{ ...c, repoId: "other" }])[0]?.detail).toBe("1 file");
+  });
+
   test("ranks conflict, error, changes, unpushed, then by name, and leaves the rest out", () => {
     const rows = attentionRepos([
       repo("zed", { ahead: 2 }),

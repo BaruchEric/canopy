@@ -411,7 +411,10 @@ describe("the landing queue's sent-back branches", () => {
   });
 
   test("a notice is never an item: it asks nothing", () => {
-    const notices = [{ id: "n1", entry: "b1", repoId: "app", branch: "run/x-b1", note: "", kind: "held" as const, why: "x", at: 1 }];
+    const notices = [
+      { id: "n1", entry: "b1", repoId: "app", branch: "run/x-b1", note: "", kind: "held" as const, why: "x", at: 1 },
+      { id: "n2", entry: "b2", repoId: "app", branch: "run/x-b2", note: "", kind: "collision" as const, why: "run/x-b2 and run/x-a both edit x.ts", at: 2 },
+    ];
     const ctx = { repos: [repo("app")], cards: {}, landing: { ...landing([]), notices } };
     expect(mergeInbox([], {}, {}, 0, ctx)).toEqual([]);
   });

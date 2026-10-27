@@ -12,7 +12,7 @@ import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
-import { ApproveSheet } from "./Landing";
+import { ApproveSheet, OverlapChip } from "./Landing";
 import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
 import { KeysSheet } from "./Keys";
@@ -645,6 +645,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
       {l.verdict && <span className="run-branch-why">{l.verdict}</span>}
       {l.why && <span className="run-branch-why">{l.why}</span>}
       {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
+      {l.overlaps?.map((overlap, index) => <OverlapChip key={`${overlap.name}:${index}`} name={overlap.name} paths={overlap.paths} />)}
       {l.scenarios && (
         <details className="run-scenarios">
           <summary className={`run-branch-why ${scenarioTone(l.scenarios)}`} title="The repo's holdout scenarios over this branch; their text stays on the server">

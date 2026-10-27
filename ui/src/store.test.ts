@@ -6,6 +6,7 @@ import {
   activeFilterCount,
   canAnswer,
   archivedCount,
+  attentionItems,
   cardOf,
   changed,
   closedIn,
@@ -55,6 +56,7 @@ import {
   type AgentSettings,
   type Ask,
   type CapacityInfo,
+  type LandingInfo,
   type KeptShell,
   type PeerSeen,
   type RangerInfo,
@@ -68,6 +70,7 @@ import {
   type TaskInfo,
   type TermInfo,
 } from "../../src/core/types";
+import type { Collision } from "../../src/core/touch";
 
 describe("closedSectionsOf", () => {
   test("a layout from before the launch and peers sections folds them", () => {
@@ -133,6 +136,27 @@ describe("per-repo folds", () => {
     expect(unfoldAllIn(none, "a", keys)).toBe(none);
     // a key left out (hidden, or held by the bench) keeps its fold
     expect(sectionsFor(unfoldAllIn({ a: ["search", "preview"] }, "a", ["search"]), "a")).toEqual(["preview"]);
+  });
+});
+
+describe("waiting attention collisions", () => {
+  const pristine = useStore.getState();
+  afterEach(() => useStore.setState({ repos: pristine.repos, landing: pristine.landing, settings: pristine.settings, activeWs: pristine.activeWs, workspaces: pristine.workspaces }));
+  test("a landing collision refreshes the waiting panel's cached attention detail", () => {
+    const repo: Repo = {
+      id: "app",
+      name: "app",
+      path: "/dev/app",
+      group: "",
+      source: "launch",
+      status: { branch: "main", upstream: "origin/main", ahead: 0, behind: 0, files: [{ path: "x.ts", index: ".", worktree: "M", untracked: false, conflicted: false }], lastCommit: null, user: null },
+    };
+    const collision: Collision = { id: "run+checkout", repoId: "app", run: "run", name: "run/x-a", with: { kind: "checkout" }, paths: ["x.ts"], at: 1 };
+    const info: LandingInfo = { runs: [], entries: [], orphans: [], collisions: [collision] };
+    useStore.setState({ repos: [repo], landing: { home: info } });
+    expect(attentionItems(useStore.getState())[0]?.detail).toBe("1 file · your uncommitted changes to x.ts overlap run/x-a; the landing will wait for them");
+    useStore.setState({ landing: { home: { ...info, collisions: [] } } });
+    expect(attentionItems(useStore.getState())[0]?.detail).toBe("1 file");
   });
 });
 
