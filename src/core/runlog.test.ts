@@ -360,3 +360,62 @@ test("a rejected recovery record stays excluded when its folder cannot be remove
   expect(await listKept(dir)).toEqual([]); expect(await rebuildIndex(dir)).toEqual([]);
   expect(await readKeptRun(dir, "identity")).toBeNull();
 });
+
+test("a RunLog credential rejection attempts removal even when its marker cannot be written", async () => {
+  const dir = join(root, "marker-failed-runlog"); const errors: string[] = [];
+  const log = open(dir, run({ id: "numeric" }), { secrets: [{ name: "VERCEL_TOKEN", value: "1" }], now: () => 7, onError: (why) => errors.push(why) });
+  const actualOpen = fs.openSync;
+  const failed = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+    if (typeof path === "string" && path.includes(".privacy-rejected.tmp")) throw new Error("synthetic marker creation failure");
+    return actualOpen(path, flags, mode);
+  });
+  try { await log.settle(run({ id: "numeric" })); } finally { failed.mockRestore(); }
+  expect(errors).toHaveLength(1); expect(existsSync(log.folder)).toBe(false);
+  expect(await listKept(dir)).toEqual([]); expect(await readKeptRun(dir, "numeric")).toBeNull();
+});
+
+test("recovery continues and removes a rejected record when marker creation fails", async () => {
+  const dir = join(root, "marker-failed-recovery");
+  for (const id of ["identity", "healthy"]) {
+    await mkdir(join(dir, id), { recursive: true });
+    await writeFile(join(dir, id, WIRE), JSON.stringify({ canopy: "start", at: 5, run: id, repo: "repo", action: "ask", harness: "codex", argv: [] }) + "\n");
+  }
+  const actualOpen = fs.openSync;
+  const failed = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+    if (typeof path === "string" && path.includes(".privacy-rejected.tmp")) throw new Error("synthetic marker creation failure");
+    return actualOpen(path, flags, mode);
+  });
+  const secrets = [{ name: "CANOPY_TOKEN", value: "identity" }];
+  try { expect(await closeOpen(dir, () => undefined, { secrets, credentials: secrets }, 77)).toEqual(["healthy"]); }
+  finally { failed.mockRestore(); }
+  expect(existsSync(join(dir, "identity"))).toBe(false);
+  expect((await listKept(dir)).map((head) => head.id)).toEqual(["healthy"]);
+  expect(await readFile(join(dir, INDEX), "utf8")).not.toContain("identity");
+});
+
+test("an unmarked undeletable rejection stays quarantined until durable exclusion succeeds", async () => {
+  const dir = join(root, "marker-and-remove-failed"); const folder = join(dir, "identity"); await mkdir(folder, { recursive: true });
+  await writeFile(join(folder, WIRE), JSON.stringify({ canopy: "start", at: 5, run: "identity", repo: "repo", action: "ask", harness: "codex", argv: [] }) + "\n");
+  const actualOpen = fs.openSync; const actualRm = fs.rmSync; let removalAttempts = 0;
+  const failedMarker = spyOn(fs, "openSync").mockImplementation((path, flags, mode) => {
+    if (typeof path === "string" && path.includes(".privacy-rejected.tmp")) throw new Error("synthetic marker creation failure");
+    return actualOpen(path, flags, mode);
+  });
+  const failedRemoval = spyOn(fs, "rmSync").mockImplementation((path, opts) => {
+    if (path === folder) { removalAttempts++; throw new Error("synthetic removal failure"); }
+    actualRm(path, opts);
+  });
+  const secrets = [{ name: "CANOPY_TOKEN", value: "identity" }];
+  try {
+    expect(await closeOpen(dir, () => undefined, { secrets, credentials: secrets }, 77)).toEqual([]);
+    expect(removalAttempts).toBeGreaterThan(0);
+    expect(existsSync(folder)).toBe(true); expect(existsSync(join(folder, ".privacy-rejected"))).toBe(false);
+    expect(await listKept(dir)).toEqual([]); expect(await rebuildIndex(dir)).toEqual([]);
+    expect(await readKeptRun(dir, "identity")).toBeNull();
+    expect(await readFile(join(dir, INDEX), "utf8")).not.toContain("identity");
+    failedMarker.mockRestore();
+    expect(await listKept(dir)).toEqual([]);
+    expect(existsSync(join(folder, ".privacy-rejected"))).toBe(true);
+  } finally { failedMarker.mockRestore(); failedRemoval.mockRestore(); }
+  expect(await listKept(dir)).toEqual([]); expect(await readKeptRun(dir, "identity")).toBeNull();
+});

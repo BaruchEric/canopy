@@ -1,8 +1,8 @@
 /** Local run transcripts: <runs>/<id>/{wire.jsonl,wire.jsonl.gz,run.json}
  *  and an atomic index.json. Canopy adds start/in/cut/end lines. Bun-only;
  *  the UI never imports this file. Payload redaction is core/redact.ts's. */
-import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { join, resolve } from "node:path";
 import type { Applied } from "./applied";
 import type { WireDir } from "./driver";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX } from "./envnames";
@@ -205,9 +205,26 @@ function atomic(path: string, text: string): void {
     renameSync(tmp, path);
   } finally { if (fd !== undefined) closeSync(fd); rmSync(tmp, { force: true }); }
 }
+/** Failed disk exclusion must never reopen a record through a read path.
+ *  Keep it quarantined in this process until a marker or removal succeeds. */
+const quarantined = new Set<string>();
+function quarantineKey(folder: string): string { try { return realpathSync(folder); } catch { return resolve(folder); } }
+function rejectFolder(folder: string): void {
+  const key = quarantineKey(folder);
+  quarantined.add(key);
+  let durable = exists(join(folder, REJECTED));
+  try { atomic(join(folder, REJECTED), ""); durable = true; } catch { /* deletion is independent of marker creation */ }
+  try { rmSync(folder, { recursive: true }); durable = true; } catch { /* retain quarantine if no durable marker exists */ }
+  if (durable) quarantined.delete(key);
+}
+function rejected(folder: string): boolean {
+  if (!quarantined.has(quarantineKey(folder)) && !exists(join(folder, REJECTED))) return false;
+  rejectFolder(folder); // retry exclusion when the filesystem becomes writable
+  return true;
+}
 function folders(dir: string): string[] {
   if (!directory(dir)) return [];
-  return readdirSync(dir).filter((id) => RUN_ID.test(id) && directory(join(dir, id)) && !exists(join(dir, id, REJECTED))).sort();
+  return readdirSync(dir).filter((id) => RUN_ID.test(id) && directory(join(dir, id)) && !rejected(join(dir, id))).sort();
 }
 function parse(text: string | null): unknown { try { return text === null ? null : JSON.parse(text); } catch { return null; } }
 function safeFolder(dir: string, id: string): string | null { return RUN_ID.test(id) && directory(dir) && directory(join(dir, id)) ? join(dir, id) : null; }
@@ -231,7 +248,7 @@ export function headOf(run: Run): KeptRunHead {
   return { id: run.id, repo: run.repoId, action: run.action, verb: run.verb, harness: run.harness, status: run.status, started: run.startedAt, ended: run.endedAt ?? run.startedAt, cost: run.result?.costUsd ?? null, ...(run.session ? { session: run.session } : {}), ...(run.branch ? { origin: run.branch.origin } : {}) };
 }
 export async function readKeptRun(dir: string, id: string): Promise<Run | null> {
-  const folder = safeFolder(dir, id); if (!folder || exists(join(folder, REJECTED))) return null;
+  const folder = safeFolder(dir, id); if (!folder || rejected(folder)) return null;
   try { chmodSync(folder, 0o700); } catch { return null; }
   const value = parse(read(join(folder, RUN_FILE)));
   return isRun(value) && value.id === id ? { ...value, kept: true } : null;
@@ -314,7 +331,7 @@ export class RunLog {
   }
   private discardCredentialCollision(error: unknown): void {
     if (error instanceof CredentialCollision && safeFolder(this.init.dir, this.init.run.id)) {
-      try { atomic(join(this.folder, REJECTED), ""); rmSync(this.folder, { recursive: true }); } catch { /* a durable rejection marker excludes undeletable records */ }
+      rejectFolder(this.folder);
     }
   }
   private close(): void {
@@ -453,9 +470,7 @@ export async function closeOpen(dir: string, hint: (id: string) => Partial<Pick<
         chmodSync(folder, 0o700); await gzip(folder); closed.push(id);
       } catch (error) {
         if (error instanceof CredentialCollision) {
-          // Exclusion survives a later listing or restart even if removal fails.
-          atomic(join(folder, REJECTED), "");
-          try { await drop(dir, id); } catch { /* the rejection marker remains */ }
+          rejectFolder(folder);
         }
         // Other corrupt or unsafe candidates do not compromise recovery peers.
       }
