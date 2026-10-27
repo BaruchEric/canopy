@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 0b87546.
+**Status:** shipped 2026-10-27, landed on main as a fast-forward of this branch (41b4f79..5e7d955, the last commit being the review's fix pass). Written on main at 0b87546.
 
 **Goal:** A labeled GitHub or Forgejo issue starts the bundled issue-fix workflow, carries the issue into a branch run, reaches the GitHub PR path or Forgejo landing queue, writes the result back once, and appears in canopy issues.
 
