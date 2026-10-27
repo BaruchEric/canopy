@@ -333,3 +333,50 @@ describe("pushing a run's branch", () => {
     expect(await subjectsSince(r, "main")).toEqual(["c x.txt", "c y.txt"]);
   });
 });
+
+test("takeWarm stops after its move when ownership is revoked before checkout", async () => {
+  const r = await repo();
+  const warm = join(root, "guard-take", "warm-1");
+  const to = join(root, "guard-take", "run");
+  await detachedTree(r, warm, "main");
+  let commands = 0;
+  await expect(takeWarm(r, warm, to, "run/guarded", "main", () => {
+    if (++commands === 2) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(warm)).toBe(false);
+  expect(await currentBranch(to)).toBeNull();
+  expect(await revOf(r, "refs/heads/run/guarded")).toBeNull();
+  expect(await sh(r, "worktree", "list", "--porcelain")).toContain(await realpath(to));
+});
+
+test("detachedTree checks ownership after prune and before adding a checkout", async () => {
+  const r = await repo();
+  const dir = join(root, "guard-create", "warm-1");
+  let allowed = true;
+  let checks = 0;
+  await expect(detachedTree(r, dir, "main", () => {
+    checks++;
+    // Four boundaries: remove, mkdir, prune, then add.
+    if (checks === 4) allowed = false;
+    if (!allowed) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(join(dir, ".git"))).toBe(false);
+  expect(await sh(r, "worktree", "list", "--porcelain")).not.toContain(dir);
+});
+
+test("removeRunTree stops before pruning or deleting the branch after ownership loss", async () => {
+  const r = await repo();
+  const dir = join(root, "guard-remove", "run");
+  const ghost = join(root, "guard-remove", "ghost");
+  await addRunTree(r, dir, "run/guard-remove", "main");
+  await detachedTree(r, ghost, "main");
+  const realGhost = await realpath(ghost);
+  await rm(ghost, { recursive: true });
+  let checks = 0;
+  await expect(removeRunTree(r, dir, "run/guard-remove", () => {
+    if (++checks === 2) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(dir)).toBe(false);
+  expect(await revOf(r, "refs/heads/run/guard-remove")).not.toBeNull();
+  expect(await sh(r, "worktree", "list", "--porcelain")).toContain(realGhost);
+});

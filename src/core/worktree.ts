@@ -71,27 +71,36 @@ export async function addRunTree(repo: string, dir: string, branch: string, base
 }
 
 /** Adds a detached worktree at `head`, or moves an existing one there: the
- *  launcher's pull request builds. Returns the lines it ran, for the job's log. */
-export async function detachedTree(repo: string, dir: string, head: string): Promise<string[]> {
+ *  launcher's pull request builds. Returns the lines it ran, for the job's log.
+ *  assertOwner fences every mutation when a caller can lose ownership. */
+export async function detachedTree(repo: string, dir: string, head: string, assertOwner?: () => void): Promise<string[]> {
   if (existsSync(join(dir, ".git"))) {
+    assertOwner?.();
     const co = await git(dir, ["checkout", "--detach", head]);
     if (co.code !== 0) throw new Error(co.stderr.trim() || "checkout failed");
     return [`$ git checkout --detach ${head.slice(0, 10)} (in the worktree)`];
   }
+  assertOwner?.();
   await rm(dir, { recursive: true, force: true });
+  assertOwner?.();
   await mkdir(dirname(dir), { recursive: true });
+  assertOwner?.();
   await git(repo, ["worktree", "prune"]);
+  assertOwner?.();
   const wt = await git(repo, ["worktree", "add", "--detach", dir, head], 120_000);
   if (wt.code !== 0) throw new Error(wt.stderr.trim() || "worktree add failed");
   return [`$ git worktree add --detach ${dir} ${head.slice(0, 10)}`];
 }
 
 /** Moves a detached warm tree into a run path, then creates the run's new
- *  branch at `base`. `-b` refuses an existing ref rather than resetting it. */
-export async function takeWarm(repo: string, from: string, to: string, branch: string, base: string): Promise<void> {
+ *  branch at `base`. `-b` refuses an existing ref rather than resetting it.
+ *  A failed ownership assertion after moving leaves a detached destination. */
+export async function takeWarm(repo: string, from: string, to: string, branch: string, base: string, assertOwner?: () => void): Promise<void> {
   if (existsSync(to)) throw new Error(`worktree destination already exists: ${to}`);
+  assertOwner?.();
   const moved = await git(repo, ["worktree", "move", from, to], 60_000);
   if (moved.code !== 0) throw new Error(why(moved, "git worktree move"));
+  assertOwner?.();
   const checked = await git(to, ["checkout", "-q", "-b", branch, base], 120_000);
   if (checked.code !== 0) throw new Error(why(checked, "git checkout"));
 }
@@ -116,12 +125,21 @@ export async function midRebase(dir: string): Promise<boolean> {
 }
 
 /** Removes a worktree and, when named, its branch. A folder git no longer
- *  knows as a worktree is removed from disk all the same. */
-export async function removeRunTree(repo: string, dir: string, branch?: string): Promise<void> {
+ *  knows as a worktree is removed from disk all the same. assertOwner, when
+ *  supplied, runs before each mutation, including fallback disk removal. */
+export async function removeRunTree(repo: string, dir: string, branch?: string, assertOwner?: () => void): Promise<void> {
+  assertOwner?.();
   const r = await git(repo, ["worktree", "remove", "--force", dir], 60_000);
-  if (r.code !== 0) await rm(dir, { recursive: true, force: true });
+  if (r.code !== 0) {
+    assertOwner?.();
+    await rm(dir, { recursive: true, force: true });
+  }
+  assertOwner?.();
   await git(repo, ["worktree", "prune"]);
-  if (branch) await git(repo, ["branch", "-D", branch]);
+  if (branch) {
+    assertOwner?.();
+    await git(repo, ["branch", "-D", branch]);
+  }
 }
 
 /** Every run worktree folder on disk: `<root>/<repo key>/<run id>`. Warm
