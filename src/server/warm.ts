@@ -11,7 +11,7 @@ import { LOCKFILES, readGates, type Gates } from "../core/gates";
 import type { ProbeResult } from "../core/health";
 import type { LandingInfo, LockfileStamp, Repo, ServerEvent, WorktreesInfo } from "../core/types";
 import { isWarmName, nextRefill, overWant, parseWarmRecord, reconcile, sameStamp, staleWhy, WARM_MAX, WARM_RECORD, WARM_TICK, worktreesProbe, type WarmRecord } from "../core/warm";
-import { aheadOf, defaultBranch, detachedTree, listWarmTreeDirs, midRebase, removeRunTree, repoKey, revOf, takeWarm, treeSize, worktreesRoot } from "../core/worktree";
+import { aheadOf, currentBranch, defaultBranch, detachedTree, listWarmTreeDirs, midRebase, removeRunTree, repoKey, revOf, takeWarm, treeSize, worktreesRoot } from "../core/worktree";
 import type { CheckOutcome } from "./landing";
 
 export async function readLockfileStamp(dir: string): Promise<LockfileStamp | null> {
@@ -36,7 +36,8 @@ export interface WarmDeps {
   setup: (dir: string, line: string) => Promise<CheckOutcome>;
   landing: () => LandingInfo;
   landingBusy: (repoPath: string) => boolean;
-  removeOrphan: (dir: string) => Promise<void>;
+  /** Forward the assertion to LandingHub.orphan for every removal step. */
+  removeOrphan: (dir: string, assertOwner: () => void) => Promise<void>;
   freeBytes?: (dir: string) => Promise<number>;
   broadcast: (ev: ServerEvent) => void;
   now?: () => number;
@@ -143,6 +144,10 @@ export class WarmPool {
     if (dot?.isSymbolicLink() || dot?.isDirectory()) return "blocked";
     if (!s) return entry && !entry.includes("detached") ? "blocked" : "missing";
     if (!entry) {
+      // Bare repositories have no .git child. Git's own directory is
+      // enough to reject one before granting plain-folder deletion rights.
+      const repository = await git(dir, ["rev-parse", "--absolute-git-dir"]);
+      if (repository.code === 0 && real(repository.stdout.trim()) === realDir) return "blocked";
       const current = await pathStat(dir);
       if (dot || !current || current.isSymbolicLink() || current.dev !== s.dev || current.ino !== s.ino || this.live(dir)) return "blocked";
       return "plain";
@@ -455,10 +460,13 @@ export class WarmPool {
           const state = await this.state(repo.path, orphan.dir, true);
           this.check(owner);
           if (state === "blocked" || state === "missing" || this.live(orphan.dir)) continue;
+          const branch = state === "plain" ? null : await currentBranch(orphan.dir);
+          this.check(owner);
+          if (branch !== orphan.branch) continue;
           const listed = this.deps.landing().orphans.some((o) => o.dir === orphan.dir && o.repoPath === orphan.repoPath && o.branch === orphan.branch);
           if (!listed) continue;
           this.check(owner);
-          await this.deps.removeOrphan(orphan.dir);
+          await this.deps.removeOrphan(orphan.dir, () => this.check(owner));
           this.check(owner);
           removed.push(orphan.dir);
         }

@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
 import type { LandingInfo, Repo, ServerEvent, WorktreesInfo } from "../core/types";
 import { EMPTY_RECORD, WARM_AGE, WARM_BEHIND, WARM_FAILS, WARM_RETRY, WORKTREE_DISK_MIN, parseWarmRecord } from "../core/warm";
-import { currentBranch, repoKey, revOf, runTreeDir } from "../core/worktree";
-import type { CheckOutcome } from "./landing";
+import { addRunTree, currentBranch, detachedTree, repoAtPath, repoKey, revOf, runTreeDir } from "../core/worktree";
+import { LandingHub, type CheckOutcome } from "./landing";
 import { freeBytes, readLockfileStamp, WarmPool, type WarmDeps } from "./warm";
 
 let root = "";
@@ -83,7 +83,7 @@ function poolFor(w: Omit<World, "pool">, over: Partial<WarmDeps> = {}): WarmPool
     },
     landing: () => w.landing,
     landingBusy: () => w.busy,
-    removeOrphan: async (dir) => rm(dir, { recursive: true, force: true }),
+    removeOrphan: async (dir, assertOwner) => { assertOwner(); await rm(dir, { recursive: true, force: true }); },
     freeBytes: async () => w.free,
     broadcast: (ev) => w.events.push(ev),
     now: () => w.now,
@@ -101,7 +101,7 @@ const last = (w: World): WorktreesInfo => {
 };
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), "canopy-warm-"));
+  root = await realpath(await mkdtemp(join(tmpdir(), "canopy-warm-")));
 });
 afterAll(async () => {
   for (const pool of pools) pool.stop();
@@ -732,4 +732,85 @@ test("setup does not start if the landing queue becomes busy while git creates t
   expect(w.setups).toEqual([]);
   expect((await record(w)).trees).toEqual([]);
   expect(existsSync(slot(w, 1))).toBe(false);
+});
+
+
+function landingFor(w: World): LandingHub {
+  return new LandingHub({
+    dir: join(w.wts, "landing-records"),
+    worktrees: w.wts,
+    broadcast: (ev) => w.events.push(ev),
+    repo: (id) => id === w.repo.id ? w.repo : undefined,
+    repoByPath: (path) => repoAtPath([w.repo], path),
+    check: async () => ({ exit: 0, output: "" }),
+    startFix: () => { throw new Error("no fix expected"); },
+    runActive: () => false,
+    scenario: async () => ({ exit: 0, output: "" }),
+    judge: null,
+  });
+}
+
+test("independent bare repositories survive adopt, excess trimming and refill", async () => {
+  const w = await world();
+  for (const k of [1, 3]) {
+    await sh(w.repo.path, "init", "--bare", slot(w, k));
+    await sh(w.repo.path, "push", slot(w, k), "main:main");
+  }
+  const tip = await sh(w.repo.path, "rev-parse", "main");
+  await w.pool.adopt();
+  await w.pool.tick();
+  w.want.set(w.repo.path, 1);
+  await w.pool.tick();
+  for (const k of [1, 3]) {
+    expect(await sh(slot(w, k), "rev-parse", "--is-bare-repository")).toBe("true");
+    expect(await sh(slot(w, k), "rev-parse", "refs/heads/main")).toBe(tip);
+  }
+  expect(w.setups).toEqual([]);
+  expect((await record(w)).trees).toEqual([]);
+});
+
+for (const change of ["switch", "detach"]) {
+  test(`prune preserves an orphan after its cached branch changes by ${change}`, async () => {
+    const w = await world();
+    const dir = runTreeDir(w.repo.path, `orphan-${change}`, w.wts);
+    await addRunTree(w.repo.path, dir, "run/old", "main");
+    const tip = await sh(w.repo.path, "rev-parse", "refs/heads/run/old");
+    const hub = landingFor(w);
+    await hub.adopt();
+    const pool = poolFor(w, { landing: () => hub.info(), removeOrphan: (path, assertOwner) => hub.orphan(path, "remove", assertOwner) });
+    await pool.adopt();
+    expect((await pool.info()).repos[0]?.orphans).toEqual([dir]);
+    await sh(dir, "checkout", "-q", ...(change === "switch" ? ["-b", "run/new"] : ["--detach"]));
+    expect(await pool.prune(w.repo.path)).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+    expect(await currentBranch(dir)).toBe(change === "switch" ? "run/new" : null);
+    expect(await sh(w.repo.path, "rev-parse", "refs/heads/run/old")).toBe(tip);
+    hub.stop();
+  });
+}
+
+test("delegated orphan removal stops before prune, branch deletion and publication after epoch loss", async () => {
+  const w = await world();
+  const dir = runTreeDir(w.repo.path, "guarded-orphan", w.wts);
+  await addRunTree(w.repo.path, dir, "run/guarded-orphan", "main");
+  const tip = await sh(w.repo.path, "rev-parse", "refs/heads/run/guarded-orphan");
+  const hub = landingFor(w);
+  await hub.adopt();
+  const ghost = runTreeDir(w.repo.path, "ghost-after-enumeration", w.wts);
+  await detachedTree(w.repo.path, ghost, "main");
+  const realGhost = await sh(ghost, "rev-parse", "--show-toplevel");
+  await rm(ghost, { recursive: true });
+  const pool = poolFor(w, { landing: () => hub.info(), removeOrphan: (path, assertOwner) => hub.orphan(path, "remove", () => {
+    if (!existsSync(path)) pool.stop();
+    assertOwner();
+  }) });
+  await pool.adopt();
+  const events = w.events.length;
+  await expect(pool.prune(w.repo.path)).rejects.toThrow("ownership");
+  expect(existsSync(dir)).toBe(false);
+  expect(await sh(w.repo.path, "rev-parse", "refs/heads/run/guarded-orphan")).toBe(tip);
+  expect(await sh(w.repo.path, "worktree", "list", "--porcelain")).toContain(realGhost);
+  expect(hub.info().orphans.some((orphan) => orphan.dir === dir)).toBe(true);
+  expect(w.events).toHaveLength(events);
+  hub.stop();
 });
