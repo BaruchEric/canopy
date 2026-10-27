@@ -4,16 +4,21 @@
  *  every backend the home one lists. */
 
 import { inQueue, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../core/landing";
+import { withName } from "../core/touch";
 import type { BackendEntry, LandEntry, LandingInfo, LandingRun } from "../core/types";
 import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
 
 export const LAND_USAGE =
-  "usage: canopy land <run> [--approve <id>] [--backend URL]\n       canopy land --all [repo] [--backend URL]\n       canopy queue [repo] [--backend URL]";
+  "usage: canopy land <run> [--approve <id>] [--backend URL]\n       canopy land --all [repo] [--backend URL]\n       canopy queue [repo] [--backend URL]\n       canopy collisions [repo] [--backend URL]";
 
 const backWords = (e: LandEntry): string => (e.state === "red" ? `${e.gate ?? "a gate"} failed` : (e.reason ?? e.state));
 
 /** whether `repo` (an id or a folder's name) names this repo */
-const named = (repo: string | null, id: string, path: string): boolean => repo === null || id === repo || path.split("/").pop() === repo;
+const named = (repo: string | null, id: string, path: string): boolean => {
+  const localId = id.split("|").at(-1) ?? id;
+  const idName = localId.split(/[/:]/).at(-1);
+  return repo === null || id === repo || path.split("/").pop() === repo || idName === repo;
+};
 
 /** Where one backend's queues stand, a repo at a time: each entry in
  *  order, then what came back and why, then ready runs not queued yet with
@@ -37,10 +42,28 @@ export function queueLines(info: LandingInfo, repo: string | null, backend = "")
     for (const e of queued) {
       const marks = [e.auto ? "joined on its own" : "", e.approved ? "approved" : "", e.reason ?? ""].filter(Boolean).join(", ");
       out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}${marks ? `  ${marks}` : ""}`);
+      if (e.overlap) out.push(`    overlaps with ${e.overlap.with}: ${e.overlap.paths.join(", ")}`);
     }
     for (const e of back) out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}  ${backWords(e).split("\n").pop() ?? ""}`);
     for (const r of ready) out.push(`  ${"ready".padEnd(16)} ${r.branch}  ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
     for (const r of stopped) out.push(`  ${"stopped".padEnd(16)} ${r.branch}  can land: ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
+  }
+  return out;
+}
+
+/** A repo at a time: one line for each pair editing the same files now. */
+export function collisionLines(info: LandingInfo, repo: string | null, backend = ""): string[] {
+  const where = backend ? ` on ${backend}` : "";
+  const collisions = info.collisions ?? [];
+  const repos = [...new Set(collisions.map((collision) => collision.repoId))].sort();
+  const out: string[] = [];
+  for (const id of repos) {
+    const path = info.entries.find((entry) => entry.repoId === id)?.repoPath ?? info.runs.find((run) => run.repoId === id)?.repoPath ?? "";
+    if (!named(repo, id, path)) continue;
+    out.push(`${id}${where}`);
+    for (const collision of collisions.filter((candidate) => candidate.repoId === id)) {
+      out.push(`  ${collision.name} and ${withName(collision.with)}: ${collision.paths.join(", ")}`);
+    }
   }
   return out;
 }
@@ -62,7 +85,7 @@ export function approveLines(rec: LandingRun): string[] {
   ];
 }
 
-export async function landCommand(cmd: "land" | "queue", argv: string[], { fail }: { fail: (msg: string) => never }): Promise<void> {
+export async function landCommand(cmd: "land" | "queue" | "collisions", argv: string[], { fail }: { fail: (msg: string) => never }): Promise<void> {
   const args = [...argv];
   const given = take(args, "--backend");
   const home = (given ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
@@ -113,9 +136,12 @@ export async function landCommand(cmd: "land" | "queue", argv: string[], { fail 
       console.log(`${t.name}: ${err instanceof Unreachable ? `did not answer: ${err.message}` : errText(err)}`);
       continue;
     }
-    const lines = queueLines(info, repo, targets.length > 1 ? t.name : "");
+    const lines = cmd === "queue" ? queueLines(info, repo, targets.length > 1 ? t.name : "") : collisionLines(info, repo, targets.length > 1 ? t.name : "");
     for (const line of lines) console.log(line);
     any ||= lines.length > 0;
   }
-  if (!any) console.log(repo ? `nothing queued, sent back or ready in ${repo}` : "nothing queued, sent back or ready");
+  if (!any) {
+    if (cmd === "collisions") console.log(repo ? `no collisions in ${repo}` : "no collisions");
+    else console.log(repo ? `nothing queued, sent back or ready in ${repo}` : "nothing queued, sent back or ready");
+  }
 }

@@ -79,6 +79,7 @@ canopy land <run>                  # a ready branch run into its repo's landing 
 canopy land <run> --approve <id>   # land a run that touches sensitive files, with the id `canopy land <run>` printed
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
+canopy collisions [repo]           # runs on one repo editing the same files right now, and what they share; a word, never a hold
 canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
 canopy scenarios <repo> add <name> [--judge] [--run CMD]   # a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
 canopy scenarios <repo> run [<run>]         # run the set against a branch run's worktree, else against the main checkout

@@ -110,6 +110,7 @@ const COMMANDS = new Set([
   "mcp",
   "land",
   "queue",
+  "collisions",
   "scenarios",
   "pr",
   "prs",
@@ -860,6 +861,7 @@ export async function main(argv: string[]): Promise<void> {
       return authCommand(args, { fail });
     case "land":
     case "queue":
+    case "collisions":
       return landCommand(cmd, args, { fail });
     case "scenarios":
       return scenariosCommand(args, { fail });

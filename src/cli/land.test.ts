@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { advance, enqueue } from "../core/landing";
+import { touchedOf, type Collision } from "../core/touch";
 import type { LandingInfo, LandingRun, RunReview } from "../core/types";
-import { approveLines, queueLines } from "./land";
+import { approveLines, collisionLines, queueLines } from "./land";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -36,6 +37,18 @@ test("a repo's queue in order, then what came back, then what is ready", () => {
 });
 
 const sorted = (verdict: RunReview["verdict"], over: Partial<RunReview> = {}): RunReview => ({ verdict, files: [], base: "b0b0b0b0b0b0b0", head: "h1h1h1h1h1h1h1", at: 1, ...over });
+
+test("a queued entry's overlap under its line, and canopy collisions", () => {
+  const working = [touchedOf({ id: "k", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["a.ts"] } }] })];
+  const entries = enqueue([], rec("a", { review: sorted("land", { files: [{ path: "a.ts", cls: "logic" }, { path: "b.ts", cls: "logic" }] }) }), 1, undefined, working);
+  const c: Collision = { id: "x+checkout", repoId: "dev-tools/canopy", run: "x", name: "run/x-x", with: { kind: "checkout" }, paths: ["c.ts"], at: 1 };
+  const info: LandingInfo = { runs: [rec("a")], entries, orphans: [], collisions: [c] };
+  expect(queueLines(info, null)).toEqual(["dev-tools/canopy", "  queued 1st       run/x-a", "    overlaps with Ask run k: a.ts"]);
+  expect(collisionLines(info, null)).toEqual(["dev-tools/canopy", "  run/x-x and your uncommitted changes: c.ts"]);
+  expect(collisionLines(info, "canopy", "mini")).toEqual(["dev-tools/canopy on mini", "  run/x-x and your uncommitted changes: c.ts"]);
+  expect(collisionLines({ ...info, runs: [], entries: [] }, "canopy")).toEqual(["dev-tools/canopy", "  run/x-x and your uncommitted changes: c.ts"]);
+  expect(collisionLines(info, "other")).toEqual([]);
+});
 
 test("each ready run's verdict, and an entry that joined on its own", () => {
   const entries = [...enqueue([], rec("a"), 1, { auto: true }), ...enqueue([], rec("b"), 2, { approved: "p1" })];
