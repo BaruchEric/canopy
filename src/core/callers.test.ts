@@ -58,7 +58,7 @@ describe("needs", () => {
   });
 
   test("repos actions key on the action", () => {
-    for (const a of ["run", "pull", "commit", "flow", "refresh"]) {
+    for (const a of ["run", "pull", "commit", "flow", "refresh", "harness"]) {
       expect(needs("POST", `/api/repos/${a}`)).toBe("operate");
     }
     for (const a of ["peer", "launch", "archive", "build", "launcher"]) {

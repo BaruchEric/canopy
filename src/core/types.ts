@@ -271,6 +271,9 @@ export interface Repo {
   archived?: "canopy" | "github";
   /** set on a repo the user starred in canopy */
   favorite?: true;
+  /** set on a repo that counts as the harness (FR-044), not the agent
+   *  harness (`Harness`) that runs in it */
+  harness?: true;
   /** where a local checkout stands against the shared repo spec (core/spec.ts);
    *  absent on a remote or forge repo, whose files the scan does not read */
   spec?: SpecState;
@@ -646,6 +649,9 @@ export interface CanopyConfig {
   archived: string[];
   /** the repos starred in canopy, by path like agents */
   favorites: string[];
+  /** the repos that count as the harness, by path like favorites; null until
+   *  the first start seeds it from canopy's own package name */
+  harness: string[] | null;
   /** whether the server fetches the user's own local repos in the background
    *  (every REMOTE_REFRESH), so behind counts and remote tips stay current */
   fetch: boolean;

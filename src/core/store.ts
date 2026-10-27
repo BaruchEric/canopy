@@ -68,6 +68,7 @@ const defaults = (): CanopyConfig => ({
   capacity: normalizeCapacity(undefined),
   archived: [],
   favorites: [],
+  harness: null,
   fetch: true,
   keepShells: false,
   tailchanNotify: false,
@@ -190,6 +191,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     capacity: normalizeCapacity(cfg.capacity),
     archived: paths(cfg.archived),
     favorites: paths(cfg.favorites),
+    harness: Array.isArray(cfg.harness) ? paths(cfg.harness) : null,
     fetch: typeof cfg.fetch === "boolean" ? cfg.fetch : base.fetch,
     keepShells: typeof cfg.keepShells === "boolean" ? cfg.keepShells : base.keepShells,
     tailchanNotify: typeof cfg.tailchanNotify === "boolean" ? cfg.tailchanNotify : base.tailchanNotify,
@@ -446,6 +448,24 @@ export async function setFavorite(path: string, on: boolean): Promise<string[]> 
     const rest = cfg.favorites.filter((p) => p !== path);
     cfg.favorites = on ? [...rest, path] : rest;
     return cfg.favorites;
+  });
+}
+
+/** Marks or unmarks a repo as the harness by path. Returns every harness path. */
+export async function setHarness(path: string, on: boolean): Promise<string[]> {
+  return withConfig((cfg) => {
+    const rest = (cfg.harness ?? []).filter((p) => p !== path);
+    cfg.harness = on ? [...rest, path] : rest;
+    return cfg.harness;
+  });
+}
+
+/** Writes the initial harness list only before the config has been seeded. */
+export async function seedHarnessList(list: string[]): Promise<string[]> {
+  return withConfig((cfg) => {
+    if (cfg.harness !== null) return cfg.harness;
+    cfg.harness = paths(list);
+    return cfg.harness;
   });
 }
 

@@ -14,6 +14,8 @@ import {
   saveConfig,
   setArchived,
   setFavorite,
+  seedHarnessList,
+  setHarness,
   setAwake,
   setKeepShells,
   setProfile,
@@ -48,6 +50,50 @@ describe("config store", () => {
     expect(cfg.port).toBe(7850);
     expect(cfg.workspaces).toEqual([]);
     expect(cfg.fetch).toBe(true);
+    expect(cfg.harness).toBeNull();
+  });
+
+  test("normalizes a missing or malformed harness list and keeps an explicit empty list", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, JSON.stringify({ favorites: ["/star"] }));
+    expect((await loadConfig()).harness).toBeNull();
+    await writeFile(path, JSON.stringify({ harness: ["/a", "", "/a", 7, "/b"] }));
+    expect((await loadConfig()).harness).toEqual(["/a", "/b"]);
+    await writeFile(path, JSON.stringify({ harness: [] }));
+    expect((await loadConfig()).harness).toEqual([]);
+  });
+
+  test("setHarness starts from an unseeded list and persists each path once", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, JSON.stringify({ harness: null }));
+    expect(await setHarness("/dev/x", true)).toEqual(["/dev/x"]);
+    expect(await setHarness("/dev/x", true)).toEqual(["/dev/x"]);
+    expect(await setHarness("ssh://mini/dev/y", true)).toEqual(["/dev/x", "ssh://mini/dev/y"]);
+    expect(await setHarness("/dev/x", false)).toEqual(["ssh://mini/dev/y"]);
+    expect((await loadConfig()).harness).toEqual(["ssh://mini/dev/y"]);
+  });
+
+  test("seeds only a null list and never reseeds an explicit empty list", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, JSON.stringify({ harness: null }));
+    expect(await seedHarnessList(["/canopy"])).toEqual(["/canopy"]);
+    expect(await seedHarnessList(["/later-canopy"])).toEqual(["/canopy"]);
+    await writeFile(path, JSON.stringify({ harness: [] }));
+    expect(await seedHarnessList(["/would-reseed"])).toEqual([]);
+    expect((await loadConfig()).harness).toEqual([]);
+  });
+
+  test("a malformed config can be seeded as an explicit empty list", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, "not json");
+    expect((await loadConfig()).harness).toBeNull();
+    expect((await readdir(dir)).some((name) => name.startsWith("config.json.corrupt-"))).toBe(true);
+    expect(await seedHarnessList([])).toEqual([]);
+    expect(await seedHarnessList(["/later-canopy"])).toEqual([]);
+    expect((await loadConfig()).harness).toEqual([]);
+    for (const name of await readdir(dir)) {
+      if (name.startsWith("config.json.corrupt-")) await rm(join(dir, name));
+    }
   });
 
   test("fetch is off only when the file says so in so many words", async () => {
