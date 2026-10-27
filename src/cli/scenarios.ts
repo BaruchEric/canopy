@@ -34,9 +34,10 @@ export function runLines(run: ScenarioRun): string[] {
 export async function scenariosCommand(argv: string[], { fail }: { fail: (msg: string) => never }): Promise<void> {
   const args = [...argv];
   const given = take(args, "--backend");
+  // the bare flag first, so `--run --judge` leaves --run with no shell line
+  const judge = has(args, "--judge");
   const runFlag = args.includes("--run");
   const runCmd = take(args, "--run");
-  const judge = has(args, "--judge");
   const home = (given ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
   const target: Target = { name: "home", urls: [home] };
   const failed = (err: unknown): never => fail(err instanceof Unreachable ? `home did not answer: ${err.message}` : errText(err));

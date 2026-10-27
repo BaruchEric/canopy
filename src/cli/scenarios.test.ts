@@ -47,6 +47,10 @@ test("add with --run and no shell line fails before asking the backend", async (
   const got = await drive(["r", "add", "n", "--run"], { "/api/scenarios": { path: "/x/n.md" } });
   expect(got.failed).toBe("--run needs a shell line");
   expect(got.posted).toEqual([]);
+  // a flag right after --run is not its shell line
+  const before = await drive(["r", "add", "n", "--run", "--judge"], { "/api/scenarios": { path: "/x/n.md" } });
+  expect(before.failed).toBe("--run needs a shell line");
+  expect(before.posted).toEqual([]);
 });
 
 test("add --judge says a judge scenario is listed but not run yet", async () => {
