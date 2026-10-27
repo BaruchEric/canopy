@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
 import type { BranchPush, ShipBundle, Shipper, ShipSource } from "./shipper";
 import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
-import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "./workflows";
+import { BUNDLED_DIR, findWorkflow, loadWorkflows, readFlowModes } from "./workflows";
 import { branchPushRefusal, holdsSlot } from "./sprout";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
 import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, PendingRework, Repo, RunAnswerRecord, Sprout, SproutWork, Workflow } from "./types";
@@ -24,7 +24,7 @@ const CLARIFY: Workflow = {
   notePlaceholder: "",
   noteRequired: false,
   listed: false,
-  steps: [{ name: "Clarify", tools: ["Edit"], turns: 40, check: null, gate: "continue", body: "Clarify.", retries: 0, back: "Clarify", evidence: [] }],
+  steps: [{ name: "Clarify", tools: ["Edit"], turns: 40, check: null, gate: "continue", body: "Clarify.", retries: 0, back: "Clarify", evidence: [], after: [], when: ["always"], mode: "auto" }],
   budget: { runs: 2, hours: 0.34 },
   source: "bundled",
   file: "/clarify.md",
@@ -729,6 +729,34 @@ Task: planted.
 `;
 
 describe("stage workflows", () => {
+  test("a seed's committed modes file is never read as incubator policy", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "canopy-seed-modes-"));
+    const was = process.env["CANOPY_CONFIG_DIR"];
+    process.env["CANOPY_CONFIG_DIR"] = join(tmp, "config");
+    try {
+      const root = join(tmp, "root");
+      const seed = join(root, "_incubator", "coin-counter");
+      mkdirSync(join(seed, ".canopy"), { recursive: true });
+      writeFileSync(join(seed, ".canopy", "workflows.json"), "[]");
+      await Bun.$`git -C ${seed} init -q -b main`.quiet();
+      await Bun.$`git -C ${seed} add .`.quiet();
+      await Bun.$`git -C ${seed} -c user.name=test -c user.email=test@example.test commit -qm modes`.quiet();
+      await expect(readFlowModes(seed)).rejects.toThrow(".canopy/workflows.json must be an object");
+      const w = world({ root, workflow: incubatorWorkflow, rescan: async () => {},
+        repo: (id) => ({ id, name: id, path: join(root, id), group: "", source: "root", status: null }),
+      });
+      const s = await w.inc.create(intake({ text: "coin counter" }));
+      await w.inc.idle();
+      expect(s.seedPath).toBe(seed);
+      expect(w.flows.started[0]?.workflow.source).toBe("bundled");
+      expect(w.flows.started[0]?.workflow.steps.every((step) => step.mode === "auto")).toBe(true);
+    } finally {
+      if (was === undefined) delete process.env["CANOPY_CONFIG_DIR"];
+      else process.env["CANOPY_CONFIG_DIR"] = was;
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test("a seed's own .canopy/workflows/clarify.md never replaces the bundled one", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "canopy-incubator-"));
     const was = process.env["CANOPY_CONFIG_DIR"];
@@ -782,6 +810,26 @@ describe("answers", () => {
     await w.inc.idle();
     return now(w, s.id);
   }
+
+  test("a stage with a manual step parks before any flow starts", async () => {
+    const w = world();
+    w.workflows.set("scout", { ...SCOUT, steps: SCOUT.steps.map((s) => ({ ...s, mode: "manual" })) });
+    const s = await asking(w);
+    await w.inc.answer(s.id, null);
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("scout's Clarify step waits for a go, made manual by its workflow file, and no one gives one in an incubator stage");
+    expect(w.flows.started.map((x) => x.workflow.name)).toEqual(["clarify"]);
+  });
+
+  test("a stage that asks parks before any flow starts", async () => {
+    const w = world();
+    w.workflows.set("scout", { ...SCOUT, steps: SCOUT.steps.map((s) => ({ ...s, gate: "ask" })) });
+    const s = await asking(w);
+    await w.inc.answer(s.id, null);
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBe("scout's Clarify step asks before the next one starts, and no one answers an incubator stage");
+    expect(w.flows.started.map((x) => x.workflow.name)).toEqual(["clarify"]);
+  });
 
   test("answers become an input and the end of intent.md, then research", async () => {
     const w = world();
@@ -1859,6 +1907,24 @@ describe("retro", () => {
     await w.inc.idle();
     return now(w, id);
   };
+
+  test("manual or asking retro stages fail before starting a flow", async () => {
+    const variants: Workflow[] = [
+      { ...RETRO, steps: RETRO.steps.map((step) => ({ ...step, mode: "manual" })) },
+      { ...RETRO, steps: RETRO.steps.map((step) => ({ ...step, gate: "ask" })) },
+    ];
+    for (const workflow of variants) {
+      const w = retroWorld();
+      w.workflows.set("retro", workflow);
+      const s = await clarifying(w);
+      await w.inc.stop(s.id);
+      await w.inc.idle();
+      const after = now(w, s.id);
+      expect(after.retro?.state).toBe("failed");
+      expect(after.retro?.reason).toContain(workflow.steps[0]?.mode === "manual" ? "waits for a go" : "no one answers an incubator stage");
+      expect(w.flows.started.map((entry) => entry.workflow.name)).toEqual(["clarify"]);
+    }
+  });
 
   test("a stop brings a retro on the seed, reading only its shared record; the sprout stays stopped and holds no slot", async () => {
     const w = retroWorld();

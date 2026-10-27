@@ -5,15 +5,20 @@
  *  `agent: <profile>` names the agent profile a step's run starts with, in
  *  the step's key block, or in the frontmatter for every step that names
  *  none of its own. It beats the repo's routes the way a launch pick does;
- *  without one a step follows the repo's `flow` route. */
+ *  without one a step follows the repo's `flow` route. Steps can name earlier
+ *  dependencies, conditions and a manual mode. */
 
 import { TOOL_SETS } from "./actions";
 import { isProfileName } from "./route";
 import {
   GATE_KINDS,
+  STEP_MODES,
+  STEP_WHENS,
   WORKFLOW_WHENS,
   type FlowBudget,
   type GateKind,
+  type StepMode,
+  type StepWhen,
   type Workflow,
   type WorkflowEntry,
   type WorkflowSource,
@@ -75,6 +80,53 @@ function tools(v: string | undefined): string[] {
   return [...new Set(out)];
 }
 
+export const READ_ONLY_SETS = ["git-read", "read"] as const;
+
+const READ_ONLY_RULES: ReadonlySet<string> = new Set(READ_ONLY_SETS.flatMap((name) => TOOL_SETS[name] ?? []));
+
+/** Whether every expanded permission rule is in one of the read-only sets. */
+export function readOnlyTools(rules: readonly string[]): boolean {
+  return rules.every((rule) => READ_ONLY_RULES.has(rule));
+}
+
+/** Whether the step uses read-only tools and has no writing check. */
+export function readOnlyStep(step: Pick<WorkflowStep, "tools" | "check">): boolean {
+  return readOnlyTools(step.tools) && (step.check === null || step.check === "@gates");
+}
+
+/** A workflow record written before graph fields became required. */
+export type RecordedWorkflow = Omit<Workflow, "steps"> & {
+  steps: (Omit<WorkflowStep, "after" | "when" | "mode"> & Partial<Pick<WorkflowStep, "after" | "when" | "mode">>)[];
+};
+
+/** Fill graph defaults for workflow records written before those fields existed. */
+export function chained(wf: RecordedWorkflow): Workflow {
+  const steps: WorkflowStep[] = wf.steps.map((step, index): WorkflowStep => {
+    const previous = wf.steps[index - 1];
+    return {
+      ...step,
+      after: step.after ?? (previous ? [previous.name] : []),
+      when: step.when ?? ["always"],
+      mode: step.mode ?? "auto",
+    };
+  });
+  return { ...wf, steps };
+}
+
+/** Why an unattended workflow asks for a person or a manual release. */
+export function unattendedRefusal(wf: Workflow, where: string): string | null {
+  for (const step of wf.steps) {
+    if (step.gate === "ask") {
+      return `${wf.name}'s ${step.name} step asks before the next one starts, and no one answers ${where}`;
+    }
+    if (step.mode === "manual") {
+      const by = step.modeFrom === "repo" ? "the repo's .canopy/workflows.json" : "its workflow file";
+      return `${wf.name}'s ${step.name} step waits for a go, made manual by ${by}, and no one gives one in ${where}`;
+    }
+  }
+  return null;
+}
+
 /** An `agent:` line's profile name, or undefined when there is none. */
 function agentKey(v: string | undefined, what: string): string | undefined {
   if (v === undefined || v === "") return undefined;
@@ -114,7 +166,26 @@ function budgetKey(v: string | undefined): FlowBudget | null {
   return { runs, hours };
 }
 
-function step(name: string, lines: string[], agent: string | undefined): WorkflowStep {
+interface ParsedStep {
+  step: Omit<WorkflowStep, "after" | "when">;
+  after: string | undefined;
+  when: string | undefined;
+}
+
+function commaWords(value: string): string[] {
+  const seen = new Set<string>();
+  const words: string[] = [];
+  for (const part of value.split(",")) {
+    const word = part.trim();
+    if (word && !seen.has(word)) {
+      seen.add(word);
+      words.push(word);
+    }
+  }
+  return words;
+}
+
+function step(name: string, lines: string[], agent: string | undefined): ParsedStep {
   const { keys, rest } = keyBlock(lines);
   const turnsRaw = keys.get("turns");
   const turns = turnsRaw === undefined || turnsRaw === "" ? DEFAULT_TURNS : Number(turnsRaw);
@@ -126,28 +197,90 @@ function step(name: string, lines: string[], agent: string | undefined): Workflo
   const profile = agentKey(keys.get("agent"), `step ${name}: agent`) ?? agent;
   const evidence = evidenceKey(keys.get("evidence"), name);
   if (evidence.length > 0 && gate !== "judge") throw new Bad(`step ${name}: evidence is only read by gate: judge`);
+  const mode: StepMode = oneOf(keys.get("mode"), STEP_MODES, `step ${name}: mode`, "auto");
   return {
-    name,
-    tools: tools(keys.get("tools")),
-    turns,
-    check,
-    gate,
-    body,
-    retries: retriesKey(keys.get("retries"), name),
-    back: keys.get("back") || name,
-    evidence,
-    ...(profile ? { agent: profile } : {}),
+    step: {
+      name,
+      tools: tools(keys.get("tools")),
+      turns,
+      check,
+      gate,
+      body,
+      retries: retriesKey(keys.get("retries"), name),
+      back: keys.get("back") || name,
+      evidence,
+      mode,
+      ...(profile ? { agent: profile } : {}),
+    },
+    after: keys.get("after"),
+    when: keys.get("when"),
   };
+}
+
+function afterSteps(parsed: ParsedStep, index: number, steps: ParsedStep[], positions: ReadonlyMap<string, number>): string[] {
+  const raw = parsed.after;
+  const names = raw === undefined || raw.trim() === "" ? [] : commaWords(raw);
+  if (names.length === 0) {
+    const previous = steps[index - 1];
+    return previous ? [previous.step.name] : [];
+  }
+  for (const name of names) {
+    const position = positions.get(name);
+    if (position === undefined) throw new Bad(`step ${parsed.step.name}: after names no step called ${name}`);
+    if (position === index) throw new Bad(`step ${parsed.step.name}: after names itself`);
+    if (position > index) throw new Bad(`step ${parsed.step.name}: after names a later step, ${name}`);
+  }
+  return names;
+}
+
+function hasPrerequisite(
+  after: string[],
+  steps: ParsedStep[],
+  positions: ReadonlyMap<string, number>,
+  matches: (step: ParsedStep["step"]) => boolean,
+): boolean {
+  return after.some((name) => {
+    const position = positions.get(name);
+    const predecessor = position === undefined ? undefined : steps[position];
+    return predecessor !== undefined && matches(predecessor.step);
+  });
+}
+
+function whenSteps(parsed: ParsedStep, after: string[], steps: ParsedStep[], positions: ReadonlyMap<string, number>): StepWhen[] {
+  const words = parsed.when === undefined ? [] : commaWords(parsed.when);
+  const explicit = words.length > 0;
+  const conditions = explicit ? words : ["always"];
+  const when: StepWhen[] = [];
+  for (const word of conditions) {
+    const condition = STEP_WHENS.find((candidate) => candidate === word);
+    if (!condition) throw new Bad(`step ${parsed.step.name}: when must be one of ${STEP_WHENS.join(", ")}, not ${word}`);
+    when.push(condition);
+  }
+  if (explicit && after.length === 0) {
+    throw new Bad(`step ${parsed.step.name}: when needs a step before it to wait on`);
+  }
+  for (const condition of when) {
+    if (condition.startsWith("verdict ") && !hasPrerequisite(after, steps, positions, (step) => step.gate === "verdict")) {
+      throw new Bad(`step ${parsed.step.name}: when ${condition} needs a step before it with gate: verdict`);
+    }
+    if (condition.startsWith("judge ") && !hasPrerequisite(after, steps, positions, (step) => step.gate === "judge")) {
+      throw new Bad(`step ${parsed.step.name}: when ${condition} needs a step before it with gate: judge`);
+    }
+    if (condition.startsWith("check ") && !hasPrerequisite(after, steps, positions, (step) => step.check !== null)) {
+      throw new Bad(`step ${parsed.step.name}: when ${condition} needs a step before it with a check`);
+    }
+  }
+  return when;
 }
 
 function steps(body: string, agent: string | undefined): WorkflowStep[] {
   const lines = body.split("\n");
-  const out: WorkflowStep[] = [];
+  const out: ParsedStep[] = [];
   let name: string | null = null;
   let buf: string[] = [];
   const flush = () => {
     if (name === null) return;
-    if (out.some((s) => s.name === name)) throw new Bad(`step ${name} appears twice`);
+    if (out.some((s) => s.step.name === name)) throw new Bad(`step ${name} appears twice`);
     out.push(step(name, buf, agent));
   };
   for (const line of lines) {
@@ -162,15 +295,22 @@ function steps(body: string, agent: string | undefined): WorkflowStep[] {
   }
   flush();
   if (out.length === 0) throw new Bad("no steps: a workflow needs at least one ## heading");
+  const positions = new Map<string, number>();
+  out.forEach((s, i) => positions.set(s.step.name, i));
   out.forEach((s, i) => {
-    const to = out.findIndex((t) => t.name === s.back);
-    if (to === -1) throw new Bad(`step ${s.name}: back names no step called ${s.back}`);
-    if (to > i) throw new Bad(`step ${s.name}: back must name this step or an earlier one, not ${s.back}`);
-    if (!s.body && s.retries > 0 && to === i) {
-      throw new Bad(`step ${s.name}: a check-only step's retries need back: an earlier step`);
+    const to = positions.get(s.step.back);
+    if (to === undefined) throw new Bad(`step ${s.step.name}: back names no step called ${s.step.back}`);
+    if (to > i) throw new Bad(`step ${s.step.name}: back must name this step or an earlier one, not ${s.step.back}`);
+    if (!s.step.body && s.step.retries > 0 && to === i) {
+      throw new Bad(`step ${s.step.name}: a check-only step's retries need back: an earlier step`);
     }
   });
-  return out;
+
+  return out.map((parsed, i) => {
+    const after = afterSteps(parsed, i, out, positions);
+    const when = whenSteps(parsed, after, out, positions);
+    return { ...parsed.step, after, when };
+  });
 }
 
 export function parseWorkflow(

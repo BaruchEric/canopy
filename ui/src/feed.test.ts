@@ -261,6 +261,11 @@ describe("describeEvent", () => {
     expect(describeEvent({ type: "flow", flow: gated }, snap({ flows: { f1: first } }), 5).map((l) => l.text)).toEqual([
       "step test gated: tests failed",
     ]);
+    const beforeHeld = flow({ steps: [{ name: "test", status: "passed" }, { name: "push", status: "pending" }] });
+    const held = flow({ status: "gated", steps: [{ name: "test", status: "passed" }, { name: "push", status: "held", reason: "push waits for your go" }] });
+    expect(describeEvent({ type: "flow", flow: held }, snap({ flows: { f1: beforeHeld } }), 5).map((l) => l.text)).toEqual([
+      "step push held: push waits for your go",
+    ]);
     const done = flow({ status: "done", outcome: "changed", steps: [{ name: "test", status: "passed" }, { name: "push", status: "passed" }] });
     expect(describeEvent({ type: "flow", flow: done }, snap({ flows: { f1: gated } }), 5).map((l) => l.text)).toEqual([
       "step test passed",

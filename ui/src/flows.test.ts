@@ -24,7 +24,7 @@ describe("flowWord", () => {
 describe("stepWord", () => {
   test.each<[FlowStep["status"], string]>([
     ["pending", "waiting its turn"], ["running", "the agent is working"], ["checking", "running the check"],
-    ["gated", "waiting for you"], ["passed", "passed"], ["failed", "failed"], ["skipped", "skipped"],
+    ["gated", "waiting for you"], ["held", "waiting for your go"], ["passed", "passed"], ["failed", "failed"], ["skipped", "skipped"],
   ])("%s", (status, word) => {
     expect(stepWord({ name: "x", status })).toBe(word);
   });

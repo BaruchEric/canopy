@@ -339,6 +339,7 @@ function flowLines(ev: Extract<ServerEvent, { type: "flow" }>, prev: FeedSnapsho
     if (st.status === "running") say(`step ${st.name} running`);
     else if (st.status === "checking") say(`step ${st.name} checking`);
     else if (st.status === "gated") say(`step ${st.name} gated${why}`);
+    else if (st.status === "held") say(`step ${st.name} held${why}`);
     else if (st.status === "passed") say(`step ${st.name} passed`);
     else if (st.status === "failed") say(`step ${st.name} failed${why}`);
     else if (st.status === "skipped") say(`step ${st.name} skipped${why}`);

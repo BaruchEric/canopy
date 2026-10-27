@@ -38,11 +38,6 @@ P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Opt
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
 Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25).
 
-### FR-034 · Workflow graph: parallel, conditional and manual steps
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)
-Three optional step keys in the markdown format that exists: `after:` (steps ready together run side by side, read-only ones only), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
-Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
-
 ### FR-033 · Best-of-N branch runs
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
 The pre-flight runs one note two or three times, across profiles if asked; the members share a group, gates and FR-032 scenarios dry-run on each ready one, a read-only `compare` run ranks them, and the winner is offered "land" by its own sort while the rest drop when it lands. A group sheet shows the members side by side with their diffstat, gates, score and cost. `canopy run --times`.
@@ -93,6 +88,12 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-034 · Workflow graph: parallel, conditional and manual steps
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)
+Three optional step keys in the markdown format that exists: `after:` (ready steps run side by side, with at most one writer), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
+Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
+Plan 1 implemented locally 2026-10-27: parser keys, graph engine, HEAD modes and unattended refusal. Combined batch verification and live checks remain pending; not shipped or deployed. Plan 2 (graph view, graph API and workflow CLI) and plan 3 (bundled workflows) remain open.
 
 ### FR-040 · Pre-edit collision warnings
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)

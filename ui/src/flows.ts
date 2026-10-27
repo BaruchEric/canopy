@@ -11,6 +11,7 @@ export const STEP_WORD: Record<FlowStep["status"], string> = {
   running: "the agent is working",
   checking: "running the check",
   gated: "waiting for you",
+  held: "waiting for your go",
   passed: "passed",
   failed: "failed",
   skipped: "skipped",
