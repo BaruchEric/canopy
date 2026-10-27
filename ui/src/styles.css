@@ -8098,6 +8098,7 @@ body:has(.focus-grip.se.dragging) {
 .step-seg .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hair); flex: none; }
 .step-seg.st-running .dot, .step-seg.st-checking .dot { background: var(--sky); }
 .step-seg.st-gated .dot { background: var(--lichen); }
+.step-seg.st-held .dot { background: var(--lichen); }
 .step-seg.st-passed .dot { background: var(--moss); }
 .step-seg.st-failed .dot { background: var(--rust); }
 /* the agent profile a step names, after its name */

@@ -625,7 +625,7 @@ describe("pruneEvents", () => {
 });
 
 describe("triggerPlan", () => {
-  const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({ name: "Fix", tools: ["Read"], turns: 60, check: null, gate: "continue", body: "fix it", retries: 0, back: "Fix", evidence: [], ...over });
+  const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({ name: "Fix", tools: ["Read"], turns: 60, check: null, gate: "continue", body: "fix it", retries: 0, back: "Fix", evidence: [], after: [], when: ["always"], mode: "auto", ...over });
   const wf = (steps: WorkflowStep[]): Workflow => ({ name: "sentry-fix", steps }) as Workflow;
   test("one plain step with a prompt is a trigger's run", () => {
     expect(triggerPlan(wf([step()]))).toEqual({ kind: "run", task: "fix it", tools: ["Read"], turns: 60 });

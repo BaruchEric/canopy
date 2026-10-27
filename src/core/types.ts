@@ -1946,6 +1946,11 @@ export type WorkflowWhen = (typeof WORKFLOW_WHENS)[number];
 export const GATE_KINDS = ["continue", "ask", "verdict", "judge"] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 
+export const STEP_WHENS = ["always", "verdict done", "verdict partial", "verdict blocked", "judge meets", "judge partly", "judge misses", "check pass", "check fail", "changed", "unchanged", "skipped"] as const;
+export type StepWhen = (typeof STEP_WHENS)[number];
+export const STEP_MODES = ["auto", "manual"] as const;
+export type StepMode = (typeof STEP_MODES)[number];
+
 /** where a workflow file came from; later sources win by name */
 export type WorkflowSource = "bundled" | "user" | "repo";
 
@@ -1969,6 +1974,14 @@ export interface WorkflowStep {
   back: string;
   /** repo-relative files a judge gate reads beside the summary */
   evidence: string[];
+  /** the steps this one waits for, by heading; defaults to the step above */
+  after: string[];
+  /** conditions on the steps it waits for; absent defaults to `always` */
+  when: StepWhen[];
+  /** manual parks the flow before this step until a continue */
+  mode: StepMode;
+  /** set when the repo's `.canopy/workflows.json` decided the mode */
+  modeFrom?: "repo";
 }
 
 /** What a workflow may spend before it parks: agent step runs and hours of
@@ -2445,7 +2458,7 @@ export interface IncubatorStages {
 /* ---------- flows: one workflow running on one repo ---------- */
 
 export type FlowStatus = "working" | "waiting" | "gated" | "done" | "failed" | "stopped";
-export type StepStatus = "pending" | "running" | "checking" | "gated" | "passed" | "failed" | "skipped";
+export type StepStatus = "pending" | "running" | "checking" | "gated" | "held" | "passed" | "failed" | "skipped";
 export type FlowChoice = "continue" | "retry" | "stop";
 
 export interface FlowStep {
@@ -2466,6 +2479,8 @@ export interface FlowStep {
    *  restart can resume a Claude session instead of starting over */
   session?: string;
   harness?: Harness;
+  /** whether the step's run moved the tree's fingerprint */
+  changed?: boolean;
 }
 
 /** A check or gate that said no and sent the flow back. */
@@ -2487,7 +2502,7 @@ export interface Flow {
   note: string;
   status: FlowStatus;
   steps: FlowStep[];
-  /** index of the step in progress or parked */
+  /** index of the step the sheet follows: the newest started, or the one parked or held */
   current: number;
   startedAt: number;
   endedAt?: number;

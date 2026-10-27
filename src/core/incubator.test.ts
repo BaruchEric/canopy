@@ -24,7 +24,7 @@ const CLARIFY: Workflow = {
   notePlaceholder: "",
   noteRequired: false,
   listed: false,
-  steps: [{ name: "Clarify", tools: ["Edit"], turns: 40, check: null, gate: "continue", body: "Clarify.", retries: 0, back: "Clarify", evidence: [] }],
+  steps: [{ name: "Clarify", tools: ["Edit"], turns: 40, check: null, gate: "continue", body: "Clarify.", retries: 0, back: "Clarify", evidence: [], after: [], when: ["always"], mode: "auto" }],
   budget: { runs: 2, hours: 0.34 },
   source: "bundled",
   file: "/clarify.md",
