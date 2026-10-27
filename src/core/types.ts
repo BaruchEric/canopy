@@ -1233,6 +1233,8 @@ export interface WorkspaceScope {
 }
 
 export interface Run {
+  /** A persisted snapshot, shown read-only after its live run is gone. */
+  kept?: true;
   id: string;
   repoId: string;
   /** a built-in action's name, or the workflow's name for a flow's step */
@@ -1295,6 +1297,22 @@ export interface Run {
   parent?: string;
   /** a coordinator's cards, in the order it proposed them */
   tasks?: CoordTask[];
+}
+
+/** One finished run in the local transcript index. */
+export interface KeptRunHead {
+  id: string;
+  repo: string;
+  action: string;
+  verb: string;
+  harness: Harness;
+  status: "done" | "failed" | "stopped" | "limited";
+  started: number;
+  ended: number;
+  cost: number | null;
+  session?: string;
+  /** Branch identity retained while its landing record or PR is live. */
+  origin?: string;
 }
 
 /** Where a branch run's work stands: still going, commits and a clean
