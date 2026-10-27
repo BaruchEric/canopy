@@ -268,6 +268,19 @@ function norm(p: string, base: string): string {
   return `/${parts.join("/")}`;
 }
 
+/** Normalize a home shorthand without resolving it to this process's home. */
+function normalizeHomePath(p: string, base = "~"): string {
+  const parts = (p.startsWith("~") ? p : `${base}/${p}`).split("/");
+  const home = parts.shift() ?? "~";
+  const tail: string[] = [];
+  for (const segment of parts) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") tail.pop();
+    else tail.push(segment);
+  }
+  return tail.length ? `${home}/${tail.join("/")}` : home;
+}
+
 const inside = (p: string, root: string): boolean => p === root || p.startsWith(root === "/" ? "/" : `${root}/`);
 
 /** where paths are judged from: the project's folder and where the command is */
@@ -681,8 +694,18 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
 }
 
 /** What one simple command does, as parts. `w.cwd` moves with a `cd`. */
-function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
-  let words = cmd.words.filter((x) => x !== "");
+interface NormalizedCommand {
+  words: string[];
+  who: string | null;
+  hidden: Part[];
+  assigned: string[];
+}
+
+/** Strip leading assignments and the wrappers both explanation and path
+ *  extraction understand. Keep the decisions in one place so their command
+ *  names cannot drift apart. */
+function normalizeCommandWords(rawWords: readonly string[]): NormalizedCommand {
+  let words = rawWords.filter((x) => x !== "");
   let who: string | null = null;
   const hidden: Part[] = [];
   // `VAR=value` words, before the program, after `env`, or set by `export`
@@ -715,6 +738,11 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
     }
     break;
   }
+  return { words, who, hidden, assigned };
+}
+
+function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
+  const { words, who, hidden, assigned } = normalizeCommandWords(cmd.words);
   if (DECLARERS.has(progName(words[0] ?? ""))) assigned.push(...words.slice(1).filter((x) => /^[A-Za-z_]\w*=/.test(x)));
   const parts: Part[] = [...hidden];
   // a variable that can name a program (a pager, a config file, a preload)
@@ -989,7 +1017,7 @@ export interface WrittenPaths {
   paths: string[];
   /** folders a command moved or removed whole, same form: `mv` and `git mv` operands, `rm -r`, `rmdir`, `git rm -r` */
   dirs: string[];
-  /** `explainCommand` read the line as opaque or vague: canopy cannot say what it writes, and nothing is listed */
+  /** The line was opaque or vague, or a later relative path had an unknown cwd. */
   unknown: boolean;
 }
 
@@ -997,9 +1025,13 @@ const IGNORED_REDIRECTS = /^\/dev\/(?:null|stdout|stderr|stdin|fd\/\d+|tty)$/;
 
 /** A shell path in the touched set: relative to `root` inside it, absolute outside. */
 function writtenPath(p: string, root: string, cwd: string): string | null {
-  if (!p || p.startsWith("~")) return p || null;
+  if (!p) return null;
+  if (p.startsWith("~")) return normalizeHomePath(p);
+  if (cwd === "?" && !p.startsWith("/")) return null;
+  if (cwd.startsWith("~") && !p.startsWith("/")) return normalizeHomePath(p, cwd);
   const r = norm(root, "/");
   const abs = norm(p, cwd);
+  if (abs === HOME || abs.startsWith(`${HOME}/`)) return `~${abs.slice(HOME.length)}`;
   if (abs === r) return null;
   return inside(abs, r) ? abs.slice(r === "/" ? 1 : r.length + 1) : abs;
 }
@@ -1048,33 +1080,59 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
 
   const paths = new Set<string>();
   const dirs = new Set<string>();
-  const addPath = (candidate: string, folder = false) => {
-    const path = writtenPath(candidate, root, cwd);
+  const normalizedRoot = norm(root, "/");
+  let currentCwd = norm(cwd, normalizedRoot);
+  let previousCwd: string | undefined;
+  let unknown = false;
+  const addPath = (candidate: string, folder = false, atCwd = currentCwd) => {
+    const path = writtenPath(candidate, root, atCwd);
     if (!path) return;
     (folder ? dirs : paths).add(path);
   };
-  const add = (values: readonly string[], folder = false) => {
-    for (const value of values) {
-      for (const candidate of reaches(value)) addPath(candidate, folder);
-    }
+  const add = (values: readonly string[], folder = false, atCwd = currentCwd) => {
+    for (const value of values) addPath(value, folder, atCwd);
   };
 
   for (const cmd of splitShell(command)) {
-    for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path);
-    const words = cmd.words;
+    const commandCwd = currentCwd;
+    for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path, false, commandCwd);
+    const words = normalizeCommandWords(cmd.words).words;
     const prog = words[0] ?? "";
     const base = prog.slice(prog.lastIndexOf("/") + 1);
     const args = words.slice(1);
 
-    if (base === "tee" || base === "touch") add(operands(args));
+    if (base === "cd") {
+      const to = args.includes("-") ? "-" : operands(args)[0];
+      if (to === "-") {
+        if (previousCwd === undefined) {
+          currentCwd = "?";
+          unknown = true;
+        } else {
+          const prior = currentCwd;
+          currentCwd = previousCwd;
+          previousCwd = prior;
+        }
+      } else {
+        previousCwd = commandCwd;
+        if (to === undefined) currentCwd = HOME;
+        else if (to.startsWith("~")) currentCwd = normalizeHomePath(to);
+        else if (to.startsWith("/")) currentCwd = norm(to, "/");
+        else if (commandCwd === "?") currentCwd = "?";
+        else if (commandCwd.startsWith("~")) currentCwd = normalizeHomePath(to, commandCwd);
+        else currentCwd = norm(to, commandCwd);
+      }
+      continue;
+    }
+
+    if (base === "tee" || base === "touch") add(operands(args), false, commandCwd);
     else if (base === "cp" || base === "install") {
       const files = operands(args, base === "cp" ? ["-t", "-S"] : ["-m", "-S", "-t"]);
-      if (files.length > 1) add(files.slice(-1));
-    } else if (base === "mv") add(operands(args), true);
-    else if (base === "rm" || base === "unlink" || base === "trash") add(operands(args), recursive(args));
-    else if (base === "rmdir") add(operands(args), true);
+      if (files.length > 1) add(files.slice(-1), false, commandCwd);
+    } else if (base === "mv") add(operands(args), true, commandCwd);
+    else if (base === "rm" || base === "unlink" || base === "trash") add(operands(args), recursive(args), commandCwd);
+    else if (base === "rmdir") add(operands(args), true, commandCwd);
     else if ((base === "sed" || base === "perl") && args.some((arg) => arg === "-i" || arg.startsWith("-i") || arg === "--in-place")) {
-      add(inPlaceFiles(args));
+      add(inPlaceFiles(args), false, commandCwd);
     } else if (base === "git") {
       let subcommand = 0;
       while (subcommand < args.length && (args[subcommand] ?? "").startsWith("-")) {
@@ -1084,15 +1142,15 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
       }
       const sub = args[subcommand];
       const rest = args.slice(subcommand + 1);
-      if (sub === "mv") add(operands(rest), true);
-      else if (sub === "rm") add(operands(rest), recursive(rest));
+      if (sub === "mv") add(operands(rest), true, commandCwd);
+      else if (sub === "rm") add(operands(rest), recursive(rest), commandCwd);
       else if (sub === "checkout") {
         const separator = rest.indexOf("--");
-        if (separator !== -1) add(rest.slice(separator + 1));
-      } else if (sub === "restore") add(operands(rest, ["-s", "--source", "--pathspec-from-file"]));
+        if (separator !== -1) add(rest.slice(separator + 1), false, commandCwd);
+      } else if (sub === "restore") add(operands(rest, ["-s", "--source", "--pathspec-from-file"]), false, commandCwd);
     }
   }
-  return { paths: [...paths], dirs: [...dirs], unknown: false };
+  return { paths: [...paths], dirs: [...dirs], unknown };
 }
 
 /** What a permission prompt carries that the explanation reads. */

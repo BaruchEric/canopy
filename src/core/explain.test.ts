@@ -61,6 +61,7 @@ describe("writtenPaths", () => {
   test("redirects, tee, touch, cp's last operand, sed -i", () => {
     expect(wp("echo hi > notes.md")).toEqual({ paths: ["notes.md"], ...none });
     expect(wp("echo hi > 'file=literal'")).toEqual({ paths: ["file=literal"], ...none });
+    expect(wp("touch 'file=literal'")).toEqual({ paths: ["file=literal"], ...none });
     expect(wp("ls src 2>/dev/null >> build.log")).toEqual({ paths: ["build.log"], ...none });
     expect(wp("ls src | tee -a out.txt")).toEqual({ paths: ["out.txt"], ...none });
     expect(wp("touch src/new.ts docs/x.md")).toEqual({ paths: ["src/new.ts", "docs/x.md"], ...none });
@@ -79,6 +80,14 @@ describe("writtenPaths", () => {
     expect(wp("cat > notes.md <<'EOF'\nhi\nEOF")).toEqual({ paths: ["notes.md"], ...none });
     expect(wp("touch x.ts", `${ROOT}/src`)).toEqual({ paths: ["src/x.ts"], ...none });
     expect(wp("cp a.ts /tmp/a.ts")).toEqual({ paths: ["/tmp/a.ts"], ...none });
+  });
+  test("a known cd changes later redirects and operands; wrappers keep their writer", () => {
+    expect(wp("cd src && touch x.ts")).toEqual({ paths: ["src/x.ts"], ...none });
+    expect(wp("cd src && echo hi > out.txt")).toEqual({ paths: ["src/out.txt"], ...none });
+    expect(wp("cd /tmp && touch x.ts")).toEqual({ paths: ["/tmp/x.ts"], ...none });
+    expect(wp("cd ~ && touch x.ts")).toEqual({ paths: ["~/x.ts"], ...none });
+    expect(wp("cd ~alice && touch x.ts")).toEqual({ paths: ["~alice/x.ts"], ...none });
+    expect(wp("command touch x.ts && env touch y.ts && LANG=C touch z.ts")).toEqual({ paths: ["x.ts", "y.ts", "z.ts"], ...none });
   });
   test("reads add nothing; an opaque or vague line adds nothing and says so", () => {
     expect(wp("cat a.ts && grep x src && git diff")).toEqual({ paths: [], ...none });

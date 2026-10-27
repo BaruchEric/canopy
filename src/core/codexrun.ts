@@ -36,7 +36,7 @@
 
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
 import { takesProvider } from "./harness";
@@ -376,11 +376,13 @@ export function itemTool(item: Record<string, unknown>, phase: Phase, root: stri
   switch (type) {
     case "commandExecution": {
       const script = unwrapShell(str(item, "command"));
+      const itemCwd = item["cwd"];
+      const cwd = typeof itemCwd === "string" && isAbsolute(itemCwd) && !itemCwd.includes("\0") ? resolve(itemCwd) : root;
       const exit = num(item, "exitCode");
       const failed = status === "ok" && exit !== null && exit !== 0;
       const declined = str(item, "status") === "declined";
       return withOutput(
-        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status, ...toolTouch(writtenPaths(script, root)) },
+        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status, ...toolTouch(writtenPaths(script, root, cwd)) },
         declined ? "declined" : str(item, "aggregatedOutput"),
       );
     }

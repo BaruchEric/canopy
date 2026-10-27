@@ -333,6 +333,13 @@ describe("items as steps", () => {
     expect(long?.output?.startsWith("x".repeat(2000) + "\n… (500 more characters)")).toBe(true);
   });
 
+  test("a command item uses its validated absolute cwd when collecting touched paths", () => {
+    const script = "/bin/sh -lc 'touch x.ts'";
+    expect(itemTool(command({ command: script, cwd: "/r/src" }), "started", "/r")?.paths).toEqual(["src/x.ts"]);
+    expect(itemTool(command({ command: script, cwd: "/tmp" }), "started", "/r")?.paths).toEqual(["/tmp/x.ts"]);
+    expect(itemTool(command({ command: script, cwd: "relative" }), "started", "/r")?.paths).toEqual(["x.ts"]);
+  });
+
   test("a file change is Edit, named by its paths, its diff as the output", () => {
     const fc = (changes: unknown[], status = "completed") => ({ type: "fileChange", id: "f", changes, status });
     const upd = (path: string, move: string | null = null) => ({ path, kind: { type: "update", move_path: move }, diff: "-a\n+b" });

@@ -129,12 +129,12 @@ export function touchedWords(t: Touched): string {
   return t.unknown ? `${words} and ran commands canopy could not read` : words;
 }
 
-const absolute = (path: string): boolean => path.startsWith("/");
+const outside = (path: string): boolean => path.startsWith("/") || path.startsWith("~");
 const insideDirectory = (path: string, dir: string): boolean => path === dir || path.startsWith(`${dir}/`);
 
 /**
  * The paths both hold, plus any path of one under a dir of the other. [] for
- * the same run, origin or group, a full set on either side, and absolute paths.
+ * the same run, origin or group, a full set on either side, and outside paths.
  */
 export function overlap(a: Touched, b: Touched): string[] {
   if (a.run === b.run || (a.origin !== undefined && a.origin === b.origin) || (a.group !== undefined && a.group === b.group)) return [];
@@ -142,17 +142,17 @@ export function overlap(a: Touched, b: Touched): string[] {
 
   const matches = new Set<string>();
   for (const path of a.paths) {
-    if (absolute(path)) continue;
-    if (b.paths.has(path) || [...b.dirs].some((dir) => !absolute(dir) && insideDirectory(path, dir))) matches.add(path);
+    if (outside(path)) continue;
+    if (b.paths.has(path) || [...b.dirs].some((dir) => !outside(dir) && insideDirectory(path, dir))) matches.add(path);
   }
   for (const path of b.paths) {
-    if (absolute(path)) continue;
-    if ([...a.dirs].some((dir) => !absolute(dir) && insideDirectory(path, dir))) matches.add(path);
+    if (outside(path)) continue;
+    if ([...a.dirs].some((dir) => !outside(dir) && insideDirectory(path, dir))) matches.add(path);
   }
   for (const left of a.dirs) {
-    if (absolute(left)) continue;
+    if (outside(left)) continue;
     for (const right of b.dirs) {
-      if (absolute(right)) continue;
+      if (outside(right)) continue;
       if (insideDirectory(left, right)) matches.add(`${left}/`);
       else if (insideDirectory(right, left)) matches.add(`${right}/`);
     }

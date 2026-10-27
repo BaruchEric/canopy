@@ -32,6 +32,12 @@ describe("the touched set", () => {
     expect(overlap(b, a)).toEqual(overlap(a, b));
     expect(overlap(a, edits("c", "q.ts"))).toEqual([]);
   });
+  test("home shorthand is outside and never overlaps, for files or folders", () => {
+    expect(overlap(edits("a", "~/shared.ts"), edits("b", "~/shared.ts"))).toEqual([]);
+    expect(overlap(edits("a", "~alice/shared.ts"), edits("b", "~alice/shared.ts"))).toEqual([]);
+    expect(overlap(edits("a", "~/shared/"), edits("b", "~/shared/file.ts"))).toEqual([]);
+    expect(overlap(edits("a", "~alice/shared/"), edits("b", "~alice/shared/file.ts"))).toEqual([]);
+  });
   test("the same run, origin or group never overlaps", () => {
     const a = edits("a", "x.ts");
     const fix = touchedOf(run("f1", [tool("1", ["x.ts"])], { branch: { name: "run/x-a", target: "main", base: "b0", dir: "/w/a", state: "working", origin: "a" } }));
