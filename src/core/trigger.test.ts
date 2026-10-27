@@ -31,7 +31,7 @@ import {
   type TriggerEvent,
   type TriggerRule,
 } from "./trigger";
-import type { Flow, LandNotice, PrWatch, Repo, RepoStatus, Run, Workflow, WorkflowStep } from "./types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Repo, RepoStatus, Run, Workflow, WorkflowStep } from "./types";
 
 const RULE: TriggerRule = {
   name: "shop",
@@ -597,9 +597,10 @@ describe("fromLanding", () => {
     const e = event({ status: "ready", branch: "br1" });
     expect(fromLanding(e, [notice({}), notice({ id: "m", why: "newer", at: 2 })]).reason).toBe("newer");
   });
-  test("another branch, a landed notice or an event past ready changes nothing", () => {
+  test("another branch or an event past ready changes nothing; a landed notice merges a ready event", () => {
     const e = event({ status: "ready", branch: "br1" });
-    expect(fromLanding(e, [notice({ entry: "br2" }), notice({ kind: "landed" })])).toBe(e);
+    expect(fromLanding(e, [notice({ entry: "br2" })])).toBe(e);
+    expect(fromLanding(e, [notice({ kind: "landed" })])).toMatchObject({ status: "merged" });
     const review = event({ status: "review", branch: "br1" });
     expect(fromLanding(review, [notice({})])).toBe(review);
   });
@@ -839,5 +840,39 @@ describe("schedule clock", () => {
     expect(scheduleKey("x", monday + 59_999)).toBe("x@2026-11-02T05:00:00.000Z");
     expect(fireMinute(monday + 59_999)).toBe(monday);
     expect(scheduleEvent(sched, shop, "k", monday, monday, "manual").source).toBe("manual");
+  });
+});
+
+
+describe("queue trigger lifecycle", () => {
+  const branch = { name: "run/x", target: "main", base: "b", dir: "/d", origin: "br1", state: "ready" } satisfies NonNullable<Run["branch"]>;
+  const entry = (over: Partial<LandEntry> = {}): LandEntry => ({ id: "br1", repoId: "web/shop", repoPath: "/dev/shop", branch: "run/x", target: "main", dir: "/d", note: "", state: "waiting", tries: 0, queuedAt: 1, updatedAt: 2, ...over });
+  const notice = (over: Partial<LandNotice> = {}): LandNotice => ({ id: "n", entry: "br1", repoId: "web/shop", branch: "run/x", note: "", kind: "held", at: 2, why: "needs approval", ...over });
+
+  test("ready queue runs and flows name the landing queue while old events still name PRs", () => {
+    const e = event({ runId: "r1", status: "working", land: "queue" });
+    expect(fromRun(e, run({ status: "done", branch }), 5)).toMatchObject({ status: "ready", reason: "committed; the landing queue sorts the branch" });
+    const f: Flow = { id: "f1", repoId: "web/shop", workflow: "fix", verb: "fix", note: "", status: "done", steps: [], current: 0, startedAt: 1, branch };
+    expect(fromFlow(event({ status: "working", flowId: "f1", land: "queue" }), f, 5).reason).toBe("committed; the landing queue sorts the branch");
+    expect(fromRun({ ...e, land: undefined }, run({ status: "done", branch }), 5).reason).toContain("opens the PR");
+  });
+
+  test("manual landing merges the event without needing an auto-land notice", () => {
+    const e = event({ status: "ready", branch: "br1", land: "queue", reason: "waiting" });
+    const result = fromLanding(e, [], [entry({ state: "landed", landedAt: 7 })]);
+    expect(result).toMatchObject({ status: "merged", endedAt: 7 });
+    expect([result.reason, result.pr]).toEqual([undefined, undefined]);
+    expect(fromLanding(e, [notice({ kind: "landed", at: 9 })])).toMatchObject({ status: "merged", endedAt: 9 });
+    expect(fromLanding(e, [], [entry({ id: "other", state: "landed" })])).toBe(e);
+  });
+
+  test("a sent-back or judge-held queue entry keeps the event ready with its observation", () => {
+    const e = event({ status: "ready", branch: "br1", land: "queue" });
+    for (const state of ["conflict", "red", "moved", "waiting", "judge"] as const) {
+      const got = fromLanding(e, [], [entry({ state, reason: "observed queue reason", updatedAt: 4 })]);
+      expect(got).toMatchObject({ status: "ready", reason: "observed queue reason" });
+    }
+    expect(fromLanding(e, [notice({ why: "newer approval", at: 5 })], [entry({ state: "red", reason: "older gate", updatedAt: 4 })]).reason).toBe("newer approval");
+    expect(fromLanding(e, [notice({ why: "older approval", at: 3 })], [entry({ state: "red", reason: "newer gate", updatedAt: 4 })]).reason).toBe("newer gate");
   });
 });

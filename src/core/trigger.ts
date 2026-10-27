@@ -10,7 +10,7 @@ import { isSeedRepoId } from "./sprout";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { fence } from "./pr";
 import { unattendedRefusal } from "./workflow";
-import type { Flow, LandNotice, PrWatch, Repo, Run, Workflow } from "./types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, Workflow } from "./types";
 
 export const TRIGGER_SOURCES = ["sentry", "linear", "schedule"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
@@ -662,7 +662,7 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     next.status = state === "working" ? "working" : state === "nothing" ? "no-fix" : state === "uncommitted" ? "stopped" : "ready";
     if (state === "nothing") next.reason = "the agent committed nothing: it found no fix to make";
     else if (state === "uncommitted") next.reason = "the run ended with changes it did not commit";
-    else if (state !== "working") next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+    else if (state !== "working") next.reason = e.land === "queue" ? "committed; the landing queue sorts the branch" : "committed; canopy opens the PR once the landing queue has sorted the branch";
   }
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
   else delete next.endedAt;
@@ -704,7 +704,7 @@ export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent
       next.reason = "the flow ended with changes it did not commit";
     } else {
       next.status = "ready";
-      next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+      next.reason = e.land === "queue" ? "committed; the landing queue sorts the branch" : "committed; canopy opens the PR once the landing queue has sorted the branch";
     }
   }
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
@@ -724,14 +724,21 @@ export function fromPr(e: TriggerEvent, w: PrWatch, now: number): TriggerEvent {
   return next;
 }
 
-/** A committed event the landing queue held back says why: its PR did not
- *  open (no GitHub remote, gh not signed in). The newest held notice for
- *  the event's branch wins. */
-export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[]): TriggerEvent {
+/** A committed event follows its landing entry, including a manual landing
+ *  that raises no quiet notice. The newest queue or approval observation wins. */
+export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[], entries: readonly LandEntry[] = []): TriggerEvent {
   if (e.status !== "ready" || !e.branch) return e;
+  const entry = entries.find((item) => item.id === e.branch);
+  const landed = notices.filter((n) => n.entry === e.branch && n.kind === "landed").sort((a, b) => b.at - a.at)[0];
+  if (entry?.state === "landed" || landed) {
+    const next: TriggerEvent = { ...e, status: "merged", endedAt: entry?.landedAt ?? landed?.at ?? e.lastAt };
+    delete next.reason;
+    return next;
+  }
   const held = notices.filter((n) => n.entry === e.branch && n.kind === "held" && n.why).sort((a, b) => b.at - a.at)[0];
-  if (!held?.why || held.why === e.reason) return e;
-  return { ...e, reason: held.why };
+  const queueWhy = entry && ["waiting", "judge", "conflict", "red", "moved"].includes(entry.state) ? entry.reason : undefined;
+  const reason = queueWhy && (!held || (entry?.updatedAt ?? 0) >= held.at) ? queueWhy : held?.why;
+  return !reason || reason === e.reason ? e : { ...e, reason };
 }
 
 /** An event whose run the last server held, after a restart: a run it was
