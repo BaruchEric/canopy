@@ -64,6 +64,7 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["workspaces/run", "workspaces/open"], right: "operate" },
   { methods: POST, paths: REPO_OPERATE.map((a) => `repos/${a}`), right: "operate" },
   { methods: POST, paths: ["repos/tasks", "repos/tasks/def"], right: "operate" },
+  { methods: POST, paths: ["work/*"], right: "operate" },
   { methods: POST, paths: ["landing/*", "prs/*", "incubator/*"], right: "operate" },
   { methods: POST, paths: ["tailchan/send", "tailchan/put", "tailchan/notify"], right: "operate" },
   { methods: POST, paths: ["asks/answer", "presence", "presence/beat", "layouts/reset", "rescan", "preview"], right: "operate" },
