@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7.
+**Status:** implemented locally 2026-10-27. Combined batch verification and live checks remain pending; not shipped or deployed. Plans 2 and 3 remain open. Written on main at 1ac8fe7.
 
 **Goal:** a workflow step can say what it waits for (`after:`), when it runs
 (`when:`) and whether a person releases it (`mode:`); the flow engine runs the
@@ -1155,7 +1155,7 @@ After the paragraph that ends "without it, a `verdict` gate behaves like `ask`",
 
 - [ ] **Step 4: `FEATURES.md` and the plans README**
 
-Move the `### FR-034` block from `## Open` to the top of `## In Progress` and append to its Spec line: `Plan 1 shipped <date> (the three keys, the graph engine, the modes file, the refusal); plan 2 (the picture, the API's graph, canopy workflow) and plan 3 (the bundled workflows) open.` In `docs/superpowers/plans/README.md`, set this plan's row to `shipped` with the date. Set this plan's Status line to shipped with the merge commit.
+Move the `### FR-034` block from `## Open` to the top of `## In Progress`. Record plan 1 as implemented locally 2026-10-27, with combined batch verification and live checks pending. Keep plans 2 and 3 open and the Shipped column empty. The coordinator owns the merged full-suite/build run, live check and final status; this documentation task does not mark the work shipped or deployed.
 
 - [ ] **Step 5: Run every gate**
 
@@ -1226,3 +1226,6 @@ Say that the branch is ready.
 - `FlowRecord.workflow` is typed `RecordedWorkflow`, since a record on disk may hold the old shape.
 - `graph` on `WorkflowEntry` waits for plan 2; the steps carry the keys, and the API has nothing to add until the page reads it.
 - `StepStatus` already had `skipped` for the steps an end leaves behind; a step skipped by `when` reuses it with a reason naming the conditions, and `pickUp` resets both kinds to `pending`, as it does today.
+- Implementation ruling, 2026-10-27: Task 6's unattended refusal required two narrow exceptions to the unchanged-tests constraint. The fleet-slot fixture now parks at a verdict gate without an evaluator; the fleet-idempotency fixture uses a local automatic copy of TWO. All original slot, count and idempotency assertions remain, and explicit ask/manual refusal tests cover the new rule.
+- Review added per-attempt identities across asynchronous preparation, checks and gates, plus per-step park causes and optional pending terminal intent in `FlowRecord`. Reset reconciles parked state; stop cancels preparation barriers. A working record with pending failure or stop ends with that intent after restart without new work.
+- Server flow/fleet starts and startup restore await `whenStarted`, which covers only pre-start preparations. Work adoption precedes flow restore; active branch flows own their work item before a Run exists. Policy-read errors become individual trigger-rule problems, while direct starts still reject malformed modes.

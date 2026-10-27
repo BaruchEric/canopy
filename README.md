@@ -220,7 +220,9 @@ A chat is a run whose process outlives its first reply: stdin stays open after e
 
 ## Workflows
 
-A workflow is a markdown file: frontmatter names it and sets its precondition, the body is a series of `##` steps run one at a time through the same Runner a plain job uses, with a gate between steps.
+A workflow is a markdown file. Frontmatter names it and sets its precondition; each `##` heading names a step run through the same Runner a plain job uses. Steps form a graph through `after`, with a check and gate after each step's run. Files without the new keys keep their original chain order.
+
+FR-034 plan 1 is implemented locally as of 2026-10-27. Combined batch verification and live checks remain pending; this implementation has not shipped or been deployed. Plan 2 covers the graph view and workflow CLI, and plan 3 updates the bundled workflows.
 
 Frontmatter keys:
 
@@ -241,11 +243,24 @@ A `##` heading is a step's name. The `key: value` lines right under it, up to th
 | `tools` | comma-separated: named sets `git-read`, `git-commit`, `git-push`, `bun`, `read`, or literal rules like `Bash(cargo:*)` | `git-read` |
 | `turns` | max turns for this step's run | 30 |
 | `check` | a shell command run in the repo after the run ends; exit 0 passes | none |
-| `gate` | `continue`, `ask`, `verdict` | `continue` |
+| `gate` | `continue`, `ask`, `verdict`, or `judge` | `continue` |
+| `after` | comma-separated earlier step headings to wait for; all predecessors must settle before this step is ready | the step above, none for the first |
+| `when` | comma-separated conditions on predecessors; any one holding runs the step, none skips it: `always`, `verdict done`, `verdict partial`, `verdict blocked`, `judge meets`, `judge partly`, `judge misses`, `check pass`, `check fail`, `changed`, `unchanged`, `skipped` | `always` |
+| `mode` | `manual` holds the step before it starts until you continue; `auto` starts it when ready | `auto` |
 
 A step whose body is empty is check-only: no Claude run, just the command. Workflows come from three folders, later ones winning by `name`: `lib/workflows/*.md` (bundled with canopy), `$CANOPY_CONFIG_DIR/workflows/*.md` (yours, `~/.config/canopy/workflows` by default), and `<repo>/.canopy/workflows/*.md` (that repo only, local repos only). The bundled five: **commit** (stages what belongs, writes the message, does not push), **push** (pushes the branch, rebasing only when safe), **ship** (gates, then commit, then push, stopping before committing if a gate fails), **deploy** (works out how the project deploys and runs it after its own gates), **review** (reads the diff and recent commits and reports what looks wrong, changing nothing).
 
-Every step's `check`, when present, runs after the step's Claude run ends and before the gate; a nonzero exit fails the step and the flow. Then the gate: `continue` starts the next step at once, `ask` parks the flow for you to continue, retry, or stop, and `verdict` hands the step's summary to an evaluator (Jev, over the Vercel AI Gateway) that decides the same three ways on its own. `verdict` needs `AI_GATEWAY_API_KEY` set in the server's environment; without it, a `verdict` gate behaves like `ask`.
+Every step's `check`, when present, runs after the agent ends and before the gate. A nonzero exit normally fails the flow, or retries the step when configured. The `continue` gate releases its dependants, `ask` parks for you to continue, retry, or stop, and `verdict` asks Jev to evaluate the step's summary. The `judge` gate evaluates the work against the step's task and evidence. Evaluation needs `AI_GATEWAY_API_KEY` in the server's environment; without it, a `verdict` or `judge` gate parks for your decision.
+
+Up to three ready steps run together, with at most one writer alongside the readers. A step counts as read-only when all its tool rules belong to `git-read` or `read` and its check is absent or `@gates`. A second writer waits with a reason naming the first. Every skipped step counts as settled for its dependants. Conditions match any predecessor in `after`; `skipped` can select a fallback. `changed` compares git-state fingerprints before and after that predecessor's agent run. An unreadable fingerprint counts real work as changed; skipped and check-only steps count as unchanged.
+
+When a dependant uses `when: check fail`, its predecessor's failed check is recorded and routed to that dependant after retries are spent. This is the one check failure that lets the flow proceed. Verdict and judge refusals keep their existing retries and parks. After a park, continue keeps that result available to conditions on the next steps.
+
+The repo's `.canopy/workflows.json` overrides step modes from the workflow file. For example, `{"modes":{"ship":{"Push":"manual"},"*":{"Deploy":"manual"}}}` holds Ship's Push step and any workflow's Deploy step. A workflow-specific entry wins over `*`. Canopy reads the committed file at the repo checkout's HEAD, so a dirty edit or a run's worktree cannot loosen that policy. An entry naming no step is a logged warning. A malformed committed file rejects a direct start with 400 and skips that repo in a fleet.
+
+A trigger, fleet or incubator stage, including retro, refuses `ask` and `manual` steps before starting work. The reason names the step and whether its manual mode came from the workflow file or repo policy. A fleet records that repo's skipped reason and continues with eligible repos. Seeds never supply their own modes file.
+
+A manual step shows `held` with `<step> waits for your go`. Continue or retry starts it; stop ends the flow. If a sibling parks or fails while another step is still live, the flow waits for the live work to finish before applying that park or failure. Stop stops all live runs and aborts checks. A restart preserves held steps without starting them, reruns interrupted steps with their saved sessions where possible, and retains a recorded pending failure or stop without launching more work.
 
 Select several repos on the board (the select button in the top bar, or `x`) and run one workflow across all of them as a fleet: each repo whose precondition does not hold is skipped, the rest run up to three at a time, and the fleet's own sheet shows every repo's flow. Select mode starts with nothing picked. Click a card or a tree row to pick it, shift-click to pick (or unpick) everything from the last click to that one, tick a group heading to take the whole group, and use the bar along the bottom for all, none, invert, or just the repos in one state (with changes, unpushed, behind, and so on). ⌘A picks everything in view, Escape leaves. The count and the fleet only ever include picks the current filters show. All, none, invert and "only…" replace the selection with what is in view; a single pick a filter hides stays put and comes back when the filter clears.
 
