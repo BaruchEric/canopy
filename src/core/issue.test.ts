@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fetchIssue, issueNote, parseIssueRef, parseIssueView, resolveIssueNote, type GhResult, type IssueView } from "./issue";
+import { fetchIssue, issueNote, listLabelledIssues, oldestIssues, parseIssueRef, parseIssueView, resolveIssueNote, type GhResult, type IssueView } from "./issue";
 import { branchSlug } from "./worktree";
 
 const ok = (stdout: string): GhResult => ({ code: 0, stdout, stderr: "" });
@@ -134,5 +134,55 @@ describe("resolveIssueNote", () => {
 
   test("a gh failure is the error", async () => {
     expect(await resolveIssueNote("#12", { slug: async () => "o/r", gh: fakeGh(no("gh: not logged in")).gh })).toEqual({ error: "gh: not logged in" });
+  });
+});
+
+describe("oldestIssues", () => {
+  const at = (number: number, createdAt: string) => ({ number, createdAt });
+  test("merges label listings by number, oldest first, and keeps the first `limit`", () => {
+    const a = [at(3, "2026-10-03T00:00:00Z"), at(1, "2026-10-01T00:00:00Z")];
+    const b = [at(2, "2026-10-02T00:00:00Z"), at(1, "2026-10-01T00:00:00Z"), at(4, "2026-10-04T00:00:00Z")];
+    expect(oldestIssues([a, b], 50).map((i) => i.number)).toEqual([1, 2, 3, 4]);
+    expect(oldestIssues([a, b], 2).map((i) => i.number)).toEqual([1, 2]);
+    // the same moment orders by number, and an unreadable time sorts first rather than being lost
+    expect(oldestIssues([[at(9, "2026-10-01T00:00:00Z"), at(8, "2026-10-01T00:00:00Z"), at(7, "")]], 50).map((i) => i.number)).toEqual([7, 8, 9]);
+  });
+});
+
+describe("listLabelledIssues", () => {
+  const listed = (number: number, createdAt: string, labels = ["canopy"]) => ({ number, title: `Issue ${number}`, body: "", url: `https://github.com/o/r/issues/${number}`, labels: labels.map((name) => ({ name })), createdAt });
+  test("one gh issue list per label, oldest first and capped, as issue views", async () => {
+    const answers: Record<string, GhResult> = {
+      canopy: ok(JSON.stringify([listed(1, "2026-10-01T00:00:00Z"), listed(3, "2026-10-03T00:00:00Z")])),
+      "fix me": ok(JSON.stringify([listed(1, "2026-10-01T00:00:00Z", ["canopy", "fix me"]), listed(2, "2026-10-02T00:00:00Z", ["fix me"])])),
+    };
+    const calls: string[][] = [];
+    const gh = async (args: string[]) => {
+      calls.push(args);
+      return answers[args[args.indexOf("--label") + 1] ?? ""] ?? no("no such label");
+    };
+    const got = await listLabelledIssues("o/r", ["canopy", "fix me"], gh, 50);
+    expect("issues" in got && got.issues.map((i) => i.number)).toEqual([1, 2, 3]);
+    expect("issues" in got && got.issues[0]).toEqual({ number: 1, title: "Issue 1", body: "", url: "https://github.com/o/r/issues/1", labels: ["canopy"], comments: [], createdAt: "2026-10-01T00:00:00Z" });
+    expect(calls[0]).toEqual(["issue", "list", "-R", "o/r", "--label", "canopy", "--state", "open", "--search", "sort:created-asc", "--limit", "50", "--json", "number,title,body,url,labels,createdAt"]);
+    expect(calls).toHaveLength(2);
+    const two = await listLabelledIssues("o/r", ["canopy", "fix me"], gh, 2);
+    expect("issues" in two && two.issues.map((i) => i.number)).toEqual([1, 2]);
+  });
+
+  test("gh's last line on a failure, and an answer that is not a list", async () => {
+    expect(await listLabelledIssues("o/r", ["canopy"], async () => no("noise\nHTTP 502: Bad gateway\n"), 50)).toEqual({ error: "HTTP 502: Bad gateway" });
+    expect(await listLabelledIssues("o/r", ["canopy"], async () => ok("nope"), 50)).toEqual({ error: "gh's answer for the canopy issues is not JSON" });
+    expect(await listLabelledIssues("o/r", ["canopy"], async () => ok("{}"), 50)).toEqual({ error: "gh's answer for the canopy issues is not a list" });
+    expect(
+      await listLabelledIssues(
+        "o/r",
+        ["canopy"],
+        async () => {
+          throw new Error("ENOENT");
+        },
+        50,
+      ),
+    ).toEqual({ error: "gh did not run: ENOENT" });
   });
 });

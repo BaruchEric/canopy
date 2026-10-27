@@ -4,7 +4,7 @@ import { SAMPLE_TITLE, SERVICE_NAME, type TriggerRuleInfo, type TriggersInfo } f
 import { baseOf } from "../registry";
 import { copyText } from "../share";
 import { useStore } from "../store";
-import { STATUS_TONE, STATUS_WORD, eventActs, hookAddress, outcomeLine, serviceOf, triggerSections, type TriggerRow } from "../triggers";
+import { STATUS_TONE, STATUS_WORD, eventActs, outcomeLine, ruleIntake, serviceOf, triggerSections, type TriggerRow } from "../triggers";
 import { ago } from "../util";
 
 type Call = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; error: string };
@@ -122,13 +122,45 @@ function FireForm({ backend, rule }: { backend: string; rule: TriggerRuleInfo })
           {call.error}
         </span>
       )}
+      {rule.poll && <PollButton backend={backend} rule={rule} />}
     </form>
+  );
+}
+
+/** "poll now" on a rule that polls: its labelled issues listed at once, a run for each new one. */
+function PollButton({ backend, rule }: { backend: string; rule: TriggerRuleInfo }) {
+  const pollTrigger = useStore((s) => s.pollTrigger);
+  const [call, setCall] = useState<Call | { kind: "done" }>({ kind: "idle" });
+  return (
+    <>
+      <button
+        type="button"
+        className="mini"
+        disabled={call.kind === "busy" || Boolean(rule.problem)}
+        title="List the repo's labelled issues now, without waiting for the poll, and start a run for each new one"
+        onClick={() => {
+          setCall({ kind: "busy" });
+          pollTrigger(backend, rule.name).then(
+            () => setCall({ kind: "done" }),
+            (err: unknown) => setCall({ kind: "failed", error: errText(err) }),
+          );
+        }}
+      >
+        {call.kind === "busy" ? "polling…" : "poll now"}
+      </button>
+      {call.kind === "done" && <span className="trigger-note">polled</span>}
+      {call.kind === "failed" && (
+        <span className="trigger-err" role="alert">
+          {call.error}
+        </span>
+      )}
+    </>
   );
 }
 
 function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRuleInfo; origin: string }) {
   const repo = useRepoName(rule.repo);
-  const address = hookAddress(origin, rule.hook);
+  const intake = ruleIntake(rule, origin);
   const [copied, setCopied] = useState(false);
   const name = SERVICE_NAME[rule.source];
   const writesBack =
@@ -145,34 +177,41 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
           <span>
             {rule.source} → {repo}
           </span>
-          {rule.source === "linear" && <span title="Adding one of these labels to an issue starts the run">on label {rule.labels.join(", ")}</span>}
+          {rule.source !== "sentry" && <span title="Adding one of these labels to an issue starts the run">on label {rule.labels.join(", ")}</span>}
           {rule.clientSecretEnv && (
             <span className={rule.agentSet ? "moss" : "rust"} title="Delegating an issue to the Linear app, or mentioning it, starts the run, and the session hears how it goes">
               {rule.agentSet ? "agent on" : `${rule.clientSecretEnv} not set`}
             </span>
           )}
           <span>runs {rule.workflow}</span>
-          <span className={rule.secretSet ? "moss" : "rust"}>{rule.secretSet ? "secret set" : rule.secretEnv ? `${rule.secretEnv} not set` : "no hook secret"}</span>
+          <span className={rule.secretSet ? "moss" : rule.secretEnv ? "rust" : "faint"}>{rule.secretSet ? "secret set" : rule.secretEnv ? `${rule.secretEnv} not set` : "no hook secret"}</span>
+          {intake.poll && (
+            <span title={rule.nextFire ? `Next poll ${new Date(rule.nextFire).toLocaleString()}; a hook delivery that never arrived is caught up here` : "Its issues come in by polling"}>
+              {intake.poll}
+            </span>
+          )}
           <span className={writes ? "moss" : "faint"} title={writesBack}>
             {writes ? (rule.source === "linear" ? "writes back to Linear" : "resolves in Sentry") : `leaves issues open in ${name}`}
           </span>
         </span>
       </div>
-      <div className="trigger-hook">
-        <code>{address}</code>
-        <button
-          type="button"
-          className="mini"
-          onClick={() => {
-            void copyText(address).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1500);
-            });
-          }}
-        >
-          {copied ? "copied" : "copy"}
-        </button>
-      </div>
+      {intake.hook && (
+        <div className="trigger-hook">
+          <code>{intake.hook}</code>
+          <button
+            type="button"
+            className="mini"
+            onClick={() => {
+              void copyText(intake.hook ?? "").then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+          >
+            {copied ? "copied" : "copy"}
+          </button>
+        </div>
+      )}
       {rule.install && (
         <div className="trigger-note">
           <a href={`${origin}${rule.install}`} target="_blank" rel="noreferrer" title="A workspace admin installs the Linear app as itself, so issues can be delegated to it and it can be mentioned">
@@ -225,9 +264,10 @@ export function TriggersView() {
         <section className="trigger-group">
           <h3 className="panel-label">Rules</h3>
           <p className="trigger-note">
-            No trigger rules yet. Add one to <code>triggers.json</code> in canopy's config folder, naming the source (<code>sentry</code> or <code>linear</code>), the repo and the environment
-            variable holding the hook's secret. canopy ships <code>sentry-fix</code> and <code>linear-issue</code> as their workflows. Then point a Sentry internal integration's webhook, or a
-            Linear webhook for issues, at the address this page shows.
+            No trigger rules yet. Add one to <code>triggers.json</code> in canopy's config folder, naming the source (<code>sentry</code>, <code>linear</code>, <code>github</code> or{" "}
+            <code>forgejo</code>), the repo and the environment variable holding the hook's secret. canopy ships <code>sentry-fix</code>, <code>linear-issue</code> and <code>issue-fix</code> as
+            their workflows. Then point a Sentry internal integration's webhook, a Linear webhook for issues, or a GitHub or Forgejo webhook for issues, at the address this page shows. A
+            GitHub or Forgejo rule with no secret polls the repo's labelled issues instead.
           </p>
         </section>
       )}

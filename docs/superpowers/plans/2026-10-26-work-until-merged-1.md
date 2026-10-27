@@ -183,7 +183,7 @@ git commit -m "feat(triggers): parse github and forgejo issues"
 - Produces in TriggerHub: poll(ruleName: string): Promise<void>; POST /api/triggers/poll { rule }; GET /api/triggers includes nextFire for each scheduled rule.
 - Produces in the UI store and API: pollTrigger(backend: string, rule: string): Promise<void>.
 
-- [ ] **Step 1: Write failing tests** for signed GitHub and Forgejo hooks, including X-Gitea-Signature, bad signatures, a bad signature on invalid JSON returning 401 before parse, a body over 1 MiB, quiet 200 for ping and unrelated event names, 404 when secretEnv is absent, 503 when its env value is missing, poll-now, and GET info's nextFire. Redelivering the same Forgejo issue must increment count without starting another branch. Use 60 issue candidates to prove the poll returns the oldest 50 and leaves the 10 newer ones for a later tick; test multiple-label deduplication, flows-lock-only scheduling, and same-rule overlap with a deferred list response. Failed list and detail reads must report exactly one health result without making events. Add UI API and model assertions for the poll POST, a hook line, and a rule with no hook that says "polls every 15 min".
+- [x] **Step 1: Write failing tests** for signed GitHub and Forgejo hooks, including X-Gitea-Signature, bad signatures, a bad signature on invalid JSON returning 401 before parse, a body over 1 MiB, quiet 200 for ping and unrelated event names, 404 when secretEnv is absent, 503 when its env value is missing, poll-now, and GET info's nextFire. Redelivering the same Forgejo issue must increment count without starting another branch. Use 60 issue candidates to prove the poll returns the oldest 50 and leaves the 10 newer ones for a later tick; test multiple-label deduplication, flows-lock-only scheduling, and same-rule overlap with a deferred list response. Failed list and detail reads must report exactly one health result without making events. Add UI API and model assertions for the poll POST, a hook line, and a rule with no hook that says "polls every 15 min".
 
 ```ts
 expect((await h.handle(githubReq("{", "sha256=bad"), githubUrl))?.status).toBe(401);
@@ -199,49 +199,49 @@ releaseList();
 await firstPoll;
 expect(overlapListIssues).toHaveBeenCalledTimes(1);
 ```
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: bun test src/server/triggers.test.ts ui/src/api.test.ts ui/src/triggers.test.ts
 Expected: FAIL because the routes, poll action, and rule display do not exist.
 
-- [ ] **Step 3: Extend the hook handler**
+- [x] **Step 3: Extend the hook handler**
 
 Keep the 1 MiB body limit and signature-before-parse order. For GitHub, accept X-Hub-Signature-256 with its sha256= prefix and require X-GitHub-Event: issues. For Forgejo, accept X-Forgejo-Signature or X-Gitea-Signature and require X-Forgejo-Event: issues. A non-issues event is a quiet 200. A source without secretEnv has no hook and answers 404.
 
-- [ ] **Step 4: Add source readers and the cron poller**
+- [x] **Step 4: Add source readers and the cron poller**
 
 For each configured label, request the oldest 50 open issues from GitHub with `gh issue list --label <label> --state open --search "sort:created-asc" --limit 50 --json number,title,body,labels,createdAt,updatedAt`. For Forgejo use `GET /api/v1/repos/{o}/{r}/issues?labels=<label>&state=open&sort=oldest&limit=50&page=1`. Verify that Forgejo accepts the label name and returns the oldest page; if it does not, paginate until all matching candidates are read before sorting. Merge label results by issue number, sort the union by createdAt, and process no more than 50 issues for the rule. The list reader sorts and caps before returning Incoming[]; it does not rely on Incoming carrying a timestamp. Use `gh issue view` or the Forgejo detail and comments endpoints to fill each issue note. Resolve Forgejo source tokens by matching the local repo remote to a configured Forgejo source. Run scheduled polls on the flows-lock holder only and keep one in-flight poll per rule. Skip existing issues through existing and pass new items through the same detail reader and deliver path as hooks. Report list or detail read failures through the canopy:triggers health check and keep them out of events.
 
-- [ ] **Step 5: Add poll-now route and rule display**
+- [x] **Step 5: Add poll-now route and rule display**
 
 Add POST /api/triggers/poll {rule}; the existing callers rule for triggers/* already requires operate. Add nextFire to rule info. The trigger card shows the hook path when secretEnv exists, shows "polls every 15 min" when the default poll replaces the hook, shows any explicit cron, and offers "poll now" beside "try it" when the rule has a poll.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: bun test src/server/triggers.test.ts ui/src/api.test.ts ui/src/triggers.test.ts
 Expected: PASS, including the lock and overlap cases.
 
-- [ ] **Step 7: Run typecheck**
+- [x] **Step 7: Run typecheck**
 
 Run: bun run typecheck
 Expected: PASS.
 
-- [ ] **Step 8: Run lint**
+- [x] **Step 8: Run lint**
 
 Run: bun run lint
 Expected: PASS.
 
-- [ ] **Step 9: Run the full test suite**
+- [x] **Step 9: Run the full test suite**
 
 Run: bun test
 Expected: PASS.
 
-- [ ] **Step 10: Build**
+- [x] **Step 10: Build**
 
 Run: bun run build
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ~~~sh
 git add src/server/triggers.ts src/server/triggers.test.ts src/server/index.ts ui/src/api.ts ui/src/api.test.ts ui/src/store.ts ui/src/triggers.ts ui/src/triggers.test.ts ui/src/components/Triggers.tsx

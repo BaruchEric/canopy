@@ -772,6 +772,10 @@ export const api = {
   /** fires a made-up issue through a rule, as if its source had sent it */
   fireTrigger: (b: string, rule: string, title: string) =>
     req<Delivery>(b, "/api/triggers/fire", { method: "POST", body: JSON.stringify({ rule, title }) }),
+  /** runs one rule's poll now; the events it makes come over the stream */
+  pollTrigger: async (b: string, rule: string) => {
+    await req<{ ok: true }>(b, "/api/triggers/poll", { method: "POST", body: JSON.stringify({ rule }) });
+  },
   /** resume, retry or stop a trigger event, by its qualified id */
   triggerAct: async (id: string, act: "resume" | "retry" | "stop") => {
     const [b, plain] = on(id);

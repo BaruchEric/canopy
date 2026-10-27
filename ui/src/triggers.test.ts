@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { TriggerEvent, TriggersInfo } from "../../src/core/trigger";
-import { eventActs, hookAddress, outcomeLine, triggerSections, triggersBadge } from "./triggers";
+import type { TriggerEvent, TriggerRuleInfo, TriggersInfo } from "../../src/core/trigger";
+import { eventActs, hookAddress, outcomeLine, pollWords, ruleIntake, triggerSections, triggersBadge } from "./triggers";
 
 const ev = (over: Partial<TriggerEvent>): TriggerEvent => ({
   id: "e1",
@@ -83,4 +83,38 @@ describe("triggersBadge", () => {
 
 test("hookAddress joins the origin and the hook's path", () => {
   expect(hookAddress("https://canopy.beric.ca/", "/api/hooks/sentry/shop")).toBe("https://canopy.beric.ca/api/hooks/sentry/shop");
+});
+
+describe("ruleIntake", () => {
+  const rule = (over: Partial<TriggerRuleInfo>): TriggerRuleInfo => ({
+    name: "tracker",
+    source: "github",
+    repo: "web/shop",
+    workflow: "issue-fix",
+    projects: [],
+    levels: [],
+    labels: ["canopy"],
+    ignore: [],
+    api: "https://api.github.com",
+    hook: "/api/hooks/github/tracker",
+    secretSet: false,
+    tokenSet: false,
+    agentSet: false,
+    ...over,
+  });
+
+  test("a rule with a hook secret shows the hook's address; one without says how often it polls", () => {
+    expect(ruleIntake(rule({ secretEnv: "CANOPY_TRIGGER_GH_HOOK", secretSet: true }), "https://canopy.beric.ca/")).toEqual({ hook: "https://canopy.beric.ca/api/hooks/github/tracker", poll: null });
+    expect(ruleIntake(rule({ poll: "*/15 * * * *" }), "https://canopy.beric.ca")).toEqual({ hook: null, poll: "polls every 15 min" });
+    // a hook with a poll line as its safety net shows both
+    expect(ruleIntake(rule({ secretEnv: "CANOPY_TRIGGER_GH_HOOK", poll: "0 9 * * 1-5" }), "http://mini:7850")).toEqual({ hook: "http://mini:7850/api/hooks/github/tracker", poll: "polls on 0 9 * * 1-5" });
+  });
+
+  test("pollWords reads the common lines", () => {
+    expect(pollWords("*/5 * * * *")).toBe("polls every 5 min");
+    expect(pollWords("* * * * *")).toBe("polls every minute");
+    expect(pollWords("0 * * * *")).toBe("polls every hour");
+    expect(pollWords("0 */2 * * *")).toBe("polls every 2 hours");
+    expect(pollWords("30 6 * * *")).toBe("polls on 30 6 * * *");
+  });
 });

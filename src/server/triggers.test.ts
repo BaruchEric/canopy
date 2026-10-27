@@ -3,10 +3,11 @@ import { createHmac } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TriggerEvent, TriggerRule } from "../core/trigger";
+import type { ProbeResult } from "../core/health";
+import type { Incoming, TriggerEvent, TriggerRule } from "../core/trigger";
 import type { Flow, PrWatch, Repo, Run } from "../core/types";
 import { LinearError } from "./linear";
-import { signatureOk, TriggerHub, type AgentSay, type StartOutcome, type TriggerDeps } from "./triggers";
+import { MAX_BODY, signatureOk, TriggerHub, type AgentSay, type StartOutcome, type TriggerDeps } from "./triggers";
 
 const SECRET = "s3cret";
 const REPO = { id: "web/shop", name: "shop", path: "/dev/web/shop" } as Repo;
@@ -38,7 +39,7 @@ function hub(over: Partial<TriggerDeps> = {}): TriggerHub {
       if (ev.type === "triggers") events.push(ev.events);
     },
     repo: (ref) => (ref === REPO.id || ref === REPO.path ? REPO : undefined),
-    workflowProblem: async (name) => (name === "sentry-fix" ? null : `unknown workflow: ${name}`),
+    workflowProblem: async (name) => (name === "sentry-fix" || name === "issue-fix" ? null : `unknown workflow: ${name}`),
     start: async (): Promise<StartOutcome> => {
       if (busy) return { busy };
       const r = run();
@@ -56,6 +57,9 @@ function hub(over: Partial<TriggerDeps> = {}): TriggerHub {
     resolve: async (_rule: TriggerRule, e: TriggerEvent, token: string) => {
       resolved.push(`${e.key}:${token}`);
     },
+    listIssues: async () => [],
+    readIssue: async (_rule, _repo, inc) => inc,
+    reportPoll: () => {},
     file: join(dir, "triggers.json"),
     dir: join(dir, "triggers"),
     now: () => 1000,
@@ -717,5 +721,309 @@ describe("installing the linear app", () => {
     expect(await (await send("org-2"))?.json()).toEqual({ kind: "skip", why: "a delivery from a Linear workspace other than the rule's" });
     expect(await (await send("org-1"))?.json()).toMatchObject({ kind: "started" });
     expect(h.list()).toHaveLength(1);
+  });
+});
+
+describe("github and forgejo hooks", () => {
+  const HOOK = "gh-s3cret";
+  const env = (name: string) => ({ CANOPY_TRIGGER_GH_HOOK: HOOK })[name];
+  const ghRules = (extra: Record<string, unknown> = {}) =>
+    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_GH_HOOK", ...extra }] }));
+  const fjRules = () =>
+    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "fj", source: "forgejo", repo: "web/shop", api: "https://git.example.com", secretEnv: "CANOPY_TRIGGER_GH_HOOK" }] }));
+  /** one issue as both services put it in a delivery */
+  const issue = (number: number, over: Record<string, unknown> = {}) => ({
+    number,
+    title: `Issue ${number}`,
+    body: "Steps: open the settings page.",
+    state: "open",
+    html_url: `https://git.example.com/o/r/issues/${number}`,
+    labels: [{ name: "canopy" }],
+    ...over,
+  });
+  const ghBody = (over: Record<string, unknown> = {}) => JSON.stringify({ action: "labeled", label: { name: "canopy" }, issue: issue(12), ...over });
+  const fjBody = () => JSON.stringify({ action: "label_updated", issue: issue(7) });
+  const githubUrl = new URL("http://x/api/hooks/github/gh");
+  const forgejoUrl = new URL("http://x/api/hooks/forgejo/fj");
+  const githubReq = (body: string, sig = `sha256=${sign(body, HOOK)}`, event = "issues") =>
+    new Request(githubUrl.href, { method: "POST", body, headers: { "x-hub-signature-256": sig, "x-github-event": event } });
+  const forgejoReq = (body: string, headers: Record<string, string> = { "x-forgejo-signature": sign(body, HOOK), "x-forgejo-event": "issues" }) =>
+    new Request(forgejoUrl.href, { method: "POST", body, headers });
+  let reports: ProbeResult[];
+  let reads: string[];
+  const issueHub = (over: Partial<TriggerDeps> = {}) =>
+    hub({
+      env,
+      readIssue: async (_rule, _repo, inc) => {
+        reads.push(inc.key);
+        return { ...inc, comments: [{ author: "eric", body: "Still happens on main." }] };
+      },
+      reportPoll: (r) => reports.push(r),
+      ...over,
+    });
+
+  beforeEach(() => {
+    reports = [];
+    reads = [];
+  });
+
+  test("a signed labeled delivery reads the issue in full and starts a run", async () => {
+    await ghRules();
+    const h = issueHub();
+    await h.adopt();
+    const res = await h.handle(githubReq(ghBody()), githubUrl);
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toMatchObject({ kind: "started" });
+    const [e] = h.list();
+    expect(e).toMatchObject({ key: "12", short: "#12", service: "github", source: "github", status: "working", runId: "r1", link: "https://git.example.com/o/r/issues/12" });
+    expect(e?.note.startsWith("GitHub issue #12 came in.")).toBe(true);
+    expect(e?.note).toContain("comment by eric:\nStill happens on main.");
+    expect(reads).toEqual(["12"]);
+    expect(reports).toEqual([]);
+  });
+
+  test("a bad signature is a 401 before the body is parsed, and a body over a MiB a 413", async () => {
+    await ghRules();
+    const h = issueHub();
+    await h.adopt();
+    expect((await h.handle(githubReq("{", "sha256=bad"), githubUrl))?.status).toBe(401);
+    // GitHub's header carries the sha256= prefix; a bare digest is not it
+    expect((await h.handle(githubReq(ghBody(), sign(ghBody(), HOOK)), githubUrl))?.status).toBe(401);
+    expect((await h.handle(githubReq(ghBody(), `sha256=${sign(ghBody(), "other")}`), githubUrl))?.status).toBe(401);
+    expect((await h.handle(githubReq("{".padEnd(MAX_BODY + 1, " "), "sha256=bad"), githubUrl))?.status).toBe(413);
+    expect(h.list()).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
+  test("ping, any event but issues, and an issues event that adds another label are a quiet 200", async () => {
+    await ghRules();
+    const h = issueHub();
+    await h.adopt();
+    const ping = JSON.stringify({ zen: "Keep it logically awesome.", hook_id: 1 });
+    const res = await h.handle(githubReq(ping, undefined, "ping"), githubUrl);
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toEqual({ kind: "skip", why: "not an issues event" });
+    expect(await (await h.handle(githubReq(ghBody(), undefined, "pull_request"), githubUrl))?.json()).toMatchObject({ kind: "skip" });
+    expect(await (await h.handle(githubReq(ghBody({ label: { name: "bug" } })), githubUrl))?.json()).toEqual({ kind: "skip", why: "no label this rule takes was added to an open issue" });
+    expect(h.list()).toEqual([]);
+    expect(reads).toEqual([]);
+  });
+
+  test("a rule with no secret has no hook, and one whose secret is unset answers 503", async () => {
+    await ghRules({ secretEnv: undefined });
+    const h = issueHub();
+    await h.adopt();
+    expect((await h.handle(githubReq(ghBody()), githubUrl))?.status).toBe(404);
+    await ghRules({ secretEnv: "CANOPY_TRIGGER_GH_UNSET" });
+    expect((await h.handle(githubReq(ghBody()), githubUrl))?.status).toBe(503);
+    expect(h.list()).toEqual([]);
+  });
+
+  test("a Forgejo delivery signs as Forgejo or as Gitea, and a second label update on the issue bumps its count", async () => {
+    await fjRules();
+    const h = issueHub();
+    await h.adopt();
+    expect(await (await h.handle(forgejoReq(fjBody()), forgejoUrl))?.json()).toMatchObject({ kind: "started" });
+    const gitea = forgejoReq(fjBody(), { "x-gitea-signature": sign(fjBody(), HOOK), "x-gitea-event": "issues" });
+    expect(await (await h.handle(gitea, forgejoUrl))?.json()).toMatchObject({ kind: "duplicate" });
+    expect(h.list()).toHaveLength(1);
+    expect(h.list()[0]).toMatchObject({ key: "7", short: "#7", service: "forgejo", count: 2, runId: "r1" });
+    expect(h.list()[0]?.note.startsWith("Forgejo issue #7 came in.")).toBe(true);
+    expect(runs).toHaveLength(1);
+    // the issue was read in full once: a redelivery finds its event before any read
+    expect(reads).toEqual(["7"]);
+    expect((await h.handle(forgejoReq(fjBody(), { "x-forgejo-signature": sign(fjBody(), "other"), "x-forgejo-event": "issues" }), forgejoUrl))?.status).toBe(401);
+    expect(await (await h.handle(forgejoReq(fjBody(), { "x-forgejo-signature": sign(fjBody(), HOOK), "x-forgejo-event": "push" }), forgejoUrl))?.json()).toEqual({ kind: "skip", why: "not an issues event" });
+    expect(h.list()[0]?.count).toBe(2);
+  });
+
+  test("an issue canopy cannot read in full makes no event: the hook says so and health hears once", async () => {
+    await ghRules();
+    const h = issueHub({
+      readIssue: async () => {
+        throw new Error("gh answered 502");
+      },
+    });
+    await h.adopt();
+    const res = await h.handle(githubReq(ghBody()), githubUrl);
+    expect(res?.status).toBe(502);
+    expect(await res?.json()).toEqual({ error: "cannot read issue #12 in full: gh answered 502" });
+    expect(h.list()).toEqual([]);
+    expect(reports).toEqual([{ state: "down", why: "gh: cannot read issue #12 in full: gh answered 502" }]);
+  });
+});
+
+describe("polling", () => {
+  let reports: ProbeResult[];
+  let listed: number;
+  let reads: string[];
+  const candidates = (n: number): Incoming[] => Array.from({ length: n }, (_, i) => ({ key: String(i + 1), short: `#${i + 1}`, title: `Issue ${i + 1}`, detail: [], frames: [] }));
+  /** a rule with no hook secret, so it polls every 15 minutes by default */
+  const pollRules = (extra: Record<string, unknown> = {}) =>
+    writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "tracker", source: "github", repo: "web/shop", ...extra }] }));
+  const pollHub = (over: Partial<TriggerDeps> = {}) =>
+    hub({
+      listIssues: async () => {
+        listed++;
+        return candidates(60);
+      },
+      readIssue: async (_rule, _repo, inc) => {
+        reads.push(inc.key);
+        return inc;
+      },
+      reportPoll: (r) => reports.push(r),
+      ...over,
+    });
+
+  beforeEach(async () => {
+    reports = [];
+    listed = 0;
+    reads = [];
+    await pollRules();
+  });
+
+  test("a poll takes the oldest 50 of 60 candidates, reads each in full, and leaves the newer ten for the next tick", async () => {
+    const h = pollHub();
+    await h.adopt();
+    await h.poll("tracker");
+    const oldest = candidates(50);
+    expect(h.list()).toHaveLength(50);
+    expect(new Set(h.list().map((e) => e.key)).size).toBe(50);
+    expect(h.list().map((e) => e.key)).toEqual(oldest.map((i) => i.key));
+    expect(listed).toBe(1);
+    expect(reads).toEqual(oldest.map((i) => i.key));
+    expect(runs).toHaveLength(50);
+    expect(reports).toEqual([{ state: "ok" }]);
+    // the next poll lists the same sixty: the fifty with events are skipped before any read
+    await h.poll("tracker");
+    expect(h.list()).toHaveLength(60);
+    expect(reads).toHaveLength(60);
+    expect(h.list().every((e) => e.source === "github" && e.service === "github")).toBe(true);
+  });
+
+  test("only the flows-lock holder polls", async () => {
+    const nonOwner = pollHub();
+    await nonOwner.poll("tracker");
+    expect(listed).toBe(0);
+    expect(nonOwner.list()).toEqual([]);
+    expect(reports).toEqual([]);
+  });
+
+  test("a poll still out is not started again", async () => {
+    let releaseList = () => {};
+    const h = pollHub({
+      listIssues: () => {
+        listed++;
+        // only the first list waits to be answered
+        if (listed > 1) return Promise.resolve(candidates(2));
+        return new Promise<Incoming[]>((resolve) => {
+          releaseList = () => resolve(candidates(2));
+        });
+      },
+    });
+    await h.adopt();
+    const firstPoll = h.poll("tracker");
+    await h.poll("tracker");
+    // the list call comes after the rules are read, so wait for it before answering
+    while (listed === 0) await Bun.sleep(1);
+    releaseList();
+    await firstPoll;
+    expect(listed).toBe(1);
+    expect(h.list()).toHaveLength(2);
+    // once it is back, a poll runs again
+    await h.poll("tracker");
+    expect(listed).toBe(2);
+  });
+
+  test("a list that fails is one health line and no event", async () => {
+    const h = pollHub({
+      listIssues: async () => {
+        throw new Error("gh: HTTP 502");
+      },
+    });
+    await h.adopt();
+    await h.poll("tracker");
+    expect(h.list()).toEqual([]);
+    expect(reports).toEqual([{ state: "down", why: "tracker: gh: HTTP 502" }]);
+  });
+
+  test("an issue that cannot be read in full is left out, and health hears once", async () => {
+    const h = pollHub({
+      listIssues: async () => candidates(3),
+      readIssue: async (_rule, _repo, inc) => {
+        if (inc.key === "2") throw new Error("gh answered 500");
+        return inc;
+      },
+    });
+    await h.adopt();
+    await h.poll("tracker");
+    expect(h.list().map((e) => e.key)).toEqual(["1", "3"]);
+    expect(reports).toEqual([{ state: "down", why: "tracker: cannot read issue #2 in full: gh answered 500" }]);
+  });
+
+  test("the tick polls a rule when its cron comes due, and info says when next", async () => {
+    let t = Date.UTC(2026, 9, 26, 10, 3);
+    const h = pollHub({ now: () => t });
+    await h.adopt();
+    const quarter = Date.UTC(2026, 9, 26, 10, 15);
+    expect((await h.info()).rules[0]?.nextFire).toBe(quarter);
+    const got = (await (await h.handle(new Request("http://x/api/triggers"), new URL("http://x/api/triggers")))?.json()) as { rules: { nextFire?: number }[] };
+    expect(got.rules[0]?.nextFire).toBe(quarter);
+    await h.tick();
+    expect(listed).toBe(0);
+    t = quarter + 20_000;
+    await h.tick();
+    expect(listed).toBe(1);
+    expect((await h.info()).rules[0]?.nextFire).toBe(Date.UTC(2026, 9, 26, 10, 30));
+    // an hour asleep is one poll, not four
+    t = Date.UTC(2026, 9, 26, 11, 31);
+    await h.tick();
+    expect(listed).toBe(2);
+    // a rule with a hook secret and no poll line never polls, and names no next fire
+    await rules();
+    expect((await h.info()).rules[0]?.nextFire).toBeUndefined();
+    t += 3_600_000;
+    await h.tick();
+    expect(listed).toBe(2);
+  });
+
+  test("a rule's own cron line is the one followed", async () => {
+    await pollRules({ secretEnv: "CANOPY_TRIGGER_GH_HOOK", poll: "0 9 * * 1-5" });
+    let t = Date.UTC(2026, 9, 26, 8, 0);
+    const h = pollHub({ now: () => t, env: () => "s" });
+    await h.adopt();
+    expect((await h.info()).rules[0]?.nextFire).toBe(Date.UTC(2026, 9, 26, 9, 0));
+    t = Date.UTC(2026, 9, 26, 8, 59);
+    await h.tick();
+    expect(listed).toBe(0);
+    t = Date.UTC(2026, 9, 26, 9, 0, 5);
+    await h.tick();
+    expect(listed).toBe(1);
+  });
+
+  test("POST /api/triggers/poll runs one poll now, and refuses what it cannot poll", async () => {
+    const h = pollHub({
+      listIssues: async () => {
+        listed++;
+        return candidates(1);
+      },
+    });
+    await h.adopt();
+    const post = (hub: TriggerHub, body: unknown) =>
+      hub.handle(new Request("http://x/api/triggers/poll", { method: "POST", body: JSON.stringify(body) }), new URL("http://x/api/triggers/poll"));
+    const res = await post(h, { rule: "tracker" });
+    expect(res?.status).toBe(200);
+    expect(await res?.json()).toEqual({ ok: true });
+    expect(h.list()).toHaveLength(1);
+    expect((await post(h, { rule: "nope" }))?.status).toBe(404);
+    expect((await post(h, {}))?.status).toBe(400);
+    await rules();
+    const refused = await post(h, { rule: "shop" });
+    expect(refused?.status).toBe(400);
+    expect(await refused?.json()).toEqual({ error: "a sentry rule has no issues to poll" });
+    await pollRules();
+    const cold = pollHub();
+    expect((await post(cold, { rule: "tracker" }))?.status).toBe(503);
+    expect(listed).toBe(1);
   });
 });

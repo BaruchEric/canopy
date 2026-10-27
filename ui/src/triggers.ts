@@ -1,7 +1,7 @@
 /** The triggers view's model: every shown backend's events in sections, the
  *  words for each state, and the tab's count. Pure; Triggers.tsx draws it. */
 
-import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
+import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerRuleInfo, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
 import type { Badge } from "./badges";
 
 export interface TriggerRow {
@@ -115,5 +115,33 @@ export function triggersBadge(triggers: Readonly<Record<string, Pick<TriggersInf
   return { text: String(going.length), tone: "sky", title: `${going.length} ${going.length === 1 ? "fix" : "fixes"} going` };
 }
 
-/** The address to paste into Sentry's integration or Linear's webhook: the backend's own origin and the hook's path. */
+/** The address to paste into the service's webhook settings: the backend's own origin and the hook's path. */
 export const hookAddress = (origin: string, hook: string): string => `${origin.replace(/\/+$/, "")}${hook}`;
+
+const EVERY = /^\*\/(\d+)$/;
+
+/** The words for a rule's poll line: the common every-N-minutes and
+ *  every-N-hours lines read as such, any other as the cron line itself. */
+export function pollWords(cron: string): string {
+  const line = cron.trim();
+  const [min = "", hour = "", dom = "", mon = "", dow = ""] = line.split(/\s+/);
+  const daily = dom === "*" && mon === "*" && dow === "*";
+  if (daily && hour === "*") {
+    if (min === "*" || min === "*/1") return "polls every minute";
+    const m = EVERY.exec(min);
+    if (m) return `polls every ${m[1]} min`;
+  }
+  if (daily && min === "0") {
+    if (hour === "*" || hour === "*/1") return "polls every hour";
+    const h = EVERY.exec(hour);
+    if (h) return `polls every ${h[1]} hours`;
+  }
+  return `polls on ${line}`;
+}
+
+/** How a rule's issues reach canopy: the hook's address when the rule has
+ *  a secret (a Sentry or Linear rule always has), and the poll's words when
+ *  it polls. A GitHub or Forgejo rule with both has the poll as its safety net. */
+export function ruleIntake(rule: Pick<TriggerRuleInfo, "hook" | "secretEnv" | "poll">, origin: string): { hook: string | null; poll: string | null } {
+  return { hook: rule.secretEnv ? hookAddress(origin, rule.hook) : null, poll: rule.poll ? pollWords(rule.poll) : null };
+}

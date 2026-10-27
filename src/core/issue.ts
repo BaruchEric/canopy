@@ -115,6 +115,63 @@ export async function fetchIssue(ref: IssueRef, slug: string, gh: GhRun): Promis
   return issue ? { issue } : { error: `gh's answer for issue #${ref.number} is not an issue` };
 }
 
+/** The oldest `limit` of several label listings merged by number: an issue
+ *  carrying two of the rule's labels is listed once, and the newest wait
+ *  for the next poll. The same moment orders by number, and an unreadable
+ *  time sorts first rather than being lost. */
+export function oldestIssues<T extends { number: number; createdAt: string }>(lists: readonly (readonly T[])[], limit: number): T[] {
+  const byNumber = new Map<number, T>();
+  for (const list of lists) for (const issue of list) if (!byNumber.has(issue.number)) byNumber.set(issue.number, issue);
+  const when = (issue: T): number => {
+    const t = Date.parse(issue.createdAt);
+    return Number.isNaN(t) ? 0 : t;
+  };
+  return [...byNumber.values()].sort((a, b) => when(a) - when(b) || a.number - b.number).slice(0, limit);
+}
+
+/** gh's JSON for `issue list`: each issue as a view with no comments, and
+ *  when it was opened; null when the answer is not a list. */
+function parseListedIssues(json: unknown): (IssueView & { createdAt: string })[] | null {
+  if (!Array.isArray(json)) return null;
+  const out: (IssueView & { createdAt: string })[] = [];
+  for (const item of json) {
+    const view = parseIssueView(item);
+    if (view && isRecord(item)) out.push({ ...view, createdAt: str(item["createdAt"]) });
+  }
+  return out;
+}
+
+/** The open issues on `slug` carrying one of `labels`, oldest first and at
+ *  most `limit` of them: one `gh issue list` per label, merged by number.
+ *  Each is a view with no comments; `fetchIssue` reads one in full. */
+export async function listLabelledIssues(
+  slug: string,
+  labels: readonly string[],
+  gh: GhRun,
+  limit: number,
+): Promise<{ issues: (IssueView & { createdAt: string })[] } | { error: string }> {
+  const lists: (IssueView & { createdAt: string })[][] = [];
+  for (const label of labels) {
+    let r: GhResult;
+    try {
+      r = await gh(["issue", "list", "-R", slug, "--label", label, "--state", "open", "--search", "sort:created-asc", "--limit", String(limit), "--json", "number,title,body,url,labels,createdAt"]);
+    } catch (err) {
+      return { error: `gh did not run: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (r.code !== 0) return { error: lastLine(r) };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch {
+      return { error: `gh's answer for the ${label} issues is not JSON` };
+    }
+    const list = parseListedIssues(parsed);
+    if (!list) return { error: `gh's answer for the ${label} issues is not a list` };
+    lists.push(list);
+  }
+  return { issues: oldestIssues(lists, limit) };
+}
+
 /** The note a branch run starts with: the issue's when the note opens with
  *  a ref and the repo has a GitHub remote, else the note as typed (a
  *  Forgejo or QNAP repo has no issue canopy can read). */

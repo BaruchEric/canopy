@@ -1,7 +1,8 @@
-/** Triggers' server half: the hooks Sentry and Linear post to, the event records, the
- *  queue of events waiting for a branch run slot, and the event's state as
- *  its run and its PR move. The model is `core/trigger.ts`; the branch run
- *  and its PR are the landing queue's and the PR watch's.
+/** Triggers' server half: the hooks Sentry, Linear, GitHub and Forgejo post
+ *  to, the poll that reads a GitHub or Forgejo repo's labelled issues, the
+ *  event records, the queue of events waiting for a branch run slot, and the
+ *  event's state as its run and its PR move. The model is `core/trigger.ts`;
+ *  the branch run and its PR are the landing queue's and the PR watch's.
  *
  *  The rules are `<configDir>/triggers.json`, written by hand. The events are
  *  `<configDir>/triggers/events.json`, written only by the server holding the
@@ -9,11 +10,14 @@
  *  sharing one config dir never both write them. The lock is per machine:
  *  what keeps the Mac and the mini from both starting a run for one issue is
  *  that Sentry posts to one address. A server without the lock answers a
- *  hook 503, and Sentry retries the same address later. */
+ *  hook 503, and Sentry retries the same address later. The polls run on the
+ *  lock holder only, for the same reason. */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { nextFire, parseCron } from "../core/cron";
+import { fail, pass, type ProbeResult } from "../core/health";
 import { configDir } from "../core/store";
 import {
   activityFor,
@@ -30,9 +34,12 @@ import {
   newEvent,
   otherWorkspace,
   parseAgentEvent,
+  parseForgejoIssue,
+  parseGithubIssue,
   parseLinear,
   parseRules,
   parseSentry,
+  POLL_ISSUES,
   pruneEvents,
   resumable,
   retryable,
@@ -45,6 +52,7 @@ import {
   type TriggerEvent,
   type TriggerRule,
   type TriggerRuleInfo,
+  type TriggerSource,
   type TriggersInfo,
 } from "../core/trigger";
 import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
@@ -52,9 +60,10 @@ import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDo
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
 export const triggersDir = (): string => join(configDir(), "triggers");
-/** how often the queue is tried again, for a slot freed while nothing told the hub */
+/** how often the queue is tried again, for a slot freed while nothing told
+ *  the hub, and the rules' polls are checked against their cron lines */
 export const TICK_EVERY = 30_000;
-/** the largest hook body read; Sentry's and Linear's are a few kilobytes */
+/** the largest hook body read; a delivery is a few kilobytes on every service */
 export const MAX_BODY = 1024 * 1024;
 /** how long an install link's state is good for, from the click to Linear's redirect back */
 export const INSTALL_FOR = 10 * 60 * 1000;
@@ -125,6 +134,16 @@ export interface TriggerDeps {
   origin?: string;
   /** finishes a Linear app's install with the code Linear sent back; Linear's API unless a test says otherwise */
   install?: (rule: TriggerRule, secret: string, code: string, redirect: string) => Promise<LinearInstall>;
+  /** github and forgejo: the repo's open issues carrying one of the rule's
+   *  labels, oldest first and at most `POLL_ISSUES`, as a hook would deliver
+   *  them (no comments yet); a poll's list call */
+  listIssues: (rule: TriggerRule, repo: Repo) => Promise<Incoming[]>;
+  /** github and forgejo: the issue read in full, its newest comments with
+   *  it, before its event is made; a hook's delivery carries none */
+  readIssue: (rule: TriggerRule, repo: Repo, issue: Incoming) => Promise<Incoming>;
+  /** how the last poll went, or a hook's read of an issue in full: the
+   *  `canopy:triggers` health check, fed one result per poll */
+  reportPoll: (result: ProbeResult) => void;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -144,6 +163,38 @@ function installPage(status: number, title: string, line: string): Response {
 }
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
+const issuesSource = (source: TriggerSource): boolean => source === "github" || source === "forgejo";
+
+/** An issue a hook or a poll could not read in full: no event is made, the
+ *  hook answers 502 and health hears why. */
+class ReadFailed extends TriggerError {
+  constructor(message: string) {
+    super(message, 502);
+  }
+}
+
+/** The hex digest a service put on its delivery, from the header it signs
+ *  in: GitHub prefixes its `X-Hub-Signature-256` with `sha256=`, Forgejo
+ *  sends `X-Forgejo-Signature` and, as Gitea did, `X-Gitea-Signature`. */
+function hookSignature(source: TriggerSource, headers: Headers): string | null {
+  switch (source) {
+    case "sentry":
+      return headers.get("sentry-hook-signature");
+    case "linear":
+      return headers.get("linear-signature");
+    case "github": {
+      const v = headers.get("x-hub-signature-256");
+      return v?.startsWith("sha256=") ? v.slice("sha256=".length) : null;
+    }
+    case "forgejo":
+      return headers.get("x-forgejo-signature") ?? headers.get("x-gitea-signature");
+  }
+}
+
+/** Whether a GitHub or Forgejo delivery is about issues: GitHub sends
+ *  `ping` on install and whatever else the hook subscribes to. */
+const issuesEvent = (source: TriggerSource, headers: Headers): boolean =>
+  source === "github" ? headers.get("x-github-event") === "issues" : (headers.get("x-forgejo-event") ?? headers.get("x-gitea-event")) === "issues";
 
 /** Whether `signature` is the hex HMAC-SHA256 of `body` under `secret`,
  *  compared in constant time: Sentry's `Sentry-Hook-Signature` and Linear's
@@ -189,8 +240,16 @@ export class TriggerHub {
    *  a slow call to Linear never holds a delivery up */
   private telling: Promise<void> = Promise.resolve();
   private pumping = false;
+  /** the polls out now, by rule, so a slow one is not started again */
+  private polling = new Map<string, Promise<void>>();
+  /** when each rule last began a poll; its cron counts from there */
+  private polled = new Map<string, number>();
+  /** when this hub began keeping, which a rule's first poll counts from */
+  private started: number;
 
-  constructor(private deps: TriggerDeps) {}
+  constructor(private deps: TriggerDeps) {
+    this.started = this.now();
+  }
 
   private get file(): string {
     return this.deps.file ?? triggersFile();
@@ -247,6 +306,7 @@ export class TriggerHub {
     for (const r of this.rules) {
       const repo = this.deps.repo(r.repo);
       const problem = repo ? await this.deps.workflowProblem(r.workflow, repo) : `no repo ${r.repo} in the tree`;
+      const next = this.nextPoll(r);
       rules.push({
         ...r,
         hook: `/api/hooks/${r.source}/${r.name}`,
@@ -255,6 +315,7 @@ export class TriggerHub {
         agentSet: r.clientSecretEnv ? this.env(r.clientSecretEnv) !== undefined : false,
         ...(r.clientId ? { install: `/api/linear/install?rule=${encodeURIComponent(r.name)}` } : {}),
         ...(problem ? { problem } : {}),
+        ...(next !== null ? { nextFire: next } : {}),
       });
     }
     return { rules, problems: this.problems, events: this.list(), keeping: this.keeping };
@@ -305,6 +366,7 @@ export class TriggerHub {
    *  lock: a run a restart took reads as stopped, and the queue goes on. */
   async adopt(): Promise<void> {
     this.keeping = true;
+    this.started = this.now();
     await this.loadRules();
     try {
       const v: unknown = JSON.parse(await readFile(join(this.dir, "events.json"), "utf8"));
@@ -329,7 +391,31 @@ export class TriggerHub {
 
   start(): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.pump(), this.deps.tickEvery ?? TICK_EVERY);
+    this.timer = setInterval(() => this.tick().catch((err) => console.error(`triggers: ${errText(err)}`)), this.deps.tickEvery ?? TICK_EVERY);
+  }
+
+  /** Each tick: the queued events tried again, and every rule whose poll
+   *  has come due polled. A tick that finds a poll still out leaves it. */
+  async tick(): Promise<void> {
+    await this.pump();
+    if (!this.keeping) return;
+    await this.loadRules();
+    const now = this.now();
+    const due = this.rules.filter((r) => {
+      const next = this.nextPoll(r);
+      return next !== null && next <= now;
+    });
+    await Promise.all(due.map((r) => this.poll(r.name)));
+  }
+
+  /** When a rule's poll next fires: the first time its cron line allows
+   *  after its last poll began, or after this hub began keeping. Null for a
+   *  rule that does not poll. */
+  private nextPoll(rule: TriggerRule): number | null {
+    if (!rule.poll) return null;
+    const cron = parseCron(rule.poll);
+    if ("error" in cron) return null;
+    return nextFire(cron, this.polled.get(rule.name) ?? this.started);
   }
 
   stop(): void {
@@ -394,6 +480,67 @@ export class TriggerHub {
       this.set(failed);
       return failed;
     }
+  }
+
+  /* ---------- polls ---------- */
+
+  /** The rule's poll, now: its open labelled issues listed, and each with
+   *  no event read in full and delivered as a hook would. Only the
+   *  flows-lock holder polls, and a poll still out is not started again.
+   *  One health result per poll: the list failing is that line, a read
+   *  failing is that line and the issue waits for the next poll; neither
+   *  is an event. An unknown rule, or one of a source without issues, throws. */
+  poll(name: string): Promise<void> {
+    if (!this.keeping || this.polling.has(name)) return Promise.resolve();
+    const p = this.pollNow(name).finally(() => this.polling.delete(name));
+    this.polling.set(name, p);
+    return p;
+  }
+
+  private async pollNow(name: string): Promise<void> {
+    await this.loadRules();
+    const rule = this.rule(name);
+    if (!rule) throw new TriggerError(`no trigger rule called ${name}`, 404);
+    if (!issuesSource(rule.source)) throw new TriggerError(`a ${rule.source} rule has no issues to poll`, 400);
+    this.polled.set(name, this.now());
+    const repo = this.deps.repo(rule.repo);
+    if (!repo) {
+      this.deps.reportPoll(fail(`${name}: no repo ${rule.repo} in the tree`));
+      return;
+    }
+    let listed: Incoming[];
+    try {
+      listed = await this.deps.listIssues(rule, repo);
+    } catch (err) {
+      this.deps.reportPoll(fail(`${name}: ${errText(err)}`));
+      return;
+    }
+    // the issues with an event are skipped before any read; the cap is the
+    // reader's too, so a repo with more labelled issues waits for the next poll
+    const fresh = listed.filter((inc) => !existing(this.list(), rule.name, inc.key)).slice(0, POLL_ISSUES);
+    const failed: string[] = [];
+    for (const inc of fresh) {
+      try {
+        await this.take(rule, repo, inc);
+      } catch (err) {
+        failed.push(errText(err));
+      }
+    }
+    this.deps.reportPoll(failed.length ? fail(`${name}: ${failed[0]}${failed.length > 1 ? ` (and ${failed.length - 1} more)` : ""}`) : pass());
+  }
+
+  /** One issue from a hook or a poll: a redelivery, or a poll listing it
+   *  again, finds its event and bumps the count; a new one is read in full
+   *  (the comments ride in the note) and delivered. */
+  private async take(rule: TriggerRule, repo: Repo, inc: Incoming): Promise<Delivery> {
+    if (existing(this.list(), rule.name, inc.key)) return this.deliver(rule, inc, rule.source);
+    let full: Incoming;
+    try {
+      full = await this.deps.readIssue(rule, repo, inc);
+    } catch (err) {
+      throw new ReadFailed(`cannot read issue ${inc.short ?? inc.key} in full: ${errText(err)}`);
+    }
+    return this.deliver(rule, full, rule.source);
   }
 
   /** Tries every queued event again, oldest first. */
@@ -689,6 +836,12 @@ export class TriggerHub {
         if (typeof b["rule"] !== "string") return json({ error: "missing rule" }, 400);
         return json(await this.fire(b["rule"], typeof b["title"] === "string" ? b["title"] : ""), 201);
       }
+      if (act === "poll") {
+        if (typeof b["rule"] !== "string") return json({ error: "missing rule" }, 400);
+        if (!this.keeping) return json({ error: "this backend does not hold the flows lock, so it polls nothing" }, 503);
+        await this.poll(b["rule"]);
+        return json({ ok: true });
+      }
       if (typeof b["id"] !== "string") return json({ error: "missing event id" }, 400);
       if (act === "resume") return json(await this.resume(b["id"]));
       if (act === "retry") return json(await this.retry(b["id"]));
@@ -699,8 +852,8 @@ export class TriggerHub {
     }
   }
 
-  /** A delivery from Sentry or Linear. Nothing in the body is read before
-   *  its signature checks out against the rule's secret. */
+  /** A delivery from a service. Nothing in the body is read before its
+   *  signature checks out against the rule's secret. */
   private async hook(req: Request, source: string, name: string): Promise<Response> {
     await this.loadRules();
     const rule = this.rule(name);
@@ -713,23 +866,46 @@ export class TriggerHub {
     if (length > MAX_BODY) return json({ error: "body too large" }, 413);
     const body = await req.text();
     if (body.length > MAX_BODY) return json({ error: "body too large" }, 413);
-    const linear = rule.source === "linear";
-    if (!signatureOk(body, req.headers.get(linear ? "linear-signature" : "sentry-hook-signature"), secret)) return json({ error: "bad signature" }, 401);
+    if (!signatureOk(body, hookSignature(rule.source, req.headers), secret)) return json({ error: "bad signature" }, 401);
+    // every service counts anything but a 200 as a failure and shows it as
+    // one, so a delivery the rule has no use for is a quiet 200
+    if (issuesSource(rule.source) && !issuesEvent(rule.source, req.headers)) return json({ kind: "skip", why: "not an issues event" });
     let payload: unknown;
     try {
       payload = JSON.parse(body);
     } catch {
       return json({ error: "body is not JSON" }, 400);
     }
+    if (issuesSource(rule.source)) return this.issueHook(rule, payload);
+    const linear = rule.source === "linear";
     if (linear && !linearFresh(payload, this.now())) return json({ error: "the delivery's webhookTimestamp is more than a minute off" }, 401);
     if (linear && otherWorkspace(rule, payload)) return json({ kind: "skip", why: "a delivery from a Linear workspace other than the rule's" });
     if (linear && isRecord(payload) && payload["type"] === "AgentSessionEvent") return this.agentHook(rule, payload);
     const inc = linear ? parseLinear(payload, rule.labels) : parseSentry(req.headers.get("sentry-hook-resource") ?? "", payload);
-    // both services count anything but a 200 as a failure and retry it, so an
-    // installation ping, a resolved issue or an edit that adds no label is a quiet 200
+    // an installation ping, a resolved issue or an edit that adds no label
     if (!inc) return json({ kind: "skip", why: linear ? "no label this rule takes was added" : "not a new issue" });
     const d = await this.deliver(rule, inc, rule.source);
     return json(d.kind === "skip" ? d : { kind: d.kind, event: d.event.id });
+  }
+
+  /** A GitHub or Forgejo issues delivery: when the label added is one the
+   *  rule takes, the issue goes the way a polled one does (`take`). An
+   *  issue that cannot be read in full is a 502 and a health line, so the
+   *  service shows the delivery failed and a redelivery, or the rule's
+   *  poll, brings it in later. */
+  private async issueHook(rule: TriggerRule, payload: unknown): Promise<Response> {
+    const inc = rule.source === "github" ? parseGithubIssue(payload, rule.labels) : parseForgejoIssue(payload, rule.labels);
+    if (!inc) return json({ kind: "skip", why: "no label this rule takes was added to an open issue" });
+    if (!this.keeping) return json({ error: "this backend does not hold the flows lock, so it starts no trigger" }, 503);
+    const repo = this.deps.repo(rule.repo);
+    if (!repo) return json({ error: `no repo ${rule.repo} in the tree` }, 404);
+    try {
+      const d = await this.take(rule, repo, inc);
+      return json(d.kind === "skip" ? d : { kind: d.kind, event: d.event.id });
+    } catch (err) {
+      if (err instanceof ReadFailed) this.deps.reportPoll(fail(`${rule.name}: ${err.message}`));
+      throw err;
+    }
   }
 
   /** A Linear agent session event. Linear gives the hook 5 s and marks a
