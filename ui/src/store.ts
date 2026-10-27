@@ -1730,6 +1730,8 @@ const kitEvents = new Map<string, number>();
 /* and each backend's landing events */
 const landingEvents = new Map<string, number>();
 const worktreeEvents = new Map<string, number>();
+/* Pool reads may overlap across a stream reconnect; only the newest may land. */
+const worktreeLoads = new Map<string, number>();
 /* and each backend's PR events */
 const prsEvents = new Map<string, number>();
 /* and each backend's trigger events */
@@ -3544,9 +3546,11 @@ export const useStore = create<CanopyState>((set, get) => ({
   loadWorktrees: async (backend) => {
     const b = backend ?? get().home;
     const mark = worktreeEvents.get(b) ?? 0;
+    const load = (worktreeLoads.get(b) ?? 0) + 1;
+    worktreeLoads.set(b, load);
     try {
       const worktrees = await api.worktrees(b);
-      if ((worktreeEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ worktrees: { ...s.worktrees, [b]: worktrees } }));
+      if (worktreeLoads.get(b) === load && (worktreeEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ worktrees: { ...s.worktrees, [b]: worktrees } }));
     } catch {
       // An older backend has no pool endpoint; nothing shows for it.
     }

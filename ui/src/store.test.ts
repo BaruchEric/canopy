@@ -1006,6 +1006,32 @@ describe("several backends", () => {
     expect(useStore.getState().worktrees.b).toBeUndefined();
   });
 
+  test("a reconnect worktrees GET wins over an older initial GET completed last", async () => {
+    const initial: WorktreesInfo = { root: "/w", free: 1, repos: [] };
+    const current: WorktreesInfo = { ...initial, free: 3 };
+    const pending: ((r: Response) => void)[] = [];
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": initial }),
+      (path, init) => {
+        if (path === "/api/worktrees") return new Promise<Response>(resolve => { pending.push(resolve); });
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    if (!stream) throw new Error("no foreign stream");
+    stream.onopen?.();
+    stream.onopen?.();
+    const [older, newer] = pending;
+    if (!older || !newer || pending.length !== 2) throw new Error("expected initial and reconnect pool reads");
+    newer(new Response(JSON.stringify(current)));
+    await settle();
+    expect(useStore.getState().worktrees.b).toEqual(current);
+    older(new Response(JSON.stringify(initial)));
+    await settle();
+    expect(useStore.getState().worktrees.b).toEqual(current);
+  });
+
   test("a worktrees GET from before removal cannot overwrite a reconnected backend", async () => {
     const fresh: WorktreesInfo = { root: "/w", free: 3, repos: [] };
     let reads = 0;
