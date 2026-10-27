@@ -17,7 +17,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 | [Workflow graph, plan 1: after, when and mode in the parser and the flow engine](2026-10-26-workflow-graph-1.md) | implemented locally 2026-10-27; combined verification pending | | [workflow graph](../specs/2026-10-25-workflow-graph-design.md) |
 | [Work ledger, plan 1: a work item per branch, minted at start and carried by git](2026-10-26-work-ledger-1.md) | implemented locally; batch verification pending | | [work ledger](../specs/2026-10-25-work-ledger-design.md) |
 | [PWA and push, plan 1: an installable page with a shell-only service worker](2026-10-26-pwa-push-1.md) | implemented locally; phone/Access checks pending | 2026-10-26 | [PWA and push](../specs/2026-10-25-pwa-push-design.md) |
-| [Run replay, plan 1: the wire on disk, kept for 30 days and redacted](2026-10-26-run-replay-1.md) | planned | | [run replay](../specs/2026-10-25-run-replay-design.md) |
+| [Run replay, plan 1: the wire on disk, kept for 30 days and redacted](2026-10-26-run-replay-1.md) | implemented on private `feat/oct26-batch` 2026-10-27; final batch verification pending; not shipped on `main` | | [run replay](../specs/2026-10-25-run-replay-design.md) |
 | [The coordinator: one chat splits a goal into branch runs](2026-10-17-coordinator.md) | shipped | 2026-10-17 | [coordinator](../specs/2026-10-16-coordinator-design.md) |
 | [PR watch: a branch run opens a PR and keeps watching it](2026-10-16-pr-watch.md) | shipped | 2026-10-16 | [PR watch](../specs/2026-10-16-pr-watch-design.md) |
 | [Landing queue, plan 2: review rules and auto-land](2026-10-16-landing-queue-2.md) | shipped | 2026-10-16 | [landing queue](../specs/2026-10-15-landing-queue-design.md) |
