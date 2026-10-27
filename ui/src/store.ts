@@ -4924,6 +4924,7 @@ let inboxIn: {
   prs: Record<string, PrWatch[]>;
   auth: Record<string, BackendAuth>;
   sweep: SweepInfo | null;
+  triggers: Record<string, TriggersInfo>;
 } | null = null;
 let inboxOut: InboxItem[] = [];
 
@@ -4932,10 +4933,10 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep && inboxIn.triggers === s.triggers) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep, triggers: s.triggers };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
@@ -4947,6 +4948,7 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     prs: prsAll(s),
     pairs: pairsOf(s.authByBackend),
     sweep: s.sweep,
+    triggers: Object.values(s.triggers).flatMap((t) => t.events),
   });
   return inboxOut;
 }

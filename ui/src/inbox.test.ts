@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
+import type { TriggerEvent } from "../../src/core/trigger";
 import {
   askPermission,
   askWord,
@@ -475,6 +476,55 @@ describe("PRs that need a look", () => {
     const prs = [watch({ autoFix: true, gaveUp: "test failed 3 times", state: state({ checks: [] }) })];
     const items = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, prs });
     expect(items.map((i) => [i.key, i.kind, i.title, i.detail])).toEqual([["pr:b1", "gave-up", "PR #7: auto-fix gave up", "test failed 3 times"]]);
+  });
+
+  const event = (over: Partial<TriggerEvent> = {}): TriggerEvent => ({
+    id: "mac|t1",
+    rule: "gh",
+    source: "github",
+    service: "github",
+    key: "12",
+    short: "#12",
+    title: "Login breaks",
+    note: "",
+    repoId: "app",
+    workflow: "issue-fix",
+    status: "review",
+    count: 1,
+    firstAt: 1,
+    lastAt: 7,
+    ...over,
+  });
+
+  test("an event that needs you is an inbox item, named by its issue and what it needs", () => {
+    const e = event({ needsYou: "auto-fix gave up: x", branch: "b1" });
+    const [it] = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, backendOf: () => "mac", triggers: [e] });
+    expect(it).toEqual({
+      key: "trigger:mac|t1",
+      source: "trigger",
+      id: "mac|t1",
+      kind: "trigger",
+      repoId: "app",
+      repo: "app",
+      who: "GitHub",
+      where: "#12 via mac",
+      title: "#12: auto-fix gave up: x",
+      detail: "Login breaks",
+      at: 7,
+      left: null,
+      until: null,
+    });
+    expect(mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, triggers: [event({ branch: "b1" })] })).toEqual([]);
+    expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, triggers: [event({ needsYou: "y", short: undefined, repoId: "web/shop" })] })[0]).toMatchObject({ repoId: null, repo: "shop", where: "12", title: "12: y" });
+  });
+
+  test("a PR's gave-up item speaks for its event, so the event adds no second item", () => {
+    const e = event({ needsYou: "auto-fix gave up: x", branch: "b1" });
+    const both = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, triggers: [e], prs: [watch({ autoFix: true, gaveUp: "x", state: state({ checks: [] }) })] });
+    expect(both.map((i) => i.key)).toEqual(["pr:b1"]);
+    // a PR item for another branch leaves the event's item in
+    const other = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, triggers: [e], prs: [watch({ id: "b2", autoFix: true, gaveUp: "x", state: state({ checks: [] }) })] });
+    expect(other.map((i) => i.key)).toEqual(["pr:b2", "trigger:mac|t1"]);
   });
 });
 

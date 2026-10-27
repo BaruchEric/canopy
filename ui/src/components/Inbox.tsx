@@ -10,6 +10,7 @@ import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { durationWord } from "../agentcards";
 import { askCloses, pickKeys } from "../sweep";
+import { openView } from "../clirun";
 import { pairAsk } from "../callerToken";
 import { HANGS_RIGHT, useFitPop } from "../pop";
 import { PopGrip, usePopEntries, type PopSpec } from "./PopGrip";
@@ -45,8 +46,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", trigger: "!" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", trigger: "trigger" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -317,6 +318,18 @@ export function InboxRow({
                   </button>
                 </div>
               )}
+            </div>
+          ) : item.kind === "trigger" ? (
+            <div className="ask">
+              <div className="eyebrow">
+                {item.repo} {item.title}
+              </div>
+              {detail && <pre className="ask-detail">{detail}</pre>}
+              <div className="ask-row">
+                <button type="button" className="mini" title="The triggers view, where the issue, its run and its PR are" onClick={() => openView("triggers")}>
+                  open
+                </button>
+              </div>
             </div>
           ) : item.kind === "sweep" ? (
             <SweepAsk items={item.sweep ?? []} busy={busy} now={now} onAnswer={answer} />

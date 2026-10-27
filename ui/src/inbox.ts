@@ -36,8 +36,10 @@ import { handOffText } from "../../src/core/sprout";
 import { sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 import { askTitle } from "./sweep";
+import type { TriggerEvent } from "../../src/core/trigger";
+import { serviceOf } from "./triggers";
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "trigger";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -46,7 +48,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "ci" | "gave-up" | "pair" | "sweep";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "ci" | "gave-up" | "pair" | "sweep" | "trigger";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -118,6 +120,9 @@ export interface InboxContext {
   pairs?: Readonly<Record<string, readonly PendingPair[]>>;
   /** the home backend's sweep: its pending ask, if any, is one item */
   sweep?: Pick<SweepInfo, "ask" | "settings" | "lastRun"> | null;
+  /** every backend's trigger events: one whose PR waits on Eric
+   *  (`needsYou`) is an item, unless the PR's own item is already here */
+  triggers?: readonly TriggerEvent[];
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -377,6 +382,31 @@ function prItem(w: PrWatch, ctx: InboxContext): InboxItem | null {
   };
 }
 
+/** A trigger event whose PR waits on Eric (`needsYou`): the issue, by the
+ *  id people read, and what it needs. The PR watch's own item for the
+ *  branch, when it makes one, speaks for the event instead. */
+function triggerItem(e: TriggerEvent, ctx: InboxContext): InboxItem | null {
+  if (e.needsYou === undefined) return null;
+  const repo = ctx.repos.find((r) => r.id === e.repoId);
+  const backend = ctx.backendOf?.(e.id) ?? "";
+  const name = e.short ?? e.key;
+  return {
+    key: `trigger:${e.id}`,
+    source: "trigger",
+    id: e.id,
+    kind: "trigger",
+    repoId: repo ? repo.id : null,
+    repo: repo?.name ?? e.repoId.split("/").pop() ?? "",
+    who: serviceOf(e),
+    where: `${name}${backend ? ` via ${backend}` : ""}`,
+    title: `${name}: ${e.needsYou}`,
+    detail: e.title,
+    at: e.lastAt,
+    left: null,
+    until: null,
+  };
+}
+
 /** A page, the CLI or a helper asking a backend to let it in. Its row shows
  *  the code the asker shows, so the two are matched by eye before allowing. */
 function pairItem(backend: string, p: PendingPair): InboxItem {
@@ -459,6 +489,11 @@ export function mergeInbox(
   }
   for (const w of ctx.prs ?? []) {
     const it = prItem(w, ctx);
+    if (it) items.push(it);
+  }
+  for (const e of ctx.triggers ?? []) {
+    if (e.branch !== undefined && items.some((i) => i.key === `pr:${e.branch}`)) continue;
+    const it = triggerItem(e, ctx);
     if (it) items.push(it);
   }
   for (const [backend, pending] of Object.entries(ctx.pairs ?? {})) for (const p of pending) items.push(pairItem(backend, p));
