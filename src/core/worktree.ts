@@ -183,6 +183,24 @@ export async function pushBranch(dir: string, remote: string, branch: string): P
   return r.code === 0 ? { ok: true } : { rejected: why(r, "git push") };
 }
 
+/** Pushes a run's branch after it was rebased in its own worktree, by
+ *  canopy or by a fix run canopy started: forced, but only while the
+ *  remote branch is still at `expect`, the commit canopy pushed last. A
+ *  push from anyone else since, or a branch that is gone, refuses it as
+ *  stale, and the reason is git's own for the ref. The PR watch's rebase
+ *  step is its one caller; `pushBranch` stays force-free for the rest. */
+export async function pushBranchLease(dir: string, remote: string, branch: string, expect: string): Promise<PushResult> {
+  const ref = `refs/heads/${branch}`;
+  const r = await git(dir, ["push", "--porcelain", `--force-with-lease=${ref}:${expect}`, remote, `${ref}:${ref}`], 120_000);
+  if (r.code === 0) return { ok: true };
+  // with --porcelain the ref's own line is on stdout: "!\t<from>:<to>\t[rejected] (stale info)"
+  const reason = r.stdout
+    .split("\n")
+    .find((l) => l.startsWith("!"))
+    ?.split("\t")[2];
+  return { rejected: reason ? `git push: ${reason}` : why(r, "git push") };
+}
+
 /** The remote a run's branch is pushed to: the one `target`'s upstream
  *  names, else `origin`, else the only remote; null when there is none. */
 export async function pushRemote(repo: string, target: string): Promise<string | null> {

@@ -15,6 +15,7 @@ import {
   listRunTreeDirs,
   overwrittenFiles,
   pushBranch,
+  pushBranchLease,
   pushRemote,
   rebaseOnto,
   removeRunTree,
@@ -198,6 +199,47 @@ describe("pushing a run's branch", () => {
     await commit(dir, "d.txt", "d\n");
     const res = await pushBranch(dir, "origin", "run/p-p1");
     expect("rejected" in res).toBe(true);
+  });
+
+  /** A run branch pushed to the bare, then main moved under it and the
+   *  branch rebased onto main in its worktree, as the PR watch does. */
+  const rebased = async (): Promise<{ r: string; bare: string; dir: string; pushed: string }> => {
+    const { r, bare } = await withRemote();
+    const dir = runTreeDir(r, "p1", join(root, `wts-lease${++n}`));
+    await addRunTree(r, dir, "run/p-p1", "main");
+    const pushed = await commit(dir, "b.txt", "b\n");
+    expect(await pushBranch(dir, "origin", "run/p-p1")).toEqual({ ok: true });
+    await commit(r, "m.txt", "m\n");
+    await sh(dir, "rebase", "main");
+    expect(await sh(dir, "rev-parse", "HEAD")).not.toBe(pushed);
+    return { r, bare, dir, pushed };
+  };
+
+  test("pushBranchLease pushes a rebased branch while the remote is at the sha canopy pushed", async () => {
+    const { bare, dir, pushed } = await rebased();
+    expect(await pushBranchLease(dir, "origin", "run/p-p1", pushed)).toEqual({ ok: true });
+    expect(await sh(bare, "rev-parse", "refs/heads/run/p-p1")).toBe(await sh(dir, "rev-parse", "HEAD"));
+  });
+
+  test("refused with stale info once another clone moved the remote branch, and pushBranch refuses the same push without a lease", async () => {
+    const { bare, dir, pushed } = await rebased();
+    const other = join(root, `clone${++n}`);
+    await exec(["git", "clone", "-q", "-b", "run/p-p1", bare, other]);
+    await sh(other, "config", "user.email", "t@t");
+    await sh(other, "config", "user.name", "t");
+    const theirs = await commit(other, "c.txt", "c\n");
+    await sh(other, "push", "-q", "origin", "run/p-p1");
+    const refused = await pushBranchLease(dir, "origin", "run/p-p1", pushed);
+    expect("rejected" in refused && /stale info/.test(refused.rejected)).toBe(true);
+    expect("rejected" in (await pushBranch(dir, "origin", "run/p-p1"))).toBe(true);
+    expect(await sh(bare, "rev-parse", "refs/heads/run/p-p1")).toBe(theirs);
+  });
+
+  test("refused when the remote branch is gone", async () => {
+    const { bare, dir, pushed } = await rebased();
+    await sh(bare, "update-ref", "-d", "refs/heads/run/p-p1");
+    expect("rejected" in (await pushBranchLease(dir, "origin", "run/p-p1", pushed))).toBe(true);
+    expect((await exec(["git", "rev-parse", "--verify", "-q", "refs/heads/run/p-p1"], { cwd: bare })).code).not.toBe(0);
   });
 
   test("pushRemote: the target's upstream remote, else origin, else the only one, else none", async () => {
