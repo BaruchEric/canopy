@@ -10,6 +10,7 @@ import { GLYPH, lockedIndex, type RepoState } from "../util";
 import { HEALTH_PANEL } from "../health";
 import { ATTENTION_WORD, WAITING_PANEL, WAITING_WORD, isUnpushed, type AttentionRow, type BehindRow, type WaitingGroup } from "../waiting";
 import { InboxRow, useNow } from "./Inbox";
+import { LandingNotices } from "./Landing";
 import { IdLabel } from "./IdLabel";
 import { AgentFix } from "./AgentFix";
 
@@ -193,10 +194,13 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
   const repoName = (id: string) => nameOf.get(id) ?? idText(id);
   if (turns.length + items.length + attention.length + failed.length + behind.length === 0) {
     return (
-      <p className="waiting-empty">
-        Nothing needs you: no chat or agent waits on its prompt, no agent asks, no run is on a prompt, no workflow is at a gate, no
-        repo has changes, unpushed commits or commits to pull, and nothing failed.
-      </p>
+      <>
+        <p className="waiting-empty">
+          Nothing needs you: no chat or agent waits on its prompt, no agent asks, no run is on a prompt, no workflow is at a gate, no
+          repo has changes, unpushed commits or commits to pull, and nothing failed.
+        </p>
+        <LandingNotices />
+      </>
     );
   }
   return (
@@ -303,6 +307,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
           <BehindRows rows={behind} />
         </Group>
       )}
+      <LandingNotices />
     </>
   );
 }
