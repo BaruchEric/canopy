@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { Flows, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { Flows, FLOW_PARALLEL, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
-import { parseWorkflow } from "./workflow";
+import { parseWorkflow, type RecordedWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
 import type { BranchStart } from "./runner";
@@ -1682,5 +1682,235 @@ Fix it.
     expect(r2.branches[0]?.branch).toMatchObject({ origin: "b1", held: true });
     expect(r2.branches[0]?.prepare).toBeUndefined();
     expect(runner.branches).toHaveLength(1);
+  });
+});
+
+const FAN_TEXT = `---
+name: fan
+verb: fan
+blurb: b
+---
+
+## Build
+tools: git-read, git-commit
+
+build
+
+## Lint
+after: Build
+tools: git-read
+
+lint
+
+## Docs
+after: Build
+tools: read
+
+docs
+
+## Ship
+after: Lint, Docs
+tools: git-push
+
+ship
+`;
+const FAN = wf(FAN_TEXT);
+
+describe("after: the ready set (FR-034)", () => {
+test("two readers run together after their step, and the fan-in waits for both", async () => {
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), FAN, "", DEFAULT_AGENT);
+  expect(flow.steps.map((s) => s.status)).toEqual(["running", "pending", "pending", "pending"]);
+  runner.end("run1", "done", "built");
+  await flush();
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "running", "running", "pending"]);
+  expect(flows.get(flow.id)?.current).toBe(2);
+  expect(runner.specs.map((s) => s.label)).toEqual(["Build", "Lint", "Docs"]);
+  runner.end("run2", "done", "linted");
+  await flush();
+  expect(flows.get(flow.id)?.steps[3]?.status).toBe("pending");
+  runner.end("run3", "done", "documented");
+  await flush();
+  expect(flows.get(flow.id)?.steps[3]?.status).toBe("running");
+  expect(runner.specs[3]?.task).toContain("- Lint: linted\n- Docs: documented");
+  runner.end("run4", "done", "shipped");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("done");
+  expect(flows.get(flow.id)?.spent?.runs).toBe(4);
+});
+
+test("two writers ready together run one after the other, and the waiting one says why", async () => {
+  const W = wf(`---\nblurb: b\n---\n\n## A\ntools: git-commit\n\na\n\n## B\nafter: A\ntools: git-commit\n\nb\n\n## C\nafter: A\ntools: git-commit\n\nc\n`);
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), W, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "a");
+  await flush();
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "running", "pending"]);
+  expect(flows.get(flow.id)?.steps[2]?.reason).toBe("waits for B (both change the tree)");
+  runner.end("run2", "done", "b");
+  await flush();
+  expect(flows.get(flow.id)?.steps[2]).toMatchObject({ status: "running" });
+  expect(flows.get(flow.id)?.steps[2]?.reason).toBeUndefined();
+});
+
+test("a writer runs beside readers, and more than FLOW_PARALLEL ready steps queue in heading order", async () => {
+  const many = `---\nblurb: b\n---\n\n## A\ntools: read\n\na\n\n## B\nafter: A\ntools: git-commit\n\nb\n\n## C\nafter: A\ntools: read\n\nc\n\n## D\nafter: A\ntools: read\n\nd\n\n## E\nafter: A\ntools: read\n\ne\n`;
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), wf(many), "", DEFAULT_AGENT);
+  runner.end("run1", "done", "a");
+  await flush();
+  expect(FLOW_PARALLEL).toBe(3);
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "running", "running", "running", "pending"]);
+  runner.end("run2", "done", "b");
+  await flush();
+  expect(flows.get(flow.id)?.steps[4]?.status).toBe("running");
+});
+
+test("a sibling that fails lets the other finish, then the flow fails with the first reason and shows both", async () => {
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), FAN, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  runner.end("run2", "failed", "", "lint blew up");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("working");
+  expect(flows.get(flow.id)?.steps[1]).toMatchObject({ status: "failed", reason: "lint blew up" });
+  runner.end("run3", "done", "documented");
+  await flush();
+  const f = flows.get(flow.id);
+  expect([f?.status, f?.error]).toEqual(["failed", "lint blew up"]);
+  expect(f?.steps.map((s) => s.status)).toEqual(["passed", "failed", "passed", "skipped"]);
+  expect(runner.specs).toHaveLength(3);
+});
+
+test("a sibling that parks waits for the other, then the flow parks; continue goes on", async () => {
+  const ASKS = wf(FAN_TEXT.replace("## Lint\nafter: Build\ntools: git-read\n", "## Lint\nafter: Build\ntools: git-read\ngate: ask\n"));
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), ASKS, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  runner.end("run2", "done", "linted");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("working");
+  expect(flows.get(flow.id)?.steps[1]).toMatchObject({ status: "gated", reason: "this step asks before the next one starts" });
+  runner.end("run3", "done", "documented");
+  await flush();
+  expect([flows.get(flow.id)?.status, flows.get(flow.id)?.current]).toEqual(["gated", 1]);
+  flows.resume(flow.id, "continue");
+  await flush();
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "passed", "passed", "running"]);
+});
+
+test("a stop with two runs live stops both and ends once the second has ended", async () => {
+  const { runner, flows } = setup();
+  runner.stop = (id) => {
+    runner.stopped.push(id);
+    const run = runner.runs.get(id);
+    if (!run) throw new Error(id);
+    return run;
+  };
+  const flow = flows.start(repo(), FAN, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  flows.stop(flow.id);
+  expect(runner.stopped).toEqual(["run2", "run3"]);
+  runner.end("run2", "stopped");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("working");
+  runner.end("run3", "stopped");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("stopped");
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "failed", "failed", "skipped"]);
+});
+
+test("a rewind leaves a running sibling alone", async () => {
+  const R = wf(`---\nblurb: b\n---\n\n## Build\ntools: git-commit\n\nbuild\n\n## Docs\nafter: Build\ntools: read\n\ndocs\n\n## Test\nafter: Build\ncheck: bun test\nretries: 1\nback: Build\n`);
+  let calls = 0;
+  const { runner, flows } = setup({ check: () => (++calls < 2 ? { exit: 1, output: "fail" } : { exit: 0, output: "ok" }) });
+  const flow = flows.start(repo(), R, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  const f = flows.get(flow.id);
+  expect(f?.rewinds?.[0]).toMatchObject({ from: "Test", to: "Build" });
+  expect(f?.steps[1]).toMatchObject({ status: "running", runId: "run2" });
+  expect(f?.steps[0]).toMatchObject({ status: "running", runId: "run3" });
+  expect(runner.dismissed).toEqual(["run1"]);
+  runner.end("run2", "done", "documented");
+  await flush();
+  runner.end("run3", "done", "built again");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("done");
+});
+
+test("the budget is checked before each start of a fan-out", async () => {
+  const B = wf(`---\nblurb: b\nbudget: 2 runs, 9h\n---\n\n## A\ntools: read\n\na\n\n## B\nafter: A\ntools: read\n\nb\n\n## C\nafter: A\ntools: read\n\nc\n`);
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), B, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "a");
+  await flush();
+  let f = flows.get(flow.id);
+  expect(f?.steps.map((s) => s.status)).toEqual(["passed", "running", "gated"]);
+  expect([f?.status, f?.parkedFor, f?.steps[2]?.reason]).toEqual(["working", "budget", "budget spent: 2 runs"]);
+  runner.end("run2", "done", "b");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("gated");
+  flows.resume(flow.id, "continue");
+  await flush();
+  f = flows.get(flow.id);
+  expect([f?.parkedFor, f?.steps[2]?.status]).toEqual([undefined, "running"]);
+});
+
+test("a record from before the keys is replayed as the chain it ran as", () => {
+  const old: RecordedWorkflow = { ...TWO, steps: TWO.steps.map(({ after: _a, when: _w, mode: _m, ...s }) => s) };
+  const a = setup();
+  const flow = a.flows.start(repo(), TWO, "", DEFAULT_AGENT);
+  const rec: FlowRecord = { v: 1, flow: structuredClone(flow), repoPath: "/tmp/r", workflow: old, before: "", savedAt: 0 };
+  const b = setup();
+  b.flows.restore([rec], () => repo(), sameAgent);
+  expect(b.flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["running", "pending"]);
+  expect(b.runner.specs).toHaveLength(1);
+});
+
+test("a restart reruns every step that was running", async () => {
+  const a = setup();
+  const flow = a.flows.start(repo(), FAN, "", DEFAULT_AGENT);
+  a.runner.end("run1", "done", "built");
+  await flush();
+  const b = setup();
+  b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+  expect(b.runner.specs.map((s) => s.label)).toEqual(["Lint", "Docs"]);
+  expect(b.runner.specs.every((s) => s.task.startsWith(RESTART_NOTE))).toBe(true);
+});
+
+});
+
+describe("graph drain safety (FR-034)", () => {
+  test("a failure takes precedence over a sibling park", async () => {
+    const { runner, flows } = setup();
+    const flow = flows.start(repo(), wf(FAN_TEXT.replace("tools: git-read\n\nlint", "tools: git-read\ngate: ask\n\nlint")), "", DEFAULT_AGENT);
+    runner.end("run1", "done"); await flush();
+    runner.end("run2", "done"); await flush();
+    runner.end("run3", "failed", "", "docs failed"); await flush();
+    expect(flow.status).toBe("failed");
+    expect(flow.error).toBe("docs failed");
+    expect(runner.specs).toHaveLength(3);
+  });
+
+  test("a stop aborts every check and waits for all checks to exit", async () => {
+    const exits: (() => void)[] = [];
+    const signals: AbortSignal[] = [];
+    const { runner, flows } = setup({ check: (_cmd, signal) => new Promise((resolve) => {
+      signals.push(signal); exits.push(() => resolve({ exit: 1, output: "aborted" }));
+    }) });
+    const graph = wf(FAN_TEXT.replace("tools: git-read\n\nlint", "tools: git-read\ncheck: @gates\n\nlint").replace("tools: read\n\ndocs", "tools: read\ncheck: @gates\n\ndocs"));
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT);
+    runner.end("run1", "done"); await flush();
+    runner.end("run2", "done"); runner.end("run3", "done"); await flush();
+    flows.stop(flow.id);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
+    exits[0]?.(); await flush();
+    expect(flow.status).toBe("working");
+    exits[1]?.(); await flush();
+    expect(flow.status).toBe("stopped");
   });
 });
