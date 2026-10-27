@@ -184,3 +184,30 @@ test("a malformed repo policy marks only its trigger rule and refuses firing wit
   while (starts.length === before && Date.now() < deadline) await Bun.sleep(10);
   expect(starts.length).toBe(before + 1);
 });
+
+test("wildcard schedule fire validates each committed mode and starts healthy queue and PR flows", async () => {
+  await writeFile(join(scratch, "config", "workflows", "graph-modes.md"), "---\nblurb: schedule flow\n---\n\n## Work\nmode: auto\ntools: read\n\nDo the work.\n\n## Docs\nmode: auto\ntools: read\n\nRead the docs.\n");
+  await writeFile(join(scratch, "config", "triggers.json"), JSON.stringify({ rules: [
+    { name: "schedule-queue", source: "schedule", cron: "0 5 * * 1", repo: "*", workflow: "graph-modes" },
+    { name: "schedule-pr", source: "schedule", cron: "0 5 * * 1", repo: "*", workflow: "graph-modes", land: "pr" },
+  ] }));
+  for (const [rule, land, pr] of [["schedule-queue", "queue", false], ["schedule-pr", "pr", true]] as const) {
+    const response = await call("/api/triggers/fire", { rule });
+    expect(response.status).toBe(201);
+    const body = await json(response);
+    expect(body).toMatchObject({ kind: "fired", events: [{ repoId: "auto", service: "schedule", source: "manual", land }], skipped: expect.arrayContaining([
+      expect.objectContaining({ repo: "held", why: expect.stringContaining("waits for a go") }),
+      expect.objectContaining({ repo: "broken", why: ".canopy/workflows.json must be an object" }),
+    ]) });
+    if (typeof body !== "object" || body === null || !("events" in body) || !Array.isArray(body.events)) throw new Error("missing events");
+    const event: unknown = body.events[0];
+    if (typeof event !== "object" || event === null || !("flowId" in event) || typeof event.flowId !== "string") throw new Error("missing flow id");
+    await done(event.flowId);
+    const flows = await json(await call("/api/flows"));
+    if (!Array.isArray(flows)) throw new Error("missing flows");
+    const flow: unknown = flows.find((candidate: unknown) => typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === event.flowId);
+    expect(flow).toMatchObject({ id: event.flowId, status: "done", branch: expect.any(Object) });
+    if (pr) expect(flow).toMatchObject({ branch: { openPr: true } });
+    else if (typeof flow === "object" && flow !== null && "branch" in flow) expect(flow.branch).not.toHaveProperty("openPr");
+  }
+});

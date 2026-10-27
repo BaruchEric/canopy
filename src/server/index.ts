@@ -1125,12 +1125,18 @@ async function startBranchRun(
   spec: ActionSpec = ACTIONS[action],
   extras: StartExtras = {},
   work: WorkStart = { title: titleOf(note), from: { kind: "note" } },
+  valid?: () => boolean,
 ): Promise<Run> {
+  const current = () => { if (valid && !valid()) throw new Error("the trigger no longer holds the flows lock"); };
+  current();
   const item = state.work.mint({ ...work, repos: [repo.id] });
   let start: BranchStart | undefined;
   try {
     start = await cutBranch(repo, note, pr, item.id);
-    return await state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
+    current();
+    const prepare = start.prepare;
+    const owned = valid ? { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } } : start;
+    return await state.runner.start(repo, action, spec, note, agent, by, undefined, owned, extras);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     state.work.close(item.id, "dropped", `the run did not start: ${message}`);
@@ -1362,12 +1368,16 @@ async function issueForge(
 /** A trigger event's branch run, or its flow on a branch, after the checks a
  *  branch run route makes; a repo whose branch slots are full answers busy,
  *  and the event waits. A flow counts for a slot from its start to its end,
- *  checks and gates between steps included. */
-async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo): Promise<StartOutcome> {
+ *  checks and gates between steps included. Queue events keep their branch
+ *  for local landing; PR events open a pull request when ready. */
+async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo, valid: () => boolean): Promise<StartOutcome> {
+  const current = () => { if (!valid()) throw new Error("the trigger no longer holds the flows lock"); };
+  current();
   if (repo.host) throw new Error(`${repo.name} is on ${repo.host}; a trigger runs only on this machine`);
   if (repo.forge) throw new Error(`${repo.name} is on the forge; a trigger runs in a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
   const got = await triggerSpec(event.workflow, repo);
+  current();
   if (typeof got === "string") throw new Error(got);
   const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
@@ -1381,15 +1391,19 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
     const agent = select(profile);
     if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
     await needHarness(state, agent.harness, repo.path);
+    current();
   }
   const pr = opensPr(event);
   const work: WorkStart = { title: event.title, from: { kind: "trigger", event: event.id } };
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work) };
+  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work, valid) };
   const item = state.work.mint({ ...work, repos: [repo.id] });
   let start: BranchStart | undefined;
   try {
     start = await cutBranch(repo, event.note, pr, item.id);
-    return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: start }) };
+    current();
+    const prepare = start.prepare;
+    const owned = { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } };
+    return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: owned }) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     state.work.close(item.id, "dropped", `the run did not start: ${message}`);
@@ -5471,6 +5485,7 @@ export async function startServer(opts: {
     triggers: new TriggerHub({
       broadcast: (ev) => broadcast(state, ev),
       repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
+      repos: () => state.result.repos.filter((r) => !r.host && !r.forge && !isSeedPath(state.root, r.path)),
       workflowProblem: async (name, repo) => {
         try {
           const got = await triggerSpec(name, repo);
@@ -5479,7 +5494,7 @@ export async function startServer(opts: {
           return String(err instanceof Error ? err.message : err);
         }
       },
-      start: (event, repo) => startTriggerRun(state, event, repo),
+      start: (event, repo, valid) => startTriggerRun(state, event, repo, valid),
       resume: async (event) => {
         // a flow still kept is picked up at the step it stopped in; one the
         // server has let go of leaves its branch to a run, like a branch run's

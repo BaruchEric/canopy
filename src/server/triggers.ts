@@ -1,6 +1,6 @@
 /** Triggers' server half: the hooks Sentry, Linear, GitHub and Forgejo post
  *  to, the poll that reads a GitHub or Forgejo repo's labelled issues, the
- *  event records, the queue of events waiting for a branch run slot, and the
+ *  schedule clock, the event records, the queue waiting for a branch run slot, and the
  *  event's state as its run and its PR move. The model is `core/trigger.ts`;
  *  the branch run and its PR are the landing queue's and the PR watch's.
  *
@@ -24,6 +24,8 @@ import {
   activityFor,
   afterRestart,
   anyEvent,
+  dueRules,
+  fireMinute,
   fromFlow,
   fromLanding,
   fromPr,
@@ -31,9 +33,11 @@ import {
   ignoreReason,
   issueNoteFor,
   knownEvent,
+  lastFire,
   linearFresh,
   linearInstallUrl,
   newEvent,
+  nextFireOf,
   otherWorkspace,
   parseAgentEvent,
   parseForgejoIssue,
@@ -46,12 +50,18 @@ import {
   resumable,
   retryable,
   sampleIncoming,
+  scheduleBusy,
+  scheduleEvent,
+  scheduleKey,
+  scheduleRepos,
   SERVICE_NAME,
+  SKIPS_KEPT,
   eventLive,
   type AgentActivity,
   type AgentDelivery,
   type Delivery,
   type Incoming,
+  type ScheduleSkip,
   type TriggerEvent,
   type TriggerRule,
   type TriggerRuleInfo,
@@ -60,6 +70,7 @@ import {
 } from "../core/trigger";
 import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
 import type { WorkSink } from "../core/work";
+import { repoKey } from "../core/worktree";
 import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearNote, linearSessionLinks, type LinearInstall } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
@@ -107,11 +118,13 @@ export interface TriggerDeps {
   broadcast: (ev: ServerEvent) => void;
   /** a rule's repo, by id or absolute path */
   repo: (ref: string) => Repo | undefined;
+  /** local, non-seed repos a wildcard schedule can use; none when absent */
+  repos?: () => Repo[];
   /** why a rule's workflow cannot run as a trigger, or null */
   workflowProblem: (name: string, repo: Repo) => Promise<string | null>;
-  /** starts the event's branch run, or its flow on a branch, which opens a
-   *  PR when it settles ready */
-  start: (event: TriggerEvent, repo: Repo) => Promise<StartOutcome>;
+  /** Starts its branch work. Recheck valid after async preparation, before
+   *  cutting a branch or launching an agent. It expires with lock ownership. */
+  start: (event: TriggerEvent, repo: Repo, valid: () => boolean) => Promise<StartOutcome>;
   /** resumes the stopped work on the event's branch: its flow picked up
    *  where it stopped, or a run resuming the branch's last session */
   resume: (event: TriggerEvent) => Promise<{ run: Run } | { flow: Flow }>;
@@ -265,7 +278,11 @@ export class TriggerHub {
   /** what agent sessions are told, in order, apart from the serial queue so
    *  a slow call to Linear never holds a delivery up */
   private telling: Promise<void> = Promise.resolve();
-  private pumping = false;
+  private pumpP: Promise<void> | null = null;
+  private ownership = Symbol("triggers");
+  private since = 0;
+  private marks = new Map<string, number>();
+  private skips = new Map<string, ScheduleSkip[]>();
   /** the polls out now, by rule, so a slow one is not started again */
   private polling = new Map<string, Promise<void>>();
   /** when each rule last began a poll; its cron counts from there */
@@ -302,6 +319,7 @@ export class TriggerHub {
 
   /** Resolves once every change asked for so far is done and on disk. */
   async idle(): Promise<void> {
+    await this.pumpP;
     await this.serial;
     await this.telling;
     await this.writing;
@@ -330,9 +348,18 @@ export class TriggerHub {
     await this.loadRules();
     const rules: TriggerRuleInfo[] = [];
     for (const r of this.rules) {
-      const repo = this.deps.repo(r.repo);
-      const problem = repo ? await this.deps.workflowProblem(r.workflow, repo) : `no repo ${r.repo} in the tree`;
+      const repos = r.source === "schedule" && r.repo === "*" ? scheduleRepos(r, this.deps.repos?.() ?? []) : [this.deps.repo(r.repo)].filter((repo): repo is Repo => repo !== undefined);
+      let problem: string | null = null;
+      for (const repo of repos) {
+        problem = await this.deps.workflowProblem(r.workflow, repo);
+        if (problem) break;
+      }
+      if (repos.length === 0 && r.repo !== "*") problem = `no repo ${r.repo} in the tree`;
+      if (r.source === "schedule" && r.repo === "*" && (this.deps.repos?.().length ?? 0) === 0) problem = 'no local repo for a schedule rule on "*"';
       const next = this.nextPoll(r);
+      const last = r.source === "schedule" ? lastFire(r.name, this.list()) : null;
+      const anchor = Math.max(last ?? this.now(), this.marks.get(r.name) ?? last ?? this.now());
+      const scheduled = r.source === "schedule" ? nextFireOf(r, anchor) : null;
       rules.push({
         ...r,
         ...(r.source !== "schedule" ? { hook: `/api/hooks/${r.source}/${r.name}` } : {}),
@@ -342,6 +369,7 @@ export class TriggerHub {
         ...(r.clientId ? { install: `/api/linear/install?rule=${encodeURIComponent(r.name)}` } : {}),
         ...(problem ? { problem } : {}),
         ...(next !== null ? { nextFire: next } : {}),
+        ...(r.source === "schedule" ? { ...(scheduled !== null ? { next: scheduled } : {}), ...(last !== null ? { lastFire: last } : {}), skips: this.skips.get(r.name) ?? [] } : {}),
       });
     }
     return { rules, problems: this.problems, events: this.list(), keeping: this.keeping };
@@ -394,21 +422,25 @@ export class TriggerHub {
   /** Takes the events the last server left, as the holder of the flows
    *  lock: a run a restart took reads as stopped, and the queue goes on. */
   async adopt(): Promise<void> {
+    const ownership = this.ownership = Symbol("triggers");
     this.keeping = true;
     this.started = this.now();
+    this.since = this.started;
     await this.loadRules();
+    if (!this.owns(ownership)) return;
     try {
       const v: unknown = JSON.parse(await readFile(join(this.dir, "events.json"), "utf8"));
       const list = isRecord(v) && Array.isArray(v["events"]) ? v["events"] : [];
       for (const e of list) {
         if (isRecord(e) && typeof e["id"] === "string" && typeof e["key"] === "string" && typeof e["status"] === "string") {
           const ev = afterRestart(e as unknown as TriggerEvent, this.deps.runKnown, this.deps.flowKnown);
-          this.events.set(ev.id, ev);
+          if (this.owns(ownership)) this.events.set(ev.id, ev);
         }
       }
     } catch {
       // nothing kept yet, or unreadable: start empty and say so once
     }
+    if (!this.owns(ownership)) return;
     this.persist();
     this.publish();
     void this.pump();
@@ -416,6 +448,11 @@ export class TriggerHub {
 
   detach(): void {
     this.keeping = false;
+    this.ownership = Symbol("detached triggers");
+  }
+
+  private owns(ownership: symbol): boolean {
+    return this.keeping && this.ownership === ownership;
   }
 
   start(): void {
@@ -474,6 +511,7 @@ export class TriggerHub {
         return { kind: "duplicate", event: this.events.get(had.id) ?? had };
       }
       const problem = await this.deps.workflowProblem(rule.workflow, repo);
+      if (!this.keeping) throw new TriggerError("this backend does not hold the flows lock, so it starts no trigger", 503);
       if (problem) throw new TriggerError(problem, 400);
       const ignored = source === "manual" ? null : ignoreReason(rule, inc);
       const event: TriggerEvent = { ...newEvent(rule, inc, repo.id, source, now, ignored), ...(session ? { session } : {}) };
@@ -486,14 +524,29 @@ export class TriggerHub {
 
   /** Starts an event's run, or leaves it queued when the repo's branch slots are full. */
   private async begin(event: TriggerEvent, repo: Repo): Promise<TriggerEvent> {
+    const ownership = this.ownership;
+    let attached: { kind: "run"; id: string } | { kind: "flow"; id: string } | null = null;
+    const valid = () => {
+      if (!this.owns(ownership)) return false;
+      const current = this.events.get(event.id);
+      if (!attached) return current === event && event.status === "queued";
+      return attached.kind === "run" ? current?.runId === attached.id : current?.flowId === attached.id;
+    };
+    if (!valid()) return event;
     try {
-      const out = await this.deps.start(event, repo);
+      const out = await this.deps.start(event, repo, valid);
+      if (!valid()) {
+        if ("run" in out) this.deps.stopRun(out.run.id);
+        if ("flow" in out) this.deps.stopFlow?.(out.flow.id);
+        return event;
+      }
       if ("busy" in out) {
         const queued: TriggerEvent = { ...event, status: "queued", reason: out.busy };
         this.set(queued);
         return queued;
       }
       const work = "flow" in out ? out.flow.branch?.work : out.run.branch?.work;
+      attached = "flow" in out ? { kind: "flow", id: out.flow.id } : { kind: "run", id: out.run.id };
       const next: TriggerEvent =
         "flow" in out
           ? { ...event, status: "working", flowId: out.flow.id, ...(out.flow.branch ? { branch: out.flow.branch.origin } : {}), ...(work ? { work } : {}) }
@@ -507,6 +560,7 @@ export class TriggerHub {
       if (now.work) this.deps.work?.link(now.work, { event: now.id });
       return now;
     } catch (err) {
+      if (!valid()) return event;
       const failed: TriggerEvent = { ...event, status: "failed", reason: errText(err), endedAt: this.now() };
       this.set(failed);
       return failed;
@@ -578,14 +632,17 @@ export class TriggerHub {
     return this.deliver(rule, full, rule.source);
   }
 
-  /** Tries every queued event again, oldest first. */
-  async pump(): Promise<void> {
-    if (!this.keeping || this.pumping) return;
-    this.pumping = true;
-    try {
+  /** The schedule clock leads the queued pass. Concurrent callers share it. */
+  pump(): Promise<void> {
+    if (this.pumpP) return this.pumpP;
+    if (!this.keeping) return Promise.resolve();
+    const ownership = this.ownership;
+    const pass = (async () => {
+      await this.tickSchedules(ownership);
       const waiting = this.list().filter((e) => e.status === "queued").reverse();
       for (const e of waiting) {
         await this.queue(async () => {
+          if (!this.owns(ownership)) return;
           const now = this.events.get(e.id);
           if (now?.status !== "queued") return;
           const repo = this.deps.repo(now.repoId);
@@ -596,9 +653,41 @@ export class TriggerHub {
           await this.begin(now, repo);
         });
       }
-    } finally {
-      this.pumping = false;
-    }
+    })();
+    const pending = pass.finally(() => { if (this.pumpP === pending) this.pumpP = null; });
+    this.pumpP = pending;
+    return pending;
+  }
+
+  private skip(name: string, skipped: ScheduleSkip): void {
+    this.skips.set(name, [...(this.skips.get(name) ?? []), skipped].slice(-SKIPS_KEPT));
+  }
+
+  private tickSchedules(ownership: symbol): Promise<void> {
+    return this.queue(async () => {
+      if (!this.owns(ownership)) return;
+      await this.loadRules();
+      if (!this.owns(ownership)) return;
+      const now = this.now();
+      const events = this.list();
+      for (const rule of this.rules) {
+        if (rule.source === "schedule" && !this.marks.has(rule.name) && lastFire(rule.name, events) === null) this.marks.set(rule.name, now);
+      }
+      const fires = dueRules(this.rules, events, now, this.deps.repos?.() ?? [], { since: this.since, marks: this.marks });
+      for (const fire of fires) {
+        if (!this.owns(ownership)) return;
+        this.marks.set(fire.rule.name, now);
+        for (const skip of fire.skipped) this.skip(fire.rule.name, skip);
+        if (fire.waits !== undefined) continue;
+        for (const repo of fire.repos) {
+          const problem = await this.deps.workflowProblem(fire.rule.workflow, repo);
+          if (!this.owns(ownership)) return;
+          if (problem) { this.skip(fire.rule.name, { repo: repo.name, why: problem, at: fire.at }); continue; }
+          const event = scheduleEvent(fire.rule, repo, repoKey(repo.path), fire.at, now, "schedule");
+          this.set(event);
+        }
+      }
+    });
   }
 
   /* ---------- runs and PRs ---------- */
@@ -662,7 +751,7 @@ export class TriggerHub {
    *  Linear: the rule's `tokenEnv`, else the Linear app's own token when
    *  the agent is on. */
   private async writer(e: TriggerEvent): Promise<{ rule: TriggerRule; token: string } | null> {
-    if (e.source === "manual") return null;
+    if (e.source === "manual" || e.service === "schedule") return null;
     await this.loadRules();
     const rule = this.rule(e.rule);
     if (!rule) return null;
@@ -805,11 +894,43 @@ export class TriggerHub {
 
   /* ---------- acts ---------- */
 
-  fire(name: string, title: string): Promise<Delivery> {
+  fire(name: string, title: string, repo?: string): Promise<Delivery> {
     return this.loadRules().then(() => {
       const rule = this.rule(name);
       if (!rule) throw new TriggerError(`no trigger rule called ${name}`, 404);
+      if (rule.source === "schedule") return this.fireSchedule(rule, repo);
       return this.deliver(rule, sampleIncoming(title, this.now(), rule.source), "manual");
+    });
+  }
+
+  private fireSchedule(rule: TriggerRule, ref?: string): Promise<Delivery> {
+    return this.queue(async () => {
+      const ownership = this.ownership;
+      if (!this.owns(ownership)) throw new TriggerError("this backend does not hold the flows lock, so it starts no trigger", 503);
+      const named = ref === undefined ? undefined : this.deps.repo(ref);
+      if (ref !== undefined && !named) throw new TriggerError(`no repo ${ref} in the tree`, 404);
+      const repos = named ? scheduleRepos({ ...rule, repo: named.id }, [named]) : scheduleRepos(rule, this.deps.repos?.() ?? []);
+      if (named && repos.length === 0) throw new TriggerError(`${named.name} is not an available local repo`, 400);
+      const now = this.now();
+      const at = fireMinute(now);
+      const events: TriggerEvent[] = [];
+      const skipped: ScheduleSkip[] = [];
+      for (const repo of repos) {
+        let why = scheduleBusy(this.list(), rule.name, repo.id) ? "last run still going" : null;
+        if (!why && anyEvent(this.list(), rule.name, scheduleKey(repoKey(repo.path), at))) why = "already fired this minute";
+        if (!why) why = await this.deps.workflowProblem(rule.workflow, repo);
+        if (!this.owns(ownership)) throw new TriggerError("this backend does not hold the flows lock, so it starts no trigger", 503);
+        if (why) {
+          const skip = { repo: repo.name, why, at };
+          this.skip(rule.name, skip);
+          skipped.push(skip);
+          continue;
+        }
+        const event = scheduleEvent(rule, repo, repoKey(repo.path), at, now, "manual");
+        this.set(event);
+        events.push(await this.begin(event, repo));
+      }
+      return { kind: "fired", events, skipped };
     });
   }
 
@@ -914,7 +1035,7 @@ export class TriggerHub {
       const act = path.slice("/api/triggers/".length);
       if (act === "fire") {
         if (typeof b["rule"] !== "string") return json({ error: "missing rule" }, 400);
-        return json(await this.fire(b["rule"], typeof b["title"] === "string" ? b["title"] : ""), 201);
+        return json(await this.fire(b["rule"], typeof b["title"] === "string" ? b["title"] : "", typeof b["repo"] === "string" ? b["repo"] : undefined), 201);
       }
       if (act === "poll") {
         if (typeof b["rule"] !== "string") return json({ error: "missing rule" }, 400);
