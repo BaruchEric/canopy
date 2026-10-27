@@ -38,12 +38,6 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coa
 Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25).
 
 
-### FR-037 · A durable work ledger
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
-A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
-Spec: docs/superpowers/specs/2026-10-25-work-ledger-design.md (2026-10-25).
-
-
 ### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
@@ -104,6 +98,12 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-037 · A durable work ledger
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
+A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
+Spec: docs/superpowers/specs/2026-10-25-work-ledger-design.md (2026-10-25).
+Plan 1 implemented locally 2026-10-26: durable ledger, branch-start minting, hub notes, branch names/trailers and canopy work. Startup/handoff regressions and focused API/CLI suites passed; combined batch verification remains pending. Plans 2 (handoff, work view and export) and 3 (rebuild and compaction) remain open.
 
 ### FR-042 · A PWA with web push for asks and "needs you"
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo, Happy, Orca mobile)
