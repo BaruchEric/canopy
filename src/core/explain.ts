@@ -47,12 +47,20 @@ export interface SimpleCommand {
   words: string[];
   writes: string[];
   reads: string[];
+  /** the surrounding subshell scopes, outermost first */
+  cwdScopes?: number[];
+  /** scopes entered before this command */
+  cwdScopeStarts?: number[];
+  /** scopes exited after this command */
+  cwdScopeEnds?: number[];
+  /** pipeline id; pipeline commands run from one cwd snapshot and cannot move the parent */
+  cwdPipeline?: number;
   heredoc?: string;
 }
 
 type Token =
   | { t: "word"; v: string }
-  | { t: "sep" }
+  | { t: "sep"; op: string }
   | { t: "redir"; op: string }
   | { t: "heredoc"; body: string };
 
@@ -128,7 +136,7 @@ function tokenize(s: string, subs: string[]): Token[] {
         }
         out.push({ t: "heredoc", body: body.join("\n") });
       }
-      out.push({ t: "sep" });
+      out.push({ t: "sep", op: "\n" });
       continue;
     }
     if (ch === "#" && !inWord) {
@@ -182,8 +190,9 @@ function tokenize(s: string, subs: string[]): Token[] {
     }
     if (ch === ";" || ch === "|" || ch === "(" || ch === ")") {
       end();
-      out.push({ t: "sep" });
-      i += ch === "|" && next === "|" ? 2 : 1;
+      const op = ch === "|" && next === "|" ? "||" : ch;
+      out.push({ t: "sep", op });
+      i += op.length;
       continue;
     }
     if (ch === "&") {
@@ -195,8 +204,9 @@ function tokenize(s: string, subs: string[]): Token[] {
         continue;
       }
       end();
-      out.push({ t: "sep" });
-      i += next === "&" ? 2 : 1;
+      const op = next === "&" ? "&&" : "&";
+      out.push({ t: "sep", op });
+      i += op.length;
       continue;
     }
     if (ch === ">" || ch === "<") {
@@ -228,14 +238,60 @@ export function splitShell(line: string): SimpleCommand[] {
   const tokens = tokenize(line, subs);
   const out: SimpleCommand[] = [];
   let cur: SimpleCommand = { words: [], writes: [], reads: [] };
+  let scopeSeq = 0;
+  let pipelineSeq = 0;
+  const scopes: number[] = [];
+  const pendingStarts: number[] = [];
+  let pipelineId: number | undefined;
+  let pipelineDepth = 0;
   const flush = () => {
-    if (cur.words.length || cur.writes.length || cur.heredoc !== undefined) out.push(cur);
+    if (cur.words.length || cur.writes.length || cur.heredoc !== undefined) {
+      if (scopes.length) cur.cwdScopes = [...scopes];
+      if (pendingStarts.length) cur.cwdScopeStarts = pendingStarts.splice(0);
+      if (pipelineId !== undefined) cur.cwdPipeline = pipelineId;
+      out.push(cur);
+    }
     cur = { words: [], writes: [], reads: [] };
   };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
     if (!tok) continue;
-    if (tok.t === "sep") flush();
+    if (tok.t === "sep") {
+      if (tok.op === "(") {
+        flush();
+        const id = ++scopeSeq;
+        scopes.push(id);
+        pendingStarts.push(id);
+      } else if (tok.op === ")") {
+        flush();
+        const id = scopes.pop();
+        if (id !== undefined) {
+          const last = out[out.length - 1];
+          if (last?.cwdScopes?.includes(id)) last.cwdScopeEnds = [...(last.cwdScopeEnds ?? []), id];
+          else {
+            const start = pendingStarts.indexOf(id);
+            if (start !== -1) pendingStarts.splice(start, 1);
+          }
+        }
+        if (pipelineId !== undefined && scopes.length < pipelineDepth) pipelineId = undefined;
+      } else if (tok.op === "|") {
+        if (pipelineId === undefined) {
+          pipelineId = ++pipelineSeq;
+          pipelineDepth = scopes.length;
+        }
+        flush();
+      } else if (tok.op === "&") {
+        if (pipelineId === undefined) {
+          pipelineId = ++pipelineSeq;
+          pipelineDepth = scopes.length;
+        }
+        flush();
+        pipelineId = undefined;
+      } else {
+        flush();
+        if (pipelineId !== undefined && scopes.length <= pipelineDepth) pipelineId = undefined;
+      }
+    }
     else if (tok.t === "heredoc") {
       // the body belongs to the command that opened it, already flushed
       // when the line ended
@@ -1084,6 +1140,8 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
   let currentCwd = norm(cwd, normalizedRoot);
   let previousCwd: string | undefined;
   let unknown = false;
+  const scopeCwds = new Map<number, { cwd: string; previousCwd: string | undefined }>();
+  const pipelineCwds = new Map<number, string>();
   const addPath = (candidate: string, folder = false, atCwd = currentCwd) => {
     const path = writtenPath(candidate, root, atCwd);
     if (!path) return;
@@ -1094,7 +1152,13 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
   };
 
   for (const cmd of splitShell(command)) {
-    const commandCwd = currentCwd;
+    for (const scope of cmd.cwdScopeStarts ?? []) scopeCwds.set(scope, { cwd: currentCwd, previousCwd });
+    let commandCwd = currentCwd;
+    if (cmd.cwdPipeline !== undefined) {
+      const pipelineCwd = pipelineCwds.get(cmd.cwdPipeline);
+      if (pipelineCwd === undefined) pipelineCwds.set(cmd.cwdPipeline, currentCwd);
+      else commandCwd = pipelineCwd;
+    }
     for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path, false, commandCwd);
     const words = normalizeCommandWords(cmd.words).words;
     const prog = words[0] ?? "";
@@ -1103,28 +1167,27 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
 
     if (base === "cd") {
       const to = args.includes("-") ? "-" : operands(args)[0];
-      if (to === "-") {
-        if (previousCwd === undefined) {
-          currentCwd = "?";
-          unknown = true;
+      if (cmd.cwdPipeline === undefined) {
+        if (to === "-") {
+          if (previousCwd === undefined) {
+            currentCwd = "?";
+            unknown = true;
+          } else {
+            const prior = currentCwd;
+            currentCwd = previousCwd;
+            previousCwd = prior;
+          }
         } else {
-          const prior = currentCwd;
-          currentCwd = previousCwd;
-          previousCwd = prior;
+          previousCwd = commandCwd;
+          if (to === undefined) currentCwd = HOME;
+          else if (to.startsWith("~")) currentCwd = normalizeHomePath(to);
+          else if (to.startsWith("/")) currentCwd = norm(to, "/");
+          else if (commandCwd === "?") currentCwd = "?";
+          else if (commandCwd.startsWith("~")) currentCwd = normalizeHomePath(to, commandCwd);
+          else currentCwd = norm(to, commandCwd);
         }
-      } else {
-        previousCwd = commandCwd;
-        if (to === undefined) currentCwd = HOME;
-        else if (to.startsWith("~")) currentCwd = normalizeHomePath(to);
-        else if (to.startsWith("/")) currentCwd = norm(to, "/");
-        else if (commandCwd === "?") currentCwd = "?";
-        else if (commandCwd.startsWith("~")) currentCwd = normalizeHomePath(to, commandCwd);
-        else currentCwd = norm(to, commandCwd);
       }
-      continue;
-    }
-
-    if (base === "tee" || base === "touch") add(operands(args), false, commandCwd);
+    } else if (base === "tee" || base === "touch") add(operands(args), false, commandCwd);
     else if (base === "cp" || base === "install") {
       const files = operands(args, base === "cp" ? ["-t", "-S"] : ["-m", "-S", "-t"]);
       if (files.length > 1) add(files.slice(-1), false, commandCwd);
@@ -1148,6 +1211,14 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
         const separator = rest.indexOf("--");
         if (separator !== -1) add(rest.slice(separator + 1), false, commandCwd);
       } else if (sub === "restore") add(operands(rest, ["-s", "--source", "--pathspec-from-file"]), false, commandCwd);
+    }
+    for (const scope of cmd.cwdScopeEnds ?? []) {
+      const saved = scopeCwds.get(scope);
+      if (saved) {
+        currentCwd = saved.cwd;
+        previousCwd = saved.previousCwd;
+        scopeCwds.delete(scope);
+      }
     }
   }
   return { paths: [...paths], dirs: [...dirs], unknown };

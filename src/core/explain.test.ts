@@ -89,6 +89,11 @@ describe("writtenPaths", () => {
     expect(wp("cd ~alice && touch x.ts")).toEqual({ paths: ["~alice/x.ts"], ...none });
     expect(wp("command touch x.ts && env touch y.ts && LANG=C touch z.ts")).toEqual({ paths: ["x.ts", "y.ts", "z.ts"], ...none });
   });
+  test("a pipeline cd stays in its child and a subshell restores the parent cwd", () => {
+    expect(wp("cd src | cat; touch x.ts")).toEqual({ paths: ["x.ts"], ...none });
+    expect(wp("cd src | touch piped.ts; touch after.ts")).toEqual({ paths: ["piped.ts", "after.ts"], ...none });
+    expect(wp("(cd src; touch inside.ts); touch outside.ts")).toEqual({ paths: ["src/inside.ts", "outside.ts"], ...none });
+  });
   test("reads add nothing; an opaque or vague line adds nothing and says so", () => {
     expect(wp("cat a.ts && grep x src && git diff")).toEqual({ paths: [], ...none });
     expect(wp("sh -c 'touch x'")).toEqual({ paths: [], dirs: [], unknown: true });
