@@ -3,14 +3,14 @@
  *  run of a repo at once, and where every queue stands, over the API of
  *  every backend the home one lists. */
 
-import { inQueue, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../core/landing";
+import { inQueue, landWord, queueOf, reviewWord, SCORE_GATE, sentBack, stoppedWhole } from "../core/landing";
 import type { BackendEntry, LandEntry, LandingInfo, LandingRun } from "../core/types";
 import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
 
 export const LAND_USAGE =
-  "usage: canopy land <run> [--approve <id>] [--backend URL]\n       canopy land --all [repo] [--backend URL]\n       canopy queue [repo] [--backend URL]";
+  "usage: canopy land <run> [--approve <id>] [--skip-judge] [--backend URL]\n       canopy land --all [repo] [--backend URL]\n       canopy queue [repo] [--backend URL]";
 
-const backWords = (e: LandEntry): string => (e.state === "red" ? `${e.gate ?? "a gate"} failed` : (e.reason ?? e.state));
+const backWords = (e: LandEntry): string => (e.state === "red" ? e.gate?.startsWith(SCORE_GATE) ? e.reason ?? e.gate : `${e.gate ?? "a gate"} failed` : (e.reason ?? e.state));
 
 /** whether `repo` (an id or a folder's name) names this repo */
 const named = (repo: string | null, id: string, path: string): boolean => repo === null || id === repo || path.split("/").pop() === repo;
@@ -36,7 +36,8 @@ export function queueLines(info: LandingInfo, repo: string | null, backend = "")
     out.push(`${id}${where}`);
     for (const e of queued) {
       const marks = [e.auto ? "joined on its own" : "", e.approved ? "approved" : "", e.reason ?? ""].filter(Boolean).join(", ");
-      out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}${marks ? `  ${marks}` : ""}`);
+      const bypass = e.state === "judge" ? `  land anyway: canopy land ${e.id} --skip-judge` : "";
+      out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}${marks ? `  ${marks}` : ""}${bypass}`);
     }
     for (const e of back) out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}  ${backWords(e).split("\n").pop() ?? ""}`);
     for (const r of ready) out.push(`  ${"ready".padEnd(16)} ${r.branch}  ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
@@ -83,11 +84,12 @@ export async function landCommand(cmd: "land" | "queue", argv: string[], { fail 
   }
   if (cmd === "land") {
     const approve = take(args, "--approve");
+    const skipJudge = has(args, "--skip-judge");
     const run = args.shift();
     if (!run || args.length > 0) return fail(LAND_USAGE);
     let entry: LandEntry;
     try {
-      entry = await ask<LandEntry>(homeTarget, "POST", "/api/landing/land", { run, ...(approve ? { approve } : {}) });
+      entry = await ask<LandEntry>(homeTarget, "POST", "/api/landing/land", { run, ...(approve ? { approve } : {}), ...(skipJudge ? { skipJudge: true } : {}) });
     } catch (err) {
       if (err instanceof Unreachable || !/needs your approval/.test(errText(err))) return failed(err);
       // the land sorted it again just now, so the record holds what to show
@@ -97,7 +99,9 @@ export async function landCommand(cmd: "land" | "queue", argv: string[], { fail 
       for (const line of approveLines(rec)) console.log(line);
       return fail("it needs your approval; look at the files, then run the command above");
     }
-    console.log(`${entry.branch}: ${landWord(entry, [entry])}; the queue rebases it onto ${entry.target}, runs the gates and fast-forwards ${entry.target}`);
+    console.log(skipJudge
+      ? `${entry.branch}: queued again with the judge scenarios left out; the queue rebases it onto ${entry.target}, runs the gates and the command scenarios, and fast-forwards ${entry.target}`
+      : `${entry.branch}: ${landWord(entry, [entry])}; the queue rebases it onto ${entry.target}, runs the gates and fast-forwards ${entry.target}`);
     return;
   }
   const repo = args.shift() ?? null;

@@ -77,6 +77,7 @@ canopy health init [dir]           # write a starter file, the dev task when the
 # --on NAME keeps one, --backend URL asks only that address (default $CANOPY_API, else 127.0.0.1:7850)
 canopy land <run>                  # a ready branch run into its repo's landing queue: rebase, gates, scenarios, fast-forward; never a push
 canopy land <run> --approve <id>   # land a run that touches sensitive files, with the id `canopy land <run>` printed
+canopy land <run> --skip-judge     # land anyway from a judge hold; command scenarios still run
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
 canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir

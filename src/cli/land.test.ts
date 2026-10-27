@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
-import { advance, enqueue } from "../core/landing";
+import { advance, enqueue, entryFor } from "../core/landing";
 import type { LandingInfo, LandingRun, RunReview } from "../core/types";
-import { approveLines, queueLines } from "./land";
+import { approveLines, landCommand, queueLines } from "./land";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -86,4 +86,31 @@ test("what land prints for a run that needs an approval: the files, how to look,
     "then: canopy land r-a --approve abc123",
   ]);
   expect(approveLines(rec("b"))).toEqual(["run/x-b is not sorted yet; try again in a moment"]);
+});
+
+test("judge holds name the manual bypass; a low score shows observations", () => {
+  const held = advance(entryFor(rec("a"),1),{t:"unjudged",name:"refund",why:"no gateway key"},2);
+  const low = advance(entryFor(rec("b"),1),{t:"red",gate:"satisfaction 0.73 < 1",output:"scenario refund: partly\nrefund 42: no"},2);
+  const lines = queueLines({runs:[],entries:[held,low],orphans:[]},null);
+  expect(lines[1]).toContain("needs a judge");
+  expect(lines[1]).toContain("land anyway: canopy land a --skip-judge");
+  expect(lines[2]).toContain("satisfaction 0.73 < 1");
+  expect(lines[2]).toContain("refund 42: no");
+  expect(lines[2]).not.toContain("failed");
+});
+
+test("land --skip-judge posts the explicit bypass flag", async () => {
+  const posted: unknown[] = [];
+  const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch:async req => {posted.push(await req.json());return Response.json({...entryFor(rec("a"),1),skipJudge:true});}});
+  const log = console.log;
+  const lines: string[] = [];
+  try {
+    console.log = (line: unknown) => {lines.push(String(line));};
+    await landCommand("land",["a","--skip-judge","--backend",`http://127.0.0.1:${server.port}`],{fail:message=>{throw Error(message);}});
+  } finally {
+    console.log=log;
+    server.stop(true);
+  }
+  expect(posted).toEqual([{run:"a",skipJudge:true}]);
+  expect(lines.join("\n")).toContain("queued again with the judge scenarios left out");
 });

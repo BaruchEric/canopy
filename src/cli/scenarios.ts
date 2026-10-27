@@ -26,8 +26,13 @@ export function listLines(repo: string, got: NamesAnswer): string[] {
 /** `scenarios 2/3 · 0.67`, then `ok name` or `red name  <last line of its tail>` per result */
 export function runLines(run: ScenarioRun): string[] {
   return [
-    `scenarios ${run.passed}/${run.total} · ${run.score.toFixed(2)}`,
-    ...run.results.map((r) => (r.ok ? `  ok   ${r.name}` : `  red  ${r.name}  ${(r.tail ?? "").split("\n").pop() ?? ""}`)),
+    `scenarios ${run.passed}/${run.total} · ${run.score.toFixed(2)}${run.skipped?.length ? ` · ${run.skipped.length} left out` : ""}`,
+    ...run.results.map((r) => {
+      if (r.kind === "command") return r.ok ? `  ok   ${r.name}` : `  red  ${r.name}  ${(r.tail ?? "").split("\n").pop() ?? ""}`;
+      const word = r.p === undefined ? "unjudged" : r.p.toFixed(2);
+      const why = r.why ?? r.unjudged;
+      return `  ${word.padEnd(4)} ${r.name}${why ? `  ${why}` : ""}`;
+    }),
   ];
 }
 
@@ -57,7 +62,6 @@ export async function scenariosCommand(argv: string[], { fail }: { fail: (msg: s
     const body = { repo, name, ...(judge ? { kind: "judge" } : {}), ...(runCmd !== undefined ? { run: runCmd } : {}) };
     const got = await ask<{ path: string }>(target, "POST", "/api/scenarios", body).catch(failed);
     console.log(`wrote ${got.path}`);
-    if (judge) console.log("judge scenarios are listed but not run until plan 2");
     return;
   }
   if (sub === "run") {
