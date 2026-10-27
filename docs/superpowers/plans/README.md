@@ -4,6 +4,10 @@ Each plan here is a checklist written before the work began, for the agent or pe
 
 | Plan | Status | Shipped | Spec |
 | --- | --- | --- | --- |
+| [Best-of-N, plan 1: groups of one profile, a compare run and the winner lands](2026-10-26-best-of-n-1.md) | implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main` | | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
+| [Spec converge, plan 1: the schedule trigger source](2026-10-26-spec-converge-1.md) | implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main` | | [spec converge](../specs/2026-10-25-spec-converge-design.md) |
+| [Harness share: how much of the spend goes into canopy itself](2026-10-26-harness-share.md) | implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main` | | [harness share](../specs/2026-10-25-harness-share-design.md) |
+| [Worktree stacks, plan 1: a warm worktree pool per repo](2026-10-26-worktree-stacks-1.md) | implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main` | | [worktree stacks](../specs/2026-10-25-worktree-stacks-design.md) |
 | [Scenario gates, plan 1: command scenarios in the landing queue](2026-10-26-scenario-gates-1.md) | shipped | 2026-10-26 | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
 | [Scenario gates, plan 2: judge scenarios, the hold and the score](2026-10-26-scenario-gates-2.md) | implemented locally; batch verification pending | | [scenario gates](../specs/2026-10-25-scenario-gates-design.md) |
 | [Capacity governor, plan 1: the probes, the model and the limited status](2026-10-26-capacity-governor-1.md) | implemented locally | | [capacity governor](../specs/2026-10-25-capacity-governor-design.md) |
