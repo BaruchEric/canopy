@@ -22,6 +22,7 @@ import { normalizeRanger } from "./ranger";
 import { normalizeSweep } from "./sweep";
 import { LIBRARY_SYNC_MODES } from "./libsync";
 import { normalizeCapacity } from "./capacity";
+import { WARM_MAX } from "./warm";
 import {
   AWAKE_MODES,
   DEFAULT_LAUNCH,
@@ -65,6 +66,7 @@ const defaults = (): CanopyConfig => ({
   launchers: {},
   tasks: {},
   health: {},
+  warm: {},
   capacity: normalizeCapacity(undefined),
   archived: [],
   favorites: [],
@@ -117,6 +119,17 @@ function normalizeHealth(v: unknown): Record<string, RepoCheckDef[]> {
     if (checks.length) out[path] = checks;
   }
   return out;
+}
+
+/** Machine-owned warm worktree counts; only explicit positive counts survive. */
+function normalizeWarm(v: unknown): Record<string, number> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const entries: [string, unknown][] = Object.entries(v);
+  const kept: [string, number][] = [];
+  for (const [path, count] of entries) {
+    if (path && typeof count === "number" && Number.isInteger(count) && count >= 1 && count <= WARM_MAX) kept.push([path, count]);
+  }
+  return Object.fromEntries(kept);
 }
 
 /** A hand-edited source survives only when every field it needs is there;
@@ -188,6 +201,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     launchers: normalizeLaunchers(cfg.launchers),
     tasks: normalizeTasks(cfg.tasks),
     health: normalizeHealth(cfg.health),
+    warm: normalizeWarm(cfg.warm),
     capacity: normalizeCapacity(cfg.capacity),
     archived: paths(cfg.archived),
     favorites: paths(cfg.favorites),
@@ -560,6 +574,21 @@ export async function removeHealthCheck(path: string, name: string): Promise<Rep
     if (list.length) cfg.health[path] = list;
     else delete cfg.health[path];
     return list;
+  });
+}
+
+/* ---------- warm worktrees ---------- */
+
+/** The warm worktree count this machine explicitly keeps for a repo. */
+export const warmFor = (cfg: Pick<CanopyConfig, "warm">, path: string): number => cfg.warm[path] ?? 0;
+
+/** Stores this machine's warm count for a repo; zero or null removes it. */
+export async function setWarm(path: string, n: number | null): Promise<number> {
+  if (n !== null && (!Number.isInteger(n) || n < 0 || n > WARM_MAX)) throw new Error(`warm must be a whole number from 0 to ${WARM_MAX}`);
+  return withConfig((cfg) => {
+    if (n === null || n === 0) delete cfg.warm[path];
+    else cfg.warm[path] = n;
+    return warmFor(cfg, path);
   });
 }
 

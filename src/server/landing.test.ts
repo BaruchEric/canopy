@@ -1421,3 +1421,33 @@ test("bulk group winner selection is rechecked after sorting and approval stays 
   approved.hub.stop();
   expect(await approved.hub.landAll(approved.repo.id)).toEqual({ queued: [], skipped: [{ id: "bulk-approve", branch: "run/x-bulk-approve", why: "needs your approval: 1 sensitive file" }] });
 });
+
+for (const change of ["switch", "detach"]) {
+  test(`orphan removal refuses a cached branch after ${change}`, async () => {
+    const w = await world();
+    const dir = runTreeDir(w.repo.path, `changed-${change}`, w.wts);
+    await addRunTree(w.repo.path, dir, "run/old-orphan", "main");
+    const tip = await revOf(w.repo.path, "refs/heads/run/old-orphan");
+    await w.hub.adopt();
+    await sh(dir, "checkout", "-q", ...(change === "switch" ? ["-b", "run/new-orphan"] : ["--detach"]));
+    await expect(w.hub.orphan(dir, "remove")).rejects.toThrow("branch");
+    expect(existsSync(dir)).toBe(true);
+    expect(await revOf(w.repo.path, "refs/heads/run/old-orphan")).toBe(tip);
+    w.hub.stop();
+  });
+}
+
+test("orphan removal rechecks the caller's ownership after reading the live branch", async () => {
+  const w = await world();
+  const dir = runTreeDir(w.repo.path, "guard-orphan", w.wts);
+  await addRunTree(w.repo.path, dir, "run/guard-orphan", "main");
+  await w.hub.adopt();
+  let checks = 0;
+  await expect(w.hub.orphan(dir, "remove", () => {
+    if (++checks === 2) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(dir)).toBe(true);
+  expect(await revOf(w.repo.path, "refs/heads/run/guard-orphan")).not.toBeNull();
+  expect(w.hub.info().orphans.some((orphan) => orphan.dir === dir)).toBe(true);
+  w.hub.stop();
+});

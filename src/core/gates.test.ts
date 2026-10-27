@@ -30,6 +30,14 @@ describe("the gates file", () => {
     });
   });
 
+  test("warm: prepared worktrees to keep, a whole number from 0 to 2", () => {
+    expect(parseGatesFile(JSON.stringify({ gates: [], warm: 1 }))).toEqual({ gates: [], warm: 1 });
+    expect(parseGatesFile(JSON.stringify({ gates: [] }))).toEqual({ gates: [] });
+    for (const warm of [3, -1, 1.5, "1"]) {
+      expect(parseGatesFile(JSON.stringify({ gates: [], warm }))).toEqual({ error: ".canopy/gates.json: warm must be a whole number from 0 to 2" });
+    }
+  });
+
   test("a bad file says why", () => {
     expect(parseGatesFile("{")).toHaveProperty("error");
     expect(parseGatesFile("[]")).toEqual({ error: ".canopy/gates.json must be an object" });
@@ -52,6 +60,11 @@ describe("package scripts", () => {
 });
 
 describe("readGates", () => {
+  test("warm comes with the file", async () => {
+    const dir = await folder("warm", { ".canopy/gates.json": JSON.stringify({ gates: [], setup: "bun install", warm: 2 }) });
+    expect(await readGates(dir)).toEqual({ gates: [], setup: "bun install", warm: 2, source: "file" });
+  });
+
   test("the file wins over package.json", async () => {
     const dir = await folder("file", {
       ".canopy/gates.json": JSON.stringify({ gates: [{ name: "check", run: "make check" }] }),

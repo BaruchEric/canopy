@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readlink, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,13 +22,16 @@ import {
   setRepoAgent,
   setRole,
   setTask,
+  setWarm,
   setWorkspaceLook,
   slugify,
   tasksFor,
   uniqueId,
+  warmFor,
   upsertWorkspace,
 } from "./store";
 import { DEFAULT_AGENT, effectivePrimary } from "./types";
+import { readGates } from "./gates";
 
 let dir = "";
 const prev = process.env["CANOPY_CONFIG_DIR"];
@@ -51,6 +54,7 @@ describe("config store", () => {
     expect(cfg.workspaces).toEqual([]);
     expect(cfg.fetch).toBe(true);
     expect(cfg.harness).toBeNull();
+    expect(cfg.warm).toEqual({});
   });
 
   test("normalizes a missing or malformed harness list and keeps an explicit empty list", async () => {
@@ -94,6 +98,43 @@ describe("config store", () => {
     for (const name of await readdir(dir)) {
       if (name.startsWith("config.json.corrupt-")) await rm(join(dir, name));
     }
+  });
+
+  test("a repo gates warm value does not enable this machine's pool", async () => {
+    const repoPath = join(dir, "repo-with-warm-gates");
+    await mkdir(join(repoPath, ".canopy"), { recursive: true });
+    await writeFile(join(repoPath, ".canopy", "gates.json"), JSON.stringify({ gates: [], warm: 2 }));
+    expect((await readGates(repoPath)).warm).toBe(2);
+    const cfg = await loadConfig();
+    expect(cfg.warm).toEqual({});
+    expect(warmFor(cfg, repoPath)).toBe(0);
+  });
+
+  test("machine warm counts set, remove and reject invalid values", async () => {
+    expect(warmFor({ warm: {} }, "/r")).toBe(0);
+    expect(await setWarm("/r", 2)).toBe(2);
+    expect(warmFor(await loadConfig(), "/r")).toBe(2);
+    expect(await setWarm("/r", 0)).toBe(0);
+    expect((await loadConfig()).warm).toEqual({});
+    await setWarm("/r", 1);
+    expect(await setWarm("/r", null)).toBe(0);
+    for (const warm of [-1, 1.5, 3]) await expect(setWarm("/bad", warm)).rejects.toThrow("warm must be a whole number from 0 to 2");
+    expect(warmFor(await loadConfig(), "/bad")).toBe(0);
+  });
+
+  test("machine warm normalization keeps only explicit counts from 1 to 2", async () => {
+    const path = join(dir, "config.json");
+    await writeFile(path, JSON.stringify({ warm: { "/one": 1, "/two": 2, "/zero": 0, "/large": 3, "/fraction": 1.5, "/text": "2", "": 1 } }));
+    expect((await loadConfig()).warm).toEqual({ "/one": 1, "/two": 2 });
+    await rm(path);
+  });
+
+  test("warm writes serialize with another machine setting", async () => {
+    await Promise.all([setWarm("/warm", 1), setFavorite("/favorite", true)]);
+    const cfg = await loadConfig();
+    expect(cfg.warm["/warm"]).toBe(1);
+    expect(cfg.favorites).toContain("/favorite");
+    await Promise.all([setWarm("/warm", null), setFavorite("/favorite", false)]);
   });
 
   test("fetch is off only when the file says so in so many words", async () => {

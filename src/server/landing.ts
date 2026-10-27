@@ -868,13 +868,23 @@ export class LandingHub {
     this.publish();
   }
 
-  /** An orphaned worktree: removed, or queued as a run of its own. */
-  async orphan(dir: string, action: "remove" | "queue"): Promise<void> {
+  /** An orphaned worktree: removed, or queued as a run of its own.
+   *  assertOwner fences removal when delegated by another lock owner. */
+  async orphan(dir: string, action: "remove" | "queue", assertOwner?: () => void): Promise<void> {
     const o = this.orphans.find((x) => x.dir === dir);
     if (!o) throw new LandError("no orphaned worktree there", 404);
     if (action === "remove") {
-      if (o.repoPath) await removeRunTree(o.repoPath, dir, o.branch ?? undefined);
-      else await rm(dir, { recursive: true, force: true });
+      assertOwner?.();
+      if (o.repoPath) {
+        const branch = await currentBranch(dir);
+        assertOwner?.();
+        if (branch !== o.branch) throw new LandError("orphaned worktree changed branch; refresh before removing");
+        await removeRunTree(o.repoPath, dir, o.branch ?? undefined, assertOwner);
+      } else {
+        assertOwner?.();
+        await rm(dir, { recursive: true, force: true });
+      }
+      assertOwner?.();
       this.orphans = this.orphans.filter((x) => x.dir !== dir);
       this.publish();
       return;

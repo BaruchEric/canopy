@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AGENT } from "../../src/core/types";
-import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, SweepLogEntry, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, SweepLogEntry, TaskInfo, WorktreesInfo } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -136,6 +136,11 @@ describe("task lines", () => {
 describe("describeEvent", () => {
   test("a work event updates the ledger without adding a feed line", () => {
     expect(describeEvent({ type: "work", items: [] }, snap(), 5)).toEqual([]);
+  });
+
+  test("a worktrees event updates its panel without adding a feed line", () => {
+    const worktrees: WorktreesInfo = { root: "/w", free: 10, repos: [] };
+    expect(describeEvent({ type: "worktrees", worktrees }, snap(), 5)).toEqual([]);
   });
 
   test("a repo event with no change is quiet and names the repo", () => {

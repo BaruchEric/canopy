@@ -223,6 +223,18 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       };
     case "landing":
       return { ...ev, landing: qLanding(q, ev.landing) };
+    case "worktrees":
+      return {
+        ...ev,
+        worktrees: {
+          ...ev.worktrees,
+          repos: ev.worktrees.repos.map((repo) => ({
+            ...repo,
+            repoId: q(repo.repoId),
+            runs: repo.runs.map((run) => ({ ...run, id: q(run.id), runId: q(run.runId) })),
+          })),
+        },
+      };
     case "prs":
       return { ...ev, prs: qPrs(q, ev.prs) };
     case "triggers":
