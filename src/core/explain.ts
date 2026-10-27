@@ -53,8 +53,8 @@ export interface SimpleCommand {
   cwdScopeStarts?: number[];
   /** scopes exited after this command */
   cwdScopeEnds?: number[];
-  /** pipeline id; pipeline commands run from one cwd snapshot and cannot move the parent */
-  cwdPipeline?: number;
+  /** pipeline and its containing scope depth; only deeper subshells can move their own cwd */
+  cwdPipeline?: { id: number; depth: number };
   heredoc?: string;
 }
 
@@ -242,13 +242,18 @@ export function splitShell(line: string): SimpleCommand[] {
   let pipelineSeq = 0;
   const scopes: number[] = [];
   const pendingStarts: number[] = [];
-  let pipelineId: number | undefined;
-  let pipelineDepth = 0;
+  const pipelines = new Map<number, { id: number; depth: number }>();
   const flush = () => {
     if (cur.words.length || cur.writes.length || cur.heredoc !== undefined) {
       if (scopes.length) cur.cwdScopes = [...scopes];
       if (pendingStarts.length) cur.cwdScopeStarts = pendingStarts.splice(0);
-      if (pipelineId !== undefined) cur.cwdPipeline = pipelineId;
+      for (let depth = scopes.length; depth >= 0; depth--) {
+        const pipeline = pipelines.get(depth);
+        if (pipeline) {
+          cur.cwdPipeline = pipeline;
+          break;
+        }
+      }
       out.push(cur);
     }
     cur = { words: [], writes: [], reads: [] };
@@ -264,6 +269,7 @@ export function splitShell(line: string): SimpleCommand[] {
         pendingStarts.push(id);
       } else if (tok.op === ")") {
         flush();
+        pipelines.delete(scopes.length);
         const id = scopes.pop();
         if (id !== undefined) {
           const last = out[out.length - 1];
@@ -273,23 +279,16 @@ export function splitShell(line: string): SimpleCommand[] {
             if (start !== -1) pendingStarts.splice(start, 1);
           }
         }
-        if (pipelineId !== undefined && scopes.length < pipelineDepth) pipelineId = undefined;
       } else if (tok.op === "|") {
-        if (pipelineId === undefined) {
-          pipelineId = ++pipelineSeq;
-          pipelineDepth = scopes.length;
-        }
+        if (!pipelines.has(scopes.length)) pipelines.set(scopes.length, { id: ++pipelineSeq, depth: scopes.length });
         flush();
       } else if (tok.op === "&") {
-        if (pipelineId === undefined) {
-          pipelineId = ++pipelineSeq;
-          pipelineDepth = scopes.length;
-        }
+        if (!pipelines.has(scopes.length)) pipelines.set(scopes.length, { id: ++pipelineSeq, depth: scopes.length });
         flush();
-        pipelineId = undefined;
+        pipelines.delete(scopes.length);
       } else {
         flush();
-        if (pipelineId !== undefined && scopes.length <= pipelineDepth) pipelineId = undefined;
+        pipelines.delete(scopes.length);
       }
     }
     else if (tok.t === "heredoc") {
@@ -1140,8 +1139,8 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
   let currentCwd = norm(cwd, normalizedRoot);
   let previousCwd: string | undefined;
   let unknown = false;
-  const scopeCwds = new Map<number, { cwd: string; previousCwd: string | undefined }>();
-  const pipelineCwds = new Map<number, string>();
+  const scopeCwds = new Map<number, { cwd: string; previousCwd: string | undefined; depth: number }>();
+  const pipelineCwds = new Map<number, { cwd: string; previousCwd: string | undefined }>();
   const addPath = (candidate: string, folder = false, atCwd = currentCwd) => {
     const path = writtenPath(candidate, root, atCwd);
     if (!path) return;
@@ -1152,20 +1151,21 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
   };
 
   for (const cmd of splitShell(command)) {
-    let pipelineCwd: string | undefined;
+    const scopeIds = cmd.cwdScopes ?? [];
+    const inheritedScope = [...scopeIds].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined);
+    let pipelineState: { cwd: string; previousCwd: string | undefined } | undefined;
     if (cmd.cwdPipeline !== undefined) {
-      pipelineCwd = pipelineCwds.get(cmd.cwdPipeline);
-      if (pipelineCwd === undefined) {
-        pipelineCwd = currentCwd;
-        pipelineCwds.set(cmd.cwdPipeline, pipelineCwd);
+      pipelineState = pipelineCwds.get(cmd.cwdPipeline.id);
+      if (pipelineState === undefined) {
+        pipelineState = { cwd: inheritedScope?.cwd ?? currentCwd, previousCwd: inheritedScope ? inheritedScope.previousCwd : previousCwd };
+        pipelineCwds.set(cmd.cwdPipeline.id, pipelineState);
       }
     }
-    const inheritedScope = [...(cmd.cwdScopes ?? [])].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined);
-    const scopeBase = inheritedScope?.cwd ?? pipelineCwd ?? currentCwd;
-    const previousBase = inheritedScope?.previousCwd ?? previousCwd;
-    for (const scope of cmd.cwdScopeStarts ?? []) scopeCwds.set(scope, { cwd: scopeBase, previousCwd: previousBase });
-    const localScope = [...(cmd.cwdScopes ?? [])].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined);
-    const commandCwd = localScope?.cwd ?? pipelineCwd ?? currentCwd;
+    const pipelineDepth = cmd.cwdPipeline?.depth ?? -1;
+    const scopeBase = inheritedScope && inheritedScope.depth > pipelineDepth ? inheritedScope : pipelineState ?? { cwd: currentCwd, previousCwd };
+    for (const scope of cmd.cwdScopeStarts ?? []) scopeCwds.set(scope, { ...scopeBase, depth: scopeIds.indexOf(scope) + 1 });
+    const localScope = [...scopeIds].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined && state.depth > pipelineDepth);
+    const commandCwd = localScope?.cwd ?? pipelineState?.cwd ?? currentCwd;
     for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path, false, commandCwd);
     const words = normalizeCommandWords(cmd.words).words;
     const prog = words[0] ?? "";

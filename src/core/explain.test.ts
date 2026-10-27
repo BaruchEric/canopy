@@ -95,6 +95,16 @@ describe("writtenPaths", () => {
     expect(wp("(cd src; touch inside.ts); touch outside.ts")).toEqual({ paths: ["src/inside.ts", "outside.ts"], ...none });
     expect(wp("echo hi | (cd src; touch x.ts)")).toEqual({ paths: ["src/x.ts"], ...none });
   });
+  test.each([
+    ["(cd src | cat; touch x.ts); touch parent.ts", ["x.ts", "parent.ts"]],
+    ["echo hi | (cd src; touch x.ts); touch parent.ts", ["src/x.ts", "parent.ts"]],
+    ["(cd src; cd lib | touch piped.ts; touch local.ts); touch parent.ts", ["src/piped.ts", "src/local.ts", "parent.ts"]],
+    ["(cd src; (cd lib; touch nested.ts); touch local.ts); touch parent.ts", ["src/lib/nested.ts", "src/local.ts", "parent.ts"]],
+    ["echo hi | (cd src; cd lib | cat; touch local.ts); touch parent.ts", ["src/local.ts", "parent.ts"]],
+    ["(cd src; echo hi | (cd lib; touch nested.ts); touch local.ts); touch parent.ts", ["src/lib/nested.ts", "src/local.ts", "parent.ts"]],
+  ])("cwd follows process nesting in %s", (command, paths) => {
+    expect(wp(command)).toEqual({ paths, ...none });
+  });
   test("reads add nothing; an opaque or vague line adds nothing and says so", () => {
     expect(wp("cat a.ts && grep x src && git diff")).toEqual({ paths: [], ...none });
     expect(wp("sh -c 'touch x'")).toEqual({ paths: [], dirs: [], unknown: true });
