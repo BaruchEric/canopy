@@ -202,6 +202,11 @@ describe("the pieces of the sort", () => {
 });
 
 describe("the sort", () => {
+  test("a SPEC.md-only diff remains docs that require approval", async () => {
+    const r = await sortOf(await branchWith({ "SPEC.md": "# x\n\n## Stack\n- Vite 8.3.2\n" }, { "SPEC.md": "# x\n\n## Stack\n- Vite 8.4.0\n" }));
+    expect([r.verdict, classesOf(r)]).toEqual(["approve", { "SPEC.md": "docs" }]);
+    expect(r.files[0]?.sensitive).toBe("instructions agents read");
+  });
   test("each class, and a verdict of auto when they all may land", async () => {
     const dir = await branchWith(
       { "README.md": "# x\n", "a.ts": TS, "b.ts": "export function f(a: number, b: number) { return a + b; }\n" },

@@ -100,7 +100,7 @@ function FireForm({ backend, rule }: { backend: string; rule: TriggerRuleInfo })
         fireTrigger(backend, rule.name, title).then(
           (d) => {
             setTitle("");
-            setCall({ kind: "done", text: d.kind === "skip" ? d.why : `${d.kind}: ${d.event.short ?? d.event.key}` });
+            setCall({ kind: "done", text: d.kind === "skip" ? d.why : d.kind === "fired" ? `${d.events.length} started, ${d.skipped.length} skipped` : `${d.kind}: ${d.event.short ?? d.event.key}` });
           },
           (err: unknown) => setCall({ kind: "failed", error: errText(err) }),
         );

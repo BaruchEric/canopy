@@ -96,6 +96,8 @@ test("hookAddress joins the origin and the hook's path", () => {
 
 const rule = (over: Partial<TriggerRuleInfo>): TriggerRuleInfo => ({
   name: "tracker",
+  land: "pr",
+  only: [],
   source: "github",
   repo: "web/shop",
   workflow: "issue-fix",

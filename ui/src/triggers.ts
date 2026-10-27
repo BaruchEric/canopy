@@ -164,5 +164,5 @@ export function pollWords(cron: string): string {
  *  a secret (a Sentry or Linear rule always has), and the poll's words when
  *  it polls. A GitHub or Forgejo rule with both has the poll as its safety net. */
 export function ruleIntake(rule: Pick<TriggerRuleInfo, "hook" | "secretEnv" | "poll">, origin: string): { hook: string | null; poll: string | null } {
-  return { hook: rule.secretEnv ? hookAddress(origin, rule.hook) : null, poll: rule.poll ? pollWords(rule.poll) : null };
+  return { hook: rule.secretEnv && rule.hook ? hookAddress(origin, rule.hook) : null, poll: rule.poll ? pollWords(rule.poll) : null };
 }

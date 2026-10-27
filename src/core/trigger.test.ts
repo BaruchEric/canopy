@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   activityFor,
-  SERVICE_NAME,
   afterRestart,
   eventLive,
   existing,
@@ -26,6 +25,9 @@ import {
   parseSentry,
   pruneEvents,
   sampleIncoming,
+  SERVICE_NAME,
+  dueRules, fireMinute, lastFire, nextFireOf, scheduleBusy, scheduleEvent, scheduleKey, scheduleRepos,
+  type ScheduleClock,
   KEEP_EVENTS,
   MAX_DESCRIPTION,
   opensPr,
@@ -35,12 +37,14 @@ import {
   type TriggerRule,
 } from "./trigger";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
-import type { Flow, LandEntry, LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Repo, RepoStatus, Run, Workflow, WorkflowStep } from "./types";
 
 const RULE: TriggerRule = {
   name: "shop",
   source: "sentry",
   repo: "web/shop",
+  land: "pr",
+  only: [],
   workflow: "sentry-fix",
   secretEnv: "CANOPY_TRIGGER_SHOP_SECRET",
   projects: [],
@@ -54,6 +58,8 @@ const LINEAR: TriggerRule = {
   name: "web-linear",
   source: "linear",
   repo: "web/shop",
+  land: "pr",
+  only: [],
   workflow: "linear-issue",
   secretEnv: "CANOPY_TRIGGER_WEB_LINEAR_SECRET",
   projects: [],
@@ -67,6 +73,8 @@ const GITHUB: TriggerRule = {
   name: "gh-issues",
   source: "github",
   repo: "web/shop",
+  land: "pr",
+  only: [],
   workflow: "issue-fix",
   poll: "*/15 * * * *",
   write: true,
@@ -708,7 +716,7 @@ describe("existing", () => {
 });
 
 describe("knownEvent", () => {
-  const FORGEJO: TriggerRule = { ...GITHUB, name: "fj-issues", source: "forgejo", api: "https://git.example.com" };
+  const FORGEJO: TriggerRule = { ...GITHUB, land: "queue", name: "fj-issues", source: "forgejo", api: "https://git.example.com" };
   test("a GitHub rule's delivery starts over after a failed, merged, closed or ignored event, since a labeled delivery names the label put back on", () => {
     for (const status of ["failed", "merged", "closed", "ignored"] as const) expect(knownEvent([event({ rule: "gh-issues", status })], GITHUB, "4242")).toBeUndefined();
     const live = event({ rule: "gh-issues", status: "review" });
@@ -866,6 +874,7 @@ describe("fromLanding", () => {
     const e = event({ status: "ready", branch: "br1" });
     expect(fromLanding(e, [notice({ entry: "br2" }), notice({ entry: "br2", kind: "landed" })])).toBe(e);
     expect(fromLanding(e, [], [{ ...landed, id: "br2" }, { ...landed, state: "queued" }])).toBe(e);
+    expect(fromLanding(e, [notice({ kind: "landed" })])).toMatchObject({ status: "merged" });
     const review = event({ status: "review", branch: "br1" });
     expect(fromLanding(review, [notice({ kind: "landed" })], [landed])).toBe(review);
   });
@@ -889,7 +898,7 @@ describe("opensPr", () => {
     expect(opensPr(event({ service: "sentry" }))).toBe(true);
     expect(opensPr(event({ service: "linear" }))).toBe(true);
     expect(opensPr(event({ service: "github" }))).toBe(true);
-    expect(opensPr(event({ service: "forgejo" }))).toBe(false);
+    expect(opensPr(event({ service: "forgejo", land: undefined }))).toBe(false);
     // an event written before services were named is Sentry's
     expect(opensPr({ service: undefined })).toBe(true);
   });
@@ -992,4 +1001,221 @@ describe("fromFlow", () => {
     const e = event({ flowId: "f1", runId: "r2", status: "working" });
     expect(fromRun(e, run({ id: "r2", status: "done" }), 5)).toBe(e);
   });
+});
+
+
+describe("schedule rule configuration", () => {
+  const schedule = (over: Record<string, unknown> = {}) => ({ name: "spec-weekly", source: "schedule", repo: "*", cron: "0 5 * * 1", ...over });
+  const parsed = (value: Record<string, unknown>) => parseRules(JSON.stringify({ rules: [value] }));
+
+  test("a schedule has no hook secret and defaults to the queue, with a cron alias accepted", () => {
+    const got = parsed(schedule({ only: ["spec-adopted", "clean"] }));
+    expect(got.problems).toEqual([]);
+    expect(got.rules[0]).toEqual({ name: "spec-weekly", source: "schedule", repo: "*", workflow: "spec-converge", cron: "0 5 * * 1", land: "queue", only: ["spec-adopted", "clean"], projects: [], levels: [], labels: [], ignore: [], api: "" });
+    expect(parsed(schedule({ cron: "@weekly", land: "pr" })).rules[0]).toMatchObject({ cron: "@weekly", land: "pr", only: [] });
+    expect(SERVICE_NAME.schedule).toBe("Schedule");
+  });
+
+  test("legacy hook sources default to PR and can explicitly choose the queue", () => {
+    const legacy = { name: "hook", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_SHOP_SECRET" };
+    expect(parsed(legacy).rules[0]).toMatchObject({ land: "pr", only: [] });
+    expect(parsed({ ...legacy, land: "queue" }).rules[0]?.land).toBe("queue");
+    const other = parseRules(JSON.stringify({ rules: [
+      { ...legacy, repo: "*" }, { ...legacy, cron: "@daily" },
+      { ...legacy, only: ["clean"] }, { ...legacy, land: "merge" },
+    ] }));
+    expect(other.rules).toEqual([]);
+    expect(other.problems).toEqual([
+      'rule 1: repo "*" is allowed only on a schedule rule',
+      "rule 2: cron is for a schedule rule", "rule 3: only is for a schedule rule",
+      "rule 4: land must be queue or pr, not merge",
+    ]);
+  });
+
+  test("bad schedule fields are isolated from healthy rules", () => {
+    const bad = [
+      { cron: undefined }, { cron: "0 5 * *" }, { cron: "x".repeat(101) },
+      { secretEnv: "CANOPY_TRIGGER_SECRET" }, { only: ["weekends"] },
+      { projects: [] }, { levels: [] }, { ignore: [] }, { org: "x" }, { api: "" },
+      { labels: ["x"] }, { clientId: "x", clientSecretEnv: "CANOPY_TRIGGER_X" },
+      { land: false },
+    ];
+    const got = parseRules(JSON.stringify({ rules: [...bad.map((over, i) => schedule({ ...over, name: `bad-${i}` })), schedule()] }));
+    expect(got.rules.map(r => r.name)).toEqual(["spec-weekly"]);
+    expect(got.problems).toEqual([
+      "rule 1: cron is required on a schedule rule: five fields, minute hour day-of-month month day-of-week",
+      "rule 2: cron: a cron line has five fields: minute hour day-of-month month day-of-week",
+      "rule 3: cron must be at most 100 characters",
+      "rule 4: secretEnv is not read by a schedule rule: nothing signs a clock",
+      "rule 5: only must be some of spec-adopted, dirty, unpushed, clean, not weekends",
+      "rule 6: projects is not read by a schedule rule", "rule 7: levels is not read by a schedule rule",
+      "rule 8: ignore is not read by a schedule rule", "rule 9: org is not read by a schedule rule",
+      "rule 10: api is not read by a schedule rule", "rule 11: labels is for a linear rule",
+      "rule 12: clientId is for a linear rule", "rule 13: land must be queue or pr, not false",
+    ]);
+  });
+
+  test("new events retain their selected landing path", () => {
+    expect(newEvent(RULE, INC, "web/shop", "sentry", 1, null).land).toBe("pr");
+    expect(newEvent({ ...RULE, land: "queue" }, INC, "web/shop", "sentry", 1, null).land).toBe("queue");
+  });
+});
+
+
+describe("schedule clock", () => {
+  const monday = Date.parse("2026-11-02T05:00:00Z");
+  const hour = 3_600_000;
+  const week = 7 * 86_400_000;
+  const sched: TriggerRule = { name: "weekly", source: "schedule", repo: "*", workflow: "spec-converge", cron: "0 5 * * 1", land: "queue", only: [], projects: [], levels: [], labels: [], ignore: [], api: "" };
+  const status = (over: Partial<RepoStatus> = {}): RepoStatus => ({ branch: "main", upstream: "origin/main", ahead: 0, behind: 0, files: [], lastCommit: null, user: null, ...over });
+  const repo = (id: string, over: Partial<Repo> = {}): Repo => ({ id, name: id, path: `/dev/${id}`, group: "", source: "root", status: status(), ...over });
+  const shop = repo("shop", { spec: "in-sync" });
+  const blog = repo("blog");
+  const repos = [shop, blog];
+  const clock = (since: number, mark?: number): ScheduleClock => ({ since, marks: new Map(mark === undefined ? [] : [[sched.name, mark]]) });
+  const fired = (at: number, over: Partial<TriggerEvent> = {}): TriggerEvent => ({ ...scheduleEvent(sched, shop, "shop-key", at, at, "schedule"), status: "merged", ...over });
+
+  test("steady ticks use the cron slot even when late, and do not refire a taken slot", () => {
+    const c = clock(monday - 86_400_000, monday - 86_400_000);
+    expect(dueRules([sched], [], monday - 1, repos, c)).toEqual([]);
+    expect(dueRules([sched], [], monday + 3 * 60_000, repos, c)).toEqual([{ rule: sched, at: monday, repos, skipped: [] }]);
+    expect(dueRules([sched], [fired(monday)], monday + 3 * 60_000, repos, c)).toEqual([]);
+    expect(dueRules([sched], [fired(monday)], monday + week, repos, c)[0]?.at).toBe(monday + week);
+    expect(dueRules([sched], [], monday, repos, clock(monday - 1))).toEqual([]);
+  });
+
+  test("startup catches one missed slot, or forgives it when the next is under an hour away", () => {
+    const now = monday + 2 * hour + 30_000;
+    expect(dueRules([sched], [fired(monday - week)], now, repos, clock(now))[0]).toEqual({ rule: sched, at: monday + 2 * hour, repos, skipped: [] });
+    const hourly = { ...sched, cron: "0 * * * *" };
+    const near = monday + 50 * 60_000;
+    expect(dueRules([hourly], [fired(monday - hour)], near, repos, clock(near))).toEqual([{ rule: hourly, at: near, repos: [], skipped: [], waits: monday + hour }]);
+    expect(dueRules([hourly], [fired(monday - hour)], near + 60_000, repos, clock(near, near))).toEqual([]);
+    expect(dueRules([hourly], [fired(monday - hour)], monday + hour, repos, clock(near, near))[0]?.at).toBe(monday + hour);
+  });
+
+  test("cron edits use the latest mark or event, and impossible schedules have no fire", () => {
+    const daily = { ...sched, cron: "0 5 * * *" };
+    const events = [fired(monday, { firstAt: monday + 10_000, lastAt: monday + 8 * hour })];
+    expect(lastFire(sched.name, events)).toBe(monday + 10_000);
+    expect(nextFireOf(daily, monday + 10_000)).toBe(monday + 86_400_000);
+    expect(dueRules([daily], events, monday + 86_400_000, repos, clock(monday - week))[0]?.at).toBe(monday + 86_400_000);
+    expect(dueRules([sched], [fired(monday - week)], monday, repos, clock(monday - week, monday))).toEqual([]);
+    const never = { ...sched, cron: "0 5 31 2 *" };
+    expect(nextFireOf(never, monday)).toBeNull();
+    expect(nextFireOf({ ...sched, cron: "bad" }, monday)).toBeNull();
+    expect(dueRules([never], events, monday + week, repos, clock(monday - week))).toEqual([]);
+  });
+
+  test("local wildcard filters exclude remote, forge, seed and errored repos", () => {
+    const dirty = repo("dirty", { status: status({ files: [{ path: "a.md", index: ".", worktree: "M", untracked: false, conflicted: false }] }) });
+    const ahead = repo("ahead", { status: status({ ahead: 2 }) });
+    const all = [...repos, dirty, ahead, repo("ssh", { host: "remote" }), repo("forge", { forge: { kind: "forgejo", slug: "o/n", clone: "ssh://forge.invalid/o/n.git", branch: "main", updated: 0, private: false, empty: false } }), repo("_incubator/seed"), repo("bad", { error: "unreadable" })];
+    expect(scheduleRepos(sched, all).map(r => r.id)).toEqual(["shop", "blog", "dirty", "ahead"]);
+    for (const [only, expected] of [["spec-adopted", ["shop"]], ["dirty", ["dirty"]], ["unpushed", ["ahead"]], ["clean", ["shop", "blog", "ahead"]]] as const) {
+      expect(scheduleRepos({ ...sched, only: [only] }, all).map(r => r.id)).toEqual([...expected]);
+    }
+    expect(scheduleRepos({ ...sched, only: ["clean", "spec-adopted"] }, all)).toEqual([shop]);
+    expect(scheduleRepos({ ...sched, repo: blog.path, only: ["dirty"] }, all)).toEqual([blog]);
+    expect(dueRules([{ ...sched, repo: "gone" }], [], monday, all, clock(monday - 1, monday - 1))[0]?.skipped).toEqual([{ repo: "gone", why: "no repo gone in the tree", at: monday }]);
+  });
+
+  test("a live last event is skipped without making an event, while terminal history frees it", () => {
+    for (const state of ["queued", "working", "waiting", "ready", "review"] as const) {
+      const prior = fired(monday - week, { status: state });
+      expect(scheduleBusy([prior], sched.name, shop.id)).toBe(true);
+      expect(dueRules([sched], [prior], monday, repos, clock(monday - 1, monday - 1))[0]).toMatchObject({ repos: [blog], skipped: [{ repo: shop.name, why: "last run still going", at: monday }] });
+    }
+    for (const state of ["merged", "failed", "no-fix", "stopped", "closed", "ignored"] as const) expect(scheduleBusy([fired(monday, { status: state })], sched.name, shop.id)).toBe(false);
+    expect(scheduleBusy([fired(monday, { rule: "other", status: "working" })], sched.name, shop.id)).toBe(false);
+  });
+
+  test("events identify the repo and scheduled minute without carrying issue fields", () => {
+    const e = scheduleEvent(sched, shop, "shop-key", monday + 15_000, monday + 20_000, "schedule");
+    expect(e).toMatchObject({ rule: "weekly", service: "schedule", source: "schedule", key: "shop-key@2026-11-02T05:00:00.000Z", short: "2026-11-02", title: "spec-converge on shop, 2026-11-02", land: "queue", status: "queued", firstAt: monday + 20_000, lastAt: monday + 20_000 });
+    expect([e.link, e.project, e.level, e.culprit]).toEqual([undefined, undefined, undefined, undefined]);
+    expect(e.note).toContain("for 2026-11-02T05:00:00.000Z. No outside issue came in");
+    expect(scheduleKey("x", monday + 59_999)).toBe("x@2026-11-02T05:00:00.000Z");
+    expect(fireMinute(monday + 59_999)).toBe(monday);
+    expect(scheduleEvent(sched, shop, "k", monday, monday, "manual").source).toBe("manual");
+  });
+});
+
+
+describe("queue trigger lifecycle", () => {
+  const branch = { name: "run/x", target: "main", base: "b", dir: "/d", origin: "br1", state: "ready" } satisfies NonNullable<Run["branch"]>;
+  const entry = (over: Partial<LandEntry> = {}): LandEntry => ({ id: "br1", repoId: "web/shop", repoPath: "/dev/shop", branch: "run/x", target: "main", dir: "/d", note: "", state: "waiting", tries: 0, queuedAt: 1, updatedAt: 2, ...over });
+  const notice = (over: Partial<LandNotice> = {}): LandNotice => ({ id: "n", entry: "br1", repoId: "web/shop", branch: "run/x", note: "", kind: "held", at: 2, why: "needs approval", ...over });
+  const scheduled = (land: TriggerEvent["land"], over: Partial<TriggerEvent> = {}): TriggerEvent =>
+    event({ rule: "weekly", source: "schedule", service: "schedule", repoId: "shop", branch: "br1", status: "ready", land, ...over });
+  const landedByEntryAndNotice = (e: TriggerEvent): TriggerEvent[] => [
+    fromLanding(e, [], [entry({ state: "landed", landedAt: 7 })]),
+    fromLanding(e, [notice({ kind: "landed", at: 9 })]),
+  ];
+
+  test("ready queue runs and flows name the landing queue while old events still name PRs", () => {
+    const e = event({ runId: "r1", status: "working", land: "queue" });
+    expect(fromRun(e, run({ status: "done", branch }), 5)).toMatchObject({ status: "ready", reason: "committed; the landing queue sorts the branch" });
+    const f: Flow = { id: "f1", repoId: "web/shop", workflow: "fix", verb: "fix", note: "", status: "done", steps: [], current: 0, startedAt: 1, branch };
+    expect(fromFlow(event({ status: "working", flowId: "f1", land: "queue" }), f, 5).reason).toBe("committed; the landing queue sorts the branch");
+    expect(fromRun({ ...e, land: undefined }, run({ status: "done", branch }), 5).reason).toContain("opens the PR");
+  });
+
+  test("manual landing merges the event without needing an auto-land notice", () => {
+    const e = event({ status: "ready", branch: "br1", land: "queue", reason: "waiting" });
+    const result = fromLanding(e, [], [entry({ state: "landed", landedAt: 7 })]);
+    expect(result).toMatchObject({ status: "merged", endedAt: 7 });
+    expect([result.reason, result.pr]).toEqual([undefined, undefined]);
+    expect(fromLanding(e, [notice({ kind: "landed", at: 9 })])).toMatchObject({ status: "merged", endedAt: 9 });
+    expect(fromLanding(e, [], [entry({ id: "other", state: "landed" })])).toBe(e);
+  });
+
+  for (const [landMode, land] of [["omitted", undefined], ["PR", "pr"], ["queue", "queue"]] as const) {
+    test(`a late run cannot reopen a landed ${landMode}-mode event`, () => {
+      const e = scheduled(land, { runId: "r1" });
+      for (const landed of landedByEntryAndNotice(e)) {
+        expect(landed).toMatchObject({ status: "merged", endedAt: expect.any(Number) });
+        const late = fromRun(landed, run({ status: "done", branch }), 11);
+        expect(late).toBe(landed);
+        expect(late.status).toBe("merged");
+        expect(late.endedAt).toBe(landed.endedAt);
+        expect(scheduleBusy([late], "weekly", "shop")).toBe(false);
+      }
+    });
+
+    test(`a late flow cannot reopen a landed ${landMode}-mode event`, () => {
+      const e = scheduled(land, { flowId: "f1" });
+      const f: Flow = { id: "f1", repoId: "shop", workflow: "spec-converge", verb: "fix", note: "", status: "done", steps: [], current: 0, startedAt: 1, branch };
+      for (const landed of landedByEntryAndNotice(e)) {
+        expect(landed).toMatchObject({ status: "merged", endedAt: expect.any(Number) });
+        const late = fromFlow(landed, f, 11);
+        expect(late).toBe(landed);
+        expect(late.status).toBe("merged");
+        expect(late.endedAt).toBe(landed.endedAt);
+        expect(scheduleBusy([late], "weekly", "shop")).toBe(false);
+      }
+    });
+  }
+
+  test("a sent-back or judge-held queue entry keeps the event ready with its observation", () => {
+    const e = event({ status: "ready", branch: "br1", land: "queue" });
+    for (const state of ["conflict", "red", "moved", "waiting", "judge"] as const) {
+      const got = fromLanding(e, [], [entry({ state, reason: "observed queue reason", updatedAt: 4 })]);
+      expect(got).toMatchObject({ status: "ready", reason: "observed queue reason" });
+    }
+    expect(fromLanding(e, [notice({ why: "newer approval", at: 5 })], [entry({ state: "red", reason: "older gate", updatedAt: 4 })]).reason).toBe("newer approval");
+    expect(fromLanding(e, [notice({ why: "older approval", at: 3 })], [entry({ state: "red", reason: "newer gate", updatedAt: 4 })]).reason).toBe("newer gate");
+  });
+});
+
+
+test("explicit landing selection survives combined hook and schedule sources", () => {
+  expect(opensPr({ service: "sentry", land: "queue" })).toBe(false);
+  expect(opensPr({ service: "schedule", land: "pr" })).toBe(true);
+  expect(opensPr({ service: "forgejo", land: "pr" })).toBe(true);
+  expect(opensPr({ service: "forgejo" })).toBe(false);
+  expect(opensPr({})).toBe(true);
+  const got = parseRules(JSON.stringify({ rules: [{ name: "forge", source: "forgejo", repo: "r", api: "https://forge.invalid" }] }));
+  expect(got.problems).toEqual([]);
+  expect(got.rules[0]?.land).toBe("queue");
 });

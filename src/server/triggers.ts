@@ -212,6 +212,8 @@ function hookSignature(source: TriggerSource, headers: Headers): string | null {
     }
     case "forgejo":
       return headers.get("x-forgejo-signature") ?? headers.get("x-gitea-signature");
+    case "schedule":
+      return null;
   }
 }
 
@@ -333,8 +335,8 @@ export class TriggerHub {
       const next = this.nextPoll(r);
       rules.push({
         ...r,
-        hook: `/api/hooks/${r.source}/${r.name}`,
-        secretSet: r.secretEnv !== undefined && this.env(r.secretEnv) !== undefined,
+        ...(r.source !== "schedule" ? { hook: `/api/hooks/${r.source}/${r.name}` } : {}),
+        secretSet: r.secretEnv ? this.env(r.secretEnv) !== undefined : r.source === "schedule",
         tokenSet: r.tokenEnv ? this.env(r.tokenEnv) !== undefined : false,
         agentSet: r.clientSecretEnv ? this.env(r.clientSecretEnv) !== undefined : false,
         ...(r.clientId ? { install: `/api/linear/install?rule=${encodeURIComponent(r.name)}` } : {}),
@@ -455,7 +457,7 @@ export class TriggerHub {
   /** One issue under one rule: dedupe, the rule's filters, then a run or the
    *  queue. A Linear agent session's issue carries the session, and the event
    *  reports to it from then on. */
-  deliver(rule: TriggerRule, inc: Incoming, source: TriggerEvent["source"], session?: string): Promise<Delivery> {
+  deliver(rule: TriggerRule, inc: Incoming, source: TriggerEvent["source"], session?: string): Promise<Exclude<Delivery, { kind: "fired" }>> {
     return this.queue(async () => {
       if (!this.keeping) throw new TriggerError("this backend does not hold the flows lock, so it starts no trigger", 503);
       const repo = this.deps.repo(rule.repo);
@@ -565,7 +567,7 @@ export class TriggerHub {
   /** One issue from a hook or a poll: a redelivery, or a poll listing it
    *  again, finds its event and bumps the count; a new one is read in full
    *  (the comments ride in the note) and delivered. */
-  private async take(rule: TriggerRule, repo: Repo, inc: Incoming): Promise<Delivery> {
+  private async take(rule: TriggerRule, repo: Repo, inc: Incoming): Promise<Exclude<Delivery, { kind: "fired" }>> {
     if (knownEvent(this.list(), rule, inc.key)) return this.deliver(rule, inc, rule.source);
     let full: Incoming;
     try {
