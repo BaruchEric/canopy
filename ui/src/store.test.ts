@@ -37,8 +37,10 @@ import {
   arrangementOf,
   failedItems,
   turnItems,
+  waitingCount,
   flowFor,
   activeFlowFor,
+  harnessNoticeOf,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -58,6 +60,7 @@ import {
   type Ask,
   type CapacityInfo,
   type HistoryOverview,
+  type RepoHistory,
   type LandingInfo,
   type KeptShell,
   type PeerSeen,
@@ -3113,5 +3116,70 @@ describe("chats, agents and popups as dock panels (FR-047)", () => {
     s.tabItem("strip", agent);
     expect(useStore.getState().panels).toEqual([]);
     expect(useStore.getState().settings.itemTabs.map((t) => t.id)).toEqual([itemTabId("strip", "agent", "claude:abc")]);
+  });
+});
+
+describe("the harness weekly inbox selector", () => {
+  const pristine = useStore.getState();
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  afterEach(() => {
+    useStore.setState({ repos: pristine.repos, history: pristine.history, harnessSaid: pristine.harnessSaid, settings: pristine.settings, activeWs: pristine.activeWs, workspaces: pristine.workspaces, backendOrder: pristine.backendOrder });
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  test("memoizes the quiet line and records acknowledgement outside inbox and waiting counts", () => {
+    const days = Array.from({ length: 16 }, (_, index) => `2026-10-${String(index + 12).padStart(2, "0")}`);
+    const weekly = (amount: number) => days.map((day) => (day >= "2026-10-19" && day <= "2026-10-25" ? amount / 7 : 0));
+    const archive = (project: string, amounts: number[]): RepoHistory => ({
+      project,
+      sessions: 0,
+      costUsd: amounts.reduce((sum, amount) => sum + amount, 0),
+      tokens: 0,
+      commits: 0,
+      first: null,
+      last: null,
+      days: amounts,
+      daySessions: amounts.map(() => 0),
+    });
+    const history: HistoryOverview = {
+      available: true,
+      days,
+      maxDay: 1,
+      fetchedAt: 1,
+      repos: { canopy: archive("canopy", weekly(17)), web: archive("web", weekly(33)) },
+    };
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    useStore.setState({
+      repos: [repo("canopy", { harness: true }), repo("web")],
+      history,
+      harnessSaid: null,
+      settings: { ...pristine.settings, harnessShareMax: 25 },
+      backendOrder: [pristine.home],
+    });
+
+    const before = useStore.getState();
+    const notice = harnessNoticeOf(before);
+    if (!notice) throw new Error("the harness notice fixture should cross the line");
+    expect(notice).toEqual({ key: "2026-W43", text: "last week 34% of Claude spend went into the harness (canopy)" });
+    expect(harnessNoticeOf(before)).toBe(notice);
+    const inbox = inboxItems(before);
+    const count = waitingCount(before);
+
+    before.sayHarness(notice.key);
+
+    const after = useStore.getState();
+    expect(after.harnessSaid).toBe("2026-W43");
+    expect(values.get("canopy.harnessSaid")).toBe("2026-W43");
+    expect(harnessNoticeOf(after)).toBeNull();
+    expect(inboxItems(after)).toBe(inbox);
+    expect(waitingCount(after)).toBe(count);
   });
 });

@@ -6,7 +6,7 @@ import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatu
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
-import { isHarnessCard } from "../../src/core/harnessshare";
+import { harnessNames, harnessWeeks, isHarnessCard } from "../../src/core/harnessshare";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
 import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
 import { addItemTab, addSectionTab, dropSectionTab, itemTabId, sectionTabId, type SectionPlace, type TabRef } from "./sectiontabs";
@@ -61,7 +61,7 @@ import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
-import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
+import { HARNESS_SAID_KEY, harnessNotice, mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type HarnessNotice, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
@@ -231,6 +231,16 @@ export function changed<T extends object>(next: T, before: T): Partial<T> {
 }
 
 const LAYOUT_KEY = "canopy.layout";
+const HARNESS_WEEK_KEY = /^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/;
+
+function readHarnessSaid(): string | null {
+  try {
+    const key = localStorage.getItem(HARNESS_SAID_KEY);
+    return key && HARNESS_WEEK_KEY.test(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
 
 /** the layout kept per kind of screen and window (screens.ts): its sizes,
  *  the tree being open, and the feed being up, which the feed's gear puts
@@ -788,6 +798,8 @@ export interface CanopyState {
   signIns: Record<string, SignIn>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
+  /** the ISO week this browser last noted for the harness line */
+  harnessSaid: string | null;
   /** an accepted lesson's text by chat run id, which that chat's message box
    *  starts with; the user sends it, or not */
   chatDrafts: Record<string, string>;
@@ -1330,6 +1342,8 @@ export interface CanopyState {
   /** marks one checkout as the harness; unmarking clears every marked
    *  checkout of its card, since the card is the unit of the figure */
   harnessRepo: (repoId: string, harness: boolean) => Promise<void>;
+  /** marks this browser as having read the harness line for the given week */
+  sayHarness: (key: string) => void;
   /** opens the repo's launch settings */
   editLaunch: (repoId: string) => void;
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
@@ -2082,6 +2096,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   signIns: {},
   secrets: {},
   advice: [],
+  harnessSaid: readHarnessSaid(),
   chatDrafts: {},
   adviceFile: null,
   inboxOpen: false,
@@ -4279,6 +4294,16 @@ export const useStore = create<CanopyState>((set, get) => ({
       get().applyEvent({ type: "repo", repo }, backendOf(id));
     }
   },
+
+  sayHarness: (key) => {
+    if (!HARNESS_WEEK_KEY.test(key)) return;
+    set({ harnessSaid: key });
+    try {
+      localStorage.setItem(HARNESS_SAID_KEY, key);
+    } catch {
+      // the line stays quiet for this page even when storage is unavailable
+    }
+  },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
   editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
   showTasks: (repoId) =>
@@ -4987,6 +5012,22 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     sweep: s.sweep,
   });
   return inboxOut;
+}
+
+let harnessNoticeIn: { history: HistoryOverview | null; cards: RepoCard[]; max: number; said: string | null } | null = null;
+let harnessNoticeOut: HarnessNotice | null = null;
+
+/** The quiet weekly line for the newest full archive week. Memoized on the
+ *  same inputs it reads so subscriptions stay settled between changes. */
+export function harnessNoticeOf(s: CanopyState): HarnessNotice | null {
+  const cards = allCards(s);
+  const max = s.settings.harnessShareMax;
+  if (harnessNoticeIn && harnessNoticeIn.history === s.history && harnessNoticeIn.cards === cards && harnessNoticeIn.max === max && harnessNoticeIn.said === s.harnessSaid) {
+    return harnessNoticeOut;
+  }
+  harnessNoticeIn = { history: s.history, cards, max, said: s.harnessSaid };
+  harnessNoticeOut = harnessNotice(harnessWeeks(s.history, cards), harnessNames(cards), max, s.harnessSaid);
+  return harnessNoticeOut;
 }
 
 let attentionIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[]; landing: Record<string, LandingInfo> } | null = null;

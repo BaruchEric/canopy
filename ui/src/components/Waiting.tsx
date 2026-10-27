@@ -9,7 +9,7 @@ import type { Repo } from "../../../src/core/types";
 import { GLYPH, lockedIndex, type RepoState } from "../util";
 import { HEALTH_PANEL } from "../health";
 import { ATTENTION_WORD, WAITING_PANEL, WAITING_WORD, isUnpushed, type AttentionRow, type BehindRow, type WaitingGroup } from "../waiting";
-import { InboxRow, useNow } from "./Inbox";
+import { HarnessNoticeLine, InboxRow, useNow } from "./Inbox";
 import { LandingNotices } from "./Landing";
 import { IdLabel } from "./IdLabel";
 import { AgentFix } from "./AgentFix";
@@ -200,6 +200,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
           repo has changes, unpushed commits or commits to pull, and nothing failed.
         </p>
         <LandingNotices />
+        <HarnessNoticeLine />
       </>
     );
   }
@@ -308,6 +309,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
         </Group>
       )}
       <LandingNotices />
+      <HarnessNoticeLine />
     </>
   );
 }
