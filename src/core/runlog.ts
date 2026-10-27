@@ -212,10 +212,12 @@ function quarantineKey(folder: string): string { try { return realpathSync(folde
 function rejectFolder(folder: string): void {
   const key = quarantineKey(folder);
   quarantined.add(key);
-  let durable = exists(join(folder, REJECTED));
-  try { atomic(join(folder, REJECTED), ""); durable = true; } catch { /* deletion is independent of marker creation */ }
-  try { rmSync(folder, { recursive: true }); durable = true; } catch { /* retain quarantine if no durable marker exists */ }
-  if (durable) quarantined.delete(key);
+  try { atomic(join(folder, REJECTED), ""); } catch { /* deletion is independent of marker creation */ }
+  try { rmSync(folder, { recursive: true }); } catch { /* partial removal may also have erased the marker */ }
+  let removed = false;
+  try { lstatSync(folder); } catch (error) { removed = record(error) && error["code"] === "ENOENT"; }
+  // Release only on observed durable state, never an earlier successful write.
+  if (removed || exists(join(folder, REJECTED))) quarantined.delete(key);
 }
 function rejected(folder: string): boolean {
   if (!quarantined.has(quarantineKey(folder)) && !exists(join(folder, REJECTED))) return false;

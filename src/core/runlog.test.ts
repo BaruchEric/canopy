@@ -419,3 +419,31 @@ test("an unmarked undeletable rejection stays quarantined until durable exclusio
   } finally { failedMarker.mockRestore(); failedRemoval.mockRestore(); }
   expect(await listKept(dir)).toEqual([]); expect(await readKeptRun(dir, "identity")).toBeNull();
 });
+
+test("partial removal that erases the rejection marker cannot revive a surviving record", async () => {
+  const dir = join(root, "partial-rejection-remove"); const folder = join(dir, "identity"); await mkdir(folder, { recursive: true });
+  await writeFile(join(folder, WIRE), JSON.stringify({ canopy: "start", at: 5, run: "identity", repo: "repo", action: "ask", harness: "codex", argv: [] }) + "\n");
+  await writeFile(join(folder, RUN_FILE), JSON.stringify(run({ id: "identity" })));
+  const actualRm = fs.rmSync; let partialAttempts = 0;
+  const partial = spyOn(fs, "rmSync").mockImplementation((path, opts) => {
+    if (path === folder) {
+      partialAttempts++; actualRm(join(folder, ".privacy-rejected"), { force: true });
+      throw new Error("synthetic partial removal after marker unlink");
+    }
+    actualRm(path, opts);
+  });
+  const secrets = [{ name: "CANOPY_TOKEN", value: "identity" }];
+  try {
+    expect(await closeOpen(dir, () => undefined, { secrets, credentials: secrets }, 77)).toEqual([]);
+    for (let i = 0; i < 3; i++) {
+      expect(await listKept(dir)).toEqual([]); expect(await rebuildIndex(dir)).toEqual([]);
+      expect(await readKeptRun(dir, "identity")).toBeNull();
+      expect(existsSync(join(folder, WIRE))).toBe(true); expect(existsSync(join(folder, RUN_FILE))).toBe(true);
+      expect(existsSync(join(folder, ".privacy-rejected"))).toBe(false);
+      expect(await readFile(join(dir, INDEX), "utf8")).not.toContain("identity");
+    }
+    expect(partialAttempts).toBeGreaterThan(1);
+  } finally { partial.mockRestore(); }
+  expect(await listKept(dir)).toEqual([]); expect(existsSync(folder)).toBe(false);
+  expect(await readKeptRun(dir, "identity")).toBeNull();
+});
