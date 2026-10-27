@@ -239,3 +239,24 @@ describe("a chat ended between turns", () => {
     }
   }, 30_000);
 });
+
+test("stopAndWait stops a terminal member's lingering process and awaits its actual exit", async () => {
+  let context: import("./driver").DriveCtx | undefined;
+  let stops = 0; let returned = false; let settlements = 0;
+  const runner = new Runner({ onChange: () => {}, onGone: () => {}, branchState: async () => { settlements++; return "ready"; } }, {
+    driver: harness => ({ harness, label: "delayed exit", check: () => null, start: ctx => { context = ctx; }, say: () => {}, stop: () => { stops++; } }),
+  });
+  const repo: Repo = { id: "app", name: "app", path: "/scratch/app", status: null, group: "", source: "root" };
+  const run = runner.start(repo, "ask", ACTIONS.ask, "work", DEFAULT_AGENT, undefined, undefined, { branch: { name: "run/member", target: "main", base: "base", dir: "/scratch/member", state: "working", origin: "member" } });
+  if (!context) throw new Error("driver absent");
+  context.result({ text: "done", durationMs: 1, turns: 1 }, null);
+  expect(run.status).toBe("done");
+  const stopping = runner.stopAndWait(run.id).then(() => { returned = true; });
+  try {
+    await Bun.sleep(10);
+    expect(stops).toBe(1); expect(returned).toBe(false);
+    const beforeExit = settlements;
+    context.exited({ code: 0, stderr: "" }); await stopping;
+    expect(returned).toBe(true); expect(settlements).toBeGreaterThan(beforeExit);
+  } finally { context.exited({ code: 0, stderr: "" }); await stopping; }
+});

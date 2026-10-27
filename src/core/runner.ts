@@ -168,6 +168,11 @@ export function runEnv(run: Pick<Run, "id" | "repoId">, backend?: string, extra?
  *  the run going there, and no status read judges its end. */
 const isCoordinate = (run: Pick<Run, "action">): boolean => run.action === "coordinate";
 
+type DriverProcess =
+  | { kind: "idle" }
+  | { kind: "running"; exited: Promise<void>; markExited: () => void }
+  | { kind: "exited" };
+
 interface Live {
   ctx: RunCtx;
   driver: RunDriver;
@@ -196,6 +201,7 @@ interface Live {
   preparation?: Promise<void>;
   /** terminal status and its asynchronous branch-state update */
   ended: Promise<void>;
+  process: DriverProcess;
 }
 
 export class Runner {
@@ -399,6 +405,7 @@ export class Runner {
       driver,
       started: false,
       ended,
+      process: { kind: "idle" },
       repo,
       spec,
       ...(scope ? { scope } : {}),
@@ -406,6 +413,15 @@ export class Runner {
       before: statusFingerprint(repo.status),
       drains: [],
       releases: [],
+    };
+    const exited = ctx.exited.bind(ctx);
+    ctx.exited = (result) => {
+      try { exited(result); }
+      finally {
+        const process = live.process;
+        live.process = { kind: "exited" };
+        if (process.kind === "running") process.markExited();
+      }
     };
     this.live.set(run.id, live);
     this.prune();
@@ -552,9 +568,20 @@ export class Runner {
   async stopAndWait(id: string): Promise<void> {
     const live = this.live.get(id);
     if (!live) return;
+    const active = isRunActive(live.ctx.run);
     this.stop(id);
-    await live.ended;
+    const process = live.process;
+    if (process.kind === "running") {
+      // A terminal result ends the job before the driver's process exits.
+      if (!active) live.driver.stop();
+      await process.exited;
+    }
     await live.preparation;
+    await live.ended;
+    await Promise.all(live.drains);
+    await Promise.all(live.releases);
+    // Work may have changed after the early result but before actual exit.
+    await this.settle(live);
   }
 
   /** Forgets a finished run. Active runs must be stopped first. */
@@ -574,11 +601,18 @@ export class Runner {
     }
   }
 
+  private drive(live: Live, message: string): void {
+    let markExited = () => {};
+    const exited = new Promise<void>(resolve => { markExited = resolve; });
+    live.process = { kind: "running", exited, markExited };
+    live.driver.start(live.ctx, message);
+  }
+
   private begin(live: Live, message: string): void {
     live.started = true;
     const prepare = live.branch?.prepare;
     if (!prepare) {
-      live.driver.start(live.ctx, message);
+      this.drive(live, message);
       return;
     }
     // once: a chat's later turns never set up again
@@ -587,7 +621,7 @@ export class Runner {
     live.preparation = prepare((text) => live.ctx.note(text)).then(
       () => {
         live.preparing = false;
-        if (isRunActive(live.ctx.run)) live.driver.start(live.ctx, message);
+        if (isRunActive(live.ctx.run)) this.drive(live, message);
       },
       (err: unknown) => {
         live.preparing = false;

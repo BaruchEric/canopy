@@ -3,6 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LOSER_KEEP, type RunGroup } from "../core/group";
+import { ACTIONS } from "../core/actions";
+import { Runner } from "../core/runner";
+import { DEFAULT_AGENT } from "../core/types";
 import type {
   LandingInfo,
   LandingRun,
@@ -126,6 +129,9 @@ async function world(overrides: Partial<GroupDeps> = {}) {
       reviewers.push(group.id);
       runs.set(run.id, run);
       return run;
+    },
+    stopReviewer: async (id) => {
+      runs.delete(id);
     },
     dropMember: async (origin) => {
       dropped.push(origin);
@@ -977,13 +983,13 @@ for (const operation of ["dry", "reviewer"] as const)
       };
     else {
       const start = w.deps.startReviewer;
-      w.deps.startReviewer = async (group, prompt) => {
+      w.deps.startReviewer = async (group, prompt, current) => {
         if (first) {
           first = false;
           began.release();
           return obsolete;
         }
-        return start(group, prompt);
+        return start(group, prompt, current);
       };
     }
     const creating = w.create();
@@ -1364,13 +1370,13 @@ test("checkout ownership acquired during reviewer preflight defers instead of fa
   let first = true;
   const w = await world({ checkoutBusy: () => busy });
   const start = w.deps.startReviewer;
-  w.deps.startReviewer = async (group, prompt) => {
+  w.deps.startReviewer = async (group, prompt, current) => {
     if (first) {
       first = false;
       busy = true;
       throw new Error("checkout became busy");
     }
-    return start(group, prompt);
+    return start(group, prompt, current);
   };
   const id = await w.create();
   expect(w.current(id).state).toBe("reviewing");
@@ -1380,4 +1386,94 @@ test("checkout ownership acquired during reviewer preflight defers instead of fa
   w.hub.recheck("repo");
   await w.hub.idle();
   expect(w.reviewers).toEqual([id]);
+});
+
+test("a successful obsolete reviewer is stopped and removed even after an early terminal result", async () => {
+  const w = await world();
+  let removal: Promise<void> | undefined;
+  let context: import("../core/driver").DriveCtx | undefined;
+  let stops = 0;
+  const runner = new Runner(
+    { onChange: () => {}, onGone: () => {} },
+    {
+      driver: (harness) => ({
+        harness,
+        label: "obsolete comparison",
+        check: () => null,
+        start: (ctx) => {
+          context = ctx;
+          ctx.result({ text: "early", durationMs: 1, turns: 1 }, null);
+          const id = w.hub.info()[0]?.id;
+          if (!id) throw new Error("group absent");
+          removal = w.hub.remove(id);
+        },
+        say: () => {},
+        stop: () => {
+          stops++;
+          context?.exited({ code: 0, stderr: "" });
+        },
+      }),
+    },
+  );
+  w.deps.startReviewer = async (group, _prompt, current) => {
+    if (!current()) return null;
+    return runner.start(
+      {
+        id: "repo",
+        name: "repo",
+        path: group.repoPath,
+        group: "",
+        source: "root",
+        status: null,
+      },
+      "compare",
+      ACTIONS.compare,
+      "compare",
+      DEFAULT_AGENT,
+      undefined,
+      undefined,
+      undefined,
+      { group: group.id },
+    );
+  };
+  w.deps.stopReviewer = async (id) => {
+    await runner.stopAndWait(id);
+    runner.dismiss(id);
+  };
+  await w.create();
+  await removal;
+  expect(stops).toBe(1);
+  expect(runner.list()).toEqual([]);
+  expect(w.hub.info()).toEqual([]);
+});
+
+test("adoption replaces a cancelled reviewer after ownership is lost during attachment", async () => {
+  const w = await world();
+  let detached = false;
+  const stopped: string[] = [];
+  const stop = w.deps.stopReviewer;
+  w.deps.stopReviewer = async (id) => {
+    stopped.push(id);
+    await stop(id);
+  };
+  w.deps.publish = (event) => {
+    if (
+      !detached &&
+      event.type === "landing" &&
+      event.landing.groups?.some((group) => group.review?.run)
+    ) {
+      detached = true;
+      w.hub.detach();
+    }
+  };
+  const id = await w.create();
+  expect(stopped).toEqual(["review-0"]);
+  expect(w.runs.has("review-0")).toBe(false);
+  await w.hub.adopt();
+  await w.hub.idle();
+  expect(w.reviewers).toEqual([id, id]);
+  expect(w.current(id)).toMatchObject({
+    state: "reviewing",
+    review: { run: "review-1" },
+  });
 });

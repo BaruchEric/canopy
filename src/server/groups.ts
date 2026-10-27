@@ -42,7 +42,14 @@ export interface GroupDeps {
   /** a workflow can own its checkout between runner steps */
   checkoutBusy?: (repoId: string) => boolean;
   dryGates: (origin: string) => Promise<GroupDry>;
-  startReviewer: (group: RunGroup, prompt: string) => Promise<Run>;
+  /** current must be rechecked after async preflight, immediately before start */
+  startReviewer: (
+    group: RunGroup,
+    prompt: string,
+    current: () => boolean,
+  ) => Promise<Run | null>;
+  /** cancel only the reviewer this hub started, including an obsolete success */
+  stopReviewer: (id: string) => Promise<void>;
   dropMember: (origin: string, why: string) => Promise<void>;
   openPr: (origin: string) => Promise<unknown>;
   /** Existing LandingHub.land, only for an auto-sorted non-PR winner. */
@@ -733,11 +740,18 @@ export class GroupHub {
         };
       }
       const reviewGroup = group;
+      const revision = this.revisions.get(id) ?? 0;
+      const current = (): boolean =>
+        this.current(id, epoch, "reviewing") === reviewGroup &&
+        (this.revisions.get(id) ?? 0) === revision;
       try {
-        review = await this.deps.startReviewer(
+        const started = await this.deps.startReviewer(
           structuredClone(group),
           comparePrompt(group, dry),
+          current,
         );
+        if (!started) return;
+        review = started;
       } catch (error: unknown) {
         // A checkout owner may arrive during the server's async preflight.
         // Its next run/flow event wakes this review; real failures still surface.
@@ -749,14 +763,29 @@ export class GroupHub {
           return;
         throw error;
       }
-      if (this.groups.get(id) === reviewGroup)
-        this.startingReview.set(id, review);
-      group = this.current(id, epoch, "reviewing");
-      if (!group) return;
-      await this.set(
-        { ...group, review: { run: review.id, ranking: [], why: {} } },
-        epoch,
-      );
+      if (!current()) {
+        await this.cancelReview(id, review.id);
+        return;
+      }
+      this.startingReview.set(id, review);
+      const attached: StoredGroup = {
+        ...reviewGroup,
+        review: { run: review.id, ranking: [], why: {} },
+      };
+      try {
+        await this.set(attached, epoch);
+      } catch (error: unknown) {
+        await this.cancelReview(id, review.id);
+        throw error;
+      }
+      if (
+        !this.owns(epoch) ||
+        this.groups.get(id) !== attached ||
+        (this.revisions.get(id) ?? 0) !== revision
+      ) {
+        await this.cancelReview(id, review.id);
+        return;
+      }
     } else if (!group.review) {
       await this.set(
         { ...group, review: { run: review.id, ranking: [], why: {} } },
@@ -805,6 +834,12 @@ export class GroupHub {
         epoch,
       );
   }
+  private async cancelReview(groupId: string, runId: string): Promise<void> {
+    if (this.startingReview.get(groupId)?.id === runId)
+      this.startingReview.delete(groupId);
+    await this.deps.stopReviewer(runId);
+  }
+
   private intentFor(group: RunGroup): DispatchIntent | undefined {
     if (!group.winner) return;
     if (group.pr)

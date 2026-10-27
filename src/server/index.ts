@@ -4739,6 +4739,8 @@ export async function startServer(opts: {
     /** how often a park is looked at for its day-old retro */
     tickEvery?: number;
   };
+  /** tests can pause the real reviewer callback after async preflight */
+  groups?: { reviewerPreflight?: (group: RunGroup) => Promise<void> };
   /** GitHub reads/writes can be replaced while tests retain the real PR hub. */
   prs?: Pick<PrDeps, "gh" | "slugOf" | "tickEvery">;
   /** the runner's driver per harness; tests swap in a stand-in agent */
@@ -5366,11 +5368,14 @@ export async function startServer(opts: {
       dropMember: (id, why) => state.landing.drop(id, why),
       openPr: id => state.prs.open(id),
       land: id => state.landing.land(id),
-      startReviewer: async (group, prompt) => {
+      stopReviewer: async id => { await state.runner.stopAndWait(id); state.runner.dismiss(id); },
+      startReviewer: async (group, prompt, current) => {
         const repo = state.result.repos.find(repo => repo.id === group.repoId);
         if (!repo) throw new HttpError(404, "the group repo is no longer scanned");
         const agent = { ...agentFor(await loadConfig(), repo.path, "flow"), yolo: false, extra: "" };
         await needHarness(state, agent.harness, repo.path);
+        await opts.groups?.reviewerPreflight?.(group);
+        if (!current()) return null;
         if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow owns this checkout");
         return state.runner.start(repo, "compare", { ...ACTIONS.compare, message: prompt }, group.note, agent, undefined, undefined, undefined, { group: group.id, priority: "low" });
       },

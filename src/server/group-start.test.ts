@@ -93,6 +93,10 @@ function groupBody(value: unknown) {
 async function world(
   opts: {
     failCheck?: number;
+    earlyResult?: boolean;
+    checkReached?: (check: number) => void;
+    holdExit?: (ctx: DriveCtx) => boolean;
+    reviewerPreflight?: () => Promise<void>;
     cutFailure?: boolean;
     autoSort?: boolean;
     flow?: boolean;
@@ -169,6 +173,7 @@ async function world(
     constructor(readonly harness: Harness) {}
     check() {
       checks++;
+      opts.checkReached?.(checks);
       const trees = Bun.spawnSync([
         "git",
         "-C",
@@ -192,9 +197,15 @@ async function world(
     start(ctx: DriveCtx, message: string) {
       this.ctx = ctx;
       starts.push({ ctx, message, harness: this.harness });
+      if (opts.earlyResult && starts.length === 1)
+        ctx.result(
+          { text: "early result", costUsd: 0.01, durationMs: 1, turns: 1 },
+          null,
+        );
     }
     say() {}
     stop() {
+      if (this.ctx && opts.holdExit?.(this.ctx)) return;
       this.ctx?.exited({ code: null, stderr: "stopped" });
     }
   }
@@ -203,6 +214,9 @@ async function world(
     port: 0,
     chan: null,
     harnesses: ["claude", "codex"],
+    ...(opts.reviewerPreflight
+      ? { groups: { reviewerPreflight: opts.reviewerPreflight } }
+      : {}),
     runner: { driver: (harness) => new FakeDriver(harness) },
     ...(opts.prs
       ? {
@@ -805,3 +819,160 @@ test("a workflow gate owns the checkout between runs and the reviewer starts onc
     (await w.readRuns()).filter((run) => run.action === "compare"),
   ).toHaveLength(1);
 });
+
+const barrier = () => {
+  let release = () => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+};
+
+test("fanout rollback retains every tree and record until an early-result member actually exits", async () => {
+  let stopRequested = false;
+  const failed = barrier();
+  const w = await world({
+    failCheck: 3,
+    earlyResult: true,
+    checkReached: (check) => {
+      if (check === 3) failed.release();
+    },
+    holdExit: (ctx) => {
+      if (ctx === w.starts[0]?.ctx) {
+        stopRequested = true;
+        return true;
+      }
+      return false;
+    },
+  });
+  let answered = false;
+  const response = w.start({ times: 3 }).then((result) => {
+    answered = true;
+    return result;
+  });
+  await failed.promise;
+  const first = w.starts[0];
+  if (!first) throw new Error("first driver absent");
+  try {
+    await until(
+      () => stopRequested || !existsSync(first.ctx.cwd),
+      "rollback reaches the lingering process",
+    );
+    expect(stopRequested).toBe(true);
+    expect(answered).toBe(false);
+    expect(w.starts.every((start) => existsSync(start.ctx.cwd))).toBe(true);
+    expect((await w.landing()).runs).toHaveLength(2);
+  } finally {
+    first.ctx.exited({ code: 0, stderr: "" });
+    await response;
+  }
+  expect((await w.landing()).runs).toEqual([]);
+  expect(await w.diskGroups()).toEqual([]);
+  expect(
+    (await git(w.repo, "worktree", "list", "--porcelain")).match(
+      /^worktree /gm,
+    ),
+  ).toHaveLength(1);
+});
+
+for (const invalidation of ["detach", "drop", "fix"] as const)
+  test(`real reviewer preflight cannot start after ${invalidation}`, async () => {
+    const entered = barrier();
+    const release = barrier();
+    let preflights = 0;
+    const w = await world({
+      autoSort: true,
+      reviewerPreflight: async () => {
+        if (++preflights === 1) {
+          entered.release();
+          await release.promise;
+        }
+      },
+    });
+    const group = groupBody(await (await w.start()).json());
+    await until(() => w.starts.length === 2, "members");
+    await w.finish(0);
+    await w.finish(1);
+    await entered.promise;
+    let dropping: Promise<Response> | undefined;
+    if (invalidation === "detach") await w.server.stop();
+    else if (invalidation === "drop") {
+      dropping = w.post("/api/groups/drop", { group: group.id });
+      await until(
+        async () =>
+          (await w.groups()).find((g) => g.id === group.id)?.state ===
+          "dropped",
+        "drop invalidation",
+      );
+    } else {
+      const origin = group.members[0]?.origin;
+      if (!origin) throw new Error("missing member");
+      const gateFile = join(w.repo, ".canopy", "gates.json");
+      await writeFile(
+        gateFile,
+        JSON.stringify({ gates: [{ name: "test", run: "false" }] }),
+      );
+      await git(w.repo, "add", "-A");
+      await git(w.repo, "commit", "-qm", "red before fix");
+      expect((await w.post("/api/landing/land", { run: origin })).status).toBe(
+        200,
+      );
+      await until(
+        async () =>
+          (await w.landing()).entries.some(
+            (entry: unknown) => isRecord(entry) && entry["state"] === "red",
+          ),
+        "queue failure",
+      );
+      expect((await w.post("/api/landing/fix", { id: origin })).status).toBe(
+        201,
+      );
+      await until(() => w.starts.length === 3, "member fix");
+      expect((await w.groups()).find((g) => g.id === group.id)?.state).toBe(
+        "working",
+      );
+    }
+    release.release();
+    if (dropping) expect((await dropping).status).toBe(200);
+    await Bun.sleep(20);
+    expect(w.starts.filter((start) => start.ctx.spec.maxTurns === 40)).toEqual(
+      [],
+    );
+    if (invalidation !== "detach") {
+      const groups: unknown = await (await fetch(w.url("/api/groups"))).json();
+      if (!Array.isArray(groups)) throw new Error("missing groups");
+      const current = groups.find(
+        (value: unknown) => isRecord(value) && value["id"] === group.id,
+      );
+      expect(current).toBeDefined();
+      expect(current).not.toHaveProperty("review");
+    }
+    if (invalidation === "fix") {
+      await writeFile(
+        join(w.repo, ".canopy", "gates.json"),
+        JSON.stringify({ gates: [{ name: "test", run: "true" }] }),
+      );
+      await git(w.repo, "add", "-A");
+      await git(w.repo, "commit", "-qm", "fixed gate");
+      await w.finish(2);
+      await until(
+        () => w.starts.length === 4,
+        "fresh reviewer after invalidation",
+      );
+      expect(
+        w.starts.filter((start) => start.ctx.spec.maxTurns === 40),
+      ).toHaveLength(1);
+      const groups: unknown = await (await fetch(w.url("/api/groups"))).json();
+      expect(groups).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: group.id,
+            state: "reviewing",
+            review: expect.objectContaining({
+              run: w.starts[3]?.ctx.env["CANOPY_RUN"],
+            }),
+          }),
+        ]),
+      );
+    }
+  });
