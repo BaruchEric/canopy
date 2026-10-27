@@ -108,6 +108,10 @@ canopy work close <id> --landed | --dropped [-m why]   # end an item by hand; re
 canopy issues [repo]               # every GitHub or Forgejo issue a trigger rule took: its state, branch id, PR and why it waits; --backend URL asks one address
 canopy sweep                       # what went idle on a backend: shells, chats, finished runs, your PRs, and agents canopy did not start
 canopy sweep --yes [--kind shell,chat,run,pr]   # close the ones the plan ticks, or all a named kind may close (--kind pr: the PRs, never a draft)
+canopy run                         # the runs kept on disk under <configDir>/runs/, newest first
+canopy run show <id>               # a kept run's head and timeline; a live run's too
+canopy run export <id> [--out f]   # the run as a markdown transcript, secrets redacted; stdout unless --out
+canopy run prune                   # remove kept runs past the sweep's transcript span (30 days); a live branch's or an open PR's stays
 canopy awake [off|always|working]  # keep this backend's machine from idle sleep: never, always, or while an agent of its own works
 canopy version                     # the version and commit (also --version, -V)
 ```

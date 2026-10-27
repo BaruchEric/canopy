@@ -1,5 +1,4 @@
-/** `canopy run`: start one branch run or a best-of-N group. This dispatcher
- * also leaves a seam for transcript subcommands owned by FR-043. */
+/** `canopy run`: start a branch or best-of-N run, or inspect its transcript. */
 
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -7,9 +6,9 @@ import { groupWord, type RunGroup } from "../core/group";
 import { RUN_ACTIONS, type BackendEntry, type Run, type RunAction, type ScanResult } from "../core/types";
 import { apiBase } from "./api";
 import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
+import { RUN_USAGE, runTranscriptCommand } from "./run-transcripts";
 
-export const RUN_USAGE =
-  "usage: canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr] [--backend URL] [--on NAME]";
+export { RUN_USAGE };
 
 export interface RunArgs {
   repo: string;
@@ -79,7 +78,7 @@ type TranscriptCommand = (argv: string[], deps: { fail: Fail }) => Promise<void>
 
 export interface RunCommandDeps {
   fail: Fail;
-  /** Provided by the transcript CLI when it is installed. */
+  /** Optional override; `runCommand` supplies the built-in transcript handler. */
   transcripts?: TranscriptCommand;
 }
 
@@ -94,10 +93,10 @@ export async function dispatchRunCommand(argv: string[], deps: RunCommandDeps): 
   return runStartCommand(args, deps);
 }
 
-/** Alias used by the top-level CLI; FR-043 can add its transcript handler
- * without changing how group starts are selected. */
+/** Alias used by the top-level CLI. Transcript forms share the dispatcher
+ * while group starts retain their existing parser and backend flow. */
 export function runCommand(argv: string[], deps: RunCommandDeps): Promise<void> {
-  return dispatchRunCommand(argv, deps);
+  return dispatchRunCommand(argv, { ...deps, transcripts: deps.transcripts ?? runTranscriptCommand });
 }
 
 function firstWord(args: string[]): string | undefined {
