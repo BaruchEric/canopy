@@ -122,7 +122,8 @@ test("isRunAction knows every run action and nothing else", () => {
 });
 
 test("the compare action is internal, read-only and denied every other tool", () => {
-  expect(ACTIONS.compare).toMatchObject({ verb: "compare", maxTurns: 40, expectsChange: false, unattended: expect.any(String) });
+  expect(ACTIONS.compare.unattended).toBeTypeOf("string");
+  expect(ACTIONS.compare).toMatchObject({ verb: "compare", maxTurns: 40, expectsChange: false });
   expect(ACTIONS.compare.allowedTools).toContain("Read");
   expect(ACTIONS.compare.allowedTools).toContain("Bash(git diff:*)");
   expect(ACTIONS.compare.allowedTools).not.toContain("Bash(git commit:*)");
