@@ -1134,3 +1134,36 @@ test("confirming the same winner during dispatch preserves Eric's pick without r
   expect(w.current(id).pickedBy).toBe("eric");
   expect(calls).toEqual(["b"]);
 });
+
+test("GET, SSE, and every successful POST omit the private journal while disk retains it", async () => {
+  const w = await world();
+  const picked = await w.create(["a"], { pr: true });
+  const picking = await w.post("pick", { group: picked, run: "a" });
+  const dropping = await w.post("drop", { group: picked, keep: ["a"] });
+  const reviewing = await w.create(["b", "c"]);
+  const review = await w.post("review", { group: reviewing });
+  for (const response of [picking, dropping, review]) {
+    expect(response.status).toBe(200);
+    const body: unknown = await response.json();
+    expect(body).not.toHaveProperty("_dispatch");
+  }
+  const request = new Request("http://local/api/groups");
+  const getting = await w.hub.handle(request, new URL(request.url));
+  expect(getting?.status).toBe(200);
+  expect(await getting?.json()).toEqual(w.hub.info());
+  for (const group of w.hub.info())
+    expect(group).not.toHaveProperty("_dispatch");
+  for (const event of w.events) {
+    if (event.type === "landing") {
+      for (const group of event.landing.groups ?? [])
+        expect(group).not.toHaveProperty("_dispatch");
+    }
+  }
+  const persisted: unknown = JSON.parse(
+    await readFile(join(w.dir, `${picked}.json`), "utf8"),
+  );
+  expect(persisted).toMatchObject({
+    state: "dropped",
+    _dispatch: { winner: "a", kind: "pr", status: "done" },
+  });
+});

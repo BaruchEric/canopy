@@ -59,6 +59,12 @@ type DispatchIntent = {
 };
 type StoredGroup = RunGroup & { _dispatch?: DispatchIntent };
 
+/** One projection for every public group boundary, without sharing mutable state. */
+const publicGroup = ({
+  _dispatch: _private,
+  ...group
+}: StoredGroup): RunGroup => structuredClone(group);
+
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
@@ -244,11 +250,9 @@ export class GroupHub {
 
   /** Return copies so caller edits cannot bypass persistence or fencing. */
   info(): RunGroup[] {
-    return structuredClone(
-      [...this.groups.values()]
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .map(({ _dispatch: _private, ...group }) => group),
-    );
+    return [...this.groups.values()]
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .map(publicGroup);
   }
   private publish(): void {
     this.deps.publish({
@@ -332,7 +336,7 @@ export class GroupHub {
     };
     await this.set(group, epoch);
     if (!this.owns(epoch)) throw new GroupError("group owner changed", 503);
-    return structuredClone(group);
+    return publicGroup(group);
   }
   async addMember(
     id: string,
@@ -995,7 +999,8 @@ export class GroupHub {
         this.kick(group.repoId);
         await this.idle();
       }
-      return json(this.groups.get(group.id));
+      const current = this.groups.get(group.id);
+      return json(current ? publicGroup(current) : undefined);
     } catch (error: unknown) {
       return json(
         { error: errText(error) },
