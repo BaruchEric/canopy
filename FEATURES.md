@@ -27,11 +27,6 @@ P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spe
 A third trigger source, `schedule` (a cron line, fired by the flows-lock holder, one event per repo per fire, `repo: "*"` for every local repo with a SPEC.md), and a bundled `spec-converge` workflow: a read-only Check step compares SPEC.md with the lockfile, the scripts, the files the code writes and the dated decisions, then a Fix step edits it on a branch. SPEC.md is on the sensitive list, so the fix always waits for a look.
 Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25).
 
-### FR-040 · Pre-edit collision warnings
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)
-canopy already sees every Edit, Write and Bash call a run makes, so it keeps a live touched-path set per run and warns when two runs on one repo, or a queued branch and a working run, touch the same files: a chip on the landing rows, a quiet inbox line, one word into an idle chat. Never a hold. Members of one FR-033 group never collide with each other.
-Spec: docs/superpowers/specs/2026-10-25-collision-warnings-design.md (2026-10-25).
-
 ### FR-039 · Per-worktree runtime stacks and a warm worktree pool
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coasts, Treehouse)
 `warm: N` in gates.json keeps prepared worktrees per repo so a branch run starts without `bun install`; a branch run may run the repo's dev task in its own worktree on allotted ports and preview it; a compose task runs per worktree under its own project name and is torn down on land or drop. canopy's own stack on the mini is refused.
@@ -99,6 +94,12 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ## In Progress
 
+### FR-040 · Pre-edit collision warnings
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)
+canopy already sees every Edit, Write and Bash call a run makes, so it keeps a live touched-path set per run and warns when two runs on one repo, or a queued branch and a working run, touch the same files: a chip on the landing rows, a quiet inbox line, one word into an idle chat. Never a hold. Members of one FR-033 group never collide with each other.
+Spec: docs/superpowers/specs/2026-10-25-collision-warnings-design.md (2026-10-25).
+Implemented locally 2026-10-27: touched sets, harness write tracking, live/queued warnings, both row/sheet chips, quiet notices, checkout attention and CLI. Browser checks found and corrected waiting-panel delivery and historical fix context; combined verification remains pending.
+
 ### FR-037 · A durable work ledger
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
 A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
@@ -114,7 +115,7 @@ Plan 1 implemented locally 2026-10-26: manifest and icons, shell-only worker, re
 ### FR-032 · Holdout scenario gates in the landing queue
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
 End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` in the main checkout sets the run line and the judge mode.
-Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26 (command scenarios in the queue, the record, the sheet's line, canopy scenarios); plans 2 (judge scenarios) and 3 (the PR watch's pass, the repo panel's list) open.
+Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26. Plan 2 implemented locally 2026-10-27: judge scoring, durable judge holds, explicit bypass and results in the CLI, sheet, landing row and waiting panel. Combined batch verification remains pending. Plan 3 (PR watch pass and repo scenarios list) remains open.
 
 ### FR-036 · Capacity governor: subscription-limit-aware dispatch
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)

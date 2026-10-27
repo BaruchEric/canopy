@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7, against plan 1 as
+**Status:** implemented locally 2026-10-27; combined batch verification pending. Written on main at 1ac8fe7, against plan 1 as
 written; re-check its line numbers once plan 1 lands.
 
 **Goal:** a judge scenario runs in the queue's pass after the command ones: its

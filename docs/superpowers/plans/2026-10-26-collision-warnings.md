@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7.
+**Status:** implemented locally 2026-10-27; combined batch verification pending. Written on main at 1ac8fe7.
 
 **Goal:** every run's tool calls carry the files they touch; the server folds
 them into a set per live run and compares each run with the other runs, the
