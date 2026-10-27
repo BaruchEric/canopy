@@ -2095,3 +2095,258 @@ describe("asynchronous graph preparation (FR-034)", () => {
     expect(flow.steps[0]?.changed).toBeUndefined();
   });
 });
+
+describe("mode: manual (FR-034)", () => {
+const HELD = wf(`---\nblurb: b\n---\n\n## Build\ntools: git-commit\n\nbuild\n\n## Review\nafter: Build\nmode: manual\ntools: read\n\nreview\n\n## Ship\nafter: Review\n\nship\n`);
+
+test("a manual step holds the flow before it runs; continue starts it", async () => {
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), HELD, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  const f = flows.get(flow.id);
+  expect([f?.status, f?.current]).toEqual(["gated", 1]);
+  expect(f?.steps[1]).toMatchObject({ status: "held", reason: "Review waits for your go" });
+  expect(runner.specs).toHaveLength(1);
+  flows.resume(flow.id, "continue");
+  await flush();
+  expect(flows.get(flow.id)?.steps[1]).toMatchObject({ status: "running", runId: "run2" });
+  expect(flows.get(flow.id)?.steps[1]?.reason).toBeUndefined();
+  runner.end("run2", "done", "reviewed");
+  await flush();
+  expect(flows.get(flow.id)?.steps[2]?.status).toBe("running");
+});
+
+test("stop at a hold ends the flow, and retry is a continue", async () => {
+  const a = setup();
+  const fa = a.flows.start(repo(), HELD, "", DEFAULT_AGENT);
+  a.runner.end("run1", "done", "built");
+  await flush();
+  a.flows.resume(fa.id, "stop");
+  expect(a.flows.get(fa.id)?.status).toBe("stopped");
+  expect(a.flows.get(fa.id)?.steps.map((s) => s.status)).toEqual(["passed", "failed", "skipped"]);
+  expect(a.flows.get(fa.id)?.steps[1]?.reason).toBe("stopped at the gate");
+  const b = setup();
+  const fb = b.flows.start(repo(), HELD, "", DEFAULT_AGENT);
+  b.runner.end("run1", "done", "built");
+  await flush();
+  b.flows.resume(fb.id, "retry");
+  await flush();
+  expect(b.flows.get(fb.id)?.steps[1]?.status).toBe("running");
+});
+
+test("a hold while a sibling runs waits for it", async () => {
+  const H = wf(`---\nblurb: b\n---\n\n## Build\n\nbuild\n\n## Review\nafter: Build\nmode: manual\ntools: read\n\nreview\n\n## Docs\nafter: Build\ntools: read\n\ndocs\n`);
+  const { runner, flows } = setup();
+  const flow = flows.start(repo(), H, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("working");
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "held", "running"]);
+  runner.end("run2", "done", "documented");
+  await flush();
+  expect([flows.get(flow.id)?.status, flows.get(flow.id)?.current]).toEqual(["gated", 1]);
+});
+
+test("a held flow restored from disk comes back held, and continue starts the step", async () => {
+  const a = setup();
+  const flow = a.flows.start(repo(), HELD, "", DEFAULT_AGENT);
+  a.runner.end("run1", "done", "built");
+  await flush();
+  const b = setup();
+  b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+  expect(b.flows.get(flow.id)?.status).toBe("gated");
+  expect(b.flows.get(flow.id)?.steps[1]?.status).toBe("held");
+  expect(b.runner.specs).toHaveLength(0);
+  b.flows.resume(flow.id, "continue");
+  await flush();
+  expect(b.runner.specs[0]?.label).toBe("Review");
+});
+
+});
+
+describe("graph resume boundaries (FR-034)", () => {
+  test("a restored sibling failure keeps terminal intent and launches no successors", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), FAN, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done"); await flush();
+    a.runner.end("run2", "failed", "", "lint failed"); await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.runner.specs).toHaveLength(0);
+    expect(b.flows.get(flow.id)?.status).toBe("failed");
+    expect(b.flows.get(flow.id)?.error).toBe("lint failed");
+  });
+
+  test("releasing a held step leaves the gate before its async preparation", async () => {
+    const { runner, flows } = setup({ fingerprint: async () => "tree" });
+    const manual = wf(`---\nblurb: b\n---\n\n## Review\nmode: manual\n\nreview\n`);
+    const flow = flows.start(repo(), manual, "", DEFAULT_AGENT);
+    flows.resume(flow.id, "continue");
+    expect(flow.status).toBe("working");
+    expect(() => flows.resume(flow.id, "continue")).toThrow("not waiting at a gate");
+    await flush();
+    expect(runner.specs).toHaveLength(1);
+    expect(flow.steps[0]?.status).toBe("running");
+  });
+
+  test("retry at a manual step's completed gate reruns the step", async () => {
+    const { runner, flows } = setup();
+    const manual = wf(`---\nblurb: b\n---\n\n## Review\nmode: manual\ngate: ask\n\nreview\n`);
+    const flow = flows.start(repo(), manual, "", DEFAULT_AGENT);
+    flows.resume(flow.id, "continue"); runner.end("run1", "done"); await flush();
+    flows.resume(flow.id, "retry"); await flush();
+    expect(flow.steps[0]?.status).toBe("running");
+    expect(runner.specs).toHaveLength(2);
+  });
+});
+
+describe("parallel gate ownership (FR-034)", () => {
+  test("an ask gate and a limited sibling keep their own resume behavior", async () => {
+    const { runner, flows } = setup();
+    const graph = wf(FAN_TEXT.replace("tools: git-read\n\nlint", "tools: git-read\ngate: ask\n\nlint"));
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT);
+    runner.end("run1", "done"); await flush();
+    runner.end("run2", "done"); await flush();
+    runner.end("run3", "limited"); await flush();
+    expect(flow.current).toBe(1);
+    expect(flow.parkedFor).toBeUndefined();
+    flows.resume(flow.id, "continue"); await flush();
+    expect(flow.steps[1]?.status).toBe("passed");
+    expect(flow.current).toBe(2);
+    expect(flow.parkedFor).toBe("capacity");
+    flows.resume(flow.id, "continue"); await flush();
+    expect(runner.specs.map((s) => s.label)).toEqual(["Build", "Lint", "Docs", "Docs"]);
+  });
+});
+
+describe("late check results (FR-034)", () => {
+  test("a check that exits after stop grace cannot overwrite a picked-up check", async () => {
+    const exits: (() => void)[] = [];
+    const runner = new FakeRunner();
+    const flows = new Flows(runner, {
+      onChange: () => {}, onGone: () => {}, onFleet: () => {}, onFleetGone: () => {}, evaluator: null,
+      stopGraceMs: 1,
+      check: () => new Promise((resolve) => exits.push(() => resolve({ exit: 0, output: "old" }))),
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    const graph = wf(`---\nblurb: b\n---\n\n## Check\ncheck: true\n`);
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT, { branch: { branch: {
+      name: "canopy/b", target: "main", base: "abc", dir: "/tmp/b", state: "working", origin: "b", held: true,
+    } } });
+    flows.stop(flow.id); await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(flow.status).toBe("stopped");
+    flows.pickUp(flow.id);
+    expect(flow.steps[0]?.status).toBe("checking");
+    exits[0]?.(); await flush();
+    expect(flow.steps[0]?.status).toBe("checking");
+    expect(flow.status).toBe("working");
+    exits[1]?.(); await flush();
+    expect(flow.status).toBe("done");
+  });
+});
+
+describe("graph parked records (FR-034)", () => {
+  test("mixed parks keep the first cause and each sibling's cause across restart", async () => {
+    const a = setup();
+    const graph = wf(FAN_TEXT.replace("tools: git-read\n\nlint", "tools: git-read\ngate: ask\n\nlint"));
+    const flow = a.flows.start(repo(), graph, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done"); await flush();
+    a.runner.end("run3", "limited"); await flush();
+    a.runner.end("run2", "done"); await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    const restored = b.flows.get(flow.id);
+    expect(restored?.current).toBe(2);
+    expect(restored?.parkedFor).toBe("capacity");
+    b.flows.resume(flow.id, "continue"); await flush();
+    expect(restored?.steps[2]?.status).toBe("pending");
+    expect(restored?.current).toBe(1);
+    expect(restored?.parkedFor).toBeUndefined();
+    b.flows.resume(flow.id, "continue"); await flush();
+    expect(b.runner.specs.map((s) => s.label)).toEqual(["Docs"]);
+    b.runner.end("run1", "done"); await flush();
+    expect(b.runner.specs.map((s) => s.label)).toEqual(["Docs", "Ship"]);
+  });
+
+  test("a stop recorded while two runs drain restores stopped without starting work", async () => {
+    const a = setup();
+    a.runner.stop = (id) => { const run = a.runner.get(id); if (!run) throw new Error(id); return run; };
+    const flow = a.flows.start(repo(), FAN, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done"); await flush();
+    a.flows.stop(flow.id);
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.flows.get(flow.id)?.status).toBe("stopped");
+    expect(b.runner.specs).toHaveLength(0);
+    expect(b.flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "failed", "failed", "skipped"]);
+  });
+});
+
+describe("restoring a draining park (FR-034)", () => {
+  test("a live sibling restarts while an already parked step keeps its gate", async () => {
+    const a = setup();
+    const graph = wf(FAN_TEXT.replace("tools: git-read\n\nlint", "tools: git-read\ngate: ask\n\nlint"));
+    const flow = a.flows.start(repo(), graph, "", DEFAULT_AGENT);
+    a.runner.end("run1", "done"); await flush();
+    a.runner.end("run2", "done"); await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, flow.id)], () => repo(), sameAgent);
+    expect(b.runner.specs.map((s) => s.label)).toEqual(["Docs"]);
+    b.runner.end("run1", "done"); await flush();
+    expect(b.flows.get(flow.id)?.status).toBe("gated");
+    expect(b.flows.get(flow.id)?.current).toBe(1);
+    b.flows.resume(flow.id, "continue"); await flush();
+    expect(b.runner.specs.map((s) => s.label)).toEqual(["Docs", "Ship"]);
+  });
+});
+
+describe("graph record metadata (FR-034)", () => {
+  test("invalid new metadata is rejected before a restored run starts", async () => {
+    const a = setup();
+    const flow = a.flows.start(repo(), FAN, "", DEFAULT_AGENT);
+    const badEnd = lastRecord(a.saved, flow.id);
+    Object.assign(badEnd, { pendingEnd: { end: "done" } });
+    const badPark = lastRecord(a.saved, flow.id);
+    Object.assign(badPark.flow, { id: "badpark1" });
+    Object.assign(badPark, { parks: [{ step: 0, cause: { kind: "stage", check: "yes" } }] });
+    const b = setup();
+    const log = spyOn(console, "error").mockImplementation(() => {});
+    try { b.flows.restore([badEnd, badPark], () => repo(), sameAgent); }
+    finally { log.mockRestore(); }
+    expect(b.flows.get(flow.id)).toBeUndefined();
+    expect(b.flows.get("badpark1")).toBeUndefined();
+    expect(b.runner.specs).toHaveLength(0);
+  });
+});
+
+describe("manual operational parks (FR-034)", () => {
+  test("budget continue starts the manual step whose go was already given", async () => {
+    const { runner, flows } = setup();
+    const graph = wf(`---\nblurb: b\nbudget: 1 runs, 9h\n---\n\n## Build\n\nbuild\n\n## Review\nmode: manual\n\nreview\n`);
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT);
+    runner.end("run1", "done"); await flush();
+    flows.resume(flow.id, "continue"); await flush();
+    expect(flow.parkedFor).toBe("budget");
+    flows.resume(flow.id, "continue"); await flush();
+    expect(flow.steps[1]?.status).toBe("running");
+    expect(runner.specs).toHaveLength(2);
+  });
+
+  test("stage continue starts the manual step whose go was already given", async () => {
+    const { runner, flows } = setup();
+    const graph = wf(`---\nblurb: b\n---\n\n## Review\nmode: manual\n\nreview\n`);
+    const start = runner.start.bind(runner);
+    let away = true;
+    runner.start = (...args) => {
+      if (away) { away = false; throw new StageAwayError("stage away"); }
+      return start(...args);
+    };
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT);
+    flows.resume(flow.id, "continue"); await flush();
+    expect(flow.parkedFor).toBe("stage");
+    flows.resume(flow.id, "continue"); await flush();
+    expect(flow.steps[0]?.status).toBe("running");
+    expect(runner.specs).toHaveLength(1);
+  });
+});
