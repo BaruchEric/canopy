@@ -25,25 +25,47 @@ export function secretValues(env: Readonly<Record<string, string | undefined>>, 
   }).sort(longestFirst);
 }
 
-/** Scan only original input: generated markers never enter the matcher. */
+/** Protect whole token spans on original input, including literal overlaps.
+ *  Generated replacement markers never enter either matcher. */
 export function redactLine(line: string, secrets: readonly Secret[]): { line: string; count: number } {
   const candidates = secrets.filter((s) => s.value.length >= REDACT_MIN).sort(longestFirst);
-  const token = new RegExp(TOKEN_PATTERN.source, "y");
+  const tokens = [...line.matchAll(new RegExp(TOKEN_PATTERN.source, "g"))].map((match) => ({
+    start: match.index, end: match.index + match[0].length,
+  }));
   const pieces: string[] = [];
+  let tokenIndex = 0;
   let count = 0;
   let start = 0;
   for (let i = 0; i < line.length;) {
     const secret = candidates.find((s) => line.startsWith(s.value, i));
-    token.lastIndex = i;
-    const unknownToken = secret ? null : token.exec(line)?.[0];
-    const value = secret?.value ?? unknownToken;
-    if (!value) {
+    const token = tokens[tokenIndex];
+    let end: number;
+    let name: string;
+    if (token && token.start === i && (!secret || secret.value.length < token.end - token.start)) {
+      end = token.end;
+      name = "token";
+    } else if (secret) {
+      end = i + secret.value.length;
+      name = secret.name;
+    } else {
       i++;
       continue;
     }
-    pieces.push(line.slice(start, i), redactedWord(secret?.name ?? "token"));
+    pieces.push(line.slice(start, i), redactedWord(name));
     count++;
-    i += value.length;
+    // A literal beginning before a token may consume only its prefix. Extend
+    // that removal to the token's end so its random suffix cannot survive.
+    let overlap = tokens[tokenIndex];
+    while (overlap && overlap.start < end) {
+      if (overlap.end > end) {
+        end = overlap.end;
+        pieces.push(redactedWord("token"));
+        count++;
+      }
+      tokenIndex++;
+      overlap = tokens[tokenIndex];
+    }
+    i = end;
     start = i;
   }
   pieces.push(line.slice(start));

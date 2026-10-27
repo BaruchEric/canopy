@@ -45,3 +45,30 @@ test("mcp argv prefixes still redact original secrets while generated markers st
     "--<redacted:FLAG>-config=<redacted:mcp-config>", "--<redacted:FLAG>-config", "<redacted:mcp-config>",
   ]);
 });
+
+describe("whole caller-token protection on original input", () => {
+  const unknown = `cnp_shell_${"b".repeat(43)}`;
+  test("prefix and inner short secrets cannot expose the random suffix", () => {
+    for (const value of ["c", "cnp_", "shell_", "b"]) {
+      expect(redactLine(unknown, secretValues({ CANOPY_SHORT: value }))).toEqual({ line: "<redacted:token>", count: 1 });
+    }
+  });
+  test("a preceding literal crossing into a token protects the entire token too", () => {
+    expect(redactLine(`prefix${unknown}`, [{ name: "CROSS", value: "prefixcnp_" }])).toEqual({
+      line: "<redacted:CROSS><redacted:token>", count: 2,
+    });
+  });
+  test("exact known tokens and longer enclosing values keep their named marker", () => {
+    const secrets = [{ name: "SHORT", value: "c" }, { name: "CANOPY_TOKEN", value: unknown }];
+    expect(redactLine(unknown, secrets)).toEqual({ line: "<redacted:CANOPY_TOKEN>", count: 1 });
+    expect(redactLine(`prefix${unknown}end`, [...secrets, { name: "LONG", value: `prefix${unknown}end` }])).toEqual({ line: "<redacted:LONG>", count: 1 });
+  });
+  test("argv protects prefix and crossing overlaps without corrupting generated markers", () => {
+    const secrets = secretValues({ CANOPY_SHORT: "c", CANOPY_CROSS: "prefixcnp_" });
+    expect(redactArgv([unknown, `prefix${unknown}`, "--mcp-config", unknown, `--mcp-config=${unknown}`], secrets)).toEqual([
+      "<redacted:token>", "<redacted:CANOPY_CROSS><redacted:token>",
+      "--m<redacted:CANOPY_SHORT>p-<redacted:CANOPY_SHORT>onfig", "<redacted:mcp-config>",
+      "--m<redacted:CANOPY_SHORT>p-<redacted:CANOPY_SHORT>onfig=<redacted:mcp-config>",
+    ]);
+  });
+});
