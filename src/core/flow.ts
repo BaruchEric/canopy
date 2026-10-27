@@ -35,9 +35,39 @@ export const FLEET_CONCURRENCY = 3;
 /** how many steps of one flow run at once */
 export const FLOW_PARALLEL = 3;
 
-export function settled(flow: Flow, _workflow: Workflow, i: number): boolean {
+function routesCheckFailure(workflow: Workflow, name: string): boolean {
+  return workflow.steps.some((s) => s.after.includes(name) && s.when.includes("check fail"));
+}
+
+/** Whether dependants may proceed, including a check failure with a route. */
+export function settled(flow: Flow, workflow: Workflow, i: number): boolean {
   const step = flow.steps[i];
-  return step?.status === "passed" || step?.status === "skipped";
+  return step?.status === "passed" || step?.status === "skipped" ||
+    step?.status === "failed" && step.check !== undefined && step.check.exit !== 0 && routesCheckFailure(workflow, step.name);
+}
+
+/** Whether any condition holds on any predecessor. Unreadable work counts as changed. */
+export function whenHolds(flow: Flow, workflow: Workflow, i: number): boolean {
+  const def = workflow.steps[i];
+  if (!def) return false;
+  return def.when.some((condition) => condition === "always" || def.after.some((name) => {
+    const step = flow.steps.find((s) => s.name === name);
+    if (!step) return false;
+    if (condition === "skipped") return step.status === "skipped";
+    if (condition === "unchanged") return step.changed === false || !step.runId;
+    if (step.status === "skipped") return false;
+    switch (condition) {
+      case "verdict done": return step.verdict?.answers.outcome.choice === "done";
+      case "verdict partial": return step.verdict?.answers.outcome.choice === "partial";
+      case "verdict blocked": return step.verdict?.answers.outcome.choice === "blocked";
+      case "judge meets": return step.judgment?.answers.fit.choice === "meets";
+      case "judge partly": return step.judgment?.answers.fit.choice === "partly";
+      case "judge misses": return step.judgment?.answers.fit.choice === "misses";
+      case "check pass": return step.check?.exit === 0;
+      case "check fail": return step.check !== undefined && step.check.exit !== 0;
+      case "changed": return step.changed === true || !!step.runId && step.changed === undefined;
+    }
+  }));
 }
 
 /** Pending steps whose predecessors have all settled, in heading order. */
@@ -148,6 +178,8 @@ export interface FlowHooks {
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   /** a fresh status for the repo, for the outcome; null when unreadable */
   status?: (repoId: string) => Promise<RepoStatus | null>;
+  /** Tree state before and after each agent run, in its checkout or worktree. */
+  fingerprint?: (repo: Repo) => Promise<string | null>;
   /** the clock, for tests; Date.now otherwise */
   now?: () => number;
   /** `STOP_GRACE` unless a test shortens it */
@@ -859,6 +891,7 @@ export class Flows {
     delete step.verdict;
     delete step.judgment;
     delete step.summary;
+    delete step.changed;
     delete step.reason;
     if (!keepSession) {
       delete step.session;
@@ -905,18 +938,6 @@ export class Flows {
     const def = workflow.steps[i];
     const step = flow.steps[i];
     if (!def || !step) return;
-    if (def.body) {
-      const over = overBudget(workflow.budget ?? null, this.spentNow(live));
-      if (over) {
-        if ((flow.grace ?? 0) > 0) {
-          flow.grace = (flow.grace ?? 0) - 1;
-        } else {
-          flow.parkedFor = "budget";
-          this.park(live, i, over);
-          return;
-        }
-      }
-    }
     this.clock(live, true);
     const restarted = live.restarting.has(i);
     flow.current = i;
@@ -947,8 +968,36 @@ export class Flows {
     const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
     if (tools) {
       const extra = await tools.catch(() => []);
-      if (!isFlowActive(flow) || step.status !== "running" || live.pending && "end" in live.pending) return;
+      if (!isFlowActive(flow) || step.status !== "running") return;
+      if (live.pending) {
+        step.status = "pending";
+        this.advance(live);
+        return;
+      }
       if (extra.length > 0) spec = { ...spec, allowedTools: [...new Set([...spec.allowedTools, ...extra])] };
+    }
+    if (this.hooks.fingerprint) {
+      const before = await this.fingerprint(live);
+      if (!isFlowActive(flow) || step.status !== "running") return;
+      if (live.pending) {
+        step.status = "pending";
+        this.advance(live);
+        return;
+      }
+      if (before !== null) live.marks.set(i, before);
+      else live.marks.delete(i);
+    }
+    if (def.body) {
+      const over = overBudget(workflow.budget ?? null, this.spentNow(live));
+      if (over) {
+        if ((flow.grace ?? 0) > 0) {
+          flow.grace = (flow.grace ?? 0) - 1;
+        } else {
+          flow.parkedFor = "budget";
+          this.park(live, i, over);
+          return;
+        }
+      }
     }
     // every step runs on the flow's branch, held from the landing queue
     // until the flow is done; the setup line runs before the first only
@@ -992,7 +1041,15 @@ export class Flows {
 
   private async afterRun(live: LiveFlow, i: number): Promise<void> {
     const step = live.flow.steps[i];
-    if (step) step.status = "checking";
+    if (!step) return;
+    step.status = "checking";
+    if (this.hooks.fingerprint) {
+      const after = await this.fingerprint(live);
+      if (!isFlowActive(live.flow) || step.status !== "checking") return;
+      const before = live.marks.get(i);
+      if (before !== undefined && after !== null) step.changed = before !== after;
+      live.marks.delete(i);
+    }
     const def = live.workflow.steps[i];
     if (def?.check) await this.check(live, i);
     else await this.gate(live, i);
@@ -1033,7 +1090,11 @@ export class Flows {
       const reason = `check failed with exit ${r.exit}`;
       this.refuse(live, i, `${reason}:\n${tailOf(r.output)}`, () => {
         // out of retries parks, so the sheet can show the output; no retries fails as it always did
-        if (def.retries > 0) this.park(live, i, reason);
+        if (routesCheckFailure(live.workflow, def.name)) {
+          step.status = "failed";
+          step.reason = reason;
+          this.advance(live);
+        } else if (def.retries > 0) this.park(live, i, reason);
         else {
           step.status = "failed";
           step.reason = reason;
@@ -1158,6 +1219,19 @@ export class Flows {
     this.advance(live);
   }
 
+  private skip(live: LiveFlow, i: number): void {
+    const step = live.flow.steps[i];
+    const def = live.workflow.steps[i];
+    if (!step || !def) return;
+    step.status = "skipped";
+    step.reason = `none of its conditions held: ${def.when.join(", ")}`;
+  }
+
+  private async fingerprint(live: LiveFlow): Promise<string | null> {
+    try { return await this.hooks.fingerprint?.(workRepo(live)) ?? null; }
+    catch { return null; }
+  }
+
   private liveSteps(live: LiveFlow): number[] {
     return live.flow.steps.flatMap((s, i) => s.status === "running" || s.status === "checking" ? [i] : []);
   }
@@ -1208,6 +1282,13 @@ export class Flows {
       live.advanceAgain = true;
       return;
     }
+    let skipped: boolean;
+    do {
+      skipped = false;
+      for (const i of ready(flow, workflow)) {
+        if (!whenHolds(flow, workflow, i)) { this.skip(live, i); skipped = true; }
+      }
+    } while (skipped);
     for (const i of ready(flow, workflow)) {
       if (this.liveSteps(live).length >= FLOW_PARALLEL) break;
       const def = workflow.steps[i];

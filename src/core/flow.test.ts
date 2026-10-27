@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { Flows, FLOW_PARALLEL, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow, type RecordedWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
@@ -110,6 +110,7 @@ function setup(opts: {
   judge?: ((state: string) => Promise<JudgeAnswers>) | null;
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   status?: () => Promise<Repo["status"]>;
+  fingerprint?: (repo: Repo) => Promise<string | null>;
   now?: () => number;
   stopGraceMs?: number;
 } = {}) {
@@ -135,6 +136,7 @@ function setup(opts: {
     judge: opts.judge ?? null,
     evidence: opts.evidence,
     status: opts.status,
+    fingerprint: opts.fingerprint,
     now: opts.now,
     ...(opts.stopGraceMs !== undefined ? { stopGraceMs: opts.stopGraceMs } : {}),
     // the record is the one this hook was just handed; the round trip copies it
@@ -1912,5 +1914,184 @@ describe("graph drain safety (FR-034)", () => {
     expect(flow.status).toBe("working");
     exits[1]?.(); await flush();
     expect(flow.status).toBe("stopped");
+  });
+});
+
+describe("when: conditions (FR-034)", () => {
+const COND = wf(`---
+blurb: b
+---
+
+## Review
+tools: read
+gate: verdict
+
+review
+
+## Fix
+after: Review
+when: verdict partial, verdict blocked
+tools: git-commit
+
+fix
+
+## Changelog
+after: Fix
+when: changed
+tools: git-commit
+
+log
+
+## Done
+after: Changelog
+
+done
+`);
+const doneVerdict = (): VerdictAnswers => ({ outcome: { choice: "done" }, needsYou: { probability: 0 }, offScope: { probability: 0 } });
+const partialVerdict = (): VerdictAnswers => ({ outcome: { choice: "partial" }, needsYou: { probability: 0 }, offScope: { probability: 0 } });
+
+test("a verdict of done skips Fix, a skipped step counts as unchanged, and Done still runs", async () => {
+  const { runner, flows } = setup({ evaluator: async () => doneVerdict() });
+  const flow = flows.start(repo(), COND, "", DEFAULT_AGENT);
+  await flush();
+  runner.end("run1", "done", "reviewed");
+  await flush();
+  const f = flows.get(flow.id);
+  expect(f?.steps.map((s) => s.status)).toEqual(["passed", "skipped", "skipped", "running"]);
+  expect(f?.steps[1]?.reason).toBe("none of its conditions held: verdict partial, verdict blocked");
+  expect(f?.steps[2]?.reason).toBe("none of its conditions held: changed");
+  expect(runner.specs[1]?.task).toContain("- Review: reviewed");
+  expect(runner.specs[1]?.task).not.toContain("Fix:");
+  runner.end("run2", "done", "finished");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("done");
+});
+
+test("a verdict of partial parks as today; continue keeps it, so Fix runs, and changed is read per step", async () => {
+  const prints = ["r1", "r1", "f1", "f2", "l1", "l1"];
+  const { runner, flows } = setup({ evaluator: async () => partialVerdict(), fingerprint: async () => prints.shift() ?? null });
+  const flow = flows.start(repo(), COND, "", DEFAULT_AGENT);
+  await flush();
+  runner.end("run1", "done", "reviewed");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("gated");
+  flows.resume(flow.id, "continue");
+  await flush();
+  expect(flows.get(flow.id)?.steps[1]?.status).toBe("running");
+  runner.end("run2", "done", "fixed");
+  await flush();
+  expect(flows.get(flow.id)?.steps[1]?.changed).toBe(true);
+  expect(flows.get(flow.id)?.steps[2]?.status).toBe("running");
+  runner.end("run3", "done", "logged");
+  await flush();
+  expect(flows.get(flow.id)?.steps[2]?.changed).toBe(false);
+  expect(flows.get(flow.id)?.steps[3]?.status).toBe("running");
+});
+
+test("a tree that cannot be read counts as changed, and a check-only step as unchanged", async () => {
+  const T = wf(`---\nblurb: b\n---\n\n## Work\ntools: git-commit\n\nwork\n\n## Gates\nafter: Work\ncheck: true\n\n## IfChanged\nafter: Work\nwhen: changed\n\nx\n\n## IfSame\nafter: Gates\nwhen: unchanged\n\ny\n\n## IfMoved\nafter: Gates\nwhen: changed\n\nz\n`);
+  const { runner, flows } = setup({ fingerprint: async () => null });
+  const flow = flows.start(repo(), T, "", DEFAULT_AGENT);
+  await flush();
+  runner.end("run1", "done", "worked");
+  await flush();
+  const f = flows.get(flow.id);
+  expect(f?.steps[0]?.changed).toBeUndefined();
+  expect(f?.steps.map((s) => s.status)).toEqual(["passed", "passed", "running", "running", "skipped"]);
+});
+
+test("skipped lets a step run in place of a skipped one, and the other conditions do not hold on it", async () => {
+  const S = wf(`---\nblurb: b\n---\n\n## Review\ngate: verdict\n\nreview\n\n## Fix\nafter: Review\nwhen: verdict partial\ncheck: true\n\nfix\n\n## Fallback\nafter: Fix\nwhen: skipped\n\nfb\n\n## Other\nafter: Fix\nwhen: check pass\n\nother\n`);
+  const { runner, flows } = setup({ evaluator: async () => doneVerdict() });
+  const flow = flows.start(repo(), S, "", DEFAULT_AGENT);
+  await flush();
+  runner.end("run1", "done", "reviewed");
+  await flush();
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "skipped", "running", "skipped"]);
+});
+
+test("check fail with a dependant does not fail the flow: the dependant runs and the flow ends done", async () => {
+  const C = wf(`---\nblurb: b\n---\n\n## Build\ntools: git-commit\ncheck: bun test\n\nbuild\n\n## Fix\nafter: Build\nwhen: check fail\ntools: git-commit\n\nfix\n\n## Recheck\nafter: Fix\ncheck: bun test\n`);
+  let calls = 0;
+  const { runner, flows, checks } = setup({ check: () => (++calls === 1 ? { exit: 1, output: "1 fail" } : { exit: 0, output: "ok" }) });
+  const flow = flows.start(repo(), C, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  let f = flows.get(flow.id);
+  expect(f?.status).toBe("working");
+  expect(f?.steps[0]).toMatchObject({ status: "failed", reason: "check failed with exit 1", check: { exit: 1, output: "1 fail" } });
+  expect(f?.steps[1]?.status).toBe("running");
+  runner.end("run2", "done", "fixed");
+  await flush();
+  f = flows.get(flow.id);
+  expect(checks).toEqual(["bun test", "bun test"]);
+  expect(f?.status).toBe("done");
+  expect(f?.steps.map((s) => s.status)).toEqual(["failed", "passed", "passed"]);
+});
+
+test("retries come first; the route is taken once they are spent", async () => {
+  const C = wf(`---\nblurb: b\n---\n\n## Build\ntools: git-commit\ncheck: bun test\nretries: 1\n\nbuild\n\n## Fix\nafter: Build\nwhen: check fail\n\nfix\n`);
+  const { runner, flows } = setup({ check: () => ({ exit: 1, output: "fail" }) });
+  const flow = flows.start(repo(), C, "", DEFAULT_AGENT);
+  runner.end("run1", "done", "built");
+  await flush();
+  expect(flows.get(flow.id)?.tries).toEqual({ Build: 1 });
+  expect(flows.get(flow.id)?.steps[0]?.status).toBe("running");
+  runner.end("run2", "done", "built again");
+  await flush();
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["failed", "running"]);
+});
+
+test("a condition over several predecessors holds when it holds on one of them", async () => {
+  const M = wf(`---\nblurb: b\n---\n\n## A\ncheck: true\n\n## B\ncheck: false\n\n## C\nafter: A, B\nwhen: check fail\n\nc\n`);
+  const { runner, flows } = setup({ check: (cmd) => ({ exit: cmd === "false" ? 1 : 0, output: "" }) });
+  const flow = flows.start(repo(), M, "", DEFAULT_AGENT);
+  await flush();
+  expect(flows.get(flow.id)?.steps.map((s) => s.status)).toEqual(["passed", "failed", "running"]);
+  runner.end("run1", "done", "c");
+  await flush();
+  expect(flows.get(flow.id)?.status).toBe("done");
+});
+
+  test("conditions never reuse a skipped step's old verdict or check", () => {
+    const { flows } = setup();
+    const flow = flows.start(repo(), COND, "", DEFAULT_AGENT);
+    const first = flow.steps[0];
+    if (!first) throw new Error("missing step");
+    first.status = "skipped";
+    const verdict = { ...COND, steps: COND.steps.map((s, i) => i === 1 ? { ...s, when: ["verdict done"] satisfies Workflow["steps"][number]["when"] } : s) };
+    expect(whenHolds(flow, verdict, 1)).toBe(false);
+    const skipped = { ...COND, steps: COND.steps.map((s, i) => i === 1 ? { ...s, when: ["skipped"] satisfies Workflow["steps"][number]["when"] } : s) };
+    expect(whenHolds(flow, skipped, 1)).toBe(true);
+  });
+});
+
+describe("asynchronous graph preparation (FR-034)", () => {
+  test("a sibling failure drains an unstarted run waiting for its fingerprint", async () => {
+    let release: ((value: string) => void) | undefined;
+    let calls = 0;
+    const { runner, flows } = setup({ fingerprint: () => {
+      calls += 1;
+      if (calls === 4) return new Promise((resolve) => { release = resolve; });
+      return Promise.resolve("tree");
+    } });
+    const flow = flows.start(repo(), FAN, "", DEFAULT_AGENT);
+    await flush();
+    runner.end("run1", "done"); await flush();
+    expect(runner.specs.map((s) => s.label)).toEqual(["Build", "Lint"]);
+    runner.end("run2", "failed", "", "lint failed"); await flush();
+    release?.("tree"); await flush();
+    expect(flow.status).toBe("failed");
+    expect(runner.specs.map((s) => s.label)).toEqual(["Build", "Lint"]);
+  });
+
+  test("a missing fingerprint after real work still takes the changed route", async () => {
+    let reads = 0;
+    const { runner, flows } = setup({ fingerprint: async () => ++reads === 1 ? "before" : null });
+    const graph = wf(`---\nblurb: b\n---\n\n## Build\n\nbuild\n\n## Changed\nwhen: changed\n\nchanged\n\n## Same\nafter: Build\nwhen: unchanged\n\nsame\n`);
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT);
+    await flush(); runner.end("run1", "done"); await flush();
+    expect(flow.steps.map((s) => s.status)).toEqual(["passed", "running", "skipped"]);
+    expect(flow.steps[0]?.changed).toBeUndefined();
   });
 });
