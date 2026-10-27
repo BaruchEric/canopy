@@ -426,6 +426,47 @@ describe("the run log (FR-043)", () => {
     expect(starts).toBe(0);
   });
 
+  test.each([true, false])("stopping deferred preparation waits for its final state and notes when logging is %s", async (logging) => {
+    const { dir, log } = await disk(); const driver = new WireDriver();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let prepared = false;
+    let returned = false;
+    const reads: boolean[] = [];
+    const runner = new Runner({
+      onChange: () => {}, onGone: () => {},
+      branchState: async () => { reads.push(prepared); return prepared ? "ready" : "nothing"; },
+    }, { driver: () => driver, ...(logging ? { log } : {}) });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, {
+      branch: { name: "run/deferred", target: "main", base: "base", dir: "/owned/work", origin: "deferred", state: "working" },
+      prepare: async (say) => { await held; say("late preparation note"); prepared = true; },
+    });
+    const stopping = runner.stopAndWait(run.id).then(() => { returned = true; });
+    try {
+      expect(run.status).toBe("stopped");
+      // Drain result-time microtasks while preparation stays explicitly held.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(returned).toBe(false);
+      if (logging) {
+        expect(await readKeptRun(dir, run.id)).toBeNull();
+        expect(reads).toEqual([]);
+      } else {
+        expect(reads).toEqual([false]);
+        expect(run.branch?.state).toBe("nothing");
+      }
+      release(); await stopping;
+      expect(returned).toBe(true);
+      expect(driver.ctx).toBeNull();
+      expect(run).toMatchObject({ status: "stopped", branch: { state: "ready" }, outcome: "changed" });
+      if (logging) {
+        const kept = await readKeptRun(dir, run.id);
+        expect(kept).toMatchObject({ status: "stopped", branch: { state: "ready" }, outcome: "changed" });
+        expect(kept?.steps.some((step) => step.text === "late preparation note")).toBe(true);
+        expect((await lines(dir, run.id)).at(-1)).toMatchObject({ canopy: "end", status: "stopped" });
+      }
+    } finally { release(); await stopping; }
+  });
+
   test("a limited job keeps its limited status after driver exit", async () => {
     const { dir, log } = await disk(); const driver = new WireDriver("claude", false);
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });

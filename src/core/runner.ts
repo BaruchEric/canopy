@@ -734,11 +734,13 @@ export class Runner {
     return { stdin: proc.stdin, stdout: proc.stdout, stderr: proc.stderr, exited, kill: () => proc.kill() };
   }
 
-  /** A result can end a job before stdout closes. Keep the transcript open
-   *  through actual driver exit and seed release, then store the final state.
+  /** A result can end a job before stdout closes; a stop can end setup early.
+   *  Keep the transcript open through preparation, driver exit and seed release,
+   *  then store the final state.
    *  Without a log, retain the existing result-time status read. */
   private async finish(live: Live): Promise<void> {
     if (live.log) {
+      await live.preparation;
       const process = live.process;
       if (process.kind === "running") await process.exited;
       await Promise.all(live.drains);
