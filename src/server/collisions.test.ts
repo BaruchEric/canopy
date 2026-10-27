@@ -282,3 +282,39 @@ describe("the queue and the checkout", () => {
     expect(hub.list().map((c) => c.id)).toEqual(["a+k"]);
   });
 });
+
+
+test("same-group overlap stays suppressed as a live sibling becomes ready and queued; other groups still warn", () => {
+  const { w, hub, see } = world({ groupOf: (r) => r.group });
+  const a = run("a", [edit("1", "x.ts")], { group: "g-one" });
+  const b = run("b", [edit("1", "x.ts")], { group: "g-one" });
+  see(a); see(b);
+  expect(hub.list()).toEqual([]);
+  const rec: LandingRun = { id: "b", runId: "b", repoId: "canopy", repoPath: "/r/canopy", branch: "run/x-b", target: "main", base: "b0", dir: "/w/b", note: "n", verb: "Ask", harness: "claude", state: "ready", startedAt: 1, group: "g-one", review: { verdict: "land", files: [{ path: "x.ts", cls: "logic" }], base: "b", head: "h", at: 1 } };
+  see({ ...b, status: "done" });
+  w.landing = { runs: [rec], entries: [], orphans: [] };
+  hub.onLanding(w.landing);
+  expect(hub.list()).toEqual([]);
+  expect(w.notes).toEqual([]);
+  expect(w.notices).toEqual([]);
+  expect(w.remembered).toEqual([]);
+  const entries = enqueue([], rec, 1, undefined, hub.working("canopy"));
+  expect(entries[0]?.overlap).toBeUndefined();
+  w.landing.entries = entries;
+  hub.onLanding(w.landing);
+  expect(hub.list()).toEqual([]);
+  see({ ...a, group: "g-other" });
+  expect(hub.list()).toHaveLength(1);
+  expect(w.notes).toEqual([["a", "also in queued branch run/x-b: x.ts"]]);
+  expect(w.notices).toHaveLength(1);
+  expect(enqueue([], rec, 2, undefined, hub.working("canopy"))[0]?.overlap).toEqual({ with: "run/x-a", paths: ["x.ts"] });
+});
+
+
+test("enqueue suppresses a ready record's same-group overlap and retains an unrelated overlap", () => {
+  const { hub, see } = world({ groupOf: (r) => r.group });
+  see(run("a", [edit("1", "x.ts")], { group: "g-one" }));
+  const rec: LandingRun = { id: "b", runId: "b", repoId: "canopy", repoPath: "/r/canopy", branch: "run/x-b", target: "main", base: "b0", dir: "/w/b", note: "n", verb: "Ask", harness: "claude", state: "ready", startedAt: 1, group: "g-one", review: { verdict: "land", files: [{ path: "x.ts", cls: "logic" }], base: "b", head: "h", at: 1 } };
+  expect(enqueue([], rec, 1, undefined, hub.working("canopy"))[0]?.overlap).toBeUndefined();
+  expect(enqueue([], { ...rec, group: "g-two" }, 1, undefined, hub.working("canopy"))[0]?.overlap).toEqual({ with: "run/x-a", paths: ["x.ts"] });
+});

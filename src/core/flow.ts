@@ -193,6 +193,8 @@ export interface FlowRunner {
   activeFor(repoId: string): Run | undefined;
   stop(id: string): Run;
   dismiss(id: string): void;
+  /** Setup, actual driver exit and owned drains; never stops the run. */
+  whenReleased(id: string): Promise<void> | null;
 }
 
 export interface FlowHooks {
@@ -231,8 +233,9 @@ export interface FlowHooks {
   branchState?: (branch: RunBranch) => Promise<RunBranchState>;
   /** a flow on a branch is done and its worktree read: the landing queue
    *  takes the branch, through the last step run's record. Only a done flow
-   *  hands its branch over; a stopped or failed one leaves it as it is. */
-  onBranchEnd?: (flow: Flow, runId: string | undefined) => void;
+   *  hands its branch over; a stopped or failed one leaves it as it is.
+   *  The released record survives UI dismissal only through this handoff. */
+  onBranchEnd?: (flow: Flow, runId: string | undefined, releasedRun?: Run) => void;
 }
 
 /** The branch as a flow keeps it: in this state, never held (only its steps' runs are). */
@@ -271,6 +274,10 @@ interface LiveFlow {
   /** Identity survives each async boundary, but never a reset or stop. */
   attempts: Map<number, symbol>;
   starting: Map<number, StepStart>;
+  /** Terminal UI runs still reserve their steps while their process releases. */
+  releasing?: Map<number, Promise<void>>;
+  /** Current branch-step records until final handoff; cleared on end/disposal. */
+  releasedRuns?: Map<string, Run>;
   lifecycle: symbol;
   pending?: { park: number } | PendingEnd;
   parks: Map<number, ParkCause>;
@@ -479,6 +486,31 @@ export class Flows {
       return;
     }
     this.byRun.delete(run.id);
+    const release = this.runner.whenReleased(run.id);
+    if (release) {
+      const lifecycle = live.lifecycle;
+      const attempt = live.attempts.get(i);
+      const releasing = live.releasing ??= new Map();
+      releasing.set(i, release);
+      void release.then(() => {
+        if (releasing.get(i) !== release) return;
+        releasing.delete(i);
+        if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle ||
+          step.runId !== run.id || step.status !== "running" || !isFlowActive(live.flow)) return;
+        // Stop invalidates the attempt but still owns the draining step.
+        if (!(live.pending && "end" in live.pending && live.pending.end === "stopped") &&
+          live.attempts.get(i) !== attempt) return;
+        this.releasedRun(live, i, run);
+      });
+      return;
+    }
+    this.releasedRun(live, i, run);
+  }
+
+  private releasedRun(live: LiveFlow, i: number, run: Run): void {
+    if (live.flow.branch && run.status === "done") (live.releasedRuns ??= new Map()).set(run.id, run);
+    const step = live.flow.steps[i];
+    if (!step) return;
     if (live.pending && "end" in live.pending && live.pending.end === "stopped") {
       live.resuming.delete(run.id);
       step.status = "failed";
@@ -675,6 +707,7 @@ export class Flows {
       const step = live.flow.steps[i];
       const run = step?.runId ? this.runner.get(step.runId) : undefined;
       if (run && isRunActive(run)) this.runner.stop(run.id);
+      else if (live.releasing?.has(i)) continue;
       else if (live.checking.has(i)) live.checking.get(i)?.abort();
       else if (step) { step.status = "failed"; step.reason = "stopped"; }
     }
@@ -695,6 +728,7 @@ export class Flows {
         }
       }
     }
+    live.releasedRuns?.clear();
     this.live.delete(id);
     this.hooks.forget?.(id);
     this.hooks.onGone(id);
@@ -969,6 +1003,7 @@ export class Flows {
     while (finished.length > KEEP_FINISHED) {
       const oldest = finished.shift();
       if (!oldest) break;
+      oldest.releasedRuns?.clear();
       this.live.delete(oldest.flow.id);
       this.hooks.forget?.(oldest.flow.id);
       this.hooks.onGone(oldest.flow.id);
@@ -1026,6 +1061,7 @@ export class Flows {
     live.starting.get(i)?.finish();
     live.marks.delete(i);
     if (step.runId) {
+      live.releasedRuns?.delete(step.runId);
       this.byRun.delete(step.runId);
       live.resuming.delete(step.runId);
       try {
@@ -1524,9 +1560,18 @@ export class Flows {
     live.flow.endedAt = Date.now();
     if (error) live.flow.error = error;
     for (const s of live.flow.steps) if (s.status === "pending") s.status = "skipped";
+    const releasedRuns = live.releasedRuns;
+    if (status !== "done") {
+      releasedRuns?.clear();
+      delete live.releasedRuns;
+    }
     this.emit(live);
     this.onFlowEnd(live.flow);
-    void this.settle(live);
+    void this.settle(live).finally(() => {
+      releasedRuns?.clear();
+      // An old stopped settlement must not clear a picked-up attempt's records.
+      if (live.releasedRuns === releasedRuns) delete live.releasedRuns;
+    });
   }
 
   protected onFlowEnd(flow: Flow): void {
@@ -1547,6 +1592,12 @@ export class Flows {
    *  and outcome, and a done flow's branch handed to the landing queue. */
   private async settleBranch(live: LiveFlow, b: RunBranch): Promise<void> {
     const lifecycle = live.lifecycle;
+    const releases = live.flow.steps.flatMap((step) => {
+      const release = step.runId ? this.runner.whenReleased(step.runId) : null;
+      return release ? [release] : [];
+    });
+    if (releases.length) await Promise.all(releases);
+    if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle || isFlowActive(live.flow)) return;
     const read = (await this.readBranch(b)) ?? "nothing";
     // dismissed or pruned while the read was out: saving it would bring it back
     if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle || isFlowActive(live.flow)) return;
@@ -1555,7 +1606,7 @@ export class Flows {
     this.emit(live);
     if (live.flow.status !== "done") return;
     const last = [...live.flow.steps].reverse().find((s) => s.runId)?.runId;
-    this.hooks.onBranchEnd?.(live.flow, last);
+    this.hooks.onBranchEnd?.(live.flow, last, last ? live.releasedRuns?.get(last) : undefined);
   }
 
   private async settle(live: LiveFlow): Promise<void> {

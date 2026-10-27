@@ -821,23 +821,28 @@ export class TriggerHub {
    *  the queue never pushes. A refusal stays on the event; nothing tries
    *  again. */
   private resolveIssue(id: string, landed?: { head: string; target: string }): Promise<void> {
+    const ownership = this.ownership;
     return this.queue(async () => {
+      if (!this.owns(ownership)) return;
       const e = this.events.get(id);
       if (!e || e.status !== "merged" || e.resolved) return;
       try {
         if (onForge(e)) {
           const w = await this.forgeWriter(e);
-          if (!w) return;
+          if (!w || !this.owns(ownership)) return;
           const comment = e.pr ? fixedComment(e.pr.number) : landed ? landedComment(landed.head, landed.target, await this.deps.missingFrom(w.repo, landed.target, landed.head)) : undefined;
+          if (!this.owns(ownership)) return;
           await this.deps.writeIssue(w.rule, w.repo, e, { kind: "close", ...(comment ? { comment } : {}) });
         } else {
           const w = await this.writer(e);
-          if (!w) return;
+          if (!w || !this.owns(ownership)) return;
           const resolve = this.deps.resolve ?? (w.rule.source === "linear" ? linearDone : sentryResolve);
           await resolve(w.rule, e, w.token);
         }
+        if (!this.owns(ownership)) return;
         this.mark(id, { resolved: { at: this.now() } });
       } catch (err) {
+        if (!this.owns(ownership)) return;
         this.mark(id, { resolved: { error: errText(err) } });
       }
     });
@@ -847,24 +852,28 @@ export class TriggerHub {
    *  has one, else as a comment (Linear's API, or gh on a GitHub issue,
    *  naming the branch it came from). */
   private linkIssue(id: string, branch: string): Promise<void> {
+    const ownership = this.ownership;
     return this.queue(async () => {
+      if (!this.owns(ownership)) return;
       const e = this.events.get(id);
       if (!e?.pr || e.linked || e.source === "manual") return;
       if (e.service !== "linear" && e.service !== "github") return;
       try {
         if (e.service === "github") {
           const w = await this.forgeWriter(e);
-          if (!w) return;
+          if (!w || !this.owns(ownership)) return;
           await this.deps.writeIssue(w.rule, w.repo, e, { kind: "comment", body: openedComment(e.pr.number, branch) });
         } else if (e.session) {
           await this.sayNow(e.rule, e.session, { links: [{ label: `Pull request #${e.pr.number}`, url: e.pr.url }] });
         } else {
           const w = await this.writer(e);
-          if (!w) return;
+          if (!w || !this.owns(ownership)) return;
           await (this.deps.link ?? linearComment)(w.rule, e, w.token);
         }
+        if (!this.owns(ownership)) return;
         this.mark(id, { linked: { at: this.now() } });
       } catch (err) {
+        if (!this.owns(ownership)) return;
         this.mark(id, { linked: { error: errText(err) } });
       }
     });
@@ -873,20 +882,23 @@ export class TriggerHub {
   /** Comments on a labeled issue why its run ended without a PR. A refusal
    *  is only logged: the event already says how the run ended. */
   private noteIssue(id: string, body: string): Promise<void> {
+    const ownership = this.ownership;
     return this.queue(async () => {
+      if (!this.owns(ownership)) return;
       const e = this.events.get(id);
       if (!e || !this.keeping) return;
       try {
         if (onForge(e)) {
           const w = await this.forgeWriter(e);
-          if (!w) return;
+          if (!w || !this.owns(ownership)) return;
           await this.deps.writeIssue(w.rule, w.repo, e, { kind: "comment", body });
         } else {
           const w = await this.writer(e);
-          if (!w) return;
+          if (!w || !this.owns(ownership)) return;
           await (this.deps.note ?? linearNote)(w.rule, e, w.token, body);
         }
       } catch (err) {
+        if (!this.owns(ownership)) return;
         console.error(`triggers: ${SERVICE_NAME[e.service ?? "sentry"]} issue ${e.short}: ${errText(err)}`);
       }
     });

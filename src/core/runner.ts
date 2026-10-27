@@ -223,6 +223,8 @@ export class Runner {
   private live = new Map<string, Live>();
   /** Logged processes keep ownership through final storage, even after UI dismiss/trim. */
   private logged = new Map<string, Live>();
+  /** Process ownership survives UI dismissal until setup, exit and drains release. */
+  private owned = new Map<string, Live>();
   /** repo path → how many stage processes are alive there */
   private procs = new Map<string, number>();
   /** a coordinator's folder → how many of its processes are alive there;
@@ -438,7 +440,13 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => { void this.finish(live).finally(() => { this.logged.delete(run.id); markEnded(); }); } },
+      { emit: (r) => this.hooks.onChange(r), ended: () => {
+        void Promise.all([this.finish(live), this.release(live)]).finally(() => {
+          this.logged.delete(run.id);
+          this.owned.delete(run.id);
+          markEnded();
+        });
+      } },
     );
     const live: Live = {
       ctx,
@@ -466,6 +474,7 @@ export class Runner {
       }
     };
     this.live.set(run.id, live);
+    this.owned.set(run.id, live);
     if (log) this.logged.set(run.id, live);
     if (branch?.startNote) live.ctx.step({ kind: "note", text: branch.startNote });
     if (logError !== undefined) ctx.note(logError);
@@ -608,10 +617,25 @@ export class Runner {
     return run;
   }
 
+  /** Non-stopping barrier for the work this run owns. It never waits for
+   * terminal hooks or branch finalization, which may themselves consume it. */
+  whenReleased(id: string): Promise<void> | null {
+    const live = this.owned.get(id);
+    return live ? this.release(live) : null;
+  }
+
+  private async release(live: Live): Promise<void> {
+    await live.preparation;
+    const process = live.process;
+    if (process.kind === "running") await process.exited;
+    await Promise.all(live.drains);
+    await Promise.all(live.releases);
+  }
+
   /** A rolled-back branch cannot be removed until its process/setup and final
    * state update have stopped touching the worktree. */
   async stopAndWait(id: string): Promise<void> {
-    const live = this.live.get(id) ?? this.logged.get(id);
+    const live = this.live.get(id) ?? this.owned.get(id);
     if (!live) return;
     const active = isRunActive(live.ctx.run);
     if (active) this.stop(id);
@@ -756,11 +780,7 @@ export class Runner {
    *  Without a log, retain the existing result-time status read. */
   private async finish(live: Live): Promise<void> {
     if (live.log) {
-      await live.preparation;
-      const process = live.process;
-      if (process.kind === "running") await process.exited;
-      await Promise.all(live.drains);
-      await Promise.all(live.releases);
+      await this.release(live);
     }
     try { await this.settle(live); }
     finally { await live.log?.settle(live.ctx.run).catch(() => {}); }

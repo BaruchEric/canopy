@@ -148,7 +148,7 @@ export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: num
   if (had && inQueue(had)) throw new LandError("it is in the queue already");
   if (had?.state === "landed") throw new LandError("it has landed already");
   const f = flags ?? { ...(had?.auto ? { auto: true } : {}), ...(had?.approved ? { approved: had.approved } : {}) };
-  const touched = fromFiles(run.runId, run.id, run.branch, run.review?.files ?? []);
+  const touched = fromFiles(run.runId, run.id, run.branch, run.review?.files ?? [], run.group);
   const shared = working.map((side) => ({ with: side.name, paths: overlap(touched, side) })).find((match) => match.paths.length > 0);
   const remembered = run.overlap ?? had?.overlap;
   const overlapMark = shared ?? (remembered ? { with: remembered.with, paths: [...remembered.paths] } : undefined);

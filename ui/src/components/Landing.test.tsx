@@ -75,3 +75,14 @@ test("a landing branch whose live run is absent remains a button to its kept rec
   expect(html).toMatch(/<button[^>]*class="landing-branch landing-open"[^>]*>run\/kept<\/button>/);
   expect(html).toContain("one a restart took opens from its kept record");
 });
+
+
+test("a retained landing entry without a valid run ID renders branch text without a dead run button", () => {
+  for (const runId of [undefined, "", "b|"]) {
+    const record: LandingRun = { id: "b|origin", runId: runId ?? "b|old", repoId: repo.id, repoPath: repo.path, branch: "run/retained", target: "main", base: "base", dir: "/w/old", note: "old work", verb: "Ask", harness: "claude", state: "ready", startedAt: 1 };
+    useStore.setState({ runs: {}, landing: { b: { runs: runId === undefined ? [] : [record], entries: [{ id: record.id, repoId: repo.id, repoPath: repo.path, branch: record.branch, target: "main", dir: record.dir, note: record.note, state: "queued", tries: 0, queuedAt: 1, updatedAt: 1 }], orphans: [] } } });
+    const html = render(pool());
+    expect(html).toContain("run/retained");
+    expect(html).not.toMatch(/<button[^>]*class="landing-branch landing-open"/);
+  }
+});

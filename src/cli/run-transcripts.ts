@@ -1,6 +1,7 @@
 /** Read, export, or prune the run transcripts kept by a canopy backend. */
 
 import { writeFile } from "node:fs/promises";
+import { RUN_ID } from "../core/runlog";
 import { ago } from "../core/treelines";
 import type { KeptRunHead, Run, RunStep } from "../core/types";
 import { apiBase } from "./api";
@@ -89,7 +90,7 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
   const outFlag = args.includes("--out");
   const out = take(args, "--out");
   if (backendFlag && given === undefined) return fail("--backend needs a value");
-  if (outFlag && (out === undefined || out.length === 0)) return fail("--out needs a file");
+  if (outFlag && (out === undefined || out.length === 0 || out.startsWith("-"))) return fail("--out needs a file");
 
   const home = apiBase(given);
   if (!/^https?:\/\/[^/\s]+$/.test(home)) return fail(`--backend must be an http(s) origin, got ${home}`);
@@ -107,6 +108,7 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
   if (sub === "show") {
     const id = args[0];
     if (args.length !== 1 || !id || outFlag) return fail(RUN_USAGE);
+    if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
     const run = await ask<Run>(target, "GET", `/api/runs/${encodeURIComponent(id)}`).catch(requestFailure(target, fail));
     for (const line of showLines(run)) console.log(line);
     return;
@@ -115,6 +117,7 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
   if (sub === "export") {
     const id = args[0];
     if (args.length !== 1 || !id) return fail(RUN_USAGE);
+    if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
     const text = await askText(target, `/api/runs/${encodeURIComponent(id)}/export`).catch(requestFailure(target, fail));
     if (out === undefined) {
       process.stdout.write(text);

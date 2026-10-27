@@ -183,3 +183,29 @@ test("runCommand says when there are no kept runs", async () => {
 test("runCommand uses the shared usage for an incomplete transcript form", async () => {
   await expect(runCommand(["show"], { fail })).rejects.toThrow(RUN_USAGE);
 });
+
+
+test("transcript IDs fail locally before any HTTP read", async () => {
+  let requests = 0;
+  const server = Bun.serve({ port: 0, fetch: () => { requests++; return Response.json({}); } });
+  try {
+    for (const sub of ["show", "export"]) {
+      for (const id of [".", "..", "x/y", "x?query", "a".repeat(65)]) {
+        await expect(runCommand([sub, id, "--backend", `http://127.0.0.1:${server.port}`], { fail })).rejects.toThrow("invalid run id");
+      }
+    }
+    expect(requests).toBe(0);
+  } finally { server.stop(true); }
+});
+
+
+test("missing or flag-like output filenames fail locally before any HTTP read", async () => {
+  let requests = 0;
+  const server = Bun.serve({ port: 0, fetch: () => { requests++; return new Response("export"); } });
+  try {
+    for (const filename of [undefined, "", "--bad"]) {
+      await expect(runCommand(["export", "ab12cd34", "--backend", `http://127.0.0.1:${server.port}`, "--out", ...(filename === undefined ? [] : [filename])], { fail })).rejects.toThrow("--out needs a file");
+    }
+    expect(requests).toBe(0);
+  } finally { server.stop(true); }
+});

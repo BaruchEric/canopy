@@ -5272,8 +5272,8 @@ export async function startServer(opts: {
     forget: (id) => flowFiles?.forget(id),
     branchState: (b) => LandingHub.stateOf(b),
     // the last step's run carries the session a "fix it" resumes
-    onBranchEnd: (flow, runId) => {
-      const run = runId ? runner.get(runId) : undefined;
+    onBranchEnd: (flow, runId, releasedRun) => {
+      const run = (runId ? runner.get(runId) : undefined) ?? releasedRun;
       if (!run || !flow.branch) {
         console.error(`flows: ${flow.id} ended on ${flow.branch?.name ?? "no branch"} with no run to hand the branch over by`);
         return;
@@ -6616,6 +6616,7 @@ export async function startServer(opts: {
       state.landing.detach();
       state.prs.detach();
       state.triggers.detach();
+      await state.triggers.idle();
       await state.warm.idle();
       await state.work.detach();
       state.flows.stopAll();

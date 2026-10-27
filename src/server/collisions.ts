@@ -177,7 +177,7 @@ export class CollisionHub {
       if (record.state !== "ready" && !stoppedWhole(record)) continue;
       if (!relevantEntry(entries.get(record.id))) continue;
       sides.push({
-        touched: fromFiles(record.runId, record.id, record.branch, record.review?.files ?? []),
+        touched: fromFiles(record.runId, record.id, record.branch, record.review?.files ?? [], record.group),
         with: { kind: "branch", origin: record.id, branch: record.branch },
       });
     }

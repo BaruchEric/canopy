@@ -3,7 +3,7 @@ import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
 import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { repoWorktrees, warmRows, warmWords } from "../landing";
-import { backendOf } from "../registry";
+import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, runFor, useStore } from "../store";
 import { repoPrChip } from "../prs";
 import { keepKeys } from "../surface";
@@ -112,11 +112,11 @@ export function LandingSection({ repo }: { repo: Repo }) {
   };
   const words = chipWords(info, repo.id);
   const openRun = showRun;
-  const runLink = (r: Pick<LandingRun, "runId" | "branch">) => (
+  const runLink = (r: Pick<LandingRun, "runId" | "branch">) => /^[A-Za-z0-9_-]{1,64}$/.test(plainOf(r.runId)) ? (
     <button type="button" className="landing-branch landing-open" title="Show the run; one a restart took opens from its kept record" onClick={() => openRun(r.runId)}>
       {r.branch}
     </button>
-  );
+  ) : <span className="landing-branch">{r.branch}</span>;
   const entryRun = (e: LandEntry): Pick<LandingRun, "runId" | "branch"> => ({ runId: info.runs.find((r) => r.id === e.id)?.runId ?? "", branch: e.branch });
   return (
     <Section

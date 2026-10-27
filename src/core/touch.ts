@@ -106,8 +106,8 @@ export function touchedOf(run: Pick<Run, "id" | "verb" | "steps" | "branch">, gr
 }
 
 /** a queued or ready branch's set from its sort: each file's `path` and `from` */
-export function fromFiles(run: string, origin: string, name: string, files: readonly Pick<ReviewFile, "path" | "from">[]): Touched {
-  const touched: Touched = { run, origin, name, paths: new Set(), dirs: new Set(), unknown: false };
+export function fromFiles(run: string, origin: string, name: string, files: readonly Pick<ReviewFile, "path" | "from">[], group?: string): Touched {
+  const touched: Touched = { run, origin, name, ...(group !== undefined ? { group } : {}), paths: new Set(), dirs: new Set(), unknown: false };
   for (const file of files) {
     addPath(touched, file.path);
     if (file.from) addPath(touched, file.from);
