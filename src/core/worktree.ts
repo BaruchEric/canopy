@@ -1,18 +1,22 @@
-/** Worktrees canopy makes: a branch run's own checkout, and the launcher's
- *  pull request builds. Every git call goes through `git()`, so a remote
+/** Worktrees canopy makes: a branch run's own checkout, a prepared warm slot
+ *  for the next run, and the launcher's pull request builds. Every git call
+ *  goes through `git()`, so a remote
  *  path would reach its host, though only local repos get branch runs.
  *
  *  A run's worktree lives at `<configDir>/worktrees/<repo key>/<run id>` on
  *  a branch `run/<work id>-<slug>`; the landing queue rebases it, fast-
- *  forwards the main checkout to it, and removes both. */
+ *  forwards the main checkout to it, and removes both. A warm slot is
+ *  `<configDir>/worktrees/<repo key>/warm-<n>`, detached, with `setup` run,
+ *  ready for the next branch run. */
 
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { git } from "./exec";
+import { exec, git } from "./exec";
 import { configDir } from "./store";
 import { branchSlug } from "./work";
+import { isWarmName } from "./warm";
 
 export { branchSlug };
 
@@ -82,6 +86,35 @@ export async function detachedTree(repo: string, dir: string, head: string): Pro
   return [`$ git worktree add --detach ${dir} ${head.slice(0, 10)}`];
 }
 
+/** Moves a detached warm tree into a run path, then creates the run's new
+ *  branch at `base`. `-b` refuses an existing ref rather than resetting it. */
+export async function takeWarm(repo: string, from: string, to: string, branch: string, base: string): Promise<void> {
+  if (existsSync(to)) throw new Error(`worktree destination already exists: ${to}`);
+  const moved = await git(repo, ["worktree", "move", from, to], 60_000);
+  if (moved.code !== 0) throw new Error(why(moved, "git worktree move"));
+  const checked = await git(to, ["checkout", "-q", "-b", branch, base], 120_000);
+  if (checked.code !== 0) throw new Error(why(checked, "git checkout"));
+}
+
+/** A folder's size in bytes, or zero when `du` cannot read it. */
+export async function treeSize(dir: string): Promise<number> {
+  const r = await exec(["du", "-sk", dir]);
+  if (r.code !== 0) return 0;
+  const kb = Number(r.stdout.trim().split(/\s+/)[0]);
+  const bytes = kb * 1024;
+  return Number.isSafeInteger(kb) && kb >= 0 && Number.isSafeInteger(bytes) ? bytes : 0;
+}
+
+/** Whether git has a rebase-merge or rebase-apply state in this checkout. */
+export async function midRebase(dir: string): Promise<boolean> {
+  for (const state of ["rebase-merge", "rebase-apply"]) {
+    const r = await git(dir, ["rev-parse", "--git-path", state]);
+    const path = out(r);
+    if (r.code === 0 && path !== "" && existsSync(resolve(dir, path))) return true;
+  }
+  return false;
+}
+
 /** Removes a worktree and, when named, its branch. A folder git no longer
  *  knows as a worktree is removed from disk all the same. */
 export async function removeRunTree(repo: string, dir: string, branch?: string): Promise<void> {
@@ -91,7 +124,8 @@ export async function removeRunTree(repo: string, dir: string, branch?: string):
   if (branch) await git(repo, ["branch", "-D", branch]);
 }
 
-/** Every run worktree folder on disk: `<root>/<repo key>/<run id>`. */
+/** Every run worktree folder on disk: `<root>/<repo key>/<run id>`. Warm
+ *  slots are owned by the pool and are not run orphans. */
 export async function listRunTreeDirs(root = worktreesRoot()): Promise<string[]> {
   const dirs: string[] = [];
   let keys: string[];
@@ -108,9 +142,28 @@ export async function listRunTreeDirs(root = worktreesRoot()): Promise<string[]>
       continue;
     }
     for (const id of ids) {
+      if (isWarmName(id)) continue;
       const d = join(root, k, id);
       if ((await stat(d).catch(() => null))?.isDirectory()) dirs.push(d);
     }
+  }
+  return dirs.sort();
+}
+
+/** A repo's warm slot directories on disk, in slot name order. */
+export async function listWarmTreeDirs(repoPath: string, root = worktreesRoot()): Promise<string[]> {
+  const repoDir = join(root, repoKey(repoPath));
+  let names: string[];
+  try {
+    names = await readdir(repoDir);
+  } catch {
+    return [];
+  }
+  const dirs: string[] = [];
+  for (const name of names) {
+    if (!isWarmName(name)) continue;
+    const dir = join(repoDir, name);
+    if ((await stat(dir).catch(() => null))?.isDirectory()) dirs.push(dir);
   }
   return dirs.sort();
 }
@@ -203,10 +256,7 @@ export type RebaseResult = { ok: true } | { conflict: string[] } | { error: stri
  *  the files git stopped on are named. A rebase a crash left half done is
  *  aborted first. */
 export async function rebaseOnto(dir: string, onto: string): Promise<RebaseResult> {
-  const mid = await git(dir, ["rev-parse", "--git-path", "rebase-merge"]);
-  const midApply = await git(dir, ["rev-parse", "--git-path", "rebase-apply"]);
-  const inside = (p: string) => (p ? existsSync(resolve(dir, p)) : false);
-  if (inside(out(mid)) || inside(out(midApply))) await git(dir, ["rebase", "--abort"]);
+  if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
   const r = await git(dir, ["rebase", onto], 120_000, { GIT_EDITOR: "true" });
   if (r.code === 0) return { ok: true };
   const u = await git(dir, ["diff", "--name-only", "--diff-filter=U"]);
