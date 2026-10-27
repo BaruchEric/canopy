@@ -121,6 +121,8 @@ import {
   configDir,
   launchFor,
   loadConfig,
+  warmFor,
+  setWarm,
   rememberRoot,
   removeSource,
   removeWorkspace,
@@ -221,6 +223,7 @@ import { CapacityHub, capacityFile } from "./capacity";
 import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { WarmPool, type Take } from "./warm";
 import { GroupHub } from "./groups";
 import { GROUP_MAX, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
@@ -349,6 +352,7 @@ interface ServerState {
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  warm: WarmPool;
   groups: GroupHub;
   /** serial branch preflights/fanout for each repo */
   branchStarts: Map<string, Promise<void>>;
@@ -1141,7 +1145,7 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
       for (let i = 0; i < times; i++) {
         const item = state.work.mint({ ...(resolved.work ?? { title: titleOf(resolved.note), from: { kind: "note" } }), repos: [repo.id] });
         items.push(item.id);
-        const cut = await cutBranch(repo, resolved.note, false, item.id);
+        const cut = await cutBranch(repo, resolved.note, false, item.id, state.warm);
         cut.branch.group = group.id;
         cuts.push(cut);
       }
@@ -1196,7 +1200,8 @@ async function issueNoteFor(repo: Repo, note: string): Promise<{ note: string; w
 
 /** A run on a branch of its own: a worktree under the config dir on
  *  `run/<work id>-<slug>`, cut from the default branch's tip, where the gates'
- *  setup runs before the agent starts. The landing queue lands it later. */
+ *  setup runs before the agent starts. A warm worktree skips unchanged setup.
+ *  The landing queue lands it later. */
 async function startBranchRun(
   state: ServerState,
   repo: Repo,
@@ -1218,7 +1223,7 @@ async function startBranchRun(
     const item = state.work.mint({ ...work, repos: [repo.id] });
     let start: BranchStart | undefined;
     try {
-      start = await cutBranch(repo, note, pr, item.id);
+      start = await cutBranch(repo, note, pr, item.id, state.warm);
       current();
       const prepare = start.prepare;
       const owned = valid ? { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } } : start;
@@ -1320,8 +1325,8 @@ async function dropCoordFolder(id: string): Promise<void> {
 
 /** A new branch off the default branch, its worktree made, and the setup
  *  line to run there before the first agent: what a branch run, or a flow
- *  on a branch, starts with. */
-async function cutBranch(repo: Repo, note: string, pr: boolean, work: string): Promise<BranchStart> {
+ *  on a branch, starts with. It uses a warm worktree when the pool has one. */
+async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, pool: WarmPool): Promise<BranchStart> {
   const target = await defaultBranch(repo.path);
   const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
   if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
@@ -1329,8 +1334,13 @@ async function cutBranch(repo: Repo, note: string, pr: boolean, work: string): P
   const name = workBranchName(work, note);
   const dir = runTreeDir(repo.path, id);
   if (existsSync(dir) || await revOf(repo.path, `refs/heads/${name}`)) throw new HttpError(409, "the run's branch or worktree exists already");
+  // Check readiness before take: an unowned backend can still start cold.
+  // A rejected take may have moved its destination, so it must never fall back.
+  const take: Take = pool.ready
+    ? await pool.take(repo.path, dir, name, base)
+    : { took: false, wanted: warmFor(await loadConfig(), repo.path) > 0 };
   try {
-    await addRunTree(repo.path, dir, name, base);
+    if (!take.took) await addRunTree(repo.path, dir, name, base);
   } catch (err) {
     // git can leave the new tree/branch behind when a checkout hook fails.
     await removeRunTree(repo.path, dir, name).catch(() => {});
@@ -1346,12 +1356,14 @@ async function cutBranch(repo: Repo, note: string, pr: boolean, work: string): P
   }
   const prepare = async (say: (text: string) => void): Promise<void> => {
     if (gatesWhy) say(`no setup run: ${gatesWhy}`);
-    if (!setup) return;
+    if (!setup || (take.took && !take.setupAgain)) return;
     say(`$ ${setup}`);
     const r = await runGate(dir, setup);
     if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
   };
+  const startNote = take.took ? "started in a warm worktree" : take.wanted ? (setup ? "no warm worktree; setup will run" : "no warm worktree") : undefined;
   return {
+    ...(startNote ? { startNote } : {}),
     branch: { name, target, base, dir, state: "working", origin: id, work, ...(pr ? { openPr: true as const } : {}) },
     prepare,
   };
@@ -1485,21 +1497,29 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
   }
   const pr = opensPr(event);
   const work: WorkStart = { title: event.title, from: { kind: "trigger", event: event.id } };
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work, valid) };
-  const item = state.work.mint({ ...work, repos: [repo.id] });
-  let start: BranchStart | undefined;
-  try {
-    start = await cutBranch(repo, event.note, pr, item.id);
-    current();
-    const prepare = start.prepare;
-    const owned = { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } };
-    return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: owned }) };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    state.work.close(item.id, "dropped", `the run did not start: ${message}`);
-    if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
-    throw err;
+  if (got.kind === "run") {
+    try { return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work, valid) }; }
+    catch (err) { if (err instanceof SlotsFullError) return { busy: err.message }; throw err; }
   }
+  return withBranchStart(state, repo.id, async () => {
+    current();
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
+    if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+    const item = state.work.mint({ ...work, repos: [repo.id] });
+    let start: BranchStart | undefined;
+    try {
+      start = await cutBranch(repo, event.note, pr, item.id, state.warm);
+      current();
+      const prepare = start.prepare;
+      const owned = { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } };
+      return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: owned }) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.work.close(item.id, "dropped", `the run did not start: ${message}`);
+      if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+      throw err;
+    }
+  });
 }
 
 /** The repo's branch slots taken, as a trigger counts them: its branch runs
@@ -2693,6 +2713,7 @@ const watchCheckId = (rt: SourceRuntime): string => `canopy:watch:${rt.src.id}`;
  *  tmux and the watchers are polled. */
 function addCanopyChecks(state: ServerState, broker: boolean): void {
   const canopy = { kind: "canopy" } as const;
+  state.health.add({ id: "canopy:worktrees", label: "worktrees", scope: canopy, heal: "button", every: 60_000, probe: () => state.warm.probe(), doHeal: async () => { await state.warm.prune(); } });
   const streams = [
     ["canopy:tailchan", "tailchan stream"],
     ["canopy:registry", "agent registry stream"],
@@ -3357,6 +3378,8 @@ async function handleApi(
   if (path === "/api/landing" && method === "GET") return json({ ...state.landing.info(), groups: state.groups.info() });
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
+  const worktreesRes = await state.warm.handle(req, url);
+  if (worktreesRes) return worktreesRes;
   const scenariosRes = await state.scenarios.handle(req, url);
   if (scenariosRes) return scenariosRes;
   const prsRes = await state.prs.handle(req, url);
@@ -5538,6 +5561,7 @@ export async function startServer(opts: {
       },
     }),
     landing: new LandingHub({
+      treeRemoved: (path) => state.warm.poke(path),
       judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
         broadcast(state, ev.type === "landing" ? { ...ev, landing: { ...ev.landing, groups: state.groups.info() } } : ev);
@@ -5567,6 +5591,16 @@ export async function startServer(opts: {
       groupBulkEligible: rec => state.groups.canBulkLand(rec),
       collisions: () => state.collisions.list(),
       working: (repoId) => state.collisions.working(repoId),
+    }),
+    warm: new WarmPool({
+      repos: () => state.result.repos.filter((r) => !r.host && r.path.startsWith("/")),
+      want: async (path) => warmFor(await loadConfig(), path),
+      setWant: (path, n) => setWarm(path, n),
+      setup: (dir, line) => runGate(dir, line),
+      landing: () => state.landing.info(),
+      landingBusy: (path) => state.landing.info().entries.some((e) => e.repoPath === path && (e.state === "rebasing" || e.state === "landing")),
+      removeOrphan: (dir, assertOwner) => state.landing.orphan(dir, "remove", assertOwner),
+      broadcast: (ev) => broadcast(state, ev),
     }),
     collisions: new CollisionHub({
       runs: () => state.runner.list(),
@@ -6296,6 +6330,7 @@ export async function startServer(opts: {
     await state.incubator.restore();
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
+    await state.warm.adopt();
     // and the PRs they opened
     await state.prs.adopt();
     // Group recovery must see the adopted queue and PR facts before retrying
@@ -6305,10 +6340,12 @@ export async function startServer(opts: {
     await state.groups.adopt();
     // and the trigger events waiting on both
     await state.triggers.adopt();
+    state.warm.start();
   };
   if (flowsLock.owner) {
     await adoptFlows();
   } else {
+    state.warm.stop();
     state.incubator.notKeeping(flowsLock.holder);
     if (flowsLock.holder) {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
@@ -6421,6 +6458,7 @@ export async function startServer(opts: {
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
+  if (process.env["NODE_ENV"] !== "test") state.warm.start();
   if (process.env["NODE_ENV"] !== "test") void state.capacity.start().catch((err) => console.error("canopy: capacity", err));
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
   // a test server never fires the schedule on whatever config it finds
@@ -6470,6 +6508,7 @@ export async function startServer(opts: {
       state.capacity.stop();
       state.kit.stop();
       state.landing.stop();
+      state.warm.stop();
       state.prs.stop();
       state.sweep.stop();
       state.librarySync.stop();
@@ -6496,6 +6535,7 @@ export async function startServer(opts: {
       state.landing.detach();
       state.prs.detach();
       state.triggers.detach();
+      await state.warm.idle();
       await state.work.detach();
       if (flowsLock.owner) flowsLock.release();
       state.flows.stopAll();

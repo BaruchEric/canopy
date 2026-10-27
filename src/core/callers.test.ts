@@ -239,3 +239,12 @@ test("group mutations require operate while the group list requires read", () =>
   expect(needs("GET", "/api/groups")).toBe("read");
   for (const action of ["pick", "review", "drop"]) expect(needs("POST", `/api/groups/${action}`)).toBe("operate");
 });
+
+test("worktree routes: the listing reads, warm is admin, prune operates", () => {
+  expect(needs("GET", "/api/worktrees")).toBe("read");
+  expect(needs("POST", "/api/worktrees/warm")).toBe("admin");
+  expect(needs("POST", "/api/worktrees/prune")).toBe("operate");
+  expect(allows("shell", needs("POST", "/api/worktrees/warm"))).toBe(false);
+  expect(allows("shell", needs("POST", "/api/worktrees/prune"))).toBe(true);
+  expect(allows("cli", needs("POST", "/api/worktrees/warm"))).toBe(true);
+});

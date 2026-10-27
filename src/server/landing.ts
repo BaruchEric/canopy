@@ -66,6 +66,8 @@ export interface CheckOutcome {
 
 export interface LandingDeps {
   broadcast: (ev: ServerEvent) => void;
+  /** a run worktree was removed: a land, a drop, an orphan's remove; the warm pool refills */
+  treeRemoved?: (repoPath: string) => void;
   /** the scan's repo by id */
   repo: (id: string) => Repo | undefined;
   /** the scan's repo by its absolute path */
@@ -856,6 +858,7 @@ export class LandingHub {
     const target = rec ?? entry;
     if (!target) throw new LandError("nothing by that id", 404);
     await removeRunTree(target.repoPath, target.dir, target.branch);
+    this.deps.treeRemoved?.(target.repoPath);
     this.entries = this.entries.filter((e) => e.id !== target.id);
     this.end(target.id, "dropped", "dropped with its worktree");
     await this.dropRun(target.id);
@@ -880,6 +883,8 @@ export class LandingHub {
         assertOwner?.();
         if (branch !== o.branch) throw new LandError("orphaned worktree changed branch; refresh before removing");
         await removeRunTree(o.repoPath, dir, o.branch ?? undefined, assertOwner);
+        assertOwner?.();
+        this.deps.treeRemoved?.(o.repoPath);
       } else {
         assertOwner?.();
         await rm(dir, { recursive: true, force: true });
@@ -1137,6 +1142,7 @@ export class LandingHub {
       if (e.auto) this.notice({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "landed", head: landed });
       this.end(e.id, "landed", `landed on ${e.target}`);
       await removeRunTree(e.repoPath, e.dir, e.branch);
+      this.deps.treeRemoved?.(e.repoPath);
       await this.dropRun(e.id);
       this.publish();
       return;

@@ -814,3 +814,15 @@ test("delegated orphan removal stops before prune, branch deletion and publicati
   expect(w.events).toHaveLength(events);
   hub.stop();
 });
+
+test("readiness follows completed adoption and is revoked on stop", async () => {
+  const w = await world();
+  w.pool.stop();
+  expect(w.pool.ready).toBe(false);
+  const adopting = w.pool.adopt();
+  expect(w.pool.ready).toBe(false);
+  await adopting;
+  expect(w.pool.ready).toBe(true);
+  w.pool.stop();
+  expect(w.pool.ready).toBe(false);
+});

@@ -529,6 +529,23 @@ describe("the run log (FR-043)", () => {
     }
   });
 
+  test("a branch startup hint stays first when its logger fails synchronously", async () => {
+    const log: RunLogger = { open: (_run, _argv, _env, onError) => { onError("synthetic open failure"); return null; } };
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver(), log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, {
+      startNote: "started in a warm worktree",
+      branch: { origin: "warm-origin", name: "run/warm", target: "main", base: "base", dir: "/tmp/warm-fixture", state: "working" },
+    });
+    await runner.stopAndWait(run.id);
+    expect(run.steps.filter((step) => step.kind === "note").map((step) => step.text).slice(0, 3)).toEqual([
+      "started in a warm worktree",
+      "transcript stopped: synthetic open failure",
+      "on branch run/warm in /tmp/warm-fixture",
+    ]);
+    expect(run.steps.filter((step) => step.text?.startsWith("transcript stopped:"))).toHaveLength(1);
+    expect(run.status).toBe("done");
+  });
+
   test("without a logger wire recording has no timeline side effects", async () => {
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver() });
     const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");

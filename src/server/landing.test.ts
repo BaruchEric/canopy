@@ -43,6 +43,7 @@ interface World {
   /** branches the hub asked to open a PR for, and ones it dropped */
   opened: string[];
   dropped: string[];
+  treeRemoved: string[];
   held: Set<string>;
   /** where the scenario sets live */
   scenRoot: string;
@@ -85,6 +86,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     active: new Set(),
     opened: [],
     dropped: [],
+    treeRemoved: [],
     held: new Set(),
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
@@ -104,6 +106,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
       w.events.push(ev);
       if (ev.type === "landing") w.landingObserver?.(ev.landing);
     },
+    treeRemoved: (path) => w.treeRemoved.push(path),
     repo: (id) => (id === repo.id ? repo : undefined),
     repoByPath: (p) => repoAtPath([repo], p),
     check: async (cwd, line) => {
@@ -1450,4 +1453,28 @@ test("orphan removal rechecks the caller's ownership after reading the live bran
   expect(await revOf(w.repo.path, "refs/heads/run/guard-orphan")).not.toBeNull();
   expect(w.hub.info().orphans.some((orphan) => orphan.dir === dir)).toBe(true);
   w.hub.stop();
+});
+
+test("a land and a drop tell the pool which repo lost a worktree", async () => {
+  const w = await world();
+  await readyRun(w, "wt1", "b.txt", "b\n");
+  await w.hub.land("wt1");
+  await w.hub.idle();
+  expect(entryOf(w, "wt1")?.state).toBe("landed");
+  expect(w.treeRemoved).toEqual([w.repo.path]);
+  await readyRun(w, "wt2", "c.txt", "c\n");
+  await w.hub.idle();
+  await w.hub.drop("wt2");
+  expect(w.treeRemoved).toEqual([w.repo.path, w.repo.path]);
+});
+
+test("removing an orphan tells the pool which repo lost a worktree", async () => {
+  const w = await world();
+  const dir = runTreeDir(w.repo.path, "pool-orphan", w.wts);
+  await addRunTree(w.repo.path, dir, "run/pool-orphan", "main");
+  await w.hub.adopt();
+  expect(w.hub.info().orphans.some((orphan) => orphan.dir === dir)).toBe(true);
+  await w.hub.orphan(dir, "remove");
+  expect(w.treeRemoved).toEqual([await sh(w.repo.path, "rev-parse", "--show-toplevel")]);
+  expect(existsSync(dir)).toBe(false);
 });

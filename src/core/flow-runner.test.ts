@@ -134,3 +134,20 @@ describe("real Runner graph ownership", () => {
     flows.stop(flow.id);
   });
 });
+
+test("a branch flow emits its startup note once, before location and setup in its first run", async () => {
+  const { runner, flows, drivers } = setup();
+  const graph = workflow("## First\n\nRead.\n\n## Second\n\nRead again.\n");
+  const start = { ...branch("warm-flow"), startNote: "started in a warm worktree", prepare: async (say: (text: string) => void) => { say("$ setup"); } };
+  const flow = flows.start(repo, graph, "user task", DEFAULT_AGENT, { branch: start });
+  await flush();
+  const first = runner.get(drivers[0]?.ctx?.env["CANOPY_RUN"] ?? "missing");
+  expect(first?.steps.filter((step) => step.kind === "note").map((step) => step.text)).toEqual(["started in a warm worktree", "on branch run/warm-flow in /scratch/warm-flow", "$ setup"]);
+  expect(first).toMatchObject({ note: "user task", branch: { work: "w-test2345", origin: "warm-flow" } });
+  drivers[0]?.end();
+  await flush();
+  const second = runner.get(drivers[1]?.ctx?.env["CANOPY_RUN"] ?? "missing");
+  expect(second?.steps.filter((step) => step.kind === "note").map((step) => step.text)).toEqual(["on branch run/warm-flow in /scratch/warm-flow"]);
+  expect(second?.branch?.work).toBe(first?.branch?.work);
+  flows.stop(flow.id);
+});

@@ -53,6 +53,8 @@ export class BranchCapError extends Error {
 export interface BranchStart {
   /** the branch and worktree, made before the run starts */
   branch: RunBranch;
+  /** The first startup note, before the branch location and setup notes. */
+  startNote?: string;
   /** Runs in the worktree before the agent starts: the gates' setup line.
    *  `say` adds a note to the run's timeline. A throw fails the run. */
   prepare?: (say: (text: string) => void) => Promise<void>;
@@ -462,6 +464,7 @@ export class Runner {
       }
     };
     this.live.set(run.id, live);
+    if (branch?.startNote) live.ctx.step({ kind: "note", text: branch.startNote });
     if (logError !== undefined) ctx.note(logError);
     this.prune();
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });

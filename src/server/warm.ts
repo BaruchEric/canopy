@@ -85,7 +85,8 @@ export class WarmPool {
   }
 
   private get owner(): symbol | null { return this.ownership?.token ?? null; }
-  private get ready(): boolean { return this.ownership?.phase === "ready"; }
+  /** A completed adoption owns this epoch; unowned servers use cold starts. */
+  get ready(): boolean { return this.ownership?.phase === "ready"; }
   private now(): number { return this.deps.now?.() ?? Date.now(); }
   private gates(path: string): Promise<Gates> { return (this.deps.gates ?? readGates)(path); }
   private repoDir(path: string): string { return join(this.root, repoKey(path)); }
