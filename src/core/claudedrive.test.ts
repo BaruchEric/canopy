@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
+import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk, toolPaths } from "./claudedrive";
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
 import { DEFAULT_AGENT } from "./types";
@@ -102,6 +102,19 @@ const responseTo = (log: Record<string, unknown>[], id: string) =>
   log.find((m) => m["type"] === "control_response" && (m["response"] as { request_id?: string }).request_id === id) as
     | { response: { subtype: string; response: { behavior: string; message?: string; updatedInput?: unknown } } }
     | undefined;
+
+describe("toolPaths", () => {
+  test("file tools, a Bash line, reads", () => {
+    expect(toolPaths("Edit", { file_path: "/r/src/a.ts" }, "/r")).toEqual({ paths: ["src/a.ts"] });
+    expect(toolPaths("Write", { file_path: "docs/x.md" }, "/r")).toEqual({ paths: ["docs/x.md"] });
+    expect(toolPaths("MultiEdit", { file_path: "/r/a.ts", edits: [] }, "/r")).toEqual({ paths: ["a.ts"] });
+    expect(toolPaths("NotebookEdit", { notebook_path: "/r/n.ipynb" }, "/r")).toEqual({ paths: ["n.ipynb"] });
+    expect(toolPaths("Edit", { file_path: "/etc/hosts" }, "/r")).toEqual({ paths: ["/etc/hosts"] });
+    expect(toolPaths("Bash", { command: "git mv src/a src/b && touch c.ts" }, "/r")).toEqual({ paths: ["c.ts", "src/a/", "src/b/"] });
+    expect(toolPaths("Bash", { command: "sh -c 'rm x'" }, "/r")).toEqual({ touchesUnknown: true });
+    expect(toolPaths("Read", { file_path: "/r/a.ts" }, "/r")).toEqual({});
+  });
+});
 
 test("Claude accounting reads cumulative per-model usage, including cached input", () => {
   expect(
@@ -365,9 +378,12 @@ describe("a Claude run through the driver", () => {
     expect(run.steps.map((s) => (s.kind === "tool" ? `tool:${s.tool?.title}:${s.tool?.status}:${s.tool?.output}` : `${s.kind}:${s.text}`))).toEqual([
       "text:Looking.",
       "tool:git status:ok:clean",
+      "tool:write src/a.ts:ok:written",
       "note:denied: rm x",
       "note:allowed: git push",
     ]);
+    expect(run.steps.find((s) => s.tool?.name === "Write")?.tool?.paths).toEqual(["src/a.ts"]);
+    expect(run.steps.find((s) => s.tool?.name === "Bash")?.tool?.paths).toBeUndefined();
     let log = await d.sent();
     for (let i = 0; i < 100 && !log.some((m) => m["eof"]); i++) {
       await Bun.sleep(20);

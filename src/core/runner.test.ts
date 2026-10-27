@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ACTIONS } from "./actions";
 import { cliArgs, Runner } from "./runner";
 import type { RunDriver } from "./driver";
-import { DEFAULT_AGENT, type Repo } from "./types";
+import { DEFAULT_AGENT, type Repo, type Run } from "./types";
 
 describe("the print-mode command line", () => {
   test("the default is the bypass mode; ask goes through the prompt tool", () => {
@@ -44,6 +44,23 @@ test("a run keeps the resolved settings snapshot for its accounting row", () => 
     provider: "team_1",
   });
   expect(run.agentSettings).toEqual({ harness: "codex", model: "gpt-x", effort: "high", provider: "team_1" });
+});
+
+test("Runner.note adds a timeline remark only to a live known run", () => {
+  const driver: RunDriver = { harness: "codex", label: "Codex", check: () => null, start: () => {}, say: () => {}, stop: () => {} };
+  const changes: Run[] = [];
+  const runner = new Runner({ onChange: (run) => changes.push(run), onGone: () => {} }, { driver: () => driver });
+  const repo: Repo = { id: "api", name: "api", path: "/r/api", group: "", source: "root", status: null };
+  const run = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT);
+  const before = changes.length;
+  runner.note(run.id, "also editing x.ts");
+  expect(run.steps.at(-1)).toMatchObject({ kind: "note", text: "also editing x.ts" });
+  expect(changes).toHaveLength(before + 1);
+  const knownSteps = run.steps.length;
+  runner.note("missing", "not recorded");
+  run.status = "limited";
+  runner.note(run.id, "not recorded either");
+  expect(run.steps).toHaveLength(knownSteps);
 });
 
 /* A stand-in for the claude CLI that never calls anything: it asks for two

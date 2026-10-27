@@ -97,6 +97,25 @@ describe("a page with two backends", () => {
     expect(home.map((r) => [r.id, r.repoId])).toEqual([["r1", "x"]]);
   });
 
+  test("a foreign backend's initial landing response preserves and qualifies collision ids", async () => {
+    reply = () => json({
+      runs: [],
+      entries: [],
+      orphans: [],
+      collisions: [
+        { id: "r1+r2", repoId: "x", run: "r1", name: "run/x-one", with: { kind: "run", run: "r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+        { id: "r1+branch:b1", repoId: "x", run: "r1", name: "run/x-one", with: { kind: "branch", origin: "b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+      ],
+    });
+
+    const landing = await api.landing("b");
+
+    expect(landing.collisions).toEqual([
+      { id: "b|r1+r2", repoId: "b|x", run: "b|r1", name: "run/x-one", with: { kind: "run", run: "b|r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+      { id: "b|r1+branch:b1", repoId: "b|x", run: "b|r1", name: "run/x-one", with: { kind: "branch", origin: "b|b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+    ]);
+  });
+
   test("staging on a foreign repo posts json there and answers its repo qualified", async () => {
     reply = () => json(repo("x"));
     const r = await api.stage("b|x", "f", false);

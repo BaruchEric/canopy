@@ -206,6 +206,7 @@ function onUser(): void {
       content: [
         { type: "text", text: "Looking." },
         { type: "tool_use", id: "tu1", name: "Bash", input: { command: "git status" } },
+        { type: "tool_use", id: "tu2", name: "Write", input: { file_path: "src/a.ts", content: "x" } },
       ],
     },
   });
@@ -261,6 +262,7 @@ function onResponse(m: Record<string, unknown>): void {
     session_id: "sess-1",
     message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tu1", content: [{ type: "text", text: "clean" }], is_error: false }] },
   });
+  toolResult("tu2", "written");
   out({
     type: "result",
     subtype: "success",

@@ -5170,6 +5170,22 @@ a.landing-state {
   color: var(--ink-dim);
   overflow-wrap: anywhere;
 }
+.landing-overlap {
+  flex-basis: 100%;
+  font-size: 11px;
+}
+.landing-overlap summary {
+  cursor: pointer;
+  list-style: none;
+}
+.landing-overlap summary::-webkit-details-marker {
+  display: none;
+}
+.landing-overlap ul {
+  list-style: none;
+  margin: 0 0 0 12px;
+  padding: 0;
+}
 .landing-out {
   flex-basis: 100%;
   font-size: 11px;
@@ -5190,7 +5206,8 @@ a.landing-state {
 .landing-section .moss {
   color: var(--moss);
 }
-.landing-section .lichen {
+.landing-section .lichen,
+.landing-state.lichen {
   color: var(--lichen);
 }
 .landing-section .rust {

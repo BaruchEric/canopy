@@ -31,6 +31,7 @@ import {
   TAIL_CHARS,
 } from "./landing";
 import type { LandEntry, LandingRun, LandNotice, RunReview } from "./types";
+import { touchedOf } from "./touch";
 
 const run = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -58,6 +59,25 @@ const queued = (ids: string[], repoId = "canopy"): LandEntry[] => {
 };
 
 describe("enqueue", () => {
+  test("an entry is marked when a working run's set holds its files, by that run's name, through to the fix prompt", () => {
+    const working = [touchedOf({ id: "w", verb: "Plan, then build", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["src/a.ts", "docs/"] } }], branch: { name: "run/x-w", target: "main", base: "b0", dir: "/w/w", state: "working", origin: "w" } })];
+    const review: RunReview = { verdict: "land", files: [{ path: "src/a.ts", cls: "logic" }, { path: "docs/x.md", cls: "docs" }, { path: "z.ts", cls: "logic" }], base: "b", head: "h", at: 1 };
+    const e = enqueue([], run("a", { review }), 1, undefined, working)[0];
+    if (!e) throw new Error("expected the entry to be queued");
+    expect(e.overlap).toEqual({ with: "run/x-w", paths: ["docs/x.md", "src/a.ts"] });
+    expect(enqueue([], run("b", { review: { ...review, files: [{ path: "q.ts", cls: "logic" }] } }), 1, undefined, working)[0]?.overlap).toBeUndefined();
+    expect(enqueue([], run("w", { review }), 1, undefined, working)[0]?.overlap).toBeUndefined();
+    expect(enqueue([], run("c"), 1, undefined, working)[0]?.overlap).toBeUndefined();
+    const back = advance(advance(e, { t: "begin" }, 2), { t: "conflict", files: ["src/a.ts"] }, 3);
+    expect(back.overlap).toEqual(e.overlap);
+    expect(fixPrompt(back)).toContain("canopy saw run/x-w editing these files while you worked: docs/x.md, src/a.ts.");
+    expect(fixPrompt(back).endsWith("Do not push.")).toBe(true);
+    const noOverlap = enqueue([], run("empty"), 1)[0];
+    if (!noOverlap) throw new Error("expected the entry to be queued");
+    const noOverlapBack = advance(advance(noOverlap, { t: "begin" }, 2), { t: "conflict", files: ["x"] }, 3);
+    expect(fixPrompt(noOverlapBack)).not.toContain("canopy saw");
+  });
+
   test("a ready run joins at the end", () => {
     const es = queued(["a", "b"]);
     expect(es.map((e) => [e.id, e.state, e.queuedAt])).toEqual([
@@ -355,5 +375,6 @@ describe("judge scenarios plan 2", () => {
     expect(fixPrompt(e)).toContain("are not shown");
     expect(fixPrompt(e)).toContain("scenario refund: partly\nno refund");
     expect(fixPrompt(e)).toContain("Do not push.");
+    expect(fixPrompt({ ...e, overlap: { with: "other-branch", paths: ["refund.ts"] } })).toContain("canopy saw other-branch editing these files while you worked: refund.ts");
   });
 });

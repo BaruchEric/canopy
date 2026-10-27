@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   effectiveAgents,
+  isEmptyRepoAgent,
   isProfileName,
   launchPick,
   normalizePick,
@@ -217,6 +218,18 @@ describe("what is stored", () => {
     expect(normalizePick({ profile: "ok" })).toEqual({ profile: "ok" });
     expect(normalizePick({ profile: "-no" })).toBeNull();
     expect(normalizePick("deep")).toBeNull();
+    expect(normalizeRepoAgent({ collisionSay: false })).toEqual({ collisionSay: false });
+    expect(normalizeRepoAgent({ collisionSay: true })).toEqual({});
+    expect(normalizeRepoAgent({ all: { profile: "fast" }, collisionSay: false })).toEqual({ all: { profile: "fast" }, collisionSay: false });
+    expect(isEmptyRepoAgent({ collisionSay: false })).toBe(false);
+  });
+
+  test("collisionSay peels off without erasing a legacy repo pick", () => {
+    const pick = codex({ model: "gpt-5.5" });
+    expect(normalizeRepoAgent({ harness: "codex", model: "gpt-5.5", collisionSay: false })).toEqual({ all: pick, collisionSay: false });
+    expect(normalizeRepoAgent({ harness: "codex", model: "gpt-5.5", collisionSay: true })).toEqual({ all: pick });
+    expect(normalizeRepoAgent({ all: { harness: "codex", model: "gpt-5.5" }, collisionSay: false })).toEqual({ all: pick, collisionSay: false });
+    expect(normalizeRepoAgent({ all: { harness: "codex", model: "gpt-5.5" }, collisionSay: true })).toEqual({ all: pick });
   });
 
   test("profiles: bad names out, and default only when it differs from the builtin", () => {

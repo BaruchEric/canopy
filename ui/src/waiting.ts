@@ -7,6 +7,7 @@
  */
 
 import type { AgentCard, Ask, RangerInfo, Repo, Run, TaskInfo } from "../../src/core/types";
+import { collisionNotice, type Collision } from "../../src/core/touch";
 import { cardName, repoOfCard, whereWord } from "./agentcards";
 import { coordTurn, isCoordinator } from "./coord";
 import { stateOf } from "./util";
@@ -63,27 +64,31 @@ export interface AttentionRow {
 }
 
 /** what a row says beside its state */
-function detailOf(repo: Repo, state: Attention): string {
+function detailOf(repo: Repo, state: Attention, collisions: readonly Collision[]): string {
   const files = repo.status?.files ?? [];
   const ahead = repo.status?.ahead ?? 0;
-  if (state === "error") return repo.error ?? "";
-  if (state === "conflict") {
+  let detail: string;
+  if (state === "error") detail = repo.error ?? "";
+  else if (state === "conflict") {
     const n = files.filter((f) => f.conflicted).length;
-    return `${n} conflicted file${n === 1 ? "" : "s"}`;
+    detail = `${n} conflicted file${n === 1 ? "" : "s"}`;
+  } else {
+    const parts: string[] = [];
+    if (files.length > 0) parts.push(`${files.length} file${files.length === 1 ? "" : "s"}`);
+    if (ahead > 0) parts.push(`↑${ahead}`);
+    detail = parts.join(" · ");
   }
-  const parts: string[] = [];
-  if (files.length > 0) parts.push(`${files.length} file${files.length === 1 ? "" : "s"}`);
-  if (ahead > 0) parts.push(`↑${ahead}`);
-  return parts.join(" · ");
+  const collision = collisions.find((item) => item.repoId === repo.id && item.with.kind === "checkout");
+  return collision ? `${detail}${detail ? " · " : ""}${collisionNotice(collision)}` : detail;
 }
 
 /** The repos that need you, ranked conflict, error, changes, unpushed, and
  *  by name inside each; a forge-only repo has no checkout to need you. */
-export function attentionRepos(repos: readonly Repo[]): AttentionRow[] {
+export function attentionRepos(repos: readonly Repo[], collisions: readonly Collision[] = []): AttentionRow[] {
   const rows: AttentionRow[] = [];
   for (const repo of repos) {
     const state = stateOf(repo);
-    if (isAttention(state)) rows.push({ repo, state, detail: detailOf(repo, state) });
+    if (isAttention(state)) rows.push({ repo, state, detail: detailOf(repo, state, collisions) });
   }
   return rows.sort(
     (a, b) => ATTENTION.indexOf(a.state) - ATTENTION.indexOf(b.state) || a.repo.name.localeCompare(b.repo.name) || a.repo.id.localeCompare(b.repo.id),

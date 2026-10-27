@@ -416,6 +416,13 @@ export class Runner {
     return b ? branchPrompt(live.repo, live.spec, note, b) : buildPrompt(live.repo, live.spec, note, live.scope);
   }
 
+  /** a one-line remark from canopy on a live run's timeline; nothing for an unknown or ended run */
+  note(id: string, text: string): void {
+    const live = this.live.get(id);
+    if (!live || !isRunActive(live.ctx.run)) return;
+    live.ctx.note(text);
+  }
+
   /** The user's next message in a chat. The first one starts the agent
    *  with the repo's framing around it; later ones are the conversation's
    *  next turns, which the driver sends on the same session. */

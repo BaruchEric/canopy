@@ -322,6 +322,8 @@ describe("items as steps", () => {
 
   test("a command is Bash, titled by its script, its exit judging it", () => {
     expect(itemTool(command({}), "started", "/r")).toEqual({ name: "Bash", title: "git status --short", status: "running" });
+    expect(itemTool(command({ command: "/bin/sh -lc 'touch x.ts'" }), "started", "/r")?.paths).toEqual(["x.ts"]);
+    expect(itemTool(command({ command: "/bin/sh -lc 'bash -c ls'" }), "started", "/r")?.touchesUnknown).toBe(true);
     expect(itemTool(command({ status: "completed", exitCode: 0, aggregatedOutput: " M a\n" }), "completed", "/r")).toEqual(
       { name: "Bash", title: "git status --short", status: "ok", output: "M a" },
     );
@@ -331,6 +333,13 @@ describe("items as steps", () => {
     expect(long?.output?.startsWith("x".repeat(2000) + "\n… (500 more characters)")).toBe(true);
   });
 
+  test("a command item uses its validated absolute cwd when collecting touched paths", () => {
+    const script = "/bin/sh -lc 'touch x.ts'";
+    expect(itemTool(command({ command: script, cwd: "/r/src" }), "started", "/r")?.paths).toEqual(["src/x.ts"]);
+    expect(itemTool(command({ command: script, cwd: "/tmp" }), "started", "/r")?.paths).toEqual(["/tmp/x.ts"]);
+    expect(itemTool(command({ command: script, cwd: "relative" }), "started", "/r")?.paths).toEqual(["x.ts"]);
+  });
+
   test("a file change is Edit, named by its paths, its diff as the output", () => {
     const fc = (changes: unknown[], status = "completed") => ({ type: "fileChange", id: "f", changes, status });
     const upd = (path: string, move: string | null = null) => ({ path, kind: { type: "update", move_path: move }, diff: "-a\n+b" });
@@ -338,6 +347,7 @@ describe("items as steps", () => {
       name: "Edit",
       title: "edit src/a.ts",
       status: "ok",
+      paths: ["src/a.ts"],
       output: "src/a.ts\n-a\n+b",
     });
     expect(itemTool(fc([{ path: "/r/n.ts", kind: { type: "add" }, diff: "+x" }]), "completed", "/r")?.title).toBe("write n.ts");
@@ -346,7 +356,8 @@ describe("items as steps", () => {
     expect(itemTool(fc([upd("/r/a"), upd("/r/b"), upd("/r/c"), upd("/r/d")]), "completed", "/r")?.title).toBe(
       "edit a, b and 2 more",
     );
-    expect(itemTool(fc([upd("/r/a")], "inProgress"), "started", "/r")).toEqual({ name: "Edit", title: "edit a", status: "running" });
+    expect(itemTool(fc([upd("/r/a", "/r/b")]), "completed", "/r")?.paths).toEqual(["a", "b"]);
+    expect(itemTool(fc([upd("/r/a")], "inProgress"), "started", "/r")).toEqual({ name: "Edit", title: "edit a", status: "running", paths: ["a"] });
   });
 
   test("MCP calls, searches and the rest", () => {

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { exec } from "../core/exec";
 import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
 import { fixPrompt } from "../core/landing";
+import { touchedOf, type Touched } from "../core/touch";
 import { addRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { LandingHub, type CheckOutcome } from "./landing";
 import { setDirOf } from "./scenarios";
@@ -44,6 +45,7 @@ interface World {
   scenRoot: string;
   /** the scenario runner's calls: worktree, line, set copy, timeout */
   scenarios: [string, string, string, number][];
+  working: Touched[];
   /** scenario line → what it answers; a function may act first */
   scenAnswers: Map<string, CheckOutcome | (() => CheckOutcome | Promise<CheckOutcome>)>;
   judged: string[];
@@ -78,6 +80,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     held: new Set(),
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
+    working: [],
     scenAnswers: new Map(),
     judged: [],
     judgeAnswer: { satisfied: { choice: "yes", probabilities: { yes: 1 } }, evidence: { probability: 0.8 } },
@@ -108,6 +111,7 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     },
     dropped: (id) => w.dropped.push(id),
     prHeld: (id) => w.held.has(id),
+    working: () => w.working,
     scenario: async (cwd, line, setDir, ms) => {
       w.scenarios.push([cwd, line, setDir, ms]);
       const a = w.scenAnswers.get(line);
@@ -200,6 +204,15 @@ afterAll(async () => {
 });
 
 describe("landing", () => {
+  test("an entry joining the queue is marked when a working run's set holds its files", async () => {
+    const w = await world();
+    await readyRun(w, "ov1", "b.txt", "b\n");
+    w.working = [touchedOf({ id: "k", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Write", title: "", status: "ok", paths: ["b.txt"] } }] })];
+    await w.hub.land("ov1");
+    expect(entryOf(w, "ov1")?.overlap).toEqual({ with: "Ask run k", paths: ["b.txt"] });
+    expect(w.hub.info().collisions).toEqual([]);
+  });
+
   test("a ready run lands: gates in its worktree in order, main fast-forwards, branch and worktree go", async () => {
     const w = await world();
     const run = await readyRun(w, "aa11", "b.txt", "b\n");

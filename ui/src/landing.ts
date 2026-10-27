@@ -4,9 +4,10 @@
 
 import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
+import { withName } from "../../src/core/touch";
 import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioRun } from "../../src/core/types";
 
-export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [] };
+export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [], collisions: [] };
 
 /** Every backend's queue as one; ids are already qualified per backend. */
 export function mergeLanding(byBackend: Readonly<Record<string, LandingInfo>>): LandingInfo {
@@ -17,7 +18,29 @@ export function mergeLanding(byBackend: Readonly<Record<string, LandingInfo>>): 
     entries: parts.flatMap((p) => p.entries),
     orphans: parts.flatMap((p) => p.orphans),
     notices: parts.flatMap((p) => p.notices ?? []).sort((a, b) => b.at - a.at),
+    collisions: parts.flatMap((p) => p.collisions ?? []),
   };
+}
+
+export const OVERLAP_WORD = "⚠ overlaps";
+
+/** the chip's words and title: a collision is a word, not a hold */
+export function overlapChip(name: string, paths: readonly string[]): { text: string; title: string } {
+  const count = paths.length;
+  return {
+    text: `${OVERLAP_WORD} ${name}`,
+    title: `Both touch ${count} file${count === 1 ? "" : "s"}; the queue rebases and reports a conflict if it finds one. Nothing is held`,
+  };
+}
+
+/** one live pair in this run's view, derived from the stored pair's orientation */
+export function runOverlaps(info: LandingInfo, runId: string): { id: string; name: string; paths: string[] }[] {
+  const overlaps: { id: string; name: string; paths: string[] }[] = [];
+  for (const collision of info.collisions ?? []) {
+    if (collision.run === runId) overlaps.push({ id: collision.id, name: withName(collision.with), paths: collision.paths });
+    else if (collision.with.kind === "run" && collision.with.run === runId) overlaps.push({ id: collision.id, name: collision.name, paths: collision.paths });
+  }
+  return overlaps;
 }
 
 /** A ready run's verdict in words; "sorting" until its sort is in. */
@@ -49,7 +72,9 @@ export function approveFiles(r: Pick<LandingRun, "review">): { look: ReviewFile[
 
 /** A notice in one line: "run/x landed on its own at abc1234". */
 export function noticeLine(n: LandNotice): string {
-  return n.kind === "landed" ? `${n.branch} landed on its own${n.head ? ` at ${n.head.slice(0, 7)}` : ""}` : `${n.branch} held back: ${n.why ?? "its sort changed"}`;
+  if (n.kind === "landed") return `${n.branch} landed on its own${n.head ? ` at ${n.head.slice(0, 7)}` : ""}`;
+  if (n.kind === "collision") return n.why ?? "";
+  return `${n.branch} held back: ${n.why ?? "its sort changed"}`;
 }
 
 /** a branch run whose record carries the PR it opened */
@@ -141,6 +166,8 @@ export interface RunLanding {
   why?: string;
   /** the set's latest pass over the branch */
   scenarios?: ScenarioRun;
+  /** the entry's queue mark, then live collisions from this run's view */
+  overlaps?: { name: string; paths: string[] }[];
 }
 
 /** The scenarios' pass in one line: "scenarios 7/8 · 0.88". */
@@ -164,6 +191,11 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
   const b = run.branch;
   if (!b) return null;
   const entry = info.entries.find((e) => e.id === b.origin);
+  const overlaps = [
+    ...(entry?.overlap ? [{ name: entry.overlap.with, paths: entry.overlap.paths }] : []),
+    ...runOverlaps(info, run.id).map(({ name, paths }) => ({ name, paths })),
+  ];
+  const overlapMark = overlaps.length > 0 ? { overlaps } : {};
   if (entry) {
     const fixing = entry.fixing !== undefined && entry.fixing !== run.id;
     const back = sentBack(entry) && entry.fixing === undefined;
@@ -175,18 +207,19 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
       canPr: back,
       entry,
       scenarios: info.runs.find((r) => r.id === b.origin)?.scenarios,
+      ...overlapMark,
     };
   }
   const rec = info.runs.find((r) => r.id === b.origin);
   // it lands on GitHub, never through the queue
-  if (rec?.pr !== undefined) return { word: `PR #${rec.pr}`, canLand: false, canFix: false, canPr: false };
+  if (rec?.pr !== undefined) return { word: `PR #${rec.pr}`, canLand: false, canFix: false, canPr: false, ...overlapMark };
   const state = rec && rec.runId === run.id ? rec.state : b.state;
   const stopped = state === "stopped" && rec !== undefined && stoppedWhole(rec);
   // a page that missed the restart may still hold the run as working; the hub's stopped says it ended
   const canLand = stopped || (state === "ready" && run.status !== "working" && run.status !== "waiting" && run.status !== "idle");
   const sorted = canLand && rec?.review ? { verdict: verdictWord(rec), approve: needsApproval(rec) } : {};
   const whole = state === "stopped" && rec?.whole && !rec.whole.ok ? { why: rec.whole.why } : {};
-  return { word: BRANCH_WORD[state], canLand, canFix: false, canPr: canLand && !stopped, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole, scenarios: rec?.scenarios };
+  return { word: BRANCH_WORD[state], canLand, canFix: false, canPr: canLand && !stopped, ...sorted, ...(canLand && stopped ? { stopped: true } : {}), ...whole, scenarios: rec?.scenarios, ...overlapMark };
 }
 
 /** Whether a new run starts on a branch unless the toggle says otherwise:

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
-import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
+import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
 import { repoPrChip } from "../prs";
@@ -11,6 +11,17 @@ import { Section } from "./Surface";
 import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
+
+/** A foldable overlap word: the paths stay available without taking space in the row. */
+export function OverlapChip({ name, paths }: { name: string; paths: string[] }) {
+  const chip = overlapChip(name, paths);
+  return (
+    <details className="landing-overlap">
+      <summary className="landing-state lichen" title={chip.title}>{chip.text}</summary>
+      <ul>{paths.map((path) => <li className="landing-branch" key={path}>{path}</li>)}</ul>
+    </details>
+  );
+}
 
 /** The card's word for a repo's landing queue: how many runs wait their
  *  turn and how many came back. Clicking it opens the landing section. */
@@ -136,6 +147,8 @@ export function LandingSection({ repo }: { repo: Repo }) {
                 {e.approved && <span className="landing-state" title="You approved its sensitive files">approved</span>}
                 {e.reason && <span className="landing-why">{e.reason}</span>}
                 {e.noGates && <span className="landing-why">no gates to run</span>}
+                {e.overlap && <OverlapChip name={e.overlap.with} paths={e.overlap.paths} />}
+                {runOverlaps(info, entryRun(e).runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 <span className="landing-note">{e.note}</span>
               </li>
             ))}
@@ -255,6 +268,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
               <li key={r.id} className={`landing-row st-${r.state}`}>
                 {runLink(r)}
                 <span className="landing-state">{r.state === "working" ? "working" : r.state === "uncommitted" ? "changes left uncommitted" : r.state === "stopped" ? "stopped by a restart" : "no commits"}</span>
+                {runOverlaps(info, r.runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 {stoppedWhole(r) && (
                   <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
                     {verdictWord(r)}
@@ -446,11 +460,11 @@ export function LandingNotices() {
   if (notices.length === 0) return null;
   return (
     <section className="settings-row">
-      <h3 className="panel-label">landed on its own</h3>
+      <h3 className="panel-label">from the landing queue</h3>
       <ul className="inbox-recent">
         {notices.slice(0, 12).map((n) => (
           <li key={n.id} title={n.note}>
-            <span className={n.kind === "held" ? "landing-held" : undefined}>{noticeLine(n)}</span>
+            <span className={n.kind === "held" || n.kind === "collision" ? "landing-held" : undefined}>{noticeLine(n)}</span>
             <span className="inbox-left dim">{ago(Math.floor(n.at / 1000))}</span>
           </li>
         ))}

@@ -4975,16 +4975,16 @@ export function inboxItems(s: CanopyState): InboxItem[] {
   return inboxOut;
 }
 
-let attentionIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[] } | null = null;
+let attentionIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[]; landing: Record<string, LandingInfo> } | null = null;
 let attentionOut: AttentionRow[] = [];
 
 /** The repos in scope that need you, the most pressing first, for the
  *  "waiting on you" panel; worked out once per change of what it reads. */
 export function attentionItems(s: CanopyState): AttentionRow[] {
   const a = attentionIn;
-  if (a && a.repos === s.repos && a.settings === s.settings && a.ws === s.activeWs && a.workspaces === s.workspaces) return attentionOut;
-  attentionIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces };
-  attentionOut = attentionRepos(scopedRepos(s));
+  if (a && a.repos === s.repos && a.settings === s.settings && a.ws === s.activeWs && a.workspaces === s.workspaces && a.landing === s.landing) return attentionOut;
+  attentionIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces, landing: s.landing };
+  attentionOut = attentionRepos(scopedRepos(s), landingAll(s).collisions ?? []);
   return attentionOut;
 }
 

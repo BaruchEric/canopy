@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { advance, enqueue } from "../../src/core/landing";
+import { touchedOf, type Collision } from "../../src/core/touch";
 import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, type OpenedRun, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, runOverlaps, type OpenedRun, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -116,6 +117,23 @@ describe("a run's word and buttons", () => {
 });
 
 const sorted = (verdict: RunReview["verdict"], files: RunReview["files"] = [], over: Partial<RunReview> = {}): RunReview => ({ verdict, files, base: "b0", head: "h1", at: 1, ...over });
+
+test("overlap chips: an entry's mark and both runs' live collisions; the notice line; merged across backends", () => {
+  expect(overlapChip("run/x-b", ["a.ts", "b.ts"])).toEqual({ text: "⚠ overlaps run/x-b", title: "Both touch 2 files; the queue rebases and reports a conflict if it finds one. Nothing is held" });
+  expect(overlapChip("x", ["a.ts"]).title.startsWith("Both touch 1 file;")).toBe(true);
+  const c: Collision = { id: "r-a+r-b", repoId: "canopy", run: "r-a", name: "run/x-a", with: { kind: "run", run: "r-b", verb: "Ask", name: "run/x-b" }, paths: ["a.ts"], at: 1 };
+  const landing: LandingInfo = { runs: [rec("a")], entries: [], orphans: [], collisions: [c] };
+  expect(runOverlaps(landing, "r-a")).toEqual([{ id: c.id, name: "run/x-b", paths: ["a.ts"] }]);
+  expect(runOverlaps(landing, "r-b")).toEqual([{ id: c.id, name: "run/x-a", paths: ["a.ts"] }]);
+  expect(runLanding(run("a"), landing)?.overlaps).toEqual([{ name: "run/x-b", paths: ["a.ts"] }]);
+  expect(runLanding(run("b"), landing)?.overlaps).toEqual([{ name: "run/x-a", paths: ["a.ts"] }]);
+  const working = [touchedOf({ id: "w", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["q.ts"] } }] })];
+  const entries = enqueue([], rec("q", { review: sorted("land", [{ path: "q.ts", cls: "logic" }]) }), 1, undefined, working);
+  expect(runLanding(run("q"), { ...landing, entries })?.overlaps).toEqual([{ name: "Ask run w", paths: ["q.ts"] }]);
+  expect(noticeLine({ id: "n", entry: "a", repoId: "canopy", branch: "run/x-a", note: "", kind: "collision", why: "run/x-a and run/x-b both edit a.ts", at: 1 })).toBe("run/x-a and run/x-b both edit a.ts");
+  expect(mergeLanding({ mac: landing, mini: { runs: [], entries: [], orphans: [], collisions: [{ ...c, id: "m" }] } }).collisions?.map((collision) => collision.id)).toEqual(["r-a+r-b", "m"]);
+  expect(OVERLAP_WORD).toBe("⚠ overlaps");
+});
 
 describe("review rules in the page", () => {
   test("a ready run's verdict, its tone, and whether land opens the approve sheet", () => {

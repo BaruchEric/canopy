@@ -34,6 +34,7 @@ import type {
   Sprout,
   TermInfo,
 } from "../../src/core/types";
+import type { Collision } from "../../src/core/touch";
 
 const reg: Reg = { home: "mini", names: ["mini", "mac"] };
 const q = (id: string) => qualify(reg, "mac", id);
@@ -165,6 +166,18 @@ describe("qEvent", () => {
       expect(out.length).toBeGreaterThan(0);
       for (const id of out) expect(back(id)[0]).toBe("mac");
     }
+  });
+  test("a foreign landing event qualifies collision pairs and both sides", () => {
+    const collisions: Collision[] = [
+      { id: "r1+r2", repoId: "a/b", run: "r1", name: "run/x-one", with: { kind: "run", run: "r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+      { id: "r1+branch:b1", repoId: "a/b", run: "r1", name: "run/x-one", with: { kind: "branch", origin: "b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+    ];
+    const out = qEvent(q, { type: "landing", landing: { runs: [], entries: [], orphans: [], collisions } });
+
+    expect(out.type === "landing" ? out.landing.collisions : []).toEqual([
+      { id: "mac|r1+r2", repoId: "mac|a/b", run: "mac|r1", name: "run/x-one", with: { kind: "run", run: "mac|r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+      { id: "mac|r1+branch:b1", repoId: "mac|a/b", run: "mac|r1", name: "run/x-one", with: { kind: "branch", origin: "mac|b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+    ]);
   });
   test("a scan event qualifies its repos", () => {
     const scan = { root: "/x", repos: [repo], sources: [], scannedAt: 1, backend: { openers: false, sshHost: null } } as unknown as ScanResult;
