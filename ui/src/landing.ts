@@ -211,7 +211,7 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
       canPr: back,
       ...(entry.state === "judge" ? { canSkipJudge: true as const } : {}),
       entry,
-      scenarios: info.runs.find((r) => r.id === b.origin)?.scenarios,
+      scenarios: info.runs.find((r) => r.id === b.origin)?.scenarios ?? entry.scenarios,
       ...overlapMark,
     };
   }

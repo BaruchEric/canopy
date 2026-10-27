@@ -228,6 +228,18 @@ test("runLanding carries the record's scenarios for a queued entry and a ready r
   expect(runLanding(branchRun, { runs: [r], entries: [], orphans: [] })?.scenarios).toEqual(pass);
 });
 
+test("runLanding keeps the landed entry's final scenario line after its run record is removed", () => {
+  const pass = { head: "h", at: 2, total: 0, passed: 0, score: 1, results: [], skipped: ["refund"] };
+  const landed = { ...advance(entryFor(rec("a"), 1), { t: "landed", head: "h" }, 3), scenarios: pass };
+  const result = runLanding(run("a"), info([], [landed]));
+  expect(result?.scenarios).toEqual(pass);
+  if (!result?.scenarios) throw new Error("missing retained scenario pass");
+  expect(scenarioLine(result.scenarios)).toBe("scenarios 0/0 · 1.00 · 1 left out");
+  const older = advance(entryFor(rec("a"), 1), { t: "landed", head: "h" }, 3);
+  expect(runLanding(run("a"), info([], [older]))).toMatchObject({ word: "landed", canLand: false, canFix: false, canPr: false });
+  expect(runLanding(run("a"), info([], [older]))?.scenarios).toBeUndefined();
+});
+
 test("judge hold offers only land anyway and preserves scenario results", () => {
   const held = advance(entryFor(rec("a"), 1), { t: "unjudged", name: "refund", why: "no gateway key" }, 2);
   const scenarios = { head: "h", at: 1, total: 1, passed: 0, score: 0, results: [{ name: "refund", kind: "judge" as const, ok: false, unjudged: "no gateway key" }] };

@@ -1474,6 +1474,8 @@ export interface LandEntry {
   approved?: string;
   /** Eric's land anyway: leave judge scenarios out of this pass. */
   skipJudge?: true;
+  /** Latest sanitized scenario pass, retained in the bounded landed history after its run record is removed. */
+  scenarios?: ScenarioRun;
   /** set at enqueue when the branch's files meet a working run's set (FR-040):
    *  that run's name and the shared paths. A word, never a hold */
   overlap?: { with: string; paths: string[] };

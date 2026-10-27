@@ -954,6 +954,39 @@ const judgeStory = (name: string, run?: string) => `---\nname: ${name}\nkind: ju
 const lastScenarioPass = (w: World, id: string): ScenarioRun | undefined => w.events.flatMap(ev=>ev.type === "landing" ? ev.landing.runs : []).filter(rec=>rec.id===id && rec.scenarios).at(-1)?.scenarios;
 
 describe("judge scenarios plan 2", () => {
+  test("a landed entry retains its skipped judge pass in the final API event and after adoption", async () => {
+    const w = await world({ noPackage: true, judge: false });
+    await w.hub.adopt();
+    await addScenario(w, "refund", undefined, judgeStory("refund"));
+    const run = await readyRun(w, "sj-retained", "b.txt", "b");
+    await w.hub.land("sj-retained");
+    await w.hub.idle();
+    const held = entryOf(w, "sj-retained");
+    await w.hub.land("sj-retained", undefined, true);
+    await w.hub.idle();
+    await w.hub.flushed();
+
+    const pass = { total: 0, passed: 0, score: 1, results: [], skipped: ["refund"] };
+    const landed = { id: "sj-retained", state: "landed", scenarios: pass };
+    const url = new URL("http://x/api/landing");
+    const response = await w.hub.handle(new Request(url.href), url);
+    expect(await response?.json()).toMatchObject({ runs: [], entries: [landed] });
+    expect(w.events.flatMap(ev => ev.type === "landing" ? [ev.landing] : []).at(-1)).toMatchObject({ runs: [], entries: [landed] });
+    expect(held).toMatchObject({ state: "judge", scenarios: { total: 1, results: [{ name: "refund", unjudged: "no gateway key" }] } });
+    expect(w.hub.record("sj-retained")).toBeUndefined();
+    if (!run.branch) throw new Error("missing branch");
+    expect(existsSync(run.branch.dir)).toBe(false);
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+    expect(JSON.stringify(w.hub.info().entries)).not.toContain("SECRET STORY");
+    w.hub.detach();
+
+    const restored = rehub(w);
+    await restored.adopt();
+    await restored.idle();
+    expect(restored.info()).toMatchObject({ runs: [], entries: [landed] });
+    expect(JSON.stringify(restored.info())).not.toContain("SECRET STORY");
+    restored.detach();
+  });
   test("a judged-only set counts as a pass and can land at its configured minimum", async () => {
     const w = await world({ noPackage: true });
     await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.9}');
@@ -1012,7 +1045,7 @@ describe("judge scenarios plan 2", () => {
     await w.hub.land("sj4");
     await w.hub.idle();
     const entry = entryOf(w,"sj4");
-    expect(entry).toMatchObject({ state:"red",gate:"satisfaction 0.90 < 1", reason:"scenario refund: satisfaction 0.90\nrefund granted" });
+    expect(entry).toMatchObject({ state:"red",gate:"satisfaction 0.90 < 1", reason:"scenario refund: satisfaction 0.90\nrefund granted", scenarios: { score: 0.9, results: [{ name: "refund", p: 0.9 }] } });
     if(!entry) throw Error("missing red entry");
     expect(fixPrompt(entry)).toContain("holdout scenarios scored satisfaction 0.90 < 1");
     expect(fixPrompt(entry)).not.toContain("SECRET STORY");

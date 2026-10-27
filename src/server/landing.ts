@@ -947,6 +947,7 @@ export class LandingHub {
           this.written.set(e.id, JSON.stringify(upd));
           void this.saveRun(upd);
         }
+        e = this.update({ ...e, scenarios: pass });
         const red = pass.results.find((r) => r.kind === "command" && !r.ok);
         if (red) {
           const gate = SCENARIO_GATE + red.name;
