@@ -1563,6 +1563,14 @@ export interface ScenarioRun {
   skipped?: string[];
 }
 
+/** A best-of-N member's read-only gate pass, before anyone lands it. */
+export interface LandingDry {
+  head: string;
+  gates: { ok: boolean; red?: string; tail?: string };
+  scenarios?: ScenarioRun;
+  minimum: number;
+}
+
 /** A branch run as the landing records keep it, across restarts. */
 export interface LandingRun {
   /** the branch's id (`RunBranch.origin`) */
@@ -1591,6 +1599,8 @@ export interface LandingRun {
   review?: RunReview;
   /** the set's latest pass over this branch; a rebase runs it again */
   scenarios?: ScenarioRun;
+  /** a best-of-N dry pass, which never rebases or lands the branch */
+  dry?: LandingDry;
   /** a stopped run only: whether its work is whole as the hub last looked,
    *  so "land" applies. Never saved: the worktree can change after. */
   whole?: RunWhole;

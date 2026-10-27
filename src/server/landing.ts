@@ -37,6 +37,7 @@ import {
   scoreGate,
   scoreOutput,
   sentBack,
+  tail,
   unqueue,
   WORKING,
   type LandEvent,
@@ -44,6 +45,7 @@ import {
 } from "../core/landing";
 import { foldsCase, readRules, sortBranch } from "../core/review";
 import type { Collision, Touched } from "../core/touch";
+import type { GroupDry } from "../core/group";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import type { EvidenceFile, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
@@ -583,6 +585,75 @@ export class LandingHub {
   /** A branch run's record, by the branch's id or its latest run's. */
   record(id: string): LandingRun | undefined {
     return this.find(id);
+  }
+
+  /** Checks a ready member in its existing worktree. This dry pass reads the
+   *  main checkout's gates, settings and scenario set, and never queues,
+   *  rebases or lands the branch. */
+  async dryGates(origin: string): Promise<GroupDry> {
+    const rec = this.find(origin);
+    if (!rec) throw new Error("no branch by that id");
+    if (rec.state !== "ready") throw new Error("only a ready branch can be dry-checked");
+    const head = await revOf(rec.dir, "HEAD");
+    if (!head) throw new Error("the branch worktree has no HEAD");
+
+    const [gates, settings, set] = await Promise.all([
+      readGates(rec.repoPath),
+      readScenarioSettings(rec.repoPath),
+      readScenarioSet(this.root, rec.repoPath),
+    ]);
+    let gateResult: GroupDry["gates"] = { ok: true };
+    const changed = await git(rec.dir, ["diff", "--name-only", rec.base, head]);
+    if (changed.code !== 0) throw new Error("could not inspect branch changes for setup");
+    const changedPaths = changed.stdout.split("\n").filter(Boolean);
+    if (gates.setup !== undefined && touchesLockfile(changedPaths)) {
+      const setup = await this.deps.check(rec.dir, gates.setup);
+      if (setup.exit !== 0) {
+        gateResult = { ok: false, red: "setup", tail: tail(setup.output || `exited ${setup.exit ?? "on a signal"}`) };
+      }
+    }
+    if (gateResult.ok) {
+      for (const gate of gates.gates) {
+        const result = await this.deps.check(rec.dir, gate.run);
+        if (result.exit !== 0) {
+          gateResult = { ok: false, red: gate.name, tail: tail(result.output || `exited ${result.exit ?? "on a signal"}`) };
+          break;
+        }
+      }
+    }
+
+    let scenarios: ScenarioRun | undefined;
+    if (gateResult.ok && (set.scenarios.length > 0 || set.errors.length > 0)) {
+      scenarios = await runScenarioSet({
+        dir: rec.dir,
+        setDir: setDirOf(this.root, rec.repoPath),
+        set,
+        settings,
+        run: this.deps.scenario,
+        judge: this.deps.judge,
+        ...(this.deps.evidence ? { evidence: this.deps.evidence } : {}),
+        head,
+        now: this.now(),
+      });
+    }
+
+    const dry = { head, gates: gateResult, ...(scenarios ? { scenarios } : {}), minimum: settings.minimum };
+    const current = this.runs.get(rec.id);
+    if (!current) throw new Error("branch record disappeared during dry check");
+    const updated = { ...current, dry };
+    this.runs.set(updated.id, updated);
+    this.written.set(updated.id, JSON.stringify(updated));
+    await this.saveRun(updated);
+    this.publish();
+
+    return {
+      branch: rec.branch,
+      base: rec.base,
+      head,
+      gates: gateResult,
+      ...(scenarios ? { scenarios: { score: scenarios.score, passed: scenarios.passed, total: scenarios.total } } : {}),
+      minimum: settings.minimum,
+    };
   }
 
   /** Why the queue has a branch, so it may not open a PR: queued or
