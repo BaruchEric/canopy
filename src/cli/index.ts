@@ -55,6 +55,7 @@ import { mcpCommand } from "./mcp";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
+import { worktreesCommand } from "./worktrees";
 import { issuesCommand } from "./issues";
 import { scenariosCommand } from "./scenarios";
 import { prCommand } from "./pr";
@@ -117,6 +118,7 @@ const COMMANDS = new Set([
   "kit",
   "mcp",
   "land",
+  "worktrees",
   "queue",
   "collisions",
   "scenarios",
@@ -875,6 +877,8 @@ export async function main(argv: string[]): Promise<void> {
     case "queue":
     case "collisions":
       return landCommand(cmd, args, { fail });
+    case "worktrees":
+      return worktreesCommand(args, { fail });
     case "scenarios":
       return scenariosCommand(args, { fail });
     case "pr":

@@ -82,6 +82,9 @@ canopy land <run> --approve <id>   # land a run that touches sensitive files, wi
 canopy land <run> --skip-judge     # land anyway from a judge hold; command scenarios still run
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
+canopy worktrees [repo] [--json]   # every run and warm worktree on the backend, the failed refills, the orphans and the free disk
+canopy worktrees warm <repo> [N]   # keep N prepared worktrees for the repo on this machine; no N takes the gates file's warm
+canopy worktrees prune [repo]      # remove orphans and stale warm trees and forget failed refills, so the pool tries again
 canopy collisions [repo]           # runs on one repo editing the same files right now, and what they share; a word, never a hold
 canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
 canopy scenarios <repo> add <name> [--judge] [--run CMD]   # a new scenario file under <configDir>/scenarios/<repo key>/; edit it there

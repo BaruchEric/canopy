@@ -96,6 +96,9 @@ usage:
     --backend URL | --on NAME       select the backend that owns the group
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
+  canopy worktrees [repo] [--json]   every run and warm worktree on the backend, the failed refills, the orphans and the free disk
+  canopy worktrees warm <repo> [N]   keep N prepared worktrees for the repo on this machine; no N takes the gates file's warm
+  canopy worktrees prune [repo]      remove orphans and stale warm trees and forget failed refills, so the pool tries again
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout
