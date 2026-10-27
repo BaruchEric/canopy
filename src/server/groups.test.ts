@@ -821,3 +821,316 @@ test("fixing a member discards the old compare result and starts a fresh reviewe
   expect(w.reviewers).toEqual([id, id]);
   expect(w.current(id).state).toBe("reviewing");
 });
+
+test("Eric can replace a completed reviewer pick and his own undispatched pick durably", async () => {
+  const w = await world();
+  const id = await w.create();
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  expect(w.current(id).winner).toBe("a");
+  expect((await w.post("pick", { group: id, run: "b" })).status).toBe(200);
+  expect(w.current(id)).toMatchObject({
+    state: "picked",
+    winner: "b",
+    pickedBy: "eric",
+  });
+  expect((await w.post("pick", { group: id, run: "a" })).status).toBe(200);
+  expect(
+    JSON.parse(await readFile(join(w.dir, `${id}.json`), "utf8")),
+  ).toMatchObject({ winner: "a", pickedBy: "eric" });
+  expect(w.opened).toEqual([]);
+  expect(w.landed).toEqual([]);
+});
+
+test("Eric cannot replace a winner with real queue or PR work", async () => {
+  const w = await world();
+  const id = await w.create();
+  await finish(w, id, comparison());
+  w.landing.entries.push({
+    ...recOf("b"),
+    state: "queued",
+    tries: 0,
+    queuedAt: 1,
+    updatedAt: 1,
+  });
+  expect((await w.post("pick", { group: id, run: "a" })).status).toBe(409);
+  w.landing.entries = [];
+  const winner = w.landing.runs.find((r) => r.id === "b");
+  if (!winner) throw new Error("missing winner");
+  winner.pr = 12;
+  expect((await w.post("pick", { group: id, run: "a" })).status).toBe(409);
+});
+
+for (const kind of ["pr", "land"] as const) {
+  test(`restart dispatches a durable picked ${kind} intent that never started`, async () => {
+    const w = await world();
+    let detached = false;
+    w.deps.publish = (ev) => {
+      w.events.push(ev);
+      if (
+        !detached &&
+        ev.type === "landing" &&
+        ev.landing.groups?.some((g) => g.state === "picked")
+      ) {
+        detached = true;
+        w.hub.detach();
+      }
+    };
+    const id = await w.create(
+      ["a"],
+      kind === "pr" ? { pr: true, autoLand: true } : { autoLand: true },
+    );
+    expect(w.opened).toEqual([]);
+    expect(w.landed).toEqual([]);
+    const restored = new GroupHub(w.deps);
+    hubs.push(restored);
+    await restored.adopt();
+    await restored.idle();
+    expect(restored.info().find((g) => g.id === id)?.winner).toBe("a");
+    expect(kind === "pr" ? w.opened : w.landed).toEqual(["a"]);
+    expect(kind === "pr" ? w.landed : w.opened).toEqual([]);
+    restored.detach();
+    await restored.adopt();
+    await restored.idle();
+    expect(kind === "pr" ? w.opened : w.landed).toEqual(["a"]);
+  });
+  test(`restart does not repeat ${kind} after the effect already exists`, async () => {
+    const w = await world();
+    const applied: string[] = [];
+    const effect = async (origin: string) => {
+      applied.push(origin);
+      if (kind === "pr") {
+        const rec = w.landing.runs.find((r) => r.id === origin);
+        if (!rec) throw new Error("missing winner");
+        rec.pr = 42;
+      } else
+        w.landing.entries.push({
+          ...recOf(origin),
+          state: "queued",
+          tries: 0,
+          queuedAt: 1,
+          updatedAt: 1,
+        });
+      w.hub.detach();
+    };
+    if (kind === "pr") w.deps.openPr = effect;
+    else w.deps.land = effect;
+    await w.create(
+      ["a"],
+      kind === "pr" ? { pr: true, autoLand: true } : { autoLand: true },
+    );
+    expect(applied).toEqual(["a"]);
+    const restored = new GroupHub(w.deps);
+    hubs.push(restored);
+    await restored.adopt();
+    await restored.idle();
+    expect(applied).toEqual(["a"]);
+  });
+}
+
+test("a pending automatic landing intent respects the winner's current approval sort on adoption", async () => {
+  const w = await world();
+  let detached = false;
+  w.deps.publish = (ev) => {
+    if (
+      !detached &&
+      ev.type === "landing" &&
+      ev.landing.groups?.some((g) => g.state === "picked")
+    ) {
+      detached = true;
+      w.hub.detach();
+    }
+  };
+  await w.create(["a"], { autoLand: true });
+  const winner = w.landing.runs[0];
+  if (!winner?.review) throw new Error("missing sort");
+  winner.review.verdict = "approve";
+  const restored = new GroupHub(w.deps);
+  hubs.push(restored);
+  await restored.adopt();
+  await restored.idle();
+  expect(w.landed).toEqual([]);
+});
+
+for (const operation of ["dry", "reviewer"] as const)
+  test(`obsolete rejected ${operation} attempt cannot strand a fresh member fix`, async () => {
+    const began = deferred();
+    let reject = (_error: Error) => {};
+    const obsolete = new Promise<never>((_resolve, fail) => {
+      reject = fail;
+    });
+    let first = true;
+    const w = await world();
+    if (operation === "dry")
+      w.deps.dryGates = async (origin) => {
+        if (first) {
+          first = false;
+          began.release();
+          return obsolete;
+        }
+        return {
+          branch: `run/${origin}`,
+          base: "base",
+          head: origin,
+          gates: { ok: true },
+          minimum: 1,
+        };
+      };
+    else {
+      const start = w.deps.startReviewer;
+      w.deps.startReviewer = async (group, prompt) => {
+        if (first) {
+          first = false;
+          began.release();
+          return obsolete;
+        }
+        return start(group, prompt);
+      };
+    }
+    const creating = w.create();
+    await began.promise;
+    const branch = {
+      name: "run/a",
+      target: "main",
+      base: "base",
+      dir: "/no-tree",
+      origin: "a",
+    };
+    const fixing: Run = {
+      ...runOf("fix-a", "working"),
+      branch: { ...branch, state: "working" },
+    };
+    w.runs.set(fixing.id, fixing);
+    w.hub.onRun(fixing);
+    reject(new Error(`obsolete ${operation} failed`));
+    const id = await creating;
+    expect(w.current(id).state).toBe("working");
+    expect(w.current(id).reason).toBeUndefined();
+    const ready: Run = {
+      ...fixing,
+      status: "done",
+      branch: { ...branch, state: "ready" },
+    };
+    w.runs.set(ready.id, ready);
+    w.hub.onRun(ready);
+    await w.hub.idle();
+    expect(w.current(id).state).toBe("reviewing");
+    expect(w.reviewers).toEqual([id]);
+    await finish(w, id, comparison());
+    expect(w.current(id).state).toBe("picked");
+  });
+
+test("a current reviewer-start rejection still needs Eric", async () => {
+  const w = await world({
+    startReviewer: async () => {
+      throw new Error("review unavailable");
+    },
+  });
+  const id = await w.create();
+  expect(w.current(id)).toMatchObject({
+    state: "needs-you",
+    reason: "review unavailable",
+  });
+});
+
+test("an in-flight winner dispatch refuses a replacement without duplicating the effect", async () => {
+  const began = deferred();
+  const release = deferred();
+  const calls: string[] = [];
+  const w = await world({
+    land: async (origin) => {
+      calls.push(origin);
+      began.release();
+      await release.promise;
+    },
+  });
+  const id = await w.create(["a", "b"], { autoLand: true });
+  const finishing = finish(w, id, comparison());
+  await began.promise;
+  expect((await w.post("pick", { group: id, run: "a" })).status).toBe(409);
+  expect(w.current(id).winner).toBe("b");
+  release.release();
+  await finishing;
+  expect(calls).toEqual(["b"]);
+});
+
+for (const supersede of ["pick", "remove", "drop", "detach"] as const)
+  test(`obsolete rejected reviewer start is ignored after ${supersede}`, async () => {
+    const began = deferred();
+    let reject = (_error: Error) => {};
+    const obsolete = new Promise<never>((_resolve, fail) => {
+      reject = fail;
+    });
+    const w = await world({
+      startReviewer: async () => {
+        began.release();
+        return obsolete;
+      },
+    });
+    const creating = w.create();
+    await began.promise;
+    const id = w.hub.info()[0]?.id;
+    if (!id) throw new Error("missing group");
+    let dropping: Promise<Response> | undefined;
+    if (supersede === "pick")
+      expect((await w.post("pick", { group: id, run: "a" })).status).toBe(200);
+    else if (supersede === "remove") await w.hub.remove(id);
+    else if (supersede === "detach") w.hub.detach();
+    else {
+      const dropped = deferred();
+      w.deps.publish = (ev) => {
+        if (
+          ev.type === "landing" &&
+          ev.landing.groups?.some((g) => g.state === "dropped")
+        )
+          dropped.release();
+      };
+      dropping = w.post("drop", { group: id });
+      await dropped.promise;
+    }
+    reject(new Error("obsolete reviewer failed"));
+    await creating;
+    if (dropping) expect((await dropping).status).toBe(200);
+    if (supersede === "remove") expect(w.hub.info()).toEqual([]);
+    else {
+      expect(w.current(id).state).toBe(
+        supersede === "pick"
+          ? "picked"
+          : supersede === "drop"
+            ? "dropped"
+            : "reviewing",
+      );
+      expect(w.current(id).reason).toBeUndefined();
+    }
+  });
+
+test("confirming the same winner during dispatch preserves Eric's pick without replaying the effect", async () => {
+  const began = deferred();
+  const release = deferred();
+  const confirmed = deferred();
+  const calls: string[] = [];
+  const w = await world({
+    land: async (origin) => {
+      calls.push(origin);
+      began.release();
+      await release.promise;
+    },
+  });
+  const id = await w.create(["a", "b"], { autoLand: true });
+  const finishing = finish(w, id, comparison());
+  await began.promise;
+  w.deps.publish = (ev) => {
+    if (
+      ev.type === "landing" &&
+      ev.landing.groups?.some((g) => g.id === id && g.pickedBy === "eric")
+    )
+      confirmed.release();
+  };
+  const confirming = w.post("pick", { group: id, run: "b" });
+  await confirmed.promise;
+  release.release();
+  await finishing;
+  expect((await confirming).status).toBe(200);
+  await w.hub.sweep();
+  expect(w.current(id).pickedBy).toBe("eric");
+  expect(calls).toEqual(["b"]);
+});

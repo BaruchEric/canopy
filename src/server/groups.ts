@@ -22,7 +22,7 @@ import {
   type MemberScore,
   type RunGroup,
 } from "../core/group";
-import { sentBack } from "../core/landing";
+import { inQueue, sentBack } from "../core/landing";
 import { configDir } from "../core/store";
 import {
   isRunAction,
@@ -50,6 +50,14 @@ export interface GroupDeps {
   dir?: string;
   now?: () => number;
 }
+
+/** Private journal fields stay on disk, outside the browser-safe group model. */
+type DispatchIntent = {
+  winner: string;
+  kind: "land" | "pr";
+  status: "pending" | "done";
+};
+type StoredGroup = RunGroup & { _dispatch?: DispatchIntent };
 
 const json = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -120,7 +128,7 @@ const STATES = new Set([
   "needs-you",
 ]);
 /** The disk boundary is untrusted too, including records from an older server. */
-function isGroup(value: unknown): value is RunGroup {
+function isGroup(value: unknown): value is StoredGroup {
   if (
     !record(value) ||
     typeof value["id"] !== "string" ||
@@ -169,6 +177,15 @@ function isGroup(value: unknown): value is RunGroup {
     optional(value["endedAt"], finite) &&
     optional(value["pr"], (v) => v === true) &&
     optional(
+      value["_dispatch"],
+      (v) =>
+        record(v) &&
+        typeof v["winner"] === "string" &&
+        v["winner"] === value["winner"] &&
+        (v["kind"] === "land" || v["kind"] === "pr") &&
+        (v["status"] === "pending" || v["status"] === "done"),
+    ) &&
+    optional(
       value["keptUntil"],
       (v) =>
         record(v) &&
@@ -191,7 +208,10 @@ class GroupError extends Error {
 }
 
 export class GroupHub {
-  private groups = new Map<string, RunGroup>();
+  private groups = new Map<string, StoredGroup>();
+  private revisions = new Map<string, number>();
+  private dispatching = new Map<string, Promise<void>>();
+  private knownPrs = new Set<string>();
   private keeping = false;
   private ownership = 0;
   private serial: Promise<void> = Promise.resolve();
@@ -225,7 +245,9 @@ export class GroupHub {
   /** Return copies so caller edits cannot bypass persistence or fencing. */
   info(): RunGroup[] {
     return structuredClone(
-      [...this.groups.values()].sort((a, b) => b.startedAt - a.startedAt),
+      [...this.groups.values()]
+        .sort((a, b) => b.startedAt - a.startedAt)
+        .map(({ _dispatch: _private, ...group }) => group),
     );
   }
   private publish(): void {
@@ -236,7 +258,7 @@ export class GroupHub {
   }
   private async persist(
     id: string,
-    next: RunGroup | null,
+    next: StoredGroup | null,
     epoch: number,
   ): Promise<void> {
     const write = this.serial.then(async () => {
@@ -258,7 +280,7 @@ export class GroupHub {
     this.serial = write.catch(() => {});
     await write;
   }
-  private async set(next: RunGroup, epoch: number): Promise<void> {
+  private async set(next: StoredGroup, epoch: number): Promise<void> {
     if (!this.owns(epoch)) return;
     if (JSON.stringify(this.groups.get(next.id)) === JSON.stringify(next))
       return;
@@ -274,6 +296,9 @@ export class GroupHub {
       throw error;
     }
     if (this.owns(epoch) && this.groups.get(next.id) === next) this.publish();
+  }
+  private revise(id: string): void {
+    this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
   }
   private owned(): number {
     if (!this.keeping) throw new GroupError("group owner is not active", 503);
@@ -327,6 +352,7 @@ export class GroupHub {
   }
   async remove(id: string): Promise<void> {
     const epoch = this.owned();
+    this.revise(id);
     this.groups.delete(id);
     await this.persist(id, null, epoch);
     if (this.owns(epoch)) this.publish();
@@ -341,11 +367,12 @@ export class GroupHub {
       // Old effects may finish, but can no longer commit. A new owner waits so
       // gates sharing ports never overlap across detach/adopt on this hub.
       await Promise.all(this.loops.values());
+      await Promise.all(this.dispatching.values());
       const names = await readdir(this.dir).catch((error: unknown) => {
         if (record(error) && error["code"] === "ENOENT") return [];
         throw error;
       });
-      const restored = new Map<string, RunGroup>();
+      const restored = new Map<string, StoredGroup>();
       for (const name of names.filter((name) =>
         /^g-[a-f0-9]{8}\.json$/.test(name),
       )) {
@@ -361,6 +388,8 @@ export class GroupHub {
       }
       if (epoch !== this.ownership) return;
       this.groups = restored;
+      this.revisions.clear();
+      this.landing = null;
       this.memberRuns.clear();
       this.seenRuns.clear();
       this.keeping = true;
@@ -416,8 +445,10 @@ export class GroupHub {
           !group.members.some((m) => m.origin === run.branch?.origin)
         )
           continue;
+        this.revise(group.id);
         const next = { ...group, state: "working" as const };
         delete next.scores;
+        delete next._dispatch;
         delete next.review;
         delete next.reason;
         delete next.winner;
@@ -434,6 +465,7 @@ export class GroupHub {
     for (const group of this.groups.values()) this.kick(group.repoId);
   }
   onPrs(prs: PrWatch[]): void {
+    this.knownPrs = new Set(prs.map((pr) => pr.id));
     this.merged = new Set(
       prs.filter((pr) => pr.state?.status === "merged").map((pr) => pr.id),
     );
@@ -454,6 +486,7 @@ export class GroupHub {
           (g) => g.repoId === repo,
         )) {
           if (!this.owns(epoch)) return;
+          const revision = this.revisions.get(group.id) ?? 0;
           try {
             await this.advance(group.id, epoch);
           } catch (error: unknown) {
@@ -461,6 +494,7 @@ export class GroupHub {
             if (
               current &&
               this.owns(epoch) &&
+              (this.revisions.get(group.id) ?? 0) === revision &&
               current.state !== "landed" &&
               current.state !== "dropped"
             )
@@ -521,7 +555,7 @@ export class GroupHub {
     id: string,
     epoch: number,
     state: RunGroup["state"],
-  ): RunGroup | undefined {
+  ): StoredGroup | undefined {
     const group = this.groups.get(id);
     return this.owns(epoch) && group?.state === state ? group : undefined;
   }
@@ -549,6 +583,16 @@ export class GroupHub {
           },
           epoch,
         );
+      if (this.current(id, epoch, "picked")) {
+        if (!group._dispatch) {
+          const intent = this.intentFor(group);
+          if (intent) {
+            await this.set({ ...group, _dispatch: intent }, epoch);
+            group = this.groups.get(id);
+          }
+        }
+        if (group) await this.dispatch(group, epoch);
+      }
       return;
     }
     if (group.state === "working") {
@@ -707,38 +751,129 @@ export class GroupHub {
         epoch,
       );
   }
+  private intentFor(group: RunGroup): DispatchIntent | undefined {
+    if (!group.winner) return;
+    if (group.pr)
+      return { winner: group.winner, kind: "pr", status: "pending" };
+    if (
+      group.autoLand &&
+      this.facts().runs.find((r) => r.id === group.winner)?.review?.verdict ===
+        "auto"
+    )
+      return { winner: group.winner, kind: "land", status: "pending" };
+  }
+  private externalWork(origin: string): boolean {
+    return (
+      this.knownPrs.has(origin) ||
+      this.facts().runs.some((r) => r.id === origin && r.pr !== undefined) ||
+      this.facts().entries.some(
+        (e) =>
+          e.id === origin &&
+          (inQueue(e) || e.state === "landed" || sentBack(e)),
+      )
+    );
+  }
+  private unsafeOverride(group: StoredGroup): boolean {
+    return (
+      this.dispatching.has(group.id) ||
+      group._dispatch?.status === "done" ||
+      (!!group.winner && this.externalWork(group.winner))
+    );
+  }
   private async pick(
-    group: RunGroup,
+    group: StoredGroup,
     winner: string,
     pickedBy: "reviewer" | "eric",
     epoch: number,
   ): Promise<void> {
-    if (group.state === "picked") {
-      if (group.winner === winner) return;
-      throw new GroupError("a winner is already picked");
-    }
-    const next: RunGroup = { ...group, state: "picked", winner, pickedBy };
+    if (
+      group.winner !== undefined &&
+      group.winner !== winner &&
+      (pickedBy !== "eric" || this.unsafeOverride(group))
+    )
+      throw new GroupError("the winner has already been dispatched");
+    this.revise(group.id);
+    const next: StoredGroup = { ...group, state: "picked", winner, pickedBy };
     delete next.reason;
+    if (group.winner !== winner) delete next._dispatch;
+    next._dispatch ??= this.intentFor(next);
     await this.set(next, epoch);
-    if (!this.owns(epoch) || this.groups.get(group.id) !== next) return;
-    try {
-      if (group.pr) await this.deps.openPr(winner);
-      else if (
-        group.autoLand &&
-        this.facts().runs.find((r) => r.id === winner)?.review?.verdict ===
-          "auto"
-      )
-        await this.deps.land(winner);
-    } catch (error: unknown) {
-      if (this.owns(epoch) && this.groups.get(group.id) === next)
+    const selected = this.current(group.id, epoch, "picked");
+    if (
+      !selected ||
+      selected.winner !== winner ||
+      selected.pickedBy !== pickedBy
+    )
+      return;
+    await this.dispatch(selected, epoch);
+  }
+  /** The pending journal entry precedes the effect. Reconcile existing queue/PR
+   * facts before retrying after an ownership change or process restart. */
+  private async dispatch(group: StoredGroup, epoch: number): Promise<void> {
+    const intent = group._dispatch;
+    if (group.state !== "picked" || !intent || intent.status === "done") return;
+    const active = this.dispatching.get(group.id);
+    if (active) {
+      await active;
+      return;
+    }
+    const current = (): StoredGroup | undefined => {
+      const latest = this.current(group.id, epoch, "picked");
+      return latest?._dispatch === intent ? latest : undefined;
+    };
+    const apply = async (): Promise<void> => {
+      const selected = current();
+      if (!selected) return;
+      if (this.externalWork(intent.winner)) {
         await this.set(
-          { ...next, state: "needs-you", reason: errText(error) },
+          { ...selected, _dispatch: { ...intent, status: "done" } },
           epoch,
         );
-    }
+        return;
+      }
+      const winner = selected.members.find((m) => m.origin === intent.winner);
+      if (!winner || this.memberScore(winner).state !== "ready") return;
+      if (
+        intent.kind === "land" &&
+        (selected.pr ||
+          !selected.autoLand ||
+          this.facts().runs.find((r) => r.id === intent.winner)?.review
+            ?.verdict !== "auto")
+      )
+        return;
+      if (intent.kind === "pr" && !selected.pr) return;
+      try {
+        if (intent.kind === "pr") await this.deps.openPr(intent.winner);
+        else await this.deps.land(intent.winner);
+      } catch (error: unknown) {
+        const latest = current();
+        if (latest)
+          await this.set(
+            { ...latest, state: "needs-you", reason: errText(error) },
+            epoch,
+          );
+        return;
+      }
+      const latest = current();
+      if (latest)
+        await this.set(
+          { ...latest, _dispatch: { ...intent, status: "done" } },
+          epoch,
+        );
+    };
+    // Install the in-flight fence before calling a port which may publish or
+    // synchronously re-enter a group route.
+    const pending = Promise.resolve()
+      .then(apply)
+      .finally(() => {
+        if (this.dispatching.get(group.id) === pending)
+          this.dispatching.delete(group.id);
+      });
+    this.dispatching.set(group.id, pending);
+    await pending;
   }
-  private async finish(group: RunGroup, epoch: number): Promise<void> {
-    const next: RunGroup = {
+  private async finish(group: StoredGroup, epoch: number): Promise<void> {
+    const next: StoredGroup = {
       ...group,
       state: "landed",
       endedAt: this.now(),
@@ -753,7 +888,7 @@ export class GroupHub {
     // and repeated PR snapshots cannot start duplicate removals.
     this.kick(group.repoId);
   }
-  private async cleanup(group: RunGroup, epoch: number): Promise<void> {
+  private async cleanup(group: StoredGroup, epoch: number): Promise<void> {
     for (const [origin, until] of Object.entries(group.keptUntil ?? {})) {
       if (!this.owns(epoch) || until > this.now()) continue;
       const current = this.groups.get(group.id);
@@ -824,7 +959,9 @@ export class GroupHub {
         )
           throw new GroupError("group is not ready to review");
         if (group.state !== "reviewing") {
-          const next: RunGroup = { ...group, state: "reviewing" };
+          this.revise(group.id);
+          const next: StoredGroup = { ...group, state: "reviewing" };
+          delete next._dispatch;
           delete next.review;
           delete next.reason;
           this.startingReview.delete(group.id);
@@ -838,6 +975,7 @@ export class GroupHub {
         if (keep.some((id) => !resolve(id)))
           return json({ error: "keep names a member outside the group" }, 400);
         if (group.state !== "dropped" && group.state !== "landed") {
+          this.revise(group.id);
           const kept = new Set(keep.map((id) => resolve(id)?.origin));
           await this.set(
             {
