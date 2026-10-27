@@ -3,11 +3,11 @@ import type { Mention } from "../../src/core/types";
 import { applyPick, mentionAt, rankFiles, rankWords, sigilsFor, subsequence, withFolders } from "./mentions";
 
 describe("sigilsFor", () => {
-  test("@ for any box, $ for Codex, / for Claude Code only when the text is a message of its own", () => {
+  test("@ for any box, / and $ for Codex skills, / for Claude Code messages of their own", () => {
     expect(sigilsFor("claude", true)).toEqual(["@", "/"]);
     expect(sigilsFor("claude")).toEqual(["@"]);
-    expect(sigilsFor("codex", true)).toEqual(["@", "$"]);
-    expect(sigilsFor("codex")).toEqual(["@", "$"]);
+    expect(sigilsFor("codex", true)).toEqual(["@", "$", "/"]);
+    expect(sigilsFor("codex")).toEqual(["@", "$", "/"]);
     expect(sigilsFor(null, true)).toEqual(["@"]);
   });
 });
@@ -19,7 +19,7 @@ describe("mentionAt", () => {
     expect(mentionAt("/com", 4, CLAUDE)).toEqual({ sigil: "/", start: 0, end: 4, query: "com" });
     expect(mentionAt("/", 1, CLAUDE)).toEqual({ sigil: "/", start: 0, end: 1, query: "" });
     expect(mentionAt("fix /com", 8, CLAUDE)).toBeNull();
-    expect(mentionAt("/com", 4, CODEX)).toBeNull();
+    expect(mentionAt("/com", 4, CODEX)).toEqual({ sigil: "/", start: 0, end: 4, query: "com" });
     expect(mentionAt("/com", 4, sigilsFor("claude"))).toBeNull();
     expect(mentionAt("/commit now", 11, CLAUDE)).toBeNull();
   });
@@ -34,6 +34,11 @@ describe("mentionAt", () => {
     expect(mentionAt("use $bu", 7, CODEX)).toEqual({ sigil: "$", start: 4, end: 7, query: "bu" });
     expect(mentionAt("use $bu", 7, sigilsFor("codex"))).toEqual({ sigil: "$", start: 4, end: 7, query: "bu" });
     expect(mentionAt("use $bu", 7, CLAUDE)).toBeNull();
+  });
+  test("/ opens Codex skills even in the first message, without matching paths in prose", () => {
+    expect(mentionAt("/", 1, sigilsFor("codex"))).toEqual({ sigil: "/", start: 0, end: 1, query: "" });
+    expect(mentionAt("/ship", 5, sigilsFor("codex"))).toEqual({ sigil: "/", start: 0, end: 5, query: "ship" });
+    expect(mentionAt("read /src", 9, CODEX)).toBeNull();
   });
   test("a caret past the end is the end", () => {
     expect(mentionAt("@a", 9, CLAUDE)).toEqual({ sigil: "@", start: 0, end: 2, query: "a" });
@@ -108,6 +113,12 @@ describe("rankFiles", () => {
 });
 
 describe("applyPick", () => {
+  test("a skill picked at / becomes Codex's $ invocation and keeps the following text", () => {
+    expect(applyPick("/sh review this", { sigil: "/", start: 0, end: 3, query: "sh" }, "ship", "codex")).toEqual({ text: "$ship  review this", caret: 6 });
+    expect(applyPick("$sh", { sigil: "$", start: 0, end: 3, query: "sh" }, "ship", "codex")).toEqual({ text: "$ship ", caret: 6 });
+    expect(applyPick("/sh", { sigil: "/", start: 0, end: 3, query: "sh" }, "ship", "claude")).toEqual({ text: "/ship ", caret: 6 });
+    expect(applyPick("@s", { sigil: "@", start: 0, end: 2, query: "s" }, "src/", "codex")).toEqual({ text: "@src/", caret: 5 });
+  });
   test("a word gets its sigil and a space, the caret after", () => {
     expect(applyPick("/com", { sigil: "/", start: 0, end: 4, query: "com" }, "commit")).toEqual({ text: "/commit ", caret: 8 });
     expect(applyPick("read @src/a now", { sigil: "@", start: 5, end: 11, query: "src/a" }, "src/core/a.ts")).toEqual({ text: "read @src/core/a.ts  now", caret: 20 });

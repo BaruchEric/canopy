@@ -891,7 +891,7 @@ function Composer({
         type="button"
         className="mini strong"
         disabled={!can}
-        title={`↩ sends, shift-↩ for a new line; ${harness === "codex" ? "$ for a skill" : "/ for a command or skill"}, @ for a file`}
+        title={`↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`}
         onClick={() => void send()}
       >
         send

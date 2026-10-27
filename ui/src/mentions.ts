@@ -24,13 +24,14 @@ const blank = (c: string | undefined): boolean => c === undefined || /\s/.test(c
 
 /** Which sigils a box offers. `@` names a file at the start of any word,
  *  for either agent; `$` a Codex skill, at the start of any word too; `/`
- *  a Claude Code command, which the CLI reads only as a message's first
+ *  opens Codex's skills as well, with picks inserted as `$skill`. For
+ *  Claude Code, `/` is a command the CLI reads only as a message's first
  *  character, so only a box whose text goes to the agent as a message of
  *  its own (`bare`) offers it. A note is folded into canopy's prompt, and
  *  a chat's first message too, so neither does. */
 export function sigilsFor(harness: Harness | null, bare = false): Sigil[] {
   const out: Sigil[] = ["@"];
-  if (harness === "codex") out.push("$");
+  if (harness === "codex") out.push("$", "/");
   if (harness === "claude" && bare) out.push("/");
   return out;
 }
@@ -143,8 +144,10 @@ export function rankFiles(paths: readonly string[], query: string, cap = MENU_CA
 
 /** The text with the word at `at` replaced by the sigil and `value`, and a
  *  space after a word or a file so typing goes on; a folder gets none, so
- *  the menu stays open on what is inside it. */
-export function applyPick(text: string, at: MentionAt, value: string): { text: string; caret: number } {
-  const insert = at.sigil + value + (isFolder(value) ? "" : " ");
+ *  the menu stays open on what is inside it. Codex skills picked at `/`
+ *  use the agent's `$skill` invocation. */
+export function applyPick(text: string, at: MentionAt, value: string, harness?: Harness): { text: string; caret: number } {
+  const sigil = at.sigil === "/" && harness === "codex" ? "$" : at.sigil;
+  const insert = sigil + value + (isFolder(value) ? "" : " ");
   return { text: text.slice(0, at.start) + insert + text.slice(at.end), caret: at.start + insert.length };
 }

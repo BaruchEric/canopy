@@ -162,7 +162,7 @@ export function useMentions({
 
   const accept = (row: Row) => {
     if (!at) return;
-    const next = applyPick(text, at, row.value);
+    const next = applyPick(text, at, row.value, harness);
     setText(next.text);
     const el = box.current;
     requestAnimationFrame(() => {
