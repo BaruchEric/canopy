@@ -6,13 +6,14 @@ import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
 import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
-import { branchByDefault, runLanding, scenarioLine, scenarioTone, stoppedLandTitle } from "../landing";
+import { branchByDefault, resultWord, runLanding, scenarioLine, scenarioTone, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
-import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
+import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick, profileNames } from "../agents";
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
-import { ApproveSheet } from "./Landing";
+import { GroupSheet } from "./GroupSheet";
+import { ApproveSheet, OverlapChip } from "./Landing";
 import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
 import { KeysSheet } from "./Keys";
@@ -28,6 +29,8 @@ import {
   AGENT_ROLES,
   DEFAULT_LAUNCH,
   isRunActive,
+  isFlowActive,
+  type Flow,
   type AgentRole,
   type Harness,
   type LaunchSettings,
@@ -44,12 +47,15 @@ import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
 
+import { GROUP_MAX } from "../../../src/core/group";
+
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
   waiting: "waiting for you",
   idle: "your turn",
   done: "done",
   failed: "failed",
+  limited: "waiting for capacity",
   stopped: "stopped",
 };
 
@@ -121,7 +127,7 @@ export function RunSheet() {
     }}>
       <div
         ref={ref}
-        className={sheet.kind === "search" ? "sheet wide" : "sheet"}
+        className={sheet.kind === "search" || sheet.kind === "group" ? "sheet wide" : "sheet"}
         role="dialog"
         aria-modal="true"
       >
@@ -151,6 +157,7 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <Plan repo={repo} action={sheet.action} workspace={sheet.workspace} />;
   }
+  if (sheet.kind === "group") return <GroupSheet key={sheet.groupId} groupId={sheet.groupId} />;
   if (sheet.kind === "search") return <SearchSheet />;
   if (sheet.kind === "keys") return <KeysSheet view={sheet.view} />;
   if (sheet.kind === "agent") {
@@ -199,10 +206,41 @@ function Missing({ what, onClose }: { what: string; onClose: () => void }) {
 
 /* ---------- pre-flight ---------- */
 
+/** A branch workflow keeps its slot between steps, including reader steps and gates. */
+export function freeBranchSlots(repoId: string, runs: readonly Run[], flows: readonly Flow[]): number {
+  const origins = new Set<string>();
+  for (const run of runs) if (run.repoId === repoId && run.branch && isRunActive(run)) origins.add(run.branch.origin);
+  for (const flow of flows) if (flow.repoId === repoId && flow.branch && isFlowActive(flow)) origins.add(flow.branch.origin);
+  return Math.max(0, GROUP_MAX - origins.size);
+}
+
+export function GroupPreflight({ onBranch, times, free, profile, profiles, autoLand, onTimes, onProfile, onAutoLand }: {
+  onBranch: boolean; times: number; free: number; profile: string; profiles: string[]; autoLand: boolean;
+  onTimes: (n: number) => void; onProfile: (p: string) => void; onAutoLand: (on: boolean) => void;
+}) {
+  if (!onBranch) return null;
+  return <fieldset className="plan-branch">
+    <legend>Try it {times} {times === 1 ? "time" : "times"}</legend>
+    <div role="group" aria-label="Number of branch runs">{[1, 2, 3].map(n => <button type="button" className={`mini${times === n ? " on" : ""}`} key={n} disabled={n > free} aria-pressed={times === n} onClick={() => onTimes(n)}>{n}</button>)}</div>
+    <p className="note">{free} of {GROUP_MAX} slots free</p>
+    {times > 1 && <>
+      <label>Shared profile <select aria-label="Shared profile" value={profile} onChange={e => onProfile(e.target.value)}><option value="">repo's job route</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+      <label className="plan-branch"><input type="checkbox" checked={autoLand} onChange={e => onAutoLand(e.target.checked)} /> auto-land the winner when its own review says auto</label>
+    </>}
+  </fieldset>;
+}
+
 /** `workspace` starts the run across that workspace, `repo` being its primary */
 function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; workspace?: string | undefined }) {
   const close = useStore((s) => s.closeSheet);
   const startRun = useStore((s) => s.startRun);
+  const startGroup = useStore((s) => s.startGroup);
+  const free = useStore(s => freeBranchSlots(repo.id, Object.values(s.runs), Object.values(s.flows)));
+  const routes = useStore(s => routesOf(s, backendOf(repo.id)));
+  const profiles = profileNames(routes);
+  const [times, setTimes] = useState(1);
+  const [profile, setProfile] = useState("");
+  const [autoLand, setAutoLand] = useState(false);
   const startWsRun = useStore((s) => s.startWsRun);
   const spec = ACTIONS[action];
   const words = planWords(action, workspace);
@@ -214,7 +252,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo.id, harness: agent.harness, side: "below" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const ready = !busy && (!spec.noteRequired || note.trim().length > 0);
+  const noteReady = !busy && (!spec.noteRequired || note.trim().length > 0);
   // a branch of its own: on for propose, off for the rest, never for a
   // workspace run or a checkout on another host or the forge; a coordinator
   // works from no checkout and branches through its cards
@@ -224,6 +262,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // FR-011: a PR in place of the landing queue, so only on a branch
   const [asPr, setAsPr] = useState(false);
   const pr = branchable && onBranch && asPr;
+  const ready = noteReady && (!branchable || !onBranch || times <= free);
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
   const issue = branchable && onBranch ? parseIssueRef(note) : null;
@@ -234,7 +273,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     setError(null);
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
-      await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined));
+      if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, profile || undefined, autoLand, pr);
+      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -305,6 +345,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             on a branch of its own
           </label>
         )}
+        <GroupPreflight onBranch={branchable && onBranch} times={times} free={free} profile={profile} profiles={profiles} autoLand={autoLand} onTimes={setTimes} onProfile={setProfile} onAutoLand={setAutoLand} />
         {branchable && onBranch && (
           <label className="plan-branch" title="Once the run is ready, canopy pushes its branch and opens a PR on GitHub instead of landing it here, then watches its checks and reviews">
             <input type="checkbox" checked={asPr} onChange={(e) => setAsPr(e.target.checked)} />
@@ -358,7 +399,7 @@ export function Timeline({
   extra?: ReactNode;
 }) {
   const chat = run.chat;
-  const active = isRunActive(run);
+  const active = !run.kept && isRunActive(run);
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const harness = harnessOf(run);
   const list = useRef<HTMLDivElement>(null);
@@ -443,7 +484,7 @@ export function Timeline({
           </li>
         )}
       </ol>
-      {run.prompt && (
+      {!run.kept && run.prompt && (
         <RunPromptForm
           key={run.prompt.id}
           prompt={run.prompt}
@@ -467,6 +508,12 @@ export function Timeline({
       {chat && run.status === "done" && (
         <div className="outcome dim">
           <p>Chat ended.</p>
+        </div>
+      )}
+      {run.status === "limited" && (
+        <div className="outcome warn">
+          <p>The plan's usage limit: {run.error}</p>
+          <p>The work is sound; it waits for the reset.</p>
         </div>
       )}
       {run.status === "failed" && (
@@ -498,7 +545,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
-  const active = isRunActive(run);
+  const active = !run.kept && isRunActive(run);
   const chat = run.chat;
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const now = useTick(active);
@@ -507,7 +554,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
 
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
-    return runConsoleAction(fn, setError, propagate);
+    return run.kept ? Promise.resolve() : runConsoleAction(fn, setError, propagate);
   };
   const harness = harnessOf(run);
   const name = AGENT_NAME[harness];
@@ -532,6 +579,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             with {name}
             {run.workspace && <span className="run-by" title="it works in this repo and sees the workspace's other members"> · in workspace {run.workspace}</span>}
             {run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}
+            {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>
           <h2 className="sheet-title">
             {run.verb} <span className="sheet-repo">{idText(run.repoId)}</span>
@@ -550,7 +598,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         </button>
       </header>
 
-      {run.parent && <ParentLine run={run} />}
+      {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
@@ -604,7 +652,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
           >
             {chat && run.status === "idle" ? "end chat" : "stop"}
           </button>
-        ) : (
+        ) : !run.kept && (
           <button type="button" className="mini" onClick={() => void act(() => dismissRun(run.id))}>
             dismiss
           </button>
@@ -638,6 +686,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
       {l.verdict && <span className="run-branch-why">{l.verdict}</span>}
       {l.why && <span className="run-branch-why">{l.why}</span>}
       {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
+      {l.overlaps?.map((overlap, index) => <OverlapChip key={`${overlap.name}:${index}`} name={overlap.name} paths={overlap.paths} />)}
       {l.scenarios && (
         <details className="run-scenarios">
           <summary className={`run-branch-why ${scenarioTone(l.scenarios)}`} title="The repo's holdout scenarios over this branch; their text stays on the server">
@@ -646,7 +695,8 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
           <ul>
             {l.scenarios.results.map((r) => (
               <li key={r.name} className={r.ok ? "" : "rust"}>
-                <span>{r.ok ? "ok" : "red"}</span> <span>{r.name}</span> <span className="dim">{r.kind}</span>
+                <span>{resultWord(r)}</span> <span>{r.name}</span> <span className="dim">{r.kind}</span>
+                {(r.why ?? r.unjudged) && <span className="dim"> {r.why ?? r.unjudged}</span>}
                 {r.tail && <pre>{r.tail}</pre>}
               </li>
             ))}
@@ -654,22 +704,27 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         </details>
       )}
       <span className="spacer" />
-      {l.canLand && l.approve && (
+      {!run.kept && l.canLand && l.approve && (
         <button type="button" className="mini strong" title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(b.origin)}>
           look and land
         </button>
       )}
-      {l.canLand && !l.approve && (
-        <button type="button" className="mini strong" title={l.stopped ? stoppedLandTitle(b.target) : `Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(run.id))}>
+      {!run.kept && l.canLand && !l.approve && (
+        <button type="button" className="mini strong" title={l.stopped ? stoppedLandTitle(b.target) : `Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(b.origin))}>
           land
         </button>
       )}
-      {l.canFix && (
+      {!run.kept && l.canFix && (
         <button type="button" className="mini strong" title="Continue on the branch with the reason as the next message" onClick={() => void act(() => fixLanding(b.origin))}>
           fix it
         </button>
       )}
-      {l.canPr && (
+      {!run.kept && l.canSkipJudge && (
+        <button type="button" className="mini strong" title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => void act(() => landRun(b.origin, undefined, true))}>
+          land anyway
+        </button>
+      )}
+      {!run.kept && l.canPr && (
         <button
           type="button"
           className="mini"
@@ -722,13 +777,13 @@ function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Pro
           </details>
         )}
         <span className="spacer" />
-        {open && (
+        {!run.kept && open && (
           <button type="button" className="mini" title="Close the PR on GitHub. The branch stays, and the run may land here again" onClick={() => void act(() => closePr(w.id))}>
             close PR
           </button>
         )}
       </div>
-      {open && (
+      {!run.kept && open && (
         <div className="run-pr-toggles">
           <label title="A failed check or a review comment from someone with write access starts a fix run on the branch, which canopy pushes. Up to 3 tries each">
             <input type="checkbox" checked={w.autoFix} onChange={(e) => void act(() => setPr(w.id, { autoFix: e.target.checked }))} />
@@ -778,12 +833,12 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const [error, setError] = useState<string | null>(null);
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
-    return runConsoleAction(fn, setError, propagate);
+    return run.kept ? Promise.resolve() : runConsoleAction(fn, setError, propagate);
   };
   return (
     <div className="run-pane" data-voice-run={run.id}>
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
-      {run.chat && isRunActive(run) && (
+      {!run.kept && run.chat && isRunActive(run) && (
         <Composer
           who={AGENT_NAME[harnessOf(run)]}
           repoId={run.repoId}

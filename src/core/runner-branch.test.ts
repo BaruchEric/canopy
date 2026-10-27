@@ -191,3 +191,23 @@ describe("a branch run", () => {
     expect(cliArgs(ACTIONS.ask)).not.toContain("--resume");
   });
 });
+
+for (const startNote of ["started in a warm worktree", "no warm worktree; setup will run"]) {
+  test(`the first branch note is ${startNote}, before location and setup`, async () => {
+    const { runner, made, changes } = setup();
+    const branch = branchOf("first-note", {
+      startNote,
+      prepare: async (say) => { say("$ fixture setup"); },
+    });
+    branch.branch.work = "w-first-note";
+    branch.branch.group = "group-first-note";
+    const run = runner.start(repo("a"), "ask", ACTIONS.ask, "user task", DEFAULT_AGENT, undefined, undefined, branch, { group: "group-first-note", priority: "low" });
+    expect(run.steps[0]).toMatchObject({ kind: "note", text: startNote });
+    expect(run.steps[1]).toMatchObject({ kind: "note", text: "on branch run/x-first-note in /w/first-note" });
+    expect(changes[0]?.steps[0]).toMatchObject({ kind: "note", text: startNote });
+    expect(changes[0]).toMatchObject({ note: "user task", group: "group-first-note", priority: "low", branch: { work: "w-first-note", group: "group-first-note" } });
+    await flush();
+    expect(run.steps.filter((step) => step.kind === "note").map((step) => step.text)).toEqual([startNote, "on branch run/x-first-note in /w/first-note", "$ fixture setup"]);
+    expect(made[0]?.started).toHaveLength(1);
+  });
+}

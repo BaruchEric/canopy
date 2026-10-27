@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseWorkflow } from "./workflow";
+import { GATES_CHECK } from "./gates";
+import type { Workflow } from "./types";
+import { chained, parseWorkflow, readOnlyStep, readOnlyTools, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 
 const meta = { name: "ship", source: "bundled" as const, file: "/x/ship.md" };
 
@@ -251,5 +253,118 @@ describe("listed", () => {
   test("anything else is an error", () => {
     const bad = parseWorkflow(text("listed: maybe\n"), meta);
     expect(bad.ok).toBe(false);
+  });
+});
+
+describe("after, when and mode", () => {
+  const graph = (review = "", fix = "", docs = "") =>
+    `---\nblurb: b\n---\n\n## Build\ntools: git-read, git-commit\n\nbuild\n\n## Review\ntools: read\ngate: verdict\n${review}\n\nreview\n\n## Fix\nafter: Review\n${fix}\n\nfix\n\n## Docs\nafter: Build\ntools: read\n${docs}\n\ndocs\n`;
+
+  test("reads the keys, and writes the chain out where a step has none", () => {
+    const e = parseWorkflow(graph("", "when: verdict partial, verdict blocked\nmode: manual"), meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps.map((s) => s.after)).toEqual([[], ["Build"], ["Review"], ["Build"]]);
+    expect(e.workflow.steps.map((s) => s.when)).toEqual([["always"], ["always"], ["verdict partial", "verdict blocked"], ["always"]]);
+    expect(e.workflow.steps.map((s) => s.mode)).toEqual(["auto", "auto", "manual", "auto"]);
+    expect(e.workflow.steps[2]).not.toHaveProperty("modeFrom");
+  });
+
+  test("after is trimmed and deduped", () => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## A\n\na\n\n## B\n\nb\n\n## C\nafter: A ,, B, A\n\nc\n`, meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps[2]?.after).toEqual(["A", "B"]);
+  });
+
+  test("an empty when list defaults to always", () => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## A\nwhen: , ,\n\na\n`, meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps[0]?.when).toEqual(["always"]);
+  });
+
+  test.each<[string, string]>([
+    [graph("", "after: Nope"), "step Fix: after names no step called Nope"],
+    [graph("", "after: Fix"), "step Fix: after names itself"],
+    [graph("", "after: Docs"), "step Fix: after names a later step, Docs"],
+    [graph("", "when: sometimes"), "step Fix: when must be one of always, verdict done, verdict partial, verdict blocked, judge meets, judge partly, judge misses, check pass, check fail, changed, unchanged, skipped, not sometimes"],
+    [graph("", "", "when: verdict done"), "step Docs: when verdict done needs a step before it with gate: verdict"],
+    [graph("", "when: judge meets"), "step Fix: when judge meets needs a step before it with gate: judge"],
+    [graph("", "when: check fail"), "step Fix: when check fail needs a step before it with a check"],
+    [graph("", "mode: sometimes"), "step Fix: mode must be one of auto, manual, not sometimes"],
+    [`---\nblurb: b\n---\n\n## A\nwhen: always\n\na\n`, "step A: when needs a step before it to wait on"],
+  ])("refuses %s", (text, error) => {
+    const e = parseWorkflow(text, meta);
+    expect(e.ok).toBe(false);
+    if (!e.ok) expect(e.error).toBe(error);
+  });
+
+  test("retries, back and after go together", () => {
+    const e = parseWorkflow(graph("", "after: Review\nretries: 1\nback: Build"), meta);
+    expect(e.ok).toBe(true);
+  });
+
+  test("every bundled workflow and the example are chains", async () => {
+    const dir = join(import.meta.dir, "../../lib/workflows");
+    const files = (await readdir(dir)).filter((n) => n.endsWith(".md")).map((n) => join(dir, n));
+    files.push(join(import.meta.dir, "../../docs/workflows/example-update-deps.md"));
+    for (const file of files) {
+      const e = parseWorkflow(await readFile(file, "utf8"), { name: "x", source: "bundled", file });
+      if (!e.ok) throw new Error(`${file}: ${e.error}`);
+      const names = e.workflow.steps.map((s) => s.name);
+      const chain = names.map((_, i) => {
+        const previous = names[i - 1];
+        return previous === undefined ? [] : [previous];
+      });
+      expect(e.workflow.steps.map((s) => s.after)).toEqual(chain);
+      expect(e.workflow.steps.every((s) => s.when.length === 1 && s.when[0] === "always" && s.mode === "auto")).toBe(true);
+    }
+  });
+});
+
+describe("readOnlyTools and readOnlyStep", () => {
+  const t = (line: string) => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## A\ntools: ${line}\n\na\n`, meta);
+    if (!e.ok) throw new Error(e.error);
+    const first = e.workflow.steps[0];
+    if (!first) throw new Error("expected one step");
+    return first.tools;
+  };
+  test("the read-only sets, and nothing else", () => {
+    expect(readOnlyTools(t("git-read"))).toBe(true);
+    expect(readOnlyTools(t("read"))).toBe(true);
+    expect(readOnlyTools(t("git-read, read"))).toBe(true);
+    expect(readOnlyTools(t("bun"))).toBe(false);
+    expect(readOnlyTools(t("git-commit"))).toBe(false);
+    expect(readOnlyTools(t("git-push"))).toBe(false);
+    expect(readOnlyTools(t("read, Bash(ls:*)"))).toBe(false);
+    expect(readOnlyTools(t("Edit"))).toBe(false);
+  });
+  test("a check that is not the gates line makes a step a writer", () => {
+    expect(readOnlyStep({ tools: t("read"), check: null })).toBe(true);
+    expect(readOnlyStep({ tools: t("read"), check: GATES_CHECK })).toBe(true);
+    expect(readOnlyStep({ tools: t("read"), check: "bun test" })).toBe(false);
+    expect(readOnlyStep({ tools: t("bun"), check: null })).toBe(false);
+  });
+});
+
+test("chained fills the keys an old record lacks and leaves the rest", () => {
+  const e = parseWorkflow(SHIP, meta);
+  if (!e.ok) throw new Error(e.error);
+  const old: RecordedWorkflow = { ...e.workflow, steps: e.workflow.steps.map(({ after: _after, when: _when, mode: _mode, ...step }) => step) };
+  expect(chained(old)).toEqual(e.workflow);
+  expect(chained(e.workflow)).toEqual(e.workflow);
+});
+
+describe("unattendedRefusal", () => {
+  const e = parseWorkflow(SHIP, meta);
+  if (!e.ok) throw new Error(e.error);
+  const ship = e.workflow;
+  test("names the first step that asks, or is manual, and who made it so", () => {
+    expect(unattendedRefusal(ship, "a trigger's run")).toBe("ship's Push step asks before the next one starts, and no one answers a trigger's run");
+    const manual: Workflow = { ...ship, steps: ship.steps.map((s) => (s.name === "Commit" ? { ...s, mode: "manual" } : s)) };
+    expect(unattendedRefusal(manual, "an incubator stage")).toBe("ship's Commit step waits for a go, made manual by its workflow file, and no one gives one in an incubator stage");
+    const repo: Workflow = { ...ship, steps: ship.steps.map((s) => (s.name === "Commit" ? { ...s, mode: "manual", modeFrom: "repo" } : s)) };
+    expect(unattendedRefusal(repo, "a trigger's run")).toBe("ship's Commit step waits for a go, made manual by the repo's .canopy/workflows.json, and no one gives one in a trigger's run");
+    const plain: Workflow = { ...ship, steps: ship.steps.map((s) => ({ ...s, gate: "continue" })) };
+    expect(unattendedRefusal(plain, "a trigger's run")).toBeNull();
   });
 });

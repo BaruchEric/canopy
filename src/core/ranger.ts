@@ -222,18 +222,21 @@ export interface BriefVars {
   /** the previous conversation's transcript, after a fresh start */
   previous: string | null;
   telegram: boolean;
+  /** last week's harness share with the line, "34%, over the 25% line" */
+  harnessShare: string | null;
 }
 
 /**
  * The brief with its `{{name}}` slots filled. A `{{#previous}}…{{/previous}}`
- * or `{{#telegram}}…{{/telegram}}` block stays only when that var is set.
- * An unknown slot is left as it was, so a typo shows rather than vanishing.
+ * `{{#telegram}}…{{/telegram}}` or `{{#harnessShare}}…{{/harnessShare}}` block
+ * stays only when that var is set. An unknown slot is left as it was, so a typo
+ * shows rather than vanishing.
  */
 export function rangerBrief(template: string, v: BriefVars): string {
-  const blocks = template.replace(/\{\{#(previous|telegram)\}\}([\s\S]*?)\{\{\/\1\}\}/g, (_m, name: string, body: string) =>
-    (name === "previous" ? v.previous : v.telegram) ? body : "",
+  const blocks = template.replace(/\{\{#(previous|telegram|harnessShare)\}\}([\s\S]*?)\{\{\/\1\}\}/g, (_m, name: string, body: string) =>
+    (name === "previous" ? v.previous : name === "telegram" ? v.telegram : v.harnessShare) ? body : "",
   );
-  const vals: Record<string, string> = { backend: v.backend, handle: v.handle, root: v.root, home: v.home, previous: v.previous ?? "" };
+  const vals: Record<string, string> = { backend: v.backend, handle: v.handle, root: v.root, home: v.home, previous: v.previous ?? "", harnessShare: v.harnessShare ?? "" };
   return blocks
     .replace(/\{\{(\w+)\}\}/g, (m, name: string) => vals[name] ?? m)
     .replace(/\n{3,}/g, "\n\n")

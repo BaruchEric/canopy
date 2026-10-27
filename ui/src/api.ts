@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { VoiceEngine } from "./voicelive";
@@ -10,10 +11,12 @@ import type {
   KitInfo,
   LandEntry,
   LandingInfo,
+  WorktreesInfo,
   PrWatch,
   KitInstallResult,
   KitMcpPreview,
   HealthInfo,
+  CapacityInfo,
   SecretAuditEntry,
   SecretProposalIn,
   SecretsInfo,
@@ -126,6 +129,8 @@ import {
   qKept,
   qRepo,
   qLanding,
+  qWorktrees,
+  qGroup,
   qPrs,
   qTriggers,
   qRun,
@@ -417,8 +422,14 @@ export const api = {
     normalizeRoutes(await req<unknown>(b, "/api/agents/scope", { method: "POST", body: JSON.stringify({ ...scope, pick }) })),
   /** one repo's effective table, as its backend resolves it */
   resolveAgents: (id: string) => repoReq<AgentTable>(id, (p) => `/api/agents/resolve?${rq(p)}`),
-  history: async (refresh = false, b: string = homeName()) =>
-    from(b, await req<HistoryOverview>(b, refresh ? "/api/history?refresh=1" : "/api/history"), qHistory),
+  history: async (refresh = false, b: string = homeName(), window?: HistoryWindow) => {
+    const params = new URLSearchParams();
+    if (refresh) params.set("refresh", "1");
+    if (window) params.set("window", window);
+    const query = params.toString();
+    const path = query ? `/api/history?${query}` : "/api/history";
+    return from(b, await req<HistoryOverview>(b, path), qHistory);
+  },
   sessions: (id: string, since: HistoryWindow) =>
     repoReq<HistorySession[]>(id, (p) => `/api/repos/sessions?${rq(p, { since })}`),
   session: (id: string, session: string) =>
@@ -602,7 +613,10 @@ export const api = {
   voiceEnded: (engine: VoiceEngine, seconds: number, context: VoiceContext) =>
     req<{ ok: true }>(homeName(), "/api/voice/ended", { method: "POST", body: JSON.stringify({ engine, seconds, context }) }),
   /** a backend's cost ledger over the last `days` local days */
-  costs: (days: number, b: string) => req<CostReport>(b, `/api/costs?days=${days}`),
+  costs: async (days: number, b: string): Promise<CostReport> => {
+    const report = await req<CostReport>(b, `/api/costs?days=${days}`);
+    return { ...report, rows: report.rows.map(row => ({ ...row, run: row.run ? from(b, row.run, (q, id) => q(id)) : null, ...(row.group ? { group: from(b, row.group, (q, id) => q(id)) } : {}) })) };
+  },
   /** a client secret for one conversation, minted by the home backend */
   voiceSession: () => req<VoiceSession>(homeName(), "/api/voice/session", { method: "POST", body: "{}" }),
   /** a GPT-Live session for this page's WebRTC offer, started by the home backend with its key */
@@ -647,6 +661,8 @@ export const api = {
     const r = await req<Partial<HealthInfo> | null>(b, "/api/health");
     return fromAll(b, Array.isArray(r?.checks) ? r.checks : [], qCheck);
   },
+  /** this backend's usage windows and any starts held for capacity */
+  capacity: (b: string = homeName()) => req<CapacityInfo>(b, "/api/capacity"),
   /** the kit on one backend: the machines it reaches, their cells and plans */
   kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),
@@ -746,6 +762,11 @@ export const api = {
   chanNotify: (on: boolean) =>
     req<{ notify: boolean }>(homeName(), "/api/tailchan/notify", { method: "POST", body: JSON.stringify({ on }) }),
   runs: async (b: string = homeName()) => fromAll(b, await req<Run[]>(b, "/api/runs"), qRun),
+  /** One run by its page id: live, else its kept record; throws on 404. */
+  keptRun: async (id: string): Promise<Run> => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, `/api/runs/${encodeURIComponent(plain)}`), qRun);
+  },
   /** `client` is this browser's id, so the run says which device started it */
   run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean) => {
     const [b, plain] = on(id);
@@ -758,6 +779,32 @@ export const api = {
       qRun,
     );
   },
+  startGroup: async (id: string, action: RunAction, note: string, times: number, profile?: string, autoLand = false, pr = false) => {
+    const [b, plain] = on(id);
+    return from(b, await req<RunGroup>(b, `/api/repos/run?${rq(plain)}`, {
+      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profile ? { profiles: [profile] } : {}), autoLand, pr }),
+    }), qGroup);
+  },
+  groups: async (b: string = homeName()) => fromAll(b, await req<RunGroup[]>(b, "/api/groups"), qGroup),
+  pickRunGroup: async (id: string, origin: string) => {
+    const [b, plain] = on(id);
+    const [memberBackend, member] = on(origin);
+    if (memberBackend !== b) throw new Error("member belongs to another backend");
+    return from(b, await req<RunGroup>(b, "/api/groups/pick", { method: "POST", body: JSON.stringify({ group: plain, run: member }) }), qGroup);
+  },
+  reviewGroup: async (id: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<RunGroup>(b, "/api/groups/review", { method: "POST", body: JSON.stringify({ group: plain }) }), qGroup);
+  },
+  dropGroup: async (id: string, keep?: string[]) => {
+    const [b, plain] = on(id);
+    const members = keep?.map(origin => {
+      const [owner, member] = on(origin);
+      if (owner !== b) throw new Error("member belongs to another backend");
+      return member;
+    });
+    return from(b, await req<RunGroup>(b, "/api/groups/drop", { method: "POST", body: JSON.stringify({ group: plain, ...(members ? { keep: members } : {}) }) }), qGroup);
+  },
   /** one backend's PRs that branch runs opened; an older backend has none */
   prs: async (b: string = homeName()) => {
     const r = await req<PrWatch[] | null>(b, "/api/prs");
@@ -769,9 +816,9 @@ export const api = {
     if (!r || !Array.isArray(r.events)) return null;
     return { ...r, events: from(b, r.events, qTriggers) };
   },
-  /** fires a made-up issue through a rule, as if its source had sent it */
-  fireTrigger: (b: string, rule: string, title: string) =>
-    req<Delivery>(b, "/api/triggers/fire", { method: "POST", body: JSON.stringify({ rule, title }) }),
+  /** Fires an issue rule, or a schedule for every matching repo or one. */
+  fireTrigger: (b: string, rule: string, title: string, repo?: string) =>
+    req<Delivery>(b, "/api/triggers/fire", { method: "POST", body: JSON.stringify({ rule, title, ...(repo ? { repo: plainOf(repo) } : {}) }) }),
   /** runs one rule's poll now; the events it makes come over the stream */
   pollTrigger: async (b: string, rule: string) => {
     await req<{ ok: true }>(b, "/api/triggers/poll", { method: "POST", body: JSON.stringify({ rule }) });
@@ -828,14 +875,18 @@ export const api = {
       entries: Array.isArray(r?.entries) ? r.entries : [],
       orphans: Array.isArray(r?.orphans) ? r.orphans : [],
       notices: Array.isArray(r?.notices) ? r.notices : [],
+      ...(Array.isArray(r?.groups) ? { groups: r.groups } : {}),
+      ...(Array.isArray(r?.collisions) ? { collisions: r.collisions } : {}),
     };
     return from(b, info, qLanding);
   },
+  /** One backend's worktree pool; qualify ids at the same boundary as SSE. */
+  worktrees: async (b: string = homeName()): Promise<WorktreesInfo> => from(b, await req<WorktreesInfo>(b, "/api/worktrees"), qWorktrees),
   /** "land" on a ready branch run, by its run's or its branch's id;
    *  `approve` is the sensitive patch id the approve sheet showed */
-  land: async (id: string, approve?: string) => {
+  land: async (id: string, approve?: string, skipJudge?: boolean) => {
     const [b, plain] = on(id);
-    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain, ...(approve ? { approve } : {}) }) });
+    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain, ...(approve ? { approve } : {}), ...(skipJudge ? { skipJudge: true } : {}) }) });
   },
   /** "land all" in one repo: the ready runs that need no approval */
   landAll: async (repoId: string) => {
@@ -1150,6 +1201,15 @@ export const api = {
     const got = await req<Repo>(b, `/api/repos/favorite?${rq(plain)}`, {
       method: "POST",
       body: JSON.stringify({ favorite }),
+    });
+    return from(b, got, qRepo);
+  },
+  /** marks a repo as the harness, or takes the mark off; answers the repo */
+  harness: async (id: string, harness: boolean) => {
+    const [b, plain] = on(id);
+    const got = await req<Repo>(b, `/api/repos/harness?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ harness }),
     });
     return from(b, got, qRepo);
   },

@@ -1,8 +1,10 @@
+import { groupWord } from "../groups";
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
-import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
-import { backendOf } from "../registry";
-import { idText, landingAll, prsAll, useStore } from "../store";
+import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
+import { repoWorktrees, warmRows, warmWords } from "../landing";
+import { backendOf, plainOf } from "../registry";
+import { idText, landingAll, prsAll, runFor, useStore } from "../store";
 import { repoPrChip } from "../prs";
 import { keepKeys } from "../surface";
 import { ago } from "../util";
@@ -12,11 +14,23 @@ import { PopGear } from "./PopGrip";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
+/** A foldable overlap word: the paths stay available without taking space in the row. */
+export function OverlapChip({ name, paths }: { name: string; paths: string[] }) {
+  const chip = overlapChip(name, paths);
+  return (
+    <details className="landing-overlap">
+      <summary className="landing-state lichen" title={chip.title}>{chip.text}</summary>
+      <ul>{paths.map((path) => <li className="landing-branch" key={path}>{path}</li>)}</ul>
+    </details>
+  );
+}
+
 /** The card's word for a repo's landing queue: how many runs wait their
  *  turn and how many came back. Clicking it opens the landing section. */
 export function LandingChip({ repoId }: { repoId: string }) {
   const info = useStore((s) => landingAll(s));
-  const words = chipWords(info, repoId);
+  const shownGroup = useStore(s => runFor(s, repoId)?.group);
+  const words = chipWords(info, repoId, shownGroup);
   const showLanding = useStore((s) => s.showLanding);
   if (!words) return null;
   return (
@@ -67,6 +81,9 @@ export function PrChip({ repoId }: { repoId: string }) {
  *  something. */
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
+  const pool = useStore((s) => repoWorktrees(s.worktrees, repo.id));
+  const warm = warmWords(pool);
+  const showGroup = useStore(s => s.showGroup);
   const landRun = useStore((s) => s.landRun);
   const landAll = useStore((s) => s.landAll);
   const showApprove = useStore((s) => s.showApprove);
@@ -74,7 +91,6 @@ export function LandingSection({ repo }: { repo: Repo }) {
   const dropLanding = useStore((s) => s.dropLanding);
   const orphanLanding = useStore((s) => s.orphanLanding);
   const showRun = useStore((s) => s.showRun);
-  const runs = useStore((s) => s.runs);
   const watches = useStore((s) => prsAll(s));
   const [error, setError] = useState("");
   const [skipped, setSkipped] = useState("");
@@ -82,7 +98,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
   const l = repoLanding(info, repo.id);
   const all = landAllOf(info, repo.id);
   const orphans = repo.host ? [] : repoOrphans(info, repo.path);
-  if (!hasLanding(l) && orphans.length === 0) return null;
+  if (!hasLanding(l) && orphans.length === 0 && warm === null) return null;
   const act = (key: string, fn: () => Promise<void>) => {
     setError("");
     setBusy(key);
@@ -95,17 +111,12 @@ export function LandingSection({ repo }: { repo: Repo }) {
     );
   };
   const words = chipWords(info, repo.id);
-  const openRun = (runId: string) => {
-    if (runs[runId]) showRun(runId);
-  };
-  const runLink = (r: Pick<LandingRun, "runId" | "branch">) =>
-    runs[r.runId] ? (
-      <button type="button" className="landing-branch landing-open" title="Show the run" onClick={() => openRun(r.runId)}>
-        {r.branch}
-      </button>
-    ) : (
-      <span className="landing-branch">{r.branch}</span>
-    );
+  const openRun = showRun;
+  const runLink = (r: Pick<LandingRun, "runId" | "branch">) => /^[A-Za-z0-9_-]{1,64}$/.test(plainOf(r.runId)) ? (
+    <button type="button" className="landing-branch landing-open" title="Show the run; one a restart took opens from its kept record" onClick={() => openRun(r.runId)}>
+      {r.branch}
+    </button>
+  ) : <span className="landing-branch">{r.branch}</span>;
   const entryRun = (e: LandEntry): Pick<LandingRun, "runId" | "branch"> => ({ runId: info.runs.find((r) => r.id === e.id)?.runId ?? "", branch: e.branch });
   return (
     <Section
@@ -113,7 +124,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
       k="landing"
       className="landing-section"
       label="Landing"
-      head={words ? <span className={words.tone === "back" ? "rust" : "lichen"}>{words.text}</span> : ""}
+      head={<>{words && <span className={words.tone === "back" ? "rust" : "lichen"}>{words.text}</span>}{words && warm && " · "}{warm}</>}
       title="Branch runs and the queue that lands them on main: rebase, the repo's gates, then a fast-forward. Nothing is pushed."
       copy={() =>
         [
@@ -122,10 +133,34 @@ export function LandingSection({ repo }: { repo: Repo }) {
           ...l.ready.map((r) => `${r.branch}  ready`),
           ...l.other.filter(stoppedWhole).map((r) => `${r.branch}  stopped, can land`),
           ...l.opened.map((r) => `${r.branch}  ${openedRow(r, watches).word}`),
+          ...(pool ? warmRows(pool, Date.now()).map(r => `${r.name}  ${r.words}`) : []),
         ].join("\n")
       }
     >
       <div className="landing-body">
+        {l.groups.map(group => (
+          <details key={group.id}>
+            <summary>
+              <button type="button" className="mini" onClick={() => showGroup(group.id)}>best of {group.expectedMembers}: {group.note}</button>{" "}
+              <span className="landing-state">{groupWord(group)}</span>
+            </summary>
+            <ul className="landing-list">
+              {group.members.map(member => {
+                const rec = info.runs.find(r => r.id === member.origin);
+                const entry = info.entries.find(e => e.id === member.origin);
+                return <li className="landing-row" key={member.origin}>
+                  <span className="landing-branch">{group.scores?.[member.origin]?.branch ?? rec?.branch ?? idText(member.origin)}</span>
+                  <span>{member.profile ?? "repo's job route"}</span>
+                  {entry && <span className="landing-state">{landWord(entry, info.entries)}</span>}
+                  {entry?.reason && <span className="landing-why">{entry.reason}</span>}
+                  {entry?.overlap && <OverlapChip name={entry.overlap.with} paths={entry.overlap.paths} />}
+                  {runOverlaps(info, rec?.runId ?? member.run).map(c => <OverlapChip key={c.id} name={c.name} paths={c.paths} />)}
+                  <button type="button" className="mini" onClick={() => showGroup(group.id)}>compare</button>
+                </li>;
+              })}
+            </ul>
+          </details>
+        ))}
         {l.queue.length > 0 && (
           <ol className="landing-list">
             {l.queue.map((e) => (
@@ -136,6 +171,14 @@ export function LandingSection({ repo }: { repo: Repo }) {
                 {e.approved && <span className="landing-state" title="You approved its sensitive files">approved</span>}
                 {e.reason && <span className="landing-why">{e.reason}</span>}
                 {e.noGates && <span className="landing-why">no gates to run</span>}
+                {e.state === "judge" && (
+                  <span className="landing-tools">
+                    <button type="button" className="mini strong" disabled={busy !== null} title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => act(e.id, () => landRun(e.id, undefined, true))}>land anyway</button>
+                    <button type="button" className="mini" disabled={busy !== null} title="Give the branch up: its worktree and its commits go" onClick={() => act(`drop:${e.id}`, () => dropLanding(e.id))}>drop</button>
+                  </span>
+                )}
+                {e.overlap && <OverlapChip name={e.overlap.with} paths={e.overlap.paths} />}
+                {runOverlaps(info, entryRun(e).runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 <span className="landing-note">{e.note}</span>
               </li>
             ))}
@@ -255,6 +298,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
               <li key={r.id} className={`landing-row st-${r.state}`}>
                 {runLink(r)}
                 <span className="landing-state">{r.state === "working" ? "working" : r.state === "uncommitted" ? "changes left uncommitted" : r.state === "stopped" ? "stopped by a restart" : "no commits"}</span>
+                {runOverlaps(info, r.runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 {stoppedWhole(r) && (
                   <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
                     {verdictWord(r)}
@@ -311,6 +355,16 @@ export function LandingSection({ repo }: { repo: Repo }) {
                     remove
                   </button>
                 </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {warm !== null && pool && (
+          <ul className="landing-list landing-warm">
+            {warmRows(pool, Date.now()).map(row => (
+              <li key={row.name} className={`landing-row${row.tone ? ` ${row.tone}` : ""}`}>
+                <span className="landing-branch">{row.name}</span>
+                <span className="dim">{row.words}</span>
               </li>
             ))}
           </ul>
@@ -446,11 +500,11 @@ export function LandingNotices() {
   if (notices.length === 0) return null;
   return (
     <section className="settings-row">
-      <h3 className="panel-label">landed on its own</h3>
+      <h3 className="panel-label">from the landing queue</h3>
       <ul className="inbox-recent">
         {notices.slice(0, 12).map((n) => (
           <li key={n.id} title={n.note}>
-            <span className={n.kind === "held" ? "landing-held" : undefined}>{noticeLine(n)}</span>
+            <span className={n.kind === "held" || n.kind === "collision" ? "landing-held" : undefined}>{noticeLine(n)}</span>
             <span className="inbox-left dim">{ago(Math.floor(n.at / 1000))}</span>
           </li>
         ))}

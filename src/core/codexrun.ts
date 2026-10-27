@@ -36,14 +36,16 @@
 
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
 import { takesProvider } from "./harness";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
+import { writtenPaths } from "./explain";
 import { commandWords, EDIT_TOOLS, parseRule, unwrapShell, type ToolRule } from "./shellwords";
+import { relPath, toolTouch } from "./touch";
 import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
 
 /** characters of tool output kept per step, as for a Claude run */
@@ -374,18 +376,22 @@ export function itemTool(item: Record<string, unknown>, phase: Phase, root: stri
   switch (type) {
     case "commandExecution": {
       const script = unwrapShell(str(item, "command"));
+      const itemCwd = item["cwd"];
+      const cwd = typeof itemCwd === "string" && isAbsolute(itemCwd) && !itemCwd.includes("\0") ? resolve(itemCwd) : root;
       const exit = num(item, "exitCode");
       const failed = status === "ok" && exit !== null && exit !== 0;
       const declined = str(item, "status") === "declined";
       return withOutput(
-        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status },
+        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status, ...toolTouch(writtenPaths(script, root, cwd)) },
         declined ? "declined" : str(item, "aggregatedOutput"),
       );
     }
     case "fileChange": {
-      const input = changesInput(fileChanges(item));
+      const changes = fileChanges(item);
+      const input = changesInput(changes);
+      const paths = changes.flatMap((change) => [change.path, ...(change.movePath ? [change.movePath] : [])].map((path) => relPath(resolve(root, path), root)));
       return withOutput(
-        { name: "Edit", title: describeTool("Edit", input, root), status },
+        { name: "Edit", title: describeTool("Edit", input, root), status, ...(paths.length ? { paths } : {}) },
         str(item, "status") === "declined" ? "declined" : phase === "completed" ? toolDetail("Edit", input, root) : "",
       );
     }
@@ -914,7 +920,7 @@ export class CodexDriver implements RunDriver {
         cwd: ctx.cwd,
         env: spawnEnv(ctx),
       });
-      rpc = new RpcClient(ctx.track ? ctx.track(started) : started);
+      rpc = new RpcClient(ctx.track ? ctx.track(started) : started, { tap: (dir, line) => ctx.wire(dir, line) });
     } catch (err) {
       ctx.exited({ code: null, stderr: "", error: `could not start codex: ${errText(err)}` });
       return;

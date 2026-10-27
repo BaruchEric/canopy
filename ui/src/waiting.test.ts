@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import type { Collision } from "../../src/core/touch";
 import type { AgentCard, Ask, CoordTask, HealthCheck, RangerInfo, Repo, RepoStatus, Run, RunStep, TaskInfo } from "../../src/core/types";
 import { WAITING_PANEL, attentionRepos, behindRepos, failedRows, isUnpushed, isWaitingPanel, lastWords, turnRows } from "./waiting";
 
@@ -19,6 +20,13 @@ describe("the waiting panel's id", () => {
 });
 
 describe("attentionRepos", () => {
+  test("a repo whose uncommitted files overlap a branch run says so in its detail (FR-040)", () => {
+    const c: Collision = { id: "a+checkout", repoId: "beta", run: "a", name: "run/x-a", with: { kind: "checkout" }, paths: ["x.ts"], at: 1 };
+    const rows = attentionRepos([repo("beta", { files: [file()] })], [c]);
+    expect(rows[0]?.detail).toBe("1 file · your uncommitted changes to x.ts overlap run/x-a; the landing will wait for them");
+    expect(attentionRepos([repo("beta", { files: [file()] })], [{ ...c, repoId: "other" }])[0]?.detail).toBe("1 file");
+  });
+
   test("ranks conflict, error, changes, unpushed, then by name, and leaves the rest out", () => {
     const rows = attentionRepos([
       repo("zed", { ahead: 2 }),
@@ -100,6 +108,10 @@ describe("failedRows", () => {
       ["run", "ask", 205],
       ["task", "watch", 50],
     ]);
+  });
+
+  test("a limited run is not a failed row (FR-036)", () => {
+    expect(failedRows([run("a", "limited", 5), run("b", "failed", 6)], {}, [])).toMatchObject([{ kind: "run", id: "b" }]);
   });
 
   test("a ranger that gave up, and none that runs or is off", () => {
@@ -228,4 +240,11 @@ describe("failedRows and health", () => {
     ]);
     expect(rows.map((r) => (r.kind === "health" ? `${r.backend}:${r.name}:${r.repoId}` : r.kind))).toEqual(["mac:watching x:", "mini:site:mini|app"]);
   });
+});
+
+test("picked groups are one waiting turn; needs-you, PR and landed groups are not", () => {
+  const group = { id: "g", repoId: "app", repoPath: "/app", action: "ask", note: "repair", expectedMembers: 2, members: [{ origin: "a", run: "r1", profile: null }], state: "picked", winner: "a", autoLand: false, startedAt: 1 } satisfies import("../../src/core/group").RunGroup;
+  const landing = { runs: [], entries: [], orphans: [], groups: [group] };
+  expect(turnRows([], {}, [], [], [], landing)).toEqual([{ kind: "group", id: "g", repoId: "app", what: "best of 2: repair", at: 1 }]);
+  expect(turnRows([], {}, [], [], [], { ...landing, groups: [{ ...group, state: "needs-you" }, { ...group, id: "pr", pr: true }, { ...group, id: "landed", state: "landed" }] })).toEqual([]);
 });

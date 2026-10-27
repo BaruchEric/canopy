@@ -424,12 +424,29 @@ describe("a stage process alive after its run ended", () => {
     expect(res.status).toBe(201);
     const flow = (await res.json()) as Flow;
     const now = async () => ((await (await fetch(url("/api/flows"))).json()) as Flow[]).find((f) => f.id === flow.id);
-    await until(async () => (await now())?.status === "done", "the flow's end");
-    await Bun.sleep(300);
-    expect((await now())?.outcome).toBeUndefined();
-    for (const r of held.splice(0)) r(0);
-    await until(async () => (await now())?.outcome !== undefined, "the outcome once quiet");
-    expect((await now())?.outcome).toBe("unchanged");
+    try {
+      const runId = (await now())?.steps[0]?.runId;
+      expect(runId).toBeString();
+      await until(async () => ((await (await fetch(url("/api/runs"))).json()) as Run[]).some((r) => r.id === runId && r.status === "done"), "the step run's early result");
+      await Bun.sleep(300);
+      const draining = await now();
+      expect(draining?.status).toBe("working");
+      expect(draining?.steps[0]?.status).toBe("running");
+      expect(draining?.steps[0]?.changed).toBeUndefined();
+      expect(draining?.outcome).toBeUndefined();
+      expect(seedBusy(seed())).toBe(true);
+      expect((await git(seed(), ["status", "--porcelain"])).stderr).toBe(SEED_BUSY);
+    } finally {
+      for (const r of held.splice(0)) r(0);
+    }
+    await until(async () => {
+      const completed = await now();
+      return completed?.status === "done" && completed.outcome !== undefined;
+    }, "the flow's end and outcome once quiet");
+    const completed = await now();
+    expect(completed?.steps[0]?.status).toBe("passed");
+    expect(completed?.outcome).toBe("unchanged");
+    expect(seedBusy(seed())).toBe(false);
   });
 });
 

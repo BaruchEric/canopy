@@ -65,10 +65,19 @@ usage:
     --cron "0 8 * * *" | --run <id>  on a cron line instead, or when a run ends
   canopy ranger unwake <id>          remove a wake
   canopy sweep                       idle shells, chats, runs and PRs a backend offers for closing
-  canopy sweep --yes [--kind shell,chat,run,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
+  canopy sweep --yes [--kind shell,chat,run,transcript,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy run                         the runs kept on disk, newest first: id, when, repo, what, status, cost
+  canopy run show <id>               a kept run's head and timeline (a live run's too)
+  canopy run export <id> [--out f]   its transcript as markdown, to stdout or a file, secrets redacted
+  canopy run prune                   remove kept runs past the sweep's transcript span; a live branch's or an open PR's stays
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy costs [--days 1|7|30] [--share]
+                                     what the paid services spent across every backend the home one lists, by service and by repo;
+                                     --share adds the harness share, dollars and Claude sessions, and eight weeks of it
+    --on NAME / --backend URL        as canopy health
   canopy health [--bad] [--repo R] [--canopy] [--json]
                                      every check on every backend the home one lists; exit 1 while one is down
     --on NAME                        only that backend (checks, add and rm speak to it too)
@@ -83,8 +92,18 @@ usage:
   canopy health rm <repo> <name>     take one of canopy's checks away
   canopy kit [status|apply]          the skills every agent has on every machine, and linking them
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
+  canopy mcp                         an MCP server on stdio for the agent that started it: canopy's tools with the rights of $CANOPY_TOKEN
+  canopy mcp tools                   the tools that token holds, one per line
+  canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr]   start one branch run or a group to compare
+    --backend URL | --on NAME       select the backend that owns the repo
+  canopy groups [repo]              list best-of-N groups and each member's branch and state
+  canopy groups pick <group> <run>  choose a green member as the winner
+    --backend URL | --on NAME       select the backend that owns the group
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
+  canopy worktrees [repo] [--json]   every run and warm worktree on the backend, the failed refills, the orphans and the free disk
+  canopy worktrees warm <repo> [N]   keep N prepared worktrees for the repo on this machine; no N takes the gates file's warm
+  canopy worktrees prune [repo]      remove orphans and stale warm trees and forget failed refills, so the pool tries again
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout
@@ -92,6 +111,10 @@ usage:
   canopy pr rebase <run>             rebase a PR's branch onto its target by hand and push it with a lease on the commit canopy pushed last
   canopy prs [repo]                  every PR branch runs opened: where it stands, its checks, auto-fix and auto-merge
   canopy issues [repo] [--needs-you]  every GitHub or Forgejo issue a trigger rule took: its state, branch, PR and what it needs; --needs-you keeps the ones waiting on you
+  canopy work [--repo R] [--state S] every work item: id, state, repos, title and its newest line
+  canopy work show <id>              the item in full: what served it and every line on it
+  canopy work note [<id>] "<text>"   a line on an item; in a run's worktree the id is read off the branch
+  canopy work close <id> --landed | --dropped [-m why]  end an item by hand; refused while a run on it is going
   canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
   canopy secrets status [--json]     this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
   canopy secrets unlock              unlock this machine's key (asks for its passphrase); its sinks are written then

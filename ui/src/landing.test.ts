@@ -1,7 +1,42 @@
 import { describe, expect, test } from "bun:test";
-import { advance, enqueue } from "../../src/core/landing";
-import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, repoLanding, type OpenedRun, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
+import { advance, enqueue, entryFor } from "../../src/core/landing";
+import { touchedOf, type Collision } from "../../src/core/touch";
+import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview, WorktreeRepoInfo, WorktreesInfo } from "../../src/core/types";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, runOverlaps, type OpenedRun, resultWord, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
+import { repoWorktrees, warmRows, warmWords } from "./landing";
+
+describe("the warm pool in the section", () => {
+  const r = (over: Partial<WorktreeRepoInfo> = {}): WorktreeRepoInfo => ({ repoId: "a", repoPath: "/r/a", want: 1, runs: [], warm: [], refilling: null, fails: [], orphans: [], ...over });
+  const t = { dir: "/w/a/warm-1", name: "warm-1", base: "b", madeAt: 1000 - 2 * 3_600_000, size: 312 * 1048576, lockfile: null };
+  test("warmWords uses the machine's choice, including when the file defaults to warm", () => {
+    expect(warmWords(undefined)).toBeNull();
+    expect(warmWords(r({ want: 0, fileWarm: 2 }))).toBeNull();
+    expect(warmWords(r({ warm: [t] }))).toBe("1 warm");
+    expect(warmWords(r({ want: 2, warm: [t], refilling: "warm-2" }))).toBe("1 of 2 warm, refilling");
+    expect(warmWords(r({ fails: [{ name: "warm-1", why: "x", at: 1, fails: 1 }] }))).toBe("0 of 1 warm, refill failed");
+    expect(warmWords(r())).toBe("0 of 1 warm");
+  });
+  test("warmRows shows age, size, refill and failure", () => {
+    expect(warmRows(r({ want: 2, warm: [t], refilling: "warm-2" }), 1000)).toEqual([
+      { name: "warm-1", words: "2h · 312 MB", tone: "" },
+      { name: "warm-2", words: "refilling", tone: "" },
+    ]);
+    expect(warmRows(r({ fails: [{ name: "warm-1", why: "bun install exited 1", at: 1, fails: 2 }] }), 1000)).toEqual([{ name: "warm-1", words: "refill failed: bun install exited 1", tone: "rust" }]);
+    expect(warmRows(r({ warm: [{ ...t, madeAt: 1000, size: 2 * 1073741824 }] }), 1000)).toEqual([{ name: "warm-1", words: "0m · 2 GB", tone: "" }]);
+    expect(warmRows(r({ warm: [{ ...t, madeAt: 1000 - 2 * 86400000 }] }), 1000)[0]?.words).toBe("2d · 312 MB");
+  });
+  test("a slot retry shows its current refill once", () => {
+    expect(warmRows(r({ refilling: "warm-1", fails: [{ name: "warm-1", why: "old failure", at: 1, fails: 1 }] }), 1000)).toEqual([{ name: "warm-1", words: "refilling", tone: "" }]);
+  });
+  test("repoWorktrees finds already-qualified ids without adding a second prefix", () => {
+    const info: WorktreesInfo = { root: "/w", free: 1, repos: [r()] };
+    const foreign: WorktreesInfo = { ...info, repos: [r({ repoId: "mini|a", repoPath: "/mini/a" })] };
+    expect(repoWorktrees({ home: info, mini: foreign }, "a")?.repoPath).toBe("/r/a");
+    expect(repoWorktrees({ home: info, mini: foreign }, "mini|a")?.repoPath).toBe("/mini/a");
+    expect(repoWorktrees({ home: info, mini: foreign }, "mini|mini|a")).toBeUndefined();
+    expect(repoWorktrees({ home: info }, "zzz")).toBeUndefined();
+  });
+});
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -117,6 +152,23 @@ describe("a run's word and buttons", () => {
 
 const sorted = (verdict: RunReview["verdict"], files: RunReview["files"] = [], over: Partial<RunReview> = {}): RunReview => ({ verdict, files, base: "b0", head: "h1", at: 1, ...over });
 
+test("overlap chips: an entry's mark and both runs' live collisions; the notice line; merged across backends", () => {
+  expect(overlapChip("run/x-b", ["a.ts", "b.ts"])).toEqual({ text: "⚠ overlaps run/x-b", title: "Both touch 2 files; the queue rebases and reports a conflict if it finds one. Nothing is held" });
+  expect(overlapChip("x", ["a.ts"]).title.startsWith("Both touch 1 file;")).toBe(true);
+  const c: Collision = { id: "r-a+r-b", repoId: "canopy", run: "r-a", name: "run/x-a", with: { kind: "run", run: "r-b", verb: "Ask", name: "run/x-b" }, paths: ["a.ts"], at: 1 };
+  const landing: LandingInfo = { runs: [rec("a")], entries: [], orphans: [], collisions: [c] };
+  expect(runOverlaps(landing, "r-a")).toEqual([{ id: c.id, name: "run/x-b", paths: ["a.ts"] }]);
+  expect(runOverlaps(landing, "r-b")).toEqual([{ id: c.id, name: "run/x-a", paths: ["a.ts"] }]);
+  expect(runLanding(run("a"), landing)?.overlaps).toEqual([{ name: "run/x-b", paths: ["a.ts"] }]);
+  expect(runLanding(run("b"), landing)?.overlaps).toEqual([{ name: "run/x-a", paths: ["a.ts"] }]);
+  const working = [touchedOf({ id: "w", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["q.ts"] } }] })];
+  const entries = enqueue([], rec("q", { review: sorted("land", [{ path: "q.ts", cls: "logic" }]) }), 1, undefined, working);
+  expect(runLanding(run("q"), { ...landing, entries })?.overlaps).toEqual([{ name: "Ask run w", paths: ["q.ts"] }]);
+  expect(noticeLine({ id: "n", entry: "a", repoId: "canopy", branch: "run/x-a", note: "", kind: "collision", why: "run/x-a and run/x-b both edit a.ts", at: 1 })).toBe("run/x-a and run/x-b both edit a.ts");
+  expect(mergeLanding({ mac: landing, mini: { runs: [], entries: [], orphans: [], collisions: [{ ...c, id: "m" }] } }).collisions?.map((collision) => collision.id)).toEqual(["r-a+r-b", "m"]);
+  expect(OVERLAP_WORD).toBe("⚠ overlaps");
+});
+
 describe("review rules in the page", () => {
   test("a ready run's verdict, its tone, and whether land opens the approve sheet", () => {
     expect([verdictWord(rec("a")), needsApproval(rec("a"))]).toEqual(["sorting", false]);
@@ -208,4 +260,42 @@ test("runLanding carries the record's scenarios for a queued entry and a ready r
   const branchRun = run("a");
   expect(runLanding(branchRun, { runs: [r], entries, orphans: [] })?.scenarios).toEqual(pass);
   expect(runLanding(branchRun, { runs: [r], entries: [], orphans: [] })?.scenarios).toEqual(pass);
+});
+
+test("runLanding keeps the landed entry's final scenario line after its run record is removed", () => {
+  const pass = { head: "h", at: 2, total: 0, passed: 0, score: 1, results: [], skipped: ["refund"] };
+  const landed = { ...advance(entryFor(rec("a"), 1), { t: "landed", head: "h" }, 3), scenarios: pass };
+  const result = runLanding(run("a"), info([], [landed]));
+  expect(result?.scenarios).toEqual(pass);
+  if (!result?.scenarios) throw new Error("missing retained scenario pass");
+  expect(scenarioLine(result.scenarios)).toBe("scenarios 0/0 · 1.00 · 1 left out");
+  const older = advance(entryFor(rec("a"), 1), { t: "landed", head: "h" }, 3);
+  expect(runLanding(run("a"), info([], [older]))).toMatchObject({ word: "landed", canLand: false, canFix: false, canPr: false });
+  expect(runLanding(run("a"), info([], [older]))?.scenarios).toBeUndefined();
+});
+
+test("judge hold offers only land anyway and preserves scenario results", () => {
+  const held = advance(entryFor(rec("a"), 1), { t: "unjudged", name: "refund", why: "no gateway key" }, 2);
+  const scenarios = { head: "h", at: 1, total: 1, passed: 0, score: 0, results: [{ name: "refund", kind: "judge" as const, ok: false, unjudged: "no gateway key" }] };
+  expect(runLanding(run("a"), info([rec("a", { scenarios })], [held]))).toMatchObject({ canLand: false, canFix: false, canPr: false, canSkipJudge: true, word: "needs a judge", scenarios });
+  expect(backLine({ ...held, state: "red", gate: "satisfaction 0.73 < 1" })).toBe("satisfaction 0.73 < 1");
+  expect(scenarioLine({ total: 1, passed: 1, score: 1, skipped: ["refund"] })).toBe("scenarios 1/1 · 1.00 · 1 left out");
+  expect(resultWord({ name: "a", kind: "command", ok: true })).toBe("ok");
+  expect(resultWord({ name: "a", kind: "command", ok: false })).toBe("red");
+  expect(resultWord({ name: "r", kind: "judge", ok: true, p: 0.9 })).toBe("0.90");
+  expect(resultWord({ name: "r", kind: "judge", ok: false, p: 0.3 })).toBe("0.30");
+  expect(resultWord({ name: "r", kind: "judge", ok: false, unjudged: "no gateway key" })).toBe("unjudged");
+});
+
+test("group members fold into one row without losing collision/scenario words or normal rows", () => {
+  const group = { id: "g", repoId: "canopy", repoPath: "/r/canopy", action: "ask", note: "n", expectedMembers: 2, members: [{ run: "r-a", origin: "a", profile: null }, { run: "r-b", origin: "b", profile: null }], state: "needs-you", autoLand: false, startedAt: 1 } satisfies import("../../src/core/group").RunGroup;
+  const collision: Collision = { id: "pair", repoId: "canopy", run: "r-a", name: "run/x-a", with: { kind: "run", run: "r-other", verb: "Ask", name: "run/other" }, paths: ["a.ts"], at: 1 };
+  const landing = { ...info([rec("a"), rec("b"), rec("standalone")]), groups: [group], collisions: [collision] };
+  const rows = repoLanding(landing, "canopy");
+  expect(rows.groups).toEqual([group]);
+  expect(rows.ready.map(r => r.id)).toEqual(["standalone"]);
+  const member = run("a", { group: "g" });
+  expect(runLanding(member, landing)).toMatchObject({ word: "ready to land", canLand: false, canPr: false, overlaps: [{ name: "run/other", paths: ["a.ts"] }] });
+  expect(runLanding(run("standalone"), landing)?.canLand).toBe(true);
+  expect(landAllOf(landing, "canopy").take.map(r => r.id)).not.toContain("a");
 });

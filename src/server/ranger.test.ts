@@ -91,6 +91,7 @@ async function until(pred: () => boolean | Promise<boolean>, what: string, ms = 
 }
 
 function hub(over: Partial<RangerHubDeps> = {}): RangerHub {
+  const brief = "You are {{handle}} on {{backend}} in {{home}} over {{root}}.{{#previous}} Before: {{previous}}{{/previous}}{{#harnessShare}} Share: {{harnessShare}}{{/harnessShare}}";
   const h = new RangerHub({
     tmux: fake,
     root: ROOT,
@@ -116,7 +117,7 @@ function hub(over: Partial<RangerHubDeps> = {}): RangerHub {
     },
     dir: dir(),
     claudeHome: home(),
-    brief: async () => "You are {{handle}} on {{backend}} in {{home}} over {{root}}.{{#previous}} Before: {{previous}}{{/previous}}",
+    brief: async () => brief,
     telegramContested: async () => false,
     loadSettings: async () => saved,
     saveSettings: async (s) => {
@@ -419,6 +420,22 @@ describe("starting and keeping it", () => {
     expect(fake.line()).toContain("fresh conversation; your brief names the last one");
     expect((await record()).previous).toBe(transcriptOf(old));
     expect(await readFile(join(dir(), "brief.md"), "utf8")).toContain(`Before: ${transcriptOf(old)}`);
+  });
+
+  test("the brief carries last week's harness share when the backend has one, and goes without it when the read fails", async () => {
+    const h = hub({ harnessShare: async () => "34%, over the 25% line" });
+    await h.start();
+    await call(h, "POST", "/api/ranger", { on: true });
+    await h.settled();
+    expect(await readFile(join(dir(), "brief.md"), "utf8")).toContain("Share: 34%, over the 25% line");
+    await call(h, "POST", "/api/ranger", { on: false });
+    await h.settled();
+
+    const h2 = hub({ harnessShare: async () => { throw new Error("no archive"); } });
+    await h2.start();
+    await call(h2, "POST", "/api/ranger", { on: true });
+    await h2.settled();
+    expect(await readFile(join(dir(), "brief.md"), "utf8")).not.toContain("Share:");
   });
 });
 

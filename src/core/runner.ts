@@ -1,22 +1,24 @@
 /** Runs: one headless agent session per job, driven over stdio.
  *
  *  The Runner keeps what every run shares whichever agent does the work: the
- *  map of live runs, one at a time per repo, the chat's turn-taking, stops,
+ *  map of live runs, one checkout job or flow per repo, the chat's turn-taking, stops,
  *  pruning, and the git status read that says whether a run changed
  *  anything. The wire is a `RunDriver` picked by the run's harness: Claude
  *  Code's stream-json (`claudedrive.ts`) or Codex's app-server
  *  (`codexrun.ts`). Each run's half of the bookkeeping (steps, the prompt
  *  queue, the result, how an exit becomes a status) is a `RunCtx`
- *  (`driver.ts`), and the server broadcasts the `Run` whole on every change. */
+ *  (`driver.ts`), and the server broadcasts the `Run` whole on every change.
+ *  With a logger, each run keeps its wire on disk (`runlog.ts`). */
 
 import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
-import { ClaudeDriver } from "./claudedrive";
+import { ClaudeDriver, cliArgs } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
-import { CodexDriver, runsInside } from "./codexrun";
-import { answerMisfit, RunCtx, type RememberHook, type RunDriver } from "./driver";
+import { appServerArgs, CodexDriver, runsInside } from "./codexrun";
+import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver } from "./driver";
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
+import type { RunLog, RunLogger } from "./runlog";
 import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { StageAwayError } from "./stagewire";
@@ -26,6 +28,7 @@ import {
   statusFingerprint,
   type AgentSettings,
   type Harness,
+  type Priority,
   type Repo,
   type RepoStatus,
   type RememberedRule,
@@ -36,11 +39,11 @@ import {
   type WorkspaceScope,
 } from "./types";
 
-/** at most this many branch runs going at once in one repo */
+/** At most this many distinct branch worktrees active in one repo. */
 export const BRANCH_RUNS_PER_REPO = 3;
 
 /** A branch run refused because its repo has `BRANCH_RUNS_PER_REPO` going.
- *  The runner counts every active branch run, held ones too, which a
+ *  The runner counts distinct active worktrees, held ones too, which a
  *  caller's own slot count may not. */
 export class BranchCapError extends Error {
   override name = "BranchCapError";
@@ -50,6 +53,8 @@ export class BranchCapError extends Error {
 export interface BranchStart {
   /** the branch and worktree, made before the run starts */
   branch: RunBranch;
+  /** The first startup note, before the branch location and setup notes. */
+  startNote?: string;
   /** Runs in the worktree before the agent starts: the gates' setup line.
    *  `say` adds a note to the run's timeline. A throw fails the run. */
   prepare?: (say: (text: string) => void) => Promise<void>;
@@ -62,6 +67,11 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** Private in-memory identity for steps belonging to one flow. */
+  flowOwner?: symbol;
+  /** best-of-N attribution, including the first event and costs */
+  group?: string;
+  priority?: Priority;
   /** the coordinator that started it, set before the run's first change is
    *  heard, so every listener sees a child as one */
   parent?: string;
@@ -100,6 +110,8 @@ export interface RunnerHooks {
 }
 
 export interface RunnerOptions {
+  /** Opens each run's disk transcript; absent, wire lines are not kept. */
+  log?: RunLogger;
   /** makes the driver for a run's harness; tests swap in a stand-in */
   driver?: (harness: Harness) => RunDriver;
   /** this backend's name, handed to every run as CANOPY_BACKEND */
@@ -146,6 +158,11 @@ export function defaultDriver(harness: Harness, version = "0"): RunDriver {
     : new ClaudeDriver();
 }
 
+/** The command line each driver builds from these same resolved settings. */
+export function startArgv(harness: Harness, spec: DriveSpec, agent: AgentSettings, stage: boolean): string[] {
+  return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent)];
+}
+
 /** What every run's process gets on top of canopy's own environment: which
  *  run, repo and backend it is, and any names the run was started with (a
  *  coordinator's API and token). A harness hook reads them (tailchan's
@@ -164,8 +181,15 @@ export function runEnv(run: Pick<Run, "id" | "repoId">, backend?: string, extra?
  *  the run going there, and no status read judges its end. */
 const isCoordinate = (run: Pick<Run, "action">): boolean => run.action === "coordinate";
 
+type DriverProcess =
+  | { kind: "idle" }
+  | { kind: "running"; exited: Promise<void>; markExited: () => void }
+  | { kind: "exited" };
+
 interface Live {
   ctx: RunCtx;
+  log: RunLog | null;
+  flowOwner?: symbol;
   driver: RunDriver;
   /** the driver has its process: a chat that opened with nothing to say
    *  starts it with the first message */
@@ -189,10 +213,18 @@ interface Live {
   branch?: BranchStart;
   /** a branch run's prepare is going and the driver has not started */
   preparing?: boolean;
+  preparation?: Promise<void>;
+  /** terminal status and its asynchronous branch-state update */
+  ended: Promise<void>;
+  process: DriverProcess;
 }
 
 export class Runner {
   private live = new Map<string, Live>();
+  /** Logged processes keep ownership through final storage, even after UI dismiss/trim. */
+  private logged = new Map<string, Live>();
+  /** Process ownership survives UI dismissal until setup, exit and drains release. */
+  private owned = new Map<string, Live>();
   /** repo path → how many stage processes are alive there */
   private procs = new Map<string, number>();
   /** a coordinator's folder → how many of its processes are alive there;
@@ -239,6 +271,11 @@ export class Runner {
   /** The branch runs going in the repo, each in its own worktree. */
   branchRunsFor(repoId: string): Run[] {
     return [...this.live.values()].map((l) => l.ctx.run).filter((r) => r.repoId === repoId && r.branch && isRunActive(r));
+  }
+
+  /** Active worktrees take capacity once, even when a flow has several step runs. */
+  branchSlotsFor(repoId: string): number {
+    return new Set(this.branchRunsFor(repoId).flatMap((run) => run.branch ? [run.branch.origin] : [])).size;
   }
 
   /** Whether a stage run's process (or a coordinator's, by its folder) is
@@ -302,14 +339,19 @@ export class Runner {
       if (this.coordinatorFor(repo.id)) throw new Error(`${repo.name} already has a coordinator going`);
     } else if (branch) {
       if (scope) throw new Error("a workspace run works in its folders, not on a branch");
-      if (this.branchRunsFor(repo.id).length >= BRANCH_RUNS_PER_REPO) {
+      const sibling = extras.flowOwner !== undefined && [...this.live.values()].some((live) =>
+        live.flowOwner === extras.flowOwner && live.repo.id === repo.id &&
+        live.ctx.run.branch?.origin === branch.branch.origin && isRunActive(live.ctx.run));
+      if (!sibling && this.branchSlotsFor(repo.id) >= BRANCH_RUNS_PER_REPO) {
         throw new BranchCapError(`${repo.name} has ${BRANCH_RUNS_PER_REPO} branch runs going; wait for one to end`);
       }
     } else {
-      const busy = this.activeFor(repo.id);
-      if (busy) {
-        throw new Error(busyWith(repo.name, busy.verb));
-      }
+      const busy = [...this.live.values()].find((live) => {
+        const run = live.ctx.run;
+        return run.repoId === repo.id && !run.branch && !isCoordinate(run) && !live.ctx.ending && isRunActive(run) &&
+          (extras.flowOwner === undefined || live.flowOwner !== extras.flowOwner);
+      })?.ctx.run;
+      if (busy) throw new Error(busyWith(repo.name, busy.verb));
     }
     if (spec.noteRequired && !note.trim() && !branch?.message && !spec.message) {
       throw new Error("write what the agent should do first");
@@ -349,9 +391,12 @@ export class Runner {
     };
     if (by) run.by = by;
     if (extras.parent) run.parent = extras.parent;
+    const group = extras.group ?? branch?.branch.group;
+    if (group) run.group = group;
+    if (extras.priority) run.priority = extras.priority;
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
-    if (branch) run.branch = { ...branch.branch, state: "working" };
+    if (branch) run.branch = { ...branch.branch, state: "working", ...(group ? { group } : {}) };
     // a stage's run never takes a remembered rule (amendment 4, ruling 16):
     // a rule kept on one seed, or for one step, must not hold for the next.
     // A branch run's rules are judged by its worktree, so a repo rule kept
@@ -361,13 +406,28 @@ export class Runner {
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
     const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume } : {}) };
-    const ctx = new RunCtx(
+    const env = runEnv(run, this.opts.backend, extras.env);
+    // open can fail synchronously, before a context exists to receive its note.
+    let ctx: RunCtx | undefined;
+    let logError: string | undefined;
+    const transcriptError = (why: string): void => {
+      if (logError !== undefined) return;
+      logError = `transcript stopped: ${why}`;
+      ctx?.note(logError);
+    };
+    let log: RunLog | null = null;
+    try { log = this.opts.log?.open(run, startArgv(settings.harness, driveSpec, settings, stage), env, transcriptError) ?? null; }
+    catch (error) { transcriptError(error instanceof Error ? error.message : String(error)); }
+    let markEnded = () => {};
+    const ended = new Promise<void>(resolve => { markEnded = resolve; });
+    ctx = new RunCtx(
       run,
       {
         cwd,
         agent: settings,
         spec: driveSpec,
-        env: runEnv(run, this.opts.backend, extras.env),
+        env,
+        ...(log ? { wire: (dir, line) => log.wire(dir, line) } : {}),
         ...(extras.env ? { pass: extras.env } : {}),
         stage,
         label: driver.label,
@@ -380,12 +440,22 @@ export class Runner {
         ...(coordinate && client ? { track: (proc: RpcProc) => this.track(live, cwd, proc, client, this.coordProcs) } : {}),
       },
       // `live` is read only once the run has ended, long after it is set
-      { emit: (r) => this.hooks.onChange(r), ended: () => void this.settle(live) },
+      { emit: (r) => this.hooks.onChange(r), ended: () => {
+        void Promise.all([this.finish(live), this.release(live)]).finally(() => {
+          this.logged.delete(run.id);
+          this.owned.delete(run.id);
+          markEnded();
+        });
+      } },
     );
     const live: Live = {
       ctx,
+      log,
+      ...(extras.flowOwner ? { flowOwner: extras.flowOwner } : {}),
       driver,
       started: false,
+      ended,
+      process: { kind: "idle" },
       repo,
       spec,
       ...(scope ? { scope } : {}),
@@ -394,7 +464,20 @@ export class Runner {
       drains: [],
       releases: [],
     };
+    const exited = ctx.exited.bind(ctx);
+    ctx.exited = (result) => {
+      try { exited(result); }
+      finally {
+        const process = live.process;
+        live.process = { kind: "exited" };
+        if (process.kind === "running") process.markExited();
+      }
+    };
     this.live.set(run.id, live);
+    this.owned.set(run.id, live);
+    if (log) this.logged.set(run.id, live);
+    if (branch?.startNote) live.ctx.step({ kind: "note", text: branch.startNote });
+    if (logError !== undefined) ctx.note(logError);
     this.prune();
     if (scope?.skipped.length) live.ctx.step({ kind: "note", text: `left out of this run: ${scope.skipped.join("; ")}` });
     if (branch) live.ctx.step({ kind: "note", text: `on branch ${branch.branch.name} in ${branch.branch.dir}` });
@@ -414,6 +497,13 @@ export class Runner {
   private firstMessage(live: Live, note: string): string {
     const b = live.ctx.run.branch;
     return b ? branchPrompt(live.repo, live.spec, note, b) : buildPrompt(live.repo, live.spec, note, live.scope);
+  }
+
+  /** a one-line remark from canopy on a live run's timeline; nothing for an unknown or ended run */
+  note(id: string, text: string): void {
+    const live = this.live.get(id);
+    if (!live || !isRunActive(live.ctx.run)) return;
+    live.ctx.note(text);
   }
 
   /** The user's next message in a chat. The first one starts the agent
@@ -527,6 +617,42 @@ export class Runner {
     return run;
   }
 
+  /** Non-stopping barrier for the work this run owns. It never waits for
+   * terminal hooks or branch finalization, which may themselves consume it. */
+  whenReleased(id: string): Promise<void> | null {
+    const live = this.owned.get(id);
+    return live ? this.release(live) : null;
+  }
+
+  private async release(live: Live): Promise<void> {
+    await live.preparation;
+    const process = live.process;
+    if (process.kind === "running") await process.exited;
+    await Promise.all(live.drains);
+    await Promise.all(live.releases);
+  }
+
+  /** A rolled-back branch cannot be removed until its process/setup and final
+   * state update have stopped touching the worktree. */
+  async stopAndWait(id: string): Promise<void> {
+    const live = this.live.get(id) ?? this.owned.get(id);
+    if (!live) return;
+    const active = isRunActive(live.ctx.run);
+    if (active) this.stop(id);
+    const process = live.process;
+    if (process.kind === "running") {
+      // A terminal result ends the job before the driver's process exits.
+      if (!active) live.driver.stop();
+      await process.exited;
+    }
+    await live.preparation;
+    await live.ended;
+    await Promise.all(live.drains);
+    await Promise.all(live.releases);
+    // Work may have changed after the early result but before actual exit.
+    await this.settle(live);
+  }
+
   /** Forgets a finished run. Active runs must be stopped first. */
   dismiss(id: string): void {
     const live = this.live.get(id);
@@ -534,6 +660,16 @@ export class Runner {
     if (isRunActive(live.ctx.run)) throw new Error("stop the run before dismissing it");
     this.live.delete(id);
     this.hooks.onGone(id);
+  }
+
+  /** Retention protects owned wires and every alias until final storage completes. */
+  pendingLogHolds(): ReadonlySet<string> {
+    return new Set([...this.logged.values()].flatMap(({ ctx }) => ctx.run.branch ? [ctx.run.id, ctx.run.branch.origin] : [ctx.run.id]));
+  }
+
+  /** Drains owned transcripts before the server releases its recovery lock. */
+  async stopLoggedAndWait(): Promise<void> {
+    await Promise.all([...this.logged.keys()].map((id) => this.stopAndWait(id)));
   }
 
   /** Stops everything, for server shutdown. */
@@ -544,20 +680,27 @@ export class Runner {
     }
   }
 
+  private drive(live: Live, message: string): void {
+    let markExited = () => {};
+    const exited = new Promise<void>(resolve => { markExited = resolve; });
+    live.process = { kind: "running", exited, markExited };
+    live.driver.start(live.ctx, message);
+  }
+
   private begin(live: Live, message: string): void {
     live.started = true;
     const prepare = live.branch?.prepare;
     if (!prepare) {
-      live.driver.start(live.ctx, message);
+      this.drive(live, message);
       return;
     }
     // once: a chat's later turns never set up again
     live.branch = { ...live.branch!, prepare: undefined };
     live.preparing = true;
-    void prepare((text) => live.ctx.note(text)).then(
+    live.preparation = prepare((text) => live.ctx.note(text)).then(
       () => {
         live.preparing = false;
-        if (isRunActive(live.ctx.run)) live.driver.start(live.ctx, message);
+        if (isRunActive(live.ctx.run)) this.drive(live, message);
       },
       (err: unknown) => {
         live.preparing = false;
@@ -629,6 +772,18 @@ export class Runner {
     })();
     live.drains.push(exited.catch(() => null));
     return { stdin: proc.stdin, stdout: proc.stdout, stderr: proc.stderr, exited, kill: () => proc.kill() };
+  }
+
+  /** A result can end a job before stdout closes; a stop can end setup early.
+   *  Keep the transcript open through preparation, driver exit and seed release,
+   *  then store the final state.
+   *  Without a log, retain the existing result-time status read. */
+  private async finish(live: Live): Promise<void> {
+    if (live.log) {
+      await this.release(live);
+    }
+    try { await this.settle(live); }
+    finally { await live.log?.settle(live.ctx.run).catch(() => {}); }
   }
 
   /** Reads git status once the run is over and records whether it moved.

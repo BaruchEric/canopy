@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk } from "./claudedrive";
+import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk, toolPaths } from "./claudedrive";
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
 import { DEFAULT_AGENT } from "./types";
@@ -23,11 +23,13 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
   message = "do the thing",
   unattended?: string,
   opts: {
     chat?: boolean;
+    spawn?: RpcSpawn;
+    onWire?: (run: DriveRun, line: string) => void;
     heldGraceMs?: number;
     requestMs?: number;
     agent?: typeof AGENT;
@@ -56,6 +58,7 @@ async function drive(
     steps: [],
     prompt: null,
   };
+  const wire: [string, string][] = [];
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
@@ -71,11 +74,16 @@ async function drive(
       },
       env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath, ...opts.env },
       label: "Claude Code",
+      wire: (d, l) => {
+        wire.push([d, l]);
+        if (d === "out") opts.onWire?.(run, l);
+      },
     },
     { emit: opts.emit ?? (() => {}), ended: (r) => ended.push(r.status) },
   );
   const driver = new ClaudeDriver({
     command: [process.execPath, FAKE],
+    ...(opts.spawn ? { spawn: opts.spawn } : {}),
     ...(opts.heldGraceMs !== undefined ? { heldGraceMs: opts.heldGraceMs } : {}),
     ...(opts.requestMs !== undefined ? { requestMs: opts.requestMs } : {}),
   });
@@ -94,14 +102,27 @@ async function drive(
       .split("\n")
       .filter(Boolean)
       .map((l) => JSON.parse(l) as Record<string, unknown>);
-  const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "stopped";
-  return { run, ctx, driver, until, sent, done, ended };
+  const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
+  return { run, ctx, driver, until, sent, done, ended, wire };
 }
 
 const responseTo = (log: Record<string, unknown>[], id: string) =>
   log.find((m) => m["type"] === "control_response" && (m["response"] as { request_id?: string }).request_id === id) as
     | { response: { subtype: string; response: { behavior: string; message?: string; updatedInput?: unknown } } }
     | undefined;
+
+describe("toolPaths", () => {
+  test("file tools, a Bash line, reads", () => {
+    expect(toolPaths("Edit", { file_path: "/r/src/a.ts" }, "/r")).toEqual({ paths: ["src/a.ts"] });
+    expect(toolPaths("Write", { file_path: "docs/x.md" }, "/r")).toEqual({ paths: ["docs/x.md"] });
+    expect(toolPaths("MultiEdit", { file_path: "/r/a.ts", edits: [] }, "/r")).toEqual({ paths: ["a.ts"] });
+    expect(toolPaths("NotebookEdit", { notebook_path: "/r/n.ipynb" }, "/r")).toEqual({ paths: ["n.ipynb"] });
+    expect(toolPaths("Edit", { file_path: "/etc/hosts" }, "/r")).toEqual({ paths: ["/etc/hosts"] });
+    expect(toolPaths("Bash", { command: "git mv src/a src/b && touch c.ts" }, "/r")).toEqual({ paths: ["c.ts", "src/a/", "src/b/"] });
+    expect(toolPaths("Bash", { command: "sh -c 'rm x'" }, "/r")).toEqual({ touchesUnknown: true });
+    expect(toolPaths("Read", { file_path: "/r/a.ts" }, "/r")).toEqual({});
+  });
+});
 
 test("Claude accounting reads cumulative per-model usage, including cached input", () => {
   expect(
@@ -147,6 +168,32 @@ test("cliArgs: a plan-mode run on a yolo agent may switch to bypass later", () =
 /** canopy's own control requests in the fake's log, in the order sent */
 const modesAsked = (log: Record<string, unknown>[]) =>
   log.filter((m) => m["type"] === "control_request").map((m) => (m["request"] as { mode?: string }).mode);
+
+describe("the plan's usage limit (FR-036)", () => {
+  const LIMIT = "You've hit your limit · resets 3pm";
+  test("a job whose result is the limit ends limited with the text", async () => {
+    const d = await drive("limited");
+    const run = await d.until(d.done, "the limit");
+    expect([run.status, run.error, run.limited?.text, run.result?.costUsd]).toEqual(["limited", LIMIT, LIMIT, 0]);
+    expect(d.ended).toEqual(["limited"]);
+  });
+  test("a chat's limited reply goes idle and is said in the timeline; the second in a row fails the run", async () => {
+    const d = await drive("limited", "hello", undefined, { chat: true });
+    await d.until((r) => r.status === "idle", "the first reply");
+    expect(d.run.steps.filter((s) => s.kind === "note").map((s) => s.text)).toEqual([`the plan's usage limit: ${LIMIT}`]);
+    d.run.status = "working";
+    d.driver.say("again");
+    const run = await d.until(d.done, "the second reply");
+    expect([run.status, run.error]).toEqual(["failed", LIMIT]);
+    // The fake is still up: a chat's failure kills nothing here, the Runner would.
+    d.driver.stop();
+  });
+  test("a CLI that exits with the limit on stderr ends limited", async () => {
+    const d = await drive("limitdie");
+    const run = await d.until(d.done, "the exit");
+    expect([run.status, run.error]).toEqual(["limited", LIMIT]);
+  });
+});
 
 describe("a propose run: ExitPlanMode is a proposal", () => {
   test("approve allows first, then sets acceptEdits (spec P8)", async () => {
@@ -339,9 +386,12 @@ describe("a Claude run through the driver", () => {
     expect(run.steps.map((s) => (s.kind === "tool" ? `tool:${s.tool?.title}:${s.tool?.status}:${s.tool?.output}` : `${s.kind}:${s.text}`))).toEqual([
       "text:Looking.",
       "tool:git status:ok:clean",
+      "tool:write src/a.ts:ok:written",
       "note:denied: rm x",
       "note:allowed: git push",
     ]);
+    expect(run.steps.find((s) => s.tool?.name === "Write")?.tool?.paths).toEqual(["src/a.ts"]);
+    expect(run.steps.find((s) => s.tool?.name === "Bash")?.tool?.paths).toBeUndefined();
     let log = await d.sent();
     for (let i = 0; i < 100 && !log.some((m) => m["eof"]); i++) {
       await Bun.sleep(20);
@@ -662,4 +712,44 @@ test("the init's slash commands say which built-ins the CLI has", async () => {
   d.ctx.ending = true;
   d.driver.stop();
   noteCliCommands("claude", BUILTIN_MENTIONS.map((w) => w.name));
+});
+
+test("wire records real fake-driver input counts and stdout before folding", async () => {
+  const h = await drive("job");
+  await h.until((r) => r.status === "waiting", "permission");
+  h.ctx.answer("p1", { kind: "allow" });
+  await h.until(h.done, "end");
+  const ins = h.wire.filter(([d]) => d === "in").map(([, l]): unknown => JSON.parse(l));
+  const out = h.wire.filter(([d]) => d === "out").map(([, l]): unknown => JSON.parse(l));
+  expect(ins[0]).toMatchObject({ type: "user" });
+  expect(ins.some((m: unknown) => typeof m === "object" && m !== null && "type" in m && m.type === "control_response")).toBe(true);
+  expect(out[0]).toMatchObject({ type: "system", subtype: "init" });
+  expect(out.at(-1)).toMatchObject({ type: "result" });
+  const logged = (await h.sent()).filter((m) => !("argv" in m) && !("eof" in m));
+  expect(ins.length).toBe(logged.length);
+  expect(ins).toEqual(logged);
+});
+
+test("wire includes non-JSON stdout and a final unterminated result", async () => {
+  const enc = new TextEncoder();
+  const result = JSON.stringify({ type: "result", subtype: "success", result: "tail é", num_turns: 1 });
+  const beforeFold: [string | undefined, string | undefined][] = [];
+  const h = await drive("job", "hello", undefined, {
+    onWire: (run) => { beforeFold.push([run.session, run.result?.text]); },
+    spawn: () => ({
+    stdin: { write() {}, end() {} },
+    stdout: new ReadableStream({ start(c) {
+      c.enqueue(enc.encode('  chatter  \n{"type":"system","subtype":"init","session_id":"tail-session"}\n' + result));
+      c.close();
+    } }),
+    exited: Promise.resolve(0), kill() {},
+  }) });
+  await h.until(h.done, "final flush");
+  expect(h.wire.filter(([d]) => d === "out").map(([, l]) => l)).toEqual([
+    "chatter", '{"type":"system","subtype":"init","session_id":"tail-session"}', result,
+  ]);
+  expect(beforeFold).toEqual([[undefined, undefined], [undefined, undefined], ["tail-session", undefined]]);
+  expect(h.run.status).toBe("done");
+  expect(h.run.session).toBe("tail-session");
+  expect(h.run.result?.text).toBe("tail é");
 });

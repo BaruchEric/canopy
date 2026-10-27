@@ -36,6 +36,8 @@ export interface SweepDeps {
   stopChat(runId: string): Run;
   /** forgets a finished run */
   dismissRun(runId: string): void;
+  /** Removes a kept transcript folder, false when already gone. */
+  dropKept(runId: string): Promise<boolean>;
   /** starts a chat on the session a swept chat had */
   startChat(c: SweptChat): Promise<Run>;
   /** the swept shells on offer to restore */
@@ -72,7 +74,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 
-const ENDED = new Set<Run["status"]>(["done", "failed", "stopped"]);
+const ENDED = new Set<Run["status"]>(["done", "failed", "limited", "stopped"]);
 
 /** how often the schedule looks at its cron */
 const TICK_MS = 60_000;
@@ -466,6 +468,8 @@ export class SweepHub {
       case "run":
         this.deps.dismissRun(id);
         return { key, result: "closed" };
+      case "transcript":
+        return { key, result: await this.deps.dropKept(id) ? "closed" : "gone" };
       case "pr": {
         const pr = facts.prs.find((p) => prId(p) === id);
         if (!pr) return { key, result: "gone" };
@@ -588,6 +592,9 @@ function missing(key: string, facts: Facts): SweepOutcome {
     }
     case "run":
       there = run() !== undefined;
+      break;
+    case "transcript":
+      there = facts.kept?.some((k) => k.id === id) ?? false;
       break;
     case "outside":
       there = facts.outside.some((c) => c.id === id);

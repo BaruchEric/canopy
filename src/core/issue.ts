@@ -92,7 +92,7 @@ export const ISSUE_COMMENTS = 10;
 const cap = (text: string, n: number): string => (text.length > n ? `${text.slice(0, n)}\n[cut at ${n} characters]` : text);
 
 /** The run's note for an issue. It opens with "GitHub issue #n: title"
- *  since the first words name the branch (runBranchName); the body and the latest
+ *  since the first words name the branch (workBranchName); the body and the latest
  *  comments go in a fence, as anyone who can file an issue chooses their
  *  words; the user's own words follow it. */
 export function issueNote(issue: IssueView, rest: string): string {
@@ -154,6 +154,14 @@ export async function fetchIssue(ref: IssueRef, slug: string, gh: GhRun): Promis
   }
   const issue = parseIssueView(parsed);
   return issue ? { issue } : { error: `gh's answer for issue #${ref.number} is not an issue` };
+}
+
+/** the issue a note was swapped for, when one was */
+export interface IssueFrom {
+  number: number;
+  title: string;
+  url: string;
+  slug: string;
 }
 
 /** The oldest `limit` of several label listings merged by number: an issue
@@ -223,11 +231,13 @@ export async function listLabelledIssues(
 /** The note a branch run starts with: the issue's when the note opens with
  *  a ref and the repo has a GitHub remote, else the note as typed (a
  *  Forgejo or QNAP repo has no issue canopy can read). */
-export async function resolveIssueNote(note: string, deps: { slug: () => Promise<string | null>; gh: GhRun }): Promise<{ note: string } | { error: string }> {
+export async function resolveIssueNote(note: string, deps: { slug: () => Promise<string | null>; gh: GhRun }): Promise<{ note: string; issue?: IssueFrom } | { error: string }> {
   const ref = parseIssueRef(note);
   if (!ref) return { note };
   const slug = await deps.slug();
   if (!slug) return { note };
   const got = await fetchIssue(ref, slug, deps.gh);
-  return "error" in got ? got : { note: issueNote(got.issue, ref.rest) };
+  return "error" in got
+    ? got
+    : { note: issueNote(got.issue, ref.rest), issue: { number: got.issue.number, title: got.issue.title, url: got.issue.url, slug } };
 }

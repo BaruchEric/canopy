@@ -6,7 +6,7 @@ import type { RememberedRule } from "./types";
 const AGENT = { model: "default", effort: "default", yolo: false, extra: "" };
 const SPEC = { allowedTools: [], maxTurns: 10 };
 
-function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook, stage = false) {
+function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number; unattended?: string } = SPEC, remember?: RememberHook, stage = false, tap = false) {
   const run: DriveRun = {
     id: "r1",
     repoId: "fx",
@@ -22,14 +22,15 @@ function makeCtx(chat = false, spec: { allowedTools: string[]; maxTurns: number;
     steps: [],
     prompt: null,
   };
+  const wire: [string, string][] = [];
   const emits: string[] = [];
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
-    { cwd: "/r", agent: AGENT, spec, label: "Codex", stage, ...(remember ? { remember } : {}) },
+    { cwd: "/r", agent: AGENT, spec, label: "Codex", stage, ...(tap ? { wire: (d: string, l: string) => { wire.push([d, l]); } } : {}), ...(remember ? { remember } : {}) },
     { emit: (r) => emits.push(r.status), ended: (r) => ended.push(r.status) },
   );
-  return { run, ctx, emits, ended };
+  return { run, ctx, emits, ended, wire };
 }
 
 const perm = (title: string) => ({ kind: "permission" as const, tool: "Bash", title, detail: title });
@@ -61,6 +62,49 @@ describe("how an exit becomes a status", () => {
     expect(
       exitOutcome({ stopping: false, ending: true }, { code: 0, stderr: "tail", error: "could not start" }, "Codex"),
     ).toEqual({ status: "failed", error: "could not start\ntail" });
+  });
+});
+
+describe("the plan's usage limit (FR-036)", () => {
+  const LIMIT = "You've hit your limit · resets 3pm";
+  const reply = { text: "", costUsd: 0, durationMs: 1, turns: 1 };
+  test("a job's result whose problem is the limit ends the run limited, with the text", () => {
+    const { run, ctx, ended } = makeCtx();
+    ctx.result({ ...reply, text: LIMIT }, LIMIT);
+    expect([run.status, run.error, run.limited?.text, ended]).toEqual(["limited", LIMIT, LIMIT, ["limited"]]);
+  });
+  test("a chat's limited reply goes idle with a note; a second in a row fails the run", () => {
+    const { run, ctx } = makeCtx(true);
+    ctx.result(reply, "usage limit reached\ntry later");
+    expect([run.status, notes(run), run.limited?.text]).toEqual(["idle", ["the plan's usage limit: usage limit reached\ntry later"], "usage limit reached\ntry later"]);
+    run.status = "working";
+    ctx.result(reply, "usage limit reached");
+    expect([run.status, run.error]).toEqual(["failed", "usage limit reached"]);
+  });
+  test("a good reply between two limited ones starts the count over", () => {
+    const { run, ctx } = makeCtx(true);
+    ctx.result(reply, LIMIT);
+    run.status = "working";
+    ctx.result({ ...reply, text: "fine" }, null);
+    run.status = "working";
+    ctx.result(reply, LIMIT);
+    expect(ctx.status()).toBe("idle");
+  });
+  test("a reply that mentions a limit in passing, or fails for another reason, is not one", () => {
+    const a = makeCtx();
+    a.ctx.result({ ...reply, text: "I checked the rate limit handling; usage limit tests pass" }, null);
+    expect(a.run.status).toBe("done");
+    const b = makeCtx();
+    b.ctx.result(reply, "stopped after 3 turns without finishing");
+    expect([b.run.status, b.run.limited]).toEqual(["failed", undefined]);
+  });
+  test("a process that dies with the limit on stderr is limited too, unless it was stopped", () => {
+    expect(exitOutcome({ stopping: false, ending: false }, { code: 1, stderr: `${LIMIT}\n` }, "Claude Code")).toEqual({ status: "limited", error: LIMIT });
+    expect(exitOutcome({ stopping: true, ending: false }, { code: 1, stderr: LIMIT }, "Claude Code")).toEqual({ status: "stopped" });
+    expect(exitOutcome({ stopping: false, ending: true }, { code: 0, stderr: LIMIT }, "Claude Code")).toEqual({ status: "done" });
+    const { run, ctx, ended } = makeCtx();
+    ctx.exited({ code: 1, stderr: "usage limit reached" });
+    expect([run.status, run.error, run.limited?.text, ended]).toEqual(["limited", "usage limit reached", "usage limit reached", ["limited"]]);
   });
 });
 
@@ -444,4 +488,18 @@ test("settle notes for a proposal", () => {
   expect(settleNote(p, { kind: "approve", auto: true })).toBe("approved the plan, running on its own");
   expect(settleNote(p, { kind: "deny", message: "split step 2" })).toBe("sent the plan back: split step 2");
   expect(settleNote(p, { kind: "deny" })).toBe("turned the plan down");
+});
+
+describe("the wire seam", () => {
+  test("no hook drops wire lines without changing the run", () => {
+    const { ctx, run } = makeCtx();
+    ctx.wire("out", '{"type":"result"}');
+    expect(run.steps).toEqual([]);
+  });
+  test("a hook receives every line in direction order", () => {
+    const { ctx, wire } = makeCtx(false, SPEC, undefined, false, true);
+    ctx.wire("in", "a");
+    ctx.wire("out", "b");
+    expect(wire).toEqual([["in", "a"], ["out", "b"]]);
+  });
 });

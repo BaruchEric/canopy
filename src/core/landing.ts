@@ -5,11 +5,13 @@
  *
  *  One queue per repo. For each entry in order: rebase onto the main
  *  checkout's HEAD, run `setup` when the rebase changed a lockfile, run the
- *  gates one at a time, then the repo's scenarios, then fast-forward main.
+ *  gates one at a time, then the repo's scenarios, whose judge may hold an
+ *  entry for Eric, then fast-forward main.
  *  A conflict, a red gate, or main moving under it three times sends the
  *  entry back to its run. */
 
-import type { LandEntry, LandingRun, LandNotice, LandState, RunReview } from "./types";
+import type { LandEntry, LandingRun, LandNotice, LandState, RunReview, ScenarioResult } from "./types";
+import { fromFiles, overlap, type Touched } from "./touch";
 
 /** how many times main may move under one entry before it is sent back */
 export const MAX_TRIES = 3;
@@ -20,6 +22,18 @@ export const KEEP_LANDED = 10;
 
 /** the prefix a red entry's gate carries when a scenario sent it back */
 export const SCENARIO_GATE = "scenario: ";
+export const SCORE_GATE = "satisfaction ";
+export const scoreGate = (score: number, minimum: number): string => `${SCORE_GATE}${score.toFixed(2)} < ${minimum}`;
+
+/** Observations and judge answers only; no story enters a result. */
+export function scoreOutput(results: readonly ScenarioResult[]): string {
+  const judges = results.filter(result => result.kind === "judge");
+  const failed = judges.filter(result => !result.ok);
+  return (failed.length > 0 ? failed : judges).map(result => {
+    const why = failed.length > 0 ? result.why ?? result.unjudged ?? "did not run" : `satisfaction ${(result.p ?? 0).toFixed(2)}`;
+    return `scenario ${result.name}: ${why}${result.tail ? `\n${result.tail}` : ""}`;
+  }).join("\n\n");
+}
 /** the scenario a red entry names, or null when a gate did */
 export const scenarioOf = (gate: string | undefined): string | null => (gate?.startsWith(SCENARIO_GATE) ? gate.slice(SCENARIO_GATE.length) : null);
 
@@ -28,7 +42,7 @@ export const SENT_BACK: ReadonlySet<LandState> = new Set(["conflict", "red", "mo
 export const WORKING: ReadonlySet<LandState> = new Set(["rebasing", "setup", "gate", "scenarios", "landing"]);
 
 /** In the queue: waiting its turn, being worked, or holding its place. */
-export const inQueue = (e: Pick<LandEntry, "state">): boolean => e.state === "queued" || e.state === "waiting" || WORKING.has(e.state);
+export const inQueue = (e: Pick<LandEntry, "state">): boolean => e.state === "queued" || e.state === "waiting" || e.state === "judge" || WORKING.has(e.state);
 export const sentBack = (e: Pick<LandEntry, "state">): boolean => SENT_BACK.has(e.state);
 
 export type LandEvent =
@@ -41,6 +55,7 @@ export type LandEvent =
   | { t: "gate-ok"; next: string | null }
   | { t: "scenarios"; first: string }
   | { t: "scenario-ok"; next: string | null }
+  | { t: "unjudged"; name: string; why: string }
   | { t: "moved" }
   | { t: "busy"; files: string[] }
   | { t: "hold"; why: string }
@@ -74,6 +89,8 @@ export function advance(e: LandEntry, ev: LandEvent, now: number): LandEntry {
       return next("scenarios", { gate: ev.first });
     case "scenario-ok":
       return ev.next ? next("scenarios", { gate: ev.next }) : next("landing");
+    case "unjudged":
+      return next("judge", { gate: ev.name, reason: `scenario ${ev.name} needs a judge: ${ev.why}` });
     case "moved": {
       const tries = e.tries + 1;
       return tries >= MAX_TRIES
@@ -125,13 +142,22 @@ export interface QueueFlags {
 /** Puts a ready run at the end of the queue: a new entry, or one that was
  *  sent back rejoining. Refused while it is already queued or landed. A
  *  rejoining entry keeps the flags it had unless new ones are given. */
-export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: number, flags?: QueueFlags): LandEntry[] {
+export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: number, flags?: QueueFlags, working: readonly Touched[] = []): LandEntry[] {
   if (run.state !== "ready") throw new LandError(`only a ready run lands; this one is ${run.state}`);
   const had = entries.find((e) => e.id === run.id);
   if (had && inQueue(had)) throw new LandError("it is in the queue already");
   if (had?.state === "landed") throw new LandError("it has landed already");
   const f = flags ?? { ...(had?.auto ? { auto: true } : {}), ...(had?.approved ? { approved: had.approved } : {}) };
-  const entry: LandEntry = { ...entryFor(run, now), ...(f.auto ? { auto: true as const } : {}), ...(f.approved ? { approved: f.approved } : {}) };
+  const touched = fromFiles(run.runId, run.id, run.branch, run.review?.files ?? [], run.group);
+  const shared = working.map((side) => ({ with: side.name, paths: overlap(touched, side) })).find((match) => match.paths.length > 0);
+  const remembered = run.overlap ?? had?.overlap;
+  const overlapMark = shared ?? (remembered ? { with: remembered.with, paths: [...remembered.paths] } : undefined);
+  const entry: LandEntry = {
+    ...entryFor(run, now),
+    ...(f.auto ? { auto: true as const } : {}),
+    ...(f.approved ? { approved: f.approved } : {}),
+    ...(overlapMark ? { overlap: overlapMark } : {}),
+  };
   return [...entries.filter((e) => e.id !== run.id), entry];
 }
 
@@ -221,6 +247,14 @@ const stripReason = (e: LandEntry): LandEntry => {
   return rest;
 };
 
+/** Resume only an explicit judge hold, without changing its queue order. */
+export function landAnyway(entries: readonly LandEntry[], id: string, now: number): LandEntry[] {
+  const entry = entries.find(e => e.id === id);
+  if (!entry) throw new LandError("no entry by that id", 404);
+  if (entry.state !== "judge") throw new LandError("it is not held for a judge");
+  return entries.map(e => e.id === id ? { ...stripReason(e), state: "queued", skipJudge: true, updatedAt: now } : e);
+}
+
 const byOrder = <T extends Pick<LandEntry, "queuedAt" | "id">>(list: T[]): T[] =>
   [...list].sort((a, b) => a.queuedAt - b.queuedAt || a.id.localeCompare(b.id));
 
@@ -242,6 +276,8 @@ export function landWord(e: LandEntry, entries: readonly LandEntry[]): string {
       return `gate: ${e.gate ?? "?"}`;
     case "scenarios":
       return `scenario: ${e.gate ?? "?"}`;
+    case "judge":
+      return "needs a judge";
     case "setup":
       return "setting up";
     case "landing":
@@ -270,18 +306,22 @@ export function landCounts(entries: readonly LandEntry[], repoId: string): { que
 /** The message a "fix it" run starts with: the reason the entry came back. */
 export function fixPrompt(e: LandEntry): string {
   const head = `canopy's landing queue sent this branch (${e.branch}) back`;
+  const overlapSentence = e.overlap ? `canopy saw ${e.overlap.with} editing these files while you worked: ${e.overlap.paths.join(", ")}.` : "";
   switch (e.state) {
     case "conflict":
-      return `${head}: rebasing it onto ${e.target} conflicts in ${(e.files ?? []).join(", ")}. Rebase it onto ${e.target} yourself, resolve the conflicts, run the checks, and commit. Do not push.`;
+      return `${head}: rebasing it onto ${e.target} conflicts in ${(e.files ?? []).join(", ")}.${overlapSentence ? ` ${overlapSentence}` : ""} Rebase it onto ${e.target} yourself, resolve the conflicts, run the checks, and commit. Do not push.`;
     case "red": {
+      if (e.gate?.startsWith(SCORE_GATE)) {
+        return `${head}: its holdout scenarios scored ${e.gate} after a rebase onto ${e.target}. The scenarios are kept outside the repository and are not shown; the end of what each one observed, and what the judge said, is below:\n\n${e.reason ?? ""}\n\n${overlapSentence ? `${overlapSentence}\n\n` : ""}Rebase onto ${e.target}, fix what the output shows, run the repo's checks, and commit. Do not push.`;
+      }
       const scenario = scenarioOf(e.gate);
       if (scenario !== null) {
-        return `${head}: scenario ${scenario} failed after a rebase onto ${e.target}. The scenario is kept outside the repository and is not shown; the end of what it observed is below:\n\n${e.reason ?? ""}\n\nRebase onto ${e.target}, fix what the output shows, run the repo's checks, and commit. Do not push.`;
+        return `${head}: scenario ${scenario} failed after a rebase onto ${e.target}. The scenario is kept outside the repository and is not shown; the end of what it observed is below:\n\n${e.reason ?? ""}\n\n${overlapSentence ? `${overlapSentence}\n\n` : ""}Rebase onto ${e.target}, fix what the output shows, run the repo's checks, and commit. Do not push.`;
       }
-      return `${head}: the ${e.gate ?? ""} gate failed after a rebase onto ${e.target}. The end of its output:\n\n${e.reason ?? ""}\n\nRebase onto ${e.target}, fix what failed, run that gate again, and commit. Do not push.`;
+      return `${head}: the ${e.gate ?? ""} gate failed after a rebase onto ${e.target}. The end of its output:\n\n${e.reason ?? ""}\n\n${overlapSentence ? `${overlapSentence}\n\n` : ""}Rebase onto ${e.target}, fix what failed, run that gate again, and commit. Do not push.`;
     }
     case "moved":
-      return `${head}: ${e.target} kept moving while its gates ran. Rebase it onto ${e.target}, run the checks, and commit. Do not push.`;
+      return `${head}: ${e.target} kept moving while its gates ran.${overlapSentence ? ` ${overlapSentence}` : ""} Rebase it onto ${e.target}, run the checks, and commit. Do not push.`;
     default:
       return `${head}. Look at why, fix it, and commit. Do not push.`;
   }

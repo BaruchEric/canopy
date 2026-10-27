@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
@@ -6,6 +7,7 @@ import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatu
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
+import { harnessNames, harnessWeeks, isHarnessCard } from "../../src/core/harnessshare";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
 import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
 import { addItemTab, addSectionTab, dropSectionTab, itemTabId, sectionTabId, type SectionPlace, type TabRef } from "./sectiontabs";
@@ -52,7 +54,7 @@ import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -60,7 +62,7 @@ import type { Delivery, TriggersInfo } from "../../src/core/trigger";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
-import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
+import { HARNESS_SAID_KEY, harnessNotice, mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type HarnessNotice, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
 import { clientCaps } from "../../src/core/client";
@@ -230,6 +232,16 @@ export function changed<T extends object>(next: T, before: T): Partial<T> {
 }
 
 const LAYOUT_KEY = "canopy.layout";
+const HARNESS_WEEK_KEY = /^\d{4}-W(?:0[1-9]|[1-4]\d|5[0-3])$/;
+
+function readHarnessSaid(): string | null {
+  try {
+    const key = localStorage.getItem(HARNESS_SAID_KEY);
+    return key && HARNESS_WEEK_KEY.test(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
 
 /** the layout kept per kind of screen and window (screens.ts): its sizes,
  *  the tree being open, and the feed being up, which the feed's gear puts
@@ -765,11 +777,16 @@ export interface CanopyState {
   /** each backend's health checks, by backend name; an older backend that
    *  has none is missing (server/health) */
   health: Record<string, HealthCheck[]>;
+  /** each backend's usage windows and held starts; an older backend that
+   *  has no capacity route is missing (server/capacity) */
+  capacity: Record<string, CapacityInfo>;
   /** each backend's kit: the machines it reaches and their skills (server/kit) */
   kit: Record<string, KitInfo>;
   /** each backend's branch runs and landing queue (server/landing); an
    *  older backend that has none is missing */
   landing: Record<string, LandingInfo>;
+  /** Warm pools, with qualified ids, by shown backend. */
+  worktrees: Record<string, WorktreesInfo>;
   /** each backend's PRs that branch runs opened (server/prs); an older
    *  backend that has none is missing */
   prs: Record<string, PrWatch[]>;
@@ -784,6 +801,8 @@ export interface CanopyState {
   signIns: Record<string, SignIn>;
   /** the retro lessons home has on offer, which the inbox shows as one item */
   advice: AdviceOffer[];
+  /** the ISO week this browser last noted for the harness line */
+  harnessSaid: string | null;
   /** an accepted lesson's text by chat run id, which that chat's message box
    *  starts with; the user sends it, or not */
   chatDrafts: Record<string, string>;
@@ -1154,13 +1173,16 @@ export interface CanopyState {
   resumeSwept: (runId: string) => Promise<void>;
   /** reads one backend's health checks, home by default */
   loadHealth: (backend?: string) => Promise<void>;
+  /** reads one backend's capacity, home by default; an older backend has none */
+  loadCapacity: (backend?: string) => Promise<void>;
   /** reads one backend's kit, home by default */
   loadKit: (backend?: string) => Promise<void>;
   /** reads one backend's landing queue, home by default */
   loadLanding: (backend?: string) => Promise<void>;
+  loadWorktrees: (backend?: string) => Promise<void>;
   /** "land" on a ready branch run, by its run's or branch's id; `approve`
    *  is the sensitive patch id the approve sheet showed */
-  landRun: (id: string, approve?: string) => Promise<void>;
+  landRun: (id: string, approve?: string, skipJudge?: boolean) => Promise<void>;
   /** "land all" in a repo; the answer names the runs it skipped */
   landAll: (repoId: string) => Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }>;
   /** one file's diff from a branch run's latest sort */
@@ -1182,7 +1204,7 @@ export interface CanopyState {
   /** reads one backend's trigger rules and events, home by default */
   loadTriggers: (backend?: string) => Promise<void>;
   /** fires a made-up issue through one backend's rule */
-  fireTrigger: (backend: string, rule: string, title: string) => Promise<Delivery>;
+  fireTrigger: (backend: string, rule: string, title: string, repo?: string) => Promise<Delivery>;
   /** runs one backend's rule's poll now */
   pollTrigger: (backend: string, rule: string) => Promise<void>;
   /** resume, retry or stop a trigger event, by its id */
@@ -1323,6 +1345,11 @@ export interface CanopyState {
   /** stars a repo in canopy; unstarring takes the star off every checkout
    *  of its card, since the card shows one star for them all */
   favoriteRepo: (repoId: string, favorite: boolean) => Promise<void>;
+  /** marks one checkout as the harness; unmarking clears every marked
+   *  checkout of its card, since the card is the unit of the figure */
+  harnessRepo: (repoId: string, harness: boolean) => Promise<void>;
+  /** marks this browser as having read the harness line for the given week */
+  sayHarness: (key: string) => void;
   /** opens the repo's launch settings */
   editLaunch: (repoId: string) => void;
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
@@ -1357,6 +1384,12 @@ export interface CanopyState {
   syncPeers: (repoId: string) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
+  /** Opens a run absent from the page from its kept record, if one exists. */
+  loadKeptRun: (runId: string) => Promise<void>;
+  showGroup: (groupId: string) => void;
+  pickRunGroup: (groupId: string, origin: string) => Promise<void>;
+  reviewGroup: (groupId: string) => Promise<void>;
+  dropGroup: (groupId: string, keep?: string[]) => Promise<void>;
   closeSheet: () => void;
   /** opens the search across every repo in view */
   openSearch: () => void;
@@ -1370,6 +1403,7 @@ export interface CanopyState {
   takePendingSearch: () => void;
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
+  startGroup: (repoId: string, action: RunAction, note: string, times: number, profile?: string, autoLand?: boolean, pr?: boolean) => Promise<void>;
   startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
@@ -1424,6 +1458,7 @@ export type Sheet =
   /** `workspace` makes it a run across that workspace; `repoId` is then its primary */
   | { kind: "plan"; repoId: string; action: RunAction; workspace?: string }
   | { kind: "run"; runId: string }
+  | { kind: "group"; groupId: string }
   | { kind: "agent"; repoId: string }
   /** `draft` fills the form, from the command line's `new` */
   | { kind: "new-sprout"; draft?: SproutDraft }
@@ -1651,6 +1686,14 @@ const streams = new Map<string, { epoch: number; off: () => void }>();
  *  late (after a retry, a hide, or the page's cleanup) lands nothing. */
 const connecting = new Map<string, number>();
 
+/** Only the latest run-open request can open a sheet. Closing or choosing
+ *  another sheet cancels it even while its GET is still on the way. */
+let runOpen = 0;
+/** A stream reconnect invalidates reads from before the reconnect. */
+const runSyncs = new Map<string, number>();
+/** A run event takes precedence over a GET, including a run-gone event. */
+const runsHeard = new Map<string, number>();
+
 /** Each backend's automatic reconnect after a failed connect: the timer
  *  waiting to try again (null while a try is under way), how many tries
  *  have failed in a row, and the init that owns it, so a cleanup clears
@@ -1690,10 +1733,15 @@ let sweepEvents = 0;
 let sweepPicks = 0;
 /* and each backend's health events, the same way */
 const healthEvents = new Map<string, number>();
+/* and each backend's capacity events, so a list read while events land passes over them */
+const capacityEvents = new Map<string, number>();
 /* and each backend's kit events, the same way */
 const kitEvents = new Map<string, number>();
 /* and each backend's landing events */
 const landingEvents = new Map<string, number>();
+const worktreeEvents = new Map<string, number>();
+/* Pool reads may overlap across a stream reconnect; only the newest may land. */
+const worktreeLoads = new Map<string, number>();
 /* and each backend's PR events */
 const prsEvents = new Map<string, number>();
 /* and each backend's trigger events */
@@ -1852,6 +1900,7 @@ function authOf(b: string, info: AuthInfo, needed: boolean, sent: string | null)
  *  broadcast to this stream), and the helpers that dialled back in before
  *  this stream did. A failure leaves what is here until the next event. */
 function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
+  runSyncs.set(b, (runSyncs.get(b) ?? 0) + 1);
   void get()
     .rescan(b)
     .catch(() => {});
@@ -1868,8 +1917,10 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadSprouts(b);
   void get().loadRanger(b);
   void get().loadHealth(b);
+  void get().loadCapacity(b);
   void get().loadKit(b);
   void get().loadLanding(b);
+  void get().loadWorktrees(b);
   void get().loadPrs(b);
   void get().loadTriggers(b);
   void get().loadAuth(b);
@@ -2063,14 +2114,17 @@ export const useStore = create<CanopyState>((set, get) => ({
   sweep: null,
   sweepEnded: [],
   health: {},
+  capacity: {},
   kit: {},
   landing: {},
+  worktrees: {},
   prs: {},
   triggers: {},
   authByBackend: {},
   signIns: {},
   secrets: {},
   advice: [],
+  harnessSaid: readHarnessSaid(),
   chatDrafts: {},
   adviceFile: null,
   inboxOpen: false,
@@ -2278,8 +2332,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadRanger();
     if (signedIn(home)) void get().loadSweep();
     void get().loadHealth();
+    void get().loadCapacity();
     void get().loadKit();
     void get().loadLanding();
+    void get().loadWorktrees();
     void get().loadPrs();
     void get().loadTriggers();
     void get().loadAuth();
@@ -2441,8 +2497,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadSprouts(name);
     void get().loadRanger(name);
     void get().loadHealth(name);
+    void get().loadCapacity(name);
     void get().loadKit(name);
     void get().loadLanding(name);
+    void get().loadWorktrees(name);
     void get().loadPrs(name);
     void get().loadTriggers(name);
     void get().loadAuth(name);
@@ -2485,6 +2543,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     sproutLoads.set(name, (sproutLoads.get(name) ?? 0) + 1);
     // a load still on its way for it lands nothing
     connecting.set(name, (connecting.get(name) ?? 0) + 1);
+    capacityEvents.set(name, (capacityEvents.get(name) ?? 0) + 1);
     const mine = mineOf(name);
     const not = <T>(idOf: (t: T) => string) => (t: T) => !mine(idOf(t));
     const terms = s.terms.filter(not((t: TermTab) => t.id));
@@ -2499,8 +2558,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _awake, ...awake } = s.awake;
     const { [name]: _health, ...health } = s.health;
+    const { [name]: _capacity, ...capacity } = s.capacity;
     const { [name]: _kit, ...kit } = s.kit;
     const { [name]: _landing, ...landing } = s.landing;
+    const { [name]: _worktrees, ...worktrees } = s.worktrees;
+    worktreeEvents.set(name, (worktreeEvents.get(name) ?? 0) + 1);
     const { [name]: _prs, ...prs } = s.prs;
     const { [name]: _triggers, ...triggers } = s.triggers;
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
@@ -2530,8 +2592,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       rangers,
       awake,
       health,
+      capacity,
       kit,
       landing,
+      worktrees,
       prs,
       triggers,
       authByBackend,
@@ -3040,6 +3104,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ landing: { ...st.landing, [b]: ev.landing } }));
       return;
     }
+    if (ev.type === "worktrees") {
+      worktreeEvents.set(b, (worktreeEvents.get(b) ?? 0) + 1);
+      set((st) => ({ worktrees: { ...st.worktrees, [b]: ev.worktrees } }));
+      return;
+    }
     if (ev.type === "triggers") {
       triggersEvents.set(b, (triggersEvents.get(b) ?? 0) + 1);
       set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events } } }));
@@ -3067,6 +3136,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "health") {
       healthEvents.set(b, (healthEvents.get(b) ?? 0) + 1);
       set((st) => ({ health: { ...st.health, [b]: ev.checks } }));
+      return;
+    }
+    if (ev.type === "capacity") {
+      if (!isShown(get(), b)) return;
+      capacityEvents.set(b, (capacityEvents.get(b) ?? 0) + 1);
+      set((st) => ({ capacity: { ...st.capacity, [b]: ev.capacity } }));
       return;
     }
     if (ev.type === "advice") {
@@ -3116,8 +3191,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     } else if (ev.type === "agents") {
       set((s) => ({ agents: { ...s.agents, [b]: ev.agents } }));
     } else if (ev.type === "run") {
+      runsHeard.set(ev.run.id, (runsHeard.get(ev.run.id) ?? 0) + 1);
       set((s) => ({ runs: { ...s.runs, [ev.run.id]: ev.run } }));
     } else if (ev.type === "run-gone") {
+      runsHeard.set(ev.id, (runsHeard.get(ev.id) ?? 0) + 1);
       set((s) => {
         const { [ev.id]: _gone, ...runs } = s.runs;
         const sheet =
@@ -3449,6 +3526,16 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no health; nothing shows for it
     }
   },
+  loadCapacity: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = capacityEvents.get(b) ?? 0;
+    try {
+      const capacity = await api.capacity(b);
+      if ((capacityEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ capacity: { ...s.capacity, [b]: capacity } }));
+    } catch {
+      // an older backend has no capacity route; it remains out of the chip
+    }
+  },
   loadKit: async (backend) => {
     const b = backend ?? get().home;
     const mark = kitEvents.get(b) ?? 0;
@@ -3469,8 +3556,20 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no landing queue; nothing shows for it
     }
   },
-  landRun: async (id, approve) => {
-    await api.land(id, approve);
+  loadWorktrees: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = worktreeEvents.get(b) ?? 0;
+    const load = (worktreeLoads.get(b) ?? 0) + 1;
+    worktreeLoads.set(b, load);
+    try {
+      const worktrees = await api.worktrees(b);
+      if (worktreeLoads.get(b) === load && (worktreeEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ worktrees: { ...s.worktrees, [b]: worktrees } }));
+    } catch {
+      // An older backend has no pool endpoint; nothing shows for it.
+    }
+  },
+  landRun: async (id, approve, skipJudge) => {
+    await api.land(id, approve, skipJudge);
   },
   landAll: (repoId) => api.landAll(repoId),
   landingDiff: async (id, path) => (await api.landingDiff(id, path)).diff,
@@ -3488,6 +3587,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   orphanLanding: async (backend, dir, action) => {
     await api.orphanLanding(backend, dir, action);
     await get().loadLanding(backend);
+    await get().loadWorktrees(backend);
   },
   loadPrs: async (backend) => {
     const b = backend ?? get().home;
@@ -3511,8 +3611,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no triggers; nothing shows for it
     }
   },
-  fireTrigger: async (backend, rule, title) => {
-    const d = await api.fireTrigger(backend, rule, title);
+  fireTrigger: async (backend, rule, title, repo) => {
+    const d = await api.fireTrigger(backend, rule, title, repo);
     void get().loadTriggers(backend);
     return d;
   },
@@ -3792,9 +3892,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (item.source === "landing") {
-      if (!("landing" in answer)) throw new Error("a sent-back branch takes fix it or drop");
+      if (!("landing" in answer)) throw new Error("a landing item takes fix it, land anyway or drop");
       if (answer.landing === "drop") return get().dropLanding(item.id);
       get().closeInbox();
+      if (answer.landing === "land") return get().landRun(item.id, undefined, true);
       return get().fixLanding(item.id);
     }
     if (item.source === "pr") {
@@ -4241,6 +4342,25 @@ export const useStore = create<CanopyState>((set, get) => ({
       get().applyEvent({ type: "repo", repo }, backendOf(id));
     }
   },
+  harnessRepo: async (repoId, harness) => {
+    const ids = harness
+      ? [repoId]
+      : (cardOf(get(), repoId)?.checkouts.filter((r) => r.harness === true).map((r) => r.id) ?? [repoId]);
+    for (const id of ids) {
+      const repo = await api.harness(id, harness);
+      get().applyEvent({ type: "repo", repo }, backendOf(id));
+    }
+  },
+
+  sayHarness: (key) => {
+    if (!HARNESS_WEEK_KEY.test(key)) return;
+    set({ harnessSaid: key });
+    try {
+      localStorage.setItem(HARNESS_SAID_KEY, key);
+    } catch {
+      // the line stays quiet for this page even when storage is unavailable
+    }
+  },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
   editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
   showTasks: (repoId) =>
@@ -4328,7 +4448,33 @@ export const useStore = create<CanopyState>((set, get) => ({
   syncPeers: async (repoId) => {
     applyPeerRepo(get, await api.peerAction(repoId, { action: "sync" }));
   },
+  loadKeptRun: async (runId) => {
+    const request = ++runOpen;
+    const b = ownerOf(runId);
+    const e = epoch;
+    const attempt = connecting.get(b);
+    const sync = runSyncs.get(b);
+    const heard = runsHeard.get(runId);
+    if (dead.has(e) || !isShown(get(), b)) return;
+    try {
+      const run = await api.keptRun(runId);
+      if (runOpen !== request || epoch !== e || dead.has(e) || !isShown(get(), b) || connecting.get(b) !== attempt || runSyncs.get(b) !== sync) return;
+      set((s) => {
+        // A newer SSE/live run wins. A newer removal must stay removed.
+        const current = s.runs[runId];
+        if (!current && runsHeard.get(runId) !== heard) return {};
+        return { runs: current ? s.runs : { ...s.runs, [runId]: run }, sheet: { kind: "run", runId } };
+      });
+    } catch {
+      // No kept record, or its backend is unavailable: leave the page as it was.
+    }
+  },
   showRun: (runId) => {
+    ++runOpen;
+    if (!get().runs[runId]) {
+      void get().loadKeptRun(runId);
+      return;
+    }
     // a chat docked as a panel of its own (FR-047) comes forward there
     // instead of over the page, while the dock is the view
     const panel = runPanel(runId);
@@ -4336,7 +4482,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (onDock && get().panels.includes(panel)) get().showPanel(panel);
     else set({ sheet: { kind: "run", runId } });
   },
-  closeSheet: () => set({ sheet: null }),
+  closeSheet: () => {
+    ++runOpen;
+    set({ sheet: null });
+  },
   openSearch: () => set({ sheet: { kind: "search" } }),
   openKeys: (view) => set({ sheet: { kind: "keys", view } }),
   setSearchQuery: (q) => set({ searchQuery: q }),
@@ -4348,6 +4497,28 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
+  showGroup: groupId => set({ sheet: { kind: "group", groupId } }),
+  pickRunGroup: async (id, origin) => {
+    const group = await api.pickRunGroup(id, origin);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  reviewGroup: async id => {
+    const group = await api.reviewGroup(id);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  dropGroup: async (id, keep) => {
+    const group = await api.dropGroup(id, keep);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  startGroup: async (repoId, action, note, times, profile, autoLand = false, pr = false) => {
+    if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
+    const group = await api.startGroup(repoId, action, note, times, profile, autoLand, pr);
+    const b = backendOf(repoId);
+    set(s => {
+      const info = s.landing[b] ?? { runs: [], entries: [], orphans: [] };
+      return { landing: { ...s.landing, [b]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } }, sheet: { kind: "group", groupId: group.id } };
+    });
+  },
   startRun: async (repoId, action, note, branch, pr) => {
     const run = await api.run(repoId, action, note, clientId(), branch, pr);
     set((s) => ({
@@ -4363,6 +4534,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }));
   },
   answerRun: async (runId, promptId, answer) => {
+    if (get().runs[runId]?.kept) return;
     const run = await api.answerRun(runId, promptId, answer, get().answerKey);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
@@ -4383,6 +4555,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({ remembered: { ...s.remembered, [backend]: rules } }));
   },
   sayRun: async (runId, text) => {
+    if (get().runs[runId]?.kept) return;
     const run = await api.say(runId, text);
     set((s) => {
       // a draft once sent is done with
@@ -4391,6 +4564,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   stopRun: async (runId) => {
+    if (get().runs[runId]?.kept) return;
     const run = await api.stopRun(runId);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
@@ -4398,6 +4572,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
   coordStart: (runId) => api.coordStart(runId),
   dismissRun: async (runId) => {
+    if (get().runs[runId]?.kept) return;
     await api.dismissRun(runId);
     // a chat docked as a panel (FR-047) goes with its run
     const panel = runPanel(runId);
@@ -4550,6 +4725,11 @@ function readClips(): void {
     .then((msgs) => useStore.setState((st) => ({ chanMsgs: { ...st.chanMsgs, clipboard: mergeMessages(st.chanMsgs["clipboard"], msgs) } })))
     .catch(() => {});
 }
+
+// A new sheet takes precedence over a pending run-open, whoever opened it.
+useStore.subscribe((s, prev) => {
+  if (s.sheet !== prev.sheet) ++runOpen;
+});
 
 // A strip shell coming forward (a new one, a join, a move) takes the strip
 // back from a section tab showing there (FR-030), so no action that sets
@@ -4953,16 +5133,32 @@ export function inboxItems(s: CanopyState): InboxItem[] {
   return inboxOut;
 }
 
-let attentionIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[] } | null = null;
+let harnessNoticeIn: { history: HistoryOverview | null; cards: RepoCard[]; max: number; said: string | null } | null = null;
+let harnessNoticeOut: HarnessNotice | null = null;
+
+/** The quiet weekly line for the newest full archive week. Memoized on the
+ *  same inputs it reads so subscriptions stay settled between changes. */
+export function harnessNoticeOf(s: CanopyState): HarnessNotice | null {
+  const cards = allCards(s);
+  const max = s.settings.harnessShareMax;
+  if (harnessNoticeIn && harnessNoticeIn.history === s.history && harnessNoticeIn.cards === cards && harnessNoticeIn.max === max && harnessNoticeIn.said === s.harnessSaid) {
+    return harnessNoticeOut;
+  }
+  harnessNoticeIn = { history: s.history, cards, max, said: s.harnessSaid };
+  harnessNoticeOut = harnessNotice(harnessWeeks(s.history, cards), harnessNames(cards), max, s.harnessSaid);
+  return harnessNoticeOut;
+}
+
+let attentionIn: { repos: Repo[]; settings: Settings; ws: string | null; workspaces: Workspace[]; landing: Record<string, LandingInfo> } | null = null;
 let attentionOut: AttentionRow[] = [];
 
 /** The repos in scope that need you, the most pressing first, for the
  *  "waiting on you" panel; worked out once per change of what it reads. */
 export function attentionItems(s: CanopyState): AttentionRow[] {
   const a = attentionIn;
-  if (a && a.repos === s.repos && a.settings === s.settings && a.ws === s.activeWs && a.workspaces === s.workspaces) return attentionOut;
-  attentionIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces };
-  attentionOut = attentionRepos(scopedRepos(s));
+  if (a && a.repos === s.repos && a.settings === s.settings && a.ws === s.activeWs && a.workspaces === s.workspaces && a.landing === s.landing) return attentionOut;
+  attentionIn = { repos: s.repos, settings: s.settings, ws: s.activeWs, workspaces: s.workspaces, landing: s.landing };
+  attentionOut = attentionRepos(scopedRepos(s), landingAll(s).collisions ?? []);
   return attentionOut;
 }
 
@@ -5006,6 +5202,7 @@ let turnIn: {
   asks: Record<string, Ask>;
   repos: Repo[];
   rangers: Record<string, RangerInfo>;
+  landing: Record<string, LandingInfo>;
 } | null = null;
 let turnOut: TurnRow[] = [];
 
@@ -5014,11 +5211,11 @@ let turnOut: TurnRow[] = [];
  *  prompt by design (a permission it waits on is in the inbox). */
 export function turnItems(s: CanopyState): TurnRow[] {
   const t = turnIn;
-  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers) return turnOut;
-  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers };
+  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers && t.landing === s.landing) return turnOut;
+  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers, landing: s.landing };
   const rangers = rangerSessions(s.rangers);
   const cards = Object.values(s.registry).filter((c) => c.session === null || !rangers.has(c.session));
-  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos);
+  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos, landingAll(s));
   return turnOut;
 }
 
@@ -5040,7 +5237,8 @@ function showNote(n: Notice): void {
   shown.onclick = () => {
     window.focus();
     const s = useStore.getState();
-    if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
+    if (n.groupId) s.showGroup(n.groupId);
+    else if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
     shown.close();
   };
 }
@@ -5158,6 +5356,12 @@ export function isFavorite(s: CanopyState, repoId: string): boolean {
   return card ? cardFavorite(card) : s.repos.some((r) => r.id === repoId && r.favorite === true);
 }
 
+/** Whether the card a repo is on counts as the harness. */
+export function isHarness(s: CanopyState, repoId: string): boolean {
+  const card = cardOf(s, repoId);
+  return card ? isHarnessCard(card) : s.repos.some((r) => r.id === repoId && r.harness === true);
+}
+
 /** how many cards in the workspace are starred */
 export function favoriteCount(s: CanopyState): number {
   return allCards(s).filter(cardFavorite).length;
@@ -5252,4 +5456,10 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === REVIEW_NOTES_STORE || e.key === null) useStore.setState({ reviewNotes: loadNotes() });
   });
+}
+
+/** A mutation can arrive before its SSE update, including immediately after fanout. */
+function withGroup(byBackend: Record<string, LandingInfo>, backend: string, group: RunGroup): Record<string, LandingInfo> {
+  const info = byBackend[backend] ?? { runs: [], entries: [], orphans: [] };
+  return { ...byBackend, [backend]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } };
 }

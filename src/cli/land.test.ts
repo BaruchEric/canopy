@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
-import { advance, enqueue } from "../core/landing";
+import { advance, enqueue, entryFor } from "../core/landing";
+import { touchedOf, type Collision } from "../core/touch";
 import type { LandingInfo, LandingRun, RunReview } from "../core/types";
-import { approveLines, queueLines } from "./land";
+import { approveLines, collisionLines, landCommand, queueLines } from "./land";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -36,6 +37,18 @@ test("a repo's queue in order, then what came back, then what is ready", () => {
 });
 
 const sorted = (verdict: RunReview["verdict"], over: Partial<RunReview> = {}): RunReview => ({ verdict, files: [], base: "b0b0b0b0b0b0b0", head: "h1h1h1h1h1h1h1", at: 1, ...over });
+
+test("a queued entry's overlap under its line, and canopy collisions", () => {
+  const working = [touchedOf({ id: "k", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["a.ts"] } }] })];
+  const entries = enqueue([], rec("a", { review: sorted("land", { files: [{ path: "a.ts", cls: "logic" }, { path: "b.ts", cls: "logic" }] }) }), 1, undefined, working);
+  const c: Collision = { id: "x+checkout", repoId: "dev-tools/canopy", run: "x", name: "run/x-x", with: { kind: "checkout" }, paths: ["c.ts"], at: 1 };
+  const info: LandingInfo = { runs: [rec("a")], entries, orphans: [], collisions: [c] };
+  expect(queueLines(info, null)).toEqual(["dev-tools/canopy", "  queued 1st       run/x-a", "    overlaps with Ask run k: a.ts"]);
+  expect(collisionLines(info, null)).toEqual(["dev-tools/canopy", "  run/x-x and your uncommitted changes: c.ts"]);
+  expect(collisionLines(info, "canopy", "mini")).toEqual(["dev-tools/canopy on mini", "  run/x-x and your uncommitted changes: c.ts"]);
+  expect(collisionLines({ ...info, runs: [], entries: [] }, "canopy")).toEqual(["dev-tools/canopy", "  run/x-x and your uncommitted changes: c.ts"]);
+  expect(collisionLines(info, "other")).toEqual([]);
+});
 
 test("each ready run's verdict, and an entry that joined on its own", () => {
   const entries = [...enqueue([], rec("a"), 1, { auto: true }), ...enqueue([], rec("b"), 2, { approved: "p1" })];
@@ -86,4 +99,31 @@ test("what land prints for a run that needs an approval: the files, how to look,
     "then: canopy land r-a --approve abc123",
   ]);
   expect(approveLines(rec("b"))).toEqual(["run/x-b is not sorted yet; try again in a moment"]);
+});
+
+test("judge holds name the manual bypass; a low score shows observations", () => {
+  const held = advance(entryFor(rec("a"),1),{t:"unjudged",name:"refund",why:"no gateway key"},2);
+  const low = advance(entryFor(rec("b"),1),{t:"red",gate:"satisfaction 0.73 < 1",output:"scenario refund: partly\nrefund 42: no"},2);
+  const lines = queueLines({runs:[],entries:[held,low],orphans:[]},null);
+  expect(lines[1]).toContain("needs a judge");
+  expect(lines[1]).toContain("land anyway: canopy land a --skip-judge");
+  expect(lines[2]).toContain("satisfaction 0.73 < 1");
+  expect(lines[2]).toContain("refund 42: no");
+  expect(lines[2]).not.toContain("failed");
+});
+
+test("land --skip-judge posts the explicit bypass flag", async () => {
+  const posted: unknown[] = [];
+  const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch:async req => {posted.push(await req.json());return Response.json({...entryFor(rec("a"),1),skipJudge:true});}});
+  const log = console.log;
+  const lines: string[] = [];
+  try {
+    console.log = (line: unknown) => {lines.push(String(line));};
+    await landCommand("land",["a","--skip-judge","--backend",`http://127.0.0.1:${server.port}`],{fail:message=>{throw Error(message);}});
+  } finally {
+    console.log=log;
+    server.stop(true);
+  }
+  expect(posted).toEqual([{run:"a",skipJudge:true}]);
+  expect(lines.join("\n")).toContain("queued again with the judge scenarios left out");
 });

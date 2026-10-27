@@ -288,7 +288,7 @@ describe("KitHub and MCP servers", () => {
     expect(a.status).toBe("fulfilled");
     expect(b.status).toBe("fulfilled");
     const owned = JSON.parse(readFileSync(join(h, ".claude", ".canopy-kit-mcp.json"), "utf8")) as { placed: Record<string, string[]>; adoptedFrom: Record<string, Record<string, unknown>> };
-    expect(owned.placed["claude"]).toEqual(["excalidraw", "github"]);
+    expect(owned.placed["claude"]).toEqual(["canopy", "excalidraw", "github"]);
     expect(Object.keys(owned.adoptedFrom.claude ?? {})).toEqual(["github"]);
   });
 
@@ -311,7 +311,7 @@ describe("KitHub and MCP servers", () => {
     const { hub } = await setupMcp({ run });
     const info = await hub.scan();
     const servers = info.cells.filter((c) => c.kind === "mcp");
-    expect(servers.map((c) => `${c.agent}/${c.skill} ${c.state}`).sort()).toEqual(["claude/excalidraw away", "claude/github away", "codex/github away"]);
+    expect(servers.map((c) => `${c.agent}/${c.skill} ${c.state}`).sort()).toEqual(["claude/canopy away", "claude/excalidraw away", "claude/github away", "codex/canopy away", "codex/github away"]);
     expect(servers[0]?.why).toBe("the MCP scan failed: sh: base64: not found");
     expect(info.machines[0]?.plan.filter((a) => a.kind.startsWith("mcp-"))).toEqual([]);
   });

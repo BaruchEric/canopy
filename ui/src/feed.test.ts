@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AGENT } from "../../src/core/types";
-import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, SweepLogEntry, TaskInfo } from "../../src/core/types";
+import type { AgentCard, Ask, Fleet, Flow, HelperInfo, Job, Repo, RepoStatus, Run, ServerEvent, SourceState, SweepLogEntry, TaskInfo, WorktreesInfo } from "../../src/core/types";
 import {
   appendFeed,
   clip,
@@ -134,6 +134,15 @@ describe("task lines", () => {
 });
 
 describe("describeEvent", () => {
+  test("a work event updates the ledger without adding a feed line", () => {
+    expect(describeEvent({ type: "work", items: [] }, snap(), 5)).toEqual([]);
+  });
+
+  test("a worktrees event updates its panel without adding a feed line", () => {
+    const worktrees: WorktreesInfo = { root: "/w", free: 10, repos: [] };
+    expect(describeEvent({ type: "worktrees", worktrees }, snap(), 5)).toEqual([]);
+  });
+
   test("a repo event with no change is quiet and names the repo", () => {
     const lines = describeEvent({ type: "repo", repo: repo() }, snap(), 5);
     expect(lines).toEqual([
@@ -210,6 +219,13 @@ describe("describeEvent", () => {
       "commit done, changed in 4s",
     ]);
   });
+  test("a limited run says it waits for capacity", () => {
+    const before = run();
+    const limited = run({ status: "limited", error: "usage limit reached", limited: { at: 1, text: "usage limit reached" } });
+    expect(describeEvent({ type: "run", run: limited }, snap({ runs: { r1: before } }), 5).map((l) => l.text)).toEqual([
+      "commit waits for capacity: usage limit reached",
+    ]);
+  });
   test("a workspace run says which workspace it spans", () => {
     const ask = run({ note: "look around", workspace: "bike-trips" });
     expect(describeEvent({ type: "run", run: ask }, snap(), 5).map((l) => l.text)).toEqual([
@@ -249,6 +265,11 @@ describe("describeEvent", () => {
     const gated = flow({ status: "gated", steps: [{ name: "test", status: "gated", reason: "tests failed" }, { name: "push", status: "pending" }] });
     expect(describeEvent({ type: "flow", flow: gated }, snap({ flows: { f1: first } }), 5).map((l) => l.text)).toEqual([
       "step test gated: tests failed",
+    ]);
+    const beforeHeld = flow({ steps: [{ name: "test", status: "passed" }, { name: "push", status: "pending" }] });
+    const held = flow({ status: "gated", steps: [{ name: "test", status: "passed" }, { name: "push", status: "held", reason: "push waits for your go" }] });
+    expect(describeEvent({ type: "flow", flow: held }, snap({ flows: { f1: beforeHeld } }), 5).map((l) => l.text)).toEqual([
+      "step push held: push waits for your go",
     ]);
     const done = flow({ status: "done", outcome: "changed", steps: [{ name: "test", status: "passed" }, { name: "push", status: "passed" }] });
     expect(describeEvent({ type: "flow", flow: done }, snap({ flows: { f1: gated } }), 5).map((l) => l.text)).toEqual([

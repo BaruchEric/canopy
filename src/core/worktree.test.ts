@@ -1,19 +1,20 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
 import {
   addRunTree,
   aheadOf,
-  branchSlug,
   currentBranch,
   defaultBranch,
   dirtyFiles,
   ffMain,
   listRunTreeDirs,
+  listWarmTreeDirs,
   overwrittenFiles,
+  midRebase,
   pushBranch,
   pushBranchLease,
   pushRemote,
@@ -22,10 +23,12 @@ import {
   repoAtPath,
   repoKey,
   revOf,
-  runBranchName,
   showAtHead,
   subjectsSince,
+  takeWarm,
   runTreeDir,
+  detachedTree,
+  treeSize,
   treeRepo,
   treeState,
 } from "./worktree";
@@ -66,13 +69,6 @@ describe("names", () => {
     expect(repoKey("/a/b/canopy")).toMatch(/^canopy-[0-9a-f]{8}$/);
     expect(repoKey("/a/b/canopy")).not.toBe(repoKey("/c/canopy"));
     expect(runTreeDir("/a/b/canopy", "abc123", "/w")).toBe(`/w/${repoKey("/a/b/canopy")}/abc123`);
-  });
-
-  test("a branch slug is lower case words from the note", () => {
-    expect(branchSlug("Fix the README's typo!")).toBe("fix-the-readme-s-typo");
-    expect(branchSlug("   ")).toBe("run");
-    expect(branchSlug("a".repeat(50))).toHaveLength(32);
-    expect(runBranchName("add a test", "ab12cd34")).toBe("run/add-a-test-ab12cd34");
   });
 
   test("overwritten files are read off git's message", () => {
@@ -129,6 +125,116 @@ describe("run worktrees", () => {
     expect(await rebaseOnto(dir, (await revOf(r, "HEAD"))!)).toEqual({ conflict: ["a.txt"] });
     expect(await revOf(dir, "HEAD")).toBe(before);
     expect(await dirtyFiles(dir)).toEqual([]);
+  });
+
+  test("rebase checks detect a linked worktree's interrupted rebase", async () => {
+    const r = await repo();
+    const base = await revOf(r, "main");
+    if (!base) throw new Error("main should have a starting commit");
+    const dir = join(root, "wt-interrupted");
+    await addRunTree(r, dir, "run/interrupted", base);
+    await commit(dir, "a.txt", "run version\n");
+    await commit(r, "a.txt", "main version\n");
+
+    const failed = await exec(["git", "rebase", "main"], { cwd: dir });
+    expect(failed.code).not.toBe(0);
+    expect(await midRebase(dir)).toBe(true);
+
+    expect(await rebaseOnto(dir, base)).toEqual({ ok: true });
+    expect(await midRebase(dir)).toBe(false);
+    expect(await currentBranch(dir)).toBe("run/interrupted");
+  });
+
+  test("a warm tree moves onto a run branch and keeps ignored setup files", async () => {
+    const r = await repo();
+    await commit(r, ".gitignore", "node_modules/\n");
+    const wts = join(root, "wts-warm");
+    const warm = join(wts, repoKey(r), "warm-1");
+    const base = await revOf(r, "main");
+    if (!base) throw new Error("main should have a base commit");
+    await detachedTree(r, warm, base);
+    expect(await currentBranch(warm)).toBeNull();
+    await mkdir(join(warm, "node_modules"));
+    await writeFile(join(warm, "node_modules", "x"), "x");
+    const tip = await commit(r, "c.txt", "c\n");
+    const dir = runTreeDir(r, "run9", wts);
+
+    await takeWarm(r, warm, dir, "run/x-run9", tip);
+
+    expect(existsSync(warm)).toBe(false);
+    expect(await currentBranch(dir)).toBe("run/x-run9");
+    expect(await revOf(dir, "HEAD")).toBe(tip);
+    expect(await readFile(join(dir, "node_modules", "x"), "utf8")).toBe("x");
+    expect(existsSync(join(dir, "c.txt"))).toBe(true);
+    expect(await dirtyFiles(dir)).toEqual([]);
+    expect(await sh(r, "worktree", "list", "--porcelain")).toContain(`worktree ${await realpath(dir)}`);
+    expect(await treeSize(dir)).toBeGreaterThan(0);
+    expect(await treeSize(join(root, "nowhere"))).toBe(0);
+    expect(await midRebase(dir)).toBe(false);
+  });
+
+  test("move failures keep source and destination ownership intact", async () => {
+    const r = await repo();
+    const wts = join(root, "wts-move-fail");
+    const warm = join(wts, repoKey(r), "warm-1");
+    const base = await revOf(r, "main");
+    if (!base) throw new Error("main should have a base commit");
+    await detachedTree(r, warm, base);
+
+    const occupied = join(wts, repoKey(r), "run-occupied");
+    await mkdir(occupied, { recursive: true });
+    await writeFile(join(occupied, "keep.txt"), "keep");
+    await expect(takeWarm(r, warm, occupied, "run/occupied", base)).rejects.toThrow();
+    expect(existsSync(warm)).toBe(true);
+    expect(await readFile(join(occupied, "keep.txt"), "utf8")).toBe("keep");
+    expect(await sh(r, "worktree", "list", "--porcelain")).toContain(`worktree ${await realpath(warm)}`);
+
+    const moved = join(wts, repoKey(r), "run-bad-ref");
+    await expect(takeWarm(r, warm, moved, "run/bad-ref", "missing-ref")).rejects.toThrow();
+    expect(existsSync(warm)).toBe(false);
+    expect(await currentBranch(moved)).toBeNull();
+    expect(await revOf(moved, "HEAD")).toBe(base);
+    expect(await sh(r, "worktree", "list", "--porcelain")).toContain(`worktree ${await realpath(moved)}`);
+    await expect(takeWarm(r, join(wts, "missing"), join(wts, "never-made"), "run/missing", base)).rejects.toThrow();
+    expect(existsSync(join(wts, "never-made"))).toBe(false);
+  });
+
+  test("a warm take refuses an existing run ref without moving its commit", async () => {
+    const r = await repo();
+    const wts = join(root, "wts-existing-ref");
+    const warm = join(wts, repoKey(r), "warm-1");
+    const base = await revOf(r, "main");
+    if (!base) throw new Error("main should have a base commit");
+    await detachedTree(r, warm, base);
+    const other = await commit(r, "unrelated.txt", "other branch's work\n");
+    await sh(r, "branch", "run/existing", other);
+    const to = runTreeDir(r, "existing", wts);
+
+    await expect(takeWarm(r, warm, to, "run/existing", base)).rejects.toThrow();
+
+    expect(await revOf(r, "run/existing")).toBe(other);
+    expect(existsSync(warm)).toBe(false);
+    expect(await currentBranch(to)).toBeNull();
+    expect(await revOf(to, "HEAD")).toBe(base);
+    expect(await sh(r, "worktree", "list", "--porcelain")).toContain(`worktree ${await realpath(to)}`);
+  });
+
+  test("only valid warm slots are excluded from run orphans", async () => {
+    const r = await repo();
+    const wts = join(root, "wts-list");
+    const run = runTreeDir(r, "run1", wts);
+    await addRunTree(r, run, "run/x-run1", "main");
+    const repoDir = join(wts, repoKey(r));
+    const warm = join(repoDir, "warm-1");
+    const base = await revOf(r, "main");
+    if (!base) throw new Error("main should have a base commit");
+    await detachedTree(r, warm, base);
+    await mkdir(join(repoDir, "warm-2"));
+    await mkdir(join(repoDir, "warm-0"));
+    await writeFile(join(repoDir, "warm.json"), "{}");
+    expect(await listRunTreeDirs(wts)).toEqual([run, join(repoDir, "warm-0")]);
+    expect(await listWarmTreeDirs(r, wts)).toEqual([warm, join(repoDir, "warm-2")]);
+    expect(await listWarmTreeDirs(join(root, "no-such-repo"), wts)).toEqual([]);
   });
 
   test("a dirty main checkout refuses the fast-forward and names the files", async () => {
@@ -268,4 +374,51 @@ describe("pushing a run's branch", () => {
     await commit(r, "y.txt", "y");
     expect(await subjectsSince(r, "main")).toEqual(["c x.txt", "c y.txt"]);
   });
+});
+
+test("takeWarm stops after its move when ownership is revoked before checkout", async () => {
+  const r = await repo();
+  const warm = join(root, "guard-take", "warm-1");
+  const to = join(root, "guard-take", "run");
+  await detachedTree(r, warm, "main");
+  let commands = 0;
+  await expect(takeWarm(r, warm, to, "run/guarded", "main", () => {
+    if (++commands === 2) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(warm)).toBe(false);
+  expect(await currentBranch(to)).toBeNull();
+  expect(await revOf(r, "refs/heads/run/guarded")).toBeNull();
+  expect(await sh(r, "worktree", "list", "--porcelain")).toContain(await realpath(to));
+});
+
+test("detachedTree checks ownership after prune and before adding a checkout", async () => {
+  const r = await repo();
+  const dir = join(root, "guard-create", "warm-1");
+  let allowed = true;
+  let checks = 0;
+  await expect(detachedTree(r, dir, "main", () => {
+    checks++;
+    // Four boundaries: remove, mkdir, prune, then add.
+    if (checks === 4) allowed = false;
+    if (!allowed) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(join(dir, ".git"))).toBe(false);
+  expect(await sh(r, "worktree", "list", "--porcelain")).not.toContain(dir);
+});
+
+test("removeRunTree stops before pruning or deleting the branch after ownership loss", async () => {
+  const r = await repo();
+  const dir = join(root, "guard-remove", "run");
+  const ghost = join(root, "guard-remove", "ghost");
+  await addRunTree(r, dir, "run/guard-remove", "main");
+  await detachedTree(r, ghost, "main");
+  const realGhost = await realpath(ghost);
+  await rm(ghost, { recursive: true });
+  let checks = 0;
+  await expect(removeRunTree(r, dir, "run/guard-remove", () => {
+    if (++checks === 2) throw new Error("ownership revoked");
+  })).rejects.toThrow("ownership revoked");
+  expect(existsSync(dir)).toBe(false);
+  expect(await revOf(r, "refs/heads/run/guard-remove")).not.toBeNull();
+  expect(await sh(r, "worktree", "list", "--porcelain")).toContain(realGhost);
 });

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import type { TriggerEvent } from "../../src/core/trigger";
+import type { HarnessWeek } from "../../src/core/harnessshare";
 import {
   askPermission,
   askWord,
@@ -18,6 +19,7 @@ import {
   toAskAnswer,
   toRunAnswer,
   scopeOffers,
+  harnessNotice,
 } from "./inbox";
 
 const ask = (over: Partial<Ask> = {}): Ask => ({
@@ -94,6 +96,31 @@ const flow = (over: Partial<Flow> = {}): Flow => ({
 
 const repos = [repo("app", { link: "https://github.com/me/app", remotes: ["git@github.com:me/app.git"] }), repo("mac|lib")];
 const ctx = { repos, cards: { "claude:s1": card }, backendOf: (id: string) => (id.includes("|") ? id.split("|")[0]! : "mini") };
+
+describe("the harness's weekly line", () => {
+  const weeks: HarnessWeek[] = [
+    { from: "2026-10-12", harness: 7, rest: 7, share: 0.5 },
+    { from: "2026-10-19", harness: 17, rest: 33, share: 0.34 },
+    { from: "2026-10-26", harness: 2, rest: 0, share: 1 },
+  ];
+
+  test("the newest full week at or over the line, once per week key", () => {
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 25, null)).toEqual({
+      key: "2026-W43",
+      text: "last week 34% of Claude spend went into the harness (canopy, devhub)",
+    });
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 34, null)?.key).toBe("2026-W43");
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 25, "2026-W43")).toBeNull();
+    expect(harnessNotice(weeks, ["canopy", "devhub"], 25, "2026-W42")).not.toBeNull();
+  });
+
+  test("none under the line, at zero, without a full week, or without spend", () => {
+    expect(harnessNotice(weeks, ["canopy"], 35, null)).toBeNull();
+    expect(harnessNotice(weeks, ["canopy"], 0, null)).toBeNull();
+    expect(harnessNotice(weeks.slice(-1), ["canopy"], 25, null)).toBeNull();
+    expect(harnessNotice([{ from: "2026-10-19", harness: 0, rest: 0, share: null }, weeks[2]!], ["canopy"], 25, null)).toBeNull();
+  });
+});
 
 describe("mergeInbox", () => {
   test("a run's proposal is its own kind, with no permission or questions to answer from the inbox", () => {
@@ -412,9 +439,26 @@ describe("the landing queue's sent-back branches", () => {
   });
 
   test("a notice is never an item: it asks nothing", () => {
-    const notices = [{ id: "n1", entry: "b1", repoId: "app", branch: "run/x-b1", note: "", kind: "held" as const, why: "x", at: 1 }];
+    const notices = [
+      { id: "n1", entry: "b1", repoId: "app", branch: "run/x-b1", note: "", kind: "held" as const, why: "x", at: 1 },
+      { id: "n2", entry: "b2", repoId: "app", branch: "run/x-b2", note: "", kind: "collision" as const, why: "run/x-b2 and run/x-a both edit x.ts", at: 2 },
+    ];
     const ctx = { repos: [repo("app")], cards: {}, landing: { ...landing([]), notices } };
     expect(mergeInbox([], {}, {}, 0, ctx)).toEqual([]);
+  });
+
+  test("a judge hold offers its own action and a low score stays distinct from a failed command", () => {
+    const ctx = { repos: [repo("app")], cards: {}, landing: landing([
+      entry({ id: "judge", branch: "run/judge", state: "judge", gate: "refund", reason: "scenario refund needs a judge: no gateway key" }),
+      entry({ id: "score", branch: "run/score", gate: "satisfaction 0.73 < 1", reason: "scenario refund: partly" }),
+    ]) };
+    const items = mergeInbox([], {}, {}, 0, ctx);
+    expect(items.map(i => [i.key, i.kind, i.title, i.detail])).toEqual([
+      ["landing:judge", "needs-judge", "held run/judge: needs a judge", "scenario refund needs a judge: no gateway key"],
+      ["landing:score", "sent-back", "sent run/score back: satisfaction 0.73 < 1", "scenario refund: partly"],
+    ]);
+    expect(toRunAnswer({ landing: "land" })).toBeNull();
+    expect(toAskAnswer({ landing: "land" })).toBeNull();
   });
 });
 
@@ -545,7 +589,7 @@ describe("pair requests", () => {
 
 describe("the sweep's ask", () => {
   const DAY = 86_400_000;
-  const settings: SweepSettings = { on: true, cron: "0 4 * * *", spans: { shell: DAY, chat: DAY / 2, run: 3 * DAY, pr: 14 * DAY, outside: DAY }, auto: ["shell", "chat", "run"], prs: false };
+  const settings: SweepSettings = { on: true, cron: "0 4 * * *", spans: { shell: DAY, chat: DAY / 2, run: 3 * DAY, transcript: 30 * DAY, pr: 14 * DAY, outside: DAY }, auto: ["shell", "chat", "run"], prs: false };
   const pr = (id: string, idleSince: number): SweepItem => ({
     key: `pr:${id}`,
     kind: "pr",
@@ -592,4 +636,13 @@ describe("the sweep's ask", () => {
     expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: info([]) })).toEqual([]);
     expect(mergeInbox([], {}, {}, 0, { repos: [], cards: {}, sweep: null })).toEqual([]);
   });
+});
+
+test("a group needing a pick owns its sent-back members' inbox attention", () => {
+  const group = { id: "g", repoId: "app", repoPath: "/app", action: "ask", note: "repair", expectedMembers: 2, members: [{ origin: "b1", run: "r1", profile: null }], state: "needs-you", autoLand: false, startedAt: 1 } satisfies import("../../src/core/group").RunGroup;
+  const entry: LandEntry = { id: "b1", repoId: "app", repoPath: "/app", branch: "run/a", target: "main", dir: "/w/a", note: "n", state: "red", gate: "test", reason: "failed", tries: 0, queuedAt: 1, updatedAt: 2 };
+  const landing = { runs: [], entries: [entry], orphans: [], groups: [group] };
+  const items = mergeInbox([], {}, {}, 5, { repos: [repo("app")], cards: {}, landing });
+  expect(items.map(i => [i.source, i.title])).toEqual([["group", "best of 2 ready: pick"]]);
+  expect(mergeInbox([], {}, {}, 5, { repos: [], cards: {}, landing: { ...landing, groups: [{ ...group, state: "picked", winner: "b1" }] } })).toEqual([]);
 });

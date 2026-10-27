@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TriggerEvent, TriggerRuleInfo, TriggersInfo } from "../../src/core/trigger";
-import { eventActs, hookAddress, outcomeLine, pollWords, ruleIntake, ruleWrites, STATUS_WORD, triggerSections, triggersBadge } from "./triggers";
+import { eventActs, hookAddress, nextFireWord, outcomeLine, pollWords, ruleIntake, ruleWrites, scheduleWord, statusWord, STATUS_WORD, triggerSections, triggersBadge } from "./triggers";
 
 const ev = (over: Partial<TriggerEvent>): TriggerEvent => ({
   id: "e1",
@@ -20,6 +20,35 @@ const ev = (over: Partial<TriggerEvent>): TriggerEvent => ({
 });
 
 const info = (events: TriggerEvent[]): TriggersInfo => ({ rules: [], problems: [], events, keeping: true });
+
+describe("schedule card (FR-041)", () => {
+  test("queue readiness and badge text identify the landing queue", () => {
+    expect(statusWord(ev({ status: "ready", land: "queue" }))).toBe("in the landing queue");
+    expect(statusWord(ev({ status: "ready" }))).toBe("committed, no PR");
+    expect(statusWord(ev({ status: "working", land: "queue" }))).toBe("fixing");
+    expect(triggersBadge({ home: info([ev({ status: "ready", land: "queue" })]) })?.title).toContain("in the landing queue");
+  });
+  test("schedule words name the targets and all filters", () => {
+    expect(scheduleWord({ repo: "*", only: [] }, "")).toBe("every local repo");
+    expect(scheduleWord({ repo: "*", only: ["spec-adopted"] }, "")).toBe("every local repo with a spec");
+    expect(scheduleWord({ repo: "*", only: ["clean", "unpushed"] }, "")).toBe("every local repo with a clean tree, with unpushed commits");
+    expect(scheduleWord({ repo: "web/shop", only: ["dirty"] }, "shop")).toBe("shop with changes");
+  });
+  test("next fire uses explicit dates and handles due or impossible schedules", () => {
+    const now = Date.parse("2026-11-02T05:00:00Z");
+    expect(nextFireWord(undefined, now)).toBe("never fires again");
+    expect(nextFireWord(now - 1, now)).toBe("due now");
+    expect(nextFireWord(now + 40 * 60_000, now)).toBe("next fire in 40 min");
+    expect(nextFireWord(now + 2 * 3_600_000 + 1, now)).toBe("next fire in 2 h");
+    expect(nextFireWord(now + 7 * 86_400_000, now)).toBe("next fire in 7 days");
+  });
+  test("schedule landing never describes an outside issue or a test fire", () => {
+    expect(outcomeLine(ev({ service: "schedule", status: "merged", land: "queue" }))).toBe("landed on main through the queue");
+    expect(outcomeLine(ev({ service: "schedule", source: "manual", status: "merged", land: "queue" }))).toBe("landed on main through the queue");
+    expect(outcomeLine(ev({ service: "schedule", status: "merged", land: "pr", pr: { number: 1, url: "u" } }))).toBeNull();
+    expect(outcomeLine(ev({ service: "schedule", status: "ready", land: "queue", reason: "needs your approval: 1 sensitive file" }))).toBe("needs your approval: 1 sensitive file");
+  });
+});
 
 describe("triggerSections", () => {
   test("needs-you first, newest first inside, empty sections left out", () => {
@@ -113,6 +142,8 @@ test("hookAddress joins the origin and the hook's path", () => {
 
 const rule = (over: Partial<TriggerRuleInfo>): TriggerRuleInfo => ({
   name: "tracker",
+  land: "pr",
+  only: [],
   source: "github",
   repo: "web/shop",
   workflow: "issue-fix",

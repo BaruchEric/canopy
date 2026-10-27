@@ -5,6 +5,7 @@ import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateD
 import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
 import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, trustedComments, type GhRun } from "../core/issue";
+import { titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
@@ -21,6 +22,7 @@ import {
   getCommit,
   getDiff,
   getLog,
+  getStatus,
   elsewhereDetail,
   isHash,
   pull,
@@ -32,10 +34,12 @@ import {
 } from "../core/git";
 import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
-import { linkFavorites } from "../core/favorite";
+import { cardsOf, HARNESS_SHARE_MAX, harnessSlot, harnessWeeks } from "../core/harnessshare";
+import { linkFavorites, linkHarness } from "../core/favorite";
 import { AUTHORED_QUERY, linkPulls, parseAuthoredPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
+  RING_DAYS,
   historyOverview,
   historySearch,
   historySession,
@@ -48,6 +52,8 @@ import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
+import { applyModes } from "../core/flowmodes";
+import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
@@ -56,7 +62,7 @@ import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos, readToken } f
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, toLocator, TOKEN_REF } from "../core/host";
 import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
-import { hasGatewayKey, jev, jevJudge } from "../core/jev";
+import { hasGatewayKey, jev, jevJudge, jevScenario } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
 import type { AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
@@ -100,7 +106,7 @@ import { listMentions } from "../core/mentions";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
-import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "../core/workflows";
+import { BUNDLED_DIR, findWorkflow, loadWorkflows, readFlowModes } from "../core/workflows";
 import {
   launchSource,
   refreshRepo,
@@ -115,11 +121,15 @@ import {
   configDir,
   launchFor,
   loadConfig,
+  warmFor,
+  setWarm,
   rememberRoot,
   removeSource,
   removeWorkspace,
   setArchived,
   setFavorite,
+  seedHarnessList,
+  setHarness,
   setAwake,
   setKeepShells,
   setLaunch,
@@ -194,7 +204,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { AWAKE_MODES, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES } from "../core/types";
+import { AWAKE_MODES, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -209,13 +219,22 @@ import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./rang
 import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
+import { CapacityHub, capacityFile } from "./capacity";
+import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
+import { WarmPool, type Take } from "./warm";
+import { GroupHub } from "./groups";
+import { GROUP_MAX, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
-import { PrHub } from "./prs";
+import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
-import { takeTriggerSecrets } from "../core/envnames";
+import { WorkHub } from "./work";
+import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
+import { exportRun } from "../core/export";
+import { sentBack } from "../core/landing";
+import { PRIVATE_ENV, TRIGGER_ENV_PREFIX, takeTriggerSecrets } from "../core/envnames";
 import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
@@ -223,7 +242,7 @@ import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRe
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
-import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runBranchName, runTreeDir } from "../core/worktree";
+import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
@@ -306,14 +325,17 @@ interface ServerState {
   timers: Map<string, ReturnType<typeof setTimeout>>;
   /** Claude Code jobs, one live session per repo at most */
   runner: Runner;
+  runlog: DiskRunLogger;
+  /** Refuses shared transcript reads before owner recovery and current privacy are ready. */
+  readyRunlog(): Promise<void>;
   /** the rules an allow said to remember, answering runs' permissions */
   remembered: RememberedRules;
   /** workflow runs, step by step, over the runner's jobs */
   flows: Flows;
-  /** the claude-history overview, kept for HISTORY_TTL and for one scan */
-  history: HistoryCache | null;
-  /** an overview being built, so concurrent callers share it */
-  historyPending: Promise<HistoryCache> | null;
+  /** claude-history overviews, keyed by requested day count */
+  history: Map<number, HistoryCache>;
+  /** one overview per day count being built, shared by concurrent callers */
+  historyPending: Map<number, Promise<HistoryCache>>;
   /** the shells behind browser terminals, by the id the browser gave each;
    *  a shell outlives its socket, and the server too when tmux holds it */
   terms: Map<string, LiveTerm>;
@@ -330,10 +352,18 @@ interface ServerState {
   ranger: RangerHub;
   /** what is broken here and what canopy is fixing (server/health) */
   health: HealthHub;
+  /** the usage windows, remembered plan hits and settings (server/capacity) */
+  capacity: CapacityHub;
   /** the kit: shared skills for every agent (server/kit) */
   kit: KitHub;
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
+  warm: WarmPool;
+  groups: GroupHub;
+  /** serial branch preflights/fanout for each repo */
+  branchStarts: Map<string, Promise<void>>;
+  /** live file overlaps; warnings only, never a hold */
+  collisions: CollisionHub;
   /** the holdout scenario sets and a pass on demand (server/scenarios) */
   scenarios: Scenarios;
   /** the PRs branch runs opened and the watch on them (server/prs) */
@@ -346,6 +376,8 @@ interface ServerState {
   triggers: TriggerHub;
   /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
   coordinator: CoordinatorHub;
+  /** the branch runs' ledger: an item per branch and the lines on it (server/work) */
+  work: WorkHub;
   /** the tokens this backend knows and the pairing that hands them out (server/callers) */
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
@@ -366,6 +398,8 @@ interface ServerState {
   archived: Set<string>;
   /** the paths of the repos starred in canopy, kept the same way */
   favorites: Set<string>;
+  /** the paths of the repos marked as the harness, kept in step with config */
+  harness: Set<string>;
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
@@ -871,7 +905,8 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   const seeds = new Set(state.result.repos.filter((r) => isSeedPath(state.root, r.path)).map((r) => r.id));
   const all = state.runner.list();
   const runs = all.filter((r) => r.action !== "coordinate" && !seeds.has(r.repoId));
-  const heldRuns = new Set<string>();
+  const heldRuns = new Set(state.runner.pendingLogHolds());
+  for (const run of all) if (isRunActive(run)) { heldRuns.add(run.id); if (run.branch) heldRuns.add(run.branch.origin); }
   for (const r of state.landing.info().runs) {
     heldRuns.add(r.id);
     heldRuns.add(r.runId);
@@ -886,9 +921,13 @@ async function sweepFacts(state: ServerState, serverStart: number): Promise<Omit
   // a watched PR's fix run is held; a watched PR canopy works on (a fix,
   // its own auto-merge, a run on the branch) is never offered
   for (const w of state.prs.info()) if (w.fixing) heldRuns.add(w.fixing.run);
+  for (const run of all) if (heldRuns.has(run.id) && run.branch) heldRuns.add(run.branch.origin);
+  const livePrs = new Set(state.prs.info().filter((w) => w.state === undefined || w.state.status === "open").map((w) => w.id));
   const fixing = state.prs.busy();
   const outside = cards.map((c) => ({ ...c, idleSince: state.registry.stateSince(c.id) ?? serverStart }));
-  return { serverStart, shells, runs, heldRuns, outside, fixing, repos: state.result.repos };
+  let kept: Awaited<ReturnType<typeof listKeptRuns>> = [];
+  try { await state.readyRunlog(); kept = await listKeptRuns(runsDir()); } catch { /* shared or unsafe persisted transcripts stay unavailable */ }
+  return { serverStart, shells, runs, heldRuns, livePrs, kept, outside, fixing, repos: state.result.repos };
 }
 
 /** Starts a chat on the session the sweep stopped one on, as a chat started
@@ -1035,6 +1074,7 @@ async function startRepoRun(
 ): Promise<Run> {
   // A coordinator runs only through its own start, in its sandbox with its
   // token; this path would spawn it here, unisolated.
+  if (action === "compare") throw new HttpError(400, "compare runs only inside a group");
   if (action === "coordinate") throw new HttpError(400, "a coordinator starts through its own path, not as a plain run");
   // The runner spawns the agent here, at the repo's path; there is no
   // agent to spawn at a folder on another host.
@@ -1055,7 +1095,7 @@ async function startRepoRun(
   if (onBranch && seed) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
   if (pr && !onBranch) throw new HttpError(400, "only a run on a branch of its own can open a PR");
   if (onBranch) {
-    const going = state.runner.branchRunsFor(repo.id).length;
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
   } else {
     // A workflow owns the repo while it runs, gate included: a second
@@ -1073,36 +1113,142 @@ async function startRepoRun(
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
-  if (onBranch) return startBranchRun(state, repo, action, await issueNoteFor(repo, note), agent, by, pr);
+  if (onBranch) {
+    const resolved = await issueNoteFor(repo, note);
+    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], {}, resolved.work);
+  }
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
+}
+
+/** A group reserves its preflight through fanout against other API branch starts. */
+async function withBranchStart<T>(state: ServerState, repoId: string, start: () => Promise<T>): Promise<T> {
+  const previous = state.branchStarts.get(repoId) ?? Promise.resolve();
+  let release = () => {};
+  const done = new Promise<void>(resolve => { release = resolve; });
+  const pending = previous.then(() => done);
+  state.branchStarts.set(repoId, pending);
+  await previous;
+  try { return await start(); }
+  finally { release(); if (state.branchStarts.get(repoId) === pending) state.branchStarts.delete(repoId); }
+}
+
+async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: string[] | undefined, autoLand: boolean, pr: boolean): Promise<RunGroup> {
+  return withBranchStart(state, repo.id, async () => {
+    if (action === "compare" || action === "coordinate") throw new HttpError(400, "that action does not start a branch group");
+    if (repo.host || repo.forge) throw new HttpError(400, "branch groups run only in local checkouts");
+    if (isSeedPath(state.root, repo.path)) throw new HttpError(400, "an incubator seed works in its seed, not in branch groups");
+    if (ACTIONS[action].noteRequired && !note.trim()) throw new HttpError(400, "write what the agent should do first");
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
+    if (going + times > BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${BRANCH_RUNS_PER_REPO - going} free branch slots; this group needs ${times}`);
+    const cfg = await loadConfig();
+    const profile = profiles?.[0];
+    if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new HttpError(400, `unknown agent profile ${profile}`);
+    const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action });
+    if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
+    await needHarness(state, agent.harness, repo.path);
+    const resolved = await issueNoteFor(repo, note);
+    const group = await state.groups.create({ repoId: repo.id, repoPath: repo.path, action, note: resolved.note, autoLand, expectedMembers: times, startedAt: Date.now(), ...(pr ? { pr: true } : {}) });
+    const cuts: BranchStart[] = [];
+    const items: string[] = [];
+    const runs: Run[] = [];
+    const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    try {
+      for (let i = 0; i < times; i++) {
+        const item = state.work.mint({ ...(resolved.work ?? { title: titleOf(resolved.note), from: { kind: "note" } }), repos: [repo.id] });
+        items.push(item.id);
+        const cut = await cutBranch(repo, resolved.note, false, item.id, state.warm);
+        cut.branch.group = group.id;
+        cuts.push(cut);
+      }
+      for (const cut of cuts) {
+        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, agent, by, undefined, cut, { group: group.id, priority: "low" });
+        runs.push(run);
+        await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: profile ?? null });
+      }
+      return state.groups.info().find(g => g.id === group.id) ?? group;
+    } catch (error: unknown) {
+      // Stop every member before removing any tree. Their final state events
+      // must settle before records are forgotten, or they could resurrect one.
+      const stopped = await Promise.allSettled(runs.map(run => state.runner.stopAndWait(run.id)));
+      for (const result of stopped) if (result.status === "rejected") console.error(`groups: rollback stop: ${String(result.reason)}`);
+      await state.landing.idle();
+      for (const cut of cuts) {
+        try { await removeRunTree(repo.path, cut.branch.dir, cut.branch.name); }
+        catch (cleanup: unknown) { console.error(`groups: rollback ${cut.branch.origin}: ${String(cleanup)}`); }
+        await state.landing.forget(cut.branch.origin).catch(cleanup => console.error(`groups: rollback record ${cut.branch.origin}: ${String(cleanup)}`));
+      }
+      for (const run of runs) {
+        try { state.runner.dismiss(run.id); }
+        catch (cleanup: unknown) { console.error(`groups: rollback run ${run.id}: ${String(cleanup)}`); }
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      for (const id of items) state.work.close(id, "dropped", `the group did not start: ${message}`);
+      await state.groups.remove(group.id).catch(cleanup => console.error(`groups: rollback group ${group.id}: ${String(cleanup)}`));
+      if (error instanceof HttpError) throw error;
+      if (error instanceof BranchCapError) throw new SlotsFullError(message);
+      throw new HttpError(400, message);
+    }
+  });
 }
 
 /** A branch run's note when it opens with `#123` or an issue's URL: the
  *  GitHub issue, read with gh off the repo's GitHub remote (core/issue).
  *  Only here, after every refusal, so a run that cannot start never calls
  *  gh; a chat in the checkout that opens with `#12` keeps its words. */
-async function issueNoteFor(repo: Repo, note: string): Promise<string> {
+async function issueNoteFor(repo: Repo, note: string): Promise<{ note: string; work?: WorkStart }> {
   const got = await resolveIssueNote(note, {
     slug: async () => (await githubRemote(repo))?.slug ?? null,
     gh: (args) => exec(["gh", ...args], { cwd: repo.path, timeoutMs: 30_000 }),
   });
   if ("error" in got) throw new HttpError(400, got.error);
-  return got.note;
+  return {
+    note: got.note,
+    ...(got.issue
+      ? { work: { title: got.issue.title, from: { kind: "issue", service: "github", key: `${got.issue.slug}#${got.issue.number}`, link: got.issue.url } } }
+      : {}),
+  };
 }
 
 /** A run on a branch of its own: a worktree under the config dir on
- *  `run/<slug>-<id>`, cut from the default branch's tip, where the gates'
- *  setup runs before the agent starts. The landing queue lands it later. */
-async function startBranchRun(state: ServerState, repo: Repo, action: RunAction, note: string, agent: AgentSettings, by: string | undefined, pr = false, spec: ActionSpec = ACTIONS[action], extras: StartExtras = {}): Promise<Run> {
-  const start = await cutBranch(repo, note, pr);
-  try {
-    return state.runner.start(repo, action, spec, note, agent, by, undefined, start, extras);
-  } catch (err) {
-    await removeRunTree(repo.path, start.branch.dir, start.branch.name);
-    if (err instanceof Error && err.name === "StageAwayError") throw err;
-    if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
-    throw new HttpError(400, String(err instanceof Error ? err.message : err));
-  }
+ *  `run/<work id>-<slug>`, cut from the default branch's tip, where the gates'
+ *  setup runs before the agent starts. A warm worktree skips unchanged setup.
+ *  The landing queue lands it later. */
+async function startBranchRun(
+  state: ServerState,
+  repo: Repo,
+  action: RunAction,
+  note: string,
+  agent: AgentSettings,
+  by: string | undefined,
+  pr = false,
+  spec: ActionSpec = ACTIONS[action],
+  extras: StartExtras = {},
+  work: WorkStart = { title: titleOf(note), from: { kind: "note" } },
+  valid?: () => boolean,
+): Promise<Run> {
+  const current = () => { if (valid && !valid()) throw new Error("the trigger no longer holds the flows lock"); };
+  return withBranchStart(state, repo.id, async () => {
+    current();
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
+    if (going >= BRANCH_RUNS_PER_REPO) throw new SlotsFullError(`${repo.name} has ${going} branch runs going; wait for one to end`);
+    const item = state.work.mint({ ...work, repos: [repo.id] });
+    let start: BranchStart | undefined;
+    try {
+      start = await cutBranch(repo, note, pr, item.id, state.warm);
+      current();
+      const prepare = start.prepare;
+      const owned = valid ? { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } } : start;
+      return await state.runner.start(repo, action, spec, note, agent, by, undefined, owned, extras);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.work.close(item.id, "dropped", `the run did not start: ${message}`);
+      if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+      if (err instanceof Error && err.name === "StageAwayError") throw err;
+      if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
+      if (!start && err instanceof HttpError) throw err;
+      throw new HttpError(400, message);
+    }
+  });
 }
 
 /** What a coordinate run says where no isolated coordinator runner is set
@@ -1190,17 +1336,25 @@ async function dropCoordFolder(id: string): Promise<void> {
 
 /** A new branch off the default branch, its worktree made, and the setup
  *  line to run there before the first agent: what a branch run, or a flow
- *  on a branch, starts with. */
-async function cutBranch(repo: Repo, note: string, pr: boolean): Promise<BranchStart> {
+ *  on a branch, starts with. It uses a warm worktree when the pool has one. */
+async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, pool: WarmPool): Promise<BranchStart> {
   const target = await defaultBranch(repo.path);
   const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
   if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
   const id = crypto.randomUUID().slice(0, 8);
-  const name = runBranchName(note, id);
+  const name = workBranchName(work, note);
   const dir = runTreeDir(repo.path, id);
+  if (existsSync(dir) || await revOf(repo.path, `refs/heads/${name}`)) throw new HttpError(409, "the run's branch or worktree exists already");
+  // Check readiness before take: an unowned backend can still start cold.
+  // A rejected take may have moved its destination, so it must never fall back.
+  const take: Take = pool.ready
+    ? await pool.take(repo.path, dir, name, base)
+    : { took: false, wanted: warmFor(await loadConfig(), repo.path) > 0 };
   try {
-    await addRunTree(repo.path, dir, name, base);
+    if (!take.took) await addRunTree(repo.path, dir, name, base);
   } catch (err) {
+    // git can leave the new tree/branch behind when a checkout hook fails.
+    await removeRunTree(repo.path, dir, name).catch(() => {});
     throw new HttpError(500, `could not make the run's worktree: ${String(err instanceof Error ? err.message : err)}`);
   }
   // read from the main checkout, so a run cannot change its own setup
@@ -1213,13 +1367,15 @@ async function cutBranch(repo: Repo, note: string, pr: boolean): Promise<BranchS
   }
   const prepare = async (say: (text: string) => void): Promise<void> => {
     if (gatesWhy) say(`no setup run: ${gatesWhy}`);
-    if (!setup) return;
+    if (!setup || (take.took && !take.setupAgain)) return;
     say(`$ ${setup}`);
     const r = await runGate(dir, setup);
     if (r.exit !== 0) throw new Error(`${setup} exited ${r.exit ?? "on a signal"}${r.output ? `: ${r.output.split("\n").slice(-3).join(" ")}` : ""}`);
   };
+  const startNote = take.took ? "started in a warm worktree" : take.wanted ? (setup ? "no warm worktree; setup will run" : "no warm worktree") : undefined;
   return {
-    branch: { name, target, base, dir, state: "working", origin: id, ...(pr ? { openPr: true as const } : {}) },
+    ...(startNote ? { startNote } : {}),
+    branch: { name, target, base, dir, state: "working", origin: id, work, ...(pr ? { openPr: true as const } : {}) },
     prepare,
   };
 }
@@ -1240,7 +1396,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: "ask" });
   await needHarness(state, agent.harness, repo.path);
-  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id };
+  const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
   const message = resume ? (queueLine ? `${reason}\n\n${branchLine(b)}` : reason) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b);
   try {
@@ -1248,7 +1404,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
       branch: b,
       message,
       ...(resume ? { resume } : {}),
-    });
+    }, rec.group ? { group: rec.group, priority: "low" } : {});
   } catch (err) {
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
@@ -1259,11 +1415,12 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
  *  its branch run starts with: the step's task, tools and turns, no one to
  *  answer it, and a PR when it settles ready. Anything more is a flow on a
  *  branch, every step unattended the same way. Read from the bundled and
- *  user workflows only, like a fleet's, so a repo cannot rewrite what its
- *  own trigger runs. */
-async function triggerSpec(name: string): Promise<{ kind: "run"; spec: ActionSpec; workflow: string; profile?: string } | { kind: "flow"; workflow: Workflow } | string> {
-  const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
-  if (!wf) return `unknown workflow: ${name}`;
+ *  user workflows only, like a fleet's: repo modes decide whether a step
+ *  may start, while its task still comes from the trusted workflow file. */
+async function triggerSpec(name: string, repo: Repo): Promise<{ kind: "run"; spec: ActionSpec; workflow: string; profile?: string } | { kind: "flow"; workflow: Workflow } | string> {
+  const base = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
+  if (!base) return `unknown workflow: ${name}`;
+  const wf = await withRepoModes(repo, base);
   const step = triggerPlan(wf);
   if (typeof step === "string") return step;
   if (step.kind === "flow") return { kind: "flow", workflow: { ...wf, unattended: TRIGGER_UNATTENDED, agentRole: "job" } };
@@ -1324,16 +1481,18 @@ async function issueForge(
 /** A trigger event's branch run, or its flow on a branch, after the checks a
  *  branch run route makes; a repo whose branch slots are full answers busy,
  *  and the event waits. A flow counts for a slot from its start to its end,
- *  checks and gates between steps included. */
-async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo): Promise<StartOutcome> {
+ *  checks and gates between steps included. Queue events keep their branch
+ *  for local landing; PR events open a pull request when ready. */
+async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo, valid: () => boolean): Promise<StartOutcome> {
+  const current = () => { if (!valid()) throw new Error("the trigger no longer holds the flows lock"); };
+  current();
   if (repo.host) throw new Error(`${repo.name} is on ${repo.host}; a trigger runs only on this machine`);
   if (repo.forge) throw new Error(`${repo.name} is on the forge; a trigger runs in a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
-  const got = await triggerSpec(event.workflow);
+  const got = await triggerSpec(event.workflow, repo);
+  current();
   if (typeof got === "string") throw new Error(got);
-  const runs = state.runner.branchRunsFor(repo.id).filter((r) => !r.branch?.held).length;
-  const flowsGoing = state.flows.list().filter((f) => f.repoId === repo.id && f.branch && isFlowActive(f)).length;
-  const going = runs + flowsGoing;
+  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const cfg = await loadConfig();
   const profiles = got.kind === "run" ? [got.profile] : got.workflow.steps.filter((s) => s.body).map((s) => s.agent);
@@ -1345,24 +1504,41 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
     const agent = select(profile);
     if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
     await needHarness(state, agent.harness, repo.path);
+    current();
   }
-  // a Forgejo event's branch lands through the queue; every other service's opens a PR
   const pr = opensPr(event);
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec) };
-  const start = await cutBranch(repo, event.note, pr);
-  try {
-    return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: start }) };
-  } catch (err) {
-    await removeRunTree(repo.path, start.branch.dir, start.branch.name);
-    throw err;
+  const work: WorkStart = { title: event.title, from: { kind: "trigger", event: event.id } };
+  if (got.kind === "run") {
+    try { return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work, valid) }; }
+    catch (err) { if (err instanceof SlotsFullError) return { busy: err.message }; throw err; }
   }
+  return withBranchStart(state, repo.id, async () => {
+    current();
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
+    if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+    const item = state.work.mint({ ...work, repos: [repo.id] });
+    let start: BranchStart | undefined;
+    try {
+      start = await cutBranch(repo, event.note, pr, item.id, state.warm);
+      current();
+      const prepare = start.prepare;
+      const owned = { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } };
+      return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: owned }) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.work.close(item.id, "dropped", `the run did not start: ${message}`);
+      if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+      throw err;
+    }
+  });
 }
 
 /** The repo's branch slots taken, as a trigger counts them: its branch runs
  *  outside a flow, and each branch flow from its start to its end. */
 function branchSlotsTaken(state: ServerState, repoId: string): number {
-  const runs = state.runner.branchRunsFor(repoId).filter((r) => !r.branch?.held).length;
-  return runs + state.flows.list().filter((f) => f.repoId === repoId && f.branch && isFlowActive(f)).length;
+  const runs = state.runner.branchRunsFor(repoId).flatMap((run) => run.branch && !run.branch.held ? [run.branch.origin] : []);
+  const flows = state.flows.list().flatMap((flow) => flow.repoId === repoId && flow.branch && isFlowActive(flow) ? [flow.branch.origin] : []);
+  return new Set([...runs, ...flows]).size;
 }
 
 /** A coordinator's card as a branch run (FR-010): the repo's agent on its
@@ -1377,13 +1553,15 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
   // the runner's own count takes held branch runs too, so both are asked
-  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchRunsFor(repo.id).length);
+  const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
   if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
   try {
-    return { run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }) };
+    return {
+      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }, { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } }),
+    };
   } catch (err) {
     // another branch run took the last slot while this one got ready
     if (err instanceof SlotsFullError) return { busy: err.message };
@@ -1408,6 +1586,18 @@ function stepProfileRefusal(cfg: CanopyConfig, wf: Workflow): string | null {
   const profiles = agentRoutes(cfg).profiles;
   const step = wf.steps.find((s) => s.agent && !hasProfile(profiles, s.agent));
   return step ? `step ${step.name} of ${wf.name} names agent profile ${step.agent ?? ""}, which this backend does not have` : null;
+}
+
+/** Committed repo modes have the last word. Seeds never supply stage policy. */
+async function withRepoModes(repo: Repo, wf: Workflow): Promise<Workflow> {
+  if (isSeedRepoId(repo.id)) return wf;
+  try {
+    const { workflow, warnings } = applyModes(wf, await readFlowModes(repo.path));
+    for (const warning of warnings) console.error(`workflows: ${repo.name}: ${warning}`);
+    return workflow;
+  } catch (err) {
+    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
 }
 
 /** The settings a workflow step's run starts with on a repo: the step's own
@@ -1978,8 +2168,11 @@ const isFlowChoice = (v: unknown): v is FlowChoice => v === "continue" || v === 
 const isHistoryWindow = (v: unknown): v is HistoryWindow =>
   typeof v === "string" && (HISTORY_WINDOWS as readonly string[]).includes(v);
 
-async function loadHistory(state: ServerState, force = false): Promise<HistoryCache> {
-  const c = state.history;
+/** Only the costs view's explicit 90-day window widens the archive strip. */
+const overviewDays = (window: string | null): number => (window === "90d" ? 90 : RING_DAYS);
+
+async function loadHistory(state: ServerState, force = false, days = RING_DAYS): Promise<HistoryCache> {
+  const c = state.history.get(days);
   if (
     !force &&
     c &&
@@ -1988,9 +2181,10 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
   ) {
     return c;
   }
-  if (state.historyPending) return state.historyPending;
+  const pending = state.historyPending.get(days);
+  if (pending) return pending;
   const scannedAt = state.result.scannedAt;
-  state.historyPending = (async () => {
+  const building = (async () => {
     const cfg = await loadConfig();
     const loc = locateHistory(cfg);
     let entry: HistoryCache;
@@ -2002,7 +2196,7 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
         value: { available: false, reason: loc.reason, fetchedAt: Date.now() },
       };
     } else {
-      const value = await historyOverview(loc.bin, state.result.repos).catch(
+      const value = await historyOverview(loc.bin, state.result.repos, new Date(), days).catch(
         (err: unknown): HistoryOverview => ({
           available: false,
           reason: String(err instanceof Error ? err.message : err),
@@ -2011,12 +2205,13 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
       );
       entry = { at: Date.now(), scannedAt, bin: loc.bin, value };
     }
-    state.history = entry;
+    state.history.set(days, entry);
     return entry;
   })().finally(() => {
-    state.historyPending = null;
+    state.historyPending.delete(days);
   });
-  return state.historyPending;
+  state.historyPending.set(days, building);
+  return building;
 }
 
 /** The CLI and the project id behind one repo's history routes. */
@@ -2199,6 +2394,7 @@ async function refreshHeld(state: ServerState, id: string): Promise<{ repo: Repo
   const idx = state.result.repos.findIndex((r) => r.id === id);
   if (idx !== -1) state.result.repos[idx] = fresh;
   broadcast(state, { type: "repo", repo: fresh });
+  state.collisions.onRepo(fresh);
   if (goneRepo(fresh)) healGone(state, fresh);
   return { repo: fresh, held: false };
 }
@@ -2281,17 +2477,42 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     // source is in the same list, so it is settled on the way out; the pull
     // request counts and the peer states ride along from the last activity
     // pass and the last peer pass.
-    repos: linkFavorites(
-      linkArchived(
-        linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
-        state.archived,
+    repos: linkHarness(
+      linkFavorites(
+        linkArchived(
+          linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
+          state.archived,
+        ),
+        state.favorites,
       ),
-      state.favorites,
+      state.harness,
     ),
     scannedAt: Date.now(),
     backend: backendCaps(state.harnesses()),
   };
   syncRepoHealthSoon(state);
+}
+
+/** Seeds the harness mark once, from local repos whose root package declares
+ *  the canopy name. A broken manifest skips that repo without leaving the
+ *  config eligible for a later guess. */
+async function seedHarness(state: ServerState): Promise<void> {
+  const cfg = await loadConfig();
+  if (cfg.harness !== null) return;
+  const found: string[] = [];
+  for (const repo of state.result.repos) {
+    if (repo.host || repo.forge) continue;
+    try {
+      const manifest: unknown = JSON.parse(await readFile(join(repo.path, "package.json"), "utf8"));
+      if (manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) && "name" in manifest && manifest.name === "canopy") {
+        found.push(repo.path);
+      }
+    } catch {
+      // Missing, unreadable, or malformed package files do not block seeding.
+    }
+  }
+  state.harness = new Set(await seedHarnessList(found));
+  rebuildResult(state, state.result.repos);
 }
 
 /** the folder the health file sits in: its removal takes the file too */
@@ -2503,6 +2724,7 @@ const watchCheckId = (rt: SourceRuntime): string => `canopy:watch:${rt.src.id}`;
  *  tmux and the watchers are polled. */
 function addCanopyChecks(state: ServerState, broker: boolean): void {
   const canopy = { kind: "canopy" } as const;
+  state.health.add({ id: "canopy:worktrees", label: "worktrees", scope: canopy, heal: "button", every: 60_000, probe: () => state.warm.probe(), doHeal: async () => { await state.warm.prune(); } });
   const streams = [
     ["canopy:tailchan", "tailchan stream"],
     ["canopy:registry", "agent registry stream"],
@@ -2729,7 +2951,10 @@ async function refreshPulls(state: ServerState): Promise<void> {
     // announcing it would pulse most of the board on every start.
     const was = before[i]?.pulls?.open ?? 0;
     const counted = was > 0 || (repo.pulls?.open ?? 0) > 0;
-    if (repo !== before[i] && (counted || repo.archived !== before[i]?.archived)) broadcast(state, { type: "repo", repo });
+    if (repo !== before[i] && (counted || repo.archived !== before[i]?.archived)) {
+      broadcast(state, { type: "repo", repo });
+      state.collisions.onRepo(repo);
+    }
   });
 }
 
@@ -2909,6 +3134,7 @@ function applyPeerState(state: ServerState, id: string, st: PeerState): void {
   const next = { ...repo, peers: st };
   state.result.repos[idx] = next;
   broadcast(state, { type: "repo", repo: next });
+  state.collisions.onRepo(next);
 }
 
 /** Best effort: `ctl` exists only where _control is installed. The PATH is
@@ -3160,8 +3386,13 @@ async function handleApi(
   if (rangerRes) return rangerRes;
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
+  const groupsRes = await state.groups.handle(req, url);
+  if (groupsRes) return groupsRes;
+  if (path === "/api/landing" && method === "GET") return json({ ...state.landing.info(), groups: state.groups.info() });
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
+  const worktreesRes = await state.warm.handle(req, url);
+  if (worktreesRes) return worktreesRes;
   const scenariosRes = await state.scenarios.handle(req, url);
   if (scenariosRes) return scenariosRes;
   const prsRes = await state.prs.handle(req, url);
@@ -3174,8 +3405,12 @@ async function handleApi(
   if (triggersRes) return triggersRes;
   const coordRes = await state.coordinator.handle(req, url, caller);
   if (coordRes) return coordRes;
+  const workRes = await state.work.handle(req, url, caller);
+  if (workRes) return workRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
+  const capacityRes = await state.capacity.handle(req, url);
+  if (capacityRes) return capacityRes;
   const secretsRes = await state.secrets.handle(req, url);
   if (secretsRes) return secretsRes;
   const repoHealthRes = await state.repoHealth.handle(req, url, (id) => state.result.repos.find((r) => r.id === id));
@@ -3324,10 +3559,40 @@ async function handleApi(
   }
 
   if (path === "/api/history" && method === "GET") {
-    const c = await loadHistory(state, url.searchParams.get("refresh") === "1");
+    const days = overviewDays(url.searchParams.get("window"));
+    const c = await loadHistory(state, url.searchParams.get("refresh") === "1", days);
     return json(c.value);
   }
 
+  if (path === "/api/runs/prune" && method === "POST") {
+    await state.readyRunlog();
+    const settings = (await loadConfig()).sweep;
+    const facts = await sweepFacts(state, state.about.startedAt);
+    return json(await pruneKept(runsDir(), settings.spans.transcript, new Set([...facts.heldRuns, ...(facts.livePrs ?? [])])));
+  }
+  if (path === "/api/runs" && method === "GET" && url.searchParams.get("kept") === "1") {
+    await state.readyRunlog();
+    return json((await listKeptRuns(runsDir())).sort((a, b) => b.ended - a.ended));
+  }
+  const keptRoute = /^\/api\/runs\/([^/]+)(\/export)?$/.exec(path);
+  if (keptRoute && method === "GET") {
+    const id = keptRoute[1] ?? "";
+    if (!RUN_ID.test(id)) return json({ error: "no run by that id" }, 404);
+    let run = state.runner.get(id) ?? null;
+    if (!run) { await state.readyRunlog(); run = await readKeptRun(runsDir(), id); }
+    if (!run) return json({ error: "no run by that id" }, 404);
+    if (!keptRoute[2]) return json(run);
+    const origin = run.branch?.origin ?? run.id;
+    const landing = state.landing.info().entries.find((e) => e.id === origin);
+    const pr = state.prs.info().find((w) => w.id === origin);
+    const where = landing?.state === "landed" ? `landed on ${landing.target}`
+      : landing && sentBack(landing) ? `sent back: ${landing.reason ?? ""}`
+      : pr ? `PR #${pr.number} ${pr.state?.status ?? "unknown"}` : undefined;
+    const repoName = state.result.repos.find((r) => r.id === run.repoId)?.name ?? run.repoId;
+    let secrets: ReturnType<DiskRunLogger["currentSecrets"]>["secrets"];
+    try { secrets = state.runlog.currentSecrets().secrets; } catch { throw new HttpError(503, "current transcript secrets are unavailable"); }
+    return new Response(exportRun(run, secrets, { repoName, ...(where ? { where } : {}) }), { headers: { "content-type": "text/markdown; charset=utf-8" } });
+  }
   if (path === "/api/runs" && method === "GET") {
     return json(state.runner.list());
   }
@@ -3772,13 +4037,14 @@ async function handleApi(
     if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
     const request = b.request;
     const again = request ? state.flows.fleetForRequest(request) : undefined;
-    if (again) return json(again);
+    if (again) {
+      await Promise.all(again.repos.flatMap((entry) => entry.flowId ? [state.flows.whenStarted(entry.flowId)] : []));
+      return json(again);
+    }
     const ids = b.ids as string[];
     const repos = ids.map((id) => state.result.repos.find((r) => r.id === id)).filter((r): r is Repo => r !== undefined);
     if (!repos.length) return json({ error: "no known repos in ids" }, 400);
-    // The fleet's workflow is resolved once, from the bundled and user
-    // sources: a fleet runs the same file everywhere, so repo overrides
-    // do not apply.
+    // The fleet uses one bundled/user file, with each repo's committed modes.
     const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), b.workflow);
     if (!wf) return json({ error: `unknown workflow: ${b.workflow}` }, 400);
     if (wf.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
@@ -3787,8 +4053,24 @@ async function handleApi(
     const cfg = await loadConfig();
     const refused = stepProfileRefusal(cfg, wf);
     if (refused) return json({ error: refused }, 400);
-    await needStepHarnesses(state, cfg, wf, repos.filter((r) => !fleetSkipReason(r, wf)).map((r) => r.path));
-    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile, wf.name), request), 201);
+    const byRepo = new Map<string, Workflow | string>();
+    const eligible = repos.filter((r) => !fleetSkipReason(r, wf));
+    await Promise.all(eligible.map(async (repo) => {
+      try { byRepo.set(repo.id, await withRepoModes(repo, wf)); }
+      catch (err) { byRepo.set(repo.id, String(err instanceof Error ? err.message : err)); }
+    }));
+    const runnable = eligible.filter((r) => {
+      const resolved = byRepo.get(r.id);
+      return typeof resolved !== "string" && !unattendedRefusal(resolved ?? wf, "a fleet's run");
+    });
+    await needStepHarnesses(state, cfg, wf, runnable.map((r) => r.path));
+    const fleet = state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile, wf.name), request, (repo) => {
+      const resolved = byRepo.get(repo.id);
+      if (typeof resolved === "string") throw new Error(resolved);
+      return resolved ?? wf;
+    });
+    await Promise.all(fleet.repos.flatMap((entry) => entry.flowId ? [state.flows.whenStarted(entry.flowId)] : []));
+    return json(fleet, 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -3961,7 +4243,7 @@ async function handleApi(
   if (path === "/api/workspaces/run" && method === "POST") {
     const b = await objectBody(req);
     if (typeof b.name !== "string") return json({ error: "missing workspace name" }, 400);
-    if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+    if (!isRunAction(b.action) || b.action === "compare") return json({ error: "unknown action" }, 400);
     if (b.action === "coordinate") return json({ error: "a coordinator starts at a repo, not at a workspace" }, 400);
     const ws = (await loadConfig()).workspaces.find((w) => w.name === b.name);
     if (!ws) return json({ error: "unknown workspace" }, 404);
@@ -4037,6 +4319,23 @@ async function handleApi(
       state.result.repos[idx] = starred!;
       broadcast(state, { type: "repo", repo: starred! });
       return json(starred);
+    }
+    // Harness membership is canopy's own path mark, so it can be set before
+    // the forge-only repo refusal just like the star and archive marks.
+    if (method === "POST" && action === "harness") {
+      const body: unknown = await req.json().catch(() => null);
+      if (body === null || typeof body !== "object" || Array.isArray(body) || !("harness" in body) || typeof body.harness !== "boolean") {
+        throw new HttpError(400, "harness must be true or false");
+      }
+      state.harness = new Set(await setHarness(repo.path, body.harness));
+      const idx = state.result.repos.findIndex((r) => r.id === repo.id);
+      const now = state.result.repos[idx];
+      if (!now) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      const marked = linkHarness([now], state.harness)[0];
+      if (!marked) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      state.result.repos[idx] = marked;
+      broadcast(state, { type: "repo", repo: marked });
+      return json(marked);
     }
     // A forge repo is a listing, not a checkout: git has nothing to run
     // against and no folder to open. Where the clone is known, say so — the
@@ -4386,7 +4685,11 @@ async function handleApi(
       if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
       const request = b.request;
       const again = request ? state.flows.forRequest(request) : undefined;
-      if (again) return again.repoId === repo.id ? json(again) : json({ error: "that request started a flow on another repo" }, 409);
+      if (again) {
+        if (again.repoId !== repo.id) return json({ error: "that request started a flow on another repo" }, 409);
+        await state.flows.whenStarted(again.id);
+        return json(again);
+      }
       const entries = await loadWorkflows(repo);
       const wf = findWorkflow(entries, b.workflow);
       if (wf?.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
@@ -4400,17 +4703,28 @@ async function handleApi(
       if (refused) return json({ error: refused }, 400);
       await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), request ? { request } : {}), 201);
+        const flow = state.flows.start(repo, await withRepoModes(repo, wf), note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), request ? { request } : {});
+        await state.flows.whenStarted(flow.id);
+        return json(flow, 201);
       } catch (err) {
         throw new HttpError(400, String(err instanceof Error ? err.message : err));
       }
     }
     if (method === "POST" && action === "run") {
       const b = await objectBody(req);
-      if (!isRunAction(b.action)) return json({ error: "unknown action" }, 400);
+      if (!isRunAction(b.action) || b.action === "compare") return json({ error: "unknown action" }, 400);
       const note = typeof b.note === "string" ? b.note : "";
       if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
       if (b.pr !== undefined && typeof b.pr !== "boolean") return json({ error: "pr must be true or false" }, 400);
+      const groupFields = b.times !== undefined || b.profiles !== undefined || b.autoLand !== undefined;
+      if (groupFields && b.branch !== true) return json({ error: "group settings require branch: true" }, 400);
+      const times = b.times ?? 1;
+      if (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX) return json({ error: `times must be 1 to ${GROUP_MAX}` }, 400);
+      if (b.autoLand !== undefined && typeof b.autoLand !== "boolean") return json({ error: "autoLand must be true or false" }, 400);
+      const rawProfiles = b.profiles;
+      if (rawProfiles !== undefined && (!Array.isArray(rawProfiles) || rawProfiles.length > 1 || !rawProfiles.every(isProfileName))) return json({ error: "profiles must contain at most one valid shared profile" }, 400);
+      const profiles = Array.isArray(rawProfiles) ? rawProfiles.filter(isProfileName) : undefined;
+      if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
@@ -4637,6 +4951,10 @@ export async function startServer(opts: {
     /** how often a park is looked at for its day-old retro */
     tickEvery?: number;
   };
+  /** tests can pause the real reviewer callback after async preflight */
+  groups?: { reviewerPreflight?: (group: RunGroup) => Promise<void> };
+  /** GitHub reads/writes can be replaced while tests retain the real PR hub. */
+  prs?: Pick<PrDeps, "gh" | "slugOf" | "tickEvery">;
   /** the runner's driver per harness; tests swap in a stand-in agent */
   /** `quietWait` shortens how long a stage run's or check's end waits for
    *  the stage runner to call its seed quiet, for tests */
@@ -4656,6 +4974,13 @@ export async function startServer(opts: {
   sweepShell: (id: string, seen?: number) => Promise<"ended" | "in use" | "unkept">;
   stop: () => Promise<void>;
 }> {
+  // Keep original sources before any await or startup environment stripping.
+  const retainedSecrets = Object.entries(process.env).flatMap(([name, value]) => {
+    if (!value || !(name.startsWith("CANOPY_") || PRIVATE_ENV.some((n) => n === name))) return [];
+    const original = { name, value };
+    const trimmed = name.startsWith(TRIGGER_ENV_PREFIX) ? value.trim() : value;
+    return trimmed && trimmed !== value ? [original, { name, value: trimmed }] : [original];
+  });
   // what the sweep counts a shell's idle from at the latest: keystrokes
   // before it were held in memory and are gone
   const serverStart = Date.now();
@@ -4784,7 +5109,35 @@ export async function startServer(opts: {
   const remembered = new RememberedRules();
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
+  const ledgerOff = process.env["NODE_ENV"] === "test" && !process.env["CANOPY_CONFIG_DIR"];
+  const runlog = new DiskRunLogger({ retainedSecrets });
+  await runlog.refresh();
+  let recordOwner = false;
+  let recoveredRunlog = false;
+  let runlogFactsReady = false;
+  let recoveringRunlog: Promise<void> | null = null;
+  const recoverRunlog = async (): Promise<void> => {
+    if (ledgerOff || !recordOwner || stopped) throw new HttpError(503, "kept transcripts are unavailable on this backend");
+    let privacy: ReturnType<DiskRunLogger["currentSecrets"]>;
+    try { privacy = runlog.currentSecrets(); } catch { throw new HttpError(503, "current transcript secrets are unavailable"); }
+    if (recoveredRunlog) return;
+    recoveringRunlog ??= closeOpen(runsDir(), (id) => {
+      const rec = state.landing.record(id);
+      return rec ? { verb: rec.verb, note: rec.note, ...(rec.session ? { session: rec.session } : {}), branch: { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "stopped", origin: rec.id } } : undefined;
+    }, privacy).then(() => { recoveredRunlog = true; }).finally(() => { recoveringRunlog = null; });
+    await recoveringRunlog;
+  };
+  const readyRunlog = async (): Promise<void> => {
+    if (!runlogFactsReady) throw new HttpError(503, "kept transcripts await record adoption");
+    await recoverRunlog();
+  };
+  const ownedLog: RunLogger = { open: (...args) => {
+    if (!recordOwner || stopped) return null;
+    if (!recoveredRunlog) { args[3]("current transcript secrets are unavailable"); return null; }
+    return runlog.open(...args);
+  } };
   const runnerOpts = {
+    ...(!ledgerOff ? { log: ownedLog } : {}),
     remembered: () => remembered.list(),
     backend: selfName(cfg.self, hostname()),
     version: readPkg().version ?? "0",
@@ -4813,13 +5166,17 @@ export async function startServer(opts: {
     onChange: (run) => {
       broadcast(state, { type: "run", run });
       state.costs.onRun(run);
+      state.capacity.onRun(run);
       state.flows.onRun(run);
       state.chan.onRun(run);
       state.ranger.onRun(run.id, isRunActive(run));
       state.landing.onRun(run);
+      state.groups.onRun(run);
+      state.collisions.onRun(run);
       state.prs.onRun(run);
       state.triggers.onRun(run);
       state.coordinator.onRun(run);
+      state.work.onRun(run);
       recountAwake(state);
       // a coordinator's token and folder live exactly as long as its run
       if (run.action === "coordinate" && !isRunActive(run)) {
@@ -4846,6 +5203,7 @@ export async function startServer(opts: {
   const flows = new Flows(runner, {
     onChange: (flow) => {
       broadcast(state, { type: "flow", flow });
+      state.groups.recheck(flow.repoId);
       state.chan.onFlow(flow);
       state.incubator.onFlow(flow);
       state.triggers.onFlow(flow);
@@ -4916,8 +5274,8 @@ export async function startServer(opts: {
     forget: (id) => flowFiles?.forget(id),
     branchState: (b) => LandingHub.stateOf(b),
     // the last step's run carries the session a "fix it" resumes
-    onBranchEnd: (flow, runId) => {
-      const run = runId ? runner.get(runId) : undefined;
+    onBranchEnd: (flow, runId, releasedRun) => {
+      const run = (runId ? runner.get(runId) : undefined) ?? releasedRun;
       if (!run || !flow.branch) {
         console.error(`flows: ${flow.id} ended on ${flow.branch?.name ?? "no branch"} with no run to hand the branch over by`);
         return;
@@ -4930,6 +5288,14 @@ export async function startServer(opts: {
       const repo = state.result.repos.find((r) => r.id === repoId);
       if (repo && isSeedPath(root, repo.path)) await runner.whenQuiet(repo.path);
       return freshStatus(state, repoId);
+    },
+    fingerprint: async (repo) => {
+      try {
+        // Fingerprints are optional evidence, not the final outcome. A lingering
+        // stage makes this read unknown; the outcome hook still waits for quiet.
+        if (isSeedPath(root, repo.path) && seedBusy(repo.path)) return null;
+        return statusFingerprint(await getStatus(repo.path));
+      } catch { return null; }
     },
   });
   const launcher = new Launcher({
@@ -4981,15 +5347,22 @@ export async function startServer(opts: {
   const callers = new CallerBook();
   // a test server that never pointed CANOPY_CONFIG_DIR at a scratch folder
   // must not write the real ledger
-  const ledgerOff = process.env["NODE_ENV"] === "test" && !process.env["CANOPY_CONFIG_DIR"];
   const recordCost = (e: CostEntry): void => {
     if (ledgerOff) return;
     appendCost(e).catch((err: unknown) => console.error(`costs: could not write the ledger: ${err instanceof Error ? err.message : String(err)}`));
   };
+  const capacity = new CapacityHub({
+    broadcast: (event) => broadcast(state, event),
+    ledger: (since) => (ledgerOff ? Promise.resolve([]) : readCosts(since)),
+    config: loadConfig,
+    file: capacityFile(),
+    reader: null,
+  });
   // the Library itself is built after the state, so its rebuild is reached through this
   let refreshLibrary: () => Promise<void> = async () => {};
   const state: ServerState = {
     root,
+    runlog, readyRunlog,
     agentLine: opts.agentLine ?? (async (_repo, agent, env) => agentLine(agent, undefined, env)),
     harnesses,
     harnessMissing,
@@ -5033,8 +5406,8 @@ export async function startServer(opts: {
     helpers: new Map(),
     gateway: await defaultGateway(),
     timers: new Map(),
-    history: null,
-    historyPending: null,
+    history: new Map(),
+    historyPending: new Map(),
     terms: new Map(),
     tmux: tmuxBase(),
     runner,
@@ -5042,6 +5415,7 @@ export async function startServer(opts: {
     flows,
     launcher,
     health,
+    capacity,
     repoHealth: new RepoHealth({
       hub: health,
       repos: () => state.result.repos,
@@ -5081,6 +5455,7 @@ export async function startServer(opts: {
       })(),
       root,
       backend: () => state.backendName,
+      harnessShare: async () => harnessSlot(harnessWeeks((await loadHistory(state)).value, cardsOf(state.result.repos)), HARNESS_SHARE_MAX),
       // what any canopy shell gets, less CANOPY_REPO: it is in no repo
       env: (term) => {
         dropTermToken(state, term);
@@ -5129,6 +5504,7 @@ export async function startServer(opts: {
     pulls: new Map(),
     archived: new Set(cfg.archived),
     favorites: new Set(cfg.favorites),
+    harness: new Set(cfg.harness ?? []),
     own: new Map(),
     // Seeded from settings at startup, not []: fetchLocal can run before
     // the first peer pass does (refreshActivity fetches, then peers), and
@@ -5236,16 +5612,51 @@ export async function startServer(opts: {
     ),
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),
+    branchStarts: new Map(),
+    groups: new GroupHub({
+      broadcast: ev => broadcast(state, ev),
+      publish: ev => broadcast(state, ev),
+      repo: id => state.result.repos.find(repo => repo.id === id),
+      run: id => state.runner.get(id),
+      activeFor: id => state.runner.activeFor(id),
+      checkoutBusy: id => state.flows.activeFor(id) !== undefined,
+      dryGates: id => state.landing.dryGates(id),
+      landingInfo: () => state.landing.info(),
+      dropMember: (id, why) => state.landing.drop(id, why),
+      openPr: id => state.prs.open(id),
+      land: id => state.landing.land(id),
+      stopReviewer: async id => { await state.runner.stopAndWait(id); state.runner.dismiss(id); },
+      startReviewer: async (group, prompt, current) => {
+        const repo = state.result.repos.find(repo => repo.id === group.repoId);
+        if (!repo) throw new HttpError(404, "the group repo is no longer scanned");
+        const agent = { ...agentFor(await loadConfig(), repo.path, "flow"), yolo: false, extra: "" };
+        await needHarness(state, agent.harness, repo.path);
+        await opts.groups?.reviewerPreflight?.(group);
+        if (!current()) return null;
+        if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow owns this checkout");
+        return state.runner.start(repo, "compare", { ...ACTIONS.compare, message: prompt }, group.note, agent, undefined, undefined, undefined, { group: group.id, priority: "low" });
+      },
+    }),
     landing: new LandingHub({
+      treeRemoved: (path) => state.warm.poke(path),
+      judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
-        broadcast(state, ev);
+        broadcast(state, ev.type === "landing" ? { ...ev, landing: { ...ev.landing, groups: state.groups.info() } } : ev);
+        if (ev.type === "landing") state.groups.onLanding(ev.landing);
         if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? [], ev.landing.entries);
         if (ev.type === "landing") state.coordinator.recheck();
+        if (ev.type === "landing") state.work.recheck();
+        if (ev.type === "landing") state.collisions.onLanding(ev.landing);
       },
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
       startFix: (rec, entry) => startFixRun(state, rec, entry),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
       scenario: runScenario,
       runActive: (id) => {
         const run = state.runner.get(id);
@@ -5254,9 +5665,35 @@ export async function startServer(opts: {
       openPr: (id) => state.prs.open(id),
       dropped: (id) => state.prs.forgetBranch(id),
       prHeld: (id) => state.prs.holds(id),
+      groupBulkEligible: rec => state.groups.canBulkLand(rec),
+      collisions: () => state.collisions.list(),
+      working: (repoId) => state.collisions.working(repoId),
+    }),
+    warm: new WarmPool({
+      repos: () => state.result.repos.filter((r) => !r.host && r.path.startsWith("/")),
+      want: async (path) => warmFor(await loadConfig(), path),
+      setWant: (path, n) => setWarm(path, n),
+      setup: (dir, line) => runGate(dir, line),
+      landing: () => state.landing.info(),
+      landingBusy: (path) => state.landing.info().entries.some((e) => e.repoPath === path && (e.state === "rebasing" || e.state === "landing")),
+      removeOrphan: (dir, assertOwner) => state.landing.orphan(dir, "remove", assertOwner),
+      broadcast: (ev) => broadcast(state, ev),
+    }),
+    collisions: new CollisionHub({
+      runs: () => state.runner.list(),
+      repo: (id) => state.result.repos.find((repo) => repo.id === id),
+      landing: () => state.landing.info(),
+      note: (id, text) => state.runner.note(id, text),
+      say: (id, text) => void state.runner.say(id, text),
+      notify: (notice) => state.landing.notice(notice),
+      publish: () => state.landing.republish(),
+      rememberOverlap: (origin, overlap) => state.landing.rememberOverlap(origin, overlap),
+      sayOff: async (path) => (await loadConfig()).agents[path]?.collisionSay === false,
+      groupOf: (run) => run.group ?? run.branch?.group,
     }),
     scenarios: new Scenarios({
       root: scenariosRoot(),
+      judge: hasGatewayKey() ? jevScenario : null,
       repo: (id) => state.result.repos.find((r) => r.id === id),
       runDir: (id, repoPath) => {
         const rec = state.landing.record(id);
@@ -5277,10 +5714,13 @@ export async function startServer(opts: {
       },
     }),
     prs: new PrHub({
+      ...opts.prs,
       broadcast: (ev) => {
         broadcast(state, ev);
+        if (ev.type === "prs") state.groups.onPrs(ev.prs);
         if (ev.type === "prs") state.triggers.onPrs(ev.prs);
         if (ev.type === "prs") state.coordinator.recheck();
+        if (ev.type === "prs") state.work.recheck();
       },
       record: (id) => state.landing.record(id),
       queueHold: (id) => state.landing.queueHold(id),
@@ -5294,6 +5734,11 @@ export async function startServer(opts: {
       // a run a restart took is unknown here, which counts as not finished
       runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
     }),
     librarySync: new LibrarySync({
       root,
@@ -5321,6 +5766,7 @@ export async function startServer(opts: {
       runStatus: (id) => state.runner.get(id)?.status,
       stopChat: (id) => state.runner.stop(id),
       dismissRun: (id) => state.runner.dismiss(id),
+      dropKept: async (id) => { await state.readyRunlog(); return dropKept(runsDir(), id); },
       startChat: (c) => startSweptChat(state, c),
       keptSwept: async () => state.kept.filter((k) => k.swept),
       authoredPrs: async () => {
@@ -5338,11 +5784,16 @@ export async function startServer(opts: {
     triggers: new TriggerHub({
       broadcast: (ev) => broadcast(state, ev),
       repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
-      workflowProblem: async (name) => {
-        const got = await triggerSpec(name);
-        return typeof got === "string" ? got : null;
+      repos: () => state.result.repos.filter((r) => !r.host && !r.forge && !isSeedPath(state.root, r.path)),
+      workflowProblem: async (name, repo) => {
+        try {
+          const got = await triggerSpec(name, repo);
+          return typeof got === "string" ? got : null;
+        } catch (err) {
+          return String(err instanceof Error ? err.message : err);
+        }
       },
-      start: (event, repo) => startTriggerRun(state, event, repo),
+      start: (event, repo, valid) => startTriggerRun(state, event, repo, valid),
       resume: async (event) => {
         // a flow still kept is picked up at the step it stopped in; one the
         // server has let go of leaves its branch to a run, like a branch run's
@@ -5428,6 +5879,11 @@ export async function startServer(opts: {
         return { run: await startBranchFix(state, rec, said, "follow-up", true) };
       },
       ...(process.env["CANOPY_PUBLIC_ORIGIN"] ? { origin: process.env["CANOPY_PUBLIC_ORIGIN"] } : {}),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
     }),
     coordinator: new CoordinatorHub({
       run: (id) => state.runner.get(id),
@@ -5454,6 +5910,27 @@ export async function startServer(opts: {
         };
       },
       broadcast: (run) => broadcast(state, { type: "run", run }),
+      work: {
+        note: (id, text) => state.work.note(id, text),
+        close: (id, end, text) => state.work.close(id, end, text),
+        link: (id, ref) => state.work.link(id, ref),
+      },
+    }),
+    work: new WorkHub({
+      broadcast: (ev) => broadcast(state, ev),
+      facts: (item) => ({
+        active: item.runs.some((id) => {
+          const r = state.runner.get(id);
+          return r !== undefined && isRunActive(r);
+        }) || state.flows.list().some((flow) => flow.branch?.work === item.id && isFlowActive(flow)),
+        branches: item.branches.flatMap((id) => {
+          const rec = state.landing.record(id);
+          if (!rec) return [];
+          const entry = state.landing.info().entries.find((e) => e.id === id);
+          const pr = state.prs.info().find((w) => w.id === id);
+          return [{ state: rec.state, ...(entry ? { land: entry.state } : {}), ...(pr?.state ? { pr: pr.state.status } : {}) }];
+        }),
+      }),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),
@@ -5534,6 +6011,7 @@ export async function startServer(opts: {
   // nothing to show. An extra source failing is a note on that source.
   const launch = state.sources[0];
   if (launch?.src.error) throw new Error(launch.src.error);
+  await seedHarness(state);
   // The shells the last server left on tmux, before listening, so a
   // browser rejoining finds them held. Said out loud, since a missing
   // tmux falls back to plain ptys and looks the same until a restart.
@@ -5927,6 +6405,13 @@ export async function startServer(opts: {
    *  that held it is gone */
   const adoptFlows = async (): Promise<void> => {
     flowFiles = new FlowFiles(root);
+    // A restored flow can start a branch run synchronously. Adopt its work
+    // item first so the runner's onRun event is recorded instead of dropped.
+    await state.work.adopt();
+    // Read hints without starting the landing queue before restored flows own their branches.
+    await state.landing.adoptRecords();
+    recordOwner = true;
+    if (!ledgerOff) await recoverRunlog().catch((err: unknown) => console.error(`transcripts: ${err instanceof Error ? err.message : String(err)}`));
     const restoreCfg = await loadConfig();
     state.flows.restore(
       await loadFlowRecords(root),
@@ -5934,19 +6419,29 @@ export async function startServer(opts: {
       // a seed's flow is an incubator stage, held to the same rule as a fresh one
       (repo) => (profile, workflow, role) => (isSeedPath(root, repo.path) ? stageAgent(stepAgentFor(restoreCfg, repo.path, profile, workflow, role)) : stepAgentFor(restoreCfg, repo.path, profile, workflow, role)),
     );
+    await state.flows.whenStarted();
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
-    // and the PRs they opened
+    await state.warm.adopt();
+    // Preserve PR activation order; public retention waits for these protection facts.
     await state.prs.adopt();
+    runlogFactsReady = true;
+    // Group recovery must see the adopted queue and PR facts before retrying
+    // a persisted winner's missing dispatch.
+    state.groups.onLanding(state.landing.info());
+    state.groups.onPrs(state.prs.info());
+    await state.groups.adopt();
     // and the trigger events waiting on both
     await state.triggers.adopt();
+    state.warm.start();
   };
   if (flowsLock.owner) {
     await adoptFlows();
   } else {
+    state.warm.stop();
     state.incubator.notKeeping(flowsLock.holder);
     if (flowsLock.holder) {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
@@ -6059,6 +6554,8 @@ export async function startServer(opts: {
   state.registry.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
+  if (process.env["NODE_ENV"] !== "test") state.warm.start();
+  if (process.env["NODE_ENV"] !== "test") void state.capacity.start().catch((err) => console.error("canopy: capacity", err));
   if (process.env["NODE_ENV"] !== "test") state.prs.start();
   // a test server never fires the schedule on whatever config it finds
   if (process.env["NODE_ENV"] !== "test") void state.sweep.start().catch((err) => console.error("canopy: sweep", err));
@@ -6100,12 +6597,14 @@ export async function startServer(opts: {
     endTerm: (id: string, opts?: { keep?: true }) => endTerm(state, id, opts),
     /** the sweep's end of a shell, with how it went; tests */
     sweepShell: (id: string, seen?: number) => sweepShell(state, id, seen),
-    stop: () => {
+    stop: async () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);
       state.health.stop();
+      state.capacity.stop();
       state.kit.stop();
       state.landing.stop();
+      state.warm.stop();
       state.prs.stop();
       state.sweep.stop();
       state.librarySync.stop();
@@ -6128,12 +6627,18 @@ export async function startServer(opts: {
       state.incubator.detach();
       state.flows.detach();
       flowFiles = null;
+      state.groups.detach();
       state.landing.detach();
       state.prs.detach();
       state.triggers.detach();
-      if (flowsLock.owner) flowsLock.release();
+      await state.triggers.idle();
+      await state.warm.idle();
+      await state.work.detach();
       state.flows.stopAll();
       state.runner.stopAll();
+      await state.runner.stopLoggedAndWait();
+      recordOwner = false;
+      if (flowsLock.owner) flowsLock.release();
       for (const h of checkHolds) h.cancel();
       state.launcher.shutdown();
       state.chan.close();

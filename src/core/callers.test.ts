@@ -3,7 +3,7 @@ import { allows, needs } from "./callers";
 
 describe("needs", () => {
   test("a GET needs read, bar the two upgrades and the Library", () => {
-    for (const p of ["/api/runs", "/api/repos", "/api/events"]) {
+    for (const p of ["/api/runs", "/api/repos", "/api/events", "/api/capacity"]) {
       expect(needs("GET", p)).toBe("read");
     }
     expect(needs("GET", "/api/term")).toBe("shell");
@@ -58,7 +58,7 @@ describe("needs", () => {
   });
 
   test("repos actions key on the action", () => {
-    for (const a of ["run", "pull", "commit", "flow", "refresh"]) {
+    for (const a of ["run", "pull", "commit", "flow", "refresh", "harness"]) {
       expect(needs("POST", `/api/repos/${a}`)).toBe("operate");
     }
     for (const a of ["peer", "launch", "archive", "build", "launcher"]) {
@@ -197,6 +197,17 @@ describe("the coordinator's routes", () => {
   });
 });
 
+describe("the work ledger's routes", () => {
+  test("reads are read, a note or a close operate", () => {
+    expect(needs("GET", "/api/work")).toBe("read");
+    expect(needs("GET", "/api/work/one")).toBe("read");
+    expect(needs("POST", "/api/work/note")).toBe("operate");
+    expect(needs("POST", "/api/work/close")).toBe("operate");
+    expect(allows("shell", needs("POST", "/api/work/note"))).toBe(true);
+    expect(allows("coordinator", needs("POST", "/api/work/close"))).toBe(false);
+  });
+});
+
 describe("allows", () => {
   test("each kind holds what the table gives it", () => {
     expect(allows("page", "shell")).toBe(true);
@@ -222,4 +233,26 @@ describe("allows", () => {
   test("open is allowed to every kind", () => {
     expect(allows("none", "open")).toBe(true);
   });
+});
+
+test("group mutations require operate while the group list requires read", () => {
+  expect(needs("GET", "/api/groups")).toBe("read");
+  for (const action of ["pick", "review", "drop"]) expect(needs("POST", `/api/groups/${action}`)).toBe("operate");
+});
+
+test("worktree routes: the listing reads, warm is admin, prune operates", () => {
+  expect(needs("GET", "/api/worktrees")).toBe("read");
+  expect(needs("POST", "/api/worktrees/warm")).toBe("admin");
+  expect(needs("POST", "/api/worktrees/prune")).toBe("operate");
+  expect(allows("shell", needs("POST", "/api/worktrees/warm"))).toBe(false);
+  expect(allows("shell", needs("POST", "/api/worktrees/prune"))).toBe(true);
+  expect(allows("cli", needs("POST", "/api/worktrees/warm"))).toBe(true);
+});
+
+
+test("kept runs: reading is open, pruning is admin", () => {
+  for (const path of ["/api/runs/ab12cd34", "/api/runs/ab12cd34/export", "/api/runs?kept=1"]) expect(needs("GET", path)).toBe("read");
+  expect(needs("POST", "/api/runs/prune")).toBe("admin");
+  expect(allows("shell", needs("POST", "/api/runs/prune"))).toBe(false);
+  expect(allows("cli", needs("POST", "/api/runs/prune"))).toBe(true);
 });

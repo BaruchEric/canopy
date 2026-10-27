@@ -1,10 +1,10 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_SWEEP, mayClose, normalizeSweep, patchSweep, planSweep, sweepComment, type OutsideFacts, type ShellFacts } from "./sweep";
+import { DEFAULT_SWEEP, RUNS_KEEP, mayClose, normalizeSweep, patchSweep, planSweep, sweepComment, type OutsideFacts, type ShellFacts } from "./sweep";
 import type { AuthoredPr, Run, SweepItem } from "./types";
 
 const H = 3_600_000;
 const now = Date.UTC(2026, 9, 22, 12);
-const base = { serverStart: now - 72 * H, shells: [], runs: [], heldRuns: new Set<string>(), outside: [], prs: [], fixing: new Set<string>(), repos: [] };
+const base = { serverStart: now - 72 * H, shells: [], runs: [], kept: [], heldRuns: new Set<string>(), outside: [], prs: [], fixing: new Set<string>(), repos: [] };
 const shell = (over: Partial<ShellFacts> = {}): ShellFacts =>
   ({ id: "t1", repoId: "dev-tools/canopy", startedAt: now - 48 * H, lastOutput: now - 30 * H, agent: null, ...over });
 const run = (over: Partial<Run> = {}): Run => ({
@@ -74,6 +74,12 @@ test("a finished run past 3d is offered unless landing or a flow holds it", () =
   expect(it).toMatchObject({ key: "run:d1", kind: "run", closable: true, checked: true, handOnly: false, why: "finished 4d ago" });
   expect(planSweep({ ...base, runs: [r], heldRuns: new Set(["d1"]) }, DEFAULT_SWEEP, now)).toEqual([]);
 });
+test("a limited run is a finished run for sweeping", () => {
+  const r = run({ id: "l1", status: "limited", endedAt: now - 4 * 24 * H });
+  expect(planSweep({ ...base, runs: [r] }, DEFAULT_SWEEP, now)).toMatchObject([
+    { key: "run:l1", kind: "run", closable: true, checked: true, why: "finished 4d ago" },
+  ]);
+});
 test("an outside agent is listed, never closable or checked", () => {
   const [it] = planSweep({ ...base, outside: [card()] }, DEFAULT_SWEEP, now);
   expect(it).toMatchObject({ kind: "outside", closable: false, checked: false, handOnly: false, idleSince: now - 25 * H });
@@ -86,7 +92,7 @@ test("an outside agent's heartbeats do not reset its idle span", () => {
   expect(out[0]).toMatchObject({ key: "outside:claude:s1", idleSince: now - 25 * H, why: "idle for 25h, not started by canopy", closable: false });
 });
 test("normalizeSweep drops a negative span and an unknown auto kind to defaults", () => {
-  expect(normalizeSweep({ spans: { shell: -1 }, auto: ["shell", "nope"] })).toMatchObject({ spans: { shell: 24 * H }, auto: ["shell"] });
+  expect(normalizeSweep({ spans: { shell: -1 }, auto: ["shell", "nope"] })).toMatchObject({ spans: { shell: 24 * H }, auto: ["shell", "transcript"] });
 });
 test("patchSweep refuses a cron parseCron rejects", () => {
   expect(typeof patchSweep(DEFAULT_SWEEP, { cron: "every day" })).toBe("string");
@@ -191,4 +197,22 @@ test("prs is off by default, read only as true, and patched only with a boolean"
   expect(normalizeSweep({ prs: true }).prs).toBe(true);
   expect(patchSweep(DEFAULT_SWEEP, { prs: 1 })).toBe("prs is true or false");
   expect(patchSweep(DEFAULT_SWEEP, { prs: true })).toMatchObject({ prs: true, auto: DEFAULT_SWEEP.auto });
+});
+
+
+test("kept transcripts expire at 30 days and protect held ids and branch origins", () => {
+  const DAY = 24 * H;
+  const head = (id: string, origin?: string) => ({ id, repo: "dev-tools/canopy", action: "build", verb: "Build", harness: "claude" as const, status: "done" as const, started: now - 32 * DAY, ended: now - 31 * DAY, cost: null, ...(origin ? { origin } : {}) });
+  expect(planSweep({ ...base, kept: [head("k1")] }, DEFAULT_SWEEP, now)[0]).toMatchObject({ key: "transcript:k1", kind: "transcript", closable: true, checked: true, auto: true, handOnly: false, why: "kept 31d" });
+  expect(planSweep({ ...base, kept: [head("k1")], heldRuns: new Set(["k1"]) }, DEFAULT_SWEEP, now)).toEqual([]);
+  expect(planSweep({ ...base, kept: [head("k2", "br")], heldRuns: new Set(["br"]) }, DEFAULT_SWEEP, now)).toEqual([]);
+  expect(planSweep({ ...base, kept: [head("k3", "br")], livePrs: new Set(["br"]) }, DEFAULT_SWEEP, now)).toEqual([]);
+  expect(planSweep({ ...base, kept: [{ ...head("k4"), ended: now - 2 * DAY }] }, DEFAULT_SWEEP, now)).toEqual([]);
+  expect(DEFAULT_SWEEP.spans.transcript).toBe(RUNS_KEEP);
+  expect(RUNS_KEEP).toBe(30 * DAY);
+});
+test("old settings adopt transcript auto, explicit transcript settings keep auto off", () => {
+  expect(normalizeSweep({ auto: ["shell"] }).auto).toEqual(["shell", "transcript"]);
+  expect(normalizeSweep({ spans: { transcript: 5 * 24 * H }, auto: ["shell"] }).auto).toEqual(["shell"]);
+  expect(normalizeSweep({ spans: { transcript: 5 * 24 * H }, auto: [] }).spans.transcript).toBe(5 * 24 * H);
 });

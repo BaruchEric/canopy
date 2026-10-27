@@ -4,13 +4,15 @@ import { cp, mkdir, mkdtemp, readdir, readFile, rm, unlink, writeFile } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GATE_NAME } from "../core/gatename";
+import { readEvidence } from "../core/evidence";
 import { parseLocator } from "../core/host";
 import { tail } from "../core/landing";
 import { DEFAULT_SETTINGS, MAX_TIMEOUT, parseScenario, parseScenarioSet, parseScenariosFile, scenarioTemplate, scoreOf, SCENARIOS_FILE } from "../core/scenario";
 import type { Scenario, ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import { isForge } from "../core/types";
-import type { Repo, ScenarioResult, ScenarioRun } from "../core/types";
+import type { EvidenceFile, Repo, ScenarioAnswers, ScenarioResult, ScenarioRun } from "../core/types";
+import { decideScenario, scenarioState } from "../core/verdict";
 import { repoKey, revOf } from "../core/worktree";
 import type { CheckOutcome } from "./landing";
 
@@ -65,6 +67,9 @@ export async function copySet(dir: string): Promise<string> {
 }
 
 export type ScenarioRunner = (cwd: string, line: string, setDir: string, timeoutMs: number) => Promise<CheckOutcome>;
+export type ScenarioJudge = (state: string) => Promise<ScenarioAnswers>;
+export const NO_JUDGE_KEY = "no gateway key";
+export const JUDGE_OFF = "the judge is off in .canopy/scenarios.json";
 
 export interface ScenarioPass {
   /** the worktree the lines run in */
@@ -74,6 +79,9 @@ export interface ScenarioPass {
   set: ScenarioSet;
   settings: ScenarioSettings;
   run: ScenarioRunner;
+  judge: ScenarioJudge | null;
+  evidence?: (dir: string, paths: string[]) => Promise<EvidenceFile[]>;
+  skipJudge?: boolean;
   head: string;
   now: number;
   /** the clock the set's budget reads, in ms; Date.now unless a test drives it */
@@ -85,21 +93,25 @@ export interface ScenarioPass {
 /** what a scenario reached after the set's budget is spent says */
 export const OUT_OF_TIME = "the set's time ran out";
 
-/** Runs the set's command scenarios in order and stops at the first red.
+/** Runs command scenarios, then judge scenarios, stopping on a red command.
  *  A file in `errors` is a red result named by the file, listed first, and
- *  nothing runs after it. Judge scenarios are left out in plan 1. The whole
+ *  nothing runs after it. Only the evaluator receives a judge story. The whole
  *  set runs under MAX_TIMEOUT seconds: each scenario gets the lesser of the
  *  settings' timeout and what is left, and one reached with nothing left is
  *  red without running, so the CLI's wait always outlasts a pass. */
 export async function runScenarioSet(p: ScenarioPass): Promise<ScenarioRun> {
   const commands: Scenario[] = p.set.scenarios.filter((s) => s.kind === "command");
+  const judges = p.set.scenarios.filter(s => s.kind === "judge");
+  const skipped = p.skipJudge ? judges.map(s => s.name) : [];
+  const activeJudges = p.skipJudge ? [] : judges;
   const results: ScenarioResult[] = p.set.errors.map((e) => ({ name: e.file, kind: "command", ok: false, tail: e.error }));
-  const total = p.set.errors.length + commands.length;
-  if (results.length > 0) return { head: p.head, at: p.now, total, passed: 0, score: scoreOf(results, total), results };
-  // nothing to run: no copy, so a repo with no set folder never reaches cp
-  if (commands.length === 0) return { head: p.head, at: p.now, total: 0, passed: 0, score: 1, results: [] };
-
+  const total = p.set.errors.length + commands.length + activeJudges.length;
   let passed = 0;
+  const finish = (): ScenarioRun => ({ head: p.head, at: p.now, total, passed, score: scoreOf(results, total), results, ...(skipped.length > 0 ? { skipped } : {}) });
+  if (results.length > 0) return finish();
+  // nothing to run: no copy, so a repo with no set folder never reaches cp
+  if (total === 0) return finish();
+
   const clock = p.clock ?? Date.now;
   const deadline = clock() + MAX_TIMEOUT * 1000;
   const copy = await copySet(p.setDir);
@@ -115,13 +127,52 @@ export async function runScenarioSet(p: ScenarioPass): Promise<ScenarioRun> {
       }
       results.push(result);
       if (result.ok) passed++;
-      p.onDone?.(result, commands[i + 1]?.name ?? null);
+      p.onDone?.(result, commands[i + 1]?.name ?? activeJudges[0]?.name ?? null);
       if (!result.ok) break;
+    }
+    if (results.some(result => !result.ok)) return finish();
+    for (const [i, scenario] of activeJudges.entries()) {
+      let output: string | null = null;
+      const left = deadline - clock();
+      if (scenario.run && left > 0) {
+        const outcome = await p.run(p.dir, scenario.run, copy, Math.min(p.settings.timeout * 1000, left));
+        output = outcome.output || `exited ${outcome.exit ?? "on a signal"}`;
+      }
+      const observed = output === null ? {} : { tail: tail(output) };
+      const why = deadline <= clock() ? OUT_OF_TIME : p.settings.judge === "off" ? JUDGE_OFF : p.judge === null ? NO_JUDGE_KEY : null;
+      let result: ScenarioResult;
+      if (why !== null || p.judge === null) {
+        result = { name: scenario.name, kind: "judge", ok: false, unjudged: why ?? NO_JUDGE_KEY, ...observed };
+      } else {
+        const judge = p.judge;
+        const expired = Symbol("scenario deadline");
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const answer = (async () => {
+            const files = await (p.evidence ?? readEvidence)(p.dir, scenario.evidence);
+            if (clock() >= deadline) throw expired;
+            return decideScenario(await judge(scenarioState({ story: scenario.body, output, files })));
+          })();
+          const timeout = new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(expired), Math.max(0, deadline - clock())); });
+          const judgment = await Promise.race([answer, timeout]);
+          if (clock() >= deadline) throw expired;
+          result = { name: scenario.name, kind: "judge", ok: judgment.ok, p: judgment.p, ...(judgment.reason === null ? {} : { why: judgment.reason }), ...observed };
+        } catch (error) {
+          // A provider error can quote the submitted story. Public records
+          // carry a fixed reason rather than any evaluator error text.
+          result = { name: scenario.name, kind: "judge", ok: false, unjudged: error === expired ? OUT_OF_TIME : "the judge did not answer", ...observed };
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+      results.push(result);
+      if (result.ok) passed++;
+      p.onDone?.(result, activeJudges[i + 1]?.name ?? null);
     }
   } finally {
     await rm(copy, { recursive: true, force: true });
   }
-  return { head: p.head, at: p.now, total: commands.length, passed, score: scoreOf(results, total), results };
+  return finish();
 }
 
 export interface ScenarioDeps {
@@ -131,6 +182,7 @@ export interface ScenarioDeps {
   /** a branch run's worktree by the run's id, when the run is on that repo, else undefined */
   runDir: (run: string, repoPath: string) => string | undefined;
   run: ScenarioRunner;
+  judge: ScenarioJudge | null;
   now?: () => number;
 }
 
@@ -250,6 +302,6 @@ export class Scenarios {
     // a folder with no git, or no folder at all, has no head; the pass still runs
     const head = (await revOf(dir, "HEAD").catch(() => null)) ?? "";
     const now = (this.deps.now ?? Date.now)();
-    return json(await runScenarioSet({ dir, setDir: setDirOf(this.deps.root, repo.path), set, settings, run: this.deps.run, head, now, ...(this.deps.now ? { clock: this.deps.now } : {}) }));
+    return json(await runScenarioSet({ dir, setDir: setDirOf(this.deps.root, repo.path), set, settings, run: this.deps.run, judge: this.deps.judge, head, now, ...(this.deps.now ? { clock: this.deps.now } : {}) }));
   }
 }

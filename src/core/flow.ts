@@ -1,10 +1,11 @@
-/** Flows: one workflow on one repo, step by step. Every step is a normal Run
- *  through the Runner; between steps come the check and the gate. Bun-only
- *  through its hooks (the check and the evaluator), pure in its logic, so the
- *  tests drive it with a fake runner. */
+/** Flows: one workflow on one repo, as a graph of steps. Every step is a
+ *  normal Run through the Runner; ready steps start together when all but
+ *  one only read; between a run and its dependants come the check and gate. */
 
+import { chained, readOnlyStep, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
-import type { BranchStart } from "./runner";
+import { limitHit, resetWord } from "./capacity";
+import type { BranchStart, StartExtras } from "./runner";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
 import { decide, decideJudge, judgeState, verdictState } from "./verdict";
@@ -18,7 +19,6 @@ import {
   type Fleet,
   type Flow,
   type FlowChoice,
-  type FlowStep,
   type JudgeAnswers,
   type Repo,
   type RepoStatus,
@@ -31,6 +31,52 @@ import {
 } from "./types";
 
 export const FLEET_CONCURRENCY = 3;
+/** how many steps of one flow run at once */
+export const FLOW_PARALLEL = 3;
+
+function routesCheckFailure(workflow: Workflow, name: string): boolean {
+  return workflow.steps.some((s) => s.after.includes(name) && s.when.includes("check fail"));
+}
+
+/** Whether dependants may proceed, including a check failure with a route. */
+export function settled(flow: Flow, workflow: Workflow, i: number): boolean {
+  const step = flow.steps[i];
+  return step?.status === "passed" || step?.status === "skipped" ||
+    step?.status === "failed" && step.check !== undefined && step.check.exit !== 0 && routesCheckFailure(workflow, step.name);
+}
+
+/** Whether any condition holds on any predecessor. Unreadable work counts as changed. */
+export function whenHolds(flow: Flow, workflow: Workflow, i: number): boolean {
+  const def = workflow.steps[i];
+  if (!def) return false;
+  return def.when.some((condition) => condition === "always" || def.after.some((name) => {
+    const step = flow.steps.find((s) => s.name === name);
+    if (!step) return false;
+    if (condition === "skipped") return step.status === "skipped";
+    if (condition === "unchanged") return step.changed === false || !step.runId;
+    if (step.status === "skipped") return false;
+    switch (condition) {
+      case "verdict done": return step.verdict?.answers.outcome.choice === "done";
+      case "verdict partial": return step.verdict?.answers.outcome.choice === "partial";
+      case "verdict blocked": return step.verdict?.answers.outcome.choice === "blocked";
+      case "judge meets": return step.judgment?.answers.fit.choice === "meets";
+      case "judge partly": return step.judgment?.answers.fit.choice === "partly";
+      case "judge misses": return step.judgment?.answers.fit.choice === "misses";
+      case "check pass": return step.check?.exit === 0;
+      case "check fail": return step.check !== undefined && step.check.exit !== 0;
+      case "changed": return step.changed === true || !!step.runId && step.changed === undefined;
+    }
+  }));
+}
+
+/** Pending steps whose predecessors have all settled, in heading order. */
+export function ready(flow: Flow, workflow: Workflow): number[] {
+  return workflow.steps.flatMap((def, i) =>
+    flow.steps[i]?.status === "pending" && def.after.every((name) => {
+      const predecessor = workflow.steps.findIndex((s) => s.name === name);
+      return predecessor >= 0 && settled(flow, workflow, predecessor);
+    }) ? [i] : []);
+}
 
 /** Why a fleet passes a repo over, or null when it may run. */
 export function fleetSkipReason(repo: Repo, workflow: Workflow): string | null {
@@ -70,6 +116,40 @@ export interface CheckResult {
   away?: boolean;
 }
 
+type ParkCause =
+  | { kind: "gate" }
+  | { kind: "budget" }
+  | { kind: "capacity" }
+  | { kind: "stage"; check: boolean };
+
+type PendingEnd = { end: "failed" | "stopped"; error?: string };
+
+/** Restore is the boundary for the optional metadata older disk readers do not validate. */
+function restoredEnd(value: unknown): PendingEnd | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "object" || value === null || !("end" in value) ||
+    value.end !== "failed" && value.end !== "stopped" ||
+    "error" in value && value.error !== undefined && typeof value.error !== "string") throw new Error("invalid pending flow end");
+  return { end: value.end, ...("error" in value && typeof value.error === "string" ? { error: value.error } : {}) };
+}
+
+function restoredParks(value: unknown, count: number): Map<number, ParkCause> {
+  const parks = new Map<number, ParkCause>();
+  if (value === undefined) return parks;
+  if (!Array.isArray(value)) throw new Error("invalid flow parks");
+  for (const item of value) {
+    const entry: unknown = item;
+    if (typeof entry !== "object" || entry === null || !("step" in entry) || !("cause" in entry) ||
+      typeof entry.step !== "number" || !Number.isInteger(entry.step) || entry.step < 0 || entry.step >= count ||
+      typeof entry.cause !== "object" || entry.cause === null || !("kind" in entry.cause)) throw new Error("invalid flow park");
+    const cause = entry.cause;
+    if (cause.kind === "stage" && "check" in cause && typeof cause.check === "boolean") parks.set(entry.step, { kind: "stage", check: cause.check });
+    else if (cause.kind === "gate" || cause.kind === "budget" || cause.kind === "capacity") parks.set(entry.step, { kind: cause.kind });
+    else throw new Error("invalid flow park cause");
+  }
+  return parks;
+}
+
 /** What a flow leaves on disk: the flow, the workflow it started with (so a
  *  file edited since does not change a flow in progress), the status
  *  fingerprint its outcome is judged against, and the repo's absolute path
@@ -78,9 +158,13 @@ export interface FlowRecord {
   v: 1;
   flow: Flow;
   repoPath: string;
-  workflow: Workflow;
+  workflow: RecordedWorkflow;
   before: string;
   savedAt: number;
+  /** Intent already requested while a sibling still ran. Dead runs do not restart it. */
+  pendingEnd?: PendingEnd;
+  /** Each parked step owns its own resume cause; old records use flow.current. */
+  parks?: { step: number; cause: ParkCause }[];
 }
 
 export const RESTART_NOTE = "canopy restarted during this step; read the repo's state and finish the step";
@@ -104,11 +188,13 @@ export const STOP_GRACE = 10_000;
 /** What Flows needs from the Runner; the real one satisfies it. A flow on a
  *  branch passes the branch as the runner's last argument. */
 export interface FlowRunner {
-  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart): Run;
+  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner">): Run;
   get(id: string): Run | undefined;
   activeFor(repoId: string): Run | undefined;
   stop(id: string): Run;
   dismiss(id: string): void;
+  /** Setup, actual driver exit and owned drains; never stops the run. */
+  whenReleased(id: string): Promise<void> | null;
 }
 
 export interface FlowHooks {
@@ -131,6 +217,8 @@ export interface FlowHooks {
   evidence?: (repo: Repo, paths: string[]) => Promise<EvidenceFile[]>;
   /** a fresh status for the repo, for the outcome; null when unreadable */
   status?: (repoId: string) => Promise<RepoStatus | null>;
+  /** Tree state before and after each agent run, in its checkout or worktree. */
+  fingerprint?: (repo: Repo) => Promise<string | null>;
   /** the clock, for tests; Date.now otherwise */
   now?: () => number;
   /** `STOP_GRACE` unless a test shortens it */
@@ -145,8 +233,9 @@ export interface FlowHooks {
   branchState?: (branch: RunBranch) => Promise<RunBranchState>;
   /** a flow on a branch is done and its worktree read: the landing queue
    *  takes the branch, through the last step run's record. Only a done flow
-   *  hands its branch over; a stopped or failed one leaves it as it is. */
-  onBranchEnd?: (flow: Flow, runId: string | undefined) => void;
+   *  hands its branch over; a stopped or failed one leaves it as it is.
+   *  The released record survives UI dismissal only through this handoff. */
+  onBranchEnd?: (flow: Flow, runId: string | undefined, releasedRun?: Run) => void;
 }
 
 /** The branch as a flow keeps it: in this state, never held (only its steps' runs are). */
@@ -160,8 +249,15 @@ const errText = (err: unknown): string => String(err instanceof Error ? err.mess
 /** The end of a check's output, which is where a failure says what failed. */
 const tailOf = (s: string, n = 2000): string => (s.length > n ? s.slice(-n) : s);
 
+interface StepStart {
+  done: Promise<void>;
+  finish: () => void;
+}
+
 interface LiveFlow {
   flow: Flow;
+  /** Private dispatch ownership, never recorded or accepted from HTTP. */
+  owner: symbol;
   repo: Repo;
   workflow: Workflow;
   /** each step's settings, by the profile it names */
@@ -170,14 +266,30 @@ interface LiveFlow {
   /** when the working clock last started; absent while it is stopped */
   since?: number;
   /** the run that resumes the step's session after a restart, while it goes */
-  resuming?: string;
+  resuming: Set<string>;
+  restarting: Set<number>;
   /** aborts the step's check while one runs */
-  checking?: AbortController;
+  checking: Map<number, AbortController>;
+  marks: Map<number, string>;
+  /** Identity survives each async boundary, but never a reset or stop. */
+  attempts: Map<number, symbol>;
+  starting: Map<number, StepStart>;
+  /** Terminal UI runs still reserve their steps while their process releases. */
+  releasing?: Map<number, Promise<void>>;
+  /** Current branch-step records until final handoff; cleared on end/disposal. */
+  releasedRuns?: Map<string, Run>;
+  lifecycle: symbol;
+  pending?: { park: number } | PendingEnd;
+  parks: Map<number, ParkCause>;
+  advancing?: boolean;
+  advanceAgain?: boolean;
   /** a stop waiting for the aborted check to exit, and the grace that ends it */
   stopping?: ReturnType<typeof setTimeout>;
   /** a branch flow's setup line, run before its first step's agent; gone
    *  once that run starts, and never there after a restore */
   prepare?: BranchStart["prepare"];
+  /** A fresh branch's first startup note; transient, like prepare. */
+  startNote?: BranchStart["startNote"];
   /** set by a pick-up until its step's run starts: the resumed session is
    *  told it was stopped, not cut short by a restart */
   pickedUp?: boolean;
@@ -240,7 +352,7 @@ export class Flows {
   private byRun = new Map<string, string>();
   private fleetsLive = new Map<
     string,
-    { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo, profile?: string) => AgentSettings }
+    { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo, profile?: string) => AgentSettings; workflowFor: (repo: Repo) => Workflow }
   >();
   /** fleet ids whose pump() is on the call stack right now, to keep a flow that
    *  ends inside start() from re-entering and finishing the fleet early */
@@ -261,6 +373,17 @@ export class Flows {
 
   list(): Flow[] {
     return [...this.live.values()].map((l) => l.flow);
+  }
+
+  /** Initial preparations only: never waits for an agent, command or gate. */
+  async whenStarted(id?: string): Promise<void> {
+    for (;;) {
+      const pending = [...this.live.values()]
+        .filter((live) => id === undefined || live.flow.id === id)
+        .flatMap((live) => [...live.starting.values()].map((start) => start.done));
+      if (!pending.length) return;
+      await Promise.all(pending);
+    }
   }
 
   get(id: string): Flow | undefined {
@@ -327,15 +450,19 @@ export class Flows {
     };
     const live: LiveFlow = {
       flow,
+      owner: Symbol(),
       repo,
       workflow,
       agent: stepAgent(agent),
       before: statusFingerprint(repo.status),
+      checking: new Map(), marks: new Map(), attempts: new Map(), starting: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
+      parks: new Map(),
       ...(branch?.prepare ? { prepare: branch.prepare } : {}),
+      ...(branch?.startNote ? { startNote: branch.startNote } : {}),
     };
     this.live.set(flow.id, live);
     this.prune();
-    void this.runStep(live);
+    this.advance(live);
     return flow;
   }
 
@@ -344,8 +471,9 @@ export class Flows {
     const id = this.byRun.get(run.id);
     const live = id ? this.live.get(id) : undefined;
     if (!live) return;
-    const step = live.flow.steps[live.flow.current];
-    if (!step || step.runId !== run.id) return;
+    const i = live.flow.steps.findIndex((s) => s.runId === run.id && s.status === "running");
+    const step = live.flow.steps[i];
+    if (!step || !isFlowActive(live.flow)) return;
     if (run.session && (step.session !== run.session || step.harness !== run.harness)) {
       // saved at once: a restart in the middle of this run resumes it
       step.session = run.session;
@@ -353,63 +481,106 @@ export class Flows {
       this.emit(live);
     }
     if (run.status === "working" || run.status === "waiting" || run.status === "idle") {
-      const status = run.status === "waiting" ? "waiting" : "working";
-      this.clock(live, status === "working");
-      if (live.flow.status !== status) {
-        live.flow.status = status;
-        this.emit(live);
-      }
+      this.activity(live);
+      this.emit(live);
       return;
     }
     this.byRun.delete(run.id);
+    const release = this.runner.whenReleased(run.id);
+    if (release) {
+      const lifecycle = live.lifecycle;
+      const attempt = live.attempts.get(i);
+      const releasing = live.releasing ??= new Map();
+      releasing.set(i, release);
+      void release.then(() => {
+        if (releasing.get(i) !== release) return;
+        releasing.delete(i);
+        if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle ||
+          step.runId !== run.id || step.status !== "running" || !isFlowActive(live.flow)) return;
+        // Stop invalidates the attempt but still owns the draining step.
+        if (!(live.pending && "end" in live.pending && live.pending.end === "stopped") &&
+          live.attempts.get(i) !== attempt) return;
+        this.releasedRun(live, i, run);
+      });
+      return;
+    }
+    this.releasedRun(live, i, run);
+  }
+
+  private releasedRun(live: LiveFlow, i: number, run: Run): void {
+    if (live.flow.branch && run.status === "done") (live.releasedRuns ??= new Map()).set(run.id, run);
+    const step = live.flow.steps[i];
+    if (!step) return;
+    if (live.pending && "end" in live.pending && live.pending.end === "stopped") {
+      live.resuming.delete(run.id);
+      step.status = "failed";
+      step.reason = "stopped";
+      this.advance(live);
+      return;
+    }
     if (run.status === "failed" && isSeedId(live.repo.id) && run.away === true) {
       // the stage runner went away under the run, as a hello confirmed: the
       // step waits for it. By the flag, never the error's words, which carry
       // the stage's own stderr and so whatever it chose to print.
-      live.flow.parkedFor = "stage";
-      this.park(live, run.awayWhy ?? STAGE_AWAY);
+      this.park(live, i, run.awayWhy ?? STAGE_AWAY, "gated", { kind: "stage", check: false });
       return;
     }
-    const resumed = live.resuming === run.id;
-    delete live.resuming;
+    const resumed = live.resuming.delete(run.id);
     if (run.status === "failed" && resumed && (run.result?.turns ?? 0) === 0) {
       // The session could not be taken up (Claude Code answers one it
       // cannot find with an error and no turns): the step starts over,
       // once, with the restart note, the session forgotten.
-      this.resetStep(step);
+      if (live.pending && "end" in live.pending) {
+        step.status = "failed";
+        step.reason = run.error ?? "the run failed";
+        this.advance(live);
+        return;
+      }
+      this.resetStep(live, i);
       live.flow.restarted = true;
-      void this.runStep(live);
+      live.restarting.add(i);
+      this.resumeReady(live, i);
+      return;
+    }
+    if (run.status === "limited") {
+      const now = this.now();
+      const hit = limitHit(run.error ?? "", now);
+      this.park(live, i, hit ? `waiting for capacity (resets ${resetWord(hit.resetsAt, now)})` : "waiting for capacity", "gated", { kind: "capacity" });
       return;
     }
     if (run.status === "failed") {
       step.status = "failed";
       step.reason = run.error ?? "the run failed";
-      this.end(live, "failed", step.reason);
+      this.fail(live, i, step.reason);
       return;
     }
     if (run.status === "stopped") {
       step.status = "failed";
       step.reason = "stopped";
-      this.end(live, "stopped");
+      if (!live.pending || !("end" in live.pending)) live.pending = { end: "stopped" };
+      this.advance(live);
       return;
     }
     step.summary = summaryOf(run);
-    void this.afterRun(live);
+    const attempt = live.attempts.get(i);
+    if (attempt) void this.afterRun(live, i, attempt);
   }
 
   resume(id: string, choice: FlowChoice): Flow {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown flow: ${id}`);
     if (live.flow.status !== "gated") throw new Error("the flow is not waiting at a gate");
-    const step = live.flow.steps[live.flow.current];
+    const i = live.flow.current;
+    const step = live.flow.steps[i];
     if (!step) throw new Error("no current step");
+    live.parks.delete(i);
     if (live.flow.parkedFor === "budget" && choice !== "stop") {
       // continue and retry both mean: allow one more step, and run the one that was waiting
       delete live.flow.parkedFor;
       live.flow.grace = (live.flow.grace ?? 0) + 1;
       // a step a restart cut short keeps its session for the rerun
-      this.resetStep(step, live.flow.restarted === true);
-      void this.runStep(live);
+      this.resetStep(live, i, live.flow.restarted === true);
+      this.resumeReady(live, i);
       return live.flow;
     }
     if (live.flow.parkedFor === "stage" && choice !== "stop") {
@@ -423,12 +594,18 @@ export class Flows {
         delete step.reason;
         this.clock(live, true);
         live.flow.status = "working";
-        void this.check(live);
+        void this.check(live, i, this.beginAttempt(live, i));
         return live.flow;
       }
       // a step a restart cut short keeps its session for the rerun
-      this.resetStep(step, live.flow.restarted === true);
-      void this.runStep(live);
+      this.resetStep(live, i, live.flow.restarted === true);
+      this.resumeReady(live, i);
+      return live.flow;
+    }
+    if (live.flow.parkedFor === "capacity" && choice !== "stop") {
+      delete live.flow.parkedFor;
+      this.resetStep(live, i);
+      this.resumeReady(live, i);
       return live.flow;
     }
     delete live.flow.parkedFor;
@@ -436,17 +613,27 @@ export class Flows {
     if (choice === "stop") {
       step.status = "failed";
       step.reason = "stopped at the gate";
-      this.end(live, "stopped");
+      this.finish(live, "stopped");
+      return live.flow;
+    }
+    if (step.status === "held") {
+      void this.runStep(live, i);
       return live.flow;
     }
     if (choice === "retry") {
       if (step.reason) live.flow.retryReason = step.reason;
-      this.resetStep(step);
-      void this.runStep(live);
+      this.resetStep(live, i);
+      void this.runStep(live, i);
       return live.flow;
     }
-    void this.pass(live);
+    void this.pass(live, i);
     return live.flow;
+  }
+
+  /** Operational retries keep the go already given to a manual step. */
+  private resumeReady(live: LiveFlow, i: number): void {
+    if (live.workflow.steps[i]?.mode === "manual") void this.runStep(live, i);
+    else this.advance(live);
   }
 
   /** Every flow parked for the stage runner, tried again now that a hello
@@ -478,8 +665,13 @@ export class Flows {
     if (!flow.branch) throw new Error("only a flow on a branch can be picked up");
     if (flow.status !== "stopped") throw new Error(`the flow is ${flow.status}, not stopped`);
     for (const s of flow.steps) if (s.status === "skipped") s.status = "pending";
-    this.resetStep(flow.steps[flow.current], true);
+    for (const [i, s] of flow.steps.entries()) {
+      if (s.status === "failed" && (s.reason === "stopped" || s.reason === "stopped at the gate")) {
+        this.resetStep(live, i, true); live.restarting.add(i);
+      }
+    }
     flow.restarted = true;
+    live.lifecycle = Symbol();
     live.pickedUp = true;
     flow.status = "working";
     flow.branch = branchOf(flow.branch, "working");
@@ -487,7 +679,7 @@ export class Flows {
     delete flow.error;
     delete flow.outcome;
     this.emit(live);
-    void this.runStep(live);
+    this.advance(live);
     return flow;
   }
 
@@ -496,38 +688,31 @@ export class Flows {
     if (!live) throw new Error(`unknown flow: ${id}`);
     if (!isFlowActive(live.flow)) return live.flow;
     if (live.flow.status === "gated") return this.resume(id, "stop");
-    if (live.stopping) return live.flow;
-    const step = live.flow.steps[live.flow.current];
-    const run = step && step.runId ? this.runner.get(step.runId) : undefined;
-    if (step && step.runId && run && isRunActive(run)) {
-      // the run's stopped status comes back through onRun and ends the flow
-      this.runner.stop(step.runId);
-    } else if (live.checking) {
-      // the check is killed and the flow ends once it has exited, so the
-      // repo is not free while its test runner still runs; one that will
-      // not exit stops being waited on after the grace
-      live.stopping = setTimeout(() => this.stopped(live), this.hooks.stopGraceMs ?? STOP_GRACE);
-      live.checking.abort();
-    } else {
-      // the run already ended (or never started) while we were awaiting the
-      // evaluator: nothing more will come back through onRun, so end the
-      // flow here instead of waiting for an event that will not arrive
-      this.stopped(live);
+    if (live.pending && "end" in live.pending && live.pending.end === "stopped") return live.flow;
+    live.pending = { end: "stopped" };
+    live.attempts.clear();
+    for (const start of live.starting.values()) start.finish();
+    const indices = this.liveSteps(live);
+    if (live.checking.size) {
+      live.stopping = setTimeout(() => {
+        for (const i of live.checking.keys()) {
+          const step = live.flow.steps[i];
+          if (step) { step.status = "failed"; step.reason = "stopped"; }
+        }
+        live.checking.clear();
+        this.advance(live);
+      }, this.hooks.stopGraceMs ?? STOP_GRACE);
     }
+    for (const i of indices) {
+      const step = live.flow.steps[i];
+      const run = step?.runId ? this.runner.get(step.runId) : undefined;
+      if (run && isRunActive(run)) this.runner.stop(run.id);
+      else if (live.releasing?.has(i)) continue;
+      else if (live.checking.has(i)) live.checking.get(i)?.abort();
+      else if (step) { step.status = "failed"; step.reason = "stopped"; }
+    }
+    this.advance(live);
     return live.flow;
-  }
-
-  /** Ends a flow its stop has reached: the step failed as stopped. */
-  private stopped(live: LiveFlow): void {
-    clearTimeout(live.stopping);
-    delete live.stopping;
-    if (!isFlowActive(live.flow)) return;
-    const step = live.flow.steps[live.flow.current];
-    if (step) {
-      step.status = "failed";
-      step.reason = "stopped";
-    }
-    this.end(live, "stopped");
   }
 
   dismiss(id: string): void {
@@ -543,6 +728,7 @@ export class Flows {
         }
       }
     }
+    live.releasedRuns?.clear();
     this.live.delete(id);
     this.hooks.forget?.(id);
     this.hooks.onGone(id);
@@ -572,15 +758,20 @@ export class Flows {
 
   private restoreOne(rec: FlowRecord, resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
     const flow = rec.flow;
+    const pendingEnd = restoredEnd(rec.pendingEnd);
+    if (flow.steps.some((s) => !s || typeof s !== "object")) throw new Error("invalid flow steps");
     delete flow.fleetId;
     const repo = resolve(rec.repoPath);
     if (repo) flow.repoId = repo.id;
     const live: LiveFlow = {
       flow,
+      owner: Symbol(),
       repo: repo ?? { id: flow.repoId, name: flow.repoId, path: rec.repoPath, group: "", source: "", status: null },
-      workflow: rec.workflow,
+      workflow: chained(rec.workflow),
       agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
       before: rec.before,
+      checking: new Map(), marks: new Map(), attempts: new Map(), starting: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
+      parks: restoredParks(rec.parks, flow.steps.length),
     };
     this.live.set(flow.id, live);
     if (!isFlowActive(flow)) return;
@@ -590,14 +781,39 @@ export class Flows {
         step.status = "failed";
         step.reason = "the repo is not in the scan any more";
       }
-      this.end(live, "failed", "the repo is not in the scan any more");
+      this.finish(live, "failed", "the repo is not in the scan any more");
       return;
     }
-    if (flow.status === "gated") return;
-    this.resetStep(flow.steps[flow.current], true);
+    if (!rec.parks && (flow.status === "gated" || flow.parkedFor)) {
+      const cause: ParkCause = flow.parkedFor === "stage"
+        ? { kind: "stage", check: flow.stageCheck === true }
+        : { kind: flow.parkedFor ?? "gate" };
+      live.parks.set(flow.current, cause);
+    }
+    if (pendingEnd) {
+      for (const [i, step] of flow.steps.entries()) {
+        if (step.status === "running" || step.status === "checking") {
+          if (pendingEnd.end === "stopped") {
+            step.status = "failed";
+            step.reason = "stopped";
+          } else this.resetStep(live, i, true);
+        }
+      }
+      this.finish(live, pendingEnd.end, pendingEnd.error);
+      return;
+    }
+    if (flow.status === "gated") {
+      if (flow.restarted) live.restarting.add(flow.current);
+      return;
+    }
+    for (const [i, step] of flow.steps.entries()) {
+      if (step.status === "running" || step.status === "checking") {
+        this.resetStep(live, i, true); live.restarting.add(i);
+      }
+    }
     flow.restarted = true;
     flow.status = "working";
-    void this.runStep(live);
+    this.advance(live);
   }
 
   stopAll(): void {
@@ -628,6 +844,8 @@ export class Flows {
     note: string,
     agentFor: (repo: Repo, profile?: string) => AgentSettings,
     request?: string,
+    /** A repo's resolved modes; a throw skips that repo with its message. */
+    workflowFor: (repo: Repo) => Workflow = () => workflow,
   ): Fleet {
     const again = request ? this.fleetForRequest(request) : undefined;
     if (again) return again;
@@ -645,7 +863,7 @@ export class Flows {
       ...(request ? { request } : {}),
     };
     const pending = repos.filter((r) => !fleetSkipReason(r, workflow));
-    this.fleetsLive.set(fleet.id, { fleet, workflow, note, pending, agentFor });
+    this.fleetsLive.set(fleet.id, { fleet, workflow, note, pending, agentFor, workflowFor });
     this.pump(fleet.id);
     return fleet;
   }
@@ -734,7 +952,10 @@ export class Flows {
       if (!repo) break;
       const entry = lf.fleet.repos.find((x) => x.repoId === repo.id);
       try {
-        const flow = this.start(repo, lf.workflow, lf.note, (profile) => lf.agentFor(repo, profile), { fleetId });
+        const workflow = lf.workflowFor(repo);
+        const refusal = unattendedRefusal(workflow, "a fleet's run");
+        if (refusal) throw new Error(refusal);
+        const flow = this.start(repo, workflow, lf.note, (profile) => lf.agentFor(repo, profile), { fleetId });
         if (entry) entry.flowId = flow.id;
       } catch (err) {
         if (entry) entry.skipped = String(err instanceof Error ? err.message : err);
@@ -764,6 +985,8 @@ export class Flows {
       workflow: live.workflow,
       before: live.before,
       savedAt: this.now(),
+      ...(live.pending && "end" in live.pending ? { pendingEnd: live.pending } : {}),
+      ...(live.parks.size ? { parks: [...live.parks].map(([step, cause]) => ({ step, cause })) } : {}),
     };
   }
 
@@ -780,6 +1003,7 @@ export class Flows {
     while (finished.length > KEEP_FINISHED) {
       const oldest = finished.shift();
       if (!oldest) break;
+      oldest.releasedRuns?.clear();
       this.live.delete(oldest.flow.id);
       this.hooks.forget?.(oldest.flow.id);
       this.hooks.onGone(oldest.flow.id);
@@ -808,11 +1032,38 @@ export class Flows {
     return { runs: s.runs, workMs: s.workMs + (live.since === undefined ? 0 : this.now() - live.since) };
   }
 
+  private beginAttempt(live: LiveFlow, i: number): symbol {
+    const attempt = Symbol();
+    live.attempts.set(i, attempt);
+    return attempt;
+  }
+
+  private ownsAttempt(live: LiveFlow, i: number, attempt: symbol): boolean {
+    return this.live.get(live.flow.id) === live && isFlowActive(live.flow) && live.attempts.get(i) === attempt;
+  }
+
+  /** A reset cannot leave a gate pointing at a pending step. Terminal intent stays. */
+  private reconcileParks(live: LiveFlow): void {
+    const parked = (i: number) => live.flow.steps[i]?.status === "gated" || live.flow.steps[i]?.status === "held";
+    for (const i of live.parks.keys()) if (!parked(i)) live.parks.delete(i);
+    if (live.pending && "end" in live.pending) return;
+    if (live.pending && !parked(live.pending.park)) delete live.pending;
+    const current = live.pending && "park" in live.pending ? live.pending.park : [...live.parks.keys()].find(parked);
+    this.showPark(live, current ?? -1);
+  }
+
   /** Back to pending, its run dismissed and everything it said dropped;
    *  its session too unless `keepSession` (a restart, which resumes it). */
-  private resetStep(step: FlowStep | undefined, keepSession = false): void {
+  private resetStep(live: LiveFlow, i: number, keepSession = false): void {
+    const step = live.flow.steps[i];
     if (!step) return;
+    live.attempts.delete(i);
+    live.starting.get(i)?.finish();
+    live.marks.delete(i);
     if (step.runId) {
+      live.releasedRuns?.delete(step.runId);
+      this.byRun.delete(step.runId);
+      live.resuming.delete(step.runId);
       try {
         this.runner.dismiss(step.runId);
       } catch {
@@ -824,70 +1075,91 @@ export class Flows {
     delete step.verdict;
     delete step.judgment;
     delete step.summary;
+    delete step.changed;
     delete step.reason;
     if (!keepSession) {
       delete step.session;
       delete step.harness;
     }
     step.status = "pending";
+    live.parks.delete(i);
+    this.reconcileParks(live);
   }
 
   /** A check or gate said no: back to the step's `back` while it has retries
    *  left, else whatever it would have done without retries. */
-  private refuse(live: LiveFlow, reason: string, otherwise: () => void): void {
-    if (!this.rewind(live, reason)) otherwise();
+  private refuse(live: LiveFlow, i: number, reason: string, otherwise: () => void): void {
+    if (!this.rewind(live, i, reason)) otherwise();
   }
 
-  private rewind(live: LiveFlow, reason: string): boolean {
+  private rewind(live: LiveFlow, i: number, reason: string): boolean {
     const { flow, workflow } = live;
-    const def = workflow.steps[flow.current];
+    const def = workflow.steps[i];
     if (!def || def.retries <= 0) return false;
     const tries = (flow.tries ??= {});
     const used = tries[def.name] ?? 0;
     if (used >= def.retries) return false;
     tries[def.name] = used + 1;
     const found = workflow.steps.findIndex((s) => s.name === def.back);
-    const to = found === -1 || found > flow.current ? flow.current : found;
-    for (let i = to; i <= flow.current; i++) this.resetStep(flow.steps[i]);
+    const to = found === -1 || found > i ? i : found;
+    for (let n = to; n <= i; n++) {
+      if (n === i || !this.liveSteps(live).includes(n)) {
+        this.resetStep(live, n);
+      }
+    }
     const toName = workflow.steps[to]?.name ?? def.name;
     (flow.rewinds ??= []).push({ from: def.name, to: toName, reason, at: this.now() });
-    flow.retryReason = to === flow.current ? reason : `the ${def.name} step did not accept the work: ${reason}`;
+    flow.retryReason = to === i ? reason : `the ${def.name} step did not accept the work: ${reason}`;
     flow.current = to;
-    void this.runStep(live);
+    this.advance(live);
     return true;
   }
 
   private summaries(live: LiveFlow): { name: string; summary: string }[] {
     return live.flow.steps
-      .slice(0, live.flow.current)
       .filter((s) => s.status === "passed")
       .map((s) => ({ name: s.name, summary: s.summary ?? "" }));
   }
 
-  private async runStep(live: LiveFlow): Promise<void> {
+  private runStep(live: LiveFlow, i: number): void {
+    const step = live.flow.steps[i];
+    if (!step || !isFlowActive(live.flow)) return;
+    if (live.pending && "end" in live.pending) { this.advance(live); return; }
+    if (step.status === "running" || step.status === "checking") return;
+    let resolve: () => void = () => {};
+    const done = new Promise<void>((finish) => { resolve = finish; });
+    const start: StepStart = { done, finish: () => {
+      if (live.starting.get(i) === start) live.starting.delete(i);
+      resolve();
+    } };
+    live.starting.set(i, start);
+    void this.prepareStep(live, i).then(start.finish, (err) => {
+      const current = live.starting.get(i) === start;
+      start.finish();
+      if (current && isFlowActive(live.flow)) this.fail(live, i, errText(err));
+    });
+  }
+
+  private async prepareStep(live: LiveFlow, i: number): Promise<void> {
     const { flow, workflow } = live;
-    const def = workflow.steps[flow.current];
-    const step = flow.steps[flow.current];
-    if (!def || !step) return;
-    if (def.body) {
-      const over = overBudget(workflow.budget ?? null, this.spentNow(live));
-      if (over) {
-        if ((flow.grace ?? 0) > 0) {
-          flow.grace = (flow.grace ?? 0) - 1;
-        } else {
-          flow.parkedFor = "budget";
-          this.park(live, over);
-          return;
-        }
-      }
-    }
+    const def = workflow.steps[i];
+    const step = flow.steps[i];
+    if (!def || !step || !isFlowActive(flow)) return;
+    if (live.pending && "end" in live.pending) { this.advance(live); return; }
+    if (step.status === "running" || step.status === "checking") return;
+    const attempt = this.beginAttempt(live, i);
     this.clock(live, true);
-    const restarted = flow.restarted === true;
+    const restarted = live.restarting.has(i);
+    flow.current = i;
+    flow.status = "working";
+    delete step.reason;
+    step.status = "running";
     if (!def.body) {
-      delete flow.restarted;
+      live.restarting.delete(i);
+      if (!live.restarting.size) delete flow.restarted;
       // check-only: no agent, straight to the command
       flow.status = "working";
-      await this.check(live);
+      void this.check(live, i, attempt);
       return;
     }
     let agent: AgentSettings;
@@ -896,46 +1168,73 @@ export class Flows {
     } catch (err) {
       step.status = "failed";
       step.reason = errText(err);
-      this.end(live, "failed", step.reason);
+      this.fail(live, i, step.reason);
       return;
     }
     // A restart resumes the step's Claude session, which holds the prompt
     // and the work so far; anything else starts fresh with the restart note.
     const resume = restarted && step.session && step.harness === "claude" && agent.harness === "claude" ? step.session : undefined;
-    let spec = stepSpec(workflow, flow.current, this.summaries(live), flow.retryReason, restarted);
+    let spec = stepSpec(workflow, i, this.summaries(live), flow.retryReason, restarted);
     if (resume) spec = { ...spec, resume, message: live.pickedUp ? PICKED_UP_NOTE : RESUME_NOTE };
     const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
     if (tools) {
       const extra = await tools.catch(() => []);
-      if (!isFlowActive(flow)) return;
+      if (!this.ownsAttempt(live, i, attempt) || step.status !== "running") return;
+      if (live.pending && "end" in live.pending) {
+        step.status = "pending";
+        this.advance(live);
+        return;
+      }
       if (extra.length > 0) spec = { ...spec, allowedTools: [...new Set([...spec.allowedTools, ...extra])] };
+    }
+    if (this.hooks.fingerprint) {
+      const before = await this.fingerprint(live);
+      if (!this.ownsAttempt(live, i, attempt) || step.status !== "running") return;
+      if (live.pending && "end" in live.pending) {
+        step.status = "pending";
+        this.advance(live);
+        return;
+      }
+      if (before !== null) live.marks.set(i, before);
+      else live.marks.delete(i);
+    }
+    if (def.body) {
+      const over = overBudget(workflow.budget ?? null, this.spentNow(live));
+      if (over) {
+        if ((flow.grace ?? 0) > 0) {
+          flow.grace = (flow.grace ?? 0) - 1;
+        } else {
+          this.park(live, i, over, "gated", { kind: "budget" });
+          return;
+        }
+      }
     }
     // every step runs on the flow's branch, held from the landing queue
     // until the flow is done; the setup line runs before the first only
     const onBranch: BranchStart | undefined = flow.branch
-      ? { branch: { ...branchOf(flow.branch, "working"), held: true }, ...(live.prepare ? { prepare: live.prepare } : {}) }
+      ? { branch: { ...branchOf(flow.branch, "working"), held: true }, ...(live.prepare ? { prepare: live.prepare } : {}), ...(live.startNote ? { startNote: live.startNote } : {}) }
       : undefined;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch);
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { flowOwner: live.owner });
       delete live.prepare;
+      delete live.startNote;
     } catch (err) {
       // The stage runner is away: the step waits for it, and keeps the
       // restart note for when it runs. By name, not class, as a thrown
       // error is matched across modules.
       if (err instanceof Error && err.name === "StageAwayError") {
-        flow.parkedFor = "stage";
-        this.park(live, err.message);
+        this.park(live, i, err.message, "gated", { kind: "stage", check: false });
         return;
       }
       step.status = "failed";
       step.reason = String(err instanceof Error ? err.message : err);
-      this.end(live, "failed", step.reason);
+      this.fail(live, i, step.reason);
       return;
     }
-    delete flow.restarted;
-    delete live.pickedUp;
-    if (resume) live.resuming = run.id;
+    live.restarting.delete(i);
+    if (!live.restarting.size) { delete flow.restarted; delete live.pickedUp; }
+    if (resume) live.resuming.add(run.id);
     step.status = "running";
     step.runId = run.id;
     spentOf(flow).runs += 1;
@@ -950,71 +1249,87 @@ export class Flows {
     if (latest && !isRunActive(latest)) this.onRun(latest);
   }
 
-  private async afterRun(live: LiveFlow): Promise<void> {
-    const def = live.workflow.steps[live.flow.current];
-    if (def?.check) await this.check(live);
-    else await this.gate(live);
+  private async afterRun(live: LiveFlow, i: number, attempt: symbol): Promise<void> {
+    const step = live.flow.steps[i];
+    if (!step || !this.ownsAttempt(live, i, attempt)) return;
+    step.status = "checking";
+    this.clock(live, true);
+    if (this.hooks.fingerprint) {
+      const after = await this.fingerprint(live);
+      if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
+      const before = live.marks.get(i);
+      if (before !== undefined && after !== null) step.changed = before !== after;
+      live.marks.delete(i);
+    }
+    const def = live.workflow.steps[i];
+    if (def?.check) await this.check(live, i, attempt);
+    else await this.gate(live, i, attempt);
   }
 
   /** Runs the step's command; a non-zero exit ends the flow. */
-  private async check(live: LiveFlow): Promise<void> {
-    const def = live.workflow.steps[live.flow.current];
-    const step = live.flow.steps[live.flow.current];
-    if (!def?.check || !step) return;
+  private async check(live: LiveFlow, i: number, attempt: symbol): Promise<void> {
+    const def = live.workflow.steps[i];
+    const step = live.flow.steps[i];
+    if (!def?.check || !step || !this.ownsAttempt(live, i, attempt)) return;
     step.status = "checking";
     this.emit(live);
     const ctl = new AbortController();
-    live.checking = ctl;
+    live.checking.set(i, ctl);
     let r: CheckResult;
     try {
       r = await this.hooks.check(workRepo(live), def.check, ctl.signal);
+      if (live.checking.get(i) !== ctl) return;
     } finally {
-      if (live.checking === ctl) delete live.checking;
+      if (live.checking.get(i) === ctl) live.checking.delete(i);
     }
     // stopped while it ran: the check has exited now, so the stop lands
-    if (live.stopping) {
-      this.stopped(live);
+    if (live.pending && "end" in live.pending && live.pending.end === "stopped") {
+      step.status = "failed";
+      step.reason = "stopped";
+      this.advance(live);
       return;
     }
-    if (!isFlowActive(live.flow)) return;
+    if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
     if (r.away && isSeedId(live.repo.id)) {
       // the check never ran: it waits for the stage runner, and no retry is spent
-      live.flow.parkedFor = "stage";
-      live.flow.stageCheck = true;
-      this.park(live, r.output || STAGE_AWAY);
+      this.park(live, i, r.output || STAGE_AWAY, "gated", { kind: "stage", check: true });
       return;
     }
     step.check = { command: def.check, exit: r.exit, output: r.output };
     if (r.exit !== 0) {
       const reason = `check failed with exit ${r.exit}`;
-      this.refuse(live, `${reason}:\n${tailOf(r.output)}`, () => {
+      this.refuse(live, i, `${reason}:\n${tailOf(r.output)}`, () => {
         // out of retries parks, so the sheet can show the output; no retries fails as it always did
-        if (def.retries > 0) this.park(live, reason);
+        if (routesCheckFailure(live.workflow, def.name)) {
+          step.status = "failed";
+          step.reason = reason;
+          this.advance(live);
+        } else if (def.retries > 0) this.park(live, i, reason);
         else {
           step.status = "failed";
           step.reason = reason;
-          this.end(live, "failed", reason);
+          this.fail(live, i, reason);
         }
       });
       return;
     }
-    await this.gate(live);
+    await this.gate(live, i, attempt);
   }
 
-  private async gate(live: LiveFlow): Promise<void> {
-    const def = live.workflow.steps[live.flow.current];
-    const step = live.flow.steps[live.flow.current];
-    if (!def || !step) return;
+  private async gate(live: LiveFlow, i: number, attempt: symbol): Promise<void> {
+    const def = live.workflow.steps[i];
+    const step = live.flow.steps[i];
+    if (!def || !step || !this.ownsAttempt(live, i, attempt)) return;
     switch (def.gate) {
       case "continue":
-        await this.pass(live);
+        await this.pass(live, i);
         return;
       case "ask":
-        this.park(live, "this step asks before the next one starts");
+        this.park(live, i, "this step asks before the next one starts");
         return;
       case "verdict": {
         if (!this.hooks.evaluator) {
-          this.park(live, "no gateway key, so the verdict is yours");
+          this.park(live, i, "no gateway key, so the verdict is yours");
           return;
         }
         let changed: boolean | null = null;
@@ -1029,28 +1344,29 @@ export class Flows {
             changed = null;
           }
         }
+        if (!this.ownsAttempt(live, i, attempt)) return;
         try {
           const answers = await this.hooks.evaluator(
             verdictState({ summary: step.summary ?? "", check: step.check?.output ?? null, changed }),
           );
-          if (!isFlowActive(live.flow)) return;
+          if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
           const v = decide(answers);
           step.verdict = v;
-          if (v.go) await this.pass(live);
+          if (v.go) await this.pass(live, i);
           else {
             const reason = v.reason ?? "the verdict said no";
-            this.refuse(live, reason, () => this.park(live, reason));
+            this.refuse(live, i, reason, () => this.park(live, i, reason));
           }
         } catch (err) {
-          if (!isFlowActive(live.flow)) return;
-          this.park(live, `verdict unavailable: ${String(err instanceof Error ? err.message : err)}`);
+          if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
+          this.park(live, i, `verdict unavailable: ${String(err instanceof Error ? err.message : err)}`);
         }
         return;
       }
       case "judge": {
         const judge = this.hooks.judge;
         if (!judge) {
-          this.park(live, "no gateway key, so the judgment is yours");
+          this.park(live, i, "no gateway key, so the judgment is yours");
           return;
         }
         let files: EvidenceFile[] = [];
@@ -1063,65 +1379,199 @@ export class Flows {
         } else {
           files = def.evidence.map((path) => ({ path, text: null }));
         }
-        if (!isFlowActive(live.flow)) return;
+        if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
         try {
           const answers = await judge(
             judgeState({ task: def.body, summary: step.summary ?? "", check: step.check?.output ?? null, files }),
           );
-          if (!isFlowActive(live.flow)) return;
+          if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
           const j = decideJudge(answers);
           step.judgment = j;
-          if (j.go) await this.pass(live);
-          else if (j.rejected) this.park(live, j.reason ?? "the judge turned the work down");
+          if (j.go) await this.pass(live, i);
+          else if (j.rejected) this.park(live, i, j.reason ?? "the judge turned the work down");
           else {
             const reason = j.reason ?? "the judge said no";
-            this.refuse(live, reason, () => this.park(live, reason));
+            this.refuse(live, i, reason, () => this.park(live, i, reason));
           }
         } catch (err) {
-          if (!isFlowActive(live.flow)) return;
-          this.park(live, `judgment unavailable: ${errText(err)}`);
+          if (!this.ownsAttempt(live, i, attempt) || step.status !== "checking") return;
+          this.park(live, i, `judgment unavailable: ${errText(err)}`);
         }
         return;
       }
     }
   }
 
-  private park(live: LiveFlow, reason: string): void {
-    const step = live.flow.steps[live.flow.current];
+  private park(live: LiveFlow, i: number, reason: string, status: "gated" | "held" = "gated", cause: ParkCause = { kind: "gate" }): void {
+    const step = live.flow.steps[i];
     if (!step) return;
-    this.clock(live, false);
-    step.status = "gated";
+    step.status = status;
     step.reason = reason;
-    live.flow.status = "gated";
-    this.emit(live);
+    live.parks.set(i, cause);
+    if (!live.pending) {
+      live.pending = { park: i };
+      this.showPark(live, i);
+    }
+    this.advance(live);
   }
 
-  private async pass(live: LiveFlow): Promise<void> {
-    const step = live.flow.steps[live.flow.current];
+  private showPark(live: LiveFlow, i: number): void {
+    const cause = live.parks.get(i);
+    delete live.flow.parkedFor;
+    delete live.flow.stageCheck;
+    if (cause && cause.kind !== "gate") live.flow.parkedFor = cause.kind;
+    if (cause?.kind === "stage" && cause.check) live.flow.stageCheck = true;
+  }
+
+  private fail(live: LiveFlow, i: number, reason: string): void {
+    const step = live.flow.steps[i];
+    if (!step) return;
+    step.status = "failed";
+    step.reason = reason;
+    // An end takes precedence over a park; an explicit stop wins over a failure.
+    if (!live.pending || "park" in live.pending) live.pending = { end: "failed", error: reason };
+    this.advance(live);
+  }
+
+  private async pass(live: LiveFlow, i: number): Promise<void> {
+    const step = live.flow.steps[i];
     if (!step) return;
     step.status = "passed";
     delete step.reason;
     delete live.flow.retryReason;
-    if (live.flow.current + 1 >= live.flow.steps.length) {
-      this.end(live, "done");
-      return;
-    }
-    live.flow.current += 1;
-    this.emit(live);
-    await this.runStep(live);
+    this.advance(live);
   }
 
-  private end(live: LiveFlow, status: "done" | "failed" | "stopped", error?: string): void {
+  private skip(live: LiveFlow, i: number): void {
+    const step = live.flow.steps[i];
+    const def = live.workflow.steps[i];
+    if (!step || !def) return;
+    step.status = "skipped";
+    step.reason = `none of its conditions held: ${def.when.join(", ")}`;
+  }
+
+  private async fingerprint(live: LiveFlow): Promise<string | null> {
+    try { return await this.hooks.fingerprint?.(workRepo(live)) ?? null; }
+    catch { return null; }
+  }
+
+  private liveSteps(live: LiveFlow): number[] {
+    return live.flow.steps.flatMap((s, i) => s.status === "running" || s.status === "checking" ? [i] : []);
+  }
+
+  private activity(live: LiveFlow): void {
+    const indices = this.liveSteps(live);
+    const waiting = indices.some((i) => {
+      const id = live.flow.steps[i]?.runId;
+      return id && this.runner.get(id)?.status === "waiting";
+    });
+    const working = indices.some((i) => {
+      const step = live.flow.steps[i];
+      const run = step?.runId ? this.runner.get(step.runId) : undefined;
+      return step?.status === "checking" || !run || run.status !== "waiting";
+    });
+    live.flow.status = waiting ? "waiting" : "working";
+    this.clock(live, working);
+  }
+
+  private advance(live: LiveFlow): void {
+    if (live.advancing) { live.advanceAgain = true; return; }
+    live.advancing = true;
+    try {
+      do {
+        live.advanceAgain = false;
+        this.advanceOnce(live);
+      } while (live.advanceAgain);
+    } finally { delete live.advancing; }
+  }
+
+  private advanceOnce(live: LiveFlow): void {
+    const { flow, workflow } = live;
+    if (!isFlowActive(flow)) return;
+    if (live.pending) {
+      if (this.liveSteps(live).length) { this.activity(live); this.emit(live); return; }
+      const pending = live.pending;
+      delete live.pending;
+      if ("end" in pending) { this.finish(live, pending.end, pending.error); return; }
+      flow.current = pending.park;
+      this.showPark(live, pending.park);
+      flow.status = "gated";
+      this.clock(live, false);
+      this.emit(live);
+      return;
+    }
+    const parked = flow.steps.findIndex((s) => s.status === "gated" || s.status === "held");
+    if (parked >= 0) {
+      live.pending = { park: parked };
+      this.showPark(live, parked);
+      // A working record may have been saved while its park drained a sibling.
+      // Only those interrupted siblings restart, never an untouched successor.
+      // Starting can synchronously delete and re-add a session fallback.
+      const interrupted = [...live.restarting];
+      for (const i of interrupted) {
+        if (flow.steps[i]?.status !== "pending" || !isFlowActive(flow) || "end" in live.pending) continue;
+        void this.runStep(live, i);
+      }
+      live.advanceAgain = true;
+      return;
+    }
+    let skipped: boolean;
+    do {
+      skipped = false;
+      for (const i of ready(flow, workflow)) {
+        if (!whenHolds(flow, workflow, i)) { this.skip(live, i); skipped = true; }
+      }
+    } while (skipped);
+    for (const i of ready(flow, workflow)) {
+      if (this.liveSteps(live).length >= FLOW_PARALLEL) break;
+      const def = workflow.steps[i];
+      const step = flow.steps[i];
+      if (!def || !step) continue;
+      const writer = this.liveSteps(live).find((n) => {
+        const other = workflow.steps[n];
+        return other && !readOnlyStep(other);
+      });
+      if (!readOnlyStep(def) && writer !== undefined) {
+        step.reason = `waits for ${workflow.steps[writer]?.name} (both change the tree)`;
+        continue;
+      }
+      if (def.mode === "manual") {
+        this.park(live, i, `${def.name} waits for your go`, "held");
+        continue;
+      }
+      void this.runStep(live, i);
+      if (live.pending && "end" in live.pending || flow.parkedFor) break;
+    }
+    if (!isFlowActive(flow)) return;
+    if (this.liveSteps(live).length) { this.activity(live); this.emit(live); return; }
+    if (live.pending) { live.advanceAgain = true; return; }
+    if (flow.steps.every((s) => s.status !== "pending" && s.status !== "gated" && s.status !== "held")) this.finish(live, "done");
+  }
+
+  private finish(live: LiveFlow, status: "done" | "failed" | "stopped", error?: string): void {
     if (!isFlowActive(live.flow)) return;
+    clearTimeout(live.stopping);
+    delete live.stopping;
+    live.attempts.clear();
+    for (const start of live.starting.values()) start.finish();
     this.clock(live, false);
     live.flow.status = status;
     delete live.flow.retryReason;
     live.flow.endedAt = Date.now();
     if (error) live.flow.error = error;
     for (const s of live.flow.steps) if (s.status === "pending") s.status = "skipped";
+    const releasedRuns = live.releasedRuns;
+    if (status !== "done") {
+      releasedRuns?.clear();
+      delete live.releasedRuns;
+    }
     this.emit(live);
     this.onFlowEnd(live.flow);
-    void this.settle(live);
+    void this.settle(live).finally(() => {
+      releasedRuns?.clear();
+      // An old stopped settlement must not clear a picked-up attempt's records.
+      if (live.releasedRuns === releasedRuns) delete live.releasedRuns;
+    });
   }
 
   protected onFlowEnd(flow: Flow): void {
@@ -1141,20 +1591,28 @@ export class Flows {
   /** A flow on a branch, ended: its worktree read into the branch's state
    *  and outcome, and a done flow's branch handed to the landing queue. */
   private async settleBranch(live: LiveFlow, b: RunBranch): Promise<void> {
+    const lifecycle = live.lifecycle;
+    const releases = live.flow.steps.flatMap((step) => {
+      const release = step.runId ? this.runner.whenReleased(step.runId) : null;
+      return release ? [release] : [];
+    });
+    if (releases.length) await Promise.all(releases);
+    if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle || isFlowActive(live.flow)) return;
     const read = (await this.readBranch(b)) ?? "nothing";
     // dismissed or pruned while the read was out: saving it would bring it back
-    if (this.live.get(live.flow.id) !== live || isFlowActive(live.flow)) return;
+    if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle || isFlowActive(live.flow)) return;
     live.flow.branch = branchOf(b, read);
     live.flow.outcome = read === "nothing" ? "unchanged" : "changed";
     this.emit(live);
     if (live.flow.status !== "done") return;
     const last = [...live.flow.steps].reverse().find((s) => s.runId)?.runId;
-    this.hooks.onBranchEnd?.(live.flow, last);
+    this.hooks.onBranchEnd?.(live.flow, last, last ? live.releasedRuns?.get(last) : undefined);
   }
 
   private async settle(live: LiveFlow): Promise<void> {
     if (live.flow.branch) return this.settleBranch(live, live.flow.branch);
     if (!live.workflow.expectsChange || !this.hooks.status) return;
+    const lifecycle = live.lifecycle;
     let after: string | null = null;
     try {
       const st = await this.hooks.status(live.flow.repoId);
@@ -1163,7 +1621,7 @@ export class Flows {
       after = null;
     }
     // dismissed or pruned while the read was out: saving it would bring it back
-    if (this.live.get(live.flow.id) !== live) return;
+    if (this.live.get(live.flow.id) !== live || live.lifecycle !== lifecycle) return;
     if (after === null || isFlowActive(live.flow)) return;
     live.flow.outcome = after === live.before ? "unchanged" : "changed";
     this.emit(live);

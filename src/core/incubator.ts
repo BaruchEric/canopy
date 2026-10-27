@@ -71,6 +71,7 @@ import {
 import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
 import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
+import { unattendedRefusal } from "./workflow";
 
 export class IncubatorError extends Error {
   constructor(
@@ -1025,7 +1026,10 @@ export class Incubator {
         return;
       }
       if (this.detached || s.retro !== r) return;
-      const flow = await this.deps.flows.start(repo, { ...withRecordRead(wf, dirname(file)), unattended: RETRO_UNATTENDED }, retroNote(s, file));
+      const workflow = { ...withRecordRead(wf, dirname(file)), unattended: RETRO_UNATTENDED };
+      const refusal = unattendedRefusal(workflow, "an incubator stage");
+      if (refusal) return this.retroFailed(s, refusal);
+      const flow = await this.deps.flows.start(repo, workflow, retroNote(s, file));
       r.flowId = flow.id;
       if (this.gone(s)) {
         this.stopFlow(flow);
@@ -1127,6 +1131,9 @@ export class Incubator {
       }
     }
     if (this.deps.shell === true && SHELL_STAGES.includes(name)) wf = withShell(wf);
+    // A step that asks, or waits for a go, is refused: no one attends a stage.
+    const refusal = unattendedRefusal(wf, "an incubator stage");
+    if (refusal) return this.park(s, refusal);
     if (this.detached || s.status === "stopped") return;
     const base = stageNote(s, inputs);
     const note = [base, ws !== null ? workspaceLine(ws) : "", build ? hostLine(build) : ""].filter(Boolean).join(" ");

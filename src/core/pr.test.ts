@@ -15,6 +15,7 @@ import {
   POLL_BUSY,
   POLL_QUIET,
   prNumberOf,
+  prBody,
   readyToMerge,
   readyToRebase,
   rebaseKey,
@@ -84,6 +85,13 @@ const watch = (over: Partial<PrWatch> = {}): PrWatch => ({
 });
 
 const state = (over: Partial<PrState> = {}): PrState => ({ ...parsePrView(view()), ...over });
+
+describe("prBody", () => {
+  test("the note, the commits, and the work trailer on the last line", () => {
+    expect(prBody("add a test", ["feat: a", "fix: b"], "w-test2345")).toBe("add a test\n\nCommits:\n- feat: a\n- fix: b\n\nOpened by canopy from a branch run.\n\nCanopy-Work: w-test2345");
+    expect(prBody("", [])).toBe("A canopy branch run.\n\nOpened by canopy from a branch run.");
+  });
+});
 
 describe("parsePrView", () => {
   test("reads the numbers, the head and both kinds of check", () => {

@@ -40,6 +40,7 @@ import {
 } from "../core/pr";
 import { configDir } from "../core/store";
 import { SWEEP_COMMENT_PREFIX } from "../core/sweep";
+import type { WorkSink } from "../core/work";
 import type { LandingRun, PrComment, PrNow, PrState, PrWatch, Run, RunReview, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { dirtyFiles, pushBranch, pushBranchLease, pushRemote, rebaseOnto, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
@@ -168,6 +169,8 @@ export interface PrDeps {
   runOk: (id: string) => boolean;
   /** sorts a branch run's worktree by its repo's review rules */
   sort?: (rec: LandingRun, now: number) => Promise<RunReview>;
+  /** the work item's note, link and close lines; absent for pre-ledger watches */
+  work?: WorkSink;
   /** the `canopy:prs` health check */
   report?: (r: ProbeResult) => void;
   dir?: string;
@@ -386,7 +389,7 @@ export class PrHub {
       if ("rejected" in pushed) throw new PrError(`the push was refused: ${pushed.rejected}`);
       const subjects = await subjectsSince(rec.dir, rec.target);
       const title = subjects[0] ?? rec.note.split("\n")[0] ?? rec.branch;
-      const args = ["pr", "create", "-R", slug, "--head", rec.branch, "--base", rec.target, "--title", title, "--body", prBody(rec.note, subjects)];
+      const args = ["pr", "create", "-R", slug, "--head", rec.branch, "--base", rec.target, "--title", title, "--body", prBody(rec.note, subjects, rec.work)];
       if (opts.draft) args.push("--draft");
       const made = await this.gh(args, rec.repoPath);
       const number = made.code === 0 ? prNumberOf(made.stdout) : null;
@@ -412,8 +415,13 @@ export class PrHub {
         seenComment: 0,
         openedAt: now,
         updatedAt: now,
+        ...(rec.work ? { work: rec.work } : {}),
       };
       this.save(w);
+      if (w.work) {
+        this.deps.work?.link(w.work, { pr: { number, url: w.url } });
+        this.deps.work?.note(w.work, `PR #${number} opened`);
+      }
       this.deps.markPr(rec.id, number);
       this.due.set(w.id, now);
       this.fresh.set(w.id, now + FRESH_FOR);
@@ -668,6 +676,9 @@ export class PrHub {
     // closed on GitHub: the run may land here again, unless the sweep
     // closed it (here or on another backend), which keeps the PR on the record
     if (w.state?.status === "closed" && w.swept === undefined && (had.state?.status !== "closed" || w.closeUnread !== undefined)) w = await this.whoClosed(w);
+    if (had.state?.status !== "closed" && w.state?.status === "closed" && w.work) {
+      this.deps.work?.note(w.work, `PR #${w.number} closed`);
+    }
     if (w.state?.status === "open") {
       // behind or conflicting on the head canopy pushed: rebased first, so
       // the comment loop and the merge see the pushed head on a later read
@@ -750,10 +761,13 @@ export class PrHub {
   private async startFix(w: PrWatch, key: string, prompt: string): Promise<PrWatch> {
     const rec = this.deps.record(w.id);
     if (!rec) return { ...w, error: "its branch run's record is gone" };
-    const attempts = { ...w.attempts, [key]: (w.attempts[key] ?? 0) + 1 };
+    const attempt = (w.attempts[key] ?? 0) + 1;
+    const attempts = { ...w.attempts, [key]: attempt };
     const what = key.startsWith("check:") ? `${key.slice("check:".length)} failed` : key.startsWith("rebase:") ? `rebase onto ${w.target}` : "a review comment";
     try {
-      const run = await this.deps.startFix(rec, prompt, `fix PR #${w.number}: ${what} (${attempts[key]}/${MAX_ATTEMPTS})`);
+      const run = await this.deps.startFix(rec, prompt, `fix PR #${w.number}: ${what} (${attempt}/${MAX_ATTEMPTS})`);
+      const lineWhat = key.startsWith("check:") ? `check ${key.slice("check:".length)}` : what;
+      if (w.work) this.deps.work?.note(w.work, `fix ${attempt} of ${MAX_ATTEMPTS} for ${lineWhat}`);
       return { ...w, attempts, runId: run.id, fixing: { run: run.id, key } };
     } catch (err) {
       return { ...w, attempts, error: `could not start a fix: ${errText(err)}` };
@@ -880,6 +894,7 @@ export class PrHub {
    *  worktree is then an orphan the landing section offers. The watch stays
    *  for the list. */
   private async merged(w: PrWatch): Promise<void> {
+    if (w.work) this.deps.work?.close(w.work, "landed", `PR #${w.number} merged`);
     await git(w.repoPath, ["push", w.remote, "--delete", w.branch]);
     const ahead = await git(w.repoPath, ["rev-list", "--count", `${w.pushed}..refs/heads/${w.branch}`]);
     const dirty = await dirtyFiles(w.dir).catch(() => []);

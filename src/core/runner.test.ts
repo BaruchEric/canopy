@@ -1,11 +1,16 @@
-import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import * as fs from "node:fs";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RpcProc } from "./codexrpc";
 import { ACTIONS } from "./actions";
-import { cliArgs, Runner } from "./runner";
-import type { RunDriver } from "./driver";
-import { DEFAULT_AGENT, type Repo } from "./types";
+import { cliArgs, Runner, startArgv } from "./runner";
+import type { DriveCtx, RunDriver } from "./driver";
+import { DiskRunLogger, readKeptRun, WIRE_GZ, type RunLogger } from "./runlog";
+import { StageClient } from "./stageclient";
+import { DEFAULT_AGENT, type Harness, type Repo, type Run } from "./types";
 
 describe("the print-mode command line", () => {
   test("the default is the bypass mode; ask goes through the prompt tool", () => {
@@ -46,6 +51,23 @@ test("a run keeps the resolved settings snapshot for its accounting row", () => 
   expect(run.agentSettings).toEqual({ harness: "codex", model: "gpt-x", effort: "high", provider: "team_1" });
 });
 
+test("Runner.note adds a timeline remark only to a live known run", () => {
+  const driver: RunDriver = { harness: "codex", label: "Codex", check: () => null, start: () => {}, say: () => {}, stop: () => {} };
+  const changes: Run[] = [];
+  const runner = new Runner({ onChange: (run) => changes.push(run), onGone: () => {} }, { driver: () => driver });
+  const repo: Repo = { id: "api", name: "api", path: "/r/api", group: "", source: "root", status: null };
+  const run = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT);
+  const before = changes.length;
+  runner.note(run.id, "also editing x.ts");
+  expect(run.steps.at(-1)).toMatchObject({ kind: "note", text: "also editing x.ts" });
+  expect(changes).toHaveLength(before + 1);
+  const knownSteps = run.steps.length;
+  runner.note("missing", "not recorded");
+  run.status = "limited";
+  runner.note(run.id, "not recorded either");
+  expect(run.steps).toHaveLength(knownSteps);
+});
+
 /* A stand-in for the claude CLI that never calls anything: it asks for two
  * tools at once, the way Claude Code does for parallel reads, and finishes
  * only when both requests got an answer. */
@@ -81,6 +103,7 @@ process.exit(0);
  * Bun.which does not see a PATH changed at runtime. */
 const HARNESS = (root: string) => `
 import { Runner, claudeBinary } from ${JSON.stringify(join(root, "src/core/runner.ts"))};
+import type { RpcProc } from "./codexrpc";
 import { ACTIONS } from ${JSON.stringify(join(root, "src/core/actions.ts"))};
 import { DEFAULT_AGENT } from ${JSON.stringify(join(root, "src/core/types.ts"))};
 if (claudeBinary() !== process.env.FAKE_CLAUDE) {
@@ -161,6 +184,7 @@ process.exit(0);
 
 const ENDED_CHAT_HARNESS = (root: string) => `
 import { Runner, claudeBinary } from ${JSON.stringify(join(root, "src/core/runner.ts"))};
+import type { RpcProc } from "./codexrpc";
 import { ACTIONS } from ${JSON.stringify(join(root, "src/core/actions.ts"))};
 import { DEFAULT_AGENT } from ${JSON.stringify(join(root, "src/core/types.ts"))};
 if (claudeBinary() !== process.env.FAKE_CLAUDE) {
@@ -221,4 +245,377 @@ describe("a chat ended between turns", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+test("stopAndWait stops a terminal member's lingering process and awaits its actual exit", async () => {
+  let context: import("./driver").DriveCtx | undefined;
+  let stops = 0; let returned = false; let settlements = 0;
+  const runner = new Runner({ onChange: () => {}, onGone: () => {}, branchState: async () => { settlements++; return "ready"; } }, {
+    driver: harness => ({ harness, label: "delayed exit", check: () => null, start: ctx => { context = ctx; }, say: () => {}, stop: () => { stops++; } }),
+  });
+  const repo: Repo = { id: "app", name: "app", path: "/scratch/app", status: null, group: "", source: "root" };
+  const run = runner.start(repo, "ask", ACTIONS.ask, "work", DEFAULT_AGENT, undefined, undefined, { branch: { name: "run/member", target: "main", base: "base", dir: "/scratch/member", state: "working", origin: "member" } });
+  if (!context) throw new Error("driver absent");
+  context.result({ text: "done", durationMs: 1, turns: 1 }, null);
+  expect(run.status).toBe("done");
+  const stopping = runner.stopAndWait(run.id).then(() => { returned = true; });
+  try {
+    await Bun.sleep(10);
+    expect(stops).toBe(1); expect(returned).toBe(false);
+    const beforeExit = settlements;
+    context.exited({ code: 0, stderr: "" }); await stopping;
+    expect(returned).toBe(true); expect(settlements).toBeGreaterThan(beforeExit);
+  } finally { context.exited({ code: 0, stderr: "" }); await stopping; }
+});
+
+
+describe("the run log (FR-043)", () => {
+  const roots: string[] = [];
+  afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+  const repo: Repo = { id: "replay-repo", name: "r", path: "/owned/replay-repo", group: "", source: "root", status: null };
+  const until = async (ready: () => boolean): Promise<void> => {
+    for (let n = 0; n < 100 && !ready(); n++) await Bun.sleep(5);
+    expect(ready()).toBe(true);
+  };
+  const disk = async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-runner-log-")); roots.push(root);
+    const dir = join(root, "runs");
+    const log = new DiskRunLogger({ dir, env: () => ({}), appliedFile: join(root, "absent-applied") });
+    return { root, dir, log };
+  };
+  const lines = async (dir: string, id: string): Promise<unknown[]> => {
+    const file = join(dir, id, WIRE_GZ);
+    await until(() => existsSync(file));
+    return new TextDecoder().decode(Bun.gunzipSync(await Bun.file(file).bytes())).trim().split("\n").map((line): unknown => JSON.parse(line));
+  };
+  class WireDriver implements RunDriver {
+    readonly label = "Inert driver";
+    ctx: DriveCtx | null = null;
+    constructor(readonly harness: Harness = "claude", private auto = true) {}
+    check() { return null; }
+    start(ctx: DriveCtx, message: string) {
+      this.ctx = ctx;
+      ctx.wire("in", JSON.stringify({ type: "user", text: message, env: ctx.env }));
+      ctx.wire("out", '{"type":"system","subtype":"init","session_id":"session-1"}');
+      ctx.session("session-1");
+      if (this.auto) { this.turn(); if (!ctx.chat) this.exit(); }
+    }
+    turn(problem: string | null = null) {
+      this.ctx?.wire("out", JSON.stringify({ type: "result", text: "ok" }));
+      this.ctx?.result({ text: "ok", durationMs: 1, turns: 1 }, problem);
+    }
+    say(text: string) { this.ctx?.wire("in", JSON.stringify({ type: "user", text })); this.turn(); }
+    exit() { this.ctx?.wire("out", '{"type":"final","text":"after result"}'); this.ctx?.exited({ code: 0, stderr: "" }); }
+    stop() { this.exit(); }
+  }
+
+  test("a job records argv, both wires and redacted run env, then keeps its final snapshot", async () => {
+    const { dir, log } = await disk();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver(), log, backend: "fixture-backend" });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, undefined, { env: { CANOPY_REPLAY: "synthetic-extra" } });
+    const wire = await lines(dir, run.id);
+    expect(wire[0]).toMatchObject({ canopy: "start", run: run.id, repo: repo.id, harness: "claude", argv: expect.arrayContaining(["claude", "-p"]) });
+    const incoming = wire[1];
+    if (typeof incoming !== "object" || incoming === null || !("line" in incoming)) throw new Error("missing input record");
+    expect(incoming.line).toContain('"CANOPY_BACKEND":"<redacted:CANOPY_BACKEND>"');
+    expect(incoming.line).toContain('"CANOPY_REPLAY":"<redacted:CANOPY_REPLAY>"');
+    expect(wire[2]).toMatchObject({ type: "system", session_id: "session-1" });
+    expect(wire.slice(-2)).toEqual([{ type: "final", text: "after result" }, { canopy: "end", at: expect.any(Number), status: "done" }]);
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ id: run.id, status: "done", session: "session-1", result: { text: "ok" } });
+    expect(run.steps.some((s) => s.text?.startsWith("transcript stopped:"))).toBe(false);
+  });
+
+  test("a terminal result keeps collecting protocol until actual exit and preserves final branch attribution", async () => {
+    const { dir, log } = await disk();
+    let afterExit = false;
+    class ExitWork extends WireDriver { override exit() { afterExit = true; super.exit(); } }
+    const driver = new ExitWork("claude", false);
+    let reads = 0;
+    const changes: Run[] = [];
+    const runner = new Runner({ onChange: (run) => { changes.push(structuredClone(run)); }, onGone: () => {}, branchState: async () => { reads++; return afterExit ? "ready" : "working"; } }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined,
+      { branch: { name: "run/replay", target: "main", base: "base", dir: "/owned/work", origin: "origin", state: "working", group: "batch-route" }, resume: "resume-fixture" },
+      { priority: "low" });
+    expect(changes[0]).toMatchObject({ group: "batch-route", priority: "low", branch: { group: "batch-route" } });
+    driver.turn();
+    expect(run.status).toBe("done");
+    await Bun.sleep(15);
+    expect(existsSync(join(dir, run.id, WIRE_GZ))).toBe(false);
+    expect(reads).toBe(0);
+    driver.exit();
+    const wire = await lines(dir, run.id);
+    expect(wire[0]).toMatchObject({ argv: expect.arrayContaining(["--resume", "resume-fixture"]) });
+    expect(wire.slice(-2)).toMatchObject([{ type: "final" }, { canopy: "end", status: "done" }]);
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ group: "batch-route", priority: "low", branch: { group: "batch-route", state: "ready" }, outcome: "changed" });
+    expect(reads).toBe(1);
+    driver.exit();
+    expect((await lines(dir, run.id)).filter((line) => typeof line === "object" && line !== null && "canopy" in line && line.canopy === "end")).toHaveLength(1);
+  });
+
+  test("stopAndWait waits for a terminal driver's actual exit without cycling through log settlement", async () => {
+    const { dir, log } = await disk();
+    class SlowStop extends WireDriver { stopped = false; override stop() { this.stopped = true; } }
+    const driver = new SlowStop("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect"); driver.turn();
+    let returned = false;
+    const stopping = runner.stopAndWait(run.id).then(() => { returned = true; });
+    await Bun.sleep(10);
+    expect(driver.stopped).toBe(true); expect(returned).toBe(false);
+    driver.exit(); await stopping;
+    expect(returned).toBe(true);
+    expect((await lines(dir, run.id)).at(-1)).toMatchObject({ canopy: "end", status: "done" });
+  });
+
+  test("a tracked stage seed stays busy and keeps its log open until quiet without a status hook", async () => {
+    const { dir, log } = await disk();
+    let releaseQuiet = (_quiet: boolean) => {};
+    const quiet = new Promise<boolean>((resolve) => { releaseQuiet = resolve; });
+    class HeldSeed extends StageClient {
+      override harnessesNow() { return ["claude"]; }
+      override busy() { return quiet; }
+    }
+    class Tracked extends WireDriver {
+      override start(ctx: DriveCtx, message: string) {
+        super.start(ctx, message);
+        const proc: RpcProc = { stdin: { write() {}, end() {} }, stdout: new ReadableStream({ start(c) { c.close(); } }), exited: Promise.resolve(0), kill() {} };
+        if (!ctx.track) throw new Error("missing seed tracker");
+        ctx.track(proc);
+        this.turn(); this.exit();
+      }
+    }
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new Tracked("claude", false), log, stage: () => true, stageExec: () => new HeldSeed("/unused-fixture-socket") });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    await Bun.sleep(10);
+    expect(run.status).toBe("done"); expect(runner.liveIn(repo.path)).toBe(true);
+    expect(existsSync(join(dir, run.id, WIRE_GZ))).toBe(false);
+    releaseQuiet(false);
+    expect((await lines(dir, run.id)).at(-1)).toMatchObject({ status: "done" });
+    expect(runner.liveIn(repo.path)).toBe(false);
+  });
+
+  test("a Codex run logs the app-server argv built from resolved extras", async () => {
+    const { dir, log } = await disk();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: (h) => new WireDriver(h), log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", { ...DEFAULT_AGENT, harness: "codex", extra: "--enable fixture --search" });
+    expect((await lines(dir, run.id))[0]).toMatchObject({ harness: "codex", argv: ["codex", "app-server", "--listen", "stdio://", "--enable", "fixture"] });
+  });
+
+  test("a chat keeps its single wire through turns and closes at its end", async () => {
+    const { dir, log } = await disk(); const driver = new WireDriver();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });
+    const run = runner.start(repo, "chat", ACTIONS.chat, "hello");
+    runner.say(run.id, "more");
+    expect(run.status).toBe("idle");
+    expect(existsSync(join(dir, run.id, WIRE_GZ))).toBe(false);
+    runner.stop(run.id);
+    const wire = await lines(dir, run.id);
+    expect(wire.filter((l) => typeof l === "object" && l !== null && "canopy" in l && l.canopy === "start")).toHaveLength(1);
+    expect(wire.filter((l) => typeof l === "object" && l !== null && "canopy" in l && l.canopy === "in")).toHaveLength(2);
+    expect(wire.at(-1)).toMatchObject({ canopy: "end", status: "done" });
+  });
+
+  test("an empty chat and a failed branch prepare settle without starting a process", async () => {
+    const { dir, log } = await disk(); let starts = 0;
+    class NotStarted extends WireDriver { override start(ctx: DriveCtx, message: string) { starts++; super.start(ctx, message); } }
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new NotStarted(), log });
+    const chat = runner.start(repo, "chat", ACTIONS.chat, ""); runner.stop(chat.id);
+    expect((await lines(dir, chat.id)).at(-1)).toMatchObject({ status: "done" });
+    const failed = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, { branch: { name: "run/setup", target: "main", base: "base", dir: "/owned/work", origin: "setup", state: "working" }, prepare: async () => { throw new Error("fixture setup error"); } });
+    expect((await lines(dir, failed.id)).at(-1)).toMatchObject({ status: "failed" });
+    expect(starts).toBe(0);
+  });
+
+  test.each([true, false])("stopping deferred preparation waits for its final state and notes when logging is %s", async (logging) => {
+    const { dir, log } = await disk(); const driver = new WireDriver();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let prepared = false;
+    let returned = false;
+    const reads: boolean[] = [];
+    const runner = new Runner({
+      onChange: () => {}, onGone: () => {},
+      branchState: async () => { reads.push(prepared); return prepared ? "ready" : "nothing"; },
+    }, { driver: () => driver, ...(logging ? { log } : {}) });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, {
+      branch: { name: "run/deferred", target: "main", base: "base", dir: "/owned/work", origin: "deferred", state: "working" },
+      prepare: async (say) => { await held; say("late preparation note"); prepared = true; },
+    });
+    const stopping = runner.stopAndWait(run.id).then(() => { returned = true; });
+    try {
+      expect(run.status).toBe("stopped");
+      // Drain result-time microtasks while preparation stays explicitly held.
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+      expect(returned).toBe(false);
+      if (logging) {
+        expect(await readKeptRun(dir, run.id)).toBeNull();
+        expect(reads).toEqual([]);
+      } else {
+        expect(reads).toEqual([false]);
+        expect(run.branch?.state).toBe("nothing");
+      }
+      release(); await stopping;
+      expect(returned).toBe(true);
+      expect(driver.ctx).toBeNull();
+      expect(run).toMatchObject({ status: "stopped", branch: { state: "ready" }, outcome: "changed" });
+      if (logging) {
+        const kept = await readKeptRun(dir, run.id);
+        expect(kept).toMatchObject({ status: "stopped", branch: { state: "ready" }, outcome: "changed" });
+        expect(kept?.steps.some((step) => step.text === "late preparation note")).toBe(true);
+        expect((await lines(dir, run.id)).at(-1)).toMatchObject({ canopy: "end", status: "stopped" });
+      }
+    } finally { release(); await stopping; }
+  });
+
+  test("a limited job keeps its limited status after driver exit", async () => {
+    const { dir, log } = await disk(); const driver = new WireDriver("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    driver.turn("usage limit reached"); driver.exit();
+    expect((await lines(dir, run.id)).at(-1)).toMatchObject({ status: "limited" });
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ status: "limited", limited: { text: "usage limit reached" } });
+  });
+
+  test("a stage job and a coordinator chat settle without a status hook", async () => {
+    const { dir, log } = await disk();
+    class InertStage extends StageClient { override harnessesNow() { return ["claude"]; } }
+    const client = new InertStage("/unused-fixture-socket");
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver(), stage: () => true, stageExec: () => client, coordExec: () => client, log });
+    const stage = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    expect((await lines(dir, stage.id)).at(-1)).toMatchObject({ status: "done" });
+    const coord = runner.start(repo, "coordinate", ACTIONS.chat, "coordinate", DEFAULT_AGENT, undefined, undefined, undefined, { cwd: "/owned/coordinator", env: { CANOPY_TOKEN: "synthetic-long-private-token" } });
+    runner.stop(coord.id);
+    expect((await lines(dir, coord.id)).at(-1)).toMatchObject({ status: "done" });
+    const coordWire = JSON.stringify(await lines(dir, coord.id));
+    expect(coordWire).not.toContain("synthetic-long-private-token");
+    expect(coordWire).toContain("<redacted:CANOPY_TOKEN>");
+    expect((await readFile(join(dir, coord.id, "run.json"), "utf8"))).not.toContain("synthetic-long-private-token");
+  });
+
+  test("a real disk open failure records one note and never blocks startup", async () => {
+    const { root } = await disk(); const bad = join(root, "file"); await writeFile(bad, "occupied");
+    const log = new DiskRunLogger({ dir: bad, env: () => ({}), appliedFile: join(root, "absent") });
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver(), log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    await runner.stopAndWait(run.id);
+    expect(run.status).toBe("done");
+    expect(run.steps.filter((s) => s.text?.startsWith("transcript stopped:"))).toHaveLength(1);
+  });
+
+  test("a later real wire write failure reports once and leaves the run free to finish", async () => {
+    const { dir, log } = await disk(); const driver = new WireDriver("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    const write = spyOn(fs, "writeSync").mockImplementation(() => { throw new Error("ENOSPC: synthetic write failure"); });
+    try { driver.turn(); driver.exit(); }
+    finally { write.mockRestore(); }
+    await runner.stopAndWait(run.id);
+    expect(run.status).toBe("done");
+    expect(run.steps.filter((s) => s.text === "transcript stopped: ENOSPC: synthetic write failure")).toHaveLength(1);
+    expect(existsSync(join(dir, run.id, WIRE_GZ))).toBe(false);
+  });
+
+  test("a throwing logger and repeated synchronous error callbacks produce one note each", async () => {
+    const logs: RunLogger[] = [
+      { open: () => { throw new Error("synthetic open error"); } },
+      { open: (_run, _argv, _env, onError) => { onError("synthetic callback error"); onError("second error"); return null; } },
+    ];
+    for (const log of logs) {
+      const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver(), log });
+      const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+      await runner.stopAndWait(run.id);
+      expect(run.status).toBe("done");
+      expect(run.steps.filter((s) => s.text?.startsWith("transcript stopped:"))).toHaveLength(1);
+    }
+  });
+
+  test("a branch startup hint stays first when its logger fails synchronously", async () => {
+    const log: RunLogger = { open: (_run, _argv, _env, onError) => { onError("synthetic open failure"); return null; } };
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver(), log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, {
+      startNote: "started in a warm worktree",
+      branch: { origin: "warm-origin", name: "run/warm", target: "main", base: "base", dir: "/tmp/warm-fixture", state: "working" },
+    });
+    await runner.stopAndWait(run.id);
+    expect(run.steps.filter((step) => step.kind === "note").map((step) => step.text).slice(0, 3)).toEqual([
+      "started in a warm worktree",
+      "transcript stopped: synthetic open failure",
+      "on branch run/warm in /tmp/warm-fixture",
+    ]);
+    expect(run.steps.filter((step) => step.text?.startsWith("transcript stopped:"))).toHaveLength(1);
+    expect(run.status).toBe("done");
+  });
+
+  test.each(["dismissed", "trimmed"])("shutdown drains a %s transcript through actual exit", async (how) => {
+    const { dir, log } = await disk();
+    let sawStop = () => {};
+    const stopped = new Promise<void>((resolve) => { sawStop = resolve; });
+    class DelayedExit extends WireDriver {
+      stops = 0;
+      override stop() { this.stops++; sawStop(); }
+    }
+    const driver = new DelayedExit("claude", false);
+    let first = true;
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => { if (first) { first = false; return driver; } return new WireDriver(); }, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    driver.turn();
+    if (how === "dismissed") runner.dismiss(run.id);
+    else for (let n = 0; n < 62; n++) runner.start(repo, "ask", ACTIONS.ask, "another finished run");
+    expect(runner.get(run.id)).toBeUndefined();
+    let returned = false;
+    const drain = runner.stopLoggedAndWait().then(() => { returned = true; });
+    await stopped;
+    expect(returned).toBe(false);
+    expect(existsSync(join(dir, run.id, WIRE_GZ))).toBe(false);
+    driver.exit();
+    await drain;
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ id: run.id, status: "done" });
+    expect((await lines(dir, run.id)).slice(-2)).toMatchObject([{ type: "final" }, { canopy: "end", status: "done" }]);
+    await runner.stopLoggedAndWait();
+    expect(driver.stops).toBe(1);
+  });
+
+  test("pending transcript retention holds both id and branch origin until storage finishes", async () => {
+    const { dir, log } = await disk();
+    const driver = new WireDriver("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {}, branchState: async () => "nothing" }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, { branch: { name: "run/alias", target: "main", base: "abc", dir: "/owned/replay-repo", origin: "branch-origin", state: "working" } });
+    driver.turn(); runner.dismiss(run.id);
+    expect(runner.pendingLogHolds()).toEqual(new Set([run.id, "branch-origin"]));
+    driver.exit();
+    expect(runner.pendingLogHolds()).toEqual(new Set([run.id, "branch-origin"]));
+    await runner.stopLoggedAndWait();
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ id: run.id, branch: { origin: "branch-origin" } });
+    expect(runner.pendingLogHolds()).toEqual(new Set());
+  });
+
+  test("pending transcript ownership clears after soft storage failure", async () => {
+    const { dir, log } = await disk();
+    class Stops extends WireDriver { stops = 0; override stop() { this.stops++; super.stop(); } }
+    const driver = new Stops("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    driver.turn(); runner.dismiss(run.id);
+    await rm(join(dir, run.id), { recursive: true });
+    await runner.stopLoggedAndWait();
+    expect(run.status).toBe("done");
+    expect(run.steps.filter((step) => step.text?.startsWith("transcript stopped:"))).toHaveLength(1);
+    await runner.stopLoggedAndWait();
+    expect(driver.stops).toBe(1);
+  });
+
+  test("without a logger wire recording has no timeline side effects", async () => {
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver() });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    await runner.stopAndWait(run.id);
+    expect(run.status).toBe("done"); expect(run.steps).toEqual([]);
+  });
+});
+
+
+test("FR-043 startArgv follows each harness and stage settings", () => {
+  expect(startArgv("claude", { allowedTools: [], maxTurns: 5, resume: "fixture-session" }, DEFAULT_AGENT, false)).toEqual(expect.arrayContaining(["claude", "-p", "--resume", "fixture-session"]));
+  const staged = startArgv("claude", ACTIONS.ask, { ...DEFAULT_AGENT, yolo: false }, true);
+  expect(staged.slice(staged.indexOf("--setting-sources"), staged.indexOf("--setting-sources") + 2)).toEqual(["--setting-sources", "user"]);
+  expect(startArgv("codex", ACTIONS.ask, { ...DEFAULT_AGENT, harness: "codex", extra: "--enable fixture" }, false)).toEqual(["codex", "app-server", "--listen", "stdio://", "--enable", "fixture"]);
 });

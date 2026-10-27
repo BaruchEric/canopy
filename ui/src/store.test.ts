@@ -6,6 +6,7 @@ import {
   activeFilterCount,
   canAnswer,
   archivedCount,
+  attentionItems,
   cardOf,
   changed,
   closedIn,
@@ -14,6 +15,7 @@ import {
   favoriteCount,
   inboxItems,
   isFavorite,
+  isHarness,
   isOnline,
   layoutOf,
   loadDock,
@@ -35,8 +37,10 @@ import {
   arrangementOf,
   failedItems,
   turnItems,
+  waitingCount,
   flowFor,
   activeFlowFor,
+  harnessNoticeOf,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -48,16 +52,22 @@ import { hasOtherBackend, RETRY_FIRST } from "./backends";
 import { WAITING_PANEL } from "./waiting";
 import { runPanel } from "./itempanel";
 import { itemTabId } from "./sectiontabs";
+import { DEFAULT_CAPACITY, emptyCapacity } from "../../src/core/capacity";
 import {
   DEFAULT_AGENT,
   type AgentCard,
   type AgentSettings,
   type Ask,
+  type CapacityInfo,
+  type HistoryOverview,
+  type RepoHistory,
+  type LandingInfo,
   type KeptShell,
   type PeerSeen,
   type RangerInfo,
   type RememberedRule,
   type Repo,
+  type Run,
   type ScanResult,
   type SourceState,
   type Sprout,
@@ -65,7 +75,9 @@ import {
   type SweepLogEntry,
   type TaskInfo,
   type TermInfo,
+  type WorktreesInfo,
 } from "../../src/core/types";
+import type { Collision } from "../../src/core/touch";
 
 describe("closedSectionsOf", () => {
   test("a layout from before the launch and peers sections folds them", () => {
@@ -131,6 +143,27 @@ describe("per-repo folds", () => {
     expect(unfoldAllIn(none, "a", keys)).toBe(none);
     // a key left out (hidden, or held by the bench) keeps its fold
     expect(sectionsFor(unfoldAllIn({ a: ["search", "preview"] }, "a", ["search"]), "a")).toEqual(["preview"]);
+  });
+});
+
+describe("waiting attention collisions", () => {
+  const pristine = useStore.getState();
+  afterEach(() => useStore.setState({ repos: pristine.repos, landing: pristine.landing, settings: pristine.settings, activeWs: pristine.activeWs, workspaces: pristine.workspaces }));
+  test("a landing collision refreshes the waiting panel's cached attention detail", () => {
+    const repo: Repo = {
+      id: "app",
+      name: "app",
+      path: "/dev/app",
+      group: "",
+      source: "launch",
+      status: { branch: "main", upstream: "origin/main", ahead: 0, behind: 0, files: [{ path: "x.ts", index: ".", worktree: "M", untracked: false, conflicted: false }], lastCommit: null, user: null },
+    };
+    const collision: Collision = { id: "run+checkout", repoId: "app", run: "run", name: "run/x-a", with: { kind: "checkout" }, paths: ["x.ts"], at: 1 };
+    const info: LandingInfo = { runs: [], entries: [], orphans: [], collisions: [collision] };
+    useStore.setState({ repos: [repo], landing: { home: info } });
+    expect(attentionItems(useStore.getState())[0]?.detail).toBe("1 file · your uncommitted changes to x.ts overlap run/x-a; the landing will wait for them");
+    useStore.setState({ landing: { home: { ...info, collisions: [] } } });
+    expect(attentionItems(useStore.getState())[0]?.detail).toBe("1 file");
   });
 });
 
@@ -751,6 +784,7 @@ const repo = (id: string, extra: Partial<Repo> = {}) =>
   ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null, ...extra }) as unknown as Repo;
 const scanOf = (root: string, repos: Repo[]): ScanResult => ({ root, sources: [source("launch", "launch")], repos, scannedAt: 1, backend: { openers: true, sshHost: null } });
 const runOf = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done", startedAt: 1 });
+const activeReplayRun = (id: string): Run => ({ id, repoId: "proj", action: "chat", verb: "chat", progress: "working", expectsChange: false, chat: true, harness: "claude", note: "", status: "working", startedAt: 1, steps: [], prompt: null });
 const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
 /** What every backend answers at load, for a tree and a run of its own. */
@@ -795,6 +829,14 @@ function backendAnswers(tree: unknown, runs: unknown[], extra: Record<string, un
 }
 
 const twoBackends = { self: "a", backends: [{ name: "a", tailnet: "http://a.test" }, { name: "b", tailnet: "http://b.test" }] };
+const capacityInfo = (used: number): CapacityInfo => ({
+  capacity: [
+    { ...emptyCapacity("claude"), fiveHour: { used, resetsAt: null, readAt: 1 }, source: "observed" },
+    emptyCapacity("codex"),
+  ],
+  held: [],
+  settings: DEFAULT_CAPACITY,
+});
 
 describe("several backends", () => {
   const pristine = useStore.getState();
@@ -830,6 +872,159 @@ describe("several backends", () => {
     cleanup = await useStore.getState().init();
   }
 
+  async function replayPage(): Promise<void> {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), backendAnswers(scanOf("/b", [repo("proj")]), []));
+    await settle();
+  }
+
+  function keptReads() {
+    const pending: { url: string; finish: (response: Response) => void }[] = [];
+    const previous = globalThis.fetch;
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/runs/")) return new Promise<Response>(finish => { pending.push({ url, finish }); });
+      return previous(input, init);
+    }, { preconnect: realFetch.preconnect });
+    const finish = (index: number, id: string, status = 200) => {
+      const read = pending[index];
+      if (!read) throw new Error("expected a kept-run GET");
+      read.finish(new Response(JSON.stringify(status === 200 ? { ...runOf(id, "proj"), kept: true } : { error: "gone" }), { status }));
+    };
+    return { pending, finish };
+  }
+
+  test("showRun loads a missing run on its own backend and opens its kept sheet", async () => {
+    await replayPage();
+    const reads = keptReads();
+    useStore.getState().showRun("b|old");
+    expect(reads.pending.map(r => r.url)).toEqual(["http://b.test/api/runs/old"]);
+    reads.finish(0, "old");
+    await settle();
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|old" });
+    expect(useStore.getState().runs["b|old"]).toMatchObject({ id: "b|old", repoId: "b|proj", kept: true });
+  });
+
+  test("a failed kept GET leaves the sheet and run map unchanged; a held run opens without a GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    useStore.getState().openSearch();
+    const before = useStore.getState();
+    const loading = useStore.getState().loadKeptRun("b|gone");
+    reads.finish(0, "gone", 404);
+    await loading;
+    expect(useStore.getState().sheet).toBe(before.sheet);
+    expect(useStore.getState().runs).toBe(before.runs);
+    useStore.getState().applyEvent({ type: "run", run: { ...activeReplayRun("live"), status: "working" } });
+    useStore.getState().showRun("live");
+    expect(reads.pending).toHaveLength(1);
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "live" });
+  });
+
+  test("rapid kept opens cannot let an older GET replace the newer selection", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const older = useStore.getState().loadKeptRun("b|old");
+    const newer = useStore.getState().loadKeptRun("b|new");
+    reads.finish(1, "new"); await newer;
+    reads.finish(0, "old"); await older;
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|new" });
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
+  test("closing an empty sheet or choosing another sheet cancels its pending kept open", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const closed = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().closeSheet();
+    reads.finish(0, "old"); await closed;
+    expect(useStore.getState().sheet).toBeNull();
+    const other = useStore.getState().loadKeptRun("b|new");
+    useStore.getState().openSearch();
+    reads.finish(1, "new"); await other;
+    expect(useStore.getState().sheet).toEqual({ kind: "search" });
+    expect(useStore.getState().runs).toEqual({});
+  });
+
+  test("a newer live run selection cancels a pending kept GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().applyEvent({ type: "run", run: activeReplayRun("live") });
+    useStore.getState().showRun("live");
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "live" });
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
+  test("a kept GET opens newer SSE data without replacing it, and cannot resurrect a run-gone", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().applyEvent({ type: "run", run: { ...activeReplayRun("b|old"), repoId: "b|proj" } }, "b");
+    const live = useStore.getState().runs["b|old"];
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().runs["b|old"]).toBe(live);
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|old" });
+    const gone = useStore.getState().loadKeptRun("b|gone");
+    useStore.getState().applyEvent({ type: "run-gone", id: "b|gone" }, "b");
+    reads.finish(1, "gone"); await gone;
+    expect(useStore.getState().runs["b|gone"]).toBeUndefined();
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|old" });
+  });
+
+  test("kept runs never send answer, say, stop or dismiss mutations even when active-looking", async () => {
+    await replayPage();
+    const run: Run = { ...activeReplayRun("old"), kept: true, prompt: { id: "p", kind: "proposal", plan: "recorded", auto: true } };
+    useStore.setState({ runs: { old: run }, sheet: { kind: "run", runId: "old" } });
+    const sent: string[] = [];
+    globalThis.fetch = Object.assign(async (input: string | URL | Request) => { sent.push(String(input)); return new Response(JSON.stringify(run)); }, { preconnect: realFetch.preconnect });
+    await useStore.getState().answerRun("old", "p", { kind: "approve", auto: false });
+    await useStore.getState().sayRun("old", "more");
+    await useStore.getState().stopRun("old");
+    await useStore.getState().dismissRun("old");
+    expect(sent).toEqual([]);
+    expect(useStore.getState().runs.old).toBe(run);
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "old" });
+  });
+
+  test("a reconnect invalidates a kept GET that began on the old event stream", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    if (!stream?.onopen) throw new Error("expected the backend event stream");
+    stream.onopen();
+    stream.onopen();
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
+  test("a removed and reconnected backend cannot receive its older kept GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().hideBackend("b", true);
+    useStore.getState().hideBackend("b", false);
+    await settle();
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+    useStore.getState().hideBackend("b", true);
+    await useStore.getState().loadKeptRun("b|inactive");
+    expect(reads.pending).toHaveLength(1);
+  });
+
+  test("page cleanup invalidates its pending kept GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    cleanup?.(); cleanup = null;
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
   test("a registry of one talks to nothing but the page's own origin", async () => {
     await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [] } }), () => {
       throw new Error("b asked");
@@ -842,6 +1037,7 @@ describe("several backends", () => {
       [
         "/api/about",
         "/api/backends",
+        "/api/capacity",
         "/api/tree",
         "/api/workspaces",
         "/api/runs",
@@ -873,6 +1069,7 @@ describe("several backends", () => {
         "/api/layouts",
         "/api/kit",
         "/api/landing",
+        "/api/worktrees",
         "/api/secrets",
       ].sort(),
     );
@@ -914,6 +1111,223 @@ describe("several backends", () => {
     expect(bs?.url.startsWith("http://b.test/api/events")).toBe(true);
     expect(bs?.opts?.withCredentials).toBe(true);
     expect(connOf(s, "b").status.state).toBe("online");
+  });
+
+  test("worktrees loads at init and connect, then SSE replaces it without feed or queue counts", async () => {
+    const info: WorktreesInfo = { root: "/w", free: 42, repos: [{ repoId: "proj", repoPath: "/dev/proj", want: 1, runs: [], warm: [], refilling: "warm-1", fails: [], orphans: [] }] };
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": info }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": info }),
+    );
+    await settle();
+    expect(useStore.getState().worktrees.a).toEqual(info);
+    expect(useStore.getState().worktrees.b?.repos[0]?.repoId).toBe("b|proj");
+    const before = useStore.getState();
+    const fresh: WorktreesInfo = { ...info, free: 99, repos: info.repos.map(r => ({ ...r, refilling: null })) };
+    FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"))?.onmessage?.({ data: JSON.stringify({ type: "worktrees", worktrees: fresh }) });
+    expect(useStore.getState().worktrees.b).toEqual({ ...fresh, repos: fresh.repos.map(r => ({ ...r, repoId: "b|proj" })) });
+    expect(useStore.getState().feed).toBe(before.feed);
+    expect(inboxItems(useStore.getState())).toEqual(inboxItems(before));
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    const reads = calls.filter(u => u === "http://b.test/api/worktrees").length;
+    stream?.onopen?.();
+    stream?.onopen?.();
+    await settle();
+    expect(calls.filter(u => u === "http://b.test/api/worktrees").length).toBe(reads + 1);
+    useStore.getState().hideBackend("b", true);
+    expect(useStore.getState().worktrees.b).toBeUndefined();
+  });
+
+  test("late worktrees GET cannot replace newer SSE or restore a hidden backend", async () => {
+    const empty: WorktreesInfo = { root: "/w", free: 1, repos: [] };
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": empty }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": empty }),
+    );
+    await settle();
+    let finish: (r: Response) => void = () => { throw new Error("no worktrees request"); };
+    globalThis.fetch = Object.assign(async () => new Promise<Response>(resolve => { finish = resolve; }), { preconnect: realFetch.preconnect });
+    const pending = useStore.getState().loadWorktrees("b");
+    useStore.getState().applyEvent({ type: "worktrees", worktrees: { ...empty, free: 2 } }, "b");
+    finish(new Response(JSON.stringify(empty)));
+    await pending;
+    expect(useStore.getState().worktrees.b?.free).toBe(2);
+    const hidden = useStore.getState().loadWorktrees("b");
+    useStore.getState().hideBackend("b", true);
+    finish(new Response(JSON.stringify(empty)));
+    await hidden;
+    expect(useStore.getState().worktrees.b).toBeUndefined();
+    useStore.getState().applyEvent({ type: "worktrees", worktrees: empty }, "b");
+    expect(useStore.getState().worktrees.b).toBeUndefined();
+  });
+
+  test("a reconnect worktrees GET wins over an older initial GET completed last", async () => {
+    const initial: WorktreesInfo = { root: "/w", free: 1, repos: [] };
+    const current: WorktreesInfo = { ...initial, free: 3 };
+    const pending: ((r: Response) => void)[] = [];
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": initial }),
+      (path, init) => {
+        if (path === "/api/worktrees") return new Promise<Response>(resolve => { pending.push(resolve); });
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    if (!stream) throw new Error("no foreign stream");
+    stream.onopen?.();
+    stream.onopen?.();
+    const [older, newer] = pending;
+    if (!older || !newer || pending.length !== 2) throw new Error("expected initial and reconnect pool reads");
+    newer(new Response(JSON.stringify(current)));
+    await settle();
+    expect(useStore.getState().worktrees.b).toEqual(current);
+    older(new Response(JSON.stringify(initial)));
+    await settle();
+    expect(useStore.getState().worktrees.b).toEqual(current);
+  });
+
+  test("a worktrees GET from before removal cannot overwrite a reconnected backend", async () => {
+    const fresh: WorktreesInfo = { root: "/w", free: 3, repos: [] };
+    let reads = 0;
+    let releaseOld: ((r: Response) => void) | undefined;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": fresh }),
+      (path, init) => {
+        if (path === "/api/worktrees" && ++reads === 2) return new Promise<Response>(resolve => { releaseOld = resolve; });
+        return backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": fresh })(path, init);
+      },
+    );
+    await settle();
+    const old = useStore.getState().loadWorktrees("b");
+    if (!releaseOld) throw new Error("no old pool read");
+    useStore.getState().hideBackend("b", true);
+    useStore.getState().hideBackend("b", false);
+    await settle();
+    expect(reads).toBe(3);
+    releaseOld(new Response(JSON.stringify({ ...fresh, free: 1 })));
+    await old;
+    expect(useStore.getState().worktrees.b).toEqual(fresh);
+  });
+
+  test("an older backend without worktrees stays quiet", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/worktrees": new Response("not found", { status: 404 }) }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/worktrees": new Response("not found", { status: 404 }) }),
+    );
+    await settle();
+    expect(useStore.getState().worktrees).toEqual({});
+  });
+
+  test("history sends a window to its backend and qualifies the overview's repo ids", async () => {
+    setRegistry("a", ["a", "b"]);
+    setBase("b", "http://b.test");
+    const overview: HistoryOverview = {
+      available: true,
+      days: [],
+      maxDay: 0,
+      fetchedAt: 1,
+      repos: {
+        proj: { project: "p1", sessions: 0, costUsd: 0, tokens: 0, commits: 0, first: null, last: null, days: [], daySessions: [] },
+      },
+    };
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, _init?: RequestInit) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify(overview), { status: 200 });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    const got = await api.history(true, "b", "90d");
+
+    expect(calls).toEqual(["http://b.test/api/history?refresh=1&window=90d"]);
+    if (!got.available) throw new Error(got.reason);
+    expect(Object.keys(got.repos)).toEqual(["b|proj"]);
+  });
+
+  test("harnessRepo marks one checkout and clears every marked checkout on the card", async () => {
+    setRegistry("a", ["a", "b"]);
+    setBase("b", "http://b.test");
+    useStore.setState({
+      home: "a",
+      backendOrder: ["a", "b"],
+      repos: [repo("proj", { harness: true }), repo("b|proj", { harness: true })],
+    });
+    const payloads: unknown[] = [];
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const target = String(input);
+        calls.push(target);
+        const body: unknown = JSON.parse(String(init?.body));
+        if (body === null || typeof body !== "object" || !("harness" in body) || typeof body.harness !== "boolean") {
+          throw new Error("the harness request did not contain a boolean");
+        }
+        payloads.push(body);
+        const url = new URL(target, "http://a.test");
+        const plain = url.searchParams.get("id");
+        if (!plain) throw new Error("the harness request had no repo id");
+        const id = url.origin === "http://b.test" ? `b|${plain}` : plain;
+        const found = useStore.getState().repos.find((r) => r.id === id);
+        if (!found) throw new Error(`no fixture repo for ${id}`);
+        const answer: Repo = { ...found, id: plain };
+        if (body.harness) answer.harness = true;
+        else delete answer.harness;
+        return new Response(JSON.stringify(answer), { status: 200 });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    await useStore.getState().harnessRepo("proj", false);
+
+    expect(calls).toEqual([
+      "/api/repos/harness?id=proj",
+      "http://b.test/api/repos/harness?id=proj",
+    ]);
+    expect(payloads).toEqual([{ harness: false }, { harness: false }]);
+    expect(useStore.getState().repos.map((r) => r.harness)).toEqual([undefined, undefined]);
+    expect(isHarness(useStore.getState(), "proj")).toBe(false);
+
+    await useStore.getState().harnessRepo("b|proj", true);
+
+    expect(calls[2]).toBe("http://b.test/api/repos/harness?id=proj");
+    expect(payloads[2]).toEqual({ harness: true });
+    expect(isHarness(useStore.getState(), "proj")).toBe(true);
+  });
+
+  test("a newer capacity event survives a pending read on that backend", async () => {
+    const homeCapacity = capacityInfo(0.25);
+    const oldRemoteCapacity = capacityInfo(0.1);
+    const newerRemoteCapacity = capacityInfo(0.8);
+    let releaseRemote: ((response: Response) => void) | undefined;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/capacity": homeCapacity }),
+      (path, init) => {
+        if (path.split("?")[0] === "/api/capacity") {
+          return new Promise<Response>((resolve) => (releaseRemote = resolve));
+        }
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    if (!releaseRemote) throw new Error("the remote capacity read did not reach the fetch stub");
+
+    useStore.getState().applyEvent({ type: "capacity", capacity: newerRemoteCapacity }, "b");
+    releaseRemote(new Response(JSON.stringify(oldRemoteCapacity), { status: 200 }));
+    await settle();
+
+    expect(useStore.getState().capacity).toEqual({ a: homeCapacity, b: newerRemoteCapacity });
+  });
+
+  test("a backend without the capacity route has no capacity entry", async () => {
+    const homeCapacity = capacityInfo(0.25);
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/capacity": homeCapacity }),
+      backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/capacity": new Response("not found", { status: 404 }) }),
+    );
+    await settle();
+
+    expect(useStore.getState().capacity).toEqual({ a: homeCapacity });
   });
 
   test("remembered rules are read per backend, kept by each one's event, and forgotten where they live", async () => {
@@ -1543,7 +1957,7 @@ describe("several backends", () => {
 
     test("signed in to home, the page reads the sweep at once, so its inbox item and Settings tab need no reload", async () => {
       const homeAnswers = backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends });
-      const sweep = { items: [], settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [], prs: false }, lastRun: null, swept: { shells: [], chats: [] }, ask: null };
+      const sweep = { items: [], settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, transcript: 1, pr: 1, outside: 1 }, auto: [], prs: false }, lastRun: null, swept: { shells: [], chats: [] }, ask: null };
       let homeClaims: Response[] = [];
       const home: Answer = (path, init) => {
         const p = path.split("?")[0] ?? "";
@@ -1976,6 +2390,15 @@ describe("cards over several backends", () => {
     expect(favoriteCount(s)).toBe(1);
     useStore.getState().setFavoritesOnly(true);
     expect(visibleCards(useStore.getState()).map((c) => c.checkouts.map((r) => r.id))).toEqual([["proj", "b|proj"]]);
+  });
+
+  test("a card is the harness when any of its checkouts is marked", () => {
+    two();
+    useStore.setState((s) => ({ repos: s.repos.map((r) => (r.id === "b|proj" ? { ...r, harness: true as const } : r)) }));
+    const s = useStore.getState();
+    expect(isHarness(s, "proj")).toBe(true);
+    expect(isHarness(s, "b|proj")).toBe(true);
+    expect(isHarness(s, "other")).toBe(false);
   });
 
   test("switchCheckout swaps the panel in place and leads the card with it", () => {
@@ -2746,7 +3169,7 @@ describe("a sweep event", () => {
 
   const info = (lastRun: SweepLogEntry | null): SweepInfo => ({
     items: [],
-    settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, pr: 1, outside: 1 }, auto: [], prs: false },
+    settings: { on: false, cron: "0 4 * * *", spans: { shell: 1, chat: 1, run: 1, transcript: 1, pr: 1, outside: 1 }, auto: [], prs: false },
     lastRun,
     swept: { shells: [], chats: [] },
     ask: null,
@@ -2956,5 +3379,70 @@ describe("chats, agents and popups as dock panels (FR-047)", () => {
     s.tabItem("strip", agent);
     expect(useStore.getState().panels).toEqual([]);
     expect(useStore.getState().settings.itemTabs.map((t) => t.id)).toEqual([itemTabId("strip", "agent", "claude:abc")]);
+  });
+});
+
+describe("the harness weekly inbox selector", () => {
+  const pristine = useStore.getState();
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  afterEach(() => {
+    useStore.setState({ repos: pristine.repos, history: pristine.history, harnessSaid: pristine.harnessSaid, settings: pristine.settings, activeWs: pristine.activeWs, workspaces: pristine.workspaces, backendOrder: pristine.backendOrder });
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else Reflect.deleteProperty(globalThis, "localStorage");
+  });
+
+  test("memoizes the quiet line and records acknowledgement outside inbox and waiting counts", () => {
+    const days = Array.from({ length: 16 }, (_, index) => `2026-10-${String(index + 12).padStart(2, "0")}`);
+    const weekly = (amount: number) => days.map((day) => (day >= "2026-10-19" && day <= "2026-10-25" ? amount / 7 : 0));
+    const archive = (project: string, amounts: number[]): RepoHistory => ({
+      project,
+      sessions: 0,
+      costUsd: amounts.reduce((sum, amount) => sum + amount, 0),
+      tokens: 0,
+      commits: 0,
+      first: null,
+      last: null,
+      days: amounts,
+      daySessions: amounts.map(() => 0),
+    });
+    const history: HistoryOverview = {
+      available: true,
+      days,
+      maxDay: 1,
+      fetchedAt: 1,
+      repos: { canopy: archive("canopy", weekly(17)), web: archive("web", weekly(33)) },
+    };
+    const values = new Map<string, string>();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+    });
+    useStore.setState({
+      repos: [repo("canopy", { harness: true }), repo("web")],
+      history,
+      harnessSaid: null,
+      settings: { ...pristine.settings, harnessShareMax: 25 },
+      backendOrder: [pristine.home],
+    });
+
+    const before = useStore.getState();
+    const notice = harnessNoticeOf(before);
+    if (!notice) throw new Error("the harness notice fixture should cross the line");
+    expect(notice).toEqual({ key: "2026-W43", text: "last week 34% of Claude spend went into the harness (canopy)" });
+    expect(harnessNoticeOf(before)).toBe(notice);
+    const inbox = inboxItems(before);
+    const count = waitingCount(before);
+
+    before.sayHarness(notice.key);
+
+    const after = useStore.getState();
+    expect(after.harnessSaid).toBe("2026-W43");
+    expect(values.get("canopy.harnessSaid")).toBe("2026-W43");
+    expect(harnessNoticeOf(after)).toBeNull();
+    expect(inboxItems(after)).toBe(inbox);
+    expect(waitingCount(after)).toBe(count);
   });
 });

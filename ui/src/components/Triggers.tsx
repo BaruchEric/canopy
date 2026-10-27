@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { SAMPLE_TITLE, type TriggerRuleInfo, type TriggersInfo } from "../../../src/core/trigger";
-import { baseOf } from "../registry";
+import { isSeedRepoId } from "../../../src/core/sprout";
+import { backendOf, baseOf, plainOf, qual } from "../registry";
 import { copyText } from "../share";
 import { useStore } from "../store";
-import { STATUS_TONE, STATUS_WORD, eventActs, outcomeLine, ruleIntake, ruleWrites, serviceOf, triggerSections, type TriggerRow } from "../triggers";
+import { STATUS_TONE, eventActs, nextFireWord, outcomeLine, ruleIntake, ruleWrites, scheduleWord, serviceOf, statusWord, triggerSections, type TriggerRow } from "../triggers";
 import { ago } from "../util";
 
 type Call = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; error: string };
@@ -20,8 +21,8 @@ const ACT_TITLE = {
 } as const;
 
 /** The repo's name as the tree shows it, else its id. */
-function useRepoName(id: string): string {
-  return useStore((s) => s.repos.find((r) => r.id === id)?.name ?? id);
+function useRepoName(id: string, backend?: string): string {
+  return useStore((s) => s.repos.find((r) => r.id === (backend ? qual(backend, id) : id) || (backend !== undefined && backendOf(r.id) === backend && r.path === id))?.name ?? id);
 }
 
 function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
@@ -55,14 +56,14 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
         )}
       </div>
       <div className="trigger-facts">
-        <span className={`trigger-state ${STATUS_TONE[e.status]}`}>{STATUS_WORD[e.status]}</span>
+        <span className={`trigger-state ${STATUS_TONE[e.status]}`}>{statusWord(e)}</span>
         {e.step && <span title="the workflow's step in progress">{e.step}</span>}
         <span className="trigger-id">{e.short ?? e.key}</span>
         <span>{repo}</span>
         {many && <span>on {backend}</span>}
         <span title={new Date(e.lastAt).toLocaleString()}>{ago(e.lastAt / 1000)}</span>
         {e.count > 1 && <span title={`times ${service} sent this issue`}>×{e.count}</span>}
-        {e.source === "manual" && <span>test fire</span>}
+        {e.source === "manual" && <span>{e.service === "schedule" ? "fired by hand" : "test fire"}</span>}
         {e.session && <span title="Delegated to canopy in Linear: its agent session hears how the run goes">agent session</span>}
         {e.link && (
           <a href={e.link} target="_blank" rel="noreferrer">
@@ -89,7 +90,11 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
 
 function FireForm({ backend, rule }: { backend: string; rule: TriggerRuleInfo }) {
   const fireTrigger = useStore((s) => s.fireTrigger);
+  const allRepos = useStore((s) => s.repos);
+  const repos = useMemo(() => allRepos.filter((r) => backendOf(r.id) === backend && !r.host && !r.forge && !r.error && !isSeedRepoId(plainOf(r.id))), [allRepos, backend]);
   const [title, setTitle] = useState("");
+  const [repo, setRepo] = useState("");
+  const schedule = rule.source === "schedule";
   const [call, setCall] = useState<Call | { kind: "done"; text: string }>({ kind: "idle" });
   return (
     <form
@@ -97,24 +102,29 @@ function FireForm({ backend, rule }: { backend: string; rule: TriggerRuleInfo })
       onSubmit={(ev) => {
         ev.preventDefault();
         setCall({ kind: "busy" });
-        fireTrigger(backend, rule.name, title).then(
+        fireTrigger(backend, rule.name, schedule ? "" : title, schedule ? repo || undefined : undefined).then(
           (d) => {
             setTitle("");
-            setCall({ kind: "done", text: d.kind === "skip" ? d.why : `${d.kind}: ${d.event.short ?? d.event.key}` });
+            setCall({ kind: "done", text: d.kind === "skip" ? d.why : d.kind === "fired" ? `${d.events.length} started, ${d.skipped.length} skipped` : `${d.kind}: ${d.event.short ?? d.event.key}` });
           },
           (err: unknown) => setCall({ kind: "failed", error: errText(err) }),
         );
       }}
     >
-      <input
+      {schedule ? (
+        <select aria-label="Which repo to fire" value={repo} onChange={(ev) => setRepo(ev.target.value)}>
+          <option value="">every matching repo</option>
+          {repos.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+      ) : <input
         type="text"
         value={title}
         placeholder={SAMPLE_TITLE[rule.source]}
         aria-label={`Issue title for a test fire of ${rule.name}`}
         onChange={(ev) => setTitle(ev.target.value)}
-      />
-      <button type="submit" className="mini" disabled={call.kind === "busy" || Boolean(rule.problem)} title="Fire a made-up issue through this rule: a real branch run starts on the repo">
-        {call.kind === "busy" ? "firing…" : "try it"}
+      />}
+      <button type="submit" className="mini" disabled={call.kind === "busy" || (!schedule && Boolean(rule.problem))} title={schedule ? "Fire the rule now: one event per matching repo, skipped where the last run still goes" : "Fire a made-up issue through this rule: a real branch run starts on the repo"}>
+        {call.kind === "busy" ? "firing…" : schedule ? "fire now" : "try it"}
       </button>
       {call.kind === "done" && <span className="trigger-note">{call.text}</span>}
       {call.kind === "failed" && (
@@ -159,7 +169,8 @@ function PollButton({ backend, rule }: { backend: string; rule: TriggerRuleInfo 
 }
 
 function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRuleInfo; origin: string }) {
-  const repo = useRepoName(rule.repo);
+  const repo = useRepoName(rule.repo, backend);
+  const schedule = rule.source === "schedule";
   const intake = ruleIntake(rule, origin);
   const [copied, setCopied] = useState(false);
   const writes = ruleWrites(rule);
@@ -169,26 +180,36 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
         <span className="trigger-rule-name">{rule.name}</span>
         <span className="trigger-facts">
           <span>
-            {rule.source} → {repo}
+            {rule.source} → {schedule ? scheduleWord(rule, repo) : repo}
           </span>
-          {rule.source !== "sentry" && <span title="Adding one of these labels to an issue starts the run">on label {rule.labels.join(", ")}</span>}
+          {rule.source !== "sentry" && !schedule && <span title="Adding one of these labels to an issue starts the run">on label {rule.labels.join(", ")}</span>}
           {rule.clientSecretEnv && (
             <span className={rule.agentSet ? "moss" : "rust"} title="Delegating an issue to the Linear app, or mentioning it, starts the run, and the session hears how it goes">
               {rule.agentSet ? "agent on" : `${rule.clientSecretEnv} not set`}
             </span>
           )}
           <span>runs {rule.workflow}</span>
-          <span className={rule.secretSet ? "moss" : rule.secretEnv ? "rust" : "faint"}>{rule.secretSet ? "secret set" : rule.secretEnv ? `${rule.secretEnv} not set` : "no hook secret"}</span>
+          {schedule ? <span>{rule.land === "queue" ? "lands through the queue" : "opens a PR"}</span> : <span className={rule.secretSet ? "moss" : rule.secretEnv ? "rust" : "faint"}>{rule.secretSet ? "secret set" : rule.secretEnv ? `${rule.secretEnv} not set` : "no hook secret"}</span>}
           {intake.poll && (
             <span title={rule.nextFire ? `Next poll ${new Date(rule.nextFire).toLocaleString()}; a hook delivery that never arrived is caught up here` : "Its issues come in by polling"}>
               {intake.poll}
             </span>
           )}
-          <span className={writes.on ? "moss" : "faint"} title={writes.why}>
+          {!schedule && <span className={writes.on ? "moss" : "faint"} title={writes.why}>
             {writes.words}
-          </span>
+          </span>}
         </span>
       </div>
+      {schedule && <>
+        <div className="trigger-hook">
+          <code>{rule.cron}</code>
+          <span>{nextFireWord(rule.next, Date.now())}</span>
+          <span>{rule.lastFire !== undefined ? `last fired ${ago(rule.lastFire / 1000)}` : "never fired"}</span>
+        </div>
+        {(rule.skips?.length ?? 0) > 0 && <ul className="trigger-skips">{rule.skips?.map((skip, index) => (
+          <li key={`${skip.repo}-${skip.at}-${index}`} className="trigger-note">skipped {skip.repo}: {skip.why} <span title={new Date(skip.at).toLocaleString()}>{ago(skip.at / 1000)}</span></li>
+        ))}</ul>}
+      </>}
       {intake.hook && (
         <div className="trigger-hook">
           <code>{intake.hook}</code>
@@ -261,7 +282,7 @@ export function TriggersView() {
             No trigger rules yet. Add one to <code>triggers.json</code> in canopy's config folder, naming the source (<code>sentry</code>, <code>linear</code>, <code>github</code> or{" "}
             <code>forgejo</code>), the repo and the environment variable holding the hook's secret. canopy ships <code>sentry-fix</code>, <code>linear-issue</code> and <code>issue-fix</code> as
             their workflows. Then point a Sentry internal integration's webhook, a Linear webhook for issues, or a GitHub or Forgejo webhook for issues, at the address this page shows. A
-            GitHub or Forgejo rule with no secret polls the repo's labelled issues instead.
+            GitHub or Forgejo rule with no secret polls the repo's labelled issues instead. A <code>schedule</code> rule takes a cron line and a repo, or <code>*</code> for every local one, with no hook or secret.
           </p>
         </section>
       )}

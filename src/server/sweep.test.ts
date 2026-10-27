@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SWEEP, normalizeSweep, type OutsideFacts, type PlanInputs, type ShellFacts } from "../core/sweep";
 import { addSweptChat, readAsk, readLastFire, readLog, readSweptChats, sweepDir, writeAsk, writeLastFire } from "../core/sweepstore";
-import type { AuthoredPr, PrNow, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
+import type { KeptRunHead, AuthoredPr, PrNow, Run, ServerEvent, SweepInfo, SweepOutcome, SweepSettings, SweptChat } from "../core/types";
 import { SweepHub, type SweepDeps } from "./sweep";
 
 const H = 3_600_000;
@@ -83,6 +83,8 @@ const authored = (over: Partial<AuthoredPr> = {}): AuthoredPr => ({
 const idleChat = (id: string): Run => run({ id, chat: true, status: "idle", session: `sess-${id}`, steps: [{ id: "1", at: NOW - 13 * H, kind: "text" }] });
 
 interface Facts {
+  kept: KeptRunHead[];
+  dropped: string[];
   shells: ShellFacts[];
   runs: Run[];
   outside: OutsideFacts[];
@@ -110,6 +112,7 @@ interface Facts {
 /** what the stand-in deps read and write, and the deps over it */
 function world(): Facts & { deps: SweepDeps } {
   const w: Facts = {
+    kept: [], dropped: [],
     shells: [],
     runs: [],
     outside: [],
@@ -126,6 +129,7 @@ function world(): Facts & { deps: SweepDeps } {
     calls: { endShell: [], seen: [], stopChat: [], dismiss: [], startChat: [], authored: 0, closePr: [] },
   };
   const deps: SweepDeps = {
+    dropKept: async (id) => { w.dropped.push(id); const found = w.kept.some((k) => k.id === id); w.kept = w.kept.filter((k) => k.id !== id); return found; },
     broadcast: (ev) => w.events.push(ev),
     facts: async (): Promise<Omit<PlanInputs, "prs">> => {
       const read: Omit<PlanInputs, "prs"> = {
@@ -133,6 +137,7 @@ function world(): Facts & { deps: SweepDeps } {
         shells: w.tmuxDown ? null : w.shells.map((s) => ({ ...s })),
         runs: w.runs.map((r) => ({ ...r })),
         heldRuns: new Set<string>(),
+        kept: w.kept,
         outside: w.outside.map((c) => ({ ...c })),
         fixing: new Set<string>(),
         repos: [],
@@ -298,6 +303,14 @@ describe("the sweep hub", () => {
       { key: "run:r9", result: "gone" },
       { key: "chat:c9", result: "gone" },
     ]);
+  });
+
+  test("a limited chat is gone when a stored chat key is rechecked", async () => {
+    const w = world();
+    w.runs = [run({ id: "c1", chat: true, status: "limited", endedAt: NOW })];
+    const hub = new SweepHub(w.deps);
+    expect(await hub.close(["chat:c1"], "eric")).toEqual([{ key: "chat:c1", result: "gone" }]);
+    expect(w.calls.stopChat).toEqual([]);
   });
 
   test("two closes at once run in turn; the second reports gone", async () => {
@@ -1161,4 +1174,13 @@ describe("PRs", () => {
     await new SweepHub(w.deps).tick(NOW);
     expect(w.calls.closePr.map((c) => c.id)).toEqual(["eric/app#7"]);
   });
+});
+
+
+test("closing a transcript drops its folder; an absent transcript is gone", async () => {
+  const w = world();
+  w.kept.push({ id: "k1", repo: "r", action: "build", verb: "Build", harness: "claude", status: "done", started: 0, ended: NOW - 40 * 24 * H, cost: null });
+  const hub = new SweepHub(w.deps);
+  expect(await hub.close(["transcript:k1", "transcript:k9"], "eric")).toEqual([{ key: "transcript:k1", result: "closed" }, { key: "transcript:k9", result: "gone" }]);
+  expect(w.dropped).toEqual(["k1"]);
 });

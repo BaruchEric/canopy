@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import type { Repo, Run } from "../../src/core/types";
+import type { Repo, Run, WorktreesInfo } from "../../src/core/types";
 import { api, onBackendSignal, PartialFleetError, readFrame, socketUrl, STREAM_STALE, streamAction } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
@@ -66,6 +66,53 @@ describe("a page with two backends", () => {
   const run = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done" }) as unknown as Run;
   const repo = (id: string) => ({ id, name: id, path: `/x/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
 
+  test("worktrees GET qualifies a foreign backend's repo and runs once", async () => {
+    const info: WorktreesInfo = { root: "/b/worktrees", free: 42, repos: [{ repoId: "proj", repoPath: "/b/proj", want: 1, fileWarm: 2, runs: [{ id: "branch", runId: "run", branch: "run/x", dir: "/b/branch", state: "working" }], warm: [], refilling: "warm-1", fails: [], orphans: [] }] };
+    reply = () => json(info);
+    const got = await api.worktrees("b");
+    expect(calls[0]?.url).toBe("http://b.test/api/worktrees");
+    expect(got).toEqual({ ...info, repos: info.repos.map(r => ({ ...r, repoId: "b|proj", runs: r.runs.map(run => ({ ...run, id: "b|branch", runId: "b|run" })) })) });
+    expect(info.repos[0]?.repoId).toBe("proj");
+    expect(await api.worktrees()).toEqual(info);
+    expect(calls[1]?.url).toBe("/api/worktrees");
+  });
+
+  test("a scheduled manual fire sends the selected backend's plain repo id", async () => {
+    reply = () => json({ kind: "fired", events: [], skipped: [] });
+    expect(await api.fireTrigger("b", "spec-weekly", "", "b|web/shop")).toEqual({ kind: "fired", events: [], skipped: [] });
+    expect(calls[0]?.url).toBe("http://b.test/api/triggers/fire");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ rule: "spec-weekly", title: "", repo: "web/shop" });
+    await api.fireTrigger("b", "spec-weekly", "");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ rule: "spec-weekly", title: "" });
+  });
+
+  test("group start sends one shared profile to the owning backend", async () => {
+    reply = () => json({ id: "g", repoId: "x", members: [{ run: "r", origin: "o", profile: "fast" }] });
+    const group = await api.startGroup("b|x", "ask", "n", 2, "fast");
+    expect(calls[0]?.url).toBe("http://b.test/api/repos/run?id=x");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ action: "ask", note: "n", branch: true, times: 2, profiles: ["fast"], autoLand: false, pr: false });
+    expect(group.id).toBe("b|g");
+    expect(group.members[0]).toMatchObject({ run: "b|r", origin: "b|o" });
+  });
+
+  test("group mutations strip owning IDs and qualify every response reference", async () => {
+    reply = () => json({ id: "g", repoId: "x", members: [{ run: "r", origin: "o", profile: null }], winner: "o", review: { run: "review", ranking: ["run/o"], why: {} }, scores: { o: { branch: "run/o" } } });
+    const picked = await api.pickRunGroup("b|g", "b|o");
+    expect(calls[0]?.url).toBe("http://b.test/api/groups/pick");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ group: "g", run: "o" });
+    expect(picked).toMatchObject({ id: "b|g", repoId: "b|x", winner: "b|o", review: { run: "b|review" }, scores: { "b|o": { branch: "run/o" } } });
+    await api.dropGroup("b|g", ["b|o"]);
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ group: "g", keep: ["o"] });
+    await api.reviewGroup("b|g");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ group: "g" });
+    await expect(api.pickRunGroup("b|g", "o")).rejects.toThrow("another backend");
+    expect(calls).toHaveLength(3);
+  });
+  test("group ledger run and group IDs share the same backend qualification", async () => {
+    reply = () => json({ since: 0, priced: false, rows: [{ group: "g", run: "r", repoId: "x" }] });
+    expect((await api.costs(1, "b")).rows[0]).toMatchObject({ group: "b|g", run: "b|r", repoId: "x" });
+  });
+
   test("a backend with no URL yet is never asked at the page's own origin", async () => {
     setBase("b", "");
     reply = () => json({ access: "unknown" });
@@ -87,6 +134,17 @@ describe("a page with two backends", () => {
     expect(calls[1]?.init?.credentials).toBeUndefined();
   });
 
+  test("land anyway keeps the bypass and approval on the right backend", async () => {
+    reply = () => json({});
+    await api.land("b|branch", undefined, true);
+    expect(calls[0]?.url).toBe("http://b.test/api/landing/land");
+    const bypass: unknown = JSON.parse(String(calls[0]?.init?.body));
+    expect(bypass).toEqual({ run: "branch", skipJudge: true });
+    await api.land("branch", "patch-id");
+    const approved: unknown = JSON.parse(String(calls[1]?.init?.body));
+    expect(approved).toEqual({ run: "branch", approve: "patch-id" });
+  });
+
   test("a backend's runs come back under its name, home's as they came", async () => {
     reply = () => json([run("r1", "x")]);
     const foreign = await api.runs("b");
@@ -95,6 +153,36 @@ describe("a page with two backends", () => {
     const home = await api.runs();
     expect(calls[1]?.url).toBe("/api/runs");
     expect(home.map((r) => [r.id, r.repoId])).toEqual([["r1", "x"]]);
+  });
+
+  test("a kept-run GET routes the plain id and qualifies all returned references exactly once", async () => {
+    const record: Run = { id: "r/one", repoId: "proj", action: "chat", verb: "chat", progress: "working", expectsChange: false, chat: true, harness: "claude", note: "n", status: "done", startedAt: 1, steps: [], prompt: null, kept: true, group: "g", parent: "p", branch: { name: "run/one", target: "main", base: "base", dir: "/b/one", state: "ready", origin: "o", group: "g" }, tasks: [{ id: "t1", title: "child", note: "n", action: "ask", state: "done", repo: "proj", run: "child" }] };
+    reply = () => json(record);
+    expect(await api.keptRun("b|r/one")).toMatchObject({ id: "b|r/one", repoId: "b|proj", kept: true, group: "b|g", parent: "b|p", branch: { origin: "b|o", group: "b|g" }, tasks: [{ repo: "b|proj", run: "b|child" }] });
+    expect(calls[0]?.url).toBe("http://b.test/api/runs/r%2Fone");
+    expect(await api.keptRun("r/one")).toEqual(record);
+    expect(calls[1]?.url).toBe("/api/runs/r%2Fone");
+    reply = () => json({ error: "gone" }, 404);
+    await expect(api.keptRun("b|missing")).rejects.toThrow("gone");
+  });
+
+  test("a foreign backend's initial landing response preserves and qualifies collision ids", async () => {
+    reply = () => json({
+      runs: [],
+      entries: [],
+      orphans: [],
+      collisions: [
+        { id: "r1+r2", repoId: "x", run: "r1", name: "run/x-one", with: { kind: "run", run: "r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+        { id: "r1+branch:b1", repoId: "x", run: "r1", name: "run/x-one", with: { kind: "branch", origin: "b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+      ],
+    });
+
+    const landing = await api.landing("b");
+
+    expect(landing.collisions).toEqual([
+      { id: "b|r1+r2", repoId: "b|x", run: "b|r1", name: "run/x-one", with: { kind: "run", run: "b|r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+      { id: "b|r1+branch:b1", repoId: "b|x", run: "b|r1", name: "run/x-one", with: { kind: "branch", origin: "b|b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+    ]);
   });
 
   test("staging on a foreign repo posts json there and answers its repo qualified", async () => {

@@ -1,21 +1,32 @@
-/** Triggers: an outside event (a Sentry issue, a labeled Linear, GitHub or
- *  Forgejo issue) starts a workflow on a branch run of its own, with nobody
- *  typing. The rules, the event records, each service's payload reader,
- *  dedupe, and the event's state read off its run and its PR. Browser-safe
- *  and pure; the hub in server/triggers.ts keeps the records and starts the
- *  runs. */
+/** Triggers: outside Sentry, Linear, GitHub and Forgejo events, or a
+ *  schedule rule's clock, start unattended branch work. The model, payload
+ *  readers, clock and event reducers are pure and browser-safe; the server
+ *  hub keeps records and starts runs. */
 
-import { CRON_MAX, parseCron } from "./cron";
+import { CRON_MAX, nextFire, parseCron } from "./cron";
+import { checkWhen } from "./actions";
+import { isSeedRepoId } from "./sprout";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
 import { fence } from "./pr";
-import type { Flow, LandEntry, LandNotice, PrWatch, Run, Workflow } from "./types";
+import { unattendedRefusal } from "./workflow";
+import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, Workflow } from "./types";
 
-export const TRIGGER_SOURCES = ["sentry", "linear", "github", "forgejo"] as const;
+export const TRIGGER_SOURCES = ["sentry", "linear", "github", "forgejo", "schedule"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
+export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear", github: "GitHub", forgejo: "Forgejo", schedule: "Schedule" };
 
-/** The service's name as the page and the run's note say it. */
-export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear", github: "GitHub", forgejo: "Forgejo" };
+export const TRIGGER_LANDS = ["queue", "pr"] as const;
+export type TriggerLand = (typeof TRIGGER_LANDS)[number];
+export const SCHEDULE_ONLY = ["spec-adopted", "dirty", "unpushed", "clean"] as const;
+export type ScheduleOnly = (typeof SCHEDULE_ONLY)[number];
+
+/** A repo passed over by a schedule fire, for its rule's card. */
+export interface ScheduleSkip {
+  repo: string;
+  why: string;
+  at: number;
+}
 
 /** One line of `<config dir>/triggers.json`: where an event comes from,
  *  which repo it is about and which workflow fixes it. Secrets are named by
@@ -24,7 +35,7 @@ export interface TriggerRule {
   /** the last part of the hook's address: `/api/hooks/<source>/<name>` */
   name: string;
   source: TriggerSource;
-  /** the repo's id or its absolute path */
+  /** the repo's id or absolute path; schedule rules may take every local repo with * */
   repo: string;
   /** a one-step workflow, run on a branch that opens a PR */
   workflow: string;
@@ -39,6 +50,12 @@ export interface TriggerRule {
   /** github and forgejo: whether canopy writes back (a comment with the PR's
    *  link, a close on merge); the parsed rule always carries it, true by default */
   write?: boolean;
+  /** The schedule in the backend's local time; absent for hooks. */
+  cron?: string;
+  /** How this rule's branch reaches main. */
+  land: TriggerLand;
+  /** Schedule filters, combined with AND. */
+  only: ScheduleOnly[];
   /** the Sentry project slugs, or the Linear team keys, this rule takes; empty takes every one */
   projects: string[];
   /** the Sentry levels this rule takes; a Linear rule takes none, and its issues carry none */
@@ -68,7 +85,10 @@ export interface TriggerRule {
 
 /** What canopy says about a rule on the page: no secret, only whether it is set. */
 export interface TriggerRuleInfo extends TriggerRule {
-  hook: string;
+  hook?: string;
+  next?: number;
+  lastFire?: number;
+  skips?: ScheduleSkip[];
   secretSet: boolean;
   tokenSet: boolean;
   /** Linear: the app's client secret is set, so the agent can answer */
@@ -132,6 +152,8 @@ export interface TriggerEvent {
   note: string;
   repoId: string;
   workflow: string;
+  /** Absent on legacy events, which opened a PR. */
+  land?: TriggerLand;
   status: TriggerStatus;
   /** why it is ignored, stopped or failed */
   reason?: string;
@@ -150,6 +172,8 @@ export interface TriggerEvent {
   step?: string;
   /** the branch's id (`RunBranch.origin`), which the landing record and the PR watch use */
   branch?: string;
+  /** the branch's work item (FR-037) */
+  work?: string;
   pr?: { number: number; url: string };
   /** set once the merge marked the issue resolved where it came from, or why that failed */
   resolved?: { at: number } | { error: string };
@@ -178,7 +202,8 @@ export interface TriggersInfo {
 export type Delivery =
   | { kind: "started" | "queued" | "ignored"; event: TriggerEvent }
   | { kind: "duplicate"; event: TriggerEvent }
-  | { kind: "skip"; why: string };
+  | { kind: "skip"; why: string }
+  | { kind: "fired"; events: TriggerEvent[]; skipped: ScheduleSkip[] };
 
 /** An outside issue as a rule reads it, before it is an event. */
 export interface Incoming {
@@ -225,6 +250,7 @@ const DEFAULTS: Record<TriggerSource, { workflow: string; api: string; labels: s
   linear: { workflow: "linear-issue", api: "https://api.linear.app", labels: ["canopy"], levels: [] },
   github: { workflow: "issue-fix", api: "https://api.github.com", labels: ["canopy"], levels: [] },
   forgejo: { workflow: "issue-fix", api: "", labels: ["canopy"], levels: [] },
+  schedule: { workflow: "spec-converge", api: "", labels: [], levels: [] },
 };
 const DEFAULT_POLL = "*/15 * * * *";
 
@@ -270,17 +296,46 @@ function parseRule(item: unknown): TriggerRule {
   const name = str(item, "name") ?? "";
   if (!NAME.test(name)) throw new Error(`name must be lowercase letters, digits and -, not ${name || "empty"}`);
   const raw = str(item, "source") ?? "sentry";
-  if (!(TRIGGER_SOURCES as readonly string[]).includes(raw)) throw new Error(`source must be one of ${TRIGGER_SOURCES.join(", ")}, not ${raw}`);
-  const source = raw as TriggerSource;
+  const source = TRIGGER_SOURCES.find((value) => value === raw);
+  if (!source) throw new Error(`source must be one of ${TRIGGER_SOURCES.join(", ")}, not ${raw}`);
   const defaults = DEFAULTS[source];
   const repo = str(item, "repo");
   if (!repo) throw new Error("repo is required: the repo's id or absolute path");
   const workflow = str(item, "workflow") ?? defaults.workflow;
   const issues = source === "github" || source === "forgejo";
+  if (repo === "*" && source !== "schedule") throw new Error('repo "*" is allowed only on a schedule rule');
+  const cron = str(item, "cron");
+  if (source === "schedule") {
+    if (!cron) throw new Error("cron is required on a schedule rule: five fields, minute hour day-of-month month day-of-week");
+    if (cron.length > CRON_MAX) throw new Error(`cron must be at most ${CRON_MAX} characters`);
+    const parsed = parseCron(cron);
+    if ("error" in parsed) throw new Error(`cron: ${parsed.error}`);
+  } else if (item["cron"] !== undefined) throw new Error("cron is for a schedule rule");
   const secretEnv = str(item, "secretEnv");
-  if (!secretEnv && !issues) throw new Error("secretEnv must name the environment variable holding the hook's secret");
-  if (secretEnv !== undefined && !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
-  if (secretEnv !== undefined && !secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  if (source === "schedule") {
+    if (item["secretEnv"] !== undefined) throw new Error("secretEnv is not read by a schedule rule: nothing signs a clock");
+  } else {
+    if ((!secretEnv && !issues) || (secretEnv !== undefined && !ENV.test(secretEnv))) throw new Error("secretEnv must name the environment variable holding the hook's secret");
+    if (secretEnv !== undefined && !secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  }
+  const rawLand = item["land"];
+  if (rawLand !== undefined && rawLand !== "queue" && rawLand !== "pr") throw new Error(`land must be queue or pr, not ${String(rawLand)}`);
+  const land = rawLand ?? ((source === "schedule" || source === "forgejo") ? "queue" : "pr");
+  if (item["only"] !== undefined && source !== "schedule") throw new Error("only is for a schedule rule");
+  const only: ScheduleOnly[] = [];
+  for (const value of strings(item["only"], "only")) {
+    const known = SCHEDULE_ONLY.find((word) => word === value);
+    if (!known) throw new Error(`only must be some of ${SCHEDULE_ONLY.join(", ")}, not ${value}`);
+    only.push(known);
+  }
+  if (source === "schedule") {
+    for (const key of ["projects", "levels", "ignore", "org", "api"]) {
+      if (item[key] !== undefined) throw new Error(`${key} is not read by a schedule rule`);
+    }
+    for (const key of ["labels", "clientId", "clientSecretEnv", "organization"]) {
+      if (item[key] !== undefined) throw new Error(`${key} is for a linear rule`);
+    }
+  }
   const clientId = str(item, "clientId");
   const clientSecretEnv = str(item, "clientSecretEnv");
   if ((clientId === undefined) !== (clientSecretEnv === undefined)) throw new Error("clientId and clientSecretEnv go together: both turn the Linear agent on");
@@ -318,13 +373,16 @@ function parseRule(item: unknown): TriggerRule {
   const apiRaw = str(item, "api");
   if (source === "forgejo" && !apiRaw) throw new Error("api is required for a forgejo rule: the server's address, such as https://git.example.com");
   const api = (apiRaw ?? defaults.api).replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
+  if (source !== "schedule" && !/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
   return {
     name,
     source,
     repo,
     workflow,
     ...(secretEnv ? { secretEnv } : {}),
+    ...(cron ? { cron } : {}),
+    land,
+    only,
     ...(poll ? { poll } : {}),
     ...(issues ? { write: write ?? true } : {}),
     projects,
@@ -661,7 +719,7 @@ export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: 
     inc.context ? `context from Linear:\n${inc.context}` : "",
     ...(inc.comments ?? []).map((c) => `comment by ${c.author}:\n${c.body}`),
   ].filter(Boolean);
-  // the first words name the branch (run/<slug>-<id>), so they lead with the
+  // the first words name the branch (run/<work id>-<slug>), so they lead with the
   // id; Linear's GitHub integration links a PR to the issue its branch names
   const id = inc.short ?? inc.key;
   const from = source === "manual" ? `Trigger test ${id}, fired by hand to try the trigger.` : `${SERVICE_NAME[service]} issue ${id} came in.`;
@@ -685,6 +743,7 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
     note: noteFor(inc, source, rule.source),
     repoId,
     workflow: rule.workflow,
+    land: rule.land,
     status: ignored ? "ignored" : "queued",
     ...(ignored ? { reason: ignored, endedAt: now } : {}),
     count: 1,
@@ -696,14 +755,14 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
 /** How a trigger runs a workflow. One step with a prompt and nothing after
  *  it is a branch run, with that step's task, tools and turns. Anything more
  *  (several steps, a check line, a gate) is a flow on a branch of its own.
- *  A step that asks before the next one starts is refused, since no one is
- *  there to answer; a verdict or judge gate with no gateway key parks the
- *  same way, and the event then waits on Eric. */
+ *  A step that asks, or waits for a go, is refused, since no one is there.
+ *  A verdict or judge gate with no gateway key parks the same way, and
+ *  the event then waits on Eric. */
 export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: string[]; turns: number } | { kind: "flow" } | string {
   if (wf.steps.length === 0) return `${wf.name} has no steps`;
   if (!wf.steps.some((s) => s.body)) return `${wf.name} has no step with a prompt`;
-  const asks = wf.steps.find((s) => s.gate === "ask");
-  if (asks) return `${wf.name}'s ${asks.name} step asks before the next one starts, and no one answers a trigger's run`;
+  const refusal = unattendedRefusal(wf, "a trigger's run");
+  if (refusal) return refusal;
   const only = wf.steps.length === 1 ? wf.steps[0] : undefined;
   if (only?.body && !only.check && only.gate === "continue") return { kind: "run", task: only.body, tools: only.tools, turns: only.turns };
   return { kind: "flow" };
@@ -712,7 +771,7 @@ export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: s
 /** The event's state as its latest run says. Only moves an event that is
  *  waiting on its run; once a PR is open the PR speaks. */
 export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
-  if (e.runId !== run.id || e.pr || e.flowId) return e;
+  if (e.runId !== run.id || e.pr || e.flowId || e.status === "merged") return e;
   const next: TriggerEvent = { ...e };
   if (run.branch) next.branch = run.branch.origin;
   if (run.status === "working" || run.status === "idle") next.status = "working";
@@ -720,6 +779,9 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
   else if (run.status === "stopped") {
     next.status = "stopped";
     next.reason = "stopped before it finished";
+  } else if (run.status === "limited") {
+    next.status = "stopped";
+    next.reason = `waiting for capacity: ${run.limited?.text || run.error || "the plan's usage limit"}`;
   } else if (run.status === "failed") {
     next.status = "failed";
     next.reason = run.error ?? "the run failed";
@@ -731,7 +793,7 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     next.status = state === "working" ? "working" : state === "nothing" ? "no-fix" : state === "uncommitted" ? "stopped" : "ready";
     if (state === "nothing") next.reason = "the agent committed nothing: it found no fix to make";
     else if (state === "uncommitted") next.reason = "the run ended with changes it did not commit";
-    else if (state !== "working") next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+    else if (state !== "working") next.reason = opensPr(e) ? "committed; canopy opens the PR once the landing queue has sorted the branch" : "committed; the landing queue sorts the branch";
   }
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
   else delete next.endedAt;
@@ -741,7 +803,7 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
 /** The event's state as its flow says, while it follows one. A done flow
  *  reads as working until its worktree has been read into the branch's state. */
 export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent {
-  if (e.flowId !== flow.id || e.pr) return e;
+  if (e.flowId !== flow.id || e.pr || e.status === "merged") return e;
   const next: TriggerEvent = { ...e };
   const runId = [...flow.steps].reverse().find((s) => s.runId)?.runId;
   if (runId) next.runId = runId;
@@ -773,7 +835,7 @@ export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent
       next.reason = "the flow ended with changes it did not commit";
     } else {
       next.status = "ready";
-      next.reason = "committed; canopy opens the PR once the landing queue has sorted the branch";
+      next.reason = opensPr(e) ? "committed; canopy opens the PR once the landing queue has sorted the branch" : "committed; the landing queue sorts the branch";
     }
   }
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
@@ -819,26 +881,23 @@ export function fromPr(e: TriggerEvent, w: PrWatch, now: number): TriggerEvent {
  *  lands through the landing queue instead: canopy opens PRs with gh,
  *  which is GitHub's, and the queue is canopy's own merge. An event written
  *  before services were named is Sentry's. */
-export const opensPr = (e: Pick<TriggerEvent, "service">): boolean => e.service !== "forgejo";
+export const opensPr = (e: Pick<TriggerEvent, "service" | "land">): boolean => e.land !== undefined ? e.land === "pr" : e.service !== "forgejo" && e.service !== "schedule";
 
-/** A committed event and the landing queue. Its branch landed, as the
- *  queue's entry (`landed`) or its notice says, is the event merged: the
- *  word stays `merged` so the page's sections hold, and `endedAt` is when
- *  it landed. Else the newest held notice for the branch says why it
- *  waits (its PR did not open, main moved under it). A caller from before
- *  entries were passed sends the notices alone. */
+/** A committed event follows its landing entry, including a manual landing
+ *  that raises no quiet notice. The newest queue or approval observation wins. */
 export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[], entries: readonly LandEntry[] = []): TriggerEvent {
   if (e.status !== "ready" || !e.branch) return e;
-  const entry = entries.find((x) => x.id === e.branch && x.state === "landed");
+  const entry = entries.find((item) => item.id === e.branch);
   const landed = notices.filter((n) => n.entry === e.branch && n.kind === "landed").sort((a, b) => b.at - a.at)[0];
-  if (entry || landed) {
-    const merged: TriggerEvent = { ...e, status: "merged", endedAt: entry?.landedAt ?? landed?.at ?? e.lastAt };
-    delete merged.reason;
-    return merged;
+  if (entry?.state === "landed" || landed) {
+    const next: TriggerEvent = { ...e, status: "merged", endedAt: entry?.landedAt ?? landed?.at ?? e.lastAt };
+    delete next.reason;
+    return next;
   }
   const held = notices.filter((n) => n.entry === e.branch && n.kind === "held" && n.why).sort((a, b) => b.at - a.at)[0];
-  if (!held?.why || held.why === e.reason) return e;
-  return { ...e, reason: held.why };
+  const queueWhy = entry && ["waiting", "judge", "conflict", "red", "moved"].includes(entry.state) ? entry.reason : undefined;
+  const reason = queueWhy && (!held || (entry?.updatedAt ?? 0) >= held.at) ? queueWhy : held?.why;
+  return !reason || reason === e.reason ? e : { ...e, reason };
 }
 
 /** An event whose run the last server held, after a restart: a run it was
@@ -951,6 +1010,7 @@ export const SAMPLE_TITLE: Record<TriggerSource, string> = {
   linear: "Show the last sync time on the settings page",
   github: "Show the last sync time on the settings page",
   forgejo: "Show the last sync time on the settings page",
+  schedule: "fired by hand",
 };
 
 /** A made-up issue for "try it": the hub fires it as if the service had. */
@@ -962,5 +1022,114 @@ export function sampleIncoming(title: string, now: number, service: TriggerSourc
     ...(service === "sentry" ? { level: "error" } : {}),
     detail: ["fired by hand from canopy"],
     frames: [],
+  };
+}
+
+
+/* ---------- the schedule source (FR-041) ---------- */
+
+export const SCHEDULE_CATCH_UP = 60 * 60 * 1000;
+export const SKIPS_KEPT = 20;
+export const fireMinute = (at: number): number => Math.floor(at / 60_000) * 60_000;
+export const scheduleKey = (repoKey: string, at: number): string => `${repoKey}@${new Date(fireMinute(at)).toISOString()}`;
+
+/** Creation time, rather than later run/PR updates, anchors a rule's next fire. */
+export function lastFire(rule: string, events: readonly TriggerEvent[]): number | null {
+  let latest: number | null = null;
+  for (const event of events) {
+    if (event.rule === rule && event.service === "schedule" && Number.isFinite(event.firstAt)) latest = Math.max(latest ?? event.firstAt, event.firstAt);
+  }
+  return latest;
+}
+
+export function nextFireOf(rule: TriggerRule, last: number): number | null {
+  if (rule.source !== "schedule" || !rule.cron || !Number.isFinite(last)) return null;
+  const cron = parseCron(rule.cron);
+  return "error" in cron ? null : nextFire(cron, last);
+}
+
+/** All wildcard filters must hold; an unreadable repo never qualifies. */
+export function takesRepo(rule: TriggerRule, repo: Repo): boolean {
+  if (repo.error) return false;
+  return rule.only.every((only) => {
+    switch (only) {
+      case "spec-adopted": return repo.spec !== undefined && repo.spec !== "not-adopted";
+      case "dirty": return checkWhen(repo, "dirty").ok;
+      case "unpushed": return checkWhen(repo, "unpushed").ok;
+      case "clean": return !checkWhen(repo, "dirty").ok;
+    }
+  });
+}
+
+export function scheduleRepos(rule: TriggerRule, repos: readonly Repo[]): Repo[] {
+  const local = repos.filter((repo) => !repo.host && !repo.forge && !isSeedRepoId(repo.id) && !repo.error);
+  return rule.repo === "*" ? local.filter((repo) => takesRepo(rule, repo)) : local.filter((repo) => repo.id === rule.repo || repo.path === rule.repo);
+}
+
+export function scheduleBusy(events: readonly TriggerEvent[], rule: string, repoId: string): boolean {
+  let latest: TriggerEvent | undefined;
+  for (const event of events) {
+    if (event.rule === rule && event.repoId === repoId && (!latest || event.lastAt > latest.lastAt)) latest = event;
+  }
+  return latest !== undefined && ["queued", "working", "waiting", "ready", "review"].includes(latest.status);
+}
+
+export interface ScheduleClock {
+  since: number;
+  marks: ReadonlyMap<string, number>;
+}
+export interface ScheduleFire {
+  rule: TriggerRule;
+  at: number;
+  repos: Repo[];
+  skipped: ScheduleSkip[];
+  waits?: number;
+}
+
+/** One due slot per rule; the hub records a mark even when it starts nothing. */
+export function dueRules(rules: readonly TriggerRule[], events: readonly TriggerEvent[], now: number, repos: readonly Repo[], clock: ScheduleClock): ScheduleFire[] {
+  const fires: ScheduleFire[] = [];
+  for (const rule of rules) {
+    if (rule.source !== "schedule") continue;
+    const eventAt = lastFire(rule.name, events);
+    const mark = clock.marks.get(rule.name);
+    if (eventAt === null && mark === undefined) continue;
+    const last = Math.max(eventAt ?? Number.NEGATIVE_INFINITY, mark ?? Number.NEGATIVE_INFINITY);
+    const next = nextFireOf(rule, last);
+    if (next === null || next > now) continue;
+    let at = next;
+    if (next < clock.since) {
+      at = fireMinute(now);
+      const upcoming = nextFireOf(rule, now);
+      if (upcoming !== null && upcoming - now < SCHEDULE_CATCH_UP) {
+        fires.push({ rule, at, repos: [], skipped: [], waits: upcoming });
+        continue;
+      }
+    }
+    const matching = scheduleRepos(rule, repos);
+    const skipped: ScheduleSkip[] = [];
+    const free: Repo[] = [];
+    for (const repo of matching) {
+      if (scheduleBusy(events, rule.name, repo.id)) skipped.push({ repo: repo.name, why: "last run still going", at });
+      else free.push(repo);
+    }
+    if (rule.repo !== "*" && matching.length === 0) skipped.push({ repo: rule.repo, why: `no repo ${rule.repo} in the tree`, at });
+    fires.push({ rule, at, repos: free, skipped });
+  }
+  return fires;
+}
+
+export function scheduleNote(rule: TriggerRule, repo: Pick<Repo, "name">, at: number): string {
+  return `${rule.workflow} on ${repo.name}: scheduled by canopy's ${rule.name} rule (${rule.cron ?? ""}) for ${new Date(fireMinute(at)).toISOString()}. No outside issue came in; work from the repository as it is.`;
+}
+
+export function scheduleEvent(rule: TriggerRule, repo: Pick<Repo, "id" | "name">, repoKey: string, at: number, now: number, source: "schedule" | "manual"): TriggerEvent {
+  const date = new Date(at);
+  const day = [date.getFullYear(), String(date.getMonth() + 1).padStart(2, "0"), String(date.getDate()).padStart(2, "0")].join("-");
+  return {
+    id: crypto.randomUUID().slice(0, 8), rule: rule.name, source, service: "schedule",
+    key: scheduleKey(repoKey, at), short: day, title: `${rule.workflow} on ${repo.name}, ${day}`,
+    note: scheduleNote(rule, repo, at), repoId: repo.id, workflow: rule.workflow,
+    land: rule.land, status: "queued", count: 1, firstAt: now, lastAt: now,
   };
 }

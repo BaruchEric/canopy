@@ -12,6 +12,6 @@
     "noUncheckedIndexedAccess": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*.ts", "bin/*.ts"],
+  "include": ["src/**/*.ts", "bin/*.ts", "scripts/*.ts"],
   "exclude": ["ui", "node_modules", "dist"]
 }

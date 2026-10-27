@@ -158,6 +158,7 @@ export class RunCosts {
       repo: repo?.path ?? null,
       repoName: repo?.name ?? null,
       run: run.id,
+      ...(run.group ? { group: run.group } : {}),
       label: run.verb,
       session: run.session ?? null,
       ...(run.agentSettings ? { agentSettings: { ...run.agentSettings } } : {}),

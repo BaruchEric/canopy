@@ -41,7 +41,7 @@ const VIEWS: readonly CoordView[] = ["cards", "chat"];
 export function CoordTasks({ run, act, layout, error = null }: { run: Run; act: Act; layout: CoordLayout; error?: string | null }) {
   const coordStart = useStore((s) => s.coordStart);
   const tasks = run.tasks ?? [];
-  const active = isRunActive(run);
+  const active = !run.kept && isRunActive(run);
   if (tasks.length === 0 && !active) return null;
   const headOnly = layout.kind === "phone" ? layout.view === "chat" : layout.folded;
   const fill = layout.kind === "phone" && layout.view === "cards";
@@ -50,7 +50,7 @@ export function CoordTasks({ run, act, layout, error = null }: { run: Run; act: 
       <div className="coord-head">
         <span className="coord-count">{tasks.length ? cardCounts(tasks) : "No cards yet. The coordinator proposes them here."}</span>
         <span className="spacer" />
-        {canStartCards(run) && (
+        {!run.kept && canStartCards(run) && (
           <button
             type="button"
             className="mini strong"
@@ -110,7 +110,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
   const [editing, setEditing] = useState(false);
   const status = cardStatus(task, child, landing, prs);
   const chip = status.pr ? ciChip(status.pr) : null;
-  const editable = task.state === "proposed" && isRunActive(run);
+  const editable = !run.kept && task.state === "proposed" && isRunActive(run);
 
   return (
     <li className="coord-card">
@@ -257,6 +257,9 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
 export function ParentLine({ run }: { run: Run }) {
   const parent = useStore((s) => (run.parent ? s.runs[run.parent] : undefined));
   const showRun = useStore((s) => s.showRun);
+  const group = useStore(s => landingAll(s).groups?.find(g => g.id === (run.group ?? run.branch?.group)));
+  const showGroup = useStore(s => s.showGroup);
+  if (group) return <div className="run-parent"><span className="run-parent-text">{group.review?.run === run.id ? "reviewing best of" : "one of"} {group.expectedMembers}</span><span className="spacer" /><button type="button" className="mini" onClick={() => showGroup(group.id)}>open the group</button></div>;
   if (!run.parent) return null;
   const card = parentCard(parent, run.id);
   return (

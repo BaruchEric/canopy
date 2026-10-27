@@ -190,9 +190,30 @@ export function targetsOf(home: string, self: string, list: readonly BackendEntr
   return out;
 }
 
+/** Every backend the home one lists, in `targetsOf`'s order; home alone
+ *  when --backend was given without --on; the one --on names, else `fail`. */
+export async function backendTargets(
+  home: string,
+  opts: { given?: string; on?: string },
+  fail: (msg: string) => never,
+): Promise<Target[]> {
+  const homeTarget: Target = { name: "home", urls: [home] };
+  if (opts.given !== undefined && opts.on === undefined) return [homeTarget];
+  const listed = await ask<{ self?: string; backends?: BackendEntry[] }>(homeTarget, "GET", "/api/backends").catch(() => null);
+  // an older backend lists none: it is the only one
+  const all = listed?.self ? targetsOf(home, listed.self, listed.backends ?? []) : [homeTarget];
+  if (opts.on === undefined) return all;
+  const one = all.find((t) => t.name === opts.on);
+  return one ? [one] : fail(`no backend named ${opts.on}; the home backend lists ${all.map((t) => t.name).join(", ")}`);
+}
+
 export class Unreachable extends Error {}
 
 export const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 /** One request to a backend at the first of its addresses that answers;
  *  a refusal by the backend is the answer, not a reason to try the next. */
@@ -227,6 +248,60 @@ export async function ask<T>(t: Target, method: string, path: string, body?: unk
   throw new Unreachable(tried.join("; ") || "no address");
 }
 
+/** `ask` for a route that answers text: the same addresses and refusals, the body as it is. */
+export async function askText(t: Target, path: string, timeoutMs = 8_000): Promise<string> {
+  const tried: string[] = [];
+  for (const url of t.urls) {
+    let res: Response;
+    try {
+      res = await fetch(`${url}${path}`, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: callerHeaders(url),
+      });
+    } catch (err) {
+      tried.push(`${url}: ${errText(err)}`);
+      continue;
+    }
+
+    const redirected = res.status >= 300 && res.status < 400;
+    if (redirected) {
+      tried.push(`${url}: needs a sign-in`);
+      continue;
+    }
+
+    let authBody: Record<string, unknown> | undefined;
+    if (res.status === 401 || res.status === 403) {
+      const body: unknown = await res.clone().json().catch(() => undefined);
+      if (isRecord(body)) authBody = body;
+      if (typeof authBody?.need === "string") {
+        throw new Error(typeof authBody.error === "string" ? authBody.error : `${t.name} refused: it needs the ${authBody.need} right`);
+      }
+      if (res.status === 401) {
+        tried.push(`${url}: needs a sign-in`);
+        continue;
+      }
+    }
+
+    const text = await res.text();
+    if (!res.ok) {
+      if (res.status === 403) {
+        throw new Error(typeof authBody?.error === "string" ? authBody.error : `${t.name} answered ${res.status}`);
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = undefined;
+      }
+      const error = isRecord(parsed) && typeof parsed.error === "string" ? parsed.error : text;
+      throw new Error(error || `${t.name} answered ${res.status}`);
+    }
+    return text;
+  }
+  throw new Unreachable(tried.join("; ") || "no address");
+}
+
 export async function healthCommand(argv: string[], { fail }: HealthDeps): Promise<void> {
   const args = [...argv];
   const given = take(args, "--backend");
@@ -241,13 +316,7 @@ export async function healthCommand(argv: string[], { fail }: HealthDeps): Promi
   let known: Target[] | null = null;
   const targets = async (): Promise<Target[]> => {
     if (known) return known;
-    if (given !== undefined && on === undefined) return (known = [homeTarget]);
-    const listed = await ask<{ self?: string; backends?: BackendEntry[] }>(homeTarget, "GET", "/api/backends").catch(() => null);
-    // an older backend lists none: it is the only one
-    const all = listed?.self ? targetsOf(home, listed.self, listed.backends ?? []) : [homeTarget];
-    if (on === undefined) return (known = all);
-    const one = all.find((t) => t.name === on);
-    return one ? (known = [one]) : fail(`no backend named ${on}; the home backend lists ${all.map((t) => t.name).join(", ")}`);
+    return (known = await backendTargets(home, { given, on }, fail));
   };
   /** the backend a repo command speaks to: --on's, else home */
   const repoTarget = async (): Promise<Target> => (on === undefined ? homeTarget : ((await targets())[0] ?? homeTarget));

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
+import { ACTIONS, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
 import { isRunAction, RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
@@ -30,6 +30,17 @@ const SCOPE = {
   others: ["/w/trips-analysis"],
   skipped: [],
 };
+
+describe("branchLine", () => {
+  test("asks for the work trailer on every commit, and nothing of it without an item", () => {
+    const b = { name: "run/w-test2345-add-a-test", dir: "/w/x", target: "main", work: "w-test2345" };
+    const line = branchLine(b);
+    expect(line.startsWith("You work on the branch run/w-test2345-add-a-test, in a worktree of its own at /w/x, cut from main.")).toBe(true);
+    expect(line.endsWith('End every commit message with the line "Canopy-Work: w-test2345" after a blank line: the trailer that ties the commit to this work.')).toBe(true);
+    expect(branchLine({ name: "run/x", dir: "/w/x", target: "main" })).not.toContain("Canopy-Work");
+    expect(branchPrompt(repo(), ACTIONS.ask, "add a test", b)).toContain('"Canopy-Work: w-test2345"');
+  });
+});
 
 const file = { path: "a.ts", index: ".", worktree: "M", untracked: false, conflicted: false };
 
@@ -104,8 +115,18 @@ describe("the coordinate action", () => {
 test("isRunAction knows every run action and nothing else", () => {
   for (const a of RUN_ACTIONS) expect(isRunAction(a)).toBe(true);
   expect(isRunAction("coordinate")).toBe(true);
+  expect(isRunAction("compare")).toBe(true);
+  expect(RUN_ACTIONS).not.toContain("compare");
   expect(isRunAction("fleet")).toBe(false);
   expect(isRunAction(undefined)).toBe(false);
+});
+
+test("the compare action is internal, read-only and denied every other tool", () => {
+  expect(ACTIONS.compare.unattended).toBeTypeOf("string");
+  expect(ACTIONS.compare).toMatchObject({ verb: "compare", maxTurns: 40, expectsChange: false });
+  expect(ACTIONS.compare.allowedTools).toContain("Read");
+  expect(ACTIONS.compare.allowedTools).toContain("Bash(git diff:*)");
+  expect(ACTIONS.compare.allowedTools).not.toContain("Bash(git commit:*)");
 });
 
 describe("checkWhen", () => {

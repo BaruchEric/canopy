@@ -4,6 +4,7 @@ import {
   advance,
   canLand,
   enqueue,
+  entryFor,
   fixPrompt,
   landAllPick,
   MAX_NOTICES,
@@ -15,6 +16,7 @@ import {
   landCounts,
   LandError,
   landWord,
+  landAnyway,
   MAX_TRIES,
   nextEntry,
   pruneLanded,
@@ -23,10 +25,13 @@ import {
   retryWaiting,
   scenarioOf,
   SCENARIO_GATE,
+  scoreGate,
+  scoreOutput,
   sentBack,
   TAIL_CHARS,
 } from "./landing";
 import type { LandEntry, LandingRun, LandNotice, RunReview } from "./types";
+import { touchedOf } from "./touch";
 
 const run = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -54,6 +59,40 @@ const queued = (ids: string[], repoId = "canopy"): LandEntry[] => {
 };
 
 describe("enqueue", () => {
+  test("an entry is marked when a working run's set holds its files, by that run's name, through to the fix prompt", () => {
+    const working = [touchedOf({ id: "w", verb: "Plan, then build", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["src/a.ts", "docs/"] } }], branch: { name: "run/x-w", target: "main", base: "b0", dir: "/w/w", state: "working", origin: "w" } })];
+    const review: RunReview = { verdict: "land", files: [{ path: "src/a.ts", cls: "logic" }, { path: "docs/x.md", cls: "docs" }, { path: "z.ts", cls: "logic" }], base: "b", head: "h", at: 1 };
+    const e = enqueue([], run("a", { review }), 1, undefined, working)[0];
+    if (!e) throw new Error("expected the entry to be queued");
+    expect(e.overlap).toEqual({ with: "run/x-w", paths: ["docs/x.md", "src/a.ts"] });
+    expect(enqueue([], run("b", { review: { ...review, files: [{ path: "q.ts", cls: "logic" }] } }), 1, undefined, working)[0]?.overlap).toBeUndefined();
+    expect(enqueue([], run("w", { review }), 1, undefined, working)[0]?.overlap).toBeUndefined();
+    expect(enqueue([], run("c"), 1, undefined, working)[0]?.overlap).toBeUndefined();
+    const back = advance(advance(e, { t: "begin" }, 2), { t: "conflict", files: ["src/a.ts"] }, 3);
+    expect(back.overlap).toEqual(e.overlap);
+    expect(fixPrompt(back)).toContain("canopy saw run/x-w editing these files while you worked: docs/x.md, src/a.ts.");
+    expect(fixPrompt(back).endsWith("Do not push.")).toBe(true);
+    const noOverlap = enqueue([], run("empty"), 1)[0];
+    if (!noOverlap) throw new Error("expected the entry to be queued");
+    const noOverlapBack = advance(advance(noOverlap, { t: "begin" }, 2), { t: "conflict", files: ["x"] }, 3);
+    expect(fixPrompt(noOverlapBack)).not.toContain("canopy saw");
+  });
+
+  test("a recorded overlap carries into enqueue and a sent-back entry keeps its older overlap", () => {
+    const review: RunReview = { verdict: "land", files: [{ path: "notes.md", cls: "logic" }], base: "b", head: "h", at: 1 };
+    const remembered = { with: "run/x-c", paths: ["notes.md"] };
+    const prior = enqueue([], run("d", { review, overlap: remembered }), 1)[0];
+    if (!prior) throw new Error("expected the branch to be queued");
+    expect(prior.overlap).toEqual(remembered);
+    expect(fixPrompt(advance(advance(prior, { t: "begin" }, 2), { t: "conflict", files: ["notes.md"] }, 3))).toContain("canopy saw run/x-c editing these files while you worked: notes.md.");
+
+    const working = [touchedOf({ id: "live", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["notes.md"] } }], branch: { name: "run/x-live", target: "main", base: "b", dir: "/w/live", state: "working", origin: "live" } })];
+    expect(enqueue([], run("d", { review, overlap: remembered }), 4, undefined, working)[0]?.overlap).toEqual({ with: "run/x-live", paths: ["notes.md"] });
+
+    const sentBack = advance(advance(enqueue([], run("e", { review }), 5, undefined, working)[0]!, { t: "begin" }, 6), { t: "conflict", files: ["notes.md"] }, 7);
+    expect(enqueue([sentBack], run("e", { review }), 8)[0]?.overlap).toEqual({ with: "run/x-live", paths: ["notes.md"] });
+  });
+
   test("a ready run joins at the end", () => {
     const es = queued(["a", "b"]);
     expect(es.map((e) => [e.id, e.state, e.queuedAt])).toEqual([
@@ -310,5 +349,47 @@ describe("scenarios", () => {
     const back = restartWorking([e], 9)[0]!;
     expect(back.state).toBe("queued");
     expect(back).not.toHaveProperty("gate");
+  });
+});
+
+describe("judge scenarios plan 2", () => {
+  const held = (id = "j"): LandEntry => advance(entryFor(run(id), 1), { t: "unjudged", name: "refund", why: "no gateway key" }, 2);
+  test("a judge hold survives retries and restart without becoming runnable", () => {
+    const e = held();
+    expect(e).toMatchObject({ state: "judge", gate: "refund", reason: "scenario refund needs a judge: no gateway key" });
+    expect([inQueue(e), sentBack(e), landWord(e, [e])]).toEqual([true, false, "needs a judge"]);
+    expect(retryWaiting([e], "canopy", 3)).toEqual([e]);
+    expect(restartWorking([e], 3)).toEqual([e]);
+    expect(holdAll([e], "canopy", "checkout busy", 3)).toEqual([e]);
+    expect(nextEntry([e], "canopy")).toBeUndefined();
+    expect(queueOf([e], "canopy")).toEqual([e]);
+    expect(landCounts([e], "canopy")).toEqual({ queued: 1, back: 0 });
+  });
+  test("land anyway preserves order and refuses every non-hold", () => {
+    const a = entryFor(run("a"), 0);
+    const e = held("b");
+    const out = landAnyway([a, e], "b", 9);
+    expect(out.find(x => x.id === "b")).toMatchObject({ state: "queued", skipJudge: true, queuedAt: 1, updatedAt: 9 });
+    expect(out.find(x => x.id === "b")?.reason).toBeUndefined();
+    expect(out.find(x => x.id === "b")?.gate).toBeUndefined();
+    expect(nextEntry(out, "canopy")?.id).toBe("a");
+    for (const state of ["queued", "rebasing", "setup", "gate", "scenarios", "landing", "landed", "waiting", "conflict", "red", "moved"] as const) {
+      expect(() => landAnyway([{ ...a, state }], "a", 10)).toThrow("it is not held for a judge");
+    }
+    expect(() => landAnyway([], "missing", 10)).toThrow("no entry by that id");
+  });
+  test("a below-minimum score explains both failing and confident judge results", () => {
+    const why = "the judge says what was observed only partly satisfies the story";
+    expect(scoreOutput([{ name: "command", kind: "command", ok: false, tail: "ignore" }, { name: "refund", kind: "judge", ok: false, p: 0.3, why, tail: "observed no refund" }])).toBe(`scenario refund: ${why}\nobserved no refund`);
+    expect(scoreOutput([{ name: "mail", kind: "judge", ok: true, p: 0.9, tail: "sent" }])).toBe("scenario mail: satisfaction 0.90\nsent");
+    expect(scoreOutput([{ name: "missing", kind: "judge", ok: false, unjudged: "no gateway key" }])).toBe("scenario missing: no gateway key");
+    expect(scoreGate(2 / 3, 0.8)).toBe("satisfaction 0.67 < 0.8");
+    const e = advance(entryFor(run("j"), 1), { t: "red", gate: scoreGate(0.5, 1), output: "scenario refund: partly\nno refund" }, 2);
+    expect(scenarioOf(e.gate)).toBeNull();
+    expect(fixPrompt(e)).toContain("holdout scenarios scored satisfaction 0.50 < 1");
+    expect(fixPrompt(e)).toContain("are not shown");
+    expect(fixPrompt(e)).toContain("scenario refund: partly\nno refund");
+    expect(fixPrompt(e)).toContain("Do not push.");
+    expect(fixPrompt({ ...e, overlap: { with: "other-branch", paths: ["refund.ts"] } })).toContain("canopy saw other-branch editing these files while you worked: refund.ts");
   });
 });

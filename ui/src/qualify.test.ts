@@ -17,6 +17,7 @@ import {
   qSproutDetail,
   qTask,
   qTerm,
+  qWorktrees,
 } from "./qualify";
 import type {
   Device,
@@ -33,7 +34,10 @@ import type {
   ServerEvent,
   Sprout,
   TermInfo,
+  WorktreeRepoInfo,
+  WorktreesInfo,
 } from "../../src/core/types";
+import type { Collision } from "../../src/core/touch";
 
 const reg: Reg = { home: "mini", names: ["mini", "mac"] };
 const q = (id: string) => qualify(reg, "mac", id);
@@ -166,6 +170,46 @@ describe("qEvent", () => {
       for (const id of out) expect(back(id)[0]).toBe("mac");
     }
   });
+  test("a foreign landing event qualifies collision pairs and both sides", () => {
+    const collisions: Collision[] = [
+      { id: "r1+r2", repoId: "a/b", run: "r1", name: "run/x-one", with: { kind: "run", run: "r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+      { id: "r1+branch:b1", repoId: "a/b", run: "r1", name: "run/x-one", with: { kind: "branch", origin: "b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+    ];
+    const out = qEvent(q, { type: "landing", landing: { runs: [], entries: [], orphans: [], collisions } });
+
+    expect(out.type === "landing" ? out.landing.collisions : []).toEqual([
+      { id: "mac|r1+r2", repoId: "mac|a/b", run: "mac|r1", name: "run/x-one", with: { kind: "run", run: "mac|r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
+      { id: "mac|r1+branch:b1", repoId: "mac|a/b", run: "mac|r1", name: "run/x-one", with: { kind: "branch", origin: "mac|b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
+    ]);
+  });
+  test("a foreign worktrees event qualifies repo and run ids but preserves local paths and slot names", () => {
+    const repoInfo: WorktreeRepoInfo = {
+      repoId: "a/b",
+      repoPath: "/work/a/b",
+      want: 1,
+      fileWarm: 2,
+      runs: [{ dir: "/w/a/b/b1", id: "b1", runId: "r1", branch: "run/x-b1", state: "working" }],
+      warm: [{ dir: "/w/a/b/warm-1", name: "warm-1", base: "deadbeef", madeAt: 1, size: 2, lockfile: null }],
+      refilling: null,
+      fails: [{ name: "warm-2", why: "setup failed", at: 2, fails: 1 }],
+      orphans: ["/w/a/b/orphan"],
+    };
+    const worktrees: WorktreesInfo = { root: "/config/worktrees", free: 42, repos: [repoInfo] };
+    const event: ServerEvent = { type: "worktrees", worktrees };
+    expect(qEvent(q, event)).toEqual({ type: "worktrees", worktrees: qWorktrees(q, worktrees) });
+    expect(qEvent(q, event)).toEqual({
+      type: "worktrees",
+      worktrees: {
+        root: "/config/worktrees",
+        free: 42,
+        repos: [{
+          ...repoInfo,
+          repoId: "mac|a/b",
+          runs: [{ dir: "/w/a/b/b1", id: "mac|b1", runId: "mac|r1", branch: "run/x-b1", state: "working" }],
+        }],
+      },
+    });
+  });
   test("a scan event qualifies its repos", () => {
     const scan = { root: "/x", repos: [repo], sources: [], scannedAt: 1, backend: { openers: false, sshHost: null } } as unknown as ScanResult;
     const out = qEvent(q, { type: "scan", result: scan });
@@ -176,12 +220,24 @@ describe("qEvent", () => {
       { type: "agents", agents: {} },
       { type: "launchers", launchers: {} },
       { type: "workspaces", workspaces: [] },
+      { type: "work", items: [] },
       { type: "helpers", helpers: [] },
       { type: "peers", seen: [] },
       { type: "registry", cards: [], gone: ["claude:s1"] },
     ] as ServerEvent[]) {
       expect(qEvent(q, ev)).toBe(ev);
     }
+  });
+  test("a capacity event qualifies held start identifiers", () => {
+    const info = {
+      capacity: [],
+      held: [{ id: "h1", what: "run", repoId: "a/b", priority: "normal" as const, why: "low window", since: 1 }],
+      settings: { lowHold: 0.7, normalHold: 0.9, weeklyLowHold: 0.85, observedFiveHourUsd: null },
+    };
+    expect(qEvent(q, { type: "capacity", capacity: info })).toMatchObject({
+      type: "capacity",
+      capacity: { held: [{ id: "mac|h1", repoId: "mac|a/b" }] },
+    });
   });
 });
 
@@ -223,4 +279,10 @@ test("a task's repo and session ids are qualified", () => {
   const info: TaskInfo = { name: "dev", cmd: "x", repoId: "app", source: "detected", termId: "a".repeat(32), status: "idle", live: false, restarts: 0, viewers: [] };
   expect(qTask(q, info)).toMatchObject({ repoId: "mini|app", termId: `mini|${"a".repeat(32)}` });
   expect(qEvent(q, { type: "tasks", repoId: "app", tasks: [info] })).toMatchObject({ repoId: "mini|app", tasks: [{ repoId: "mini|app" }] });
+});
+
+test("branch origins, flow slots and both run group pointers share foreign qualification", () => {
+  const branch = { name: "run/a", target: "main", base: "b", dir: "/a", state: "working" as const, origin: "a", group: "g", work: "work-a" };
+  expect(qRun(q, { ...run, group: "g", branch })).toMatchObject({ group: "mac|g", branch: { origin: "mac|a", group: "mac|g", work: "work-a", name: "run/a" } });
+  expect(qFlow(q, { ...flow, branch }).branch).toMatchObject({ origin: "mac|a", group: "mac|g" });
 });

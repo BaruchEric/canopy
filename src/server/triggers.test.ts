@@ -30,7 +30,7 @@ let events: TriggerEvent[][];
 let n: number;
 
 const run = (over: Partial<Run> = {}): Run =>
-  ({ id: `r${++n}`, status: "working", branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: `br${n}` }, ...over }) as Run;
+  ({ id: `r${++n}`, status: "working", branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: `br${n}`, work: "w-test2345" }, ...over }) as Run;
 
 let made: TriggerHub[] = [];
 
@@ -150,6 +150,22 @@ describe("the hook", () => {
     const res = await h.handle(hookReq(issueBody()), new URL("http://x/api/hooks/sentry/shop"));
     expect(res?.status).toBe(503);
     expect(runs).toEqual([]);
+  });
+});
+
+describe("the work ledger (FR-037)", () => {
+  test("an event carries its branch's item, links it, and notes an end the other hubs do not", async () => {
+    const notes: string[] = [];
+    const links: [string, unknown][] = [];
+    const h = hub({ work: { note: (id, t) => notes.push(`${id} ${t}`), close: () => {}, link: (id, ref) => links.push([id, ref]) } });
+    await h.adopt();
+    await h.handle(hookReq(issueBody()), new URL("http://x/api/hooks/sentry/shop"));
+    const [e] = h.list();
+    expect(e?.work).toBe("w-test2345");
+    expect(links).toEqual([["w-test2345", { event: e!.id }]]);
+    h.onRun({ ...runs[0]!, status: "done", branch: { ...runs[0]!.branch!, state: "nothing" } });
+    await h.idle();
+    expect(notes).toEqual(["w-test2345 trigger event SHOP-1A no-fix: the agent committed nothing: it found no fix to make"]);
   });
 });
 
@@ -1200,6 +1216,101 @@ describe("writing back", () => {
   const prOf = (r: Run, status: "open" | "merged") => ({ id: r.branch!.origin, runId: r.id, branch: r.branch!.name, number: 3, url: "https://github.com/o/r/pull/3", state: { status } }) as PrWatch;
   const landedEntry = (r: Run): LandEntry =>
     ({ id: r.branch!.origin, repoId: "web/shop", repoPath: "/dev/web/shop", branch: r.branch!.name, target: "main", dir: "/d", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9, head: "1a2b3c4d5e6f7890" }) as LandEntry;
+
+  function held<T>() {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
+  for (const action of ["close", "link", "note"] as const) {
+    for (const readopt of [false, true]) {
+      test(`${action} ignores a stale epoch after rule loading${readopt ? " and re-adoption" : ""}`, async () => {
+        await ghRule();
+        const h = writeHub(); await h.adopt();
+        await deliver(h, "github", 12); await h.idle();
+        const r = runs[0]; if (!r) throw new Error("missing run");
+        if (action !== "note") ready(h, r);
+        const entered = held<void>(); const gate = held<void>();
+        const load = h.loadRules.bind(h);
+        h.loadRules = async () => { entered.resolve(); await gate.promise; await load(); };
+        if (action === "close") h.onLanding([], [landedEntry(r)]);
+        else if (action === "link") h.onPrs([prOf(r, "open")]);
+        else h.onRun({ ...r, status: "failed", error: "failed locally" });
+        await entered.promise;
+        h.detach(); h.loadRules = load;
+        try {
+          if (readopt) await h.adopt();
+        } finally { gate.resolve(); }
+        await h.idle();
+        expect(written).toEqual([]);
+        expect(h.list()[0]?.resolved).toBeUndefined();
+        expect(h.list()[0]?.linked).toBeUndefined();
+      });
+    }
+  }
+
+  for (const readopt of [false, true]) {
+    test(`close ignores a stale epoch after the remote check${readopt ? " and re-adoption" : ""}`, async () => {
+      await fjRule();
+      const entered = held<void>(); const remote = held<string | null>();
+      const h = writeHub({ missingFrom: async () => { entered.resolve(); return remote.promise; } });
+      await h.adopt(); await deliver(h, "forgejo", 7);
+      const r = runs[0]; if (!r) throw new Error("missing run");
+      ready(h, r); await h.idle();
+      h.onLanding([], [landedEntry(r)]); await entered.promise;
+      h.detach();
+      try { if (readopt) await h.adopt(); } finally { remote.resolve(null); }
+      await h.idle();
+      expect(written).toEqual([]);
+      expect(h.list()[0]?.resolved).toBeUndefined();
+    });
+  }
+
+  for (const action of ["close", "link", "note"] as const) {
+    for (const fails of [false, true]) {
+      test(`${action} drains an issued write and suppresses its stale ${fails ? "error" : "success"} mark after re-adoption`, async () => {
+        await ghRule();
+        const entered = held<void>(); const effect = held<void>();
+        let issued = 0;
+        const h = writeHub({ writeIssue: async () => { issued++; entered.resolve(); await effect.promise; if (fails) throw new Error("old epoch failure"); } });
+        await h.adopt(); await deliver(h, "github", 12);
+        const r = runs[0]; if (!r) throw new Error("missing run");
+        if (action !== "note") ready(h, r);
+        await h.idle();
+        if (action === "close") h.onLanding([], [landedEntry(r)]);
+        else if (action === "link") h.onPrs([prOf(r, "open")]);
+        else h.onRun({ ...r, status: "failed", error: "failed locally" });
+        await entered.promise;
+        h.detach(); await h.adopt();
+        let drained = false;
+        const idle = h.idle().then(() => { drained = true; });
+        await Bun.sleep(0);
+        expect(drained).toBe(false);
+        effect.resolve(); await idle;
+        expect(issued).toBe(1);
+        expect(h.list()[0]?.resolved).toBeUndefined();
+        expect(h.list()[0]?.linked).toBeUndefined();
+      });
+    }
+  }
+
+  test("a queued write captures its scheduling epoch and cannot revive after re-adoption", async () => {
+    await ghRule();
+    const entered = held<void>(); const effect = held<void>();
+    const issued: string[] = [];
+    const h = writeHub({ writeIssue: async (_rule, _repo, e) => { issued.push(e.key); entered.resolve(); await effect.promise; } });
+    await h.adopt(); await deliver(h, "github", 12); await deliver(h, "github", 13);
+    const first = runs[0]; const second = runs[1];
+    if (!first || !second) throw new Error("missing runs");
+    ready(h, first); ready(h, second); await h.idle();
+    h.onPrs([prOf(first, "open"), prOf(second, "open")]);
+    await entered.promise;
+    try { h.detach(); await h.adopt(); } finally { effect.resolve(); }
+    await h.idle();
+    expect(issued).toEqual(["12"]);
+    expect(h.list().every((e) => e.linked === undefined)).toBe(true);
+  });
 
   test("a GitHub PR's open is commented on the issue once, and its merge closes the issue", async () => {
     await ghRule();

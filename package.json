@@ -14,9 +14,9 @@
   "scripts": {
     "dev": "bun run --watch src/server/index.ts",
     "dev:web": "vite ui",
-    "build": "vite build ui",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json",
-    "lint": "oxlint src ui/src bin",
+    "build": "vite build ui && vite build ui --config ui/vite.sw.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json && tsc --noEmit -p ui/tsconfig.sw.json",
+    "lint": "oxlint src ui/src ui/sw.ts bin scripts",
     "test": "bun test",
     "redeploy": "bash scripts/redeploy.sh"
   },

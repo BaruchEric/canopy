@@ -11,6 +11,7 @@ export const STEP_WORD: Record<FlowStep["status"], string> = {
   running: "the agent is working",
   checking: "running the check",
   gated: "waiting for you",
+  held: "waiting for your go",
   passed: "passed",
   failed: "failed",
   skipped: "skipped",
@@ -37,6 +38,15 @@ export function flowWord(flow: Flow, long: boolean): string {
     case "stopped":
       return long ? `${flow.verb} stopped` : "stopped";
   }
+}
+
+/** The action a gate's continue button will actually take. */
+export function continueWord(flow: Flow): string {
+  if (flow.parkedFor === "budget") return "allow one more step";
+  if (flow.parkedFor === "stage") return flow.stageCheck ? "run the check again" : "run the step again";
+  const step = flow.steps[flow.current];
+  if (step?.status === "held") return `start ${step.name}`;
+  return flow.current + 1 >= flow.steps.length ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`;
 }
 
 export interface FleetCounts {

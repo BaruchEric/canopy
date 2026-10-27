@@ -2,8 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** planned 2026-10-26. Written on main at 1ac8fe7, against plan 1 as
-written; re-check its line numbers once plan 1 lands.
+**Status:** plan 2 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Plan 3 remains open. Written on main at 1ac8fe7.
 
 **Goal:** a judge scenario runs in the queue's pass after the command ones: its
 line's output, its evidence files and its story go to Jev, which says yes,

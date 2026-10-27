@@ -26,6 +26,8 @@ COPY . .
 ARG CANOPY_COMMIT=""
 ARG CANOPY_COMMITTED=""
 RUN CANOPY_COMMIT="$CANOPY_COMMIT" CANOPY_COMMITTED="$CANOPY_COMMITTED" bun run build
+# The shells container's MCP server, refreshed without restarting its shells.
+RUN bun build bin/canopy-mcp.ts --target=bun --outfile /app/dist/canopy-mcp.js
 # the incubator's stage runner as one file, the only canopy code the stages
 # image carries
 RUN bun build src/stage/main.ts --target=bun --outfile /app/dist/stage-runner.js
@@ -108,6 +110,9 @@ ENV LANG=C.UTF-8
 # Claude Code, Anthropic's official native install (subscription login, no
 # API key; the login itself is a mounted ~/.claude, see deploy.md).
 RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# A fixed launcher; the MCP code itself comes from the shared config volume.
+COPY --chown=bun:bun docker/canopy /home/bun/.local/bin/canopy
 
 # Codex CLI, run inside a shell on your Codex subscription. If this package
 # name is wrong for your setup, install it your own way (see deploy.md); it

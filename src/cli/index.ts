@@ -49,17 +49,23 @@ import { versionLine } from "../core/version";
 import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
+import { costsCommand } from "./costs";
 import { kitCommand } from "./kit";
+import { mcpCommand } from "./mcp";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
+import { worktreesCommand } from "./worktrees";
 import { issuesCommand } from "./issues";
 import { scenariosCommand } from "./scenarios";
 import { prCommand } from "./pr";
+import { workCommand } from "./work";
 import { awakeCommand } from "./awake";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
 import { secretsCommand } from "./secrets";
+import { groupsCommand } from "./groups";
+import { runCommand } from "./run";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
 const HELP = `${bold("canopy")}${HELP_TEXT.slice("canopy".length)}`;
@@ -105,13 +111,20 @@ const COMMANDS = new Set([
   "ranger",
   "sweep",
   "awake",
+  "run",
+  "groups",
   "health",
+  "costs",
   "kit",
+  "mcp",
   "land",
+  "worktrees",
   "queue",
+  "collisions",
   "scenarios",
   "pr",
   "prs",
+  "work",
   "issues",
   "secrets",
   "library",
@@ -852,18 +865,31 @@ export async function main(argv: string[]): Promise<void> {
     }
     case "health":
       return healthCommand(args, { fail });
+    case "costs":
+      return costsCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
+    case "mcp":
+      return mcpCommand(args, { fail });
     case "auth":
       return authCommand(args, { fail });
     case "land":
     case "queue":
+    case "collisions":
       return landCommand(cmd, args, { fail });
+    case "worktrees":
+      return worktreesCommand(args, { fail });
     case "scenarios":
       return scenariosCommand(args, { fail });
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });
+    case "run":
+      return runCommand(args, { fail });
+    case "groups":
+      return groupsCommand(args, { fail });
+    case "work":
+      return workCommand(args, { fail });
     case "issues":
       return issuesCommand(args, { fail });
     case "sweep":

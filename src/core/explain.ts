@@ -3,7 +3,8 @@
  *  (it deletes, writes, reaches the network, runs code, commits or pushes,
  *  or works outside the project). Pure and browser-safe: no LLM, no node
  *  imports. The reading is a guide, never a guarantee; the raw command
- *  stays on screen beside it. */
+ *  stays on screen beside it. It also lists the files a line writes, for the
+ *  touched set. */
 
 import { execOption, progName } from "./shellwords";
 
@@ -46,12 +47,20 @@ export interface SimpleCommand {
   words: string[];
   writes: string[];
   reads: string[];
+  /** the surrounding subshell scopes, outermost first */
+  cwdScopes?: number[];
+  /** scopes entered before this command */
+  cwdScopeStarts?: number[];
+  /** scopes exited after this command */
+  cwdScopeEnds?: number[];
+  /** pipeline and its containing scope depth; only deeper subshells can move their own cwd */
+  cwdPipeline?: { id: number; depth: number };
   heredoc?: string;
 }
 
 type Token =
   | { t: "word"; v: string }
-  | { t: "sep" }
+  | { t: "sep"; op: string }
   | { t: "redir"; op: string }
   | { t: "heredoc"; body: string };
 
@@ -127,7 +136,7 @@ function tokenize(s: string, subs: string[]): Token[] {
         }
         out.push({ t: "heredoc", body: body.join("\n") });
       }
-      out.push({ t: "sep" });
+      out.push({ t: "sep", op: "\n" });
       continue;
     }
     if (ch === "#" && !inWord) {
@@ -181,8 +190,9 @@ function tokenize(s: string, subs: string[]): Token[] {
     }
     if (ch === ";" || ch === "|" || ch === "(" || ch === ")") {
       end();
-      out.push({ t: "sep" });
-      i += ch === "|" && next === "|" ? 2 : 1;
+      const op = ch === "|" && next === "|" ? "||" : ch;
+      out.push({ t: "sep", op });
+      i += op.length;
       continue;
     }
     if (ch === "&") {
@@ -194,8 +204,9 @@ function tokenize(s: string, subs: string[]): Token[] {
         continue;
       }
       end();
-      out.push({ t: "sep" });
-      i += next === "&" ? 2 : 1;
+      const op = next === "&" ? "&&" : "&";
+      out.push({ t: "sep", op });
+      i += op.length;
       continue;
     }
     if (ch === ">" || ch === "<") {
@@ -227,14 +238,59 @@ export function splitShell(line: string): SimpleCommand[] {
   const tokens = tokenize(line, subs);
   const out: SimpleCommand[] = [];
   let cur: SimpleCommand = { words: [], writes: [], reads: [] };
+  let scopeSeq = 0;
+  let pipelineSeq = 0;
+  const scopes: number[] = [];
+  const pendingStarts: number[] = [];
+  const pipelines = new Map<number, { id: number; depth: number }>();
   const flush = () => {
-    if (cur.words.length || cur.writes.length || cur.heredoc !== undefined) out.push(cur);
+    if (cur.words.length || cur.writes.length || cur.heredoc !== undefined) {
+      if (scopes.length) cur.cwdScopes = [...scopes];
+      if (pendingStarts.length) cur.cwdScopeStarts = pendingStarts.splice(0);
+      for (let depth = scopes.length; depth >= 0; depth--) {
+        const pipeline = pipelines.get(depth);
+        if (pipeline) {
+          cur.cwdPipeline = pipeline;
+          break;
+        }
+      }
+      out.push(cur);
+    }
     cur = { words: [], writes: [], reads: [] };
   };
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
     if (!tok) continue;
-    if (tok.t === "sep") flush();
+    if (tok.t === "sep") {
+      if (tok.op === "(") {
+        flush();
+        const id = ++scopeSeq;
+        scopes.push(id);
+        pendingStarts.push(id);
+      } else if (tok.op === ")") {
+        flush();
+        pipelines.delete(scopes.length);
+        const id = scopes.pop();
+        if (id !== undefined) {
+          const last = out[out.length - 1];
+          if (last?.cwdScopes?.includes(id)) last.cwdScopeEnds = [...(last.cwdScopeEnds ?? []), id];
+          else {
+            const start = pendingStarts.indexOf(id);
+            if (start !== -1) pendingStarts.splice(start, 1);
+          }
+        }
+      } else if (tok.op === "|") {
+        if (!pipelines.has(scopes.length)) pipelines.set(scopes.length, { id: ++pipelineSeq, depth: scopes.length });
+        flush();
+      } else if (tok.op === "&") {
+        if (!pipelines.has(scopes.length)) pipelines.set(scopes.length, { id: ++pipelineSeq, depth: scopes.length });
+        flush();
+        pipelines.delete(scopes.length);
+      } else {
+        flush();
+        pipelines.delete(scopes.length);
+      }
+    }
     else if (tok.t === "heredoc") {
       // the body belongs to the command that opened it, already flushed
       // when the line ended
@@ -265,6 +321,19 @@ function norm(p: string, base: string): string {
     else parts.push(seg);
   }
   return `/${parts.join("/")}`;
+}
+
+/** Normalize a home shorthand without resolving it to this process's home. */
+function normalizeHomePath(p: string, base = "~"): string {
+  const parts = (p.startsWith("~") ? p : `${base}/${p}`).split("/");
+  const home = parts.shift() ?? "~";
+  const tail: string[] = [];
+  for (const segment of parts) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") tail.pop();
+    else tail.push(segment);
+  }
+  return tail.length ? `${home}/${tail.join("/")}` : home;
 }
 
 const inside = (p: string, root: string): boolean => p === root || p.startsWith(root === "/" ? "/" : `${root}/`);
@@ -680,8 +749,18 @@ function commandParts(cmd: SimpleCommand, w: Where, root: string | null): Part[]
 }
 
 /** What one simple command does, as parts. `w.cwd` moves with a `cd`. */
-function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
-  let words = cmd.words.filter((x) => x !== "");
+interface NormalizedCommand {
+  words: string[];
+  who: string | null;
+  hidden: Part[];
+  assigned: string[];
+}
+
+/** Strip leading assignments and the wrappers both explanation and path
+ *  extraction understand. Keep the decisions in one place so their command
+ *  names cannot drift apart. */
+function normalizeCommandWords(rawWords: readonly string[]): NormalizedCommand {
+  let words = rawWords.filter((x) => x !== "");
   let who: string | null = null;
   const hidden: Part[] = [];
   // `VAR=value` words, before the program, after `env`, or set by `export`
@@ -714,6 +793,11 @@ function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part
     }
     break;
   }
+  return { words, who, hidden, assigned };
+}
+
+function commandPartsOf(cmd: SimpleCommand, w: Where, root: string | null): Part[] {
+  const { words, who, hidden, assigned } = normalizeCommandWords(cmd.words);
   if (DECLARERS.has(progName(words[0] ?? ""))) assigned.push(...words.slice(1).filter((x) => /^[A-Za-z_]\w*=/.test(x)));
   const parts: Part[] = [...hidden];
   // a variable that can name a program (a pager, a config file, a preload)
@@ -981,6 +1065,184 @@ export function explainCommand(command: string, root?: string, cwd?: string): Ex
   const parts = explainParts(command, w, r);
   if (r && cwd && !inside(start, r)) parts.push(part("outside", "", undefined, ["outside"]));
   return fold(parts);
+}
+
+export interface WrittenPaths {
+  /** files the line writes, moves, removes or restores, as paths from `root`; one outside it is kept absolute */
+  paths: string[];
+  /** folders a command moved or removed whole, same form: `mv` and `git mv` operands, `rm -r`, `rmdir`, `git rm -r` */
+  dirs: string[];
+  /** The line was opaque or vague, or a later relative path had an unknown cwd. */
+  unknown: boolean;
+}
+
+const IGNORED_REDIRECTS = /^\/dev\/(?:null|stdout|stderr|stdin|fd\/\d+|tty)$/;
+
+/** A shell path in the touched set: relative to `root` inside it, absolute outside. */
+function writtenPath(p: string, root: string, cwd: string): string | null {
+  if (!p) return null;
+  if (p.startsWith("~")) return normalizeHomePath(p);
+  if (cwd === "?" && !p.startsWith("/")) return null;
+  if (cwd.startsWith("~") && !p.startsWith("/")) return normalizeHomePath(p, cwd);
+  const r = norm(root, "/");
+  const abs = norm(p, cwd);
+  if (abs === HOME || abs.startsWith(`${HOME}/`)) return `~${abs.slice(HOME.length)}`;
+  if (abs === r) return null;
+  return inside(abs, r) ? abs.slice(r === "/" ? 1 : r.length + 1) : abs;
+}
+
+function recursive(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--recursive" || (arg.startsWith("-") && !arg.startsWith("--") && /[rR]/.test(arg.slice(1))));
+}
+
+function inPlaceFiles(args: readonly string[]): string[] {
+  const operandsSeen: string[] = [];
+  let expression = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--") {
+      operandsSeen.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg === "-i" || arg === "--in-place") {
+      if (args[i + 1] === "") i++;
+      continue;
+    }
+    if (arg.startsWith("-i") || arg.startsWith("--in-place=")) continue;
+    if (arg === "-e" || arg === "--expression") {
+      expression = true;
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--expression=") || arg.startsWith("-e") && arg.length > 2) {
+      expression = true;
+      continue;
+    }
+    if (arg === "-f" || arg === "--file") {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("-") && arg !== "-") continue;
+    operandsSeen.push(arg);
+  }
+  return expression ? operandsSeen : operandsSeen.slice(1);
+}
+
+/** The files a shell line writes, for the touched set (FR-040). */
+export function writtenPaths(command: string, root: string, cwd = root): WrittenPaths {
+  const explained = explainCommand(command, root, cwd);
+  if (explained.opaque || explained.vague) return { paths: [], dirs: [], unknown: true };
+
+  const paths = new Set<string>();
+  const dirs = new Set<string>();
+  const normalizedRoot = norm(root, "/");
+  let currentCwd = norm(cwd, normalizedRoot);
+  let previousCwd: string | undefined;
+  let unknown = false;
+  const scopeCwds = new Map<number, { cwd: string; previousCwd: string | undefined; depth: number }>();
+  const pipelineCwds = new Map<number, { cwd: string; previousCwd: string | undefined }>();
+  const addPath = (candidate: string, folder = false, atCwd = currentCwd) => {
+    const path = writtenPath(candidate, root, atCwd);
+    if (!path) return;
+    (folder ? dirs : paths).add(path);
+  };
+  const add = (values: readonly string[], folder = false, atCwd = currentCwd) => {
+    for (const value of values) addPath(value, folder, atCwd);
+  };
+
+  for (const cmd of splitShell(command)) {
+    const scopeIds = cmd.cwdScopes ?? [];
+    const inheritedScope = [...scopeIds].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined);
+    let pipelineState: { cwd: string; previousCwd: string | undefined } | undefined;
+    if (cmd.cwdPipeline !== undefined) {
+      pipelineState = pipelineCwds.get(cmd.cwdPipeline.id);
+      if (pipelineState === undefined) {
+        pipelineState = { cwd: inheritedScope?.cwd ?? currentCwd, previousCwd: inheritedScope ? inheritedScope.previousCwd : previousCwd };
+        pipelineCwds.set(cmd.cwdPipeline.id, pipelineState);
+      }
+    }
+    const pipelineDepth = cmd.cwdPipeline?.depth ?? -1;
+    const scopeBase = inheritedScope && inheritedScope.depth > pipelineDepth ? inheritedScope : pipelineState ?? { cwd: currentCwd, previousCwd };
+    for (const scope of cmd.cwdScopeStarts ?? []) scopeCwds.set(scope, { ...scopeBase, depth: scopeIds.indexOf(scope) + 1 });
+    const localScope = [...scopeIds].reverse().map((scope) => scopeCwds.get(scope)).find((state) => state !== undefined && state.depth > pipelineDepth);
+    const commandCwd = localScope?.cwd ?? pipelineState?.cwd ?? currentCwd;
+    for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path, false, commandCwd);
+    const words = normalizeCommandWords(cmd.words).words;
+    const prog = words[0] ?? "";
+    const base = prog.slice(prog.lastIndexOf("/") + 1);
+    const args = words.slice(1);
+
+    if (base === "cd") {
+      const to = args.includes("-") ? "-" : operands(args)[0];
+      if (localScope) {
+        if (to === "-") {
+          if (localScope.previousCwd === undefined) {
+            localScope.cwd = "?";
+            unknown = true;
+          } else {
+            const prior = localScope.cwd;
+            localScope.cwd = localScope.previousCwd;
+            localScope.previousCwd = prior;
+          }
+        } else {
+          localScope.previousCwd = commandCwd;
+          if (to === undefined) localScope.cwd = HOME;
+          else if (to.startsWith("~")) localScope.cwd = normalizeHomePath(to);
+          else if (to.startsWith("/")) localScope.cwd = norm(to, "/");
+          else if (commandCwd === "?") localScope.cwd = "?";
+          else if (commandCwd.startsWith("~")) localScope.cwd = normalizeHomePath(to, commandCwd);
+          else localScope.cwd = norm(to, commandCwd);
+        }
+      } else if (cmd.cwdPipeline === undefined) {
+        if (to === "-") {
+          if (previousCwd === undefined) {
+            currentCwd = "?";
+            unknown = true;
+          } else {
+            const prior = currentCwd;
+            currentCwd = previousCwd;
+            previousCwd = prior;
+          }
+        } else {
+          previousCwd = commandCwd;
+          if (to === undefined) currentCwd = HOME;
+          else if (to.startsWith("~")) currentCwd = normalizeHomePath(to);
+          else if (to.startsWith("/")) currentCwd = norm(to, "/");
+          else if (commandCwd === "?") currentCwd = "?";
+          else if (commandCwd.startsWith("~")) currentCwd = normalizeHomePath(to, commandCwd);
+          else currentCwd = norm(to, commandCwd);
+        }
+      }
+    } else if (base === "tee" || base === "touch") add(operands(args), false, commandCwd);
+    else if (base === "cp" || base === "install") {
+      const files = operands(args, base === "cp" ? ["-t", "-S"] : ["-m", "-S", "-t"]);
+      if (files.length > 1) add(files.slice(-1), false, commandCwd);
+    } else if (base === "mv") add(operands(args), true, commandCwd);
+    else if (base === "rm" || base === "unlink" || base === "trash") add(operands(args), recursive(args), commandCwd);
+    else if (base === "rmdir") add(operands(args), true, commandCwd);
+    else if ((base === "sed" || base === "perl") && args.some((arg) => arg === "-i" || arg.startsWith("-i") || arg === "--in-place")) {
+      add(inPlaceFiles(args), false, commandCwd);
+    } else if (base === "git") {
+      let subcommand = 0;
+      while (subcommand < args.length && (args[subcommand] ?? "").startsWith("-")) {
+        const option = args[subcommand] ?? "";
+        if (["-c", "-C", "--git-dir", "--work-tree", "--namespace"].includes(option)) subcommand += 1;
+        subcommand += 1;
+      }
+      const sub = args[subcommand];
+      const rest = args.slice(subcommand + 1);
+      if (sub === "mv") add(operands(rest), true, commandCwd);
+      else if (sub === "rm") add(operands(rest), recursive(rest), commandCwd);
+      else if (sub === "checkout") {
+        const separator = rest.indexOf("--");
+        if (separator !== -1) add(rest.slice(separator + 1), false, commandCwd);
+      } else if (sub === "restore") add(operands(rest, ["-s", "--source", "--pathspec-from-file"]), false, commandCwd);
+    }
+    for (const scope of cmd.cwdScopeEnds ?? []) {
+      scopeCwds.delete(scope);
+    }
+  }
+  return { paths: [...paths], dirs: [...dirs], unknown };
 }
 
 /** What a permission prompt carries that the explanation reads. */

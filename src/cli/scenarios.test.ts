@@ -53,10 +53,11 @@ test("add with --run and no shell line fails before asking the backend", async (
   expect(before.posted).toEqual([]);
 });
 
-test("add --judge says a judge scenario is listed but not run yet", async () => {
+test("add --judge creates a judge scenario", async () => {
   const got = await drive(["r", "add", "story", "--judge"], { "/api/scenarios": { path: "/x/story.md" } });
   expect(got.failed).toBeNull();
-  expect(got.lines).toEqual(["wrote /x/story.md", "judge scenarios are listed but not run until plan 2"]);
+  expect(got.lines).toEqual(["wrote /x/story.md"]);
+  expect(got.posted).toEqual([{ repo: "r", name: "story", kind: "judge" }]);
   const plain = await drive(["r", "add", "n", "--run", "make n"], { "/api/scenarios": { path: "/x/n.md" } });
   expect(plain.lines).toEqual(["wrote /x/n.md"]);
   expect(plain.posted).toEqual([{ repo: "r", name: "n", run: "make n" }]);
@@ -67,4 +68,9 @@ test("run on an empty set says there are no scenarios", async () => {
   const got = await drive(["r", "run"], { "/api/scenarios/run": empty });
   expect(got.failed).toBeNull();
   expect(got.lines).toEqual(["no scenarios for r"]);
+});
+
+test("judge results display probabilities or unavailable reasons and omitted counts", () => {
+  const run: ScenarioRun = {head:"h",at:1,total:2,passed:1,score:0.45,results:[{name:"mail",kind:"judge",ok:true,p:0.9},{name:"refund",kind:"judge",ok:false,unjudged:"no gateway key"}],skipped:["other"]};
+  expect(runLines(run)).toEqual(["scenarios 1/2 · 0.45 · 1 left out","  0.90 mail","  unjudged refund  no gateway key"]);
 });

@@ -141,9 +141,10 @@ export async function historyOverview(
   bin: string,
   repos: Repo[],
   now = new Date(),
+  days = RING_DAYS,
 ): Promise<HistoryOverview> {
-  const days = localDays(RING_DAYS, now);
-  const since = localMidnightIso(days[0] ?? dayKey(now));
+  const dates = localDays(days, now);
+  const since = localMidnightIso(dates[0] ?? dayKey(now));
   const [projects, activity] = await Promise.all([
     report<ProjectRow[]>(bin, ["projects"]),
     report<ActivityRow[]>(bin, ["activity", "--since", since]),
@@ -166,13 +167,13 @@ export async function historyOverview(
       commits: p.commits,
       first: p.first,
       last: p.last,
-      days: Array.from(days, () => 0),
-      daySessions: Array.from(days, () => 0),
+      days: Array.from(dates, () => 0),
+      daySessions: Array.from(dates, () => 0),
     };
     reposOf.set(p.id, [...(reposOf.get(p.id) ?? []), r.id]);
   }
 
-  const dayIdx = new Map(days.map((d, i) => [d, i]));
+  const dayIdx = new Map(dates.map((d, i) => [d, i]));
   let maxDay = 0;
   for (const a of activity) {
     const i = dayIdx.get(a.day);
@@ -185,7 +186,7 @@ export async function historyOverview(
       maxDay = Math.max(maxDay, h.days[i] ?? 0);
     }
   }
-  return { available: true, days, maxDay, repos: out, fetchedAt: Date.now() };
+  return { available: true, days: dates, maxDay, repos: out, fetchedAt: Date.now() };
 }
 
 export function historySessions(

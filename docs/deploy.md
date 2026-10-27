@@ -40,7 +40,9 @@ mini.
   foreground on the socket in the config volume, which canopy's own tmux
   client joins from the canopy container. Every mount canopy has, that
   container has too, since `git`, `claude` and `codex` typed into a shell run
-  there.
+  there. Its `canopy` command launches only `canopy mcp`, using the bundle
+  the canopy service copies to `/config/bin/canopy-mcp.js` at each start;
+  the full CLI is not installed in the shells container.
 
 ## Prerequisites on the mini
 
@@ -1164,6 +1166,13 @@ mapping as they are; moving the mapping back onto 7850 would hand `coord`
 the main listener.
 
 ## The kit
+
+The kit knows the `canopy` MCP server and writes `canopy mcp` for Claude and
+Codex on backend machines without a manifest entry. Its first deploy needs
+`redeploy --shells` to install the launcher in the shells image; later
+server changes refresh the shared bundle without restarting shells. As with
+the MCP mounts below, `redeploy` exits 3 until that first shell restart is
+explicitly allowed.
 
 The kit links one set of skills into every agent's folder on every machine
 (`docs/superpowers/specs/2026-10-14-kit-design.md`, "The kit" in

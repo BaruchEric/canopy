@@ -1,16 +1,32 @@
 import { expect, test } from "bun:test";
-import type { HistoryOverview, Repo, RepoHistory } from "../../src/core/types";
-import type { RepoCard } from "./checkouts";
-import { claudeByCard, claudeLeads, costSheet, sessionLines, usageWords, type ServedRow } from "./costs";
-import type { HistorySession } from "../../src/core/types";
+import type { HistoryOverview, HistorySession, Repo, RepoHistory } from "./types";
+import type { RepoCard } from "./cards";
+import { claudeByCard, claudeLeads, costSheet, sessionLines, tokensWord, usageWords, usdWord, type ServedRow } from "./costsheet";
 
-const repo = (id: string): Repo => ({ id, name: id.split(":").pop() ?? id }) as Repo;
+const repo = (id: string): Repo => ({
+  id,
+  name: id.split(":").pop() ?? id,
+  path: `/repo/${id}`,
+  group: "",
+  source: "launch",
+  status: null,
+});
 const cards: RepoCard[] = [
   { key: "github.com/e/api", name: "api", checkouts: [repo("api"), repo("mini:api")] },
   { key: "github.com/e/web", name: "web", checkouts: [repo("web")] },
 ];
 
-const hist = (days: number[]): RepoHistory => ({ days, daySessions: days.map(() => 1) }) as RepoHistory;
+const hist = (days: number[]): RepoHistory => ({
+  project: "fixture",
+  sessions: days.length,
+  costUsd: days.reduce((total, day) => total + day, 0),
+  tokens: 0,
+  commits: 0,
+  first: null,
+  last: null,
+  days,
+  daySessions: days.map(() => 1),
+});
 const history: HistoryOverview = {
   available: true,
   days: ["2026-10-18", "2026-10-19", "2026-10-20"],
@@ -149,6 +165,11 @@ test("usageWords says tokens and minutes", () => {
   expect(usageWords({ tokens: 0, seconds: 20 }, String)).toBe("20 s");
 });
 
+test("the moved currency and token words keep their display format", () => {
+  expect([usdWord(null), usdWord(12.345), usdWord(123.45)]).toEqual(["n/a", "$12.35", "$123"]);
+  expect([tokensWord(123), tokensWord(1_234), tokensWord(1_234_567), tokensWord(1_234_567_890)]).toEqual(["123", "1.2k", "1.2M", "1.23B"]);
+});
+
 test("claudeLeads names each card's costliest checkout, the costliest card first", () => {
   expect(claudeLeads(history, 1, cards).map((l) => [l.name, l.id, l.usd])).toEqual([
     ["api", "api", 3],
@@ -157,7 +178,22 @@ test("claudeLeads names each card's costliest checkout, the costliest card first
 });
 
 const session = (over: Partial<HistorySession>): HistorySession =>
-  ({ id: "s1-aaaa-bbbb", host: "mac", started_at: "2026-10-20T10:00:00Z", ended_at: "2026-10-20T11:00:00Z", title: null, first_prompt: "fix   the\nbuild", turns: 3, tokens: 5000, cost: 1.5, ...over }) as HistorySession;
+  ({
+    id: "s1-aaaa-bbbb",
+    host: "mac",
+    started_at: "2026-10-20T10:00:00Z",
+    ended_at: "2026-10-20T11:00:00Z",
+    title: null,
+    first_prompt: "fix   the\nbuild",
+    turns: 3,
+    tool_calls: 0,
+    tokens: 5000,
+    cost: 1.5,
+    subs: 0,
+    commits: 0,
+    source_present: 1,
+    ...over,
+  });
 
 test("sessionLines keeps the sessions that began in the window, the costliest first", () => {
   const lead = { key: "github.com/e/api", name: "api", id: "api", usd: 3 };
@@ -179,4 +215,12 @@ test("sessionLines keeps the sessions that began in the window, the costliest fi
     ["Ship the ledger", "api · mac · 1 turn", 2],
     ["fix the build", "api · mac · 3 turns", 1.5],
   ]);
+});
+
+
+test("a run line names its run and backend so the page can open its kept record", () => {
+  const sheet = costSheet([row({ backend: "mini", run: "ab12cd34", label: "Build" })], null, 7, []);
+  expect(sheet.runs[0]).toMatchObject({ key: "mini:ab12cd34", run: { backend: "mini", id: "ab12cd34" } });
+  expect(sheet.services[0]).not.toHaveProperty("run");
+  expect(sheet.repos[0]).not.toHaveProperty("run");
 });

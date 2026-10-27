@@ -311,6 +311,8 @@ function runLines(ev: Extract<ServerEvent, { type: "run" }>, prev: FeedSnapshot,
     } else if (run.status === "done") {
       const tail = run.outcome ? `, ${run.outcome}` : "";
       say(`${run.verb} done${tail}${run.result ? ` in ${Math.round(run.result.durationMs / 1000)}s` : ""}`);
+    } else if (run.status === "limited") {
+      say(`${run.verb} waits for capacity${run.error ? `: ${clip(run.error, 100)}` : ""}`);
     } else if (run.status === "failed") {
       say(`${run.verb} failed${run.error ? `: ${clip(run.error, 100)}` : ""}`);
     } else if (run.status === "stopped") {
@@ -337,6 +339,7 @@ function flowLines(ev: Extract<ServerEvent, { type: "flow" }>, prev: FeedSnapsho
     if (st.status === "running") say(`step ${st.name} running`);
     else if (st.status === "checking") say(`step ${st.name} checking`);
     else if (st.status === "gated") say(`step ${st.name} gated${why}`);
+    else if (st.status === "held") say(`step ${st.name} held${why}`);
     else if (st.status === "passed") say(`step ${st.name} passed`);
     else if (st.status === "failed") say(`step ${st.name} failed${why}`);
     else if (st.status === "skipped") say(`step ${st.name} skipped${why}`);
@@ -516,6 +519,8 @@ export function describeEvent(
       const repo = prev.repos.find((r) => r.id === ev.repoId);
       return taskLines(prev.tasks?.[ev.repoId] ?? prev.taskAll?.filter((t) => t.repoId === ev.repoId), ev.tasks, at).map((text) => about(repo, "task", at, text));
     }
+    case "work":
+      return [];
     case "chan":
       // a channel line canopy marked silent is a quiet one
       return [{ at, kind: "chan", source: "", text: chanLine(ev.message, prev.chanAs ?? ""), quiet: ev.message.meta["silent"] === true }];
@@ -536,6 +541,8 @@ export function describeEvent(
     case "ranger":
     // health has its own chip, panel and page
     case "health":
+    // capacity has its own chip and popover
+    case "capacity":
     // a run's own timeline says what a remembered rule let through
     case "remembered":
     // the kit has its own page
@@ -545,6 +552,7 @@ export function describeEvent(
     case "awake":
     // the repo's landing section and the inbox say where the queue stands
     case "landing":
+    case "worktrees":
     case "prs":
     // the triggers view lists every event and what became of it
     case "triggers":

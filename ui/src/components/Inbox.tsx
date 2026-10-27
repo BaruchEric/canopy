@@ -17,7 +17,7 @@ import { PopGrip, usePopEntries, type PopSpec } from "./PopGrip";
 import { POPUP_WORD } from "../sectiontabs";
 import { qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
-import { canAnswer as canAnswerHere, inboxItems, prsAll, useStore } from "../store";
+import { canAnswer as canAnswerHere, harnessNoticeOf, inboxItems, prsAll, useStore } from "../store";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { LandingNotices } from "./Landing";
 import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
@@ -46,8 +46,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", trigger: "!" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", trigger: "trigger" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", group: "comparison", trigger: "trigger" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -154,7 +154,8 @@ export function InboxRow({
   const openSheet = () => {
     const st = useStore.getState();
     st.closeInbox();
-    if (item.source === "run") st.showRun(item.id);
+    if (item.source === "group") st.showGroup(item.id);
+    else if (item.source === "run") st.showRun(item.id);
     else if (item.source === "flow") st.showFlow(item.id);
     else if (item.source === "sprout") st.showSprout(item.id);
     else if (item.source === "landing" && item.repoId) st.showLanding(item.repoId);
@@ -259,7 +260,7 @@ export function InboxRow({
                 </button>
               </div>
             </div>
-          ) : item.kind === "sent-back" ? (
+          ) : item.kind === "group" ? <p>{detail}</p> : item.kind === "sent-back" || item.kind === "needs-judge" ? (
             <div className="ask">
               <div className="eyebrow">
                 {item.repo} {item.title}
@@ -270,10 +271,10 @@ export function InboxRow({
                   type="button"
                   className="mini strong"
                   disabled={busy}
-                  title="The run continues on its branch with this reason as its next message, and rejoins the queue once it is ready again"
-                  onClick={() => answer({ landing: "fix" })}
+                  title={item.kind === "needs-judge" ? "Land it with its judge scenarios left out; its command scenarios ran and passed" : "The run continues on its branch with this reason as its next message, and rejoins the queue once it is ready again"}
+                  onClick={() => answer({ landing: item.kind === "needs-judge" ? "land" : "fix" })}
                 >
-                  fix it
+                  {item.kind === "needs-judge" ? "land anyway" : "fix it"}
                 </button>
                 <span className="spacer" />
                 <button type="button" className="mini" disabled={busy} title="Give the branch up: its worktree and its commits go" onClick={() => answer({ landing: "drop" })}>
@@ -416,7 +417,7 @@ export function InboxRow({
           <div className="kept-acts">
             {item.source !== "ask" && item.source !== "advice" && item.source !== "auth" && item.source !== "sweep" && (
               <button type="button" className="mini" onClick={openSheet}>
-                open the {item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : item.source === "pr" ? "run" : "workflow"}
+                open the {item.source === "group" ? "group" : item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : item.source === "pr" ? "run" : "workflow"}
               </button>
             )}
             {held && (
@@ -592,6 +593,22 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   );
 }
 
+/** A quiet weekly line outside the inbox's ask count. */
+export function HarnessNoticeLine() {
+  const notice = useStore(harnessNoticeOf);
+  const sayHarness = useStore((s) => s.sayHarness);
+  if (!notice) return null;
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">harness</h3>
+      <p className="settings-hint">{notice.text}</p>
+      <button type="button" className="mini" onClick={() => sayHarness(notice.key)}>
+        noted
+      </button>
+    </section>
+  );
+}
+
 /**
  * What the inbox popover shows: its head and gear, every item with the form
  * that answers it, how the last asks ended, and the away switch. The
@@ -673,6 +690,7 @@ export function InboxPopBody({ onGit, popEntries = [] }: { onGit?: () => void; p
         )}
       </section>
       <LandingNotices />
+      <HarnessNoticeLine />
       {recent.length > 0 && (
         <section className="settings-row">
           <h3 className="panel-label">lately</h3>

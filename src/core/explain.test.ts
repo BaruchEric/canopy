@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { explainCommand, explainPrompt, splitShell, startsOutside } from "./explain";
+import { explainCommand, explainPrompt, splitShell, startsOutside, writtenPaths } from "./explain";
 
 const ROOT = "/home/me/dev/proj";
 
@@ -52,6 +52,64 @@ describe("splitShell", () => {
 
   test("an unclosed quote takes the rest of the line rather than failing", () => {
     expect(splitShell("echo 'oops").map((c) => c.words)).toEqual([["echo", "oops"]]);
+  });
+});
+
+describe("writtenPaths", () => {
+  const wp = (c: string, cwd = ROOT) => writtenPaths(c, ROOT, cwd);
+  const none = { dirs: [], unknown: false };
+  test("redirects, tee, touch, cp's last operand, sed -i", () => {
+    expect(wp("echo hi > notes.md")).toEqual({ paths: ["notes.md"], ...none });
+    expect(wp("echo hi > 'file=literal'")).toEqual({ paths: ["file=literal"], ...none });
+    expect(wp("touch 'file=literal'")).toEqual({ paths: ["file=literal"], ...none });
+    expect(wp("ls src 2>/dev/null >> build.log")).toEqual({ paths: ["build.log"], ...none });
+    expect(wp("ls src | tee -a out.txt")).toEqual({ paths: ["out.txt"], ...none });
+    expect(wp("touch src/new.ts docs/x.md")).toEqual({ paths: ["src/new.ts", "docs/x.md"], ...none });
+    expect(wp("cp a.ts b.ts src/c.ts")).toEqual({ paths: ["src/c.ts"], ...none });
+    expect(wp("sed -i '' 's/a/b/' src/a.ts src/b.ts")).toEqual({ paths: ["src/a.ts", "src/b.ts"], ...none });
+    expect(wp("sed -i -e s/a/b/ x.ts")).toEqual({ paths: ["x.ts"], ...none });
+  });
+  test("moves and removals, whole folders apart", () => {
+    expect(wp("mv src/a src/b")).toEqual({ paths: [], dirs: ["src/a", "src/b"], unknown: false });
+    expect(wp("rm src/a.ts")).toEqual({ paths: ["src/a.ts"], ...none });
+    expect(wp("rm -rf docs/old build")).toEqual({ paths: [], dirs: ["docs/old", "build"], unknown: false });
+    expect(wp("git mv src/a src/b && git rm -r docs/old && git rm x.ts")).toEqual({ paths: ["x.ts"], dirs: ["src/a", "src/b", "docs/old"], unknown: false });
+    expect(wp("git checkout -- src/a.ts && git restore --staged src/b.ts")).toEqual({ paths: ["src/a.ts", "src/b.ts"], ...none });
+  });
+  test("a heredoc into a file, the cwd, and a path outside the repo kept absolute", () => {
+    expect(wp("cat > notes.md <<'EOF'\nhi\nEOF")).toEqual({ paths: ["notes.md"], ...none });
+    expect(wp("touch x.ts", `${ROOT}/src`)).toEqual({ paths: ["src/x.ts"], ...none });
+    expect(wp("cp a.ts /tmp/a.ts")).toEqual({ paths: ["/tmp/a.ts"], ...none });
+  });
+  test("a known cd changes later redirects and operands; wrappers keep their writer", () => {
+    expect(wp("cd src && touch x.ts")).toEqual({ paths: ["src/x.ts"], ...none });
+    expect(wp("cd src && echo hi > out.txt")).toEqual({ paths: ["src/out.txt"], ...none });
+    expect(wp("cd /tmp && touch x.ts")).toEqual({ paths: ["/tmp/x.ts"], ...none });
+    expect(wp("cd ~ && touch x.ts")).toEqual({ paths: ["~/x.ts"], ...none });
+    expect(wp("cd ~alice && touch x.ts")).toEqual({ paths: ["~alice/x.ts"], ...none });
+    expect(wp("command touch x.ts && env touch y.ts && LANG=C touch z.ts")).toEqual({ paths: ["x.ts", "y.ts", "z.ts"], ...none });
+  });
+  test("a pipeline cd stays in its child and a subshell restores the parent cwd", () => {
+    expect(wp("cd src | cat; touch x.ts")).toEqual({ paths: ["x.ts"], ...none });
+    expect(wp("cd src | touch piped.ts; touch after.ts")).toEqual({ paths: ["piped.ts", "after.ts"], ...none });
+    expect(wp("(cd src; touch inside.ts); touch outside.ts")).toEqual({ paths: ["src/inside.ts", "outside.ts"], ...none });
+    expect(wp("echo hi | (cd src; touch x.ts)")).toEqual({ paths: ["src/x.ts"], ...none });
+  });
+  test.each([
+    ["(cd src | cat; touch x.ts); touch parent.ts", ["x.ts", "parent.ts"]],
+    ["echo hi | (cd src; touch x.ts); touch parent.ts", ["src/x.ts", "parent.ts"]],
+    ["(cd src; cd lib | touch piped.ts; touch local.ts); touch parent.ts", ["src/piped.ts", "src/local.ts", "parent.ts"]],
+    ["(cd src; (cd lib; touch nested.ts); touch local.ts); touch parent.ts", ["src/lib/nested.ts", "src/local.ts", "parent.ts"]],
+    ["echo hi | (cd src; cd lib | cat; touch local.ts); touch parent.ts", ["src/local.ts", "parent.ts"]],
+    ["(cd src; echo hi | (cd lib; touch nested.ts); touch local.ts); touch parent.ts", ["src/lib/nested.ts", "src/local.ts", "parent.ts"]],
+  ])("cwd follows process nesting in %s", (command, paths) => {
+    expect(wp(command)).toEqual({ paths, ...none });
+  });
+  test("reads add nothing; an opaque or vague line adds nothing and says so", () => {
+    expect(wp("cat a.ts && grep x src && git diff")).toEqual({ paths: [], ...none });
+    expect(wp("sh -c 'touch x'")).toEqual({ paths: [], dirs: [], unknown: true });
+    expect(wp("echo $(date) > out.txt")).toEqual({ paths: [], dirs: [], unknown: true });
+    expect(wp("frobnicate --out x.ts")).toEqual({ paths: [], dirs: [], unknown: true });
   });
 });
 

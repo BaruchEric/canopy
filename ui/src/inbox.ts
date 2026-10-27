@@ -30,16 +30,36 @@ import type {
   SweepInfo,
   SweepItem,
 } from "../../src/core/types";
+import { pct, shareTone, weekKey, type HarnessWeek } from "../../src/core/harnessshare";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 import { handOffText } from "../../src/core/sprout";
-import { sentBack } from "../../src/core/landing";
+import { SCORE_GATE, sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 import { askTitle } from "./sweep";
 import type { TriggerEvent } from "../../src/core/trigger";
 import { serviceOf } from "./triggers";
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "trigger";
+/** The browser's quiet harness line, kept to one notice per ISO week. */
+export const HARNESS_SAID_KEY = "canopy.harnessSaid";
+
+export interface HarnessNotice {
+  /** its ISO week, such as "2026-W43" */
+  key: string;
+  text: string;
+}
+
+/** The newest full week at or over the visible threshold, unless this
+ *  browser already noted that week. */
+export function harnessNotice(weeks: readonly HarnessWeek[], names: readonly string[], max: number, said: string | null): HarnessNotice | null {
+  const week = weeks.at(-2);
+  if (!week || week.share === null || shareTone(week.share, max) !== "rust") return null;
+  const key = weekKey(week.from);
+  if (said === key) return null;
+  return { key, text: `last week ${pct(week.share)} of Claude spend went into the harness (${names.join(", ")})` };
+}
+
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "group" | "trigger";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -48,7 +68,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "ci" | "gave-up" | "pair" | "sweep" | "trigger";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep" | "group" | "trigger";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -333,20 +353,20 @@ function adviceItem(advice: readonly AdviceOffer[]): InboxItem | null {
 /** A branch the landing queue sent back, while no fix is going: "fix it"
  *  continues the run with the reason, "drop" gives the branch up. */
 function landingItem(e: LandEntry, ctx: InboxContext): InboxItem | null {
-  if (!sentBack(e) || e.fixing !== undefined) return null;
+  if ((!sentBack(e) && e.state !== "judge") || e.fixing !== undefined) return null;
   const repo = ctx.repos.find((r) => r.id === e.repoId);
   const backend = ctx.backendOf?.(e.id) ?? "";
-  const why = e.state === "conflict" ? `conflicts with ${e.target}` : e.state === "red" ? `${e.gate ?? "a gate"} failed` : `${e.target} kept moving`;
+  const why = e.state === "conflict" ? `conflicts with ${e.target}` : e.state === "red" ? e.gate?.startsWith(SCORE_GATE) ? e.gate : `${e.gate ?? "a gate"} failed` : `${e.target} kept moving`;
   return {
     key: `landing:${e.id}`,
     source: "landing",
     id: e.id,
-    kind: "sent-back",
+    kind: e.state === "judge" ? "needs-judge" : "sent-back",
     repoId: repo ? repo.id : null,
     repo: repo?.name ?? e.repoPath.split("/").pop() ?? "",
     who: "landing",
     where: `landing queue${backend ? ` on ${backend}` : ""}`,
-    title: `sent ${e.branch} back: ${why}`,
+    title: e.state === "judge" ? `held ${e.branch}: needs a judge` : `sent ${e.branch} back: ${why}`,
     detail: e.reason ?? "",
     at: e.updatedAt,
     left: null,
@@ -483,7 +503,13 @@ export function mergeInbox(
   }
   const advice = adviceItem(ctx.advice ?? []);
   if (advice) items.push(advice);
+  for (const group of ctx.landing?.groups ?? []) if (group.state === "needs-you") {
+    const repo = ctx.repos.find(r => r.id === group.repoId);
+    const backend = ctx.backendOf?.(group.id) ?? "";
+    items.push({ key: `group:${group.id}`, source: "group", id: group.id, kind: "group", repoId: group.repoId, repo: repo?.name ?? group.repoPath.split("/").pop() ?? "", who: "comparison", where: backend, title: `best of ${group.expectedMembers} ready: pick`, detail: group.reason ?? group.note, at: group.endedAt ?? group.startedAt, left: null, until: null });
+  }
   for (const e of ctx.landing?.entries ?? []) {
+    if ((ctx.landing?.groups ?? []).some(g => g.state !== "dropped" && g.members.some(m => m.origin === e.id))) continue;
     const it = landingItem(e, ctx);
     if (it) items.push(it);
   }
@@ -527,7 +553,7 @@ export type InboxAnswer =
   /** an extend's push: yes or no, for the head the item shows */
   | { handOff: boolean }
   /** a sent-back branch: continue the run with the reason, or give it up */
-  | { landing: "fix" | "drop" }
+  | { landing: "fix" | "drop" | "land" }
   /** a PR with a red check: turn auto-fix on */
   | { pr: "auto-fix" }
   /** a pair request: let it in, or turn it away */

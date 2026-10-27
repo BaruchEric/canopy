@@ -1,4 +1,5 @@
-import { useStore } from "../store";
+import { groupWord } from "../groups";
+import { landingAll, useStore } from "../store";
 import { keepKeys } from "../surface";
 import { flowWord } from "../flows";
 import { AGENT_NAME, agentWord, harnessOf, progressWord } from "../runs";
@@ -8,6 +9,8 @@ import type { Flow, Run } from "../../../src/core/types";
  *  opens the console; the finished states stay until the run is dismissed. */
 export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
   const showRun = useStore((s) => s.showRun);
+  const group = useStore(s => landingAll(s).groups?.find(g => g.id === (run.group ?? run.branch?.group)));
+  const showGroup = useStore(s => s.showGroup);
   const verb = run.verb;
   const harness = harnessOf(run);
   // a propose run's "planning" turns to "building" once the plan is approved
@@ -37,6 +40,10 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
           ? long
             ? `${verb} done`
             : "done"
+          : run.status === "limited"
+            ? long
+              ? `${verb} waits for capacity`
+              : "limited"
           : run.status === "failed"
             ? long
               ? `${verb} failed`
@@ -47,17 +54,18 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
   return (
     <button
       type="button"
-      className={`run-chip st-${run.status}${noChange ? " no-change" : ""}`}
-      title={`Show the run (${AGENT_NAME[harness]})`}
+      className={`run-chip st-${group ? group.state === "needs-you" || group.state === "picked" ? "waiting" : ["working", "scoring", "reviewing"].includes(group.state) ? "working" : "done" : run.status}${noChange ? " no-change" : ""}`}
+      title={group ? "Show the branch group" : `Show the run (${AGENT_NAME[harness]})`}
       onClick={(e) => {
         e.stopPropagation();
-        showRun(run.id);
+        if (group) showGroup(group.id);
+        else showRun(run.id);
       }}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={keepKeys}
     >
       <span className="dot" />
-      {text}
+      {group ? `best of ${group.expectedMembers}: ${groupWord(group)}` : text}
     </button>
   );
 }

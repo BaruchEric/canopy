@@ -4574,6 +4574,9 @@ button.dl-gut.has {
 .st-waiting {
   --tone: var(--lichen);
 }
+.st-judge {
+  --tone: var(--lichen);
+}
 .st-done {
   --tone: var(--moss);
 }
@@ -4582,6 +4585,9 @@ button.dl-gut.has {
 }
 .st-stopped {
   --tone: var(--ink-faint);
+}
+.st-limited {
+  --tone: var(--lichen);
 }
 /* a chat between turns: Claude has answered and the next word is yours */
 .st-idle {
@@ -5167,6 +5173,22 @@ a.landing-state {
   color: var(--ink-dim);
   overflow-wrap: anywhere;
 }
+.landing-overlap {
+  flex-basis: 100%;
+  font-size: 11px;
+}
+.landing-overlap summary {
+  cursor: pointer;
+  list-style: none;
+}
+.landing-overlap summary::-webkit-details-marker {
+  display: none;
+}
+.landing-overlap ul {
+  list-style: none;
+  margin: 0 0 0 12px;
+  padding: 0;
+}
 .landing-out {
   flex-basis: 100%;
   font-size: 11px;
@@ -5187,7 +5209,8 @@ a.landing-state {
 .landing-section .moss {
   color: var(--moss);
 }
-.landing-section .lichen {
+.landing-section .lichen,
+.landing-state.lichen {
   color: var(--lichen);
 }
 .landing-section .rust {
@@ -8095,6 +8118,7 @@ body:has(.focus-grip.se.dragging) {
 .step-seg .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hair); flex: none; }
 .step-seg.st-running .dot, .step-seg.st-checking .dot { background: var(--sky); }
 .step-seg.st-gated .dot { background: var(--lichen); }
+.step-seg.st-held .dot { background: var(--lichen); }
 .step-seg.st-passed .dot { background: var(--moss); }
 .step-seg.st-failed .dot { background: var(--rust); }
 /* the agent profile a step names, after its name */
@@ -12079,6 +12103,92 @@ span.effective-flag:not(:first-child) {
 .health-count {
   font-variant-numeric: tabular-nums;
 }
+.capacity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.capacity-chip.lichen {
+  color: var(--lichen);
+}
+.capacity-chip.rust {
+  color: var(--rust);
+}
+.capacity-pop {
+  width: 360px;
+  max-height: min(70vh, 640px);
+  overflow: auto;
+  padding: 8px 14px 10px;
+}
+@media (max-width: 760px) {
+  .capacity-pop {
+    width: auto;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
+}
+.capacity-rows {
+  display: grid;
+  gap: 12px;
+  align-self: stretch;
+}
+.capacity-row {
+  display: grid;
+  gap: 4px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.capacity-row + .capacity-row {
+  border-top: 1px solid var(--hair);
+}
+.capacity-row h4 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.capacity-row .moss {
+  color: var(--moss);
+}
+.capacity-row .lichen {
+  color: var(--lichen);
+}
+.capacity-row .rust {
+  color: var(--rust);
+}
+.capacity-source,
+.capacity-hint,
+.capacity-limited-error {
+  color: var(--ink-faint);
+}
+.capacity-hit,
+.capacity-limited-error {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.capacity-limited {
+  margin-top: 8px;
+}
+.capacity-limited .panel-label {
+  margin-bottom: 4px;
+}
+.capacity-limited ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.capacity-limited li {
+  display: grid;
+  gap: 2px;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.capacity-limited li + li {
+  border-top: 1px solid var(--hair);
+}
+.capacity-limited-name {
+  font-weight: 600;
+}
 .health-pop {
   width: 420px;
   max-height: min(70vh, 640px);
@@ -12329,6 +12439,12 @@ button.trigger-title:hover {
   color: var(--ink-faint);
   font-size: 12px;
   margin: 0;
+}
+
+.trigger-skips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 .trigger-hook {
   display: flex;
@@ -13133,6 +13249,68 @@ button.trigger-title:hover {
   font-size: 20px;
   color: var(--ink);
 }
+.cost-share {
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+.cost-share summary {
+  cursor: pointer;
+  color: var(--ink-dim);
+}
+.cost-share summary b {
+  color: var(--ink);
+}
+.cost-share .rust {
+  color: var(--rust);
+}
+.cost-share .moss {
+  color: var(--moss);
+}
+.cost-share table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.cost-share th,
+.cost-share td {
+  padding: 4px 8px;
+  text-align: right;
+  white-space: nowrap;
+}
+.cost-share th {
+  color: var(--ink-dim);
+  font-weight: 400;
+}
+.cost-share th:first-child,
+.cost-share td:first-child {
+  padding-left: 0;
+  text-align: left;
+}
+.cost-share td small {
+  color: var(--ink-faint);
+}
+.cost-bar {
+  display: inline-flex;
+  width: 140px;
+  height: 8px;
+  overflow: hidden;
+  vertical-align: middle;
+  border-radius: 4px;
+  background: var(--bark3);
+}
+.cost-bar > span {
+  display: block;
+  height: 100%;
+}
+.cost-bar-harness {
+  background: var(--lichen);
+}
+.cost-bar-harness.rust {
+  background: var(--rust);
+}
+.cost-bar-rest {
+  background: var(--moss);
+}
 .cost-group ul {
   list-style: none;
   margin: 0;
@@ -13207,6 +13385,13 @@ button.trigger-title:hover {
   margin-top: 4px;
 }
 @media (max-width: 560px) {
+  .cost-share th,
+  .cost-share td {
+    padding-inline: 3px;
+  }
+  .cost-bar {
+    width: 80px;
+  }
   .cost-row {
     grid-template-columns: minmax(0, 1fr) auto;
   }
@@ -13610,3 +13795,18 @@ body.resizing-nesw {
 .run-solo-main > .empty {
   padding: 24px;
 }
+
+/* Best-of-N comparison: columns share one sheet, stack on narrow screens. */
+.group-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px;
+}
+.group-column {
+  min-width: 0;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--hair);
+  overflow-wrap: anywhere;
+}
+.group-column p { margin: 8px 0; }
+.group-column .landing-tools { flex-wrap: wrap; }

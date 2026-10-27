@@ -10,6 +10,7 @@ export interface Note {
   body: string;
   /** the repo whose panel a click opens, when there is one */
   repoId: string | null;
+  groupId?: string;
 }
 
 /** What the page last saw: everything waiting on the human by key, and
@@ -41,12 +42,12 @@ export function snapshot(input: SnapshotInput, nameOf: (repoId: string) => strin
   const named = (id: string | null, fallback: string) => (id ? nameOf(id) || fallback : fallback);
   for (const i of input.inbox) {
     const key = `inbox:${i.key}`;
-    waiting[key] = { key, title: `Waiting on you · ${i.repo || i.who || "canopy"}`, body: line(i.title), repoId: i.repoId };
+    waiting[key] = { key, title: `Waiting on you · ${i.repo || i.who || "canopy"}`, body: line(i.title), repoId: i.repoId, ...(i.source === "group" ? { groupId: i.id } : {}) };
   }
   for (const t of input.turns) {
     const key = `turn:${t.kind}:${t.id}`;
-    const who = t.kind === "chat" ? named(t.repoId, "a chat") : t.name || named(t.repoId, "an agent");
-    waiting[key] = { key, title: `Your turn · ${who}`, body: line(t.what) || "waiting for you", repoId: t.repoId || null };
+    const who = t.kind !== "agent" ? named(t.repoId, "a chat") : t.name || named(t.repoId, "an agent");
+    waiting[key] = { key, title: `Your turn · ${who}`, body: line(t.what) || "waiting for you", repoId: t.repoId || null, ...(t.kind === "group" ? { groupId: t.id } : {}) };
   }
   for (const f of input.failed) {
     const key = `failed:${f.kind}:${f.id}`;

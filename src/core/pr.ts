@@ -5,6 +5,7 @@
  *  through here. */
 
 import type { PrCheck, PrCheckState, PrComment, PrState, PrWatch } from "./types";
+import { trailerLine } from "./work";
 
 /** fix attempts per check or comment before auto-fix stops for the PR */
 export const MAX_ATTEMPTS = 3;
@@ -233,7 +234,8 @@ export function parseRepoDefault(text: string | null): { autoMerge: boolean } {
 }
 
 /** The PR's body: the run's note and the commits it holds. */
-export function prBody(note: string, commits: readonly string[]): string {
+export function prBody(note: string, commits: readonly string[], work?: string): string {
   const list = commits.map((c) => `- ${c}`).join("\n");
-  return `${note.trim() || "A canopy branch run."}\n\n${list ? `Commits:\n${list}\n\n` : ""}Opened by canopy from a branch run.`;
+  const body = `${note.trim() || "A canopy branch run."}\n\n${list ? `Commits:\n${list}\n\n` : ""}Opened by canopy from a branch run.`;
+  return work ? `${body}\n\n${trailerLine(work)}` : body;
 }

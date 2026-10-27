@@ -94,7 +94,7 @@ export interface ChildLanding {
 }
 
 /** How a child settled, in the words a card and its note use. */
-export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change";
+export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change" | "waiting for capacity";
 
 /** A settled child as its card's state and outcome word. Null while the
  *  child is going, or ended with its branch still being read (its first
@@ -102,11 +102,13 @@ export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | 
  *  The queue's word beats the branch's once the branch has an entry: landed
  *  is done, sent back failed, and a ready branch with a PR open is done. A
  *  branch with nothing on it is done, since an ask may only answer, unless
- *  Eric turned its plan down; one left uncommitted failed. */
+ *  Eric turned its plan down; one left uncommitted failed. A limited run
+ *  settles as waiting for capacity before its branch can read as success. */
 export function childOutcome(run: Run, landing: ChildLanding = {}): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
   if (isRunActive(run)) return null;
   if (run.status === "failed") return { state: "failed", outcome: "failed" };
   if (run.status === "stopped") return { state: "failed", outcome: "stopped" };
+  if (run.status === "limited") return { state: "failed", outcome: "waiting for capacity" };
   const b = run.branch?.state ?? "nothing";
   if (b === "working") return null;
   const e = landing.entry;
@@ -179,7 +181,9 @@ function oneLine(s: string): string {
  *  state. */
 export function settleNote(task: CoordTask, run: Run, landing: ChildLanding = {}): string {
   const how = childOutcome(run, landing);
-  const result = run.result?.text?.trim() || run.error?.trim() || "";
+  const result = run.status === "limited"
+    ? run.limited?.text?.trim() || run.error?.trim() || run.result?.text?.trim() || ""
+    : run.result?.text?.trim() || run.error?.trim() || "";
   const lines = [
     "canopy: a task you started has settled",
     `task ${task.id}: ${task.title} (repo ${task.repo})`,

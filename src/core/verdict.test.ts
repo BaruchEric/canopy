@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { EVIDENCE_EACH, EVIDENCE_TOTAL, JUDGE_THRESHOLDS, THRESHOLDS, decide, decideJudge, judgeState, verdictState } from "./verdict";
-import type { JudgeAnswers, VerdictAnswers } from "./types";
+import { EVIDENCE_EACH, EVIDENCE_TOTAL, JUDGE_THRESHOLDS, THRESHOLDS, decide, decideJudge, decideScenario, judgeState, scenarioState, verdictState } from "./verdict";
+import type { JudgeAnswers, ScenarioAnswers, VerdictAnswers } from "./types";
 
 const answers = (o: Partial<VerdictAnswers> = {}): VerdictAnswers => ({
   outcome: { choice: "done", probabilities: { done: 0.9, partial: 0.05, blocked: 0.05 } },
@@ -166,5 +166,36 @@ describe("judgeState", () => {
     // only research is over its share; the eval is read whole
     expect(s.match(/\[clipped: \d+ characters\]/g)?.length).toBe(1);
     expect(s).toContain(`File .canopy/eval.md:\n${"r".repeat(9831 - "## Verdict\nGo ahead.".length)}`);
+  });
+});
+
+const scenarioAnswers = (changes: Partial<ScenarioAnswers> = {}): ScenarioAnswers => ({
+  satisfied: { choice: "yes", probabilities: { yes: 0.9, partly: 0.07, no: 0.03 } },
+  evidence: { probability: 0.8 },
+  ...changes,
+});
+
+describe("scenario judgment", () => {
+  test("confidence and evidence must both reach their thresholds", () => {
+    expect(decideScenario(scenarioAnswers())).toMatchObject({ ok: true, p: 0.9, reason: null });
+    expect(decideScenario(scenarioAnswers({ satisfied: { choice: "yes", probabilities: { yes: 0.7 } }, evidence: { probability: 0.35 } }))).toMatchObject({ ok: true, p: 0.7 });
+    expect(decideScenario(scenarioAnswers({ satisfied: { choice: "yes", probabilities: { yes: 0.69 } } }))).toMatchObject({ ok: false, p: 0.69 });
+    expect(decideScenario(scenarioAnswers({ evidence: { probability: 0.34 } }))).toMatchObject({ ok: false, p: 0.9, reason: "the judge says there is not enough to go on" });
+  });
+  test("the score is P(yes), including partly/no and missing probabilities", () => {
+    for (const choice of ["partly", "no"] as const) {
+      expect(decideScenario(scenarioAnswers({ satisfied: { choice, probabilities: { yes: 0.3 } } }))).toMatchObject({ ok: false, p: 0.3 });
+      expect(decideScenario(scenarioAnswers({ satisfied: { choice } })).p).toBe(0);
+    }
+    expect(decideScenario(scenarioAnswers({ satisfied: { choice: "yes" } }))).toMatchObject({ ok: true, p: 1 });
+  });
+  test("the judge sees story, fenced observations and clipped evidence separately", () => {
+    const state = scenarioState({ story: " refund story\n", output: "refund 42 granted\n", files: [{ path: "a.ts", text: "x".repeat(EVIDENCE_EACH + 100) }, { path: "gone.ts", text: null }] });
+    expect(state.startsWith("Story, as a user would read it:\nrefund story\n\nObserved output:\n<<<\nrefund 42 granted\n>>>\n\nFile a.ts:")).toBe(true);
+    expect(state).toContain("[clipped: 100 characters]");
+    expect(state).toContain("File gone.ts: (missing)");
+    expect(scenarioState({ story: "s", output: null, files: [] })).toContain("Observed output: (no command ran)");
+    expect(scenarioState({ story: "s", output: " ", files: [] })).toContain("<<<\n(empty)\n>>>");
+    expect(scenarioState({ story: "s", output: null, files: Array.from({ length: 5 }, (_, i) => ({ path: `${i}.ts`, text: "x".repeat(EVIDENCE_EACH) })) })).toContain("(1 more file left out for room)");
   });
 });

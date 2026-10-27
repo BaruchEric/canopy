@@ -400,6 +400,17 @@ export const mcpTargets = (kit: KitManifest, machine: string): (KitTarget & { mc
 export const mcpWanted = (s: KitMcpServer, agent: string, machine: string): boolean =>
   (s.agents === null || s.agents.includes(agent)) && (s.machines === null || s.machines.includes(machine));
 
+/** Canopy's tools inherit each session's token on every backend machine. */
+export const canopyServer = (machines: readonly KitMachine[]): KitMcpServer => ({
+  name: "canopy", command: "canopy", args: ["mcp"], url: null, env: {}, headers: {}, agents: null,
+  machines: machines.filter((machine) => machine.backend !== null).map((machine) => machine.name), options: {},
+});
+
+/** A manifest's explicit canopy definition takes precedence. */
+export function withCanopyServer(kit: KitManifest): KitManifest {
+  return kit.mcp.some((server) => server.name === "canopy") ? kit : { ...kit, mcp: [...kit.mcp, canopyServer(kit.machines)] };
+}
+
 /** literal and ${env:} values resolved; secrets left to the wrapper. The
  *  values sit under `vals` so a key named `unset` cannot pass for the signal
  *  and carry its value into a why. */

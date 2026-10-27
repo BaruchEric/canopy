@@ -6,10 +6,10 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DriveCtx, RunDriver } from "../core/driver";
+import type { DriveCtx, DriveExit, RunDriver } from "../core/driver";
 import { exec } from "../core/exec";
 import type { Harness, LandingInfo, Run } from "../core/types";
 import { startServer } from "./index";
@@ -17,31 +17,53 @@ import { startServer } from "./index";
 /** A driver that does the work itself: one commit in its cwd, then done. */
 class CommitDriver implements RunDriver {
   readonly label = "Claude Code";
+  private ctx: DriveCtx | null = null;
+  private stopping = false;
   constructor(readonly harness: Harness) {}
   check(): string | null {
     return null;
   }
   start(ctx: DriveCtx, message: string): void {
+    this.ctx = ctx;
+    this.stopping = false;
     void (async () => {
       prompts.push({ cwd: ctx.cwd, message, resume: ctx.spec.resume });
       if (!message.includes("leave it")) {
         await writeFile(join(ctx.cwd, `work-${prompts.length}.txt`), "work\n");
+        if (this.finishIfStopped()) return;
         await exec(["git", "-C", ctx.cwd, "add", "-A"]);
+        if (this.finishIfStopped()) return;
         await exec(["git", "-C", ctx.cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "the work"]);
+        if (this.finishIfStopped()) return;
       }
+      if (this.finishIfStopped()) return;
       ctx.session("sess-1");
       ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+      this.finish({ code: 0, stderr: "" });
     })();
   }
   say(): void {}
-  stop(): void {}
+  stop(): void {
+    this.stopping = true;
+  }
+  private finishIfStopped(): boolean {
+    if (!this.stopping) return false;
+    this.finish({ code: null, stderr: "stopped" });
+    return true;
+  }
+  private finish(exit: DriveExit): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    this.ctx = null;
+    ctx.exited(exit);
+  }
 }
 
 const prompts: { cwd: string; message: string; resume: string | undefined }[] = [];
 let scratch: string;
 let root: string;
 let previousConfig: string | undefined;
-let server: { port: number; stop: () => void };
+let server: Awaited<ReturnType<typeof startServer>>;
 
 const url = (p: string) => `http://127.0.0.1:${server.port}${p}`;
 const call = (p: string, body: unknown) => fetch(url(p), { method: "POST", body: JSON.stringify(body) });
@@ -82,7 +104,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  server.stop();
+  await server.stop();
   if (previousConfig === undefined) delete process.env["CANOPY_CONFIG_DIR"];
   else process.env["CANOPY_CONFIG_DIR"] = previousConfig;
   await rm(scratch, { recursive: true, force: true });
@@ -93,7 +115,7 @@ describe("branch runs over the API", () => {
     const start = await call("/api/repos/run?id=proj", { action: "ask", note: "add a file", branch: true });
     expect(start.status).toBe(201);
     const run = (await start.json()) as Run;
-    expect(run.branch?.name).toBe(`run/add-a-file-${run.branch?.origin}`);
+    expect(run.branch?.name).toBe(`run/${run.branch?.work}-add-a-file`);
     expect(run.branch?.dir.startsWith(join(scratch, "config", "worktrees"))).toBe(true);
     const done = await until(async () => {
       const r = await runOf(run.id);
@@ -117,9 +139,33 @@ describe("branch runs over the API", () => {
     await until(async () => !existsSync(run.branch!.dir), "the worktree to go");
   });
 
+  test("a branch run is named after its work item, which is written at start and asked for as a trailer", async () => {
+    const start = await call("/api/repos/run?id=proj", { action: "ask", note: "add a file", branch: true });
+    const run = (await start.json()) as Run;
+    expect(run.branch?.work).toMatch(/^w-[a-z2-7]{8}$/);
+    expect(run.branch?.name).toBe(`run/${run.branch?.work}-add-a-file`);
+    const file = join(scratch, "config", "work", `${run.branch!.work}.json`);
+    const item = await until(async () => {
+      if (!existsSync(file)) return null;
+      const saved = JSON.parse(await readFile(file, "utf8")) as { title: string; state: string; from: unknown; repos: string[]; runs: string[]; branches: string[]; notes: { by: string; text: string }[] };
+      return saved.runs.includes(run.id) && saved.branches.includes(run.branch!.origin) ? saved : null;
+    }, "the item to record its run and branch");
+    expect(item).toMatchObject({ title: "add a file", from: { kind: "note" }, repos: ["proj"], runs: [run.id], branches: [run.branch!.origin] });
+    await until(async () => ((await runOf(run.id))?.branch?.state === "ready" ? true : null), "the run to settle ready");
+    expect(prompts.at(-1)?.message).toContain(`"Canopy-Work: ${run.branch!.work}"`);
+    await until(async () => {
+      const saved = JSON.parse(await readFile(file, "utf8")) as { state: string; notes: { by: string; text: string }[] };
+      return saved.state === "review" && saved.notes[0]?.text.startsWith("branch ready, ") ? saved : null;
+    }, "the item to record the ready branch");
+    const got = (await (await fetch(url(`/api/work/one?id=${run.branch!.work}`))).json()) as { state: string; notes: { by: string; text: string }[] };
+    expect(got.state).toBe("review");
+    expect(got.notes[0]).toMatchObject({ by: "canopy" });
+    expect(got.notes[0]?.text.startsWith("branch ready, ")).toBe(true);
+  });
+
   test("propose goes on a branch by default, and branch: false keeps it in the checkout", async () => {
     const r1 = (await (await call("/api/repos/run?id=proj", { action: "propose", note: "plan a thing" })).json()) as Run;
-    expect(r1.branch?.name.startsWith("run/plan-a-thing-")).toBe(true);
+    expect(r1.branch?.name).toBe(`run/${r1.branch?.work}-plan-a-thing`);
     await until(async () => (await runOf(r1.id))?.status === "done", "the propose run");
     const r2 = (await (await call("/api/repos/run?id=proj", { action: "propose", note: "leave it", branch: false })).json()) as Run;
     expect(r2.branch).toBeUndefined();
@@ -143,9 +189,15 @@ describe("branch runs over the API", () => {
     const r = await call("/api/repos/run?id=bare", { action: "ask", note: "x", branch: true });
     expect(r.status).toBe(400);
     expect(((await r.json()) as { error: string }).error).toContain("no main or master");
+    const failed = (await (await fetch(url("/api/work?repo=bare"))).json()) as { items: { title: string; state: string; reason?: string }[] };
+    expect(failed.items).toHaveLength(1);
+    expect(failed.items[0]).toMatchObject({ title: "x", state: "dropped" });
+    expect(failed.items[0]?.reason).toContain("the run did not start");
     const p = (await (await call("/api/repos/run?id=bare", { action: "propose", note: "leave it" })).json()) as Run;
     expect(p.branch).toBeUndefined();
     await until(async () => (await runOf(p.id))?.status === "done", "the bare repo's run");
+    const afterCheckout = (await (await fetch(url("/api/work?repo=bare"))).json()) as { items: { title: string }[] };
+    expect(afterCheckout.items).toHaveLength(1);
   });
 
   test("a bad branch flag is a 400", async () => {

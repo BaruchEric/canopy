@@ -322,6 +322,8 @@ describe("items as steps", () => {
 
   test("a command is Bash, titled by its script, its exit judging it", () => {
     expect(itemTool(command({}), "started", "/r")).toEqual({ name: "Bash", title: "git status --short", status: "running" });
+    expect(itemTool(command({ command: "/bin/sh -lc 'touch x.ts'" }), "started", "/r")?.paths).toEqual(["x.ts"]);
+    expect(itemTool(command({ command: "/bin/sh -lc 'bash -c ls'" }), "started", "/r")?.touchesUnknown).toBe(true);
     expect(itemTool(command({ status: "completed", exitCode: 0, aggregatedOutput: " M a\n" }), "completed", "/r")).toEqual(
       { name: "Bash", title: "git status --short", status: "ok", output: "M a" },
     );
@@ -331,6 +333,13 @@ describe("items as steps", () => {
     expect(long?.output?.startsWith("x".repeat(2000) + "\n… (500 more characters)")).toBe(true);
   });
 
+  test("a command item uses its validated absolute cwd when collecting touched paths", () => {
+    const script = "/bin/sh -lc 'touch x.ts'";
+    expect(itemTool(command({ command: script, cwd: "/r/src" }), "started", "/r")?.paths).toEqual(["src/x.ts"]);
+    expect(itemTool(command({ command: script, cwd: "/tmp" }), "started", "/r")?.paths).toEqual(["/tmp/x.ts"]);
+    expect(itemTool(command({ command: script, cwd: "relative" }), "started", "/r")?.paths).toEqual(["x.ts"]);
+  });
+
   test("a file change is Edit, named by its paths, its diff as the output", () => {
     const fc = (changes: unknown[], status = "completed") => ({ type: "fileChange", id: "f", changes, status });
     const upd = (path: string, move: string | null = null) => ({ path, kind: { type: "update", move_path: move }, diff: "-a\n+b" });
@@ -338,6 +347,7 @@ describe("items as steps", () => {
       name: "Edit",
       title: "edit src/a.ts",
       status: "ok",
+      paths: ["src/a.ts"],
       output: "src/a.ts\n-a\n+b",
     });
     expect(itemTool(fc([{ path: "/r/n.ts", kind: { type: "add" }, diff: "+x" }]), "completed", "/r")?.title).toBe("write n.ts");
@@ -346,7 +356,8 @@ describe("items as steps", () => {
     expect(itemTool(fc([upd("/r/a"), upd("/r/b"), upd("/r/c"), upd("/r/d")]), "completed", "/r")?.title).toBe(
       "edit a, b and 2 more",
     );
-    expect(itemTool(fc([upd("/r/a")], "inProgress"), "started", "/r")).toEqual({ name: "Edit", title: "edit a", status: "running" });
+    expect(itemTool(fc([upd("/r/a", "/r/b")]), "completed", "/r")?.paths).toEqual(["a", "b"]);
+    expect(itemTool(fc([upd("/r/a")], "inProgress"), "started", "/r")).toEqual({ name: "Edit", title: "edit a", status: "running", paths: ["a"] });
   });
 
   test("MCP calls, searches and the rest", () => {
@@ -602,6 +613,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     prompt: null,
     harness: "codex",
   };
+  const wire: [string, string][] = [];
   const ctx = new RunCtx(
     run,
     {
@@ -610,6 +622,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
       spec: { allowedTools: opts.allowedTools ?? [], maxTurns: opts.maxTurns ?? 10 },
       env: { FAKE_CODEX_SCENARIO: scenarioPath, FAKE_CODEX_LOG: logPath },
       label: "Codex",
+      wire: (d, l) => { wire.push([d, l]); },
     },
     { emit: () => {} },
   );
@@ -639,8 +652,8 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     }
     driver.stop();
   };
-  const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "stopped";
-  return { run, ctx, driver, repo, until, sent, stop, ended };
+  const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
+  return { run, ctx, driver, repo, until, sent, stop, ended, wire };
 }
 
 const replyTo = (log: Record<string, unknown>[], id: number) =>
@@ -1154,11 +1167,20 @@ describe("a Codex run", () => {
 
   test("a failed turn fails a job with codex's error", async () => {
     const d = await drive(() => ({
-      turns: [[{ complete: "failed", error: { message: "usage limit reached", codexErrorInfo: null, additionalDetails: null } }]],
+      turns: [[{ complete: "failed", error: { message: "turn failed", codexErrorInfo: null, additionalDetails: null } }]],
     }));
     const run = await d.until(d.ended, "the failure");
     expect(run.status).toBe("failed");
-    expect(run.error).toBe("usage limit reached");
+    expect(run.error).toBe("turn failed");
+  });
+
+  // Synthetic P4-shaped text from the plan; no live Codex output was probed.
+  test("a failed turn whose error is the plan's usage limit ends the job limited, not failed (FR-036)", async () => {
+    const d = await drive(() => ({
+      turns: [[{ complete: "failed", error: { message: "usage limit reached", codexErrorInfo: null, additionalDetails: "try later" } }]],
+    }));
+    const run = await d.until(d.ended, "the limit");
+    expect([run.status, run.error, run.limited?.text]).toEqual(["limited", "usage limit reached\ntry later", "usage limit reached\ntry later"]);
   });
 
   test("a codex outside the tested range says so in the run's first note", async () => {
@@ -1287,4 +1309,14 @@ describe.skipIf(!process.env["CANOPY_CODEX_IT"])("a real codex", () => {
     expect(run.session).toBeTruthy();
     expect(run.result?.tokens?.total ?? 0).toBeGreaterThan(0);
   }, 180_000);
+});
+
+test("wire hands the Codex protocol both ways to the ctx", async () => {
+  const h = await drive(() => ({ turns: [[agentMessage("answer", "done"), { complete: "completed" }]] }));
+  await h.until(h.ended, "end");
+  const ins = h.wire.filter(([d]) => d === "in").map(([, l]): unknown => JSON.parse(l));
+  expect(ins.slice(0, 3)).toMatchObject([{ method: "initialize" }, { method: "initialized" }, { method: "thread/start" }]);
+  expect(ins).toEqual((await h.sent()).filter((m) => !("argv" in m) && !("eof" in m)));
+  expect(h.wire.filter(([d]) => d === "out").length).toBeGreaterThan(0);
+  expect(h.run.result?.text).toBe("done");
 });

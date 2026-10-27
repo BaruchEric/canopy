@@ -1,15 +1,40 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { builtinCheck } from "./builtincheck";
-import { findWorkflow, loadWorkflows } from "./workflows";
+import { exec } from "./exec";
+import { findWorkflow, loadWorkflows, readFlowModes } from "./workflows";
 import { parseWorkflow } from "./workflow";
-import { readFile } from "node:fs/promises";
 
 let cfg = "";
 let repo = "";
 const savedCfg = process.env["CANOPY_CONFIG_DIR"];
+
+const git = async (cwd: string, ...args: string[]): Promise<string> => {
+  const result = await exec(["git", ...args], { cwd });
+  if (result.code !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+  return result.stdout.trim();
+};
+
+const gitRepo = async (): Promise<string> => {
+  const dir = join(repo, "modes-repo");
+  await mkdir(dir, { recursive: true });
+  const init = await exec(["git", "init", "-q", "-b", "main", dir]);
+  if (init.code !== 0) throw new Error(`git init: ${init.stderr}`);
+  await git(dir, "config", "user.email", "t@t");
+  await git(dir, "config", "user.name", "t");
+  await git(dir, "commit", "--allow-empty", "-q", "-m", "init");
+  return dir;
+};
+
+const commitModesFile = async (dir: string, file: string, text: string): Promise<void> => {
+  const path = join(dir, file);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, text);
+  await git(dir, "add", file);
+  await git(dir, "commit", "-q", "-m", `update ${file}`);
+};
 
 beforeAll(async () => {
   cfg = await mkdtemp(join(tmpdir(), "canopy-wf-cfg-"));
@@ -141,6 +166,18 @@ describe("the bundled scout", () => {
     expect(tools.some((t) => t.startsWith("Bash("))).toBe(false);
     for (const banned of ["Read", "Glob", "Grep", "Bash(gh api:*)", "Bash(git clone:*)", "Bash(git push:*)"]) expect(tools).not.toContain(banned);
     expect(tools.some((t) => /vercel|gh repo create|gh repo fork/.test(t))).toBe(false);
+  });
+});
+
+describe("readFlowModes", () => {
+  test("reads the file at HEAD, not the folder; none is empty; a wrong one throws", async () => {
+    const dir = await gitRepo();
+    expect(await readFlowModes(dir)).toEqual({});
+    await commitModesFile(dir, ".canopy/workflows.json", '{"modes":{"ship":{"Push":"manual"}}}');
+    await writeFile(join(dir, ".canopy", "workflows.json"), '{"modes":{"ship":{"Push":"auto"}}}');
+    expect(await readFlowModes(dir)).toEqual({ ship: { Push: "manual" } });
+    await commitModesFile(dir, ".canopy/workflows.json", "[]");
+    await expect(readFlowModes(dir)).rejects.toThrow(".canopy/workflows.json must be an object");
   });
 });
 

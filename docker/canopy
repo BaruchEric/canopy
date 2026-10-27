@@ -1,0 +1,6 @@
+#!/bin/sh
+# The MCP bundle is refreshed by the canopy service on its config volume.
+# Only canopy mcp runs here; the shells container has no full canopy CLI.
+f=/config/bin/canopy-mcp.js
+[ -r "$f" ] || { echo "canopy: $f is not there yet; the canopy service writes it when it starts" >&2; exit 127; }
+exec bun "$f" "$@"

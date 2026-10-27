@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import type {
   Device,
   Fleet,
@@ -10,7 +11,6 @@ import type {
   LandingInfo,
   PrWatch,
   Repo,
-  RepoHistory,
   Run,
   ScanResult,
   TaskInfo,
@@ -19,8 +19,11 @@ import type {
   Sprout,
   SproutDetail,
   TermInfo,
+  WorktreesInfo,
 } from "../../src/core/types";
 import type { TriggerEvent } from "../../src/core/trigger";
+import type { Collision } from "../../src/core/touch";
+export { mergeHistory } from "../../src/core/historymerge";
 
 /* What one backend sends, with every id it minted given the backend's name
    (through `q`), so two backends' ids never meet. Pure; the api layer is
@@ -46,11 +49,21 @@ export const qScan = (q: Q, t: ScanResult): ScanResult => ({
   sources: t.sources.map((s) => qSource(q, s)),
 });
 
+export const qGroup = (q: Q, g: RunGroup): RunGroup => ({
+  ...g, id: q(g.id), repoId: q(g.repoId),
+  members: g.members.map(m => ({ ...m, run: q(m.run), origin: q(m.origin) })),
+  ...(g.winner ? { winner: q(g.winner) } : {}),
+  ...(g.scores ? { scores: Object.fromEntries(Object.entries(g.scores).map(([id, score]) => [q(id), score])) } : {}),
+  ...(g.review ? { review: { ...g.review, run: q(g.review.run) } } : {}),
+  ...(g.keptUntil ? { keptUntil: Object.fromEntries(Object.entries(g.keptUntil).map(([id, at]) => [q(id), at])) } : {}),
+});
+
 export const qRun = (q: Q, r: Run): Run => ({
   ...r,
   id: q(r.id),
   repoId: q(r.repoId),
-  ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin) } } : {}),
+  ...(r.group ? { group: q(r.group) } : {}),
+  ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin), ...(r.branch.group ? { group: q(r.branch.group) } : {}) } } : {}),
   // a coordinator's child names it, and its cards name their repos and runs
   ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
   ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}) })) } : {}),
@@ -59,10 +72,34 @@ export const qRun = (q: Q, r: Run): Run => ({
 /** The landing queue: a branch's id, its runs' and its repo's under the
  *  backend's name. Folders stay the backend's own. */
 export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
-  runs: l.runs.map((r) => ({ ...r, id: q(r.id), runId: q(r.runId), repoId: q(r.repoId) })),
+  runs: l.runs.map((r) => ({ ...r, id: q(r.id), runId: q(r.runId), repoId: q(r.repoId), ...(r.group ? { group: q(r.group) } : {}) })),
+  ...(l.groups ? { groups: l.groups.map(g => qGroup(q, g)) } : {}),
   entries: l.entries.map((e) => ({ ...e, id: q(e.id), repoId: q(e.repoId), ...(e.fixing !== undefined ? { fixing: q(e.fixing) } : {}) })),
   orphans: l.orphans,
   notices: (l.notices ?? []).map((n) => ({ ...n, id: q(n.id), entry: q(n.entry), repoId: q(n.repoId) })),
+  ...(l.collisions !== undefined ? {
+    collisions: l.collisions.map((collision): Collision => ({
+      ...collision,
+      id: q(collision.id),
+      repoId: q(collision.repoId),
+      run: q(collision.run),
+      with: collision.with.kind === "run"
+        ? { ...collision.with, run: q(collision.with.run) }
+        : collision.with.kind === "branch"
+          ? { ...collision.with, origin: q(collision.with.origin) }
+          : collision.with,
+    })),
+  } : {}),
+});
+
+/** Pool and run ids belong to the backend; paths and warm slots stay local. */
+export const qWorktrees = (q: Q, info: WorktreesInfo): WorktreesInfo => ({
+  ...info,
+  repos: info.repos.map(repo => ({
+    ...repo,
+    repoId: q(repo.repoId),
+    runs: repo.runs.map(run => ({ ...run, id: q(run.id), runId: q(run.runId) })),
+  })),
 });
 
 /** The PR watches: a branch's id, its run's and its repo's under the
@@ -85,6 +122,7 @@ export const qFlow = (q: Q, f: Flow): Flow => ({
   ...f,
   id: q(f.id),
   repoId: q(f.repoId),
+  ...(f.branch ? { branch: { ...f.branch, origin: q(f.branch.origin), ...(f.branch.group ? { group: q(f.branch.group) } : {}) } } : {}),
   ...(f.fleetId !== undefined ? { fleetId: q(f.fleetId) } : {}),
   steps: f.steps.map((st) => (st.runId !== undefined ? { ...st, runId: q(st.runId) } : st)),
 });
@@ -164,6 +202,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "workspaces":
     case "agents":
     case "launchers":
+    case "work":
     // a repo scope is an absolute path, a step's a workflow's name: no id to qualify
     case "remembered":
     case "helpers":
@@ -185,8 +224,18 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return ev;
     case "health":
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
+    case "capacity":
+      return {
+        ...ev,
+        capacity: {
+          ...ev.capacity,
+          held: ev.capacity.held.map((h) => ({ ...h, id: q(h.id), repoId: q(h.repoId) })),
+        },
+      };
     case "landing":
       return { ...ev, landing: qLanding(q, ev.landing) };
+    case "worktrees":
+      return { ...ev, worktrees: qWorktrees(q, ev.worktrees) };
     case "prs":
       return { ...ev, prs: qPrs(q, ev.prs) };
     case "triggers":
@@ -204,34 +253,3 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
 
 /** a repo's check names its repo as this page does */
 export const qCheck = (q: Q, c: HealthCheck): HealthCheck => (c.scope.kind === "repo" ? { ...c, scope: { kind: "repo", repoId: q(c.scope.repoId) } } : c);
-
-type Available = Extract<HistoryOverview, { available: true }>;
-
-/** Several backends' archive overviews as one, on the first available
- *  one's days: a day it does not cover drops out of the others' arrays and
- *  a day they lack is 0, so every ring on the board shares one strip. One
- *  overview is handed back as it is. */
-export function mergeHistory(parts: readonly HistoryOverview[]): HistoryOverview | null {
-  if (parts.length === 1) return parts[0] ?? null;
-  const ok = parts.filter((p): p is Available => p.available);
-  const base = ok[0];
-  if (!base) return parts[0] ?? null;
-  const at = new Map(base.days.map((d, i) => [d, i]));
-  const align = (days: string[], vals: number[]): number[] => {
-    const out = base.days.map(() => 0);
-    days.forEach((d, i) => {
-      const j = at.get(d);
-      if (j !== undefined) out[j] = vals[i] ?? 0;
-    });
-    return out;
-  };
-  const repos: Record<string, RepoHistory> = {};
-  let maxDay = 0;
-  for (const p of ok) {
-    maxDay = Math.max(maxDay, p.maxDay);
-    for (const [id, h] of Object.entries(p.repos)) {
-      repos[id] = p === base ? h : { ...h, days: align(p.days, h.days), daySessions: align(p.days, h.daySessions) };
-    }
-  }
-  return { available: true, days: base.days, maxDay, repos, fetchedAt: base.fetchedAt };
-}

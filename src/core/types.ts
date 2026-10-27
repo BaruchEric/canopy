@@ -1,5 +1,9 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
+import type { Capacity, CapacitySettings } from "./capacity";
+import type { WorkItem } from "./work";
+import type { Collision } from "./touch";
+import type { RunGroup } from "./group";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -271,6 +275,9 @@ export interface Repo {
   archived?: "canopy" | "github";
   /** set on a repo the user starred in canopy */
   favorite?: true;
+  /** set on a repo that counts as the harness (FR-044), not the agent
+   *  harness (`Harness`) that runs in it */
+  harness?: true;
   /** where a local checkout stands against the shared repo spec (core/spec.ts);
    *  absent on a remote or forge repo, whose files the scan does not read */
   spec?: SpecState;
@@ -640,10 +647,17 @@ export interface CanopyConfig {
   /** per-machine health checks by repo path, over the repo's own
    *  `.canopy/health.json` (core/repohealth) */
   health: Record<string, RepoCheckDef[]>;
+  /** per-machine warm worktree count by repo path (core/warm); the repo's gates file is the default, never acted on */
+  warm: Record<string, number>;
+  /** the capacity governor's thresholds and observed dollar figure (FR-036) */
+  capacity: CapacitySettings;
   /** the repos archived in canopy, by path like agents */
   archived: string[];
   /** the repos starred in canopy, by path like agents */
   favorites: string[];
+  /** the repos that count as the harness, by path like favorites; null until
+   *  the first start seeds it from canopy's own package name */
+  harness: string[] | null;
   /** whether the server fetches the user's own local repos in the background
    *  (every REMOTE_REFRESH), so behind counts and remote tips stay current */
   fetch: boolean;
@@ -826,6 +840,11 @@ export type Harness = (typeof HARNESSES)[number];
 
 export const isHarness = (v: unknown): v is Harness => typeof v === "string" && (HARNESSES as readonly string[]).includes(v);
 
+/** who may go first when the plan's window runs low (FR-036); plan 2 puts
+ *  one on every start, this plan only defines it */
+export const PRIORITIES = ["interactive", "normal", "low"] as const;
+export type Priority = (typeof PRIORITIES)[number];
+
 /** Model aliases the claude CLI takes; "default" leaves the choice to it.
  *  Codex takes any model name (core/harness has the rule). */
 export const AGENT_MODELS = ["default", "fable", "opus", "sonnet", "haiku"] as const;
@@ -884,6 +903,8 @@ export interface RepoAgent {
   roles?: Partial<Record<AgentRole, AgentPick>>;
   workflows?: Record<string, AgentPick>;
   tasks?: Record<string, AgentPick>;
+  /** FR-040: the chat's collision say is off for this repo; absent means on */
+  collisionSay?: false;
 }
 
 /** A named workflow or agent task. Shell commands in the Tasks panel do
@@ -995,9 +1016,9 @@ export const AGENT_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
 export const RUN_ACTIONS = ["ask", "chat", "propose", "coordinate"] as const;
-export type RunAction = (typeof RUN_ACTIONS)[number];
+export type RunAction = (typeof RUN_ACTIONS)[number] | "compare";
 
-export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (v === "compare" || RUN_ACTIONS.some((action) => action === v));
 
 /** One card a coordinator proposed (FR-010): a branch run's worth of work in
  *  one repo. It waits as `proposed` until the user presses start these, then
@@ -1015,6 +1036,8 @@ export interface CoordTask {
   state: "proposed" | "queued" | "running" | "done" | "failed" | "dropped";
   /** the child run's id, once it started */
   run?: string;
+  /** the child's work item, once it started (FR-037) */
+  work?: string;
   /** how it settled, in a word or two: "landed", "sent back", or a start's error */
   outcome?: string;
 }
@@ -1028,6 +1051,9 @@ export type RunStatus =
   | "idle"
   | "done"
   | "failed"
+  /** the harness reported the plan's usage limit: the work is sound and
+   *  waits for the reset (FR-036); `error` is the limit text */
+  | "limited"
   | "stopped";
 
 export interface RunTool {
@@ -1038,6 +1064,14 @@ export interface RunTool {
   status: "running" | "ok" | "error";
   /** tool output, truncated */
   output?: string;
+  /** the files the call touches, as paths from the run's folder (its
+   *  worktree or checkout); one outside it is kept absolute. A path ending
+   *  in `/` is a folder moved or removed whole. Set for Edit, Write,
+   *  MultiEdit, NotebookEdit and what a Bash line writes (`writtenPaths`);
+   *  reading is not touching (FR-040) */
+  paths?: string[];
+  /** a Bash line canopy could not read (opaque or vague): it may have written anything */
+  touchesUnknown?: true;
 }
 
 /** One line of the agent's own checklist (Claude's TaskCreate or TodoWrite). */
@@ -1211,8 +1245,14 @@ export interface WorkspaceScope {
 }
 
 export interface Run {
+  /** A persisted snapshot, shown read-only after its live run is gone. */
+  kept?: true;
   id: string;
   repoId: string;
+  /** the best-of-N group, set before the first run event */
+  group?: string;
+  /** requested priority; grouped members are marked low */
+  priority?: Priority;
   /** a built-in action's name, or the workflow's name for a flow's step */
   action: string;
   /** the words the chip and the sheet use, copied from the spec at start */
@@ -1253,6 +1293,9 @@ export interface Run {
   result?: RunResult;
   /** why a failed run failed */
   error?: string;
+  /** the last usage limit the harness reported on this run, as it said it;
+   *  a job ends `limited` on it, a chat stays idle and carries it (FR-036) */
+  limited?: { at: number; text: string };
   /** a stage run that failed because the stage runner went away under it,
    *  as a hello confirmed; a flow parks on this, never on the error's words,
    *  which carry the stage's own stderr. Also set when the runner refused
@@ -1272,13 +1315,29 @@ export interface Run {
   tasks?: CoordTask[];
 }
 
+/** One finished run in the local transcript index. */
+export interface KeptRunHead {
+  id: string;
+  repo: string;
+  action: string;
+  verb: string;
+  harness: Harness;
+  status: "done" | "failed" | "stopped" | "limited";
+  started: number;
+  ended: number;
+  cost: number | null;
+  session?: string;
+  /** Branch identity retained while its landing record or PR is live. */
+  origin?: string;
+}
+
 /** Where a branch run's work stands: still going, commits and a clean
  *  worktree (`ready`, the one state the queue takes), changes left
  *  uncommitted, nothing at all, or cut off by a canopy restart. */
 export type RunBranchState = "working" | "ready" | "uncommitted" | "nothing" | "stopped";
 
 export interface RunBranch {
-  /** `run/<slug>-<run id>` */
+  /** `run/<work id>-<slug>` */
   name: string;
   /** the default branch it was cut from and lands on */
   target: string;
@@ -1291,6 +1350,10 @@ export interface RunBranch {
    *  on the branch (the first, and each "fix it") carries it, and the
    *  landing record is kept under it */
   origin: string;
+  /** the work item this branch serves (FR-037), in its name too; every run on the branch carries it */
+  work?: string;
+  /** the best-of-N group this run belongs to; members of a group share intended edits (FR-033) */
+  group?: string;
   /** the pre-flight said to open a PR when it settles ready, instead of
    *  landing here (FR-011) */
   openPr?: true;
@@ -1346,6 +1409,8 @@ export interface PrComment {
 export interface PrWatch {
   /** the branch's id (`RunBranch.origin`), as in the landing records */
   id: string;
+  /** the branch's work item (FR-037) */
+  work?: string;
   /** the latest run on the branch */
   runId: string;
   repoId: string;
@@ -1405,7 +1470,8 @@ export interface PrWatch {
 /** A queue entry's state. `conflict`, `red` and `moved` are sent back: the
  *  entry has left the queue and waits for "fix it". `waiting` holds its
  *  place until what it names clears. */
-export type LandState = "queued" | "rebasing" | "setup" | "gate" | "scenarios" | "landing" | "landed" | "waiting" | "conflict" | "red" | "moved";
+/** judge is held until Eric explicitly chooses land anyway. */
+export type LandState = "queued" | "rebasing" | "setup" | "gate" | "scenarios" | "landing" | "landed" | "waiting" | "judge" | "conflict" | "red" | "moved";
 
 export interface LandEntry {
   /** the branch's id (`RunBranch.origin`) */
@@ -1443,6 +1509,13 @@ export interface LandEntry {
   auto?: true;
   /** the sensitive files' patch id Eric approved when he landed it */
   approved?: string;
+  /** Eric's land anyway: leave judge scenarios out of this pass. */
+  skipJudge?: true;
+  /** Latest sanitized scenario pass, retained in the bounded landed history after its run record is removed. */
+  scenarios?: ScenarioRun;
+  /** set at enqueue when the branch's files meet a working run's set (FR-040):
+   *  that run's name and the shared paths. A word, never a hold */
+  overlap?: { with: string; paths: string[] };
 }
 
 /** What one file in a branch run's diff is, for the review rules (FR-013):
@@ -1482,7 +1555,8 @@ export interface RunReview {
 }
 
 /** A line about the queue that asks nothing: a run that landed on its own,
- *  or one held back from doing so. Kept outside the inbox's count. */
+ *  one held back from doing so, or two pieces of work editing one file.
+ *  Kept outside the inbox's count. */
 export interface LandNotice {
   id: string;
   /** the branch's id */
@@ -1490,8 +1564,8 @@ export interface LandNotice {
   repoId: string;
   branch: string;
   note: string;
-  kind: "landed" | "held";
-  /** why it was held */
+  kind: "landed" | "held" | "collision";
+  /** why it was held; a collision's line */
   why?: string;
   /** the commit main fast-forwarded to */
   head?: string;
@@ -1504,10 +1578,14 @@ export interface ScenarioResult {
   name: string;
   kind: "command" | "judge";
   ok: boolean;
-  /** a judge scenario's P(yes) (plan 2) */
+  /** a judge scenario's P(yes) */
   p?: number;
   /** the output's last TAIL_CHARS */
   tail?: string;
+  /** The judge's reason for an unsatisfied scenario. */
+  why?: string;
+  /** A missing judge counts zero and holds the entry. */
+  unjudged?: string;
 }
 /** what the set said about one head of a branch, written on its record */
 export interface ScenarioRun {
@@ -1519,12 +1597,26 @@ export interface ScenarioRun {
   /** the mean satisfaction, 0 to 1 */
   score: number;
   results: ScenarioResult[];
+  /** Judge scenarios explicitly skipped by land anyway. */
+  skipped?: string[];
+}
+
+/** A best-of-N member's read-only gate pass, before anyone lands it. */
+export interface LandingDry {
+  head: string;
+  gates: { ok: boolean; red?: string; tail?: string };
+  scenarios?: ScenarioRun;
+  minimum: number;
 }
 
 /** A branch run as the landing records keep it, across restarts. */
 export interface LandingRun {
   /** the branch's id (`RunBranch.origin`) */
   id: string;
+  /** the branch's work item (FR-037); a record from before the ledger has none */
+  work?: string;
+  /** the best-of-N group this branch belongs to (FR-033) */
+  group?: string;
   /** the latest run on the branch: the origin or its last "fix it" */
   runId: string;
   repoId: string;
@@ -1545,6 +1637,10 @@ export interface LandingRun {
   review?: RunReview;
   /** the set's latest pass over this branch; a rebase runs it again */
   scenarios?: ScenarioRun;
+  /** the last observed live run or branch overlap, retained until the branch leaves landing */
+  overlap?: { with: string; paths: string[] };
+  /** a best-of-N dry pass, which never rebases or lands the branch */
+  dry?: LandingDry;
   /** a stopped run only: whether its work is whole as the hub last looked,
    *  so "land" applies. Never saved: the worktree can change after. */
   whole?: RunWhole;
@@ -1575,6 +1671,53 @@ export interface LandingInfo {
   orphans: LandingOrphan[];
   /** landed on its own and held back, newest first; an older backend has none */
   notices?: LandNotice[];
+  /** the live collisions on this backend (FR-040); an older backend has none */
+  collisions?: Collision[];
+  /** best-of-N group records on this backend (FR-033) */
+  groups?: RunGroup[];
+}
+
+/** A lockfile as a warm tree saw it; a change means setup runs again. */
+export interface LockfileStamp {
+  name: string;
+  size: number;
+  mtime: number;
+}
+
+export interface WarmTreeInfo {
+  dir: string;
+  /** the slot: warm-1, warm-2 */
+  name: string;
+  /** the commit it was cut at */
+  base: string;
+  madeAt: number;
+  /** bytes, from du at the refill */
+  size: number;
+  lockfile: LockfileStamp | null;
+}
+
+export interface WorktreeRepoInfo {
+  repoId: string;
+  repoPath: string;
+  /** warm trees this machine keeps (the config's layer) */
+  want: number;
+  /** what the repo's gates file says, when it says */
+  fileWarm?: number;
+  /** the live run worktrees, from the landing records */
+  runs: { dir: string; id: string; runId: string; branch: string; state: RunBranchState }[];
+  warm: WarmTreeInfo[];
+  /** the slot being cut now */
+  refilling: string | null;
+  /** slots whose last refill failed */
+  fails: { name: string; why: string; at: number; fails: number }[];
+  orphans: string[];
+}
+
+export interface WorktreesInfo {
+  root: string;
+  /** bytes free on the root's volume */
+  free: number;
+  repos: WorktreeRepoInfo[];
 }
 
 /** The parts of a status a run is expected to move: the working tree and
@@ -1629,8 +1772,12 @@ export type ServerEvent =
   | { type: "advice"; advice: AdviceOffer[] }
   /** the landing queue and branch runs, whole, whenever they change */
   | { type: "landing"; landing: LandingInfo }
+  /** every repo's run and warm worktrees, whole, whenever one changes */
+  | { type: "worktrees"; worktrees: WorktreesInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
+  /** every work item, whole, whenever one changes (FR-037) */
+  | { type: "work"; items: WorkItem[] }
   /** every trigger event kept, whole, whenever one changes */
   | { type: "triggers"; events: TriggerEvent[] }
   /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */
@@ -1676,6 +1823,8 @@ export type ServerEvent =
   | { type: "sweep" }
   /** every health check, whole, when any of them changed (server/health.ts) */
   | { type: "health"; checks: HealthCheck[] }
+  /** each backend's usage windows, the reported hit and held starts */
+  | { type: "capacity"; capacity: CapacityInfo }
   | { type: "kit"; kit: KitInfo }
   | { type: "secrets"; info: SecretsInfo }
   /** keep awake, whole, whenever its mode or hold changes (core/awake) */
@@ -1916,6 +2065,11 @@ export type WorkflowWhen = (typeof WORKFLOW_WHENS)[number];
 export const GATE_KINDS = ["continue", "ask", "verdict", "judge"] as const;
 export type GateKind = (typeof GATE_KINDS)[number];
 
+export const STEP_WHENS = ["always", "verdict done", "verdict partial", "verdict blocked", "judge meets", "judge partly", "judge misses", "check pass", "check fail", "changed", "unchanged", "skipped"] as const;
+export type StepWhen = (typeof STEP_WHENS)[number];
+export const STEP_MODES = ["auto", "manual"] as const;
+export type StepMode = (typeof STEP_MODES)[number];
+
 /** where a workflow file came from; later sources win by name */
 export type WorkflowSource = "bundled" | "user" | "repo";
 
@@ -1939,6 +2093,14 @@ export interface WorkflowStep {
   back: string;
   /** repo-relative files a judge gate reads beside the summary */
   evidence: string[];
+  /** the steps this one waits for, by heading; defaults to the step above */
+  after: string[];
+  /** conditions on the steps it waits for; absent defaults to `always` */
+  when: StepWhen[];
+  /** manual parks the flow before this step until a continue */
+  mode: StepMode;
+  /** set when the repo's `.canopy/workflows.json` decided the mode */
+  modeFrom?: "repo";
 }
 
 /** What a workflow may spend before it parks: agent step runs and hours of
@@ -2000,6 +2162,22 @@ export interface Verdict {
 }
 
 export type JudgeFit = "meets" | "partly" | "misses";
+
+export type ScenarioSatisfied = "yes" | "partly" | "no";
+
+/** The judge's answers about one holdout scenario. */
+export interface ScenarioAnswers {
+  satisfied: { choice: ScenarioSatisfied; probabilities?: Record<string, number> };
+  evidence: { probability: number };
+}
+
+export interface ScenarioJudgment {
+  answers: ScenarioAnswers;
+  /** P(yes), carried to the branch's satisfaction score. */
+  p: number;
+  ok: boolean;
+  reason: string | null;
+}
 
 export interface JudgeAnswers {
   fit: { choice: JudgeFit; probabilities?: Record<string, number> };
@@ -2399,7 +2577,7 @@ export interface IncubatorStages {
 /* ---------- flows: one workflow running on one repo ---------- */
 
 export type FlowStatus = "working" | "waiting" | "gated" | "done" | "failed" | "stopped";
-export type StepStatus = "pending" | "running" | "checking" | "gated" | "passed" | "failed" | "skipped";
+export type StepStatus = "pending" | "running" | "checking" | "gated" | "held" | "passed" | "failed" | "skipped";
 export type FlowChoice = "continue" | "retry" | "stop";
 
 export interface FlowStep {
@@ -2420,6 +2598,8 @@ export interface FlowStep {
    *  restart can resume a Claude session instead of starting over */
   session?: string;
   harness?: Harness;
+  /** whether the step's run moved the tree's fingerprint */
+  changed?: boolean;
 }
 
 /** A check or gate that said no and sent the flow back. */
@@ -2441,7 +2621,7 @@ export interface Flow {
   note: string;
   status: FlowStatus;
   steps: FlowStep[];
-  /** index of the step in progress or parked */
+  /** index of the step the sheet follows: the newest started, or the one parked or held */
   current: number;
   startedAt: number;
   endedAt?: number;
@@ -2459,10 +2639,10 @@ export interface Flow {
   budget?: FlowBudget;
   /** agent step runs started and working time so far */
   spent?: { runs: number; workMs: number };
-  /** set while the flow is parked because its budget is spent, or because
-   *  the stage runner was not answering when its step was to run; either
-   *  way continuing runs the step again */
-  parkedFor?: "budget" | "stage";
+  /** set while the flow is parked because its budget is spent, the stage
+   *  runner was not answering, or its step's run ended `limited`; continuing
+   *  runs the step again */
+  parkedFor?: "budget" | "stage" | "capacity";
   /** with `parkedFor` "stage": it was the step's check, not its run, that
    *  found the stage runner away, so continuing runs the check alone */
   stageCheck?: boolean;
@@ -3139,7 +3319,7 @@ export interface RangerWake {
 
 /* ---------- the sweep: idle shells, chats, runs and agents offered for closing ---------- */
 
-export const SWEEP_KINDS = ["shell", "chat", "run", "pr", "outside"] as const;
+export const SWEEP_KINDS = ["shell", "chat", "run", "transcript", "pr", "outside"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
 
 /** The sweep's settings as stored: whether the schedule is on, its cron
@@ -3321,6 +3501,23 @@ export interface HealthCheck {
 /** `GET /api/health` */
 export interface HealthInfo {
   checks: HealthCheck[];
+}
+
+/** a start a pump holds for capacity (plan 2 fills it; this plan serves none) */
+export interface HeldStart {
+  id: string;
+  what: string;
+  repoId: string;
+  priority: Priority;
+  why: string;
+  since: number;
+}
+
+/** `GET /api/capacity` and the `capacity` event */
+export interface CapacityInfo {
+  capacity: Capacity[];
+  held: HeldStart[];
+  settings: CapacitySettings;
 }
 
 /** What a repo's health check looks at (core/repohealth). */

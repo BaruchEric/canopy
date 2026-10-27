@@ -212,7 +212,7 @@ describe("the ask's words", () => {
   const MIN = 60_000;
   const HOUR = 60 * MIN;
   const DAY = 24 * HOUR;
-  const spans = { shell: DAY, chat: 12 * HOUR, run: 3 * DAY, pr: 14 * DAY, outside: DAY };
+  const spans = { shell: DAY, chat: 12 * HOUR, run: 3 * DAY, transcript: 30 * DAY, pr: 14 * DAY, outside: DAY };
 
   test("spanWord reads days from two whole days up, hours below, minutes under an hour", () => {
     expect(spanWord(14 * DAY)).toBe("14+ days");
@@ -343,4 +343,9 @@ describe("the PRs GitHub did not list", () => {
     expect(prPlace([{ kind: "outside" }])).toBe(0);
     expect(prPlace([])).toBe(0);
   });
+});
+
+
+test("transcripts are removed and runs dismissed", () => {
+  expect(sweepSummary([{ key: "transcript:a", result: "closed" }, { key: "run:b", result: "closed" }])).toBe("removed 1 transcript, dismissed 1 run");
 });
