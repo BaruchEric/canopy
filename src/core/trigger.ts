@@ -4,15 +4,16 @@
  *  and the event's state read off its run and its PR. Browser-safe and pure;
  *  the hub in server/triggers.ts keeps the records and starts the runs. */
 
+import { CRON_MAX, parseCron } from "./cron";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { fence } from "./pr";
 import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
 
-export const TRIGGER_SOURCES = ["sentry", "linear"] as const;
+export const TRIGGER_SOURCES = ["sentry", "linear", "github", "forgejo"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
 
 /** The service's name as the page and the run's note say it. */
-export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear" };
+export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear", github: "GitHub", forgejo: "Forgejo" };
 
 /** One line of `<config dir>/triggers.json`: where an event comes from,
  *  which repo it is about and which workflow fixes it. Secrets are named by
@@ -27,8 +28,15 @@ export interface TriggerRule {
   workflow: string;
   /** the env var holding the secret that signs each hook (the Sentry
    *  integration's client secret, the Linear webhook's signing secret); it
-   *  starts with `CANOPY_TRIGGER_`, which the server takes out of its env at start */
-  secretEnv: string;
+   *  starts with `CANOPY_TRIGGER_`, which the server takes out of its env at start.
+   *  A github or forgejo rule may leave it out: it then has no hook and polls */
+  secretEnv?: string;
+  /** github and forgejo: a cron line for polling the repo's labeled issues;
+   *  15 minutes by default when there is no hook secret, none when there is */
+  poll?: string;
+  /** github and forgejo: whether canopy writes back (a comment with the PR's
+   *  link, a close on merge); the parsed rule always carries it, true by default */
+  write?: boolean;
   /** the Sentry project slugs, or the Linear team keys, this rule takes; empty takes every one */
   projects: string[];
   /** the Sentry levels this rule takes; a Linear rule takes none, and its issues carry none */
@@ -67,6 +75,8 @@ export interface TriggerRuleInfo extends TriggerRule {
   install?: string;
   /** why the rule cannot fire: an unknown repo or workflow, a bad line */
   problem?: string;
+  /** when the poll next runs, as epoch ms, for a rule that polls */
+  nextFire?: number;
 }
 
 export type TriggerStatus =
@@ -196,7 +206,10 @@ const DEFAULT_LEVELS = ["error", "fatal"];
 const DEFAULTS: Record<TriggerSource, { workflow: string; api: string; labels: string[]; levels: string[] }> = {
   sentry: { workflow: "sentry-fix", api: "https://sentry.io", labels: [], levels: DEFAULT_LEVELS },
   linear: { workflow: "linear-issue", api: "https://api.linear.app", labels: ["canopy"], levels: [] },
+  github: { workflow: "issue-fix", api: "https://api.github.com", labels: ["canopy"], levels: [] },
+  forgejo: { workflow: "issue-fix", api: "", labels: ["canopy"], levels: [] },
 };
+const DEFAULT_POLL = "*/15 * * * *";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (o: Record<string, unknown>, k: string): string | undefined => {
@@ -246,9 +259,11 @@ function parseRule(item: unknown): TriggerRule {
   const repo = str(item, "repo");
   if (!repo) throw new Error("repo is required: the repo's id or absolute path");
   const workflow = str(item, "workflow") ?? defaults.workflow;
+  const issues = source === "github" || source === "forgejo";
   const secretEnv = str(item, "secretEnv");
-  if (!secretEnv || !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
-  if (!secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  if (!secretEnv && !issues) throw new Error("secretEnv must name the environment variable holding the hook's secret");
+  if (secretEnv !== undefined && !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
+  if (secretEnv !== undefined && !secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
   const clientId = str(item, "clientId");
   const clientSecretEnv = str(item, "clientSecretEnv");
   if ((clientId === undefined) !== (clientSecretEnv === undefined)) throw new Error("clientId and clientSecretEnv go together: both turn the Linear agent on");
@@ -262,17 +277,40 @@ function parseRule(item: unknown): TriggerRule {
   if (tokenEnv !== undefined && !tokenEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`tokenEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${tokenEnv}`);
   const levels = strings(item["levels"], "levels").map((l) => l.toLowerCase());
   const labels = strings(item["labels"], "labels");
-  if (labels.length && source !== "linear") throw new Error("labels is for a linear rule");
+  if (labels.length && source === "sentry") throw new Error("labels is for a linear rule, or a github or forgejo one");
   const org = str(item, "org");
-  const api = (str(item, "api") ?? defaults.api).replace(/\/+$/, "");
+  const projects = strings(item["projects"], "projects");
+  if (issues) {
+    if (projects.length) throw new Error(`projects is not for a ${source} rule`);
+    if (levels.length) throw new Error(`levels is not for a ${source} rule`);
+    if (org !== undefined) throw new Error(`org is not for a ${source} rule`);
+  }
+  const write = item["write"];
+  if (write !== undefined && !issues) throw new Error("write is for a github or forgejo rule");
+  if (write !== undefined && typeof write !== "boolean") throw new Error("write must be true or false");
+  const pollRaw = item["poll"];
+  if (pollRaw !== undefined && !issues) throw new Error("poll is for a github or forgejo rule");
+  if (pollRaw !== undefined && (typeof pollRaw !== "string" || !pollRaw.trim())) throw new Error("poll must be a cron line such as */15 * * * *");
+  const given = typeof pollRaw === "string" ? pollRaw.trim() : undefined;
+  if (given !== undefined) {
+    if (given.length > CRON_MAX) throw new Error(`poll must be at most ${CRON_MAX} characters`);
+    const cron = parseCron(given);
+    if ("error" in cron) throw new Error(`poll is not a cron line: ${cron.error}`);
+  }
+  const poll = given ?? (issues && secretEnv === undefined ? DEFAULT_POLL : undefined);
+  const apiRaw = str(item, "api");
+  if (source === "forgejo" && !apiRaw) throw new Error("api is required for a forgejo rule: the server's address, such as https://git.example.com");
+  const api = (apiRaw ?? defaults.api).replace(/\/+$/, "");
   if (!/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
   return {
     name,
     source,
     repo,
     workflow,
-    secretEnv,
-    projects: strings(item["projects"], "projects"),
+    ...(secretEnv ? { secretEnv } : {}),
+    ...(poll ? { poll } : {}),
+    ...(issues ? { write: write ?? true } : {}),
+    projects,
     levels: levels.length ? levels : defaults.levels,
     labels: labels.length ? labels : defaults.labels,
     ignore: strings(item["ignore"], "ignore"),
@@ -498,9 +536,10 @@ export function ignoreReason(rule: TriggerRule, inc: Incoming): string | null {
 }
 
 /** States after which the same issue coming in again starts a new event:
- *  canopy could not start it, or it was fixed and came back. Any other
+ *  canopy could not start it, its PR was closed unmerged, or it was fixed
+ *  and came back. Any other
  *  state, open or ended, keeps it to one event and one PR. */
-const AGAIN: readonly TriggerStatus[] = ["failed", "merged", "ignored"];
+const AGAIN: readonly TriggerStatus[] = ["failed", "merged", "closed", "ignored"];
 
 /** The event this issue already has under this rule, when one counts. */
 export function existing(events: readonly TriggerEvent[], rule: string, key: string): TriggerEvent | undefined {
@@ -759,6 +798,8 @@ export function pruneEvents(events: TriggerEvent[]): TriggerEvent[] {
 export const SAMPLE_TITLE: Record<TriggerSource, string> = {
   sentry: "TypeError: Cannot read properties of undefined (reading 'percent')",
   linear: "Show the last sync time on the settings page",
+  github: "Show the last sync time on the settings page",
+  forgejo: "Show the last sync time on the settings page",
 };
 
 /** A made-up issue for "try it": the hub fires it as if the service had. */

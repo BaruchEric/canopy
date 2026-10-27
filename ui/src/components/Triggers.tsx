@@ -152,7 +152,7 @@ function RuleCard({ backend, rule, origin }: { backend: string; rule: TriggerRul
             </span>
           )}
           <span>runs {rule.workflow}</span>
-          <span className={rule.secretSet ? "moss" : "rust"}>{rule.secretSet ? "secret set" : `${rule.secretEnv} not set`}</span>
+          <span className={rule.secretSet ? "moss" : "rust"}>{rule.secretSet ? "secret set" : rule.secretEnv ? `${rule.secretEnv} not set` : "no hook secret"}</span>
           <span className={writes ? "moss" : "faint"} title={writesBack}>
             {writes ? (rule.source === "linear" ? "writes back to Linear" : "resolves in Sentry") : `leaves issues open in ${name}`}
           </span>

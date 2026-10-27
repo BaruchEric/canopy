@@ -250,7 +250,7 @@ export class TriggerHub {
       rules.push({
         ...r,
         hook: `/api/hooks/${r.source}/${r.name}`,
-        secretSet: this.env(r.secretEnv) !== undefined,
+        secretSet: r.secretEnv !== undefined && this.env(r.secretEnv) !== undefined,
         tokenSet: r.tokenEnv ? this.env(r.tokenEnv) !== undefined : false,
         agentSet: r.clientSecretEnv ? this.env(r.clientSecretEnv) !== undefined : false,
         ...(r.clientId ? { install: `/api/linear/install?rule=${encodeURIComponent(r.name)}` } : {}),
@@ -705,6 +705,8 @@ export class TriggerHub {
     await this.loadRules();
     const rule = this.rule(name);
     if (!rule || rule.source !== source) return json({ error: "no such hook" }, 404);
+    // a rule with no secretEnv has no hook at all; its issues come by polling
+    if (!rule.secretEnv) return json({ error: "no such hook" }, 404);
     const secret = this.env(rule.secretEnv);
     if (!secret) return json({ error: `${rule.secretEnv} is not set on this backend` }, 503);
     const length = Number(req.headers.get("content-length") ?? "0");

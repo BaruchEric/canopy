@@ -62,48 +62,48 @@
 - Consumes: TRIGGER_ENV_PREFIX from core/envnames.ts; parseCron and CRON_MAX from core/cron.ts.
 - Produces: TriggerSource includes github and forgejo; TriggerRule has optional secretEnv and poll, optional write, and required api; TriggerRuleInfo has optional nextFire. Parsed GitHub and Forgejo rules default labels to ["canopy"] and workflow to "issue-fix".
 
-- [ ] **Step 1: Write failing tests** named “GitHub and Forgejo defaults”, “hook secret and poll defaults”, “bad source-specific fields”, “poll cron limits”, and “closed issue can start again”. Assert GitHub api is https://api.github.com; Forgejo requires api; no secretEnv gives poll "*/15 * * * *"; a configured secretEnv leaves poll absent; write defaults true and accepts false; labels, projects, levels, org, and clientId follow the source rules; a closed event no longer blocks an open issue from starting again.
+- [x] **Step 1: Write failing tests** named “GitHub and Forgejo defaults”, “hook secret and poll defaults”, “bad source-specific fields”, “poll cron limits”, and “closed issue can start again”. Assert GitHub api is https://api.github.com; Forgejo requires api; no secretEnv gives poll "*/15 * * * *"; a configured secretEnv leaves poll absent; write defaults true and accepts false; labels, projects, levels, org, and clientId follow the source rules; a closed event no longer blocks an open issue from starting again.
 
 ```ts
 const { rules, problems } = parseRules(JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "web/shop" }] }));
 expect(problems).toEqual([]);
 expect(rules[0]).toMatchObject({ api: "https://api.github.com", labels: ["canopy"], workflow: "issue-fix", poll: "*/15 * * * *", write: true });
 ```
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: bun test src/core/trigger.test.ts
 Expected: FAIL because the two sources and their rule defaults are not defined.
 
-- [ ] **Step 3: Extend the rule model and parser in src/core/trigger.ts**
+- [x] **Step 3: Extend the rule model and parser in src/core/trigger.ts**
 
 Add github and forgejo to TRIGGER_SOURCES and SERVICE_NAME. Validate poll through parseCron and CRON_MAX. Allow secretEnv to be omitted only for github and forgejo. Require api for forgejo. Reject projects, levels, org, and clientId on the new sources, and reject labels on sentry. Parse write as an optional boolean for the new sources, defaulting to true. Add nextFire?: number to TriggerRuleInfo. Add closed to the terminal states that let an issue be taken again.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: bun test src/core/trigger.test.ts
 Expected: PASS with old Sentry and Linear defaults unchanged.
 
-- [ ] **Step 5: Run typecheck**
+- [x] **Step 5: Run typecheck**
 
 Run: bun run typecheck
 Expected: PASS.
 
-- [ ] **Step 6: Run lint**
+- [x] **Step 6: Run lint**
 
 Run: bun run lint
 Expected: PASS.
 
-- [ ] **Step 7: Run the full test suite**
+- [x] **Step 7: Run the full test suite**
 
 Run: bun test
 Expected: PASS.
 
-- [ ] **Step 8: Build**
+- [x] **Step 8: Build**
 
 Run: bun run build
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ~~~sh
 git add src/core/trigger.ts src/core/trigger.test.ts

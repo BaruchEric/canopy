@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   activityFor,
+  SERVICE_NAME,
   afterRestart,
   existing,
   fromFlow,
@@ -169,6 +170,73 @@ describe("parseRules", () => {
 
   test("bad JSON says so", () => {
     expect(parseRules("{").problems[0]).toContain("not JSON");
+  });
+
+  test("GitHub and Forgejo defaults", () => {
+    const gh = parseRules(JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "web/shop" }] }));
+    expect(gh.problems).toEqual([]);
+    expect(gh.rules[0]).toMatchObject({ source: "github", api: "https://api.github.com", labels: ["canopy"], workflow: "issue-fix", poll: "*/15 * * * *", write: true, projects: [], levels: [] });
+    expect(gh.rules[0]?.secretEnv).toBeUndefined();
+    const fj = parseRules(JSON.stringify({ rules: [{ name: "fj", source: "forgejo", repo: "web/shop", api: "https://git.example.com/" }] }));
+    expect(fj.problems).toEqual([]);
+    expect(fj.rules[0]).toMatchObject({ source: "forgejo", api: "https://git.example.com", labels: ["canopy"], workflow: "issue-fix", poll: "*/15 * * * *", write: true });
+    const none = parseRules(JSON.stringify({ rules: [{ name: "fj", source: "forgejo", repo: "web/shop" }] }));
+    expect(none.rules).toEqual([]);
+    expect(none.problems[0]).toContain("api is required");
+    expect(SERVICE_NAME.github).toBe("GitHub");
+    expect(SERVICE_NAME.forgejo).toBe("Forgejo");
+  });
+
+  test("hook secret and poll defaults", () => {
+    const hooked = parseRules(JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "x", secretEnv: "CANOPY_TRIGGER_GH", write: false }] }));
+    expect(hooked.problems).toEqual([]);
+    expect(hooked.rules[0]?.secretEnv).toBe("CANOPY_TRIGGER_GH");
+    expect(hooked.rules[0]?.poll).toBeUndefined();
+    expect(hooked.rules[0]?.write).toBe(false);
+    const both = parseRules(JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "x", secretEnv: "CANOPY_TRIGGER_GH", poll: "0 * * * *" }] }));
+    expect(both.rules[0]?.poll).toBe("0 * * * *");
+    const bad = parseRules(JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "x", secretEnv: "GH_SECRET" }] }));
+    expect(bad.problems[0]).toContain("must start with CANOPY_TRIGGER_");
+  });
+
+  test("bad source-specific fields", () => {
+    const base = { source: "github", repo: "x" };
+    const bad = parseRules(
+      JSON.stringify({
+        rules: [
+          { ...base, name: "a", projects: ["p"] },
+          { ...base, name: "b", levels: ["error"] },
+          { ...base, name: "c", org: "o" },
+          { ...base, name: "d", clientId: "cid", clientSecretEnv: "CANOPY_TRIGGER_X" },
+          { name: "e", repo: "x", secretEnv: "CANOPY_TRIGGER_S", labels: ["x"] },
+          { ...base, name: "f", write: "no" },
+          { name: "g", repo: "x", secretEnv: "CANOPY_TRIGGER_S", write: true },
+          { name: "h", source: "linear", repo: "x", secretEnv: "CANOPY_TRIGGER_S", write: false },
+          { name: "i", repo: "x" },
+        ],
+      }),
+    );
+    expect(bad.rules).toEqual([]);
+    expect(bad.problems).toHaveLength(9);
+    expect(bad.problems[0]).toContain("projects is not for a github rule");
+    expect(bad.problems[1]).toContain("levels is not for a github rule");
+    expect(bad.problems[2]).toContain("org is not for a github rule");
+    expect(bad.problems[3]).toContain("clientId is for a linear rule");
+    expect(bad.problems[4]).toContain("labels is for a linear rule");
+    expect(bad.problems[5]).toContain("write must be true or false");
+    expect(bad.problems[6]).toContain("write is for a github or forgejo rule");
+    expect(bad.problems[7]).toContain("write is for a github or forgejo rule");
+    expect(bad.problems[8]).toContain("secretEnv must name");
+  });
+
+  test("poll cron limits", () => {
+    const rule = (poll: unknown) => parseRules(JSON.stringify({ rules: [{ name: "gh", source: "github", repo: "x", poll }] }));
+    expect(rule("*/5 * * * *").problems).toEqual([]);
+    expect(rule("not a cron").problems[0]).toContain("poll");
+    expect(rule(`${"0 ".repeat(60)}* * * *`).problems[0]).toContain("poll");
+    expect(rule(5).problems[0]).toContain("poll");
+    const sentry = parseRules(JSON.stringify({ rules: [{ name: "s", repo: "x", secretEnv: "CANOPY_TRIGGER_S", poll: "*/5 * * * *" }] }));
+    expect(sentry.problems[0]).toContain("poll is for a github or forgejo rule");
   });
 });
 
@@ -474,6 +542,9 @@ describe("existing", () => {
   });
   test("a failed start, an ignored one or a merged fix lets it start again", () => {
     for (const status of ["failed", "merged", "ignored"] as const) expect(existing([event({ status })], "shop", "4242")).toBeUndefined();
+  });
+  test("closed issue can start again", () => {
+    expect(existing([event({ status: "closed" })], "shop", "4242")).toBeUndefined();
   });
   test("the newest event for the issue decides", () => {
     const old = event({ status: "review", firstAt: 1 });
