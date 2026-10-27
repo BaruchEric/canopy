@@ -61,6 +61,8 @@ import { awakeCommand } from "./awake";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
 import { secretsCommand } from "./secrets";
+import { groupsCommand } from "./groups";
+import { runCommand } from "./run";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
 const HELP = `${bold("canopy")}${HELP_TEXT.slice("canopy".length)}`;
@@ -106,6 +108,8 @@ const COMMANDS = new Set([
   "ranger",
   "sweep",
   "awake",
+  "run",
+  "groups",
   "health",
   "kit",
   "mcp",
@@ -870,6 +874,10 @@ export async function main(argv: string[]): Promise<void> {
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });
+    case "run":
+      return runCommand(args, { fail });
+    case "groups":
+      return groupsCommand(args, { fail });
     case "work":
       return workCommand(args, { fail });
     case "sweep":
