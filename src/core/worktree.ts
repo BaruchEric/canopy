@@ -3,7 +3,7 @@
  *  path would reach its host, though only local repos get branch runs.
  *
  *  A run's worktree lives at `<configDir>/worktrees/<repo key>/<run id>` on
- *  a branch `run/<slug>-<run id>`; the landing queue rebases it, fast-
+ *  a branch `run/<work id>-<slug>`; the landing queue rebases it, fast-
  *  forwards the main checkout to it, and removes both. */
 
 import { createHash } from "node:crypto";
@@ -12,6 +12,9 @@ import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { git } from "./exec";
 import { configDir } from "./store";
+import { branchSlug } from "./work";
+
+export { branchSlug };
 
 export const worktreesRoot = (): string => join(configDir(), "worktrees");
 
@@ -25,18 +28,7 @@ export function repoKey(path: string): string {
 
 export const runTreeDir = (repoPath: string, runId: string, root = worktreesRoot()): string => join(root, repoKey(repoPath), runId);
 
-/** A branch name's middle part from the run's note: lower case words joined
- *  by dashes, at most 32 characters, "run" when nothing is left. */
-export function branchSlug(note: string): string {
-  const s = note
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32)
-    .replace(/-+$/g, "");
-  return s || "run";
-}
-
+/** Legacy branch naming for starts that have not migrated to WorkHub yet. */
 export const runBranchName = (note: string, runId: string): string => `run/${branchSlug(note)}-${runId}`;
 
 const out = (r: { stdout: string }): string => r.stdout.trim();

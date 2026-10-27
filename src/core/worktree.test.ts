@@ -7,7 +7,6 @@ import { exec } from "./exec";
 import {
   addRunTree,
   aheadOf,
-  branchSlug,
   currentBranch,
   defaultBranch,
   dirtyFiles,
@@ -21,7 +20,6 @@ import {
   repoAtPath,
   repoKey,
   revOf,
-  runBranchName,
   showAtHead,
   subjectsSince,
   runTreeDir,
@@ -65,13 +63,6 @@ describe("names", () => {
     expect(repoKey("/a/b/canopy")).toMatch(/^canopy-[0-9a-f]{8}$/);
     expect(repoKey("/a/b/canopy")).not.toBe(repoKey("/c/canopy"));
     expect(runTreeDir("/a/b/canopy", "abc123", "/w")).toBe(`/w/${repoKey("/a/b/canopy")}/abc123`);
-  });
-
-  test("a branch slug is lower case words from the note", () => {
-    expect(branchSlug("Fix the README's typo!")).toBe("fix-the-readme-s-typo");
-    expect(branchSlug("   ")).toBe("run");
-    expect(branchSlug("a".repeat(50))).toHaveLength(32);
-    expect(runBranchName("add a test", "ab12cd34")).toBe("run/add-a-test-ab12cd34");
   });
 
   test("overwritten files are read off git's message", () => {
