@@ -145,3 +145,12 @@ test("a card for a checkout that moved heals by a rescan, and a broken .git stay
   expect((await ids()).find((r) => r.id === "broken")?.error).toBeTruthy();
   s.stop();
 });
+
+test("canopy:worktrees is kept, ok, with the counts and the free disk", async () => {
+  const server = await startServer({ root, port: 0, harnesses: ["claude"], chan: null });
+  servers.push(server);
+  await until(async () => (await one(server.port, "canopy:worktrees"))?.state === "ok", "the worktrees check");
+  const c = await one(server.port, "canopy:worktrees");
+  expect(c?.heal).toBe("button");
+  expect(c?.detail).toMatch(/^0 run, 0 warm, \d+\.\d GB free$/);
+});

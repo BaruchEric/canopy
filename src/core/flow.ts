@@ -281,6 +281,8 @@ interface LiveFlow {
   /** a branch flow's setup line, run before its first step's agent; gone
    *  once that run starts, and never there after a restore */
   prepare?: BranchStart["prepare"];
+  /** A fresh branch's first startup note; transient, like prepare. */
+  startNote?: BranchStart["startNote"];
   /** set by a pick-up until its step's run starts: the resumed session is
    *  told it was stopped, not cut short by a restart */
   pickedUp?: boolean;
@@ -449,6 +451,7 @@ export class Flows {
       checking: new Map(), marks: new Map(), attempts: new Map(), starting: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
       parks: new Map(),
       ...(branch?.prepare ? { prepare: branch.prepare } : {}),
+      ...(branch?.startNote ? { startNote: branch.startNote } : {}),
     };
     this.live.set(flow.id, live);
     this.prune();
@@ -1173,12 +1176,13 @@ export class Flows {
     // every step runs on the flow's branch, held from the landing queue
     // until the flow is done; the setup line runs before the first only
     const onBranch: BranchStart | undefined = flow.branch
-      ? { branch: { ...branchOf(flow.branch, "working"), held: true }, ...(live.prepare ? { prepare: live.prepare } : {}) }
+      ? { branch: { ...branchOf(flow.branch, "working"), held: true }, ...(live.prepare ? { prepare: live.prepare } : {}), ...(live.startNote ? { startNote: live.startNote } : {}) }
       : undefined;
     let run: Run;
     try {
       run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { flowOwner: live.owner });
       delete live.prepare;
+      delete live.startNote;
     } catch (err) {
       // The stage runner is away: the step waits for it, and keeps the
       // restart note for when it runs. By name, not class, as a thrown
