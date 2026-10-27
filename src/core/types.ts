@@ -1046,6 +1046,14 @@ export interface RunTool {
   status: "running" | "ok" | "error";
   /** tool output, truncated */
   output?: string;
+  /** the files the call touches, as paths from the run's folder (its
+   *  worktree or checkout); one outside it is kept absolute. A path ending
+   *  in `/` is a folder moved or removed whole. Set for Edit, Write,
+   *  MultiEdit, NotebookEdit and what a Bash line writes (`writtenPaths`);
+   *  reading is not touching (FR-040) */
+  paths?: string[];
+  /** a Bash line canopy could not read (opaque or vague): it may have written anything */
+  touchesUnknown?: true;
 }
 
 /** One line of the agent's own checklist (Claude's TaskCreate or TodoWrite). */
