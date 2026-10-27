@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
@@ -530,6 +530,45 @@ describe("parseStash", () => {
 });
 
 describe("readElsewhere", () => {
+  test("timestamps detached worktrees from changed files, including nested untracked names, and falls back for deletions", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-worktree-time-"));
+    const main = join(dir, "main");
+    const wt = join(dir, "wt");
+    try {
+      const run = (...args: string[]) => exec(["git", "-C", main, "-c", "user.name=t", "-c", "user.email=t@t", ...args]);
+      await exec(["git", "init", "-q", "-b", "main", main]);
+      await writeFile(join(main, "f.txt"), "one\n");
+      await writeFile(join(main, ".gitignore"), "ignored\n");
+      await run("add", ".");
+      await run("commit", "-q", "-m", "one");
+      const log = await run("log", "-1", "--format=%ct");
+      const committedAt = Number(log.stdout.trim());
+      await run("worktree", "add", "-q", "--detach", wt);
+      const worktreePath = await realpath(wt);
+      await writeFile(join(wt, "f.txt"), "changed\n");
+      await utimes(join(wt, "f.txt"), committedAt + 60, committedAt + 60);
+      await mkdir(join(wt, "new folder"));
+      const untracked = join(wt, "new folder", 'a "quoted" file.txt');
+      await writeFile(untracked, "new\n");
+      await utimes(untracked, committedAt + 120, committedAt + 120);
+      await utimes(join(wt, "new folder"), committedAt - 60, committedAt - 60);
+      await writeFile(join(wt, "ignored"), "ignored\n");
+      await utimes(join(wt, "ignored"), committedAt + 180, committedAt + 180);
+
+      expect((await readElsewhere(main))?.worktrees).toEqual([
+        { path: worktreePath, branch: null, files: 2, unmerged: 0, at: committedAt + 120 },
+      ]);
+      await rm(untracked);
+      expect((await readElsewhere(main))?.worktrees[0]?.at).toBe(committedAt + 60);
+      await rm(join(wt, "f.txt"));
+      expect((await readElsewhere(main))?.worktrees).toEqual([
+        { path: worktreePath, branch: null, files: 1, unmerged: 0, at: committedAt },
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test("finds a dirty worktree, an unmerged branch and the stash from the main checkout only", async () => {
     const dir = await mkdtemp(join(tmpdir(), "canopy-elsewhere-"));
     const main = join(dir, "main");
@@ -552,13 +591,15 @@ describe("readElsewhere", () => {
       // a linked worktree with an untracked file
       await run("worktree", "add", "-q", "-b", "agent", wt);
       await writeFile(join(wt, "new.txt"), "wip\n");
+      const editedAt = 2_000_000_000;
+      await utimes(join(wt, "new.txt"), editedAt, editedAt);
       // a stash
       await writeFile(join(main, "f.txt"), "two\n");
       await run("stash", "push", "-q", "-m", "parked");
 
       const e = await readElsewhere(main);
       expect(e?.worktrees.map((w) => ({ ...w, path: w.path.endsWith("/wt") }))).toEqual([
-        { path: true, branch: "agent", files: 1, unmerged: 0 },
+        { path: true, branch: "agent", files: 1, unmerged: 0, at: editedAt },
       ]);
       expect(e?.branches.map((b) => [b.name, b.unmerged, b.push.kind, b.subject])).toEqual([
         ["idea", 1, "local", "an idea"],
@@ -578,6 +619,8 @@ describe("readElsewhere", () => {
       // still show, now as a branch
       await exec(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "add", "new.txt"]);
       await exec(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "agent work"]);
+      const committed = await exec(["git", "-C", wt, "log", "-1", "--format=%ct"]);
+      expect((await readElsewhere(main))?.worktrees[0]).toMatchObject({ files: 0, unmerged: 1, at: Number(committed.stdout.trim()) });
       await rm(wt, { recursive: true, force: true });
       const after = await readElsewhere(main);
       expect(after?.worktrees).toEqual([]);

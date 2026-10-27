@@ -73,10 +73,13 @@ export interface WorktreeWip {
   path: string;
   /** null when its HEAD is detached */
   branch: string | null;
-  /** changed entries in its tree, untracked ones counted per folder */
+  /** changed entries in its tree, including untracked files */
   files: number;
   /** commits on its branch that this checkout's HEAD lacks */
   unmerged: number;
+  /** latest changed file's mtime or HEAD committer date, unix seconds;
+   *  absent when neither can be read or from an older backend */
+  at?: number;
 }
 
 /** A local branch with commits this checkout's HEAD lacks, checked out

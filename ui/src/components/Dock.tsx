@@ -596,6 +596,7 @@ function ElsewhereDrill({ repo, at, stamp }: { repo: Repo; at: DrillAt; stamp: s
  * a time; a worktree that is a card of its own also opens that card's panel.
  */
 function ElsewhereList({ repo }: { repo: Repo }) {
+  useNow();
   const e = repo.status?.elsewhere;
   const here = repo.status?.branch || "HEAD";
   const cards = useStore((s) => s.repos);
@@ -622,13 +623,19 @@ function ElsewhereList({ repo }: { repo: Repo }) {
                 {w.files > 0 && ` · ${w.files} changed`}
                 {w.unmerged > 0 && ` · ${w.unmerged} unmerged`}
               </button>
+              <span
+                className="file-time"
+                title={w.at === undefined ? "Last activity unavailable" : `Last file change or commit: ${new Date(w.at * 1000).toLocaleString()}`}
+              >
+                {ago(w.at)}
+              </span>
               {card && (
                 <button type="button" className="mini" onClick={() => openPanel(card.id)}>
                   open
                 </button>
               )}
             </div>
-            {drilled === key && <ElsewhereDrill repo={repo} at={{ worktree: w.path }} stamp={`${w.files}:${w.unmerged}`} />}
+            {drilled === key && <ElsewhereDrill repo={repo} at={{ worktree: w.path }} stamp={`${w.files}:${w.unmerged}:${w.at ?? ""}`} />}
           </Fragment>
         );
       })}

@@ -338,12 +338,20 @@ export async function readElsewhere(repoPath: string): Promise<Elsewhere | undef
   const read = new Set(linked.map((w) => w.path));
   const counted = await Promise.all(
     linked.map(async (w): Promise<WorktreeWip> => {
-      const r = await git(toLocator(host, w.path), ["status", "--porcelain=v2", "-unormal"]);
+      const atPath = toLocator(host, w.path);
+      const [r, log] = await Promise.all([
+        git(atPath, ["-c", "core.quotePath=false", "status", "--porcelain=v2", "-uall"]),
+        git(atPath, ["log", "-1", "--format=%ct"]),
+      ]);
+      const files = r.code === 0 ? parsePorcelainV2(r.stdout).files : [];
+      const times = await fileMtimes(atPath, files.map((f) => f.path));
+      const at = times.reduce<number>((latest, t) => Math.max(latest, t ?? 0), log.code === 0 ? Number(log.stdout.trim()) || 0 : 0);
       return {
         path: w.path,
         branch: w.branch,
-        files: r.code === 0 ? countStatusEntries(r.stdout) : 0,
+        files: files.length,
         unmerged: w.branch === null ? 0 : (unmergedOf.get(w.branch) ?? 0),
+        ...(at > 0 ? { at } : {}),
       };
     }),
   );
