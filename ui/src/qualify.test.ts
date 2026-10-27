@@ -33,6 +33,8 @@ import type {
   ServerEvent,
   Sprout,
   TermInfo,
+  WorktreeRepoInfo,
+  WorktreesInfo,
 } from "../../src/core/types";
 import type { Collision } from "../../src/core/touch";
 
@@ -178,6 +180,33 @@ describe("qEvent", () => {
       { id: "mac|r1+r2", repoId: "mac|a/b", run: "mac|r1", name: "run/x-one", with: { kind: "run", run: "mac|r2", verb: "Ask", name: "run/x-two" }, paths: ["a.ts"], at: 1 },
       { id: "mac|r1+branch:b1", repoId: "mac|a/b", run: "mac|r1", name: "run/x-one", with: { kind: "branch", origin: "mac|b1", branch: "run/x-branch" }, paths: ["b.ts"], at: 2 },
     ]);
+  });
+  test("a foreign worktrees event qualifies repo and run ids but preserves local paths and slot names", () => {
+    const repoInfo: WorktreeRepoInfo = {
+      repoId: "a/b",
+      repoPath: "/work/a/b",
+      want: 1,
+      fileWarm: 2,
+      runs: [{ dir: "/w/a/b/b1", id: "b1", runId: "r1", branch: "run/x-b1", state: "working" }],
+      warm: [{ dir: "/w/a/b/warm-1", name: "warm-1", base: "deadbeef", madeAt: 1, size: 2, lockfile: null }],
+      refilling: null,
+      fails: [{ name: "warm-2", why: "setup failed", at: 2, fails: 1 }],
+      orphans: ["/w/a/b/orphan"],
+    };
+    const worktrees: WorktreesInfo = { root: "/config/worktrees", free: 42, repos: [repoInfo] };
+    const event: ServerEvent = { type: "worktrees", worktrees };
+    expect(qEvent(q, event)).toEqual({
+      type: "worktrees",
+      worktrees: {
+        root: "/config/worktrees",
+        free: 42,
+        repos: [{
+          ...repoInfo,
+          repoId: "mac|a/b",
+          runs: [{ dir: "/w/a/b/b1", id: "mac|b1", runId: "mac|r1", branch: "run/x-b1", state: "working" }],
+        }],
+      },
+    });
   });
   test("a scan event qualifies its repos", () => {
     const scan = { root: "/x", repos: [repo], sources: [], scannedAt: 1, backend: { openers: false, sshHost: null } } as unknown as ScanResult;

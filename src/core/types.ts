@@ -1626,6 +1626,49 @@ export interface LandingInfo {
   collisions?: Collision[];
 }
 
+/** A lockfile as a warm tree saw it; a change means setup runs again. */
+export interface LockfileStamp {
+  name: string;
+  size: number;
+  mtime: number;
+}
+
+export interface WarmTreeInfo {
+  dir: string;
+  /** the slot: warm-1, warm-2 */
+  name: string;
+  /** the commit it was cut at */
+  base: string;
+  madeAt: number;
+  /** bytes, from du at the refill */
+  size: number;
+  lockfile: LockfileStamp | null;
+}
+
+export interface WorktreeRepoInfo {
+  repoId: string;
+  repoPath: string;
+  /** warm trees this machine keeps (the config's layer) */
+  want: number;
+  /** what the repo's gates file says, when it says */
+  fileWarm?: number;
+  /** the live run worktrees, from the landing records */
+  runs: { dir: string; id: string; runId: string; branch: string; state: RunBranchState }[];
+  warm: WarmTreeInfo[];
+  /** the slot being cut now */
+  refilling: string | null;
+  /** slots whose last refill failed */
+  fails: { name: string; why: string; at: number; fails: number }[];
+  orphans: string[];
+}
+
+export interface WorktreesInfo {
+  root: string;
+  /** bytes free on the root's volume */
+  free: number;
+  repos: WorktreeRepoInfo[];
+}
+
 /** The parts of a status a run is expected to move: the working tree and
  *  the branch's position. Equal fingerprints before and after a commit or
  *  push mean the run did nothing the card can show. */
@@ -1678,6 +1721,8 @@ export type ServerEvent =
   | { type: "advice"; advice: AdviceOffer[] }
   /** the landing queue and branch runs, whole, whenever they change */
   | { type: "landing"; landing: LandingInfo }
+  /** every repo's run and warm worktrees, whole, whenever one changes */
+  | { type: "worktrees"; worktrees: WorktreesInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
   /** every work item, whole, whenever one changes (FR-037) */
