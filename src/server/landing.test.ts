@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
+import { pickWinner } from "../core/group";
+import type { GroupDry, RunGroup } from "../core/group";
 import type { EvidenceFile, LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
 import { fixPrompt } from "../core/landing";
 import { touchedOf, type Touched } from "../core/touch";
@@ -964,6 +966,31 @@ describe("scenarios (FR-032)", () => {
 
 const judgeStory = (name: string, run?: string) => `---\nname: ${name}\nkind: judge\n${run ? `run: ${run}\n` : ""}evidence: b.txt\n---\nSECRET STORY ${name}\n`;
 const lastScenarioPass = (w: World, id: string): ScenarioRun | undefined => w.events.flatMap(ev=>ev.type === "landing" ? ev.landing.runs : []).filter(rec=>rec.id===id && rec.scenarios).at(-1)?.scenarios;
+const pickDryWinner = (dry: GroupDry, origin: string): string | null => {
+  const member: RunGroup["members"][number] = { run: origin, origin, profile: null };
+  const group: RunGroup = {
+    id: "g-dry-check",
+    repoId: "repo-dry-check",
+    repoPath: "/repo-dry-check",
+    action: "propose",
+    note: "dry check",
+    expectedMembers: 1,
+    members: [member],
+    state: "scoring",
+    autoLand: false,
+    startedAt: 1,
+    scores: {
+      [origin]: {
+        branch: dry.branch,
+        base: dry.base,
+        state: "ready",
+        gates: dry.gates,
+        ...(dry.scenarios ? { scenarios: dry.scenarios } : {}),
+      },
+    },
+  };
+  return pickWinner(group, [dry.branch], dry.minimum);
+};
 
 describe("judge scenarios plan 2", () => {
   test("a judged-only set counts as a pass and can land at its configured minimum", async () => {
@@ -1162,5 +1189,59 @@ describe("best-of-N dry gates", () => {
     expect(w.checks.map(([, line]) => line)).toEqual(["bun test"]);
     expect(w.scenarios).toEqual([]);
     expect(w.hub.record("dry5")).toMatchObject({ state: "ready", dry: { gates: { ok: true }, minimum: 1 } });
+  });
+
+  test("a failed command scenario stays ineligible at a permissive minimum", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.5}');
+    await addScenario(w, "a-pass", "first passes");
+    await addScenario(w, "b-red", "second fails");
+    w.scenAnswers.set("first passes", () => ({ exit: 0, output: "passed" }));
+    w.scenAnswers.set("second fails", () => ({ exit: 1, output: "command failed" }));
+    const run = await readyRun(w, "dry6", "b.txt", "b\n");
+    const branchHead = await revOf(run.branch!.dir, "HEAD");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry6");
+
+    expect(dry).toMatchObject({ gates: { ok: false, red: "scenario: b-red", tail: "command failed" }, scenarios: { score: 0.5, passed: 1, total: 2 }, minimum: 0.5 });
+    expect(pickDryWinner(dry, "dry6")).toBeNull();
+    expect(w.hub.record("dry6")).toMatchObject({ state: "ready", dry: { scenarios: { score: 0.5, passed: 1, total: 2 } } });
+    expect(entryOf(w, "dry6")).toBeUndefined();
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(branchHead);
+  });
+
+  test("an unjudged scenario stays ineligible when the minimum is zero", async () => {
+    const w = await world({ judge: false });
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0}');
+    await addScenario(w, "refund", undefined, judgeStory("refund"));
+    const run = await readyRun(w, "dry7", "b.txt", "b\n");
+    const branchHead = await revOf(run.branch!.dir, "HEAD");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry7");
+
+    expect(dry).toMatchObject({ gates: { ok: false, red: "scenario: refund", tail: "no gateway key" }, scenarios: { score: 0, passed: 0, total: 1 }, minimum: 0 });
+    expect(pickDryWinner(dry, "dry7")).toBeNull();
+    expect(w.hub.record("dry7")).toMatchObject({ state: "ready", dry: { scenarios: { results: [{ unjudged: "no gateway key" }] } } });
+    expect(JSON.stringify(w.hub.info())).not.toContain("SECRET STORY");
+    expect(JSON.stringify(w.events)).not.toContain("SECRET STORY");
+    expect(entryOf(w, "dry7")).toBeUndefined();
+    expect(await revOf(run.branch!.dir, "HEAD")).toBe(branchHead);
+  });
+
+  test("a known partial judgment can win when its mean meets the minimum", async () => {
+    const w = await world();
+    await commit(w.repo.path, ".canopy/scenarios.json", '{"minimum":0.5}');
+    await addScenario(w, "refund", undefined, judgeStory("refund"));
+    w.judgeAnswer = { satisfied: { choice: "partly", probabilities: { yes: 0.6 } }, evidence: { probability: 0.8 } };
+    await readyRun(w, "dry8", "b.txt", "b\n");
+    await w.hub.idle();
+
+    const dry = await w.hub.dryGates("dry8");
+
+    expect(dry).toMatchObject({ gates: { ok: true }, scenarios: { score: 0.6, passed: 0, total: 1 }, minimum: 0.5 });
+    expect(pickDryWinner(dry, "dry8")).toBe("dry8");
+    expect(w.hub.record("dry8")).toMatchObject({ state: "ready", dry: { scenarios: { results: [{ ok: false, p: 0.6 }] } } });
   });
 });

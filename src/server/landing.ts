@@ -635,6 +635,18 @@ export class LandingHub {
         head,
         now: this.now(),
       });
+      const ineligible = scenarios.results.find((result) =>
+        (result.kind === "command" && !result.ok) ||
+        (result.kind === "judge" && result.unjudged !== undefined),
+      );
+      if (ineligible) {
+        const detail = ineligible.kind === "judge" ? ineligible.unjudged : ineligible.tail;
+        gateResult = {
+          ok: false,
+          red: `${SCENARIO_GATE}${ineligible.name}`,
+          ...(detail !== undefined ? { tail: detail } : {}),
+        };
+      }
     }
 
     const dry = { head, gates: gateResult, ...(scenarios ? { scenarios } : {}), minimum: settings.minimum };
