@@ -3,6 +3,7 @@ import type { TriggerEvent } from "./trigger";
 import type { Capacity, CapacitySettings } from "./capacity";
 import type { WorkItem } from "./work";
 import type { Collision } from "./touch";
+import type { RunGroup } from "./group";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -1004,9 +1005,9 @@ export const AGENT_OPENERS: readonly OpenerId[] = ["agent", "herdr"];
 /* ---------- runs: a job handed to Claude Code for one repo ---------- */
 
 export const RUN_ACTIONS = ["ask", "chat", "propose", "coordinate"] as const;
-export type RunAction = (typeof RUN_ACTIONS)[number];
+export type RunAction = (typeof RUN_ACTIONS)[number] | "compare";
 
-export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (RUN_ACTIONS as readonly string[]).includes(v);
+export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (v === "compare" || RUN_ACTIONS.some((action) => action === v));
 
 /** One card a coordinator proposed (FR-010): a branch run's worth of work in
  *  one repo. It waits as `proposed` until the user presses start these, then
@@ -1568,6 +1569,8 @@ export interface LandingRun {
   id: string;
   /** the branch's work item (FR-037); a record from before the ledger has none */
   work?: string;
+  /** the best-of-N group this branch belongs to (FR-033) */
+  group?: string;
   /** the latest run on the branch: the origin or its last "fix it" */
   runId: string;
   repoId: string;
@@ -1620,6 +1623,8 @@ export interface LandingInfo {
   notices?: LandNotice[];
   /** the live collisions on this backend (FR-040); an older backend has none */
   collisions?: Collision[];
+  /** best-of-N group records on this backend (FR-033) */
+  groups?: RunGroup[];
 }
 
 /** The parts of a status a run is expected to move: the working tree and

@@ -32,6 +32,8 @@ export interface CostEntry {
   repoName: string | null;
   /** the canopy run or chat the row belongs to */
   run: string | null;
+  /** the best-of-N group this row belongs to, absent on older rows */
+  group?: string;
   /** the run's verb, or what the row was ("voice call") */
   label: string | null;
   /** Claude's session or Codex's thread */
@@ -216,6 +218,7 @@ export function parseCostLine(line: string): CostEntry | null {
     repo: str(v["repo"]),
     repoName: str(v["repoName"]),
     run: str(v["run"]),
+    ...(typeof v["group"] === "string" ? { group: v["group"] } : {}),
     label: str(v["label"]),
     session: str(v["session"]),
     ...(agentSettings ? { agentSettings } : {}),
