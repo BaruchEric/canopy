@@ -28,7 +28,7 @@ let events: TriggerEvent[][];
 let n: number;
 
 const run = (over: Partial<Run> = {}): Run =>
-  ({ id: `r${++n}`, status: "working", branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: `br${n}` }, ...over }) as Run;
+  ({ id: `r${++n}`, status: "working", branch: { name: "run/x", target: "main", base: "b", dir: "/d", state: "working", origin: `br${n}`, work: "w-test2345" }, ...over }) as Run;
 
 let made: TriggerHub[] = [];
 
@@ -140,6 +140,22 @@ describe("the hook", () => {
     const res = await h.handle(hookReq(issueBody()), new URL("http://x/api/hooks/sentry/shop"));
     expect(res?.status).toBe(503);
     expect(runs).toEqual([]);
+  });
+});
+
+describe("the work ledger (FR-037)", () => {
+  test("an event carries its branch's item, links it, and notes an end the other hubs do not", async () => {
+    const notes: string[] = [];
+    const links: [string, unknown][] = [];
+    const h = hub({ work: { note: (id, t) => notes.push(`${id} ${t}`), close: () => {}, link: (id, ref) => links.push([id, ref]) } });
+    await h.adopt();
+    await h.handle(hookReq(issueBody()), new URL("http://x/api/hooks/sentry/shop"));
+    const [e] = h.list();
+    expect(e?.work).toBe("w-test2345");
+    expect(links).toEqual([["w-test2345", { event: e!.id }]]);
+    h.onRun({ ...runs[0]!, status: "done", branch: { ...runs[0]!.branch!, state: "nothing" } });
+    await h.idle();
+    expect(notes).toEqual(["w-test2345 trigger event SHOP-1A no-fix: the agent committed nothing: it found no fix to make"]);
   });
 });
 

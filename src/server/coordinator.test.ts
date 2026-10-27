@@ -39,7 +39,7 @@ const coordinator = (over: Partial<Run> = {}): Run => {
   return r;
 };
 
-const branch = (id: string, state: RunBranch["state"] = "working"): RunBranch => ({ name: `run/x-${id}`, target: "main", base: "b", dir: `/w/${id}`, state, origin: `br-${id}` });
+const branch = (id: string, state: RunBranch["state"] = "working"): RunBranch => ({ name: `run/x-${id}`, target: "main", base: "b", dir: `/w/${id}`, state, origin: `br-${id}`, work: "w-test2345" });
 
 const page: Caller = { id: "p1", kind: "page", label: "page mac", created: 0, used: 0 };
 const coordCaller = (run?: string): Caller => ({ id: "k1", kind: "coordinator", label: "coordinator web", ...(run ? { run } : {}), created: 0, used: 0 });
@@ -364,6 +364,23 @@ describe("settle notes", () => {
     expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
     expect(said[0]?.text).toContain("outcome: landed");
     expect(said[0]?.text).toContain("branch: run/x-c1, landed");
+  });
+
+  test("a card carries its child's item and notes how it settled", async () => {
+    const notes: string[] = [];
+    coordinator({ status: "idle" });
+    const h = hub({ work: { note: (id, t) => notes.push(`${id} ${t}`), close: () => {}, link: () => {} } });
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    expect(card("t1")?.work).toBe("w-test2345");
+    branches.set("c1", { verdict: "auto" });
+    end(h, "t1", { result: "Fixed it." });
+    await settled(h);
+    branches.set("c1", { verdict: "auto", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed", work: "w-test2345" });
+    expect(notes).toEqual(["w-test2345 card t1 settled: landed"]);
   });
 
   test("a sent-back child, a PR and a branch left to Eric each settle it", async () => {
