@@ -546,6 +546,50 @@ describe("the run log (FR-043)", () => {
     expect(run.status).toBe("done");
   });
 
+  test.each(["dismissed", "trimmed"])("shutdown drains a %s transcript through actual exit", async (how) => {
+    const { dir, log } = await disk();
+    let sawStop = () => {};
+    const stopped = new Promise<void>((resolve) => { sawStop = resolve; });
+    class DelayedExit extends WireDriver {
+      stops = 0;
+      override stop() { this.stops++; sawStop(); }
+    }
+    const driver = new DelayedExit("claude", false);
+    let first = true;
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => { if (first) { first = false; return driver; } return new WireDriver(); }, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    driver.turn();
+    if (how === "dismissed") runner.dismiss(run.id);
+    else for (let n = 0; n < 62; n++) runner.start(repo, "ask", ACTIONS.ask, "another finished run");
+    expect(runner.get(run.id)).toBeUndefined();
+    let returned = false;
+    const drain = runner.stopLoggedAndWait().then(() => { returned = true; });
+    await stopped;
+    expect(returned).toBe(false);
+    expect(existsSync(join(dir, run.id, WIRE_GZ))).toBe(false);
+    driver.exit();
+    await drain;
+    expect(await readKeptRun(dir, run.id)).toMatchObject({ id: run.id, status: "done" });
+    expect((await lines(dir, run.id)).slice(-2)).toMatchObject([{ type: "final" }, { canopy: "end", status: "done" }]);
+    await runner.stopLoggedAndWait();
+    expect(driver.stops).toBe(1);
+  });
+
+  test("pending transcript ownership clears after soft storage failure", async () => {
+    const { dir, log } = await disk();
+    class Stops extends WireDriver { stops = 0; override stop() { this.stops++; super.stop(); } }
+    const driver = new Stops("claude", false);
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver, log });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");
+    driver.turn(); runner.dismiss(run.id);
+    await rm(join(dir, run.id), { recursive: true });
+    await runner.stopLoggedAndWait();
+    expect(run.status).toBe("done");
+    expect(run.steps.filter((step) => step.text?.startsWith("transcript stopped:"))).toHaveLength(1);
+    await runner.stopLoggedAndWait();
+    expect(driver.stops).toBe(1);
+  });
+
   test("without a logger wire recording has no timeline side effects", async () => {
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new WireDriver() });
     const run = runner.start(repo, "ask", ACTIONS.ask, "inspect");

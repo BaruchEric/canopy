@@ -43,6 +43,8 @@ const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "pull"
 
 /** Paths are written without `/api/`. A trailing `/*` matches anything below. */
 const RULES: readonly Rule[] = [
+  // Removing kept transcripts is a hand's job, like the sweep's closes; reading one is a GET and stays read.
+  { methods: POST, paths: ["runs/prune"], right: "admin" },
   // auth/ticket is open here because its route checks the right the ticket is
   // for (shell or helper); a helper token has no read right to pass this table with
   { methods: POST, paths: ["auth/pair", "auth/claim", "auth/first", "auth/ticket"], right: "open" },
