@@ -1197,3 +1197,5 @@ With a scratch canopy (the "Scratch canopy server for UI checks" memory note) po
 - `score` in plan 1 is `passed / total`, with scenarios after a red counted 0 since they did not run. The sheet shows it beside the count as the spec draws it, so plan 2 changes the number and not the line.
 - `readScenarioSet` lives in `server/scenarios.ts`, not `core/scenario.ts`, so the core file stays browser-safe for the UI.
 - `/api/scenarios/run` never writes the record; only the queue's own pass does.
+- The pass runs under a budget of `MAX_TIMEOUT` seconds for the whole set, each scenario under the lesser of its timeout and what is left, and a scenario reached with nothing left is red with "the set's time ran out". The spec bounds one scenario, not the set; without this the CLI's wait had nothing to match, and a slow set outlived it with no record written.
+- A parse error names the file and the kind of problem but never quotes a line of it, and `/api/scenarios/names` returns an unreadable file by name only. The message is the red result's tail and the fix prompt's observation, so a story typed above the closing `---` would otherwise reach the agent.
