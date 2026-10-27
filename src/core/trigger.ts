@@ -97,6 +97,10 @@ export type TriggerStatus =
   | "ready"
   /** the PR is open */
   | "review"
+  /** canopy is rebasing the PR's branch onto its target */
+  | "rebasing"
+  /** a rebase conflict is being fixed; the fix run is `runId` */
+  | "conflict"
   /** the PR merged */
   | "merged"
   /** the PR closed without merging */
@@ -104,7 +108,7 @@ export type TriggerStatus =
   /** a level, project or ignore line passed it over; no run */
   | "ignored";
 
-export const TRIGGER_STATUSES: readonly TriggerStatus[] = ["queued", "working", "waiting", "stopped", "failed", "no-fix", "ready", "review", "merged", "closed", "ignored"];
+export const TRIGGER_STATUSES: readonly TriggerStatus[] = ["queued", "working", "waiting", "stopped", "failed", "no-fix", "ready", "review", "rebasing", "conflict", "merged", "closed", "ignored"];
 
 /** One event a rule took, and everything canopy did about it. */
 export interface TriggerEvent {
@@ -131,6 +135,8 @@ export interface TriggerEvent {
   status: TriggerStatus;
   /** why it is ignored, stopped or failed */
   reason?: string;
+  /** what its PR waits on Eric for, a sentence, while it does (`needsYouFromPr`) */
+  needsYou?: string;
   /** how many times the issue came in */
   count: number;
   firstAt: number;
@@ -775,14 +781,33 @@ export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent
   return next;
 }
 
-/** The event's state as its branch's PR says. */
+/** What an open PR waits on Eric for, as a sentence, or nothing: the head
+ *  his review rules hold for his approval, auto-fix that gave up, or a
+ *  review comment from someone without write access while no fix and no
+ *  rebase goes (the newest such comment's author). */
+export function needsYouFromPr(w: PrWatch): string | undefined {
+  if (w.approve && w.approve.head === w.state?.head) return `it touches files that need your approval (${w.approve.why}); merge it on GitHub yourself`;
+  if (w.gaveUp !== undefined) return `auto-fix gave up: ${w.gaveUp}`;
+  const c = w.untrusted?.[w.untrusted.length - 1];
+  if (c && !w.fixing && !w.rebasing) return `a review comment by ${c.author}, who has no write access, waits for you`;
+  return undefined;
+}
+
+/** The event's state as its branch's PR says: merged, closed, rebasing
+ *  while canopy rebases the branch, conflict while a fix run works a
+ *  rebase conflict (`fixing.key` is `rebase:<base>`), else review; and
+ *  what the PR needs Eric for, while it is open. */
 export function fromPr(e: TriggerEvent, w: PrWatch, now: number): TriggerEvent {
   if (!e.branch || w.id !== e.branch) return e;
-  const status: TriggerStatus = w.state?.status === "merged" ? "merged" : w.state?.status === "closed" ? "closed" : "review";
-  if (e.status === status && e.pr?.number === w.number && e.runId === w.runId) return e;
+  const status: TriggerStatus =
+    w.state?.status === "merged" ? "merged" : w.state?.status === "closed" ? "closed" : w.rebasing ? "rebasing" : w.fixing?.key.startsWith("rebase:") ? "conflict" : "review";
+  const needsYou = w.state?.status === "open" ? needsYouFromPr(w) : undefined;
+  if (e.status === status && e.pr?.number === w.number && e.runId === w.runId && e.needsYou === needsYou) return e;
   const next: TriggerEvent = { ...e, status, pr: { number: w.number, url: w.url }, runId: w.runId };
   delete next.reason;
-  if (status === "review") delete next.endedAt;
+  if (needsYou === undefined) delete next.needsYou;
+  else next.needsYou = needsYou;
+  if (status === "review" || status === "rebasing" || status === "conflict") delete next.endedAt;
   else next.endedAt ??= now;
   return next;
 }
@@ -859,7 +884,12 @@ export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent):
     case "ready":
       return { type: "thought", body: "Committed on the branch; canopy opens the pull request once its checks pass." };
     case "review":
+      if (prev?.status === "rebasing" || prev?.status === "conflict") return { type: "response", body: `Rebased and pushed ${pr}.` };
       return { type: "response", body: said(`Opened ${pr}.`) };
+    case "rebasing":
+      return { type: "thought", body: `Rebasing the branch: ${pr} fell behind its target.` };
+    case "conflict":
+      return { type: "action", action: "Working", parameter: "the rebase's conflicts on the branch" };
     case "merged":
       return { type: "response", body: `Merged ${pr}.` };
     case "closed":
@@ -898,8 +928,9 @@ export const resumable = (e: TriggerEvent): boolean => e.status === "stopped" &&
 /** Whether an event can be started again from scratch, on a new branch. */
 export const retryable = (e: TriggerEvent): boolean => e.status === "failed" || e.status === "no-fix" || (e.status === "stopped" && e.branch === undefined);
 
-/** Whether the run behind an event is still going. */
-export const eventLive = (e: TriggerEvent): boolean => e.status === "working" || e.status === "waiting";
+/** Whether the run behind an event is still going, or canopy is on its
+ *  branch (a rebase, or a fix run on a rebase conflict). */
+export const eventLive = (e: TriggerEvent): boolean => e.status === "working" || e.status === "waiting" || e.status === "rebasing" || e.status === "conflict";
 
 /** Kept newest first, at most `KEEP_EVENTS`, but never one still going. */
 export function pruneEvents(events: TriggerEvent[]): TriggerEvent[] {

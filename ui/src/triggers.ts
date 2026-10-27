@@ -25,6 +25,8 @@ const SECTION_OF: Record<TriggerStatus, SectionKey> = {
   closed: "needs",
   queued: "working",
   working: "working",
+  rebasing: "working",
+  conflict: "working",
   review: "review",
   merged: "fixed",
   "no-fix": "nofix",
@@ -49,6 +51,8 @@ export const STATUS_WORD: Record<TriggerStatus, string> = {
   "no-fix": "no fix",
   ready: "committed, no PR",
   review: "PR open",
+  rebasing: "rebasing onto main",
+  conflict: "fixing a rebase conflict",
   merged: "merged",
   closed: "PR closed",
   ignored: "ignored",
@@ -63,17 +67,23 @@ export const STATUS_TONE: Record<TriggerStatus, "moss" | "lichen" | "rust" | "sk
   "no-fix": "faint",
   ready: "lichen",
   review: "sky",
+  rebasing: "sky",
+  conflict: "sky",
   merged: "moss",
   closed: "rust",
   ignored: "faint",
 };
+
+/** The section an event sits in: Needs you while its PR waits on Eric
+ *  (`needsYou`), else the one its state names. */
+const sectionOf = (e: Pick<TriggerEvent, "status" | "needsYou">): SectionKey => (e.needsYou !== undefined ? "needs" : SECTION_OF[e.status]);
 
 /** Every shown backend's events, newest first within each section, and
  *  only the sections that hold any. */
 export function triggerSections(triggers: Readonly<Record<string, TriggersInfo>>, order: readonly string[]): TriggerSection[] {
   const rows: TriggerRow[] = order.flatMap((backend) => (triggers[backend]?.events ?? []).map((event) => ({ backend, event })));
   rows.sort((a, b) => b.event.lastAt - a.event.lastAt);
-  return SECTIONS.map((s) => ({ ...s, rows: rows.filter((r) => SECTION_OF[r.event.status] === s.key) })).filter((s) => s.rows.length > 0);
+  return SECTIONS.map((s) => ({ ...s, rows: rows.filter((r) => sectionOf(r.event) === s.key) })).filter((s) => s.rows.length > 0);
 }
 
 /** The service an event came from: an event written while Sentry was the only one names none. */
@@ -81,6 +91,7 @@ export const serviceOf = (e: Pick<TriggerEvent, "service">): string => SERVICE_N
 
 /** The line under an event's title: what became of it past its state. */
 export function outcomeLine(e: TriggerEvent): string | null {
+  if (e.needsYou !== undefined) return e.needsYou;
   const name = serviceOf(e);
   const linear = e.service === "linear";
   const forge = e.service === "github" || e.service === "forgejo";
@@ -127,9 +138,9 @@ export function eventActs(e: TriggerEvent): ("stop" | "resume" | "retry" | "dism
 /** The tab's count: events that need Eric, else the ones going. */
 export function triggersBadge(triggers: Readonly<Record<string, Pick<TriggersInfo, "events">>>): Badge | null {
   const events = Object.values(triggers).flatMap((t) => t.events);
-  const needs = events.filter((e) => SECTION_OF[e.status] === "needs");
+  const needs = events.filter((e) => sectionOf(e) === "needs");
   if (needs.length > 0) {
-    return { text: String(needs.length), tone: "rust", title: needs.map((e) => `${e.short ?? e.key}: ${STATUS_WORD[e.status]}`).join("\n") };
+    return { text: String(needs.length), tone: "rust", title: needs.map((e) => `${e.short ?? e.key}: ${e.needsYou ?? STATUS_WORD[e.status]}`).join("\n") };
   }
   const going = events.filter((e) => e.status === "queued" || eventLive(e));
   if (going.length === 0) return null;

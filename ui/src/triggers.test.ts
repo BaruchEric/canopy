@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TriggerEvent, TriggerRuleInfo, TriggersInfo } from "../../src/core/trigger";
-import { eventActs, hookAddress, outcomeLine, pollWords, ruleIntake, ruleWrites, triggerSections, triggersBadge } from "./triggers";
+import { eventActs, hookAddress, outcomeLine, pollWords, ruleIntake, ruleWrites, STATUS_WORD, triggerSections, triggersBadge } from "./triggers";
 
 const ev = (over: Partial<TriggerEvent>): TriggerEvent => ({
   id: "e1",
@@ -37,6 +37,23 @@ describe("triggerSections", () => {
 
   test("a hidden backend's events are not shown", () => {
     expect(triggerSections({ mini: info([ev({})]) }, ["home"])).toEqual([]);
+  });
+});
+
+describe("needs you and the rebase states", () => {
+  test("an event with needsYou is in Needs you whatever its status, and rebasing and conflict are Working", () => {
+    const needy = ev({ id: "n", status: "review", needsYou: "auto-fix gave up: x", lastAt: 4 });
+    const sections = triggerSections({ home: info([needy, ev({ id: "r", status: "rebasing", lastAt: 3 }), ev({ id: "c", status: "conflict", lastAt: 2 })]) }, ["home"]);
+    expect(sections.map((s) => [s.key, s.rows.map((r) => r.event.id)])).toEqual([
+      ["needs", ["n"]],
+      ["working", ["r", "c"]],
+    ]);
+    expect(STATUS_WORD.rebasing).toBe("rebasing onto main");
+    expect(STATUS_WORD.conflict).toBe("fixing a rebase conflict");
+    expect(outcomeLine(needy)).toBe("auto-fix gave up: x");
+    expect(outcomeLine(ev({ status: "review", needsYou: "y", linked: { error: "nope" } }))).toBe("y");
+    expect(triggersBadge({ home: info([needy, ev({ id: "r", status: "rebasing" })]) })).toMatchObject({ text: "1", tone: "rust", title: "SHOP-1A: auto-fix gave up: x" });
+    expect(triggersBadge({ home: info([ev({ id: "r", status: "rebasing" }), ev({ id: "c", status: "conflict" })]) })).toMatchObject({ text: "2", tone: "sky" });
   });
 });
 

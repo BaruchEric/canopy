@@ -6,12 +6,14 @@ import {
   existing,
   fromFlow,
   fromLanding,
+  eventLive,
   fromPr,
   fromRun,
   ignoreReason,
   incomingFromIssueView,
   issueNoteFor,
   knownEvent,
+  needsYouFromPr,
   linearFresh,
   linearInstallUrl,
   newEvent,
@@ -34,7 +36,7 @@ import {
   type TriggerRule,
 } from "./trigger";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
-import type { Flow, LandEntry, LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
+import type { Flow, LandEntry, LandNotice, PrComment, PrState, PrWatch, Run, Workflow, WorkflowStep } from "./types";
 
 const RULE: TriggerRule = {
   name: "shop",
@@ -596,6 +598,14 @@ describe("activityFor", () => {
     expect(activityFor(ag({ status: "review", pr }), ag({ status: "closed", pr }))?.type).toBe("response");
     expect(activityFor(undefined, ag({ status: "ignored", reason: "team OPS is not one this rule takes" }))).toEqual({ type: "response", body: "Not taking this one: team OPS is not one this rule takes." });
   });
+
+  test("a rebase and its conflict are told, and the return to review is not a second opening", () => {
+    const pr = { number: 9, url: "https://github.com/a/b/pull/9" };
+    expect(activityFor(ag({ status: "review", pr }), ag({ status: "rebasing", pr }))).toEqual({ type: "thought", body: "Rebasing the branch: [pull request #9](https://github.com/a/b/pull/9) fell behind its target." });
+    expect(activityFor(ag({ status: "rebasing", pr }), ag({ status: "conflict", pr }))).toEqual({ type: "action", action: "Working", parameter: "the rebase's conflicts on the branch" });
+    expect(activityFor(ag({ status: "conflict", pr }), ag({ status: "review", pr }))).toEqual({ type: "response", body: "Rebased and pushed [pull request #9](https://github.com/a/b/pull/9)." });
+    expect(activityFor(ag({ status: "rebasing", pr }), ag({ status: "review", pr }))).toEqual({ type: "response", body: "Rebased and pushed [pull request #9](https://github.com/a/b/pull/9)." });
+  });
 });
 
 describe("issueNoteFor", () => {
@@ -832,19 +842,52 @@ describe("fromRun", () => {
 });
 
 describe("fromPr", () => {
-  const watch = (status: "open" | "merged" | "closed"): PrWatch =>
-    ({ id: "br1", runId: "r2", number: 3, url: "https://github.com/a/b/pull/3", state: { status } }) as PrWatch;
+  const st = (status: "open" | "merged" | "closed", head = "h1"): PrState => ({ status, head }) as PrState;
+  /** an open watch on the head canopy pushed, with nothing going */
+  const watch = (over: Partial<PrWatch> = {}): PrWatch =>
+    ({ id: "br1", runId: "r2", number: 3, url: "https://github.com/a/b/pull/3", pushed: "h1", attempts: {}, seenComment: 0, state: st("open"), ...over }) as PrWatch;
+  const comment = (author: string): PrComment => ({ id: 9, author, body: "hm", url: "u" });
   test("the PR's state is the event's", () => {
     const e = event({ branch: "br1", status: "ready", runId: "r1" });
-    expect(fromPr(e, watch("open"), 9)).toMatchObject({ status: "review", pr: { number: 3 }, runId: "r2" });
-    expect(fromPr(e, watch("merged"), 9)).toMatchObject({ status: "merged", endedAt: 9 });
-    expect(fromPr(e, watch("closed"), 9).status).toBe("closed");
+    expect(fromPr(e, watch(), 9)).toMatchObject({ status: "review", pr: { number: 3 }, runId: "r2" });
+    expect(fromPr(e, watch({ state: st("merged") }), 9)).toMatchObject({ status: "merged", endedAt: 9 });
+    expect(fromPr(e, watch({ state: st("closed") }), 9).status).toBe("closed");
   });
   test("another branch's PR changes nothing, and neither does the same read twice", () => {
     const e = event({ branch: "other" });
-    expect(fromPr(e, watch("open"), 9)).toBe(e);
-    const seen = fromPr(event({ branch: "br1" }), watch("open"), 9);
-    expect(fromPr(seen, watch("open"), 10)).toBe(seen);
+    expect(fromPr(e, watch(), 9)).toBe(e);
+    const seen = fromPr(event({ branch: "br1" }), watch(), 9);
+    expect(fromPr(seen, watch(), 10)).toBe(seen);
+  });
+  test("fromPr reads rebasing and conflict from the watch, and back to review", () => {
+    const e = event({ branch: "br1", status: "ready", runId: "r1" });
+    const w = watch({ rebasing: { from: "h1" } });
+    const rebasing = fromPr(e, w, 5);
+    expect(rebasing.status).toBe("rebasing");
+    expect(rebasing.endedAt).toBeUndefined();
+    expect(eventLive(rebasing)).toBe(true);
+    const conflict = fromPr(e, { ...w, rebasing: undefined, fixing: { run: "f", key: "rebase:b1" } }, 5);
+    expect(conflict.status).toBe("conflict");
+    expect(eventLive(conflict)).toBe(true);
+    expect(fromPr(e, { ...w, rebasing: undefined, fixing: { run: "f", key: "check:test" } }, 5).status).toBe("review");
+    expect(fromPr(rebasing, watch(), 6).status).toBe("review");
+  });
+  test("needsYou from the PR: approval, auto-fix gave up, a comment without write access and nothing going; gone once the watch is clean", () => {
+    expect(needsYouFromPr(watch({ approve: { head: "h1", why: "infra/" } }))).toBe("it touches files that need your approval (infra/); merge it on GitHub yourself");
+    expect(needsYouFromPr(watch({ approve: { head: "h0", why: "infra/" } }))).toBeUndefined();
+    expect(needsYouFromPr(watch({ gaveUp: "could not rebase onto main after 3 tries" }))).toBe("auto-fix gave up: could not rebase onto main after 3 tries");
+    expect(needsYouFromPr(watch({ untrusted: [comment("bob"), comment("ann")] }))).toBe("a review comment by ann, who has no write access, waits for you");
+    expect(needsYouFromPr(watch({ untrusted: [comment("ann")], fixing: { run: "f", key: "check:test" } }))).toBeUndefined();
+    expect(needsYouFromPr(watch({ untrusted: [comment("ann")], rebasing: { from: "h1" } }))).toBeUndefined();
+    expect(needsYouFromPr(watch())).toBeUndefined();
+    const e = event({ branch: "br1" });
+    const needy = fromPr(e, watch({ gaveUp: "x" }), 5);
+    expect(needy.needsYou).toBe("auto-fix gave up: x");
+    expect(needy.status).toBe("review");
+    const clean = fromPr(needy, watch(), 6);
+    expect(clean.needsYou).toBeUndefined();
+    expect("needsYou" in clean).toBe(false);
+    expect(fromPr(e, watch({ gaveUp: "x", state: st("merged") }), 5).needsYou).toBeUndefined();
   });
 });
 
