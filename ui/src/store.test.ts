@@ -56,6 +56,7 @@ import {
   type AgentSettings,
   type Ask,
   type CapacityInfo,
+  type HistoryOverview,
   type LandingInfo,
   type KeptShell,
   type PeerSeen,
@@ -949,6 +950,33 @@ describe("several backends", () => {
     expect(bs?.url.startsWith("http://b.test/api/events")).toBe(true);
     expect(bs?.opts?.withCredentials).toBe(true);
     expect(connOf(s, "b").status.state).toBe("online");
+  });
+
+  test("history sends a window to its backend and qualifies the overview's repo ids", async () => {
+    setRegistry("a", ["a", "b"]);
+    setBase("b", "http://b.test");
+    const overview: HistoryOverview = {
+      available: true,
+      days: [],
+      maxDay: 0,
+      fetchedAt: 1,
+      repos: {
+        proj: { project: "p1", sessions: 0, costUsd: 0, tokens: 0, commits: 0, first: null, last: null, days: [], daySessions: [] },
+      },
+    };
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, _init?: RequestInit) => {
+        calls.push(String(input));
+        return new Response(JSON.stringify(overview), { status: 200 });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    const got = await api.history(true, "b", "90d");
+
+    expect(calls).toEqual(["http://b.test/api/history?refresh=1&window=90d"]);
+    if (!got.available) throw new Error(got.reason);
+    expect(Object.keys(got.repos)).toEqual(["b|proj"]);
   });
 
   test("a newer capacity event survives a pending read on that backend", async () => {

@@ -38,6 +38,7 @@ import { linkFavorites, linkHarness } from "../core/favorite";
 import { AUTHORED_QUERY, linkPulls, parseAuthoredPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
+  RING_DAYS,
   historyOverview,
   historySearch,
   historySession,
@@ -317,10 +318,10 @@ interface ServerState {
   remembered: RememberedRules;
   /** workflow runs, step by step, over the runner's jobs */
   flows: Flows;
-  /** the claude-history overview, kept for HISTORY_TTL and for one scan */
-  history: HistoryCache | null;
-  /** an overview being built, so concurrent callers share it */
-  historyPending: Promise<HistoryCache> | null;
+  /** claude-history overviews, keyed by requested day count */
+  history: Map<number, HistoryCache>;
+  /** one overview per day count being built, shared by concurrent callers */
+  historyPending: Map<number, Promise<HistoryCache>>;
   /** the shells behind browser terminals, by the id the browser gave each;
    *  a shell outlives its socket, and the server too when tmux holds it */
   terms: Map<string, LiveTerm>;
@@ -2002,8 +2003,11 @@ const isFlowChoice = (v: unknown): v is FlowChoice => v === "continue" || v === 
 const isHistoryWindow = (v: unknown): v is HistoryWindow =>
   typeof v === "string" && (HISTORY_WINDOWS as readonly string[]).includes(v);
 
-async function loadHistory(state: ServerState, force = false): Promise<HistoryCache> {
-  const c = state.history;
+/** Only the costs view's explicit 90-day window widens the archive strip. */
+const overviewDays = (window: string | null): number => (window === "90d" ? 90 : RING_DAYS);
+
+async function loadHistory(state: ServerState, force = false, days = RING_DAYS): Promise<HistoryCache> {
+  const c = state.history.get(days);
   if (
     !force &&
     c &&
@@ -2012,9 +2016,10 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
   ) {
     return c;
   }
-  if (state.historyPending) return state.historyPending;
+  const pending = state.historyPending.get(days);
+  if (pending) return pending;
   const scannedAt = state.result.scannedAt;
-  state.historyPending = (async () => {
+  const building = (async () => {
     const cfg = await loadConfig();
     const loc = locateHistory(cfg);
     let entry: HistoryCache;
@@ -2026,7 +2031,7 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
         value: { available: false, reason: loc.reason, fetchedAt: Date.now() },
       };
     } else {
-      const value = await historyOverview(loc.bin, state.result.repos).catch(
+      const value = await historyOverview(loc.bin, state.result.repos, new Date(), days).catch(
         (err: unknown): HistoryOverview => ({
           available: false,
           reason: String(err instanceof Error ? err.message : err),
@@ -2035,12 +2040,13 @@ async function loadHistory(state: ServerState, force = false): Promise<HistoryCa
       );
       entry = { at: Date.now(), scannedAt, bin: loc.bin, value };
     }
-    state.history = entry;
+    state.history.set(days, entry);
     return entry;
   })().finally(() => {
-    state.historyPending = null;
+    state.historyPending.delete(days);
   });
-  return state.historyPending;
+  state.historyPending.set(days, building);
+  return building;
 }
 
 /** The CLI and the project id behind one repo's history routes. */
@@ -3375,7 +3381,8 @@ async function handleApi(
   }
 
   if (path === "/api/history" && method === "GET") {
-    const c = await loadHistory(state, url.searchParams.get("refresh") === "1");
+    const days = overviewDays(url.searchParams.get("window"));
+    const c = await loadHistory(state, url.searchParams.get("refresh") === "1", days);
     return json(c.value);
   }
 
@@ -5140,8 +5147,8 @@ export async function startServer(opts: {
     helpers: new Map(),
     gateway: await defaultGateway(),
     timers: new Map(),
-    history: null,
-    historyPending: null,
+    history: new Map(),
+    historyPending: new Map(),
     terms: new Map(),
     tmux: tmuxBase(),
     runner,
