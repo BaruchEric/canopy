@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { DEFAULT_SETTINGS, INBOX_TEXT, PALETTES, SCREEN_SETTINGS, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
+import { DEFAULT_SETTINGS, HARNESS_SHARE, INBOX_TEXT, PALETTES, SCREEN_SETTINGS, harnessShareMaxOf, inboxTextOf, levelOf, loadSettings, saveSettings, shellPlace } from "./settings";
 
 describe("shellPlace", () => {
   test("auto follows the panel", () => {
@@ -79,6 +79,35 @@ describe("loadSettings", () => {
     expect(loadSettings().zoom).toEqual({});
     expect(loadSettings().sectionOrder[0]).toBe("changes");
     delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("the harness share's line", () => {
+  test("defaults to 25, keeps 0, clamps and rounds, and repairs junk", () => {
+    expect(HARNESS_SHARE).toEqual({ min: 5, max: 90, off: 0 });
+    expect(DEFAULT_SETTINGS.harnessShareMax).toBe(25);
+    expect(harnessShareMaxOf(undefined)).toBe(25);
+    expect(harnessShareMaxOf(0)).toBe(0);
+    expect(harnessShareMaxOf(3)).toBe(5);
+    expect(harnessShareMaxOf(95)).toBe(90);
+    expect(harnessShareMaxOf(40.6)).toBe(41);
+    expect(harnessShareMaxOf("30")).toBe(25);
+  });
+
+  test("saved and repaired values survive a reload", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    };
+    try {
+      store.set("canopy.settings", JSON.stringify({ harnessShareMax: 40 }));
+      expect(loadSettings().harnessShareMax).toBe(40);
+      store.set("canopy.settings", JSON.stringify({ harnessShareMax: 200 }));
+      expect(loadSettings().harnessShareMax).toBe(90);
+    } finally {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
   });
 });
 

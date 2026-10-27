@@ -22,7 +22,7 @@ import { AwakeRow } from "./AwakeRow";
 import { SweepRow } from "./Sweep";
 import { NotifyRow } from "./NotifyRow";
 import { InstallRow } from "./InstallRow";
-import type { Palette } from "../settings";
+import { HARNESS_SHARE, harnessShareMaxOf, type Palette } from "../settings";
 
 const LEVEL = [
   { value: "intermediate", label: "intermediate", title: "Agent first: run your app, save your work, and the rest one click away" },
@@ -163,6 +163,49 @@ function useAbout(name: string, open: boolean): { about: About | null; error: st
     };
   }, [name, open]);
   return { about, error };
+}
+
+function HarnessShareRow() {
+  const value = useStore((s) => s.settings.harnessShareMax);
+  const setSetting = useStore((s) => s.setSetting);
+  const [text, setText] = useState<string | null>(null);
+  const commit = () => {
+    if (text === null) return;
+    const next = harnessShareMaxOf(Number(text));
+    setText(null);
+    if (next !== value) setSetting("harnessShareMax", next);
+  };
+
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">harness share</h3>
+      <label className="layout-field">
+        warning at
+        <span className="sweep-span">
+          <input
+            className="settings-input"
+            type="number"
+            min={HARNESS_SHARE.off}
+            max={HARNESS_SHARE.max}
+            value={text ?? String(value)}
+            aria-label="Harness share warning line"
+            onChange={(e) => setText(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commit();
+              }
+            }}
+          />
+          <span>%</span>
+        </span>
+      </label>
+      <p className="settings-hint">
+        The costs view's harness line turns rust at this share of the window's dollars, and the inbox gets one quiet line a week when last week crossed it. 0 turns both off.
+      </p>
+    </section>
+  );
 }
 
 export function SettingsMenu() {
@@ -442,6 +485,12 @@ export function SettingsMenu() {
           key: "notify",
           words: "notifications notify alert system desktop title count waiting hidden tab permission",
           node: <NotifyRow />,
+        },
+        {
+          tab: "device",
+          key: "harness",
+          words: "harness share warning line percent costs canopy itself inbox",
+          node: <HarnessShareRow />,
         },
         {
           tab: "device",
