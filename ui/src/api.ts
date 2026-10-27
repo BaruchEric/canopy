@@ -1159,6 +1159,15 @@ export const api = {
     });
     return from(b, got, qRepo);
   },
+  /** marks a repo as the harness, or takes the mark off; answers the repo */
+  harness: async (id: string, harness: boolean) => {
+    const [b, plain] = on(id);
+    const got = await req<Repo>(b, `/api/repos/harness?${rq(plain)}`, {
+      method: "POST",
+      body: JSON.stringify({ harness }),
+    });
+    return from(b, got, qRepo);
+  },
   /** the backends this page may talk to, as its home backend's config names them */
   backends: () => req<{ self: string | null; backends: BackendEntry[] }>(homeName(), "/api/backends"),
   workspaces: () => req<Workspace[]>(homeName(), "/api/workspaces"),

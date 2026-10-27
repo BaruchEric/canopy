@@ -15,6 +15,7 @@ import {
   favoriteCount,
   inboxItems,
   isFavorite,
+  isHarness,
   isOnline,
   layoutOf,
   loadDock,
@@ -977,6 +978,55 @@ describe("several backends", () => {
     expect(calls).toEqual(["http://b.test/api/history?refresh=1&window=90d"]);
     if (!got.available) throw new Error(got.reason);
     expect(Object.keys(got.repos)).toEqual(["b|proj"]);
+  });
+
+  test("harnessRepo marks one checkout and clears every marked checkout on the card", async () => {
+    setRegistry("a", ["a", "b"]);
+    setBase("b", "http://b.test");
+    useStore.setState({
+      home: "a",
+      backendOrder: ["a", "b"],
+      repos: [repo("proj", { harness: true }), repo("b|proj", { harness: true })],
+    });
+    const payloads: unknown[] = [];
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const target = String(input);
+        calls.push(target);
+        const body: unknown = JSON.parse(String(init?.body));
+        if (body === null || typeof body !== "object" || !("harness" in body) || typeof body.harness !== "boolean") {
+          throw new Error("the harness request did not contain a boolean");
+        }
+        payloads.push(body);
+        const url = new URL(target, "http://a.test");
+        const plain = url.searchParams.get("id");
+        if (!plain) throw new Error("the harness request had no repo id");
+        const id = url.origin === "http://b.test" ? `b|${plain}` : plain;
+        const found = useStore.getState().repos.find((r) => r.id === id);
+        if (!found) throw new Error(`no fixture repo for ${id}`);
+        const answer: Repo = { ...found, id: plain };
+        if (body.harness) answer.harness = true;
+        else delete answer.harness;
+        return new Response(JSON.stringify(answer), { status: 200 });
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    );
+
+    await useStore.getState().harnessRepo("proj", false);
+
+    expect(calls).toEqual([
+      "/api/repos/harness?id=proj",
+      "http://b.test/api/repos/harness?id=proj",
+    ]);
+    expect(payloads).toEqual([{ harness: false }, { harness: false }]);
+    expect(useStore.getState().repos.map((r) => r.harness)).toEqual([undefined, undefined]);
+    expect(isHarness(useStore.getState(), "proj")).toBe(false);
+
+    await useStore.getState().harnessRepo("b|proj", true);
+
+    expect(calls[2]).toBe("http://b.test/api/repos/harness?id=proj");
+    expect(payloads[2]).toEqual({ harness: true });
+    expect(isHarness(useStore.getState(), "proj")).toBe(true);
   });
 
   test("a newer capacity event survives a pending read on that backend", async () => {
@@ -2074,6 +2124,15 @@ describe("cards over several backends", () => {
     expect(favoriteCount(s)).toBe(1);
     useStore.getState().setFavoritesOnly(true);
     expect(visibleCards(useStore.getState()).map((c) => c.checkouts.map((r) => r.id))).toEqual([["proj", "b|proj"]]);
+  });
+
+  test("a card is the harness when any of its checkouts is marked", () => {
+    two();
+    useStore.setState((s) => ({ repos: s.repos.map((r) => (r.id === "b|proj" ? { ...r, harness: true as const } : r)) }));
+    const s = useStore.getState();
+    expect(isHarness(s, "proj")).toBe(true);
+    expect(isHarness(s, "b|proj")).toBe(true);
+    expect(isHarness(s, "other")).toBe(false);
   });
 
   test("switchCheckout swaps the panel in place and leads the card with it", () => {

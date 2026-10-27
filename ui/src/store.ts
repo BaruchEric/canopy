@@ -6,6 +6,7 @@ import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatu
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
+import { isHarnessCard } from "../../src/core/harnessshare";
 import { changedAt, foldGroups as foldGroupList } from "./grouping";
 import { foldKeys, sectionsHidden, withZoom, zoomOf, ZOOM_MAX, ZOOM_MIN, type SectionKey } from "./surface";
 import { addItemTab, addSectionTab, dropSectionTab, itemTabId, sectionTabId, type SectionPlace, type TabRef } from "./sectiontabs";
@@ -1326,6 +1327,9 @@ export interface CanopyState {
   /** stars a repo in canopy; unstarring takes the star off every checkout
    *  of its card, since the card shows one star for them all */
   favoriteRepo: (repoId: string, favorite: boolean) => Promise<void>;
+  /** marks one checkout as the harness; unmarking clears every marked
+   *  checkout of its card, since the card is the unit of the figure */
+  harnessRepo: (repoId: string, harness: boolean) => Promise<void>;
   /** opens the repo's launch settings */
   editLaunch: (repoId: string) => void;
   setLaunch: (repoId: string, settings: LaunchSettings) => Promise<void>;
@@ -4266,6 +4270,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       get().applyEvent({ type: "repo", repo }, backendOf(id));
     }
   },
+  harnessRepo: async (repoId, harness) => {
+    const ids = harness
+      ? [repoId]
+      : (cardOf(get(), repoId)?.checkouts.filter((r) => r.harness === true).map((r) => r.id) ?? [repoId]);
+    for (const id of ids) {
+      const repo = await api.harness(id, harness);
+      get().applyEvent({ type: "repo", repo }, backendOf(id));
+    }
+  },
   editLaunch: (repoId) => set({ sheet: { kind: "launch", repoId } }),
   editTask: (repoId, name) => set({ sheet: { kind: "task", repoId, name } }),
   showTasks: (repoId) =>
@@ -5179,6 +5192,12 @@ export function boardFavorite(s: CanopyState): (r: Repo) => boolean {
 export function isFavorite(s: CanopyState, repoId: string): boolean {
   const card = cardOf(s, repoId);
   return card ? cardFavorite(card) : s.repos.some((r) => r.id === repoId && r.favorite === true);
+}
+
+/** Whether the card a repo is on counts as the harness. */
+export function isHarness(s: CanopyState, repoId: string): boolean {
+  const card = cardOf(s, repoId);
+  return card ? isHarnessCard(card) : s.repos.some((r) => r.id === repoId && r.harness === true);
 }
 
 /** how many cards in the workspace are starred */
