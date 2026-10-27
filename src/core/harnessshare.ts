@@ -10,6 +10,24 @@ export const WEEKS = 8;
 /** Yegge's default warning line, in percent */
 export const HARNESS_SHARE_MAX = 25;
 
+/** Whole-percent display for a share; absent when no money was spent. */
+export function pct(share: number | null): string {
+  return share === null ? "—" : `${Math.round(share * 100)}%`;
+}
+
+/** Compare the same rounded value the user sees; zero disables the line. */
+export function shareTone(share: number | null, max: number): "rust" | "moss" | null {
+  if (share === null || max <= 0) return null;
+  return Math.round(share * 100) >= max ? "rust" : "moss";
+}
+
+/** Whole-percent spans whose widths always fill the strip. */
+export function barWidths(share: number | null): { harness: string; rest: string } | null {
+  if (share === null) return null;
+  const harness = Math.max(0, Math.min(100, Math.round(share * 100)));
+  return { harness: `${harness}%`, rest: `${100 - harness}%` };
+}
+
 export interface HarnessShare {
   /** dollars, reported plus estimated, in the window */
   usd: { harness: number; rest: number };

@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { joinRepos } from "../checkouts";
-import { COST_WINDOWS, claudeLeads, costSheet, sessionLines, tokensWord as fmtTokens, usageWords, usdWord as usd, windowStart, type ClaudeLead, type CostLine, type CostWindow, type LeadSessions, type ServedRow } from "../../../src/core/costsheet";
+import { barWidths, harnessNames, harnessShare, harnessWeeks, pct, shareTone } from "../../../src/core/harnessshare";
+import { mergeHistory } from "../../../src/core/historymerge";
+import { COST_WINDOWS, claudeLeads, costSheet, sessionLines, tokensWord as fmtTokens, usageWords, usdWord as usd, windowStart, type ClaudeLead, type CostLine, type CostSheet, type CostWindow, type LeadSessions, type ServedRow } from "../../../src/core/costsheet";
+import type { RepoCard } from "../../../src/core/cards";
+import type { HistoryOverview } from "../../../src/core/types";
 import { backendOf, plainOf, qual } from "../registry";
 import { isOnline, useStore } from "../store";
 import { Seg } from "./Seg";
@@ -83,6 +87,38 @@ function useSessions(leads: readonly ClaudeLead[], days: number): CostLine[] | n
   return got;
 }
 
+/** The open cost table reads every online backend's independently qualified
+ *  90-day overview. A closed, hidden, offline or superseded request cannot
+ *  publish its result into the current view. */
+function useWideHistory(open: boolean): HistoryOverview | null {
+  const online = useStore((s) => s.backendOrder.filter((b) => isOnline(s, b)).join("\n"));
+  const [got, setGot] = useState<{ online: string; history: HistoryOverview | null } | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    const backends = online ? online.split("\n") : [];
+    setGot(null);
+    void Promise.all(
+      backends.map((backend) =>
+        // api.history qualifies repo ids at this backend boundary, before
+        // these overviews are combined.
+        api.history(false, backend, "90d").then(
+          (history) => ({ history }),
+          () => ({ history: null }),
+        ),
+      ),
+    ).then((parts) => {
+      if (!live) return;
+      const answered = parts.flatMap((part) => (part.history?.available ? [part.history] : []));
+      setGot({ online, history: mergeHistory(answered) });
+    });
+    return () => {
+      live = false;
+    };
+  }, [open, online]);
+  return open && got?.online === online ? got.history : null;
+}
+
 function Amount({ l }: { l: CostLine }) {
   return (
     <span className="cost-amt">
@@ -90,6 +126,58 @@ function Amount({ l }: { l: CostLine }) {
       {l.est > 0 && <span title="Estimated from prices.json">≈ {usd(l.est)}</span>}
       {l.usd === 0 && l.est === 0 && <span className="cost-none">{l.unpriced > 0 ? "unpriced" : usd(0)}</span>}
     </span>
+  );
+}
+
+function HarnessLine({ sheet, history, days, cards }: { sheet: CostSheet; history: HistoryOverview | null; days: number; cards: readonly RepoCard[] }) {
+  const [open, setOpen] = useState(false);
+  const wide = useWideHistory(open);
+  const max = useStore((s) => s.settings.harnessShareMax);
+  const share = harnessShare(sheet, history, days, cards);
+  const weeks = harnessWeeks(wide ?? history, cards);
+  const names = harnessNames(cards);
+  const tone = shareTone(share.share, max);
+  return (
+    <details className="cost-share" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
+      <summary title={names.length ? `The harness: ${names.join(", ")}` : "No repo counts as the harness: mark one from its card's menu"}>
+        harness <b className={tone ?? undefined}>{pct(share.share)}</b> of {usd(share.usd.harness + share.usd.rest)} · <b className={tone ?? undefined}>{pct(share.sessionShare)}</b> of {share.sessions.harness + share.sessions.rest} sessions
+      </summary>
+      {weeks.length === 0 ? (
+        <p className="cost-note">{open && wide === null ? "reading 90 days…" : "No week to show: claude-history has no spend in these repos."}</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>week</th>
+              <th>harness</th>
+              <th>rest</th>
+              <th>share</th>
+              <th aria-label="share bar" />
+            </tr>
+          </thead>
+          <tbody>
+            {weeks.map((week, index) => {
+              const weekTone = shareTone(week.share, max);
+              const bar = barWidths(week.share);
+              return (
+                <tr key={week.from}>
+                  <td>{week.from}{index === weeks.length - 1 && <small> so far</small>}</td>
+                  <td>{usd(week.harness)}</td>
+                  <td>{usd(week.rest)}</td>
+                  <td className={weekTone ?? undefined}>{pct(week.share)}</td>
+                  <td>{bar && (
+                    <span className="cost-bar" aria-hidden="true">
+                      <span className={`cost-bar-harness${weekTone === "rust" ? " rust" : ""}`} style={{ width: bar.harness }} />
+                      <span className="cost-bar-rest" style={{ width: bar.rest }} />
+                    </span>
+                  )}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </details>
   );
 }
 
@@ -160,6 +248,7 @@ export function CostsView() {
           </span>
         )}
       </header>
+      {sheet && <HarnessLine sheet={sheet} history={history} days={days} cards={cards} />}
       {got.kind === "loading" && <p className="cost-note">reading the ledgers…</p>}
       {got.kind === "done" && got.failed.length > 0 && (
         <p className="cost-note rust" role="alert">

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RepoCard } from "./cards";
-import { HARNESS_SHARE_MAX, WEEKS, cardsOf, harnessNames, harnessShare, harnessWeeks, isHarnessCard, weekFrom, weekKey } from "./harnessshare";
+import { HARNESS_SHARE_MAX, WEEKS, barWidths, cardsOf, harnessNames, harnessShare, harnessWeeks, isHarnessCard, pct, shareTone, weekFrom, weekKey } from "./harnessshare";
 import type { CostLine, CostSheet } from "./costsheet";
 import type { HistoryOverview, Repo, RepoHistory } from "./types";
 
@@ -93,6 +93,17 @@ const sheet: Pick<CostSheet, "repos"> = {
 
 test("share defaults match the product line", () => {
   expect([WEEKS, HARNESS_SHARE_MAX]).toEqual([8, 25]);
+});
+
+test("percentage, warning tone and bar widths use the displayed whole percent", () => {
+  expect([pct(0.234), pct(1), pct(null)]).toEqual(["23%", "100%", "—"]);
+  expect(shareTone(0.25, 25)).toBe("rust");
+  expect(shareTone(0.249, 25)).toBe("rust");
+  expect(shareTone(0.244, 25)).toBe("moss");
+  expect(shareTone(0.9, 0)).toBeNull();
+  expect(shareTone(null, 25)).toBeNull();
+  expect(barWidths(0.754)).toEqual({ harness: "75%", rest: "25%" });
+  expect(barWidths(null)).toBeNull();
 });
 
 describe("harnessShare", () => {
