@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`.
+**Status:** implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`.
 
 **Goal:** a repo can be marked as the harness; the costs view says what share of
 the window's dollars and Claude sessions went into the harness repos, folds open

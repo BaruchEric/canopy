@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plans 2 and 3 remain open.
+**Status:** implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Plans 2 and 3 remain open.
 
 **Goal:** a repo whose gates file names `setup` can keep one or two prepared
 worktrees under the config dir, cut from the default branch's tip with `setup`

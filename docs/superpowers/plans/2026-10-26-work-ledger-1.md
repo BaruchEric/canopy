@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** implemented locally 2026-10-26, integrated at 8262993; combined batch verification pending. Written on main at 1ac8fe7.
+**Status:** implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Plans 2 and 3 remain open. Written on main at 1ac8fe7.
 
 **Goal:** every branch run gets a work item, `w-xxxxxxxx`, kept under
 `<configDir>/work/` by the holder of the flows lock; the branch is named after
