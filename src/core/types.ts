@@ -1590,6 +1590,8 @@ export interface LandingRun {
   review?: RunReview;
   /** the set's latest pass over this branch; a rebase runs it again */
   scenarios?: ScenarioRun;
+  /** the last observed live run or branch overlap, retained until the branch leaves landing */
+  overlap?: { with: string; paths: string[] };
   /** a stopped run only: whether its work is whole as the hub last looked,
    *  so "land" applies. Never saved: the worktree can change after. */
   whole?: RunWhole;

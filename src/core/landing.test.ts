@@ -78,6 +78,21 @@ describe("enqueue", () => {
     expect(fixPrompt(noOverlapBack)).not.toContain("canopy saw");
   });
 
+  test("a recorded overlap carries into enqueue and a sent-back entry keeps its older overlap", () => {
+    const review: RunReview = { verdict: "land", files: [{ path: "notes.md", cls: "logic" }], base: "b", head: "h", at: 1 };
+    const remembered = { with: "run/x-c", paths: ["notes.md"] };
+    const prior = enqueue([], run("d", { review, overlap: remembered }), 1)[0];
+    if (!prior) throw new Error("expected the branch to be queued");
+    expect(prior.overlap).toEqual(remembered);
+    expect(fixPrompt(advance(advance(prior, { t: "begin" }, 2), { t: "conflict", files: ["notes.md"] }, 3))).toContain("canopy saw run/x-c editing these files while you worked: notes.md.");
+
+    const working = [touchedOf({ id: "live", verb: "Ask", steps: [{ id: "1", at: 1, kind: "tool", tool: { name: "Edit", title: "", status: "ok", paths: ["notes.md"] } }], branch: { name: "run/x-live", target: "main", base: "b", dir: "/w/live", state: "working", origin: "live" } })];
+    expect(enqueue([], run("d", { review, overlap: remembered }), 4, undefined, working)[0]?.overlap).toEqual({ with: "run/x-live", paths: ["notes.md"] });
+
+    const sentBack = advance(advance(enqueue([], run("e", { review }), 5, undefined, working)[0]!, { t: "begin" }, 6), { t: "conflict", files: ["notes.md"] }, 7);
+    expect(enqueue([sentBack], run("e", { review }), 8)[0]?.overlap).toEqual({ with: "run/x-live", paths: ["notes.md"] });
+  });
+
   test("a ready run joins at the end", () => {
     const es = queued(["a", "b"]);
     expect(es.map((e) => [e.id, e.state, e.queuedAt])).toEqual([

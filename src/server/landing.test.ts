@@ -1,14 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
-import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
+import type { LandEntry, LandingInfo, LandingRun, Repo, Run, RunBranchState, RunStep, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
 import { fixPrompt } from "../core/landing";
 import { touchedOf, type Touched } from "../core/touch";
 import { addRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { LandingHub, type CheckOutcome } from "./landing";
+import { CollisionHub } from "./collisions";
 import { setDirOf } from "./scenarios";
 
 let root = "";
@@ -52,6 +53,7 @@ interface World {
   judgeAnswer: ScenarioAnswers | (() => ScenarioAnswers | Promise<ScenarioAnswers>);
   notes: string[];
   closes: string[];
+  landingObserver?: (info: LandingInfo) => void;
 }
 
 /** A repo with one commit on main, gates from package.json, and a hub. */
@@ -90,7 +92,10 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
   };
   let fixN = 0;
   w.hub = new LandingHub({
-    broadcast: (ev) => w.events.push(ev),
+    broadcast: (ev) => {
+      w.events.push(ev);
+      if (ev.type === "landing") w.landingObserver?.(ev.landing);
+    },
     repo: (id) => (id === repo.id ? repo : undefined),
     repoByPath: (p) => repoAtPath([repo], p),
     check: async (cwd, line) => {
@@ -280,6 +285,87 @@ describe("landing", () => {
     // nothing of the second reached main, and its worktree stays for the fix
     expect(await sh(w.repo.path, "show", "HEAD:a.txt")).toBe("one\nTWO first\nthree");
     expect(existsSync(runTreeDir(w.repo.path, "cc02", w.wts))).toBe(true);
+  });
+
+  test("live branch overlap survives the first landing and names it in the later conflict fix", async () => {
+    const w = await world();
+    await w.hub.adopt();
+    const first = await readyRun(w, "hist-c", "notes.md", "from C\n");
+    const second = await readyRun(w, "hist-d", "notes.md", "from D\n");
+    await w.hub.idle();
+
+    const live = new Map<string, Run>();
+    const collisions = new CollisionHub({
+      runs: () => [...live.values()],
+      repo: (id) => id === w.repo.id ? w.repo : undefined,
+      landing: () => w.hub.info(),
+      note: (id, text) => w.notes.push(`${id} ${text}`),
+      say: () => {},
+      notify: (notice) => w.hub.notice(notice),
+      publish: () => w.hub.republish(),
+      rememberOverlap: (origin, overlap) => w.hub.rememberOverlap(origin, overlap),
+      now: () => 10_000,
+    });
+    w.landingObserver = (info) => collisions.onLanding(info);
+    const observe = (run: Run): void => {
+      live.set(run.id, run);
+      w.hub.onRun(run);
+      collisions.onRun(run);
+      w.working = collisions.working(w.repo.id);
+    };
+    const edit = (run: Run): Run => {
+      if (!run.branch) throw new Error("expected a branch run");
+      const { endedAt: _endedAt, ...active } = run;
+      const step: RunStep = { id: `edit-${run.id}`, at: 3, kind: "tool", tool: { name: "Edit", title: "Edit notes.md", status: "ok", paths: ["notes.md"] } };
+      return { ...active, status: "working", branch: { ...run.branch, state: "working" }, steps: [step] };
+    };
+    const ready = (run: Run): Run => {
+      if (!run.branch) throw new Error("expected a branch run");
+      return { ...run, status: "done", endedAt: 4, branch: { ...run.branch, state: "ready" } };
+    };
+
+    const firstWorking = edit(first);
+    const secondWorking = edit(second);
+    observe(firstWorking);
+    observe(secondWorking);
+    await w.hub.flushed();
+    expect(w.hub.record("hist-c")?.overlap).toEqual({ with: second.branch!.name, paths: ["notes.md"] });
+    expect(w.hub.record("hist-d")?.overlap).toEqual({ with: first.branch!.name, paths: ["notes.md"] });
+    const recordPath = join(w.dir, "runs", "hist-d.json");
+    const saved = JSON.parse(await readFile(recordPath, "utf8")) as LandingRun;
+    expect(saved.overlap).toEqual({ with: first.branch!.name, paths: ["notes.md"] });
+    const eventCount = w.events.length;
+    const fileBefore = await stat(recordPath);
+    collisions.onRun(secondWorking);
+    expect(w.hub.rememberOverlap("hist-d", { with: first.branch!.name, paths: ["notes.md"] })).toBe(false);
+    await w.hub.flushed();
+    const fileAfter = await stat(recordPath);
+    expect(w.events).toHaveLength(eventCount);
+    expect(fileAfter.ino).toBe(fileBefore.ino);
+
+    observe(ready(firstWorking));
+    await w.hub.idle();
+    await w.hub.land("hist-c");
+    await w.hub.idle();
+    expect(entryOf(w, "hist-c")?.state).toBe("landed");
+    expect(w.hub.record("hist-c")).toBeUndefined();
+    expect(w.hub.rememberOverlap("hist-c", { with: second.branch!.name, paths: ["notes.md"] })).toBe(false);
+    expect(w.hub.record("hist-d")?.overlap).toEqual({ with: first.branch!.name, paths: ["notes.md"] });
+
+    observe(ready(secondWorking));
+    await w.hub.idle();
+    expect(collisions.working(w.repo.id)).toEqual([]);
+    expect(w.working).toEqual([]);
+    await w.hub.land("hist-d");
+    await w.hub.idle();
+
+    const conflict = entryOf(w, "hist-d");
+    expect(conflict).toMatchObject({ state: "conflict", overlap: { with: first.branch!.name, paths: ["notes.md"] } });
+    if (!conflict) throw new Error("expected the second branch to conflict");
+    await w.hub.fix("hist-d");
+    const fixEntry = w.fixes[0]?.[1];
+    if (!fixEntry) throw new Error("expected the fix to receive its sent-back entry");
+    expect(fixPrompt(fixEntry)).toContain(`canopy saw ${first.branch!.name} editing these files while you worked: notes.md.`);
   });
 
   test("fix it resumes on the branch, and a ready fix rejoins the queue at the end", async () => {

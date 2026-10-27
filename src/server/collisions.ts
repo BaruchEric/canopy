@@ -4,7 +4,7 @@
 
 import { inQueue, sentBack, stoppedWhole } from "../core/landing";
 import { ago } from "../core/treelines";
-import { isRunActive, type LandEntry, type LandingInfo, type LandNotice, type Repo, type Run } from "../core/types";
+import { isRunActive, type LandEntry, type LandingInfo, type LandNotice, type LandingRun, type Repo, type Run } from "../core/types";
 import { addStep, childrenSay, collide, collisionLine, collisionNotice, collisionSay, flipped, fromFiles, fromStatus, touchedOf, type Collision, type Side, type Touched } from "../core/touch";
 
 export interface CollisionDeps {
@@ -22,6 +22,8 @@ export interface CollisionDeps {
   notify: (n: Omit<LandNotice, "id" | "at">) => void;
   /** `LandingHub.republish` */
   publish: () => void;
+  /** saves a live run/branch overlap on its branch record, without publishing */
+  rememberOverlap?: (origin: string, overlap: NonNullable<LandingRun["overlap"]>) => void;
   /** whether the chat's say is off for a repo (`RepoAgent.collisionSay`) */
   sayOff?: (repoPath: string) => boolean | Promise<boolean>;
   /** FR-033 wires this as `(run) => run.group`: members of one group never collide */
@@ -83,8 +85,10 @@ export class CollisionHub {
     const touched = this.touchRun(run);
     const active = this.activeRuns();
     if (!active.some((current) => current.id === run.id)) active.push(run);
-    const result = collide(this.collisions, touched, this.sides(run, active, this.deps.landing()), run.repoId, this.now(), this.saidAt);
+    const previous = this.collisions;
+    const result = collide(previous, touched, this.sides(run, active, this.deps.landing()), run.repoId, this.now(), this.saidAt);
     this.collisions = result.live;
+    this.rememberChanged(previous, result.live, active);
     this.process(result.fresh, result.grown, active);
     this.pruneMessages();
     if (run.chat && run.status === "idle") this.flush(run.id);
@@ -103,6 +107,7 @@ export class CollisionHub {
       const prior = this.collisions.filter((collision) => collision.id === id);
       const result = collide(prior, touched, [checkout], repo.id, this.now(), this.saidAt);
       this.collisions = [...this.collisions.filter((collision) => collision.id !== id), ...result.live];
+      this.rememberChanged(prior, result.live, active);
       this.process(result.fresh, result.grown, active);
     }
     this.pruneMessages();
@@ -116,8 +121,10 @@ export class CollisionHub {
     const active = this.activeRuns();
     for (const run of active) {
       const touched = this.touchRun(run);
-      const result = collide(this.collisions, touched, this.sides(run, active, info), run.repoId, this.now(), this.saidAt);
+      const previous = this.collisions;
+      const result = collide(previous, touched, this.sides(run, active, info), run.repoId, this.now(), this.saidAt);
       this.collisions = result.live;
+      this.rememberChanged(previous, result.live, active);
       this.process(result.fresh, result.grown, active);
     }
     this.prune(info);
@@ -230,6 +237,39 @@ export class CollisionHub {
         }
         this.saySides(collision, active);
       }
+    }
+  }
+
+  /** Persist every changed path set, including growth too small to resay. */
+  private rememberChanged(previous: readonly Collision[], current: readonly Collision[], active: readonly Run[]): void {
+    const before = new Map(previous.map((collision) => [collision.id, JSON.stringify({ with: collision.with, paths: collision.paths })]));
+    for (const collision of current) {
+      if (before.get(collision.id) === JSON.stringify({ with: collision.with, paths: collision.paths })) continue;
+      this.rememberOverlap(collision, active);
+    }
+  }
+
+  /** Retains only overlaps with observed runs or branches; checkout status is
+   *  transient and must never become a historical branch warning. */
+  private rememberOverlap(collision: Collision, active: readonly Run[]): void {
+    if (!this.deps.rememberOverlap || collision.with.kind === "checkout") return;
+    const first = active.find((run) => run.id === collision.run);
+    if (!first) return;
+    const paths = [...collision.paths];
+    if (first.branch) {
+      const withName = collision.with.kind === "run" ? collision.with.name : collision.with.branch;
+      this.deps.rememberOverlap(first.branch.origin, { with: withName, paths });
+    }
+    const other = collision.with;
+    if (other.kind === "run") {
+      const second = active.find((run) => run.id === other.run);
+      if (second?.branch) {
+        this.deps.rememberOverlap(second.branch.origin, { with: first.branch?.name ?? collision.name, paths });
+      }
+      return;
+    }
+    if (other.kind === "branch") {
+      this.deps.rememberOverlap(other.origin, { with: first.branch?.name ?? collision.name, paths });
     }
   }
 

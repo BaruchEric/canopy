@@ -150,11 +150,13 @@ export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: num
   const f = flags ?? { ...(had?.auto ? { auto: true } : {}), ...(had?.approved ? { approved: had.approved } : {}) };
   const touched = fromFiles(run.runId, run.id, run.branch, run.review?.files ?? []);
   const shared = working.map((side) => ({ with: side.name, paths: overlap(touched, side) })).find((match) => match.paths.length > 0);
+  const remembered = run.overlap ?? had?.overlap;
+  const overlapMark = shared ?? (remembered ? { with: remembered.with, paths: [...remembered.paths] } : undefined);
   const entry: LandEntry = {
     ...entryFor(run, now),
     ...(f.auto ? { auto: true as const } : {}),
     ...(f.approved ? { approved: f.approved } : {}),
-    ...(shared ? { overlap: shared } : {}),
+    ...(overlapMark ? { overlap: overlapMark } : {}),
   };
   return [...entries.filter((e) => e.id !== run.id), entry];
 }

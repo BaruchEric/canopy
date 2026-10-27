@@ -585,6 +585,21 @@ export class LandingHub {
     return this.find(id);
   }
 
+  /** Saves the last observed live run/branch overlap without broadcasting.
+   *  The collision observer publishes the surrounding change; publishing here
+   *  would re-enter that observer. */
+  rememberOverlap(origin: string, overlap: NonNullable<LandingRun["overlap"]>): boolean {
+    const rec = this.find(origin);
+    if (!rec || overlap.paths.length === 0 || this.entries.some((entry) => entry.id === rec.id && entry.state === "landed")) return false;
+    const mark = { with: overlap.with, paths: [...overlap.paths] };
+    if (JSON.stringify(rec.overlap) === JSON.stringify(mark)) return false;
+    const updated = { ...rec, overlap: mark };
+    this.runs.set(updated.id, updated);
+    this.written.set(updated.id, JSON.stringify(updated));
+    void this.saveRun(updated);
+    return true;
+  }
+
   /** Why the queue has a branch, so it may not open a PR: queued or
    *  landed. A sent-back branch may; opening its PR takes it off the list. */
   queueHold(id: string): string | null {

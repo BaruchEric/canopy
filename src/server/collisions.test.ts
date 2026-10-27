@@ -17,6 +17,7 @@ interface WorldValues {
   refuse: number;
   landing: LandingInfo;
   repo: Repo;
+  remembered: [string, { with: string; paths: string[] }][];
 }
 
 function world(opts: { groupOf?: (r: Run) => string | undefined; sayOff?: (path: string) => boolean | Promise<boolean> } = {}) {
@@ -30,6 +31,7 @@ function world(opts: { groupOf?: (r: Run) => string | undefined; sayOff?: (path:
     refuse: 0,
     landing: { runs: [], entries: [], orphans: [] },
     repo: { id: "canopy", name: "canopy", path: "/r/canopy", group: "", source: "root", status: null },
+    remembered: [],
   };
   const hub = new CollisionHub({
     runs: () => [...runs.values()],
@@ -44,6 +46,7 @@ function world(opts: { groupOf?: (r: Run) => string | undefined; sayOff?: (path:
       w.says.push([id, text]);
     },
     notify: (n) => w.notices.push(n),
+    rememberOverlap: (origin, overlap) => w.remembered.push([origin, overlap]),
     publish: () => {
       w.published += 1;
     },
@@ -172,6 +175,47 @@ describe("chats", () => {
 });
 
 describe("the queue and the checkout", () => {
+  test("remembers both branch sides of a live overlap, ignores repeats and never records checkout overlap", () => {
+    const { w, hub, see } = world();
+    see(run("a", [edit("1", "x.ts")]));
+    see(run("b", [edit("1", "x.ts")]));
+    expect(w.remembered).toEqual([
+      ["b", { with: "run/x-a", paths: ["x.ts"] }],
+      ["a", { with: "run/x-b", paths: ["x.ts"] }],
+    ]);
+    const publishes = w.published;
+    see(run("b", [edit("1", "x.ts")]));
+    expect([w.remembered.length, w.published]).toEqual([2, publishes]);
+
+    see(run("a", [edit("1", "x.ts"), edit("2", "y.ts")]));
+    see(run("b", [edit("1", "x.ts"), edit("2", "y.ts")]));
+    expect(w.remembered.slice(-2)).toEqual([
+      ["b", { with: "run/x-a", paths: ["x.ts", "y.ts"] }],
+      ["a", { with: "run/x-b", paths: ["x.ts", "y.ts"] }],
+    ]);
+    const grownPublishes = w.published;
+    const grownRemembers = w.remembered.length;
+    see(run("b", [edit("1", "x.ts"), edit("2", "y.ts")]));
+    expect([w.remembered.length, w.published]).toEqual([grownRemembers, grownPublishes]);
+
+    w.repo = { ...w.repo, status: { branch: "main", upstream: null, ahead: 0, behind: 0, files: [file("x.ts")], lastCommit: null, user: null } };
+    hub.onRepo(w.repo);
+    expect(w.remembered).toHaveLength(grownRemembers);
+  });
+
+  test("remembers a live run against a ready branch on both landing records", () => {
+    const { w, see } = world();
+    const rec: LandingRun = { id: "q", runId: "r-q", repoId: "canopy", repoPath: "/r/canopy", branch: "run/x-q", target: "main", base: "b0", dir: "/w/q", note: "n", verb: "Ask", harness: "claude", state: "ready", startedAt: 1, review: { verdict: "land", files: [{ path: "x.ts", cls: "logic" }], base: "b", head: "h", at: 1 } };
+    w.landing = { runs: [rec], entries: enqueue([], rec, 1), orphans: [] };
+
+    see(run("a", [edit("1", "x.ts")]));
+
+    expect(w.remembered).toEqual([
+      ["a", { with: "run/x-q", paths: ["x.ts"] }],
+      ["q", { with: "run/x-a", paths: ["x.ts"] }],
+    ]);
+  });
+
   test("a live overlap follows a run into its ready landing record", () => {
     const { w, hub, see } = world();
     const first = run("a", [edit("a1", "x.ts")]);

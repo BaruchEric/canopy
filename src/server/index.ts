@@ -5290,6 +5290,7 @@ export async function startServer(opts: {
       say: (id, text) => void state.runner.say(id, text),
       notify: (notice) => state.landing.notice(notice),
       publish: () => state.landing.republish(),
+      rememberOverlap: (origin, overlap) => state.landing.rememberOverlap(origin, overlap),
       sayOff: async (path) => (await loadConfig()).agents[path]?.collisionSay === false,
       groupOf: (run) => run.branch?.group,
     }),
