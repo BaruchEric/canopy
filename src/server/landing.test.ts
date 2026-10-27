@@ -1245,3 +1245,19 @@ describe("best-of-N dry gates", () => {
     expect(w.hub.record("dry8")).toMatchObject({ state: "ready", dry: { scenarios: { results: [{ ok: false, p: 0.6 }] } } });
   });
 });
+
+describe("best-of-N quiet loser drops", () => {
+  test("a group drop records a held-style quiet line while normal drops stay quiet", async () => {
+    const w = await world();
+    await w.hub.adopt();
+    const loser = await readyRun(w, "not-picked", "loser.txt", "loser");
+    await w.hub.idle();
+    await w.hub.drop(loser.id, "another member won");
+    expect(w.hub.info().notices).toEqual([expect.objectContaining({ kind: "held", entry: loser.id, why: `not picked: ${loser.branch?.name}, another member won` })]);
+    expect(JSON.parse(await readFile(join(w.dir, "notices.json"), "utf8"))).toEqual(w.hub.info().notices);
+    const normal = await readyRun(w, "normal-drop", "normal.txt", "normal");
+    await w.hub.idle();
+    await w.hub.drop(normal.id);
+    expect(w.hub.info().notices?.length).toBe(1);
+  });
+});

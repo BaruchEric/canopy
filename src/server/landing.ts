@@ -811,7 +811,7 @@ export class LandingHub {
   /** Drops a sent-back entry, its branch and its worktree: the work is
    *  given up. Not a branch whose PR is open and watched: the watch works
    *  in that worktree, and the PR is closed from its run's sheet. */
-  async drop(id: string): Promise<void> {
+  async drop(id: string, why?: string): Promise<void> {
     const rec = this.find(id);
     if (rec?.pr !== undefined && this.deps.prHeld?.(rec.id)) throw new LandError(`PR #${rec.pr} is open and canopy watches it; close the PR from its run's sheet first`);
     const entry = this.entries.find((e) => e.id === (rec?.id ?? id));
@@ -825,6 +825,10 @@ export class LandingHub {
     await this.dropRun(target.id);
     await this.saveQueue(target.repoPath);
     this.deps.dropped?.(target.id);
+    if (why !== undefined) {
+      this.notice({ entry: target.id, repoId: target.repoId, branch: target.branch, note: target.note, kind: "held", why: `not picked: ${target.branch}, ${why}` });
+      await this.saveNotices();
+    }
     this.publish();
   }
 
