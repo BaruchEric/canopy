@@ -110,3 +110,10 @@ describe("titled", () => {
     expect(titled("canopy", 0)).toBe("canopy");
   });
 });
+
+test("a picked group is one ordinary waiting transition with a group sheet target", () => {
+  const before = snapshot({ turns: [], inbox: [], failed: [], runs: [] }, () => "repo");
+  const picked = snapshot({ turns: [{ kind: "group", id: "remote|g", repoId: "remote|r", what: "best of 2: repair", at: 1 }], inbox: [], failed: [], runs: [] }, () => "repo");
+  expect(transitions(before, picked)).toEqual([{ key: "turn:group:remote|g", title: "Your turn · repo", body: "best of 2: repair", repoId: "remote|r", groupId: "remote|g" }]);
+  expect(transitions(picked, picked)).toEqual([]);
+});

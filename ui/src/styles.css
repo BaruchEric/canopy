@@ -13716,3 +13716,18 @@ body.resizing-nesw {
 .run-solo-main > .empty {
   padding: 24px;
 }
+
+/* Best-of-N comparison: columns share one sheet, stack on narrow screens. */
+.group-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px;
+}
+.group-column {
+  min-width: 0;
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--hair);
+  overflow-wrap: anywhere;
+}
+.group-column p { margin: 8px 0; }
+.group-column .landing-tools { flex-wrap: wrap; }

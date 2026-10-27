@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
@@ -57,7 +58,7 @@ import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
-import { mergeLanding } from "./landing";
+import { landAllOf, mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
 import { mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type InboxAnswer, type InboxItem } from "./inbox";
@@ -1360,6 +1361,10 @@ export interface CanopyState {
   syncPeers: (repoId: string) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
+  showGroup: (groupId: string) => void;
+  pickRunGroup: (groupId: string, origin: string) => Promise<void>;
+  reviewGroup: (groupId: string) => Promise<void>;
+  dropGroup: (groupId: string, keep?: string[]) => Promise<void>;
   closeSheet: () => void;
   /** opens the search across every repo in view */
   openSearch: () => void;
@@ -3502,7 +3507,20 @@ export const useStore = create<CanopyState>((set, get) => ({
   landRun: async (id, approve) => {
     await api.land(id, approve);
   },
-  landAll: (repoId) => api.landAll(repoId),
+  landAll: async repoId => {
+    const info = landingAll(get());
+    if (!(info.groups ?? []).some(g => g.repoId === repoId)) return api.landAll(repoId);
+    // The older repo-wide route cannot distinguish a group's selected winner.
+    // Send the visible eligible origins through the same individual land gates.
+    const eligible = landAllOf(info, repoId);
+    const queued: string[] = [];
+    const skipped = eligible.skip.map(r => ({ id: r.id, branch: r.branch, why: "needs your approval" }));
+    for (const r of eligible.take) {
+      try { await api.land(r.id); queued.push(r.id); }
+      catch (error: unknown) { skipped.push({ id: r.id, branch: r.branch, why: error instanceof Error ? error.message : String(error) }); }
+    }
+    return { queued, skipped };
+  },
   landingDiff: async (id, path) => (await api.landingDiff(id, path)).diff,
   seenLanding: async (ids) => {
     await api.seenLanding(ids);
@@ -4374,6 +4392,19 @@ export const useStore = create<CanopyState>((set, get) => ({
       closedSections: unfoldIn(s.closedSections, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
+  showGroup: groupId => set({ sheet: { kind: "group", groupId } }),
+  pickRunGroup: async (id, origin) => {
+    const group = await api.pickRunGroup(id, origin);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  reviewGroup: async id => {
+    const group = await api.reviewGroup(id);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
+  dropGroup: async (id, keep) => {
+    const group = await api.dropGroup(id, keep);
+    set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
+  },
   startGroup: async (repoId, action, note, times, profile, autoLand = false, pr = false) => {
     if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
     const group = await api.startGroup(repoId, action, note, times, profile, autoLand, pr);
@@ -5039,6 +5070,7 @@ let turnIn: {
   asks: Record<string, Ask>;
   repos: Repo[];
   rangers: Record<string, RangerInfo>;
+  landing: Record<string, LandingInfo>;
 } | null = null;
 let turnOut: TurnRow[] = [];
 
@@ -5047,11 +5079,11 @@ let turnOut: TurnRow[] = [];
  *  prompt by design (a permission it waits on is in the inbox). */
 export function turnItems(s: CanopyState): TurnRow[] {
   const t = turnIn;
-  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers) return turnOut;
-  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers };
+  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers && t.landing === s.landing) return turnOut;
+  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers, landing: s.landing };
   const rangers = rangerSessions(s.rangers);
   const cards = Object.values(s.registry).filter((c) => c.session === null || !rangers.has(c.session));
-  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos);
+  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos, landingAll(s));
   return turnOut;
 }
 
@@ -5073,7 +5105,8 @@ function showNote(n: Notice): void {
   shown.onclick = () => {
     window.focus();
     const s = useStore.getState();
-    if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
+    if (n.groupId) s.showGroup(n.groupId);
+    else if (n.repoId && s.repos.some((r) => r.id === n.repoId)) s.openPanel(n.repoId);
     shown.close();
   };
 }
@@ -5285,4 +5318,10 @@ if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === REVIEW_NOTES_STORE || e.key === null) useStore.setState({ reviewNotes: loadNotes() });
   });
+}
+
+/** A mutation can arrive before its SSE update, including immediately after fanout. */
+function withGroup(byBackend: Record<string, LandingInfo>, backend: string, group: RunGroup): Record<string, LandingInfo> {
+  const info = byBackend[backend] ?? { runs: [], entries: [], orphans: [] };
+  return { ...byBackend, [backend]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } };
 }

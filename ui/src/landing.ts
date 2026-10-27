@@ -1,3 +1,4 @@
+import type { RunGroup } from "../../src/core/group";
 /** The landing queue as the page shows it: every backend's queue as one,
  *  a repo's part of it, a run's word and buttons, the card chip. Pure; the
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
@@ -18,6 +19,7 @@ export function mergeLanding(byBackend: Readonly<Record<string, LandingInfo>>): 
     entries: parts.flatMap((p) => p.entries),
     orphans: parts.flatMap((p) => p.orphans),
     notices: parts.flatMap((p) => p.notices ?? []).sort((a, b) => b.at - a.at),
+    groups: parts.flatMap(p => p.groups ?? []),
     collisions: parts.flatMap((p) => p.collisions ?? []),
   };
 }
@@ -55,7 +57,7 @@ export const verdictTone = (r: Pick<LandingRun, "review">): "moss" | "lichen" | 
 
 /** The ready runs "land all" would take in a repo, and the ones it leaves
  *  for an approval; the button shows with two or more ready. */
-export const landAllOf = (info: LandingInfo, repoId: string) => landAllPick(info.runs, info.entries, repoId);
+export const landAllOf = (info: LandingInfo, repoId: string) => landAllPick(info.runs.filter(r => !(info.groups ?? []).some(g => g.members.some(m => m.origin === r.id) && (g.state !== "picked" || g.winner !== r.id))), info.entries, repoId);
 
 /** The title of a stopped run's land, in the list and its sheet. */
 export const stoppedLandTitle = (target: string): string =>
@@ -81,6 +83,7 @@ export function noticeLine(n: LandNotice): string {
 export type OpenedRun = LandingRun & { pr: number };
 
 export interface RepoLanding {
+  groups: RunGroup[];
   /** in the queue, in order */
   queue: LandEntry[];
   /** sent back, waiting for "fix it" */
@@ -97,12 +100,15 @@ export interface RepoLanding {
 
 /** One repo's part of the queue, for its landing section. */
 export function repoLanding(info: LandingInfo, repoId: string): RepoLanding {
-  const mine = info.entries.filter((e) => e.repoId === repoId);
+  const groups = (info.groups ?? []).filter(g => g.repoId === repoId && g.state !== "dropped");
+  const grouped = new Set(groups.flatMap(g => g.members.map(m => m.origin)));
+  const mine = info.entries.filter((e) => e.repoId === repoId && !grouped.has(e.id));
   const has = new Set(mine.map((e) => e.id));
-  const mineRuns = info.runs.filter((r) => r.repoId === repoId && !has.has(r.id));
+  const mineRuns = info.runs.filter((r) => r.repoId === repoId && !has.has(r.id) && !grouped.has(r.id));
   const runs = mineRuns.filter((r) => r.pr === undefined);
   return {
-    queue: queueOf(info.entries, repoId),
+    groups,
+    queue: queueOf(mine, repoId),
     back: mine.filter(sentBack).sort((a, b) => a.updatedAt - b.updatedAt),
     landed: mine.filter((e) => e.state === "landed").sort((a, b) => (b.landedAt ?? 0) - (a.landedAt ?? 0)),
     ready: runs.filter((r) => r.state === "ready"),
@@ -129,16 +135,19 @@ export function openedRow(r: OpenedRun, watches: readonly PrWatch[]): { word: st
 
 /** Whether a repo has anything for its landing section to show. */
 export const hasLanding = (l: RepoLanding): boolean =>
-  l.queue.length + l.back.length + l.landed.length + l.ready.length + l.other.length + l.opened.length > 0;
+  l.groups.length + l.queue.length + l.back.length + l.landed.length + l.ready.length + l.other.length + l.opened.length > 0;
 
 /** The orphaned worktrees of one repo, by its main checkout's path. */
 export const repoOrphans = (info: LandingInfo, repoPath: string): LandingOrphan[] => info.orphans.filter((o) => o.repoPath === repoPath);
 
 /** The card chip's words, or null when the repo has nothing queued or sent back. */
-export function chipWords(info: LandingInfo, repoId: string): { text: string; title: string; tone: "queued" | "back" } | null {
-  const { queued, back } = landCounts(info.entries, repoId);
-  if (queued + back === 0) return null;
-  const parts = [queued ? `${queued} queued` : "", back ? `${back} sent back` : ""].filter(Boolean);
+export function chipWords(info: LandingInfo, repoId: string, shownGroup?: string): { text: string; title: string; tone: "queued" | "back" } | null {
+  const groups = (info.groups ?? []).filter(g => g.repoId === repoId && g.state !== "dropped" && g.state !== "landed");
+  const origins = new Set(groups.flatMap(g => g.members.map(m => m.origin)));
+  const { queued, back } = landCounts(info.entries.filter(e => !origins.has(e.id)), repoId);
+  const count = groups.filter(g => g.id !== shownGroup).length;
+  if (queued + back + count === 0) return null;
+  const parts = [count ? `${count} group${count === 1 ? "" : "s"}` : "", queued ? `${queued} queued` : "", back ? `${back} sent back` : ""].filter(Boolean);
   return {
     text: parts.join(" · "),
     title: back ? "Branch runs the landing queue sent back; open the landing section to fix them" : "Branch runs waiting their turn to land on main",
@@ -188,6 +197,14 @@ const BRANCH_WORD: Record<NonNullable<Run["branch"]>["state"], string> = {
  *  it has an entry, else the branch's own. A run a restart stopped lands
  *  as a ready one does once the hub found its work whole. */
 export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
+  const view = ordinaryRunLanding(run, info);
+  const group = (info.groups ?? []).find(g => g.id === (run.group ?? run.branch?.group));
+  return view && group && (group.state !== "picked" || group.winner !== run.branch?.origin)
+    ? { ...view, canLand: false, canPr: false }
+    : view;
+}
+
+function ordinaryRunLanding(run: Run, info: LandingInfo): RunLanding | null {
   const b = run.branch;
   if (!b) return null;
   const entry = info.entries.find((e) => e.id === b.origin);

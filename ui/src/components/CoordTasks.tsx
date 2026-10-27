@@ -257,6 +257,9 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
 export function ParentLine({ run }: { run: Run }) {
   const parent = useStore((s) => (run.parent ? s.runs[run.parent] : undefined));
   const showRun = useStore((s) => s.showRun);
+  const group = useStore(s => landingAll(s).groups?.find(g => g.id === (run.group ?? run.branch?.group)));
+  const showGroup = useStore(s => s.showGroup);
+  if (group) return <div className="run-parent"><span className="run-parent-text">{group.review?.run === run.id ? "reviewing best of" : "one of"} {group.expectedMembers}</span><span className="spacer" /><button type="button" className="mini" onClick={() => showGroup(group.id)}>open the group</button></div>;
   if (!run.parent) return null;
   const card = parentCard(parent, run.id);
   return (

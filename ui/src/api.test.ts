@@ -75,6 +75,24 @@ describe("a page with two backends", () => {
     expect(group.members[0]).toMatchObject({ run: "b|r", origin: "b|o" });
   });
 
+  test("group mutations strip owning IDs and qualify every response reference", async () => {
+    reply = () => json({ id: "g", repoId: "x", members: [{ run: "r", origin: "o", profile: null }], winner: "o", review: { run: "review", ranking: ["run/o"], why: {} }, scores: { o: { branch: "run/o" } } });
+    const picked = await api.pickRunGroup("b|g", "b|o");
+    expect(calls[0]?.url).toBe("http://b.test/api/groups/pick");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ group: "g", run: "o" });
+    expect(picked).toMatchObject({ id: "b|g", repoId: "b|x", winner: "b|o", review: { run: "b|review" }, scores: { "b|o": { branch: "run/o" } } });
+    await api.dropGroup("b|g", ["b|o"]);
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ group: "g", keep: ["o"] });
+    await api.reviewGroup("b|g");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ group: "g" });
+    await expect(api.pickRunGroup("b|g", "o")).rejects.toThrow("another backend");
+    expect(calls).toHaveLength(3);
+  });
+  test("group ledger run and group IDs share the same backend qualification", async () => {
+    reply = () => json({ since: 0, priced: false, rows: [{ group: "g", run: "r", repoId: "x" }] });
+    expect((await api.costs(1, "b")).rows[0]).toMatchObject({ group: "b|g", run: "b|r", repoId: "x" });
+  });
+
   test("a backend with no URL yet is never asked at the page's own origin", async () => {
     setBase("b", "");
     reply = () => json({ access: "unknown" });

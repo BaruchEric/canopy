@@ -145,3 +145,15 @@ describe("a coordinator's sheet on a phone", () => {
     expect(p.cards).toBe(-1);
   });
 });
+
+import { useStore } from "../store";
+test("a member without a coordinator still shows its group parent entrypoint in the console", () => {
+  screen(false);
+  const initial = useStore.getInitialState();
+  const prior = initial.landing;
+  initial.landing = { "": { runs: [], entries: [], orphans: [], groups: [{ id: "g", repoId: "canopy", repoPath: "/canopy", action: "ask", note: "n", expectedMembers: 2, members: [], state: "working", autoLand: false, startedAt: 1 }] } };
+  try {
+    const member = coordinator({ id: "member", action: "ask", group: "g", chat: false, tasks: undefined, parent: undefined });
+    expect(sheet(member)).toContain("one of 2");
+  } finally { initial.landing = prior; }
+});

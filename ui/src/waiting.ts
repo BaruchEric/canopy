@@ -1,3 +1,5 @@
+import type { LandingInfo } from "../../src/core/types";
+import { groupWaiting } from "./groups";
 /**
  * "Waiting on you": everything that needs the user in one dock panel. The
  * inbox's items come from `inboxItems` as they are; this holds the panel's
@@ -173,6 +175,7 @@ export function lastWords(r: Pick<Run, "steps">): string {
 
 /** a chat or a terminal agent sitting on its prompt for the user */
 export type TurnRow =
+  | { kind: "group"; id: string; repoId: string; what: string; at: number }
   | { kind: "chat"; id: string; repoId: string; what: string; at: number }
   | { kind: "agent"; id: string; repoId: string | null; name: string; where: string; what: string; at: number };
 
@@ -190,8 +193,10 @@ export function turnRows(
   cards: readonly AgentCard[],
   asks: readonly Ask[],
   repos: readonly Repo[],
+  landing?: LandingInfo,
 ): TurnRow[] {
   const out: TurnRow[] = [];
+  for (const group of landing?.groups ?? []) if (landing && groupWaiting(group, landing)) out.push({ kind: "group", id: group.id, repoId: group.repoId, what: `best of ${group.expectedMembers}: ${group.note}`, at: group.endedAt ?? group.startedAt });
   for (const r of runs) {
     if (r.status !== "idle" || flowRuns[r.id] !== undefined) continue;
     const coord = isCoordinator(r) ? coordTurn(r) : null;

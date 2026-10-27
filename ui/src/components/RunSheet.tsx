@@ -12,6 +12,7 @@ import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick, profileNames } from "../agents";
 import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
+import { GroupSheet } from "./GroupSheet";
 import { ApproveSheet, OverlapChip } from "./Landing";
 import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
@@ -126,7 +127,7 @@ export function RunSheet() {
     }}>
       <div
         ref={ref}
-        className={sheet.kind === "search" ? "sheet wide" : "sheet"}
+        className={sheet.kind === "search" || sheet.kind === "group" ? "sheet wide" : "sheet"}
         role="dialog"
         aria-modal="true"
       >
@@ -156,6 +157,7 @@ function Body({ sheet }: { sheet: Sheet }) {
     if (!repo) return <Missing what="That repo is no longer in the tree." onClose={close} />;
     return <Plan repo={repo} action={sheet.action} workspace={sheet.workspace} />;
   }
+  if (sheet.kind === "group") return <GroupSheet key={sheet.groupId} groupId={sheet.groupId} />;
   if (sheet.kind === "search") return <SearchSheet />;
   if (sheet.kind === "keys") return <KeysSheet view={sheet.view} />;
   if (sheet.kind === "agent") {
@@ -234,7 +236,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const startRun = useStore((s) => s.startRun);
   const startGroup = useStore((s) => s.startGroup);
   const free = useStore(s => freeBranchSlots(repo.id, Object.values(s.runs), Object.values(s.flows)));
-  const profiles = useStore(s => profileNames(routesOf(s, backendOf(repo.id))));
+  const routes = useStore(s => routesOf(s, backendOf(repo.id)));
+  const profiles = profileNames(routes);
   const [times, setTimes] = useState(1);
   const [profile, setProfile] = useState("");
   const [autoLand, setAutoLand] = useState(false);
@@ -594,7 +597,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         </button>
       </header>
 
-      {run.parent && <ParentLine run={run} />}
+      {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
@@ -705,7 +708,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         </button>
       )}
       {l.canLand && !l.approve && (
-        <button type="button" className="mini strong" title={l.stopped ? stoppedLandTitle(b.target) : `Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(run.id))}>
+        <button type="button" className="mini strong" title={l.stopped ? stoppedLandTitle(b.target) : `Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(b.origin))}>
           land
         </button>
       )}

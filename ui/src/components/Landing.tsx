@@ -1,8 +1,9 @@
+import { groupWord } from "../groups";
 import { useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
 import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { backendOf } from "../registry";
-import { idText, landingAll, prsAll, useStore } from "../store";
+import { idText, landingAll, prsAll, runFor, useStore } from "../store";
 import { repoPrChip } from "../prs";
 import { keepKeys } from "../surface";
 import { ago } from "../util";
@@ -27,7 +28,8 @@ export function OverlapChip({ name, paths }: { name: string; paths: string[] }) 
  *  turn and how many came back. Clicking it opens the landing section. */
 export function LandingChip({ repoId }: { repoId: string }) {
   const info = useStore((s) => landingAll(s));
-  const words = chipWords(info, repoId);
+  const shownGroup = useStore(s => runFor(s, repoId)?.group);
+  const words = chipWords(info, repoId, shownGroup);
   const showLanding = useStore((s) => s.showLanding);
   if (!words) return null;
   return (
@@ -78,6 +80,7 @@ export function PrChip({ repoId }: { repoId: string }) {
  *  something. */
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
+  const showGroup = useStore(s => s.showGroup);
   const landRun = useStore((s) => s.landRun);
   const landAll = useStore((s) => s.landAll);
   const showApprove = useStore((s) => s.showApprove);
@@ -137,6 +140,29 @@ export function LandingSection({ repo }: { repo: Repo }) {
       }
     >
       <div className="landing-body">
+        {l.groups.map(group => (
+          <details key={group.id}>
+            <summary>
+              <button type="button" className="mini" onClick={() => showGroup(group.id)}>best of {group.expectedMembers}: {group.note}</button>{" "}
+              <span className="landing-state">{groupWord(group)}</span>
+            </summary>
+            <ul className="landing-list">
+              {group.members.map(member => {
+                const rec = info.runs.find(r => r.id === member.origin);
+                const entry = info.entries.find(e => e.id === member.origin);
+                return <li className="landing-row" key={member.origin}>
+                  <span className="landing-branch">{group.scores?.[member.origin]?.branch ?? rec?.branch ?? idText(member.origin)}</span>
+                  <span>{member.profile ?? "repo's job route"}</span>
+                  {entry && <span className="landing-state">{landWord(entry, info.entries)}</span>}
+                  {entry?.reason && <span className="landing-why">{entry.reason}</span>}
+                  {entry?.overlap && <OverlapChip name={entry.overlap.with} paths={entry.overlap.paths} />}
+                  {runOverlaps(info, rec?.runId ?? member.run).map(c => <OverlapChip key={c.id} name={c.name} paths={c.paths} />)}
+                  <button type="button" className="mini" onClick={() => showGroup(group.id)}>compare</button>
+                </li>;
+              })}
+            </ul>
+          </details>
+        ))}
         {l.queue.length > 0 && (
           <ol className="landing-list">
             {l.queue.map((e) => (
