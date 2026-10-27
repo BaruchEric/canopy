@@ -17,9 +17,11 @@ import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
 import { bunSpawn, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
+import { writtenPaths } from "./explain";
 import { agentArgs } from "./harness";
 import { noteCliCommands } from "./mentions";
-import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo, type RunTokens } from "./types";
+import { relPath, toolTouch } from "./touch";
+import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo, type RunTokens, type RunTool } from "./types";
 import { TODO_TOOLS, todoCreated, todoUpdated, todoWritten } from "./todos";
 
 /** characters of tool output kept per step */
@@ -155,6 +157,15 @@ export function permissionAsk(tool: string, input: Record<string, unknown>, cwd:
 function absolutePath(file: string, cwd: string): string {
   if (file === "~" || file.startsWith("~/")) return resolve(homedir(), file.slice(2));
   return resolve(cwd, file);
+}
+
+/** What a tool call touches, for the step (FR-040): a file tool's path from the
+ *  run's folder, a Bash line's `writtenPaths`, nothing for a read. */
+export function toolPaths(tool: string, input: Record<string, unknown>, cwd: string): Pick<RunTool, "paths" | "touchesUnknown"> {
+  if (tool === "Bash") return toolTouch(writtenPaths(str(input, "command"), cwd));
+  if (!["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(tool)) return {};
+  const file = tool === "NotebookEdit" ? str(input, "notebook_path") : str(input, "file_path");
+  return file ? { paths: [relPath(absolutePath(file, cwd), cwd)] } : {};
 }
 
 /** The reply the CLI expects on stdin to a can_use_tool request. */
@@ -648,7 +659,7 @@ export class ClaudeDriver implements RunDriver {
           const name = str(block, "name");
           const step = ctx.step({
             kind: "tool",
-            tool: { name, title: describeTool(name, input, ctx.cwd), status: "running" },
+            tool: { name, title: describeTool(name, input, ctx.cwd), status: "running", ...toolPaths(name, input, ctx.cwd) },
             ...(parent ? { parent } : {}),
           });
           this.tools.set(str(block, "id"), step);

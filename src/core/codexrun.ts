@@ -43,7 +43,9 @@ import { takesProvider } from "./harness";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
+import { writtenPaths } from "./explain";
 import { commandWords, EDIT_TOOLS, parseRule, unwrapShell, type ToolRule } from "./shellwords";
+import { relPath, toolTouch } from "./touch";
 import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
 
 /** characters of tool output kept per step, as for a Claude run */
@@ -378,14 +380,16 @@ export function itemTool(item: Record<string, unknown>, phase: Phase, root: stri
       const failed = status === "ok" && exit !== null && exit !== 0;
       const declined = str(item, "status") === "declined";
       return withOutput(
-        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status },
+        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status, ...toolTouch(writtenPaths(script, root)) },
         declined ? "declined" : str(item, "aggregatedOutput"),
       );
     }
     case "fileChange": {
-      const input = changesInput(fileChanges(item));
+      const changes = fileChanges(item);
+      const input = changesInput(changes);
+      const paths = changes.flatMap((change) => [change.path, ...(change.movePath ? [change.movePath] : [])].map((path) => relPath(resolve(root, path), root)));
       return withOutput(
-        { name: "Edit", title: describeTool("Edit", input, root), status },
+        { name: "Edit", title: describeTool("Edit", input, root), status, ...(paths.length ? { paths } : {}) },
         str(item, "status") === "declined" ? "declined" : phase === "completed" ? toolDetail("Edit", input, root) : "",
       );
     }

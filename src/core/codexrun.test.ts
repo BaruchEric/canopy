@@ -322,6 +322,8 @@ describe("items as steps", () => {
 
   test("a command is Bash, titled by its script, its exit judging it", () => {
     expect(itemTool(command({}), "started", "/r")).toEqual({ name: "Bash", title: "git status --short", status: "running" });
+    expect(itemTool(command({ command: "/bin/sh -lc 'touch x.ts'" }), "started", "/r")?.paths).toEqual(["x.ts"]);
+    expect(itemTool(command({ command: "/bin/sh -lc 'bash -c ls'" }), "started", "/r")?.touchesUnknown).toBe(true);
     expect(itemTool(command({ status: "completed", exitCode: 0, aggregatedOutput: " M a\n" }), "completed", "/r")).toEqual(
       { name: "Bash", title: "git status --short", status: "ok", output: "M a" },
     );
@@ -338,6 +340,7 @@ describe("items as steps", () => {
       name: "Edit",
       title: "edit src/a.ts",
       status: "ok",
+      paths: ["src/a.ts"],
       output: "src/a.ts\n-a\n+b",
     });
     expect(itemTool(fc([{ path: "/r/n.ts", kind: { type: "add" }, diff: "+x" }]), "completed", "/r")?.title).toBe("write n.ts");
@@ -346,7 +349,8 @@ describe("items as steps", () => {
     expect(itemTool(fc([upd("/r/a"), upd("/r/b"), upd("/r/c"), upd("/r/d")]), "completed", "/r")?.title).toBe(
       "edit a, b and 2 more",
     );
-    expect(itemTool(fc([upd("/r/a")], "inProgress"), "started", "/r")).toEqual({ name: "Edit", title: "edit a", status: "running" });
+    expect(itemTool(fc([upd("/r/a", "/r/b")]), "completed", "/r")?.paths).toEqual(["a", "b"]);
+    expect(itemTool(fc([upd("/r/a")], "inProgress"), "started", "/r")).toEqual({ name: "Edit", title: "edit a", status: "running", paths: ["a"] });
   });
 
   test("MCP calls, searches and the rest", () => {
