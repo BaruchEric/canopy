@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecResult } from "../core/exec";
+import { POLL_BUSY } from "../core/pr";
 import type { LandingRun, PrWatch, Run, ServerEvent } from "../core/types";
 import { addRunTree, revOf, runTreeDir } from "../core/worktree";
 import { PrHub } from "./prs";
@@ -34,6 +35,8 @@ interface Gh {
   state: string;
   review: string;
   mergeable: string;
+  /** GitHub's `mergeStateStatus` */
+  mergeState: string;
   comments: unknown[];
   perms: Record<string, string>;
   mergeFails: boolean;
@@ -87,7 +90,7 @@ const view = (g: Gh, number = 7) => ({
   changedFiles: 1,
   headRefOid: g.head,
   mergeable: g.mergeable,
-  mergeStateStatus: "CLEAN",
+  mergeStateStatus: g.mergeState,
   reviewDecision: g.review,
   latestReviews: [],
   statusCheckRollup: g.checks,
@@ -113,7 +116,7 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
   const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
-  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric", now: {} };
+  const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", mergeState: "CLEAN", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric", now: {} };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
@@ -452,6 +455,151 @@ describe("auto-fix", () => {
     w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
     await pollNow(w);
     expect(w.fixes).toHaveLength(0);
+  });
+});
+
+describe("the rebase step", () => {
+  const MOVED = "the branch moved on GitHub since canopy pushed; rebase it yourself";
+  const editorOff = { ...process.env, GIT_EDITOR: "true" } as Record<string, string>;
+
+  /** An open PR read on the head canopy pushed, then main moved under it
+   *  on the remote with a file the branch does not touch. */
+  const behind = async (opts: { autoFix?: boolean } = {}): Promise<{ w: World; mainHead: string; pushed: string }> => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: opts.autoFix ?? true });
+    const pushed = (await revOf(w.dir, "HEAD"))!;
+    w.gh.head = pushed;
+    const mainHead = await commit(w.path, "c.txt", "c\n");
+    await sh(w.path, "push", "-q", "origin", "main");
+    w.gh.mergeState = "BEHIND";
+    return { w, mainHead, pushed };
+  };
+
+  /** As `behind`, but main's new commit edits a line the branch changed. */
+  const dirty = async (): Promise<{ w: World; mainHead: string; pushed: string }> => {
+    const w = await world();
+    await commit(w.dir, "a.txt", "mine\n");
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    const pushed = (await revOf(w.dir, "HEAD"))!;
+    w.gh.head = pushed;
+    const mainHead = await commit(w.path, "a.txt", "theirs\n");
+    await sh(w.path, "push", "-q", "origin", "main");
+    w.gh.mergeState = "DIRTY";
+    return { w, mainHead, pushed };
+  };
+
+  const remoteBranch = (w: World): Promise<string> => sh(w.bare, "rev-parse", `refs/heads/${w.rec.branch}`);
+
+  test("BEHIND on the head canopy pushed: fetched, rebased and pushed with a lease; the new head is pushed and read at the fresh pace", async () => {
+    const { w, mainHead, pushed } = await behind();
+    const pr = await pollNow(w);
+    const head = (await revOf(w.dir, "HEAD"))!;
+    expect(head).not.toBe(pushed);
+    expect(pr.pushed).toBe(head);
+    expect(await sh(w.dir, "rev-parse", "HEAD~1")).toBe(mainHead);
+    expect(await remoteBranch(w)).toBe(head);
+    expect(pr.rebasing).toBeUndefined();
+    expect(pr.error).toBeUndefined();
+    expect(pr.gaveUp).toBeUndefined();
+    expect(w.fixes).toHaveLength(0);
+    const due = (w.hub as unknown as { due: Map<string, number> }).due.get(w.rec.id)!;
+    expect(due - Date.now()).toBeLessThanOrEqual(POLL_BUSY);
+  });
+
+  test("DIRTY with a conflict starts one fix run with the files fenced, counted under the base sha; its push goes with the lease", async () => {
+    const { w, mainHead } = await dirty();
+    let pr = await pollNow(w);
+    expect(w.fixes).toHaveLength(1);
+    expect(w.fixes[0]!.prompt).toContain("stops on conflicts in 1 file.");
+    expect(w.fixes[0]!.prompt).toContain("<<<\na.txt\n>>>");
+    expect(w.fixes[0]!.label).toBe("fix PR #7: rebase onto main (1/3)");
+    expect(pr.fixing).toEqual({ run: "fix1", key: `rebase:${mainHead}` });
+    expect(pr.attempts).toEqual({ [`rebase:${mainHead}`]: 1 });
+    expect(pr.rebasing).toBeUndefined();
+    // the worktree is left as it was, for the fix run
+    expect(await sh(w.dir, "status", "--porcelain")).toBe("");
+    // the fix resolves it by hand, keeping both, and leaves the branch rebased
+    await sh(w.dir, "fetch", "-q", "origin", "main");
+    expect((await exec(["git", "rebase", "origin/main"], { cwd: w.dir, env: editorOff })).code).not.toBe(0);
+    await writeFile(join(w.dir, "a.txt"), "theirs\nmine\n");
+    await sh(w.dir, "add", "a.txt");
+    expect((await exec(["git", "rebase", "--continue"], { cwd: w.dir, env: editorOff })).code).toBe(0);
+    const fixed = (await revOf(w.dir, "HEAD"))!;
+    await endFix(w, "fix1");
+    pr = w.hub.info()[0]!;
+    expect(pr.pushed).toBe(fixed);
+    expect(await remoteBranch(w)).toBe(fixed);
+    expect(pr.fixing).toBeUndefined();
+    expect(pr.error).toBeUndefined();
+  });
+
+  test("a lease the remote refuses gives up with the branch-moved words and pushes nothing", async () => {
+    const { w, pushed } = await behind();
+    const other = join(root, `clone${++n}`);
+    await exec(["git", "clone", "-q", "-b", w.rec.branch, w.bare, other]);
+    await sh(other, "config", "user.email", "t@t");
+    await sh(other, "config", "user.name", "t");
+    const theirs = await commit(other, "d.txt", "d\n");
+    await sh(other, "push", "-q", "origin", w.rec.branch);
+    const pr = await pollNow(w);
+    expect(pr.gaveUp).toBe(MOVED);
+    expect(pr.error).toBe(MOVED);
+    expect(pr.pushed).toBe(pushed);
+    expect(await remoteBranch(w)).toBe(theirs);
+    expect(w.fixes).toHaveLength(0);
+    expect(pr.rebasing).toBeUndefined();
+  });
+
+  test("three conflict fixes on one base, then auto-fix gives up", async () => {
+    const { w } = await dirty();
+    for (let i = 1; i <= 3; i++) {
+      await pollNow(w);
+      await endFix(w, `fix${i}`);
+    }
+    const pr = await pollNow(w);
+    expect(w.fixes).toHaveLength(3);
+    expect(w.fixes.map((f) => f.label)).toEqual(["fix PR #7: rebase onto main (1/3)", "fix PR #7: rebase onto main (2/3)", "fix PR #7: rebase onto main (3/3)"]);
+    expect(pr.gaveUp).toBe("could not rebase onto main after 3 tries");
+    await pollNow(w);
+    expect(w.fixes).toHaveLength(3);
+  });
+
+  test("a rebase that errors gives up with the reason and pushes nothing", async () => {
+    const { w, pushed } = await behind();
+    await writeFile(join(w.dir, "b.txt"), "left by a stopped fix\n");
+    const pr = await pollNow(w);
+    expect(pr.gaveUp).toStartWith("could not rebase onto main:");
+    expect(pr.pushed).toBe(pushed);
+    expect(await remoteBranch(w)).toBe(pushed);
+    expect(w.fixes).toHaveLength(0);
+  });
+
+  test("a trusted comment that arrived while the PR was behind is fixed on the rebased head", async () => {
+    const { w } = await behind();
+    w.gh.comments = [{ id: 5, user: { login: "ann" }, body: "rename this", path: "b.txt", line: 1, html_url: "u5" }];
+    w.gh.perms = { ann: "write" };
+    let pr = await pollNow(w);
+    const head = (await revOf(w.dir, "HEAD"))!;
+    expect(pr.pushed).toBe(head);
+    // the comment waits for the read of the pushed head
+    expect(w.fixes).toHaveLength(0);
+    w.gh.head = head;
+    w.gh.mergeState = "CLEAN";
+    pr = await pollNow(w);
+    expect(w.fixes).toHaveLength(1);
+    expect(w.fixes[0]!.prompt).toContain("rename this");
+    expect(pr.fixing).toEqual({ run: "fix1", key: "comment:5" });
+  });
+
+  test("auto-fix off: BEHIND starts no rebase", async () => {
+    const { w, pushed } = await behind({ autoFix: false });
+    const pr = await pollNow(w);
+    expect(pr.pushed).toBe(pushed);
+    expect(await remoteBranch(w)).toBe(pushed);
+    expect(pr.rebasing).toBeUndefined();
+    expect(await revOf(w.dir, "HEAD")).toBe(pushed);
   });
 });
 

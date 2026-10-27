@@ -21,6 +21,7 @@ import {
   exhausted,
   fixPromptForCheck,
   fixPromptForComment,
+  fixPromptForConflict,
   MAX_ATTEMPTS,
   mergeMethod,
   nextPoll,
@@ -32,6 +33,8 @@ import {
   prNumberOf,
   PR_FIELDS,
   readyToMerge,
+  readyToRebase,
+  rebaseKey,
   trusted,
   watchHolds,
 } from "../core/pr";
@@ -39,7 +42,7 @@ import { configDir } from "../core/store";
 import { SWEEP_COMMENT_PREFIX } from "../core/sweep";
 import type { LandingRun, PrComment, PrNow, PrState, PrWatch, Run, RunReview, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
-import { dirtyFiles, pushBranch, pushRemote, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
+import { dirtyFiles, pushBranch, pushBranchLease, pushRemote, rebaseOnto, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
 import { sortRun } from "./landing";
 
 export const prsDir = (): string => join(configDir(), "prs");
@@ -178,6 +181,8 @@ const errText = (err: unknown): string => String(err instanceof Error ? err.mess
 const lastLine = (r: ExecResult, what: string): string => (r.stderr.trim() || r.stdout.trim()).split("\n").filter(Boolean).pop() ?? `${what} exited ${r.code}`;
 
 const runGh = (args: string[], cwd?: string): Promise<ExecResult> => exec(["gh", ...args], { ...(cwd ? { cwd } : {}), timeoutMs: 60_000 });
+/** what stops canopy for a PR whose lease push the remote refused */
+const MOVED = "the branch moved on GitHub since canopy pushed; rebase it yourself";
 
 async function remoteSlug(repoPath: string, remote: string): Promise<string | null> {
   const r = await git(repoPath, ["remote", "get-url", remote]);
@@ -640,6 +645,9 @@ export class PrHub {
     // closed it (here or on another backend), which keeps the PR on the record
     if (w.state?.status === "closed" && w.swept === undefined && (had.state?.status !== "closed" || w.closeUnread !== undefined)) w = await this.whoClosed(w);
     if (w.state?.status === "open") {
+      // behind or conflicting on the head canopy pushed: rebased first, so
+      // the comment loop and the merge see the pushed head on a later read
+      if (w.autoFix && !w.fixing && w.gaveUp === undefined && w.state && readyToRebase(w.state, w).ok) w = await this.rebase(w);
       if (w.autoFix && !w.fixing) w = await this.autoFix(w);
       if (w.autoMerge && !w.fixing && w.state && readyToMerge(w.state, w).ok) {
         w = await this.screen(w, w.state);
@@ -679,9 +687,37 @@ export class PrHub {
     if (dirty.length > 0) return failed("the fix left changes not committed; nothing was pushed");
     const head = await revOf(w.dir, "HEAD");
     if (!head || head === w.pushed) return failed("the fix ended with nothing new to push");
-    const pushed = await pushBranch(w.dir, w.remote, w.branch);
+    // a conflict fix rebased the branch, so its push goes with the lease
+    const pushed = fixing.key.startsWith("rebase:") ? await pushBranchLease(w.dir, w.remote, w.branch, w.pushed) : await pushBranch(w.dir, w.remote, w.branch);
     if ("rejected" in pushed) return failed(`the push was refused: ${pushed.rejected}`);
     return { ...done, pushed: head };
+  }
+
+  /** The PR fell behind its target, or conflicts with it, on the head
+   *  canopy pushed: the target is fetched, the branch rebased in its
+   *  worktree and pushed again with a lease on that head. A conflict
+   *  becomes a fix run with the files named, `MAX_ATTEMPTS` per base
+   *  commit; a lease the remote refuses, or a rebase that errors, stops
+   *  auto-fix for the PR with why. */
+  private async rebase(w: PrWatch): Promise<PrWatch> {
+    const onto = `${w.remote}/${w.target}`;
+    const fetched = await git(w.dir, ["fetch", w.remote, w.target], 60_000);
+    if (fetched.code !== 0) return { ...w, error: `fetching ${w.target}: ${lastLine(fetched, "git fetch")}` };
+    const base = await revOf(w.dir, onto);
+    if (!base) return { ...w, error: `fetching ${w.target}: ${onto} is not a commit` };
+    const key = rebaseKey(base);
+    if (exhausted(w, key)) return { ...w, gaveUp: `could not rebase onto ${w.target} after ${MAX_ATTEMPTS} tries` };
+    const { error: _e, ...rest } = w;
+    this.save({ ...rest, rebasing: { from: w.pushed } });
+    this.publish();
+    const r = await rebaseOnto(w.dir, onto);
+    if ("conflict" in r) return this.startFix(rest, key, fixPromptForConflict(w, r.conflict));
+    if ("error" in r) return { ...rest, error: r.error, gaveUp: `could not rebase onto ${w.target}: ${r.error}` };
+    const head = await revOf(w.dir, "HEAD");
+    if (!head) return { ...rest, error: "the rebased worktree has no HEAD" };
+    const pushed = await pushBranchLease(w.dir, w.remote, w.branch, w.pushed);
+    if ("rejected" in pushed) return { ...rest, error: MOVED, gaveUp: MOVED };
+    return { ...rest, pushed: head };
   }
 
   /** Starts a fix run for a key, counting the attempt. */
@@ -689,7 +725,7 @@ export class PrHub {
     const rec = this.deps.record(w.id);
     if (!rec) return { ...w, error: "its branch run's record is gone" };
     const attempts = { ...w.attempts, [key]: (w.attempts[key] ?? 0) + 1 };
-    const what = key.startsWith("check:") ? `${key.slice("check:".length)} failed` : "a review comment";
+    const what = key.startsWith("check:") ? `${key.slice("check:".length)} failed` : key.startsWith("rebase:") ? `rebase onto ${w.target}` : "a review comment";
     try {
       const run = await this.deps.startFix(rec, prompt, `fix PR #${w.number}: ${what} (${attempts[key]}/${MAX_ATTEMPTS})`);
       return { ...w, attempts, runId: run.id, fixing: { run: run.id, key } };
