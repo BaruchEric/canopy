@@ -92,6 +92,10 @@ usage:
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout
   canopy pr <run> [--draft]          push a ready branch run and open a PR on GitHub in place of landing it
   canopy prs [repo]                  every PR branch runs opened: where it stands, its checks, auto-fix and auto-merge
+  canopy work [--repo R] [--state S] every work item: id, state, repos, title and its newest line
+  canopy work show <id>              the item in full: what served it and every line on it
+  canopy work note [<id>] "<text>"   a line on an item; in a run's worktree the id is read off the branch
+  canopy work close <id> --landed | --dropped [-m why]  end an item by hand; refused while a run on it is going
   canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
   canopy secrets status [--json]     this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
   canopy secrets unlock              unlock this machine's key (asks for its passphrase); its sinks are written then
