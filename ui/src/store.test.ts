@@ -67,6 +67,7 @@ import {
   type RangerInfo,
   type RememberedRule,
   type Repo,
+  type Run,
   type ScanResult,
   type SourceState,
   type Sprout,
@@ -783,6 +784,7 @@ const repo = (id: string, extra: Partial<Repo> = {}) =>
   ({ id, name: id, path: `/dev/${id}`, group: "", source: "launch", status: null, ...extra }) as unknown as Repo;
 const scanOf = (root: string, repos: Repo[]): ScanResult => ({ root, sources: [source("launch", "launch")], repos, scannedAt: 1, backend: { openers: true, sshHost: null } });
 const runOf = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done", startedAt: 1 });
+const activeReplayRun = (id: string): Run => ({ id, repoId: "proj", action: "chat", verb: "chat", progress: "working", expectsChange: false, chat: true, harness: "claude", note: "", status: "working", startedAt: 1, steps: [], prompt: null });
 const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 
 /** What every backend answers at load, for a tree and a run of its own. */
@@ -869,6 +871,159 @@ describe("several backends", () => {
     globalThis.fetch = stubFetch(home, b, calls);
     cleanup = await useStore.getState().init();
   }
+
+  async function replayPage(): Promise<void> {
+    await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }), backendAnswers(scanOf("/b", [repo("proj")]), []));
+    await settle();
+  }
+
+  function keptReads() {
+    const pending: { url: string; finish: (response: Response) => void }[] = [];
+    const previous = globalThis.fetch;
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/api/runs/")) return new Promise<Response>(finish => { pending.push({ url, finish }); });
+      return previous(input, init);
+    }, { preconnect: realFetch.preconnect });
+    const finish = (index: number, id: string, status = 200) => {
+      const read = pending[index];
+      if (!read) throw new Error("expected a kept-run GET");
+      read.finish(new Response(JSON.stringify(status === 200 ? { ...runOf(id, "proj"), kept: true } : { error: "gone" }), { status }));
+    };
+    return { pending, finish };
+  }
+
+  test("showRun loads a missing run on its own backend and opens its kept sheet", async () => {
+    await replayPage();
+    const reads = keptReads();
+    useStore.getState().showRun("b|old");
+    expect(reads.pending.map(r => r.url)).toEqual(["http://b.test/api/runs/old"]);
+    reads.finish(0, "old");
+    await settle();
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|old" });
+    expect(useStore.getState().runs["b|old"]).toMatchObject({ id: "b|old", repoId: "b|proj", kept: true });
+  });
+
+  test("a failed kept GET leaves the sheet and run map unchanged; a held run opens without a GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    useStore.getState().openSearch();
+    const before = useStore.getState();
+    const loading = useStore.getState().loadKeptRun("b|gone");
+    reads.finish(0, "gone", 404);
+    await loading;
+    expect(useStore.getState().sheet).toBe(before.sheet);
+    expect(useStore.getState().runs).toBe(before.runs);
+    useStore.getState().applyEvent({ type: "run", run: { ...activeReplayRun("live"), status: "working" } });
+    useStore.getState().showRun("live");
+    expect(reads.pending).toHaveLength(1);
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "live" });
+  });
+
+  test("rapid kept opens cannot let an older GET replace the newer selection", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const older = useStore.getState().loadKeptRun("b|old");
+    const newer = useStore.getState().loadKeptRun("b|new");
+    reads.finish(1, "new"); await newer;
+    reads.finish(0, "old"); await older;
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|new" });
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
+  test("closing an empty sheet or choosing another sheet cancels its pending kept open", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const closed = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().closeSheet();
+    reads.finish(0, "old"); await closed;
+    expect(useStore.getState().sheet).toBeNull();
+    const other = useStore.getState().loadKeptRun("b|new");
+    useStore.getState().openSearch();
+    reads.finish(1, "new"); await other;
+    expect(useStore.getState().sheet).toEqual({ kind: "search" });
+    expect(useStore.getState().runs).toEqual({});
+  });
+
+  test("a newer live run selection cancels a pending kept GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().applyEvent({ type: "run", run: activeReplayRun("live") });
+    useStore.getState().showRun("live");
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "live" });
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
+  test("a kept GET opens newer SSE data without replacing it, and cannot resurrect a run-gone", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().applyEvent({ type: "run", run: { ...activeReplayRun("b|old"), repoId: "b|proj" } }, "b");
+    const live = useStore.getState().runs["b|old"];
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().runs["b|old"]).toBe(live);
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|old" });
+    const gone = useStore.getState().loadKeptRun("b|gone");
+    useStore.getState().applyEvent({ type: "run-gone", id: "b|gone" }, "b");
+    reads.finish(1, "gone"); await gone;
+    expect(useStore.getState().runs["b|gone"]).toBeUndefined();
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "b|old" });
+  });
+
+  test("kept runs never send answer, say, stop or dismiss mutations even when active-looking", async () => {
+    await replayPage();
+    const run: Run = { ...activeReplayRun("old"), kept: true, prompt: { id: "p", kind: "proposal", plan: "recorded", auto: true } };
+    useStore.setState({ runs: { old: run }, sheet: { kind: "run", runId: "old" } });
+    const sent: string[] = [];
+    globalThis.fetch = Object.assign(async (input: string | URL | Request) => { sent.push(String(input)); return new Response(JSON.stringify(run)); }, { preconnect: realFetch.preconnect });
+    await useStore.getState().answerRun("old", "p", { kind: "approve", auto: false });
+    await useStore.getState().sayRun("old", "more");
+    await useStore.getState().stopRun("old");
+    await useStore.getState().dismissRun("old");
+    expect(sent).toEqual([]);
+    expect(useStore.getState().runs.old).toBe(run);
+    expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "old" });
+  });
+
+  test("a reconnect invalidates a kept GET that began on the old event stream", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    const stream = FakeEventSource.opened.find(e => e.url.startsWith("http://b.test"));
+    if (!stream?.onopen) throw new Error("expected the backend event stream");
+    stream.onopen();
+    stream.onopen();
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
+
+  test("a removed and reconnected backend cannot receive its older kept GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    useStore.getState().hideBackend("b", true);
+    useStore.getState().hideBackend("b", false);
+    await settle();
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+    useStore.getState().hideBackend("b", true);
+    await useStore.getState().loadKeptRun("b|inactive");
+    expect(reads.pending).toHaveLength(1);
+  });
+
+  test("page cleanup invalidates its pending kept GET", async () => {
+    await replayPage();
+    const reads = keptReads();
+    const loading = useStore.getState().loadKeptRun("b|old");
+    cleanup?.(); cleanup = null;
+    reads.finish(0, "old"); await loading;
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().runs["b|old"]).toBeUndefined();
+  });
 
   test("a registry of one talks to nothing but the page's own origin", async () => {
     await start(backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": { self: "a", backends: [] } }), () => {

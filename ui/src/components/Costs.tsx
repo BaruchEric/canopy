@@ -181,7 +181,7 @@ function HarnessLine({ sheet, history, days, cards }: { sheet: CostSheet; histor
   );
 }
 
-function Lines({ title, lines, empty, limit }: { title: string; lines: CostLine[]; empty: string; limit?: number }) {
+export function Lines({ title, lines, empty, limit, onOpen }: { title: string; lines: CostLine[]; empty: string; limit?: number; onOpen?: (line: CostLine) => void }) {
   const [all, setAll] = useState(false);
   const shown = limit && !all ? lines.slice(0, limit) : lines;
   return (
@@ -196,7 +196,7 @@ function Lines({ title, lines, empty, limit }: { title: string; lines: CostLine[
           {shown.map((l) => (
             <li key={l.key} className="cost-row">
               <span className="cost-name">
-                {l.label}
+                {l.run && onOpen ? <button type="button" className="landing-branch landing-open" onClick={() => onOpen(l)}>{l.label}</button> : l.label}
                 {l.detail && <small>{l.detail}</small>}
               </span>
               <span className="cost-usage">{usageWords(l, fmtTokens)}</span>
@@ -225,6 +225,7 @@ const PRICES_EXAMPLE = `{
 export function CostsView() {
   const [win, setWin] = useState<CostWindow>("7");
   const days = Number(win);
+  const showRun = useStore((s) => s.showRun);
   const got = useLedger(days);
   const { repos, order, history } = useStore(useShallow((s) => ({ repos: s.repos, order: s.backendOrder, history: s.history })));
   const cards = useMemo(() => joinRepos(repos, order, (id) => [backendOf(id), plainOf(id)]), [repos, order]);
@@ -260,7 +261,7 @@ export function CostsView() {
           {!sheet.archive && <p className="cost-note">claude-history did not answer, so Claude here is only what canopy's own runs reported.</p>}
           <Lines title="By service" lines={sheet.services} empty="Nothing spent in this window." />
           <Lines title="By repo" lines={sheet.repos} empty="Nothing spent in a repo in this window." limit={15} />
-          <Lines title="By run and chat" lines={sheet.runs} empty="No canopy run, chat or voice call in a chat spent anything in this window." limit={15} />
+          <Lines title="By run and chat" lines={sheet.runs} empty="No canopy run, chat or voice call in a chat spent anything in this window." limit={15} onOpen={(l) => l.run && showRun(qual(l.run.backend, plainOf(l.run.id)))} />
           {sheet.archive && (
             <Lines
               title="Claude sessions"

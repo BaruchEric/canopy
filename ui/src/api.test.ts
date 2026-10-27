@@ -155,6 +155,17 @@ describe("a page with two backends", () => {
     expect(home.map((r) => [r.id, r.repoId])).toEqual([["r1", "x"]]);
   });
 
+  test("a kept-run GET routes the plain id and qualifies all returned references exactly once", async () => {
+    const record: Run = { id: "r/one", repoId: "proj", action: "chat", verb: "chat", progress: "working", expectsChange: false, chat: true, harness: "claude", note: "n", status: "done", startedAt: 1, steps: [], prompt: null, kept: true, group: "g", parent: "p", branch: { name: "run/one", target: "main", base: "base", dir: "/b/one", state: "ready", origin: "o", group: "g" }, tasks: [{ id: "t1", title: "child", note: "n", action: "ask", state: "done", repo: "proj", run: "child" }] };
+    reply = () => json(record);
+    expect(await api.keptRun("b|r/one")).toMatchObject({ id: "b|r/one", repoId: "b|proj", kept: true, group: "b|g", parent: "b|p", branch: { origin: "b|o", group: "b|g" }, tasks: [{ repo: "b|proj", run: "b|child" }] });
+    expect(calls[0]?.url).toBe("http://b.test/api/runs/r%2Fone");
+    expect(await api.keptRun("r/one")).toEqual(record);
+    expect(calls[1]?.url).toBe("/api/runs/r%2Fone");
+    reply = () => json({ error: "gone" }, 404);
+    await expect(api.keptRun("b|missing")).rejects.toThrow("gone");
+  });
+
   test("a foreign backend's initial landing response preserves and qualifies collision ids", async () => {
     reply = () => json({
       runs: [],

@@ -41,6 +41,8 @@ export interface ServedRow extends CostRow {
 }
 
 export interface CostLine {
+  /** The run behind a by-run line, on the backend that recorded it. */
+  run?: { backend: string; id: string };
   key: string;
   label: string;
   detail: string;
@@ -202,6 +204,7 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
     if (r.run) {
       const k = `${r.backend}:${r.run}`;
       const l = runs.get(k) ?? line(k, r.label ?? "run");
+      l.run = { backend: r.backend, id: r.run };
       runs.set(k, l);
       add(l, r);
       const where = (r.qid ? cardOf.get(r.qid)?.name : undefined) ?? r.repoName;

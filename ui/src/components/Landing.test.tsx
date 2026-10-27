@@ -66,3 +66,12 @@ test("warm words join the queue's head and leave group, collision and judge rows
   expect(html).toContain("warm-2");
   expect(html).toContain("refilling");
 });
+
+
+test("a landing branch whose live run is absent remains a button to its kept record", () => {
+  const record: LandingRun = { id: "b|origin", runId: "b|old", repoId: repo.id, repoPath: repo.path, branch: "run/kept", target: "main", base: "base", dir: "/w/old", note: "old work", verb: "Ask", harness: "claude", state: "ready", startedAt: 1 };
+  useStore.setState({ runs: {}, landing: { b: { runs: [record], entries: [], orphans: [] } } });
+  const html = render(pool());
+  expect(html).toMatch(/<button[^>]*class="landing-branch landing-open"[^>]*>run\/kept<\/button>/);
+  expect(html).toContain("one a restart took opens from its kept record");
+});

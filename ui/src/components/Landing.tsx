@@ -91,7 +91,6 @@ export function LandingSection({ repo }: { repo: Repo }) {
   const dropLanding = useStore((s) => s.dropLanding);
   const orphanLanding = useStore((s) => s.orphanLanding);
   const showRun = useStore((s) => s.showRun);
-  const runs = useStore((s) => s.runs);
   const watches = useStore((s) => prsAll(s));
   const [error, setError] = useState("");
   const [skipped, setSkipped] = useState("");
@@ -112,17 +111,12 @@ export function LandingSection({ repo }: { repo: Repo }) {
     );
   };
   const words = chipWords(info, repo.id);
-  const openRun = (runId: string) => {
-    if (runs[runId]) showRun(runId);
-  };
-  const runLink = (r: Pick<LandingRun, "runId" | "branch">) =>
-    runs[r.runId] ? (
-      <button type="button" className="landing-branch landing-open" title="Show the run" onClick={() => openRun(r.runId)}>
-        {r.branch}
-      </button>
-    ) : (
-      <span className="landing-branch">{r.branch}</span>
-    );
+  const openRun = showRun;
+  const runLink = (r: Pick<LandingRun, "runId" | "branch">) => (
+    <button type="button" className="landing-branch landing-open" title="Show the run; one a restart took opens from its kept record" onClick={() => openRun(r.runId)}>
+      {r.branch}
+    </button>
+  );
   const entryRun = (e: LandEntry): Pick<LandingRun, "runId" | "branch"> => ({ runId: info.runs.find((r) => r.id === e.id)?.runId ?? "", branch: e.branch });
   return (
     <Section
