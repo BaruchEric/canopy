@@ -43,6 +43,8 @@ const rule = (): TriggerRule => ({
   name: "lin",
   source: "linear",
   repo: "web/shop",
+  land: "pr",
+  only: [],
   workflow: "linear-issue",
   secretEnv: "CANOPY_TRIGGER_LIN_SECRET",
   projects: [],

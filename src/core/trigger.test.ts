@@ -21,6 +21,7 @@ import {
   parseSentry,
   pruneEvents,
   sampleIncoming,
+  SERVICE_NAME,
   KEEP_EVENTS,
   MAX_DESCRIPTION,
   triggerPlan,
@@ -34,6 +35,8 @@ const RULE: TriggerRule = {
   name: "shop",
   source: "sentry",
   repo: "web/shop",
+  land: "pr",
+  only: [],
   workflow: "sentry-fix",
   secretEnv: "CANOPY_TRIGGER_SHOP_SECRET",
   projects: [],
@@ -47,6 +50,8 @@ const LINEAR: TriggerRule = {
   name: "web-linear",
   source: "linear",
   repo: "web/shop",
+  land: "pr",
+  only: [],
   workflow: "linear-issue",
   secretEnv: "CANOPY_TRIGGER_WEB_LINEAR_SECRET",
   projects: [],
@@ -694,5 +699,63 @@ describe("fromFlow", () => {
   test("a flow's step runs leave the event to the flow", () => {
     const e = event({ flowId: "f1", runId: "r2", status: "working" });
     expect(fromRun(e, run({ id: "r2", status: "done" }), 5)).toBe(e);
+  });
+});
+
+
+describe("schedule rule configuration", () => {
+  const schedule = (over: Record<string, unknown> = {}) => ({ name: "spec-weekly", source: "schedule", repo: "*", cron: "0 5 * * 1", ...over });
+  const parsed = (value: Record<string, unknown>) => parseRules(JSON.stringify({ rules: [value] }));
+
+  test("a schedule has no hook secret and defaults to the queue, with a cron alias accepted", () => {
+    const got = parsed(schedule({ only: ["spec-adopted", "clean"] }));
+    expect(got.problems).toEqual([]);
+    expect(got.rules[0]).toEqual({ name: "spec-weekly", source: "schedule", repo: "*", workflow: "spec-converge", cron: "0 5 * * 1", land: "queue", only: ["spec-adopted", "clean"], projects: [], levels: [], labels: [], ignore: [], api: "" });
+    expect(parsed(schedule({ cron: "@weekly", land: "pr" })).rules[0]).toMatchObject({ cron: "@weekly", land: "pr", only: [] });
+    expect(SERVICE_NAME.schedule).toBe("Schedule");
+  });
+
+  test("legacy hook sources default to PR and can explicitly choose the queue", () => {
+    const legacy = { name: "hook", repo: "web/shop", secretEnv: "CANOPY_TRIGGER_SHOP_SECRET" };
+    expect(parsed(legacy).rules[0]).toMatchObject({ land: "pr", only: [] });
+    expect(parsed({ ...legacy, land: "queue" }).rules[0]?.land).toBe("queue");
+    const other = parseRules(JSON.stringify({ rules: [
+      { ...legacy, repo: "*" }, { ...legacy, cron: "@daily" },
+      { ...legacy, only: ["clean"] }, { ...legacy, land: "merge" },
+    ] }));
+    expect(other.rules).toEqual([]);
+    expect(other.problems).toEqual([
+      'rule 1: repo "*" is allowed only on a schedule rule',
+      "rule 2: cron is for a schedule rule", "rule 3: only is for a schedule rule",
+      "rule 4: land must be queue or pr, not merge",
+    ]);
+  });
+
+  test("bad schedule fields are isolated from healthy rules", () => {
+    const bad = [
+      { cron: undefined }, { cron: "0 5 * *" }, { cron: "x".repeat(101) },
+      { secretEnv: "CANOPY_TRIGGER_SECRET" }, { only: ["weekends"] },
+      { projects: [] }, { levels: [] }, { ignore: [] }, { org: "x" }, { api: "" },
+      { labels: ["x"] }, { clientId: "x", clientSecretEnv: "CANOPY_TRIGGER_X" },
+      { land: false },
+    ];
+    const got = parseRules(JSON.stringify({ rules: [...bad.map((over, i) => schedule({ ...over, name: `bad-${i}` })), schedule()] }));
+    expect(got.rules.map(r => r.name)).toEqual(["spec-weekly"]);
+    expect(got.problems).toEqual([
+      "rule 1: cron is required on a schedule rule: five fields, minute hour day-of-month month day-of-week",
+      "rule 2: cron: a cron line has five fields: minute hour day-of-month month day-of-week",
+      "rule 3: cron must be at most 100 characters",
+      "rule 4: secretEnv is not read by a schedule rule: nothing signs a clock",
+      "rule 5: only must be some of spec-adopted, dirty, unpushed, clean, not weekends",
+      "rule 6: projects is not read by a schedule rule", "rule 7: levels is not read by a schedule rule",
+      "rule 8: ignore is not read by a schedule rule", "rule 9: org is not read by a schedule rule",
+      "rule 10: api is not read by a schedule rule", "rule 11: labels is for a linear rule",
+      "rule 12: clientId is for a linear rule", "rule 13: land must be queue or pr, not false",
+    ]);
+  });
+
+  test("new events retain their selected landing path", () => {
+    expect(newEvent(RULE, INC, "web/shop", "sentry", 1, null).land).toBe("pr");
+    expect(newEvent({ ...RULE, land: "queue" }, INC, "web/shop", "sentry", 1, null).land).toBe("queue");
   });
 });

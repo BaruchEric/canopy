@@ -252,8 +252,8 @@ export class TriggerHub {
       const problem = repo ? await this.deps.workflowProblem(r.workflow, repo) : `no repo ${r.repo} in the tree`;
       rules.push({
         ...r,
-        hook: `/api/hooks/${r.source}/${r.name}`,
-        secretSet: this.env(r.secretEnv) !== undefined,
+        ...(r.source !== "schedule" ? { hook: `/api/hooks/${r.source}/${r.name}` } : {}),
+        secretSet: r.secretEnv ? this.env(r.secretEnv) !== undefined : true,
         tokenSet: r.tokenEnv ? this.env(r.tokenEnv) !== undefined : false,
         agentSet: r.clientSecretEnv ? this.env(r.clientSecretEnv) !== undefined : false,
         ...(r.clientId ? { install: `/api/linear/install?rule=${encodeURIComponent(r.name)}` } : {}),
@@ -348,7 +348,7 @@ export class TriggerHub {
   /** One issue under one rule: dedupe, the rule's filters, then a run or the
    *  queue. A Linear agent session's issue carries the session, and the event
    *  reports to it from then on. */
-  deliver(rule: TriggerRule, inc: Incoming, source: TriggerEvent["source"], session?: string): Promise<Delivery> {
+  deliver(rule: TriggerRule, inc: Incoming, source: TriggerEvent["source"], session?: string): Promise<Exclude<Delivery, { kind: "fired" }>> {
     return this.queue(async () => {
       if (!this.keeping) throw new TriggerError("this backend does not hold the flows lock, so it starts no trigger", 503);
       const repo = this.deps.repo(rule.repo);
@@ -712,7 +712,7 @@ export class TriggerHub {
   private async hook(req: Request, source: string, name: string): Promise<Response> {
     await this.loadRules();
     const rule = this.rule(name);
-    if (!rule || rule.source !== source) return json({ error: "no such hook" }, 404);
+    if (!rule || rule.source !== source || !rule.secretEnv) return json({ error: "no such hook" }, 404);
     const secret = this.env(rule.secretEnv);
     if (!secret) return json({ error: `${rule.secretEnv} is not set on this backend` }, 503);
     const length = Number(req.headers.get("content-length") ?? "0");

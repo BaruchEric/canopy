@@ -1,19 +1,32 @@
 /** Triggers: an outside event (a Sentry issue, a labeled Linear issue)
- *  starts a workflow on a branch run of its own, with nobody typing. The
+ *  or a clock (a schedule rule's cron line) starts a workflow on a branch run of its own, with nobody typing. The
  *  rules, the event records, the Sentry and Linear payload readers, dedupe,
  *  and the event's state read off its run and its PR. Browser-safe and pure;
  *  the hub in server/triggers.ts keeps the records and starts the runs. */
 
+import { CRON_MAX, parseCron } from "./cron";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { fence } from "./pr";
 import { unattendedRefusal } from "./workflow";
 import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
 
-export const TRIGGER_SOURCES = ["sentry", "linear"] as const;
+export const TRIGGER_SOURCES = ["sentry", "linear", "schedule"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
 
 /** The service's name as the page and the run's note say it. */
-export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear" };
+export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear", schedule: "Schedule" };
+
+export const TRIGGER_LANDS = ["queue", "pr"] as const;
+export type TriggerLand = (typeof TRIGGER_LANDS)[number];
+export const SCHEDULE_ONLY = ["spec-adopted", "dirty", "unpushed", "clean"] as const;
+export type ScheduleOnly = (typeof SCHEDULE_ONLY)[number];
+
+/** A repo passed over by a schedule fire, for its rule's card. */
+export interface ScheduleSkip {
+  repo: string;
+  why: string;
+  at: number;
+}
 
 /** One line of `<config dir>/triggers.json`: where an event comes from,
  *  which repo it is about and which workflow fixes it. Secrets are named by
@@ -22,14 +35,20 @@ export interface TriggerRule {
   /** the last part of the hook's address: `/api/hooks/<source>/<name>` */
   name: string;
   source: TriggerSource;
-  /** the repo's id or its absolute path */
+  /** the repo's id or absolute path; schedule rules may take every local repo with * */
   repo: string;
   /** a one-step workflow, run on a branch that opens a PR */
   workflow: string;
   /** the env var holding the secret that signs each hook (the Sentry
    *  integration's client secret, the Linear webhook's signing secret); it
    *  starts with `CANOPY_TRIGGER_`, which the server takes out of its env at start */
-  secretEnv: string;
+  secretEnv?: string;
+  /** The schedule in the backend's local time; absent for hooks. */
+  cron?: string;
+  /** How this rule's branch reaches main. */
+  land: TriggerLand;
+  /** Schedule filters, combined with AND. */
+  only: ScheduleOnly[];
   /** the Sentry project slugs, or the Linear team keys, this rule takes; empty takes every one */
   projects: string[];
   /** the Sentry levels this rule takes; a Linear rule takes none, and its issues carry none */
@@ -59,7 +78,10 @@ export interface TriggerRule {
 
 /** What canopy says about a rule on the page: no secret, only whether it is set. */
 export interface TriggerRuleInfo extends TriggerRule {
-  hook: string;
+  hook?: string;
+  next?: number;
+  lastFire?: number;
+  skips?: ScheduleSkip[];
   secretSet: boolean;
   tokenSet: boolean;
   /** Linear: the app's client secret is set, so the agent can answer */
@@ -117,6 +139,8 @@ export interface TriggerEvent {
   note: string;
   repoId: string;
   workflow: string;
+  /** Absent on legacy events, which opened a PR. */
+  land?: TriggerLand;
   status: TriggerStatus;
   /** why it is ignored, stopped or failed */
   reason?: string;
@@ -163,7 +187,8 @@ export interface TriggersInfo {
 export type Delivery =
   | { kind: "started" | "queued" | "ignored"; event: TriggerEvent }
   | { kind: "duplicate"; event: TriggerEvent }
-  | { kind: "skip"; why: string };
+  | { kind: "skip"; why: string }
+  | { kind: "fired"; events: TriggerEvent[]; skipped: ScheduleSkip[] };
 
 /** An outside issue as a rule reads it, before it is an event. */
 export interface Incoming {
@@ -199,6 +224,7 @@ const DEFAULT_LEVELS = ["error", "fatal"];
 const DEFAULTS: Record<TriggerSource, { workflow: string; api: string; labels: string[]; levels: string[] }> = {
   sentry: { workflow: "sentry-fix", api: "https://sentry.io", labels: [], levels: DEFAULT_LEVELS },
   linear: { workflow: "linear-issue", api: "https://api.linear.app", labels: ["canopy"], levels: [] },
+  schedule: { workflow: "spec-converge", api: "", labels: [], levels: [] },
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -243,15 +269,45 @@ function parseRule(item: unknown): TriggerRule {
   const name = str(item, "name") ?? "";
   if (!NAME.test(name)) throw new Error(`name must be lowercase letters, digits and -, not ${name || "empty"}`);
   const raw = str(item, "source") ?? "sentry";
-  if (!(TRIGGER_SOURCES as readonly string[]).includes(raw)) throw new Error(`source must be one of ${TRIGGER_SOURCES.join(", ")}, not ${raw}`);
-  const source = raw as TriggerSource;
+  const source = TRIGGER_SOURCES.find((value) => value === raw);
+  if (!source) throw new Error(`source must be one of ${TRIGGER_SOURCES.join(", ")}, not ${raw}`);
   const defaults = DEFAULTS[source];
   const repo = str(item, "repo");
   if (!repo) throw new Error("repo is required: the repo's id or absolute path");
   const workflow = str(item, "workflow") ?? defaults.workflow;
+  if (repo === "*" && source !== "schedule") throw new Error('repo "*" is allowed only on a schedule rule');
+  const cron = str(item, "cron");
+  if (source === "schedule") {
+    if (!cron) throw new Error("cron is required on a schedule rule: five fields, minute hour day-of-month month day-of-week");
+    if (cron.length > CRON_MAX) throw new Error(`cron must be at most ${CRON_MAX} characters`);
+    const parsed = parseCron(cron);
+    if ("error" in parsed) throw new Error(`cron: ${parsed.error}`);
+  } else if (item["cron"] !== undefined) throw new Error("cron is for a schedule rule");
   const secretEnv = str(item, "secretEnv");
-  if (!secretEnv || !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
-  if (!secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  if (source === "schedule") {
+    if (item["secretEnv"] !== undefined) throw new Error("secretEnv is not read by a schedule rule: nothing signs a clock");
+  } else {
+    if (!secretEnv || !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
+    if (!secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  }
+  const rawLand = item["land"];
+  if (rawLand !== undefined && rawLand !== "queue" && rawLand !== "pr") throw new Error(`land must be queue or pr, not ${String(rawLand)}`);
+  const land = rawLand ?? (source === "schedule" ? "queue" : "pr");
+  if (item["only"] !== undefined && source !== "schedule") throw new Error("only is for a schedule rule");
+  const only: ScheduleOnly[] = [];
+  for (const value of strings(item["only"], "only")) {
+    const known = SCHEDULE_ONLY.find((word) => word === value);
+    if (!known) throw new Error(`only must be some of ${SCHEDULE_ONLY.join(", ")}, not ${value}`);
+    only.push(known);
+  }
+  if (source === "schedule") {
+    for (const key of ["projects", "levels", "ignore", "org", "api"]) {
+      if (item[key] !== undefined) throw new Error(`${key} is not read by a schedule rule`);
+    }
+    for (const key of ["labels", "clientId", "clientSecretEnv", "organization"]) {
+      if (item[key] !== undefined) throw new Error(`${key} is for a linear rule`);
+    }
+  }
   const clientId = str(item, "clientId");
   const clientSecretEnv = str(item, "clientSecretEnv");
   if ((clientId === undefined) !== (clientSecretEnv === undefined)) throw new Error("clientId and clientSecretEnv go together: both turn the Linear agent on");
@@ -268,13 +324,16 @@ function parseRule(item: unknown): TriggerRule {
   if (labels.length && source !== "linear") throw new Error("labels is for a linear rule");
   const org = str(item, "org");
   const api = (str(item, "api") ?? defaults.api).replace(/\/+$/, "");
-  if (!/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
+  if (source !== "schedule" && !/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
   return {
     name,
     source,
     repo,
     workflow,
-    secretEnv,
+    ...(secretEnv ? { secretEnv } : {}),
+    ...(cron ? { cron } : {}),
+    land,
+    only,
     projects: strings(item["projects"], "projects"),
     levels: levels.length ? levels : defaults.levels,
     labels: labels.length ? labels : defaults.labels,
@@ -551,6 +610,7 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
     note: noteFor(inc, source, rule.source),
     repoId,
     workflow: rule.workflow,
+    land: rule.land,
     status: ignored ? "ignored" : "queued",
     ...(ignored ? { reason: ignored, endedAt: now } : {}),
     count: 1,
@@ -765,6 +825,7 @@ export function pruneEvents(events: TriggerEvent[]): TriggerEvent[] {
 export const SAMPLE_TITLE: Record<TriggerSource, string> = {
   sentry: "TypeError: Cannot read properties of undefined (reading 'percent')",
   linear: "Show the last sync time on the settings page",
+  schedule: "fired by hand",
 };
 
 /** A made-up issue for "try it": the hub fires it as if the service had. */
