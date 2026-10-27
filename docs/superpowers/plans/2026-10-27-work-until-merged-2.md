@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Status:** written 2026-10-27 on main at 6c701c4 plus the trusted-comments commit. Tasks 3 and 4 wait on the spec's call 7 (the forced push with a lease); the rest can start now.
+**Status:** written 2026-10-27 on main at 6c701c4 plus the trusted-comments commit. Call 7 (the forced push with a lease) was answered yes on 2026-10-27, so every task can start.
 
 **Goal:** A PR canopy opened that falls behind main or conflicts with it is rebased and pushed again by canopy, with a fix run for the conflicts; what canopy cannot finish reaches Eric through the inbox; and each trigger rule has its own health line.
 
@@ -15,7 +15,7 @@
 ## Global constraints
 
 - A forced push happens only on a `run/*` branch canopy itself cut and pushed, only with `--force-with-lease=refs/heads/<branch>:<sha canopy pushed last>`, only after a rebase canopy ran or a fix run canopy started in the branch's own worktree, never on `target`, never with bare `--force`. `pushBranch` stays force-free for every other caller.
-- Tasks 3 and 4 wait on call 7 in the spec's Calls section (Eric's yes to the lease push). Do not start them before it. Tasks 1, 2, 5, 6 and 7 do not depend on it.
+- Call 7 in the spec's Calls section (Eric's yes to the lease push) was given on 2026-10-27; Tasks 3 and 4 rest on it.
 - The rebase runs before `readyToMerge`, which keeps refusing BEHIND and DIRTY, so a merge still happens only on a head GitHub calls MERGEABLE.
 - Three conflict fixes per base sha (`MAX_ATTEMPTS`, 3), counted under `rebase:<base sha>`; then auto-fix gives up for the PR with "could not rebase onto <target> after 3 tries".
 - A lease the remote refuses stops canopy for that PR: `gaveUp` and `error` both read "the branch moved on GitHub since canopy pushed; rebase it yourself", nothing is pushed, and the event reads Needs you.
@@ -167,7 +167,7 @@ git commit -m "feat(pr): readyToRebase, rebaseKey and the conflict prompt"
 
 ---
 
-### Task 3: The lease push (waits on call 7)
+### Task 3: The lease push
 
 **Files:**
 - Modify `src/core/worktree.ts:177-187`
@@ -217,7 +217,7 @@ git commit -m "feat(worktree): push a run branch with a lease on the sha canopy 
 
 ---
 
-### Task 4: The rebase step in the PR watch (waits on call 7)
+### Task 4: The rebase step in the PR watch
 
 **Files:**
 - Modify `src/server/prs.ts:42` (imports), `:620-665` (`tick`), `:668-700` (`finishFix` and `startFix`)

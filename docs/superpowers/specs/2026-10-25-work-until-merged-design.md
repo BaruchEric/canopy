@@ -384,6 +384,8 @@ For Eric:
 
 7. The forced push with a lease is a change to the rule "never force" in
    `2026-10-16-pr-watch-design.md`. Say yes or the loop stops at BEHIND.
+   **Yes, 2026-10-27**: only on `run/*` branches canopy pushed, only with
+   a lease on the sha it pushed last, as the conflict loop section says.
 8. `STALL_AFTER` at 20 minutes: a long `bun test` on the mini can take ten.
    P6 decides whether an open tool call is enough to tell them apart.
 9. Whether `write-back` to GitHub should use gh's login (Eric's) or a
