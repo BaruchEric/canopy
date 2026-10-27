@@ -63,6 +63,8 @@ canopy <any command> --token T     # send this caller token (default: the token 
 canopy spec status [dir]           # every local repo against the shared repo spec
 canopy spec sync <repo> [--visual] # write the spec into a repo (--visual adds DESIGN.md)
 canopy spec check [repo]           # exit 1 unless the repo's spec text is in sync
+canopy costs [--days 1|7|30]       # what the paid services spent, by service and by repo, across every backend the home one lists
+canopy costs --share               # and the harness share: the dollars and Claude sessions that went into the repos marked as the harness, eight weeks of it
 canopy health [--bad] [--repo R] [--json]   # every check on every backend; exit 1 when anything is down
 canopy health show <id>            # one check: why, how it heals, its last 20 changes
 canopy health heal <id>            # heal one check now
