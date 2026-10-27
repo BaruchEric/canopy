@@ -5,6 +5,7 @@
  *  `NODE_ENV=test` only when it is unset, so the suite resets them itself;
  *  a test that wants one sets it. */
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 process.env["NODE_ENV"] = "test";
 for (const k of ["CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_SSH_HOST", "CANOPY_NO_DESKTOP"]) delete process.env[k];
@@ -59,3 +60,10 @@ process.env["TZ"] = "Etc/UTC";
 // from inside a canopy shell, it makes a test's tmux attach refuse to nest.
 process.env["SHELL"] = "/bin/bash";
 delete process.env["TMUX"];
+
+// A unix socket path holds 103 characters on macOS, and a test server's tmux
+// socket sits at <tmpdir>/canopy-<name>-XXXXXX/config/tmux.sock. The system
+// tmpdir is 48 characters, which fits; a tool that nests its own folder
+// under $TMPDIR (context-mode's sandbox, at 65) does not, and every test
+// that starts a server then fails with "File name too long". /tmp fits.
+if (tmpdir().length > 56) process.env["TMPDIR"] = "/tmp";
