@@ -5911,6 +5911,9 @@ export async function startServer(opts: {
    *  that held it is gone */
   const adoptFlows = async (): Promise<void> => {
     flowFiles = new FlowFiles(root);
+    // A restored flow can start a branch run synchronously. Adopt its work
+    // item first so the runner's onRun event is recorded instead of dropped.
+    await state.work.adopt();
     const restoreCfg = await loadConfig();
     state.flows.restore(
       await loadFlowRecords(root),
@@ -5921,8 +5924,6 @@ export async function startServer(opts: {
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();
-    // the work items before the landing queue can write restart lines on them
-    await state.work.adopt();
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
     // and the PRs they opened
