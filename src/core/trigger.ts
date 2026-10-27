@@ -9,7 +9,7 @@ import { CRON_MAX, parseCron } from "./cron";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
 import { fence } from "./pr";
-import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Run, Workflow } from "./types";
 
 export const TRIGGER_SOURCES = ["sentry", "linear", "github", "forgejo"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
@@ -762,11 +762,27 @@ export function fromPr(e: TriggerEvent, w: PrWatch, now: number): TriggerEvent {
   return next;
 }
 
-/** A committed event the landing queue held back says why: its PR did not
- *  open (no GitHub remote, gh not signed in). The newest held notice for
- *  the event's branch wins. */
-export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[]): TriggerEvent {
+/** Whether an event's run opens a PR when it settles ready. A Forgejo run
+ *  lands through the landing queue instead: canopy opens PRs with gh,
+ *  which is GitHub's, and the queue is canopy's own merge. An event written
+ *  before services were named is Sentry's. */
+export const opensPr = (e: Pick<TriggerEvent, "service">): boolean => e.service !== "forgejo";
+
+/** A committed event and the landing queue. Its branch landed, as the
+ *  queue's entry (`landed`) or its notice says, is the event merged: the
+ *  word stays `merged` so the page's sections hold, and `endedAt` is when
+ *  it landed. Else the newest held notice for the branch says why it
+ *  waits (its PR did not open, main moved under it). A caller from before
+ *  entries were passed sends the notices alone. */
+export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[], entries: readonly LandEntry[] = []): TriggerEvent {
   if (e.status !== "ready" || !e.branch) return e;
+  const entry = entries.find((x) => x.id === e.branch && x.state === "landed");
+  const landed = notices.filter((n) => n.entry === e.branch && n.kind === "landed").sort((a, b) => b.at - a.at)[0];
+  if (entry || landed) {
+    const merged: TriggerEvent = { ...e, status: "merged", endedAt: entry?.landedAt ?? landed?.at ?? e.lastAt };
+    delete merged.reason;
+    return merged;
+  }
   const held = notices.filter((n) => n.entry === e.branch && n.kind === "held" && n.why).sort((a, b) => b.at - a.at)[0];
   if (!held?.why || held.why === e.reason) return e;
   return { ...e, reason: held.why };

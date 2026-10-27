@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProbeResult } from "../core/health";
 import type { Incoming, TriggerEvent, TriggerRule } from "../core/trigger";
-import type { Flow, PrWatch, Repo, Run } from "../core/types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run } from "../core/types";
 import { LinearError } from "./linear";
 import { MAX_BODY, signatureOk, TriggerHub, type AgentSay, type StartOutcome, type TriggerDeps } from "./triggers";
 
@@ -1025,5 +1025,40 @@ describe("polling", () => {
     const cold = pollHub();
     expect((await post(cold, { rule: "tracker" }))?.status).toBe(503);
     expect(listed).toBe(1);
+  });
+});
+
+describe("landing", () => {
+  const landed: LandEntry = { id: "br1", repoId: "web/shop", repoPath: "/dev/web/shop", branch: "run/fix", target: "main", dir: "/tmp/run", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9 };
+  const notice = (over: Partial<LandNotice>): LandNotice => ({ id: "n", entry: "br1", repoId: "web/shop", branch: "run/fix", note: "", kind: "landed", at: 11, ...over });
+  /** a hub with one Forgejo event committed on br1, waiting on the queue */
+  async function readyHub(): Promise<TriggerHub> {
+    await writeFile(join(dir, "triggers.json"), JSON.stringify({ rules: [{ name: "fj", source: "forgejo", repo: "web/shop", api: "https://git.example.com" }] }));
+    const h = hub();
+    await h.adopt();
+    await h.fire("fj", "Show the last sync time");
+    const r = runs[0] as Run;
+    h.onRun({ ...r, status: "done", branch: { ...r.branch!, state: "ready" } });
+    expect(h.list()[0]).toMatchObject({ service: "forgejo", status: "ready", branch: "br1" });
+    return h;
+  }
+
+  test("a Forgejo event is merged once the queue lands its branch, by the entry", async () => {
+    const entryHub = await readyHub();
+    entryHub.onLanding([], [landed]);
+    expect(entryHub.list()[0]).toMatchObject({ status: "merged", endedAt: 9 });
+    expect(entryHub.list()[0]?.pr).toBeUndefined();
+  });
+
+  test("or by the landed notice, as a caller without entries sends it", async () => {
+    const noticeHub = await readyHub();
+    noticeHub.onLanding([notice({})]);
+    expect(noticeHub.list()[0]).toMatchObject({ status: "merged", endedAt: 11 });
+  });
+
+  test("a held notice still says why the branch waits", async () => {
+    const h = await readyHub();
+    h.onLanding([notice({ kind: "held", why: "main moved under it" })], [{ ...landed, state: "waiting" }]);
+    expect(h.list()[0]).toMatchObject({ status: "ready", reason: "main moved under it" });
   });
 });

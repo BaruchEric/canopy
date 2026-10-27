@@ -26,13 +26,14 @@ import {
   sampleIncoming,
   KEEP_EVENTS,
   MAX_DESCRIPTION,
+  opensPr,
   triggerPlan,
   type Incoming,
   type TriggerEvent,
   type TriggerRule,
 } from "./trigger";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
-import type { Flow, LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Run, Workflow, WorkflowStep } from "./types";
 
 const RULE: TriggerRule = {
   name: "shop",
@@ -819,15 +820,42 @@ describe("fromPr", () => {
 
 describe("fromLanding", () => {
   const notice = (over: Partial<LandNotice>): LandNotice => ({ id: "n", entry: "br1", repoId: "web/shop", branch: "run/x", note: "", kind: "held", why: "its PR did not open: no GitHub remote", at: 1, ...over });
+  const landed: LandEntry = { id: "br1", repoId: "web/shop", repoPath: "/dev/web/shop", branch: "run/fix", target: "main", dir: "/tmp/run", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9 };
   test("a committed event takes the newest held notice for its branch", () => {
     const e = event({ status: "ready", branch: "br1" });
     expect(fromLanding(e, [notice({}), notice({ id: "m", why: "newer", at: 2 })]).reason).toBe("newer");
+    expect(fromLanding(e, [notice({})], [])).toMatchObject({ reason: "its PR did not open: no GitHub remote" });
   });
-  test("another branch, a landed notice or an event past ready changes nothing", () => {
+  test("another branch, a landed notice for another branch, or an event past ready changes nothing", () => {
     const e = event({ status: "ready", branch: "br1" });
-    expect(fromLanding(e, [notice({ entry: "br2" }), notice({ kind: "landed" })])).toBe(e);
+    expect(fromLanding(e, [notice({ entry: "br2" }), notice({ entry: "br2", kind: "landed" })])).toBe(e);
+    expect(fromLanding(e, [], [{ ...landed, id: "br2" }, { ...landed, state: "queued" }])).toBe(e);
     const review = event({ status: "review", branch: "br1" });
-    expect(fromLanding(review, [notice({})])).toBe(review);
+    expect(fromLanding(review, [notice({ kind: "landed" })], [landed])).toBe(review);
+  });
+  test("a committed event whose branch landed through the queue is merged, by its entry or its notice", () => {
+    const e = event({ service: "forgejo", status: "ready", branch: "br1", reason: "waiting on the queue" });
+    const byEntry = fromLanding(e, [], [landed]);
+    expect(byEntry).toMatchObject({ status: "merged", endedAt: 9 });
+    expect(byEntry.reason).toBeUndefined();
+    expect(fromLanding(e, [], [{ ...landed, auto: true }]).status).toBe("merged");
+    expect(fromLanding(e, [notice({ kind: "landed", at: 11 })])).toMatchObject({ status: "merged", endedAt: 11 });
+    // the entry's time first, then the notice's, then the event's own
+    expect(fromLanding(e, [notice({ kind: "landed", at: 11 })], [landed]).endedAt).toBe(9);
+    expect(fromLanding(e, [], [{ ...landed, landedAt: undefined }]).endedAt).toBe(e.lastAt);
+    // a landed branch of any service is merged: the queue is canopy's own merge
+    expect(fromLanding(event({ status: "ready", branch: "br1" }), [], [landed]).status).toBe("merged");
+  });
+});
+
+describe("opensPr", () => {
+  test("every service but Forgejo opens a PR; a Forgejo run lands through the queue", () => {
+    expect(opensPr(event({ service: "sentry" }))).toBe(true);
+    expect(opensPr(event({ service: "linear" }))).toBe(true);
+    expect(opensPr(event({ service: "github" }))).toBe(true);
+    expect(opensPr(event({ service: "forgejo" }))).toBe(false);
+    // an event written before services were named is Sentry's
+    expect(opensPr({ service: undefined })).toBe(true);
   });
 });
 

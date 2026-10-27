@@ -264,7 +264,7 @@ git commit -m "feat(triggers): receive and poll issue sources"
 - Produces the shared landing interface: fromLanding(e: TriggerEvent, notices: readonly LandNotice[], entries: readonly LandEntry[] = []): TriggerEvent and TriggerHub.onLanding(notices: readonly LandNotice[], entries?: readonly LandEntry[]): void. This accepts existing notice-only callers and the planned spec-converge-1 entries argument; either plan can land first.
 - Produces: a bundled workflow named issue-fix with listed: false; github events start with openPr true; forgejo events start with openPr false; a Forgejo event whose branch has a LandEntry with state landed moves from ready to merged.
 
-- [ ] **Step 1: Write failing tests** proving issue-fix parses as a bundled workflow and is unlisted; GitHub starts through the PR path; Forgejo starts without openPr; a Forgejo ready event becomes merged when entries contain its landed branch, including manual and automatic land; a landed notice also merges through the hub callback; held notices continue to set the existing reason. Import LandEntry from core/types.ts for the entry fixture. Seed separate hubs with ready Forgejo events for the entry and notice callback assertions.
+- [x] **Step 1: Write failing tests** proving issue-fix parses as a bundled workflow and is unlisted; GitHub starts through the PR path; Forgejo starts without openPr; a Forgejo ready event becomes merged when entries contain its landed branch, including manual and automatic land; a landed notice also merges through the hub callback; held notices continue to set the existing reason. Import LandEntry from core/types.ts for the entry fixture. Seed separate hubs with ready Forgejo events for the entry and notice callback assertions.
 
 ```ts
 const landed: LandEntry = { id: "br1", repoId: "web/shop", repoPath: "/dev/web/shop", branch: "run/fix", target: "main", dir: "/tmp/run", note: "fix", state: "landed", tries: 0, queuedAt: 1, updatedAt: 9, landedAt: 9 };
@@ -276,49 +276,49 @@ expect(entryHub.list()[0]?.status).toBe("merged");
 noticeHub.onLanding([notice({ kind: "landed", at: 11 })]);
 expect(noticeHub.list()[0]).toMatchObject({ status: "merged", endedAt: 11 });
 ```
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: bun test src/core/workflow.test.ts src/core/trigger.test.ts src/server/triggers.test.ts
 Expected: FAIL because issue-fix and source-specific landing behavior are absent.
 
-- [ ] **Step 3: Add lib/workflows/issue-fix.md**
+- [x] **Step 3: Add lib/workflows/issue-fix.md**
 
 Copy the one-step tool allowlist and gate instructions from linear-issue. State that the run first checks the issue is clear and small enough for one run; when it is not, it changes and commits nothing and names what is missing. For a suitable issue, make the smallest fix with a test, run the gates, commit on the branch, and never push.
 
-- [ ] **Step 4: Choose PR or queue from the event service**
+- [x] **Step 4: Choose PR or queue from the event service**
 
 In startTriggerRun, use event.service to keep GitHub on the existing open-PR path and give Forgejo a branch without openPr. Keep Sentry and Linear on their current PR path.
 
-- [ ] **Step 5: Observe landed queue entries**
+- [x] **Step 5: Observe landed queue entries**
 
 Extend fromLanding to inspect the supplied LandEntry list for an entry whose id matches the event branch and whose state is landed, and the notices for a matching landed notice. A ready event with either signal becomes merged and clears reason, with endedAt set to entry.landedAt, then notice.at, then e.lastAt. This covers Forgejo queue lands and preserves the planned schedule trigger's landed-notice path. Preserve the newest held-notice behavior when there is no landed signal. Pass ev.landing.entries beside ev.landing.notices from the landing broadcast in server/index.ts.
 
-- [ ] **Step 6: Run the tests to verify they pass**
+- [x] **Step 6: Run the tests to verify they pass**
 
 Run: bun test src/core/workflow.test.ts src/core/trigger.test.ts src/server/triggers.test.ts
 Expected: PASS for both event routes, landed-notice-only transitions, held notices, and callers that omit entries.
 
-- [ ] **Step 7: Run typecheck**
+- [x] **Step 7: Run typecheck**
 
 Run: bun run typecheck
 Expected: PASS.
 
-- [ ] **Step 8: Run lint**
+- [x] **Step 8: Run lint**
 
 Run: bun run lint
 Expected: PASS.
 
-- [ ] **Step 9: Run the full test suite**
+- [x] **Step 9: Run the full test suite**
 
 Run: bun test
 Expected: PASS.
 
-- [ ] **Step 10: Build**
+- [x] **Step 10: Build**
 
 Run: bun run build
 Expected: PASS.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ~~~sh
 git add lib/workflows/issue-fix.md src/core/workflow.test.ts src/core/trigger.ts src/core/trigger.test.ts src/server/index.ts src/server/triggers.ts src/server/triggers.test.ts

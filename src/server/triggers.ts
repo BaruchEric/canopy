@@ -55,7 +55,7 @@ import {
   type TriggerSource,
   type TriggersInfo,
 } from "../core/trigger";
-import type { Flow, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
 import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearNote, linearSessionLinks, type LinearInstall } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
@@ -609,10 +609,11 @@ export class TriggerHub {
     }
   }
 
-  /** The landing queue's notices: a committed event whose PR did not open says why. */
-  onLanding(notices: readonly LandNotice[]): void {
+  /** The landing queue's every change: a committed event whose branch
+   *  landed is merged, and one the queue held back says why. */
+  onLanding(notices: readonly LandNotice[], entries: readonly LandEntry[] = []): void {
     for (const e of this.events.values()) {
-      const next = fromLanding(e, notices);
+      const next = fromLanding(e, notices, entries);
       if (next !== e) this.set(next);
     }
   }

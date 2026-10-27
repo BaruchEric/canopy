@@ -216,7 +216,7 @@ import { PrHub } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { takeTriggerSecrets } from "../core/envnames";
-import { incomingFromIssueView, POLL_ISSUES, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
+import { incomingFromIssueView, opensPr, POLL_ISSUES, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
 import { forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
@@ -1346,8 +1346,10 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
     if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
     await needHarness(state, agent.harness, repo.path);
   }
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, true, got.spec) };
-  const start = await cutBranch(repo, event.note, true);
+  // a Forgejo event's branch lands through the queue; every other service's opens a PR
+  const pr = opensPr(event);
+  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec) };
+  const start = await cutBranch(repo, event.note, pr);
   try {
     return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: start }) };
   } catch (err) {
@@ -5235,7 +5237,7 @@ export async function startServer(opts: {
     landing: new LandingHub({
       broadcast: (ev) => {
         broadcast(state, ev);
-        if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
+        if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? [], ev.landing.entries);
         if (ev.type === "landing") state.coordinator.recheck();
       },
       repo: (id) => state.result.repos.find((r) => r.id === id),
