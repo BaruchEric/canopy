@@ -1005,7 +1005,7 @@ function writtenPath(p: string, root: string, cwd: string): string | null {
 }
 
 function recursive(args: readonly string[]): boolean {
-  return args.some((arg) => arg === "--recursive" || arg.startsWith("-") && !arg.startsWith("--") && [...arg.slice(1)].some((flag) => flag === "r" || flag === "R"));
+  return args.some((arg) => arg === "--recursive" || (arg.startsWith("-") && !arg.startsWith("--") && /[rR]/.test(arg.slice(1))));
 }
 
 function inPlaceFiles(args: readonly string[]): string[] {
