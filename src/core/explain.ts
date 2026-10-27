@@ -1048,18 +1048,19 @@ export function writtenPaths(command: string, root: string, cwd = root): Written
 
   const paths = new Set<string>();
   const dirs = new Set<string>();
+  const addPath = (candidate: string, folder = false) => {
+    const path = writtenPath(candidate, root, cwd);
+    if (!path) return;
+    (folder ? dirs : paths).add(path);
+  };
   const add = (values: readonly string[], folder = false) => {
     for (const value of values) {
-      for (const candidate of reaches(value)) {
-        const path = writtenPath(candidate, root, cwd);
-        if (!path) continue;
-        (folder ? dirs : paths).add(path);
-      }
+      for (const candidate of reaches(value)) addPath(candidate, folder);
     }
   };
 
   for (const cmd of splitShell(command)) {
-    add(cmd.writes.filter((path) => !IGNORED_REDIRECTS.test(path)));
+    for (const path of cmd.writes) if (!IGNORED_REDIRECTS.test(path)) addPath(path);
     const words = cmd.words;
     const prog = words[0] ?? "";
     const base = prog.slice(prog.lastIndexOf("/") + 1);

@@ -60,6 +60,7 @@ describe("writtenPaths", () => {
   const none = { dirs: [], unknown: false };
   test("redirects, tee, touch, cp's last operand, sed -i", () => {
     expect(wp("echo hi > notes.md")).toEqual({ paths: ["notes.md"], ...none });
+    expect(wp("echo hi > 'file=literal'")).toEqual({ paths: ["file=literal"], ...none });
     expect(wp("ls src 2>/dev/null >> build.log")).toEqual({ paths: ["build.log"], ...none });
     expect(wp("ls src | tee -a out.txt")).toEqual({ paths: ["out.txt"], ...none });
     expect(wp("touch src/new.ts docs/x.md")).toEqual({ paths: ["src/new.ts", "docs/x.md"], ...none });
