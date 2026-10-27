@@ -3,7 +3,8 @@
  *  (it deletes, writes, reaches the network, runs code, commits or pushes,
  *  or works outside the project). Pure and browser-safe: no LLM, no node
  *  imports. The reading is a guide, never a guarantee; the raw command
- *  stays on screen beside it. */
+ *  stays on screen beside it. It also lists the files a line writes, for the
+ *  touched set. */
 
 import { execOption, progName } from "./shellwords";
 
@@ -981,6 +982,116 @@ export function explainCommand(command: string, root?: string, cwd?: string): Ex
   const parts = explainParts(command, w, r);
   if (r && cwd && !inside(start, r)) parts.push(part("outside", "", undefined, ["outside"]));
   return fold(parts);
+}
+
+export interface WrittenPaths {
+  /** files the line writes, moves, removes or restores, as paths from `root`; one outside it is kept absolute */
+  paths: string[];
+  /** folders a command moved or removed whole, same form: `mv` and `git mv` operands, `rm -r`, `rmdir`, `git rm -r` */
+  dirs: string[];
+  /** `explainCommand` read the line as opaque or vague: canopy cannot say what it writes, and nothing is listed */
+  unknown: boolean;
+}
+
+const IGNORED_REDIRECTS = /^\/dev\/(?:null|stdout|stderr|stdin|fd\/\d+|tty)$/;
+
+/** A shell path in the touched set: relative to `root` inside it, absolute outside. */
+function writtenPath(p: string, root: string, cwd: string): string | null {
+  if (!p || p.startsWith("~")) return p || null;
+  const r = norm(root, "/");
+  const abs = norm(p, cwd);
+  if (abs === r) return null;
+  return inside(abs, r) ? abs.slice(r === "/" ? 1 : r.length + 1) : abs;
+}
+
+function recursive(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--recursive" || arg.startsWith("-") && !arg.startsWith("--") && [...arg.slice(1)].some((flag) => flag === "r" || flag === "R"));
+}
+
+function inPlaceFiles(args: readonly string[]): string[] {
+  const operandsSeen: string[] = [];
+  let expression = false;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i] ?? "";
+    if (arg === "--") {
+      operandsSeen.push(...args.slice(i + 1));
+      break;
+    }
+    if (arg === "-i" || arg === "--in-place") {
+      if (args[i + 1] === "") i++;
+      continue;
+    }
+    if (arg.startsWith("-i") || arg.startsWith("--in-place=")) continue;
+    if (arg === "-e" || arg === "--expression") {
+      expression = true;
+      i++;
+      continue;
+    }
+    if (arg.startsWith("--expression=") || arg.startsWith("-e") && arg.length > 2) {
+      expression = true;
+      continue;
+    }
+    if (arg === "-f" || arg === "--file") {
+      i++;
+      continue;
+    }
+    if (arg.startsWith("-") && arg !== "-") continue;
+    operandsSeen.push(arg);
+  }
+  return expression ? operandsSeen : operandsSeen.slice(1);
+}
+
+/** The files a shell line writes, for the touched set (FR-040). */
+export function writtenPaths(command: string, root: string, cwd = root): WrittenPaths {
+  const explained = explainCommand(command, root, cwd);
+  if (explained.opaque || explained.vague) return { paths: [], dirs: [], unknown: true };
+
+  const paths = new Set<string>();
+  const dirs = new Set<string>();
+  const add = (values: readonly string[], folder = false) => {
+    for (const value of values) {
+      for (const candidate of reaches(value)) {
+        const path = writtenPath(candidate, root, cwd);
+        if (!path) continue;
+        (folder ? dirs : paths).add(path);
+      }
+    }
+  };
+
+  for (const cmd of splitShell(command)) {
+    add(cmd.writes.filter((path) => !IGNORED_REDIRECTS.test(path)));
+    const words = cmd.words;
+    const prog = words[0] ?? "";
+    const base = prog.slice(prog.lastIndexOf("/") + 1);
+    const args = words.slice(1);
+
+    if (base === "tee" || base === "touch") add(operands(args));
+    else if (base === "cp" || base === "install") {
+      const files = operands(args, base === "cp" ? ["-t", "-S"] : ["-m", "-S", "-t"]);
+      if (files.length > 1) add(files.slice(-1));
+    } else if (base === "mv") add(operands(args), true);
+    else if (base === "rm" || base === "unlink" || base === "trash") add(operands(args), recursive(args));
+    else if (base === "rmdir") add(operands(args), true);
+    else if ((base === "sed" || base === "perl") && args.some((arg) => arg === "-i" || arg.startsWith("-i") || arg === "--in-place")) {
+      add(inPlaceFiles(args));
+    } else if (base === "git") {
+      let subcommand = 0;
+      while (subcommand < args.length && (args[subcommand] ?? "").startsWith("-")) {
+        const option = args[subcommand] ?? "";
+        if (["-c", "-C", "--git-dir", "--work-tree", "--namespace"].includes(option)) subcommand += 1;
+        subcommand += 1;
+      }
+      const sub = args[subcommand];
+      const rest = args.slice(subcommand + 1);
+      if (sub === "mv") add(operands(rest), true);
+      else if (sub === "rm") add(operands(rest), recursive(rest));
+      else if (sub === "checkout") {
+        const separator = rest.indexOf("--");
+        if (separator !== -1) add(rest.slice(separator + 1));
+      } else if (sub === "restore") add(operands(rest, ["-s", "--source", "--pathspec-from-file"]));
+    }
+  }
+  return { paths: [...paths], dirs: [...dirs], unknown: false };
 }
 
 /** What a permission prompt carries that the explanation reads. */

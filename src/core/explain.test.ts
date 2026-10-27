@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { explainCommand, explainPrompt, splitShell, startsOutside } from "./explain";
+import { explainCommand, explainPrompt, splitShell, startsOutside, writtenPaths } from "./explain";
 
 const ROOT = "/home/me/dev/proj";
 
@@ -52,6 +52,38 @@ describe("splitShell", () => {
 
   test("an unclosed quote takes the rest of the line rather than failing", () => {
     expect(splitShell("echo 'oops").map((c) => c.words)).toEqual([["echo", "oops"]]);
+  });
+});
+
+describe("writtenPaths", () => {
+  const wp = (c: string, cwd = ROOT) => writtenPaths(c, ROOT, cwd);
+  const none = { dirs: [], unknown: false };
+  test("redirects, tee, touch, cp's last operand, sed -i", () => {
+    expect(wp("echo hi > notes.md")).toEqual({ paths: ["notes.md"], ...none });
+    expect(wp("ls src 2>/dev/null >> build.log")).toEqual({ paths: ["build.log"], ...none });
+    expect(wp("ls src | tee -a out.txt")).toEqual({ paths: ["out.txt"], ...none });
+    expect(wp("touch src/new.ts docs/x.md")).toEqual({ paths: ["src/new.ts", "docs/x.md"], ...none });
+    expect(wp("cp a.ts b.ts src/c.ts")).toEqual({ paths: ["src/c.ts"], ...none });
+    expect(wp("sed -i '' 's/a/b/' src/a.ts src/b.ts")).toEqual({ paths: ["src/a.ts", "src/b.ts"], ...none });
+    expect(wp("sed -i -e s/a/b/ x.ts")).toEqual({ paths: ["x.ts"], ...none });
+  });
+  test("moves and removals, whole folders apart", () => {
+    expect(wp("mv src/a src/b")).toEqual({ paths: [], dirs: ["src/a", "src/b"], unknown: false });
+    expect(wp("rm src/a.ts")).toEqual({ paths: ["src/a.ts"], ...none });
+    expect(wp("rm -rf docs/old build")).toEqual({ paths: [], dirs: ["docs/old", "build"], unknown: false });
+    expect(wp("git mv src/a src/b && git rm -r docs/old && git rm x.ts")).toEqual({ paths: ["x.ts"], dirs: ["src/a", "src/b", "docs/old"], unknown: false });
+    expect(wp("git checkout -- src/a.ts && git restore --staged src/b.ts")).toEqual({ paths: ["src/a.ts", "src/b.ts"], ...none });
+  });
+  test("a heredoc into a file, the cwd, and a path outside the repo kept absolute", () => {
+    expect(wp("cat > notes.md <<'EOF'\nhi\nEOF")).toEqual({ paths: ["notes.md"], ...none });
+    expect(wp("touch x.ts", `${ROOT}/src`)).toEqual({ paths: ["src/x.ts"], ...none });
+    expect(wp("cp a.ts /tmp/a.ts")).toEqual({ paths: ["/tmp/a.ts"], ...none });
+  });
+  test("reads add nothing; an opaque or vague line adds nothing and says so", () => {
+    expect(wp("cat a.ts && grep x src && git diff")).toEqual({ paths: [], ...none });
+    expect(wp("sh -c 'touch x'")).toEqual({ paths: [], dirs: [], unknown: true });
+    expect(wp("echo $(date) > out.txt")).toEqual({ paths: [], dirs: [], unknown: true });
+    expect(wp("frobnicate --out x.ts")).toEqual({ paths: [], dirs: [], unknown: true });
   });
 });
 
