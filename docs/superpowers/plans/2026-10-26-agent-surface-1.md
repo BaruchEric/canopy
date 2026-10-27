@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** implemented and verified locally 2026-10-26, based on main at 0fabbb3. The combined four gates, MCP image builds, compose validation and real scratch-backend token check passed. Deployment and interactive Claude/Codex shell/ranger discovery remain pending; plans 2 and 3 remain open.
+**Status:** implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Deployment to the mini and interactive Claude/Codex shell/ranger discovery remain pending; plans 2 and 3 remain open.
 
 **Goal:** `canopy mcp` is a stdio MCP server over canopy's API that acts with
 the token in its environment and offers the tools that token's rights allow;

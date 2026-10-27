@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
-**Status:** implemented locally 2026-10-27 (41b4f79..5e7d955); batch integration, independent verification and live-service checks remain pending. Main has not received these commits. Written on main at 0b87546.
+**Status:** plan 1 issue intake and write-back implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. GitHub/Forgejo live-service checks remain pending. Plans 2 (rebase and conflict loop) and 3 (stall watchdog) remain open. Written on main at 0b87546.
 
 **Goal:** A labeled GitHub or Forgejo issue starts the bundled issue-fix workflow, carries the issue into a branch run, reaches the GitHub PR path or Forgejo landing queue, writes the result back once, and appears in canopy issues.
 

@@ -12,11 +12,6 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25)
 The queue's pure model (states, review sorting, gates reading) and its git half (worktree add, rebase, fast-forward) become a Bun workspace package with no canopy types and a small `land` CLI, so Paseo, Orca or anyone with a CI can run the sort and the gates. No-go by default: go when a second consumer is real. Needs a licence and a name without "canopy" in it (github.com/juliensimon/canopy exists).
 Spec: docs/superpowers/specs/2026-10-25-landing-package-design.md (2026-10-25).
 
-### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
-P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
-Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
-Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 implemented locally 2026-10-27 (github and forgejo rules, hooks and polling, issue-fix, the Forgejo landing path, write-back, canopy issues); batch verification and live-service checks pending; plans 2 (the rebase and conflict loop, needsYou, canopy pr rebase) and 3 (the stall watchdog and the digest) open. Plan 1's review left four spec corrections for plan 2 (the plan's last section).
-
 ### FR-025 · Copy the branch, PR link or run id from the keyboard
 P3 · added 2026-10-23 · source: Eric (Linear UX study)
 With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch.
@@ -63,65 +58,70 @@ The gear still marks "panels side by side" once the dock is a grid of split cell
 
 ## In Progress
 
+### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
+P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
+Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
+Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 issue intake and write-back implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`; GitHub/Forgejo live-service checks remain pending. Plans 2 (the rebase and conflict loop, `needsYou`, `canopy pr rebase`) and 3 (the stall watchdog and digest) remain open. Plan 1's review left four spec corrections for plan 2 (listed at the end of plan 1).
+
 ### FR-043 · Run transcripts, replay and fork
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
 Canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacts sensitive values and keeps transcripts for 30 days by default, so finished runs open read-only after a restart. Plan 2 will replay the wire in the sheet. Plan 3 adds “Fork from here” as a new branch run from the original's base with `--fork-session`; a fork onto the other harness will use a fenced summary handoff. `canopy run export` writes a Markdown report.
-Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch` 2026-10-27 (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction); final batch verification pending; not shipped on `main`. Plans 2 (replay from the wire) and 3 (fork) remain open.
+Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch` (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction). Plans 2 (replay from the wire) and 3 (fork) remain open.
 
 ### FR-033 · Best-of-N branch runs
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
 The first group plan runs one action and note in two or three branch worktrees through one shared profile. It dry-runs gates and holdout scenarios on each ready member, starts one read-only compare run when multiple green members are ready, then sends a green winner through the landing queue before dropping the other members. The group sheet shows each member's diffstat, gates, score and cost. Profiles per member and a two-reviewer comparison remain open for plan 2.
-Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plan 2 remains open.
+Spec: docs/superpowers/specs/2026-10-25-best-of-n-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Plan 2 remains open.
 
 ### FR-039 · Per-worktree runtime stacks and a warm worktree pool
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coasts, Treehouse)
 Plan 1 adds a per-machine pool of prepared worktrees. `warm: N` in `.canopy/gates.json` supplies the default count for `canopy worktrees warm <repo> [N]`; a warm branch run reuses prepared setup when its lockfile is unchanged, while a cold start says `no warm worktree; setup will run` and runs setup. Per-worktree dev tasks and ports are plan 2; per-worktree compose stacks are plan 3.
-Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plans 2 and 3 remain open.
+Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Plans 2 and 3 remain open.
 
 ### FR-041 · Spec drift and convergence, on a schedule
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode)
 Plan 1 adds schedule rules with a cron line, one event per matching local repo, `repo` and `only` filters, and `land` through the PR or landing queue path. Plan 2 adds the `spec-converge` workflow, its report, spec-drift check and chip.
-Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25). Plan 1 implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`. Plan 2 remains open.
+Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`. Plan 2 remains open.
 
 ### FR-044 · Harness share in the costs view
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Yegge's "20-25% of all my work")
 Repos marked as the harness contribute their dollars and Claude sessions to a share line in the costs view, with eight weeks of bars, a per-browser warning line (25% by default), one quiet inbox notice per week at most and `canopy costs --share`.
-Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Implemented on private `feat/oct26-batch`; final verification pending; not shipped on `main`.
+Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`.
 
 ### FR-034 · Workflow graph: parallel, conditional and manual steps
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)
 Three optional step keys in the markdown format that exists: `after:` (ready steps run side by side, with at most one writer), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
 Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
-Plan 1 implemented locally 2026-10-27: parser keys, graph engine, HEAD modes and unattended refusal. Combined batch verification and live checks remain pending; not shipped or deployed. Plan 2 (graph view, graph API and workflow CLI) and plan 3 (bundled workflows) remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: parser keys, graph engine, HEAD modes and unattended refusal. Live checks remain pending. Plan 2 (graph view, graph API and workflow CLI) and plan 3 (bundled workflows) remain open.
 
 ### FR-040 · Pre-edit collision warnings
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)
 canopy already sees every Edit, Write and Bash call a run makes, so it keeps a live touched-path set per run and warns when two runs on one repo, or a queued branch and a working run, touch the same files: a chip on the landing rows, a quiet inbox line, one word into an idle chat. Never a hold. Members of one FR-033 group never collide with each other.
 Spec: docs/superpowers/specs/2026-10-25-collision-warnings-design.md (2026-10-25).
-Implemented locally 2026-10-27: touched sets, harness write tracking, live/queued warnings, both row/sheet chips, quiet notices, checkout attention and CLI. Browser checks found and corrected waiting-panel delivery and historical fix context; combined verification remains pending.
+Implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: touched sets, harness write tracking, live/queued warnings, both row/sheet chips, quiet notices, checkout attention and CLI. Browser checks corrected waiting-panel delivery and historical fix context.
 
 ### FR-037 · A durable work ledger
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
 A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
 Spec: docs/superpowers/specs/2026-10-25-work-ledger-design.md (2026-10-25).
-Plan 1 implemented locally 2026-10-26: durable ledger, branch-start minting, hub notes, branch names/trailers and canopy work. Startup/handoff regressions and focused API/CLI suites passed; combined batch verification remains pending. Plans 2 (handoff, work view and export) and 3 (rebuild and compaction) remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: durable ledger, branch-start minting, hub notes, branch names/trailers and canopy work. Startup/handoff regressions and focused API/CLI suites passed. Plans 2 (handoff, work view and export) and 3 (rebuild and compaction) remain open.
 
 ### FR-042 · A PWA with web push for asks and "needs you"
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo, Happy, Orca mobile)
 A manifest and a hand-written service worker that caches the shell only make canopy installable on a phone; web push (VAPID keys under the config dir, subscriptions per browser) tells the phone about a new ask, a sent-back branch, a check that gave up or a trigger event that needs Eric while the page is closed. A push carries the item's key and a title, never a token. Telegram stays for the ranger.
 Spec: docs/superpowers/specs/2026-10-25-pwa-push-design.md (2026-10-25).
-Plan 1 implemented locally 2026-10-26: manifest and icons, shell-only worker, registration and the device settings row. Browser activation, cache boundaries and offline loading verified; phone installation and Access checks remain pending deployment. Plan 2 (push keys, subscriptions, routes, setting and CLI) and plan 3 (badge and polish) remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: manifest and icons, shell-only worker, registration and the device settings row. Browser activation, cache boundaries and offline loading were verified; phone installation and Access checks remain pending deployment. Plan 2 (push keys, subscriptions, routes, setting and CLI) and plan 3 (badge and polish) remain open.
 
 ### FR-032 · Holdout scenario gates in the landing queue
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
 End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` in the main checkout sets the run line and the judge mode.
-Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26. Plan 2 implemented locally 2026-10-27: judge scoring, durable judge holds, explicit bypass and results in the CLI, sheet, landing row and waiting panel. Combined batch verification remains pending. Plan 3 (PR watch pass and repo scenarios list) remains open.
+Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26. Plan 2 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: judge scoring, durable judge holds, explicit bypass and results in the CLI, sheet, landing row and waiting panel. Plan 3 (PR watch pass and repo scenarios list) remains open.
 
 ### FR-036 · Capacity governor: subscription-limit-aware dispatch
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)
 Every start carries a priority (interactive, normal, low); a pure governor holds `low` work past 70% of the five-hour window and `normal` past 90%, never a chat or an ask, and a limit hit makes a run `limited` and retried after the reset rather than failed. A top-bar chip shows each login's windows and their resets (FR-028). The credits lane (an API key funded by the plan's monthly credits for the ranger and low work) is written out and held for Eric, since it reverses the 2026-08-24 decision.
 Spec: docs/superpowers/specs/2026-10-25-capacity-governor-design.md (2026-10-25).
-Plan 1 implemented locally 2026-10-26: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded; live-window and credential checks remain unobserved. Plan 2 dispatch holds/retries and plan 3 credits lane remain open and unwired.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded; live-window and credential checks remain unobserved. Plan 2 dispatch holds/retries and plan 3 credits lane remain open and unwired.
 
 ### FR-028 · What is left on each subscription, in the status line
 P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
@@ -132,7 +132,7 @@ Folded into FR-036 plan 1. The local chip shows Claude/Codex readings and resets
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)
 `canopy mcp` is a stdio MCP server whose tools (status, runs, start a branch run, the queue, land, a work note, say, a wake, health) are filtered by the caller's kind; shells and the ranger use it with the tokens they have. A `run` caller kind, minted per run only when the profile turns it on and delivered through a 0600 `--mcp-config` file, lets a run start a child in its own repo (depth 2, three children) and post notes, and can never land, push, open a PR or answer a prompt.
 Spec: docs/superpowers/specs/2026-10-25-agent-surface-design.md (2026-10-25).
-Plan 1 implemented locally 2026-10-26: eight MCP tools, CLI, kit entry, shells launcher and ranger brief. Deployment and interactive agent checks pending; plans 2 and 3 remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `feat/oct26-batch`: eight MCP tools, CLI, kit entry, shells launcher and ranger brief. Deployment to the mini and interactive Claude/Codex shell and ranger checks remain pending; plans 2 and 3 remain open.
 
 ### FR-016 · One Library across backends
 P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
