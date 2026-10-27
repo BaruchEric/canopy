@@ -127,6 +127,10 @@ describe("polled checks", () => {
 describe("healing", () => {
   test("an auto check heals, and comes back", async () => {
     let up = false;
+    // the heal waits for the test to look, so the healing state is seen
+    // whether or not the first heal (T.base, 5 ms) has fired by then
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => (release = r));
     const { h } = hub();
     h.add(
       def({
@@ -134,12 +138,14 @@ describe("healing", () => {
         every: 1000,
         probe: async () => (up ? { state: "ok" } : { state: "down", why: "gone" }),
         doHeal: async () => {
+          await gate;
           up = true;
         },
       }),
     );
     await sleep(5);
     expect(h.get("canopy:x")?.state).toBe("healing");
+    release();
     await sleep(30);
     expect(h.get("canopy:x")?.state).toBe("ok");
   });
