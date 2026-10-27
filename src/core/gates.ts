@@ -9,6 +9,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { GATE_NAME } from "./gatename";
 import { shellQuote } from "./host";
+import { WARM_MAX } from "./warm";
 
 export interface Gate {
   name: string;
@@ -21,6 +22,8 @@ export interface Gates {
   /** a shell line run once when a worktree is made, and again after a
    *  rebase that changed the lockfile */
   setup?: string;
+  /** prepared worktrees a machine may keep for this repo; the default `canopy worktrees warm` adopts */
+  warm?: number;
   /** where the list came from; `none` lands with no gates and says so */
   source: "file" | "package" | "none";
 }
@@ -34,7 +37,7 @@ export const PACKAGE_GATES = ["typecheck", "lint", "test", "build"] as const;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** `.canopy/gates.json`'s text as gates, or why it cannot be. */
-export function parseGatesFile(text: string): { gates: Gate[]; setup?: string } | { error: string } {
+export function parseGatesFile(text: string): { gates: Gate[]; setup?: string; warm?: number } | { error: string } {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -57,7 +60,15 @@ export function parseGatesFile(text: string): { gates: Gate[]; setup?: string } 
   }
   const setup = raw["setup"];
   if (setup !== undefined && (typeof setup !== "string" || !setup.trim())) return { error: `${GATES_FILE}: setup must be a shell line` };
-  return typeof setup === "string" ? { gates, setup: setup.trim() } : { gates };
+  const warm = raw["warm"];
+  if (warm !== undefined && (typeof warm !== "number" || !Number.isInteger(warm) || warm < 0 || warm > WARM_MAX)) {
+    return { error: `${GATES_FILE}: warm must be a whole number from 0 to ${WARM_MAX}` };
+  }
+  return {
+    gates,
+    ...(typeof setup === "string" ? { setup: setup.trim() } : {}),
+    ...(warm === undefined ? {} : { warm }),
+  };
 }
 
 /** The gates `package.json`'s scripts give, in `PACKAGE_GATES` order. */

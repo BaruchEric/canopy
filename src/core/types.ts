@@ -640,6 +640,8 @@ export interface CanopyConfig {
   /** per-machine health checks by repo path, over the repo's own
    *  `.canopy/health.json` (core/repohealth) */
   health: Record<string, RepoCheckDef[]>;
+  /** per-machine warm worktree count by repo path (core/warm); the repo's gates file is the default, never acted on */
+  warm: Record<string, number>;
   /** the capacity governor's thresholds and observed dollar figure (FR-036) */
   capacity: CapacitySettings;
   /** the repos archived in canopy, by path like agents */
