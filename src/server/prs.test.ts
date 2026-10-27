@@ -65,6 +65,9 @@ interface World {
   gh: Gh;
   events: ServerEvent[];
   fixes: { id: string; prompt: string; label: string }[];
+  notes: string[];
+  closes: string[];
+  links: [string, unknown][];
   active: Set<string>;
   /** runs that ended stopped or failed */
   failed: Set<string>;
@@ -96,7 +99,7 @@ const checkRun = (name: string, status: string, conclusion = "") => ({ __typenam
 
 /** A repo with a bare origin, a run worktree with one commit, its landing
  *  record, a fake gh and a hub. */
-async function world(opts: { repoDefault?: string } = {}): Promise<World> {
+async function world(opts: { repoDefault?: string; work?: string } = {}): Promise<World> {
   const path = join(root, `repo${++n}`);
   await exec(["git", "init", "-q", "-b", "main", path]);
   await sh(path, "config", "user.email", "t@t");
@@ -112,11 +115,11 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
   const dir = runTreeDir(path, id, join(root, `wts${n}`));
   await addRunTree(path, dir, branch, "main");
   await commit(dir, "b.txt", "two\n");
-  const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1 };
+  const rec: LandingRun = { id, runId: id, repoId: `repo${n}`, repoPath: path, branch, target: "main", base: "", dir, note: "make the thing", verb: "propose", harness: "claude", state: "ready", startedAt: 1, ...(opts.work ? { work: opts.work } : {}) };
   const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric", now: {} };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
@@ -174,6 +177,11 @@ async function world(opts: { repoDefault?: string } = {}): Promise<World> {
       },
       runActive: (x) => w.active.has(x),
       runOk: (x) => !w.active.has(x) && !w.failed.has(x),
+      work: {
+        note: (work, text) => w.notes.push(`${work} ${text}`),
+        close: (work, state, text) => w.closes.push(`${work} ${state} ${text}`),
+        link: (work, ref) => w.links.push([work, ref]),
+      },
       dir: recDir,
       tickEvery: 60_000,
       now: () => w.clock ?? Date.now(),
@@ -270,6 +278,35 @@ describe("open PR", () => {
     expect((await exec(["git", "rev-parse", "-q", "--verify", `refs/heads/${w.rec.branch}`], { cwd: w.bare })).code).not.toBe(0);
     await sh(w.path, "remote", "remove", "origin");
     await expect(w.hub.open(w.rec.id)).rejects.toThrow("no remote to push to");
+  });
+});
+
+describe("the work ledger (FR-037)", () => {
+  test("open links and notes the PR with the trailer in its body; a fix counts its try; a merge closes the item as landed", async () => {
+    const w = await world({ work: "w-test2345" });
+    const pr = await w.hub.open(w.rec.id);
+    expect(pr.work).toBe("w-test2345");
+    const create = w.gh.calls.find((c) => c[0] === "pr" && c[1] === "create")!;
+    expect(create.at(-1)?.endsWith("\n\nCanopy-Work: w-test2345")).toBe(true);
+    expect(w.links).toEqual([["w-test2345", { pr: { number: 7, url: "https://github.com/o/r/pull/7" } }]]);
+    expect(w.notes).toEqual(["w-test2345 PR #7 opened"]);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    await pollNow(w);
+    expect(w.notes.at(-1)).toBe("w-test2345 fix 1 of 3 for check test");
+    await endFix(w, "fix1", "c.txt");
+    w.gh.state = "MERGED";
+    await pollNow(w);
+    expect(w.closes).toEqual(["w-test2345 landed PR #7 merged"]);
+  });
+
+  test("a watch from before the ledger writes nothing", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    expect([w.notes, w.links, w.closes]).toEqual([[], [], []]);
+    const body = w.gh.calls.find((c) => c[1] === "create")!.at(-1)!;
+    expect(body).not.toContain("Canopy-Work");
   });
 });
 
@@ -575,7 +612,7 @@ describe("close", () => {
   });
 
   test("a PR closed on GitHub frees its run to land here again", async () => {
-    const w = await world();
+    const w = await world({ work: "w-test2345" });
     await w.hub.open(w.rec.id);
     w.gh.head = await revOf(w.dir, "HEAD");
     w.gh.state = "CLOSED";
@@ -584,6 +621,7 @@ describe("close", () => {
     expect(pr.state?.status).toBe("closed");
     expect(w.records.get(w.rec.id)?.pr).toBeUndefined();
     expect(existsSync(w.dir)).toBe(true);
+    expect(w.notes).toContain("w-test2345 PR #7 closed");
   });
 });
 
