@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { RepoCard } from "./cards";
-import { HARNESS_SHARE_MAX, WEEKS, barWidths, cardsOf, harnessNames, harnessShare, harnessWeeks, isHarnessCard, pct, shareTone, weekFrom, weekKey } from "./harnessshare";
+import { HARNESS_SHARE_MAX, WEEKS, barWidths, cardsOf, harnessNames, harnessShare, harnessSlot, harnessWeeks, isHarnessCard, pct, shareTone, weekFrom, weekKey } from "./harnessshare";
 import type { CostLine, CostSheet } from "./costsheet";
 import type { HistoryOverview, Repo, RepoHistory } from "./types";
 
@@ -180,6 +180,16 @@ describe("harnessWeeks", () => {
     expect(newest).toHaveLength(WEEKS);
     expect(newest[0]?.from).toBe("2026-01-19");
     expect(newest.at(-1)?.from).toBe("2026-03-09");
+  });
+
+  test("harnessSlot names the newest full week against the line", () => {
+    const weeks = harnessWeeks(history, cards);
+    const partialWeek = weeks.find((week) => week.from === "2026-10-26");
+    expect(harnessSlot(weeks, 25)).toBe("75%, over the 25% line");
+    expect(harnessSlot(weeks, 80)).toBe("75%, under the 80% line");
+    expect(harnessSlot(weeks.slice(-1), 25)).toBeNull();
+    if (partialWeek === undefined) throw new Error("fixture missing partial week");
+    expect(harnessSlot([{ from: "2026-10-19", harness: 0, rest: 0, share: null }, partialWeek], 25)).toBeNull();
   });
 
   test("an absent or unavailable overview has no weeks", () => {

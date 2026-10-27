@@ -34,6 +34,7 @@ import {
 } from "../core/git";
 import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
+import { cardsOf, HARNESS_SHARE_MAX, harnessSlot, harnessWeeks } from "../core/harnessshare";
 import { linkFavorites, linkHarness } from "../core/favorite";
 import { AUTHORED_QUERY, linkPulls, parseAuthoredPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
@@ -5196,6 +5197,7 @@ export async function startServer(opts: {
       })(),
       root,
       backend: () => state.backendName,
+      harnessShare: async () => harnessSlot(harnessWeeks((await loadHistory(state)).value, cardsOf(state.result.repos)), HARNESS_SHARE_MAX),
       // what any canopy shell gets, less CANOPY_REPO: it is in no repo
       env: (term) => {
         dropTermToken(state, term);

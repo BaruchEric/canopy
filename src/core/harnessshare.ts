@@ -141,6 +141,15 @@ export function harnessWeeks(
   }));
 }
 
+/** The newest full week's figure for the ranger, with the warning line. */
+export function harnessSlot(weeks: readonly HarnessWeek[], max: number): string | null {
+  const week = weeks.at(-2);
+  if (!week || week.share === null) return null;
+  const percent = Math.round(week.share * 100);
+  const line = percent >= max ? "over" : "under";
+  return `${percent}%, ${line} the ${max}% line`;
+}
+
 /** The local Monday that starts this date's week. */
 export function weekFrom(day: string): string {
   const monday = localDay(day);
