@@ -131,7 +131,7 @@ export const isProfilePick = (p: AgentPick): p is { profile: string } => "profil
  *  valid pick and drops the rest. */
 export function normalizeRepoAgent(v: unknown): RepoAgent {
   if (!isRecord(v)) return {};
-  if (!("all" in v) && !("roles" in v) && !("workflows" in v) && !("tasks" in v)) {
+  if (!("all" in v) && !("roles" in v) && !("workflows" in v) && !("tasks" in v) && !("collisionSay" in v)) {
     // an old entry: settings, or nothing usable
     return Object.keys(v).length ? { all: normalizeAgent(v) } : {};
   }
@@ -140,10 +140,11 @@ export function normalizeRepoAgent(v: unknown): RepoAgent {
   if (all) out.all = all;
   const roles = normalizeRoles(v["roles"]);
   if (Object.keys(roles).length) out.roles = roles;
+  if (v["collisionSay"] === false) out.collisionSay = false;
   return out;
 }
 
-export const isEmptyRepoAgent = (r: RepoAgent): boolean => !r.all && ![r.roles, r.workflows, r.tasks].some((p) => p && Object.keys(p).length);
+export const isEmptyRepoAgent = (r: RepoAgent): boolean => r.collisionSay !== false && !r.all && ![r.roles, r.workflows, r.tasks].some((p) => p && Object.keys(p).length);
 
 /** The per-role picks, unknown roles and malformed picks left out. */
 export function normalizeRoles(v: unknown): Partial<Record<AgentRole, AgentPick>> {

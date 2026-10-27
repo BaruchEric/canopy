@@ -10,6 +10,7 @@
  *  entry back to its run. */
 
 import type { LandEntry, LandingRun, LandNotice, LandState, RunReview } from "./types";
+import { fromFiles, overlap, type Touched } from "./touch";
 
 /** how many times main may move under one entry before it is sent back */
 export const MAX_TRIES = 3;
@@ -125,13 +126,20 @@ export interface QueueFlags {
 /** Puts a ready run at the end of the queue: a new entry, or one that was
  *  sent back rejoining. Refused while it is already queued or landed. A
  *  rejoining entry keeps the flags it had unless new ones are given. */
-export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: number, flags?: QueueFlags): LandEntry[] {
+export function enqueue(entries: readonly LandEntry[], run: LandingRun, now: number, flags?: QueueFlags, working: readonly Touched[] = []): LandEntry[] {
   if (run.state !== "ready") throw new LandError(`only a ready run lands; this one is ${run.state}`);
   const had = entries.find((e) => e.id === run.id);
   if (had && inQueue(had)) throw new LandError("it is in the queue already");
   if (had?.state === "landed") throw new LandError("it has landed already");
   const f = flags ?? { ...(had?.auto ? { auto: true } : {}), ...(had?.approved ? { approved: had.approved } : {}) };
-  const entry: LandEntry = { ...entryFor(run, now), ...(f.auto ? { auto: true as const } : {}), ...(f.approved ? { approved: f.approved } : {}) };
+  const touched = fromFiles(run.runId, run.id, run.branch, run.review?.files ?? []);
+  const shared = working.map((side) => ({ with: side.name, paths: overlap(touched, side) })).find((match) => match.paths.length > 0);
+  const entry: LandEntry = {
+    ...entryFor(run, now),
+    ...(f.auto ? { auto: true as const } : {}),
+    ...(f.approved ? { approved: f.approved } : {}),
+    ...(shared ? { overlap: shared } : {}),
+  };
   return [...entries.filter((e) => e.id !== run.id), entry];
 }
 
@@ -270,18 +278,19 @@ export function landCounts(entries: readonly LandEntry[], repoId: string): { que
 /** The message a "fix it" run starts with: the reason the entry came back. */
 export function fixPrompt(e: LandEntry): string {
   const head = `canopy's landing queue sent this branch (${e.branch}) back`;
+  const overlapSentence = e.overlap ? `canopy saw ${e.overlap.with} editing these files while you worked: ${e.overlap.paths.join(", ")}.` : "";
   switch (e.state) {
     case "conflict":
-      return `${head}: rebasing it onto ${e.target} conflicts in ${(e.files ?? []).join(", ")}. Rebase it onto ${e.target} yourself, resolve the conflicts, run the checks, and commit. Do not push.`;
+      return `${head}: rebasing it onto ${e.target} conflicts in ${(e.files ?? []).join(", ")}.${overlapSentence ? ` ${overlapSentence}` : ""} Rebase it onto ${e.target} yourself, resolve the conflicts, run the checks, and commit. Do not push.`;
     case "red": {
       const scenario = scenarioOf(e.gate);
       if (scenario !== null) {
-        return `${head}: scenario ${scenario} failed after a rebase onto ${e.target}. The scenario is kept outside the repository and is not shown; the end of what it observed is below:\n\n${e.reason ?? ""}\n\nRebase onto ${e.target}, fix what the output shows, run the repo's checks, and commit. Do not push.`;
+        return `${head}: scenario ${scenario} failed after a rebase onto ${e.target}. The scenario is kept outside the repository and is not shown; the end of what it observed is below:\n\n${e.reason ?? ""}\n\n${overlapSentence ? `${overlapSentence}\n\n` : ""}Rebase onto ${e.target}, fix what the output shows, run the repo's checks, and commit. Do not push.`;
       }
-      return `${head}: the ${e.gate ?? ""} gate failed after a rebase onto ${e.target}. The end of its output:\n\n${e.reason ?? ""}\n\nRebase onto ${e.target}, fix what failed, run that gate again, and commit. Do not push.`;
+      return `${head}: the ${e.gate ?? ""} gate failed after a rebase onto ${e.target}. The end of its output:\n\n${e.reason ?? ""}\n\n${overlapSentence ? `${overlapSentence}\n\n` : ""}Rebase onto ${e.target}, fix what failed, run that gate again, and commit. Do not push.`;
     }
     case "moved":
-      return `${head}: ${e.target} kept moving while its gates ran. Rebase it onto ${e.target}, run the checks, and commit. Do not push.`;
+      return `${head}: ${e.target} kept moving while its gates ran.${overlapSentence ? ` ${overlapSentence}` : ""} Rebase it onto ${e.target}, run the checks, and commit. Do not push.`;
     default:
       return `${head}. Look at why, fix it, and commit. Do not push.`;
   }

@@ -1,6 +1,7 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
 import type { Capacity, CapacitySettings } from "./capacity";
+import type { Collision } from "./touch";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -889,6 +890,8 @@ export interface RepoAgent {
   roles?: Partial<Record<AgentRole, AgentPick>>;
   workflows?: Record<string, AgentPick>;
   tasks?: Record<string, AgentPick>;
+  /** FR-040: the chat's collision say is off for this repo; absent means on */
+  collisionSay?: false;
 }
 
 /** A named workflow or agent task. Shell commands in the Tasks panel do
@@ -1459,6 +1462,9 @@ export interface LandEntry {
   auto?: true;
   /** the sensitive files' patch id Eric approved when he landed it */
   approved?: string;
+  /** set at enqueue when the branch's files meet a working run's set (FR-040):
+   *  that run's name and the shared paths. A word, never a hold */
+  overlap?: { with: string; paths: string[] };
 }
 
 /** What one file in a branch run's diff is, for the review rules (FR-013):
@@ -1498,7 +1504,8 @@ export interface RunReview {
 }
 
 /** A line about the queue that asks nothing: a run that landed on its own,
- *  or one held back from doing so. Kept outside the inbox's count. */
+ *  one held back from doing so, or two pieces of work editing one file.
+ *  Kept outside the inbox's count. */
 export interface LandNotice {
   id: string;
   /** the branch's id */
@@ -1506,8 +1513,8 @@ export interface LandNotice {
   repoId: string;
   branch: string;
   note: string;
-  kind: "landed" | "held";
-  /** why it was held */
+  kind: "landed" | "held" | "collision";
+  /** why it was held; a collision's line */
   why?: string;
   /** the commit main fast-forwarded to */
   head?: string;
@@ -1591,6 +1598,8 @@ export interface LandingInfo {
   orphans: LandingOrphan[];
   /** landed on its own and held back, newest first; an older backend has none */
   notices?: LandNotice[];
+  /** the live collisions on this backend (FR-040); an older backend has none */
+  collisions?: Collision[];
 }
 
 /** The parts of a status a run is expected to move: the working tree and

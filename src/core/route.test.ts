@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   effectiveAgents,
+  isEmptyRepoAgent,
   isProfileName,
   launchPick,
   normalizePick,
@@ -217,6 +218,10 @@ describe("what is stored", () => {
     expect(normalizePick({ profile: "ok" })).toEqual({ profile: "ok" });
     expect(normalizePick({ profile: "-no" })).toBeNull();
     expect(normalizePick("deep")).toBeNull();
+    expect(normalizeRepoAgent({ collisionSay: false })).toEqual({ collisionSay: false });
+    expect(normalizeRepoAgent({ collisionSay: true })).toEqual({});
+    expect(normalizeRepoAgent({ all: { profile: "fast" }, collisionSay: false })).toEqual({ all: { profile: "fast" }, collisionSay: false });
+    expect(isEmptyRepoAgent({ collisionSay: false })).toBe(false);
   });
 
   test("profiles: bad names out, and default only when it differs from the builtin", () => {
