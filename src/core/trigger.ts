@@ -1,19 +1,22 @@
-/** Triggers: an outside event (a Sentry issue, a labeled Linear issue)
- *  starts a workflow on a branch run of its own, with nobody typing. The
- *  rules, the event records, the Sentry and Linear payload readers, dedupe,
- *  and the event's state read off its run and its PR. Browser-safe and pure;
- *  the hub in server/triggers.ts keeps the records and starts the runs. */
+/** Triggers: an outside event (a Sentry issue, a labeled Linear, GitHub or
+ *  Forgejo issue) starts a workflow on a branch run of its own, with nobody
+ *  typing. The rules, the event records, each service's payload reader,
+ *  dedupe, and the event's state read off its run and its PR. Browser-safe
+ *  and pure; the hub in server/triggers.ts keeps the records and starts the
+ *  runs. */
 
+import { CRON_MAX, parseCron } from "./cron";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
+import { ISSUE_COMMENTS, type IssueView } from "./issue";
 import { fence } from "./pr";
 import { unattendedRefusal } from "./workflow";
-import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
+import type { Flow, LandEntry, LandNotice, PrWatch, Run, Workflow } from "./types";
 
-export const TRIGGER_SOURCES = ["sentry", "linear"] as const;
+export const TRIGGER_SOURCES = ["sentry", "linear", "github", "forgejo"] as const;
 export type TriggerSource = (typeof TRIGGER_SOURCES)[number];
 
 /** The service's name as the page and the run's note say it. */
-export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear" };
+export const SERVICE_NAME: Record<TriggerSource, string> = { sentry: "Sentry", linear: "Linear", github: "GitHub", forgejo: "Forgejo" };
 
 /** One line of `<config dir>/triggers.json`: where an event comes from,
  *  which repo it is about and which workflow fixes it. Secrets are named by
@@ -28,8 +31,15 @@ export interface TriggerRule {
   workflow: string;
   /** the env var holding the secret that signs each hook (the Sentry
    *  integration's client secret, the Linear webhook's signing secret); it
-   *  starts with `CANOPY_TRIGGER_`, which the server takes out of its env at start */
-  secretEnv: string;
+   *  starts with `CANOPY_TRIGGER_`, which the server takes out of its env at start.
+   *  A github or forgejo rule may leave it out: it then has no hook and polls */
+  secretEnv?: string;
+  /** github and forgejo: a cron line for polling the repo's labeled issues;
+   *  15 minutes by default when there is no hook secret, none when there is */
+  poll?: string;
+  /** github and forgejo: whether canopy writes back (a comment with the PR's
+   *  link, a close on merge); the parsed rule always carries it, true by default */
+  write?: boolean;
   /** the Sentry project slugs, or the Linear team keys, this rule takes; empty takes every one */
   projects: string[];
   /** the Sentry levels this rule takes; a Linear rule takes none, and its issues carry none */
@@ -68,6 +78,8 @@ export interface TriggerRuleInfo extends TriggerRule {
   install?: string;
   /** why the rule cannot fire: an unknown repo or workflow, a bad line */
   problem?: string;
+  /** when the poll next runs, as epoch ms, for a rule that polls */
+  nextFire?: number;
 }
 
 export type TriggerStatus =
@@ -186,11 +198,20 @@ export interface Incoming {
   /** a Linear agent session's context: the issue, its comments and the
    *  workspace's guidance, as Linear formats it */
   context?: string;
+  /** a GitHub or Forgejo issue's newest comments, at most `ISSUE_COMMENTS`,
+   *  oldest first; a hook delivery carries none, the detail read fills them */
+  comments?: { author: string; body: string }[];
 }
 
 export const KEEP_EVENTS = 200;
-/** the most of a Linear issue's description the run's note carries */
+/** the most of an issue's description the run's note carries */
 export const MAX_DESCRIPTION = 6000;
+/** the most of one comment the run's note carries */
+const MAX_COMMENT = 4000;
+/** how many open issues one poll reads in full per rule, oldest first, after
+ *  the ones it knows are dropped from a listing of `LIST_ISSUES`
+ *  (core/issue.ts); the rest wait for the next tick */
+export const POLL_ISSUES = 50;
 /** how far a Linear delivery's `webhookTimestamp` may sit from canopy's clock */
 export const LINEAR_SKEW = 60_000;
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -199,7 +220,10 @@ const DEFAULT_LEVELS = ["error", "fatal"];
 const DEFAULTS: Record<TriggerSource, { workflow: string; api: string; labels: string[]; levels: string[] }> = {
   sentry: { workflow: "sentry-fix", api: "https://sentry.io", labels: [], levels: DEFAULT_LEVELS },
   linear: { workflow: "linear-issue", api: "https://api.linear.app", labels: ["canopy"], levels: [] },
+  github: { workflow: "issue-fix", api: "https://api.github.com", labels: ["canopy"], levels: [] },
+  forgejo: { workflow: "issue-fix", api: "", labels: ["canopy"], levels: [] },
 };
+const DEFAULT_POLL = "*/15 * * * *";
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (o: Record<string, unknown>, k: string): string | undefined => {
@@ -249,9 +273,11 @@ function parseRule(item: unknown): TriggerRule {
   const repo = str(item, "repo");
   if (!repo) throw new Error("repo is required: the repo's id or absolute path");
   const workflow = str(item, "workflow") ?? defaults.workflow;
+  const issues = source === "github" || source === "forgejo";
   const secretEnv = str(item, "secretEnv");
-  if (!secretEnv || !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
-  if (!secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
+  if (!secretEnv && !issues) throw new Error("secretEnv must name the environment variable holding the hook's secret");
+  if (secretEnv !== undefined && !ENV.test(secretEnv)) throw new Error("secretEnv must name the environment variable holding the hook's secret");
+  if (secretEnv !== undefined && !secretEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`secretEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${secretEnv}`);
   const clientId = str(item, "clientId");
   const clientSecretEnv = str(item, "clientSecretEnv");
   if ((clientId === undefined) !== (clientSecretEnv === undefined)) throw new Error("clientId and clientSecretEnv go together: both turn the Linear agent on");
@@ -265,17 +291,40 @@ function parseRule(item: unknown): TriggerRule {
   if (tokenEnv !== undefined && !tokenEnv.startsWith(TRIGGER_ENV_PREFIX)) throw new Error(`tokenEnv must start with ${TRIGGER_ENV_PREFIX}, so canopy keeps it from every run and shell, not ${tokenEnv}`);
   const levels = strings(item["levels"], "levels").map((l) => l.toLowerCase());
   const labels = strings(item["labels"], "labels");
-  if (labels.length && source !== "linear") throw new Error("labels is for a linear rule");
+  if (labels.length && source === "sentry") throw new Error("labels is for a linear rule, or a github or forgejo one");
   const org = str(item, "org");
-  const api = (str(item, "api") ?? defaults.api).replace(/\/+$/, "");
+  const projects = strings(item["projects"], "projects");
+  if (issues) {
+    if (projects.length) throw new Error(`projects is not for a ${source} rule`);
+    if (levels.length) throw new Error(`levels is not for a ${source} rule`);
+    if (org !== undefined) throw new Error(`org is not for a ${source} rule`);
+  }
+  const write = item["write"];
+  if (write !== undefined && !issues) throw new Error("write is for a github or forgejo rule");
+  if (write !== undefined && typeof write !== "boolean") throw new Error("write must be true or false");
+  const pollRaw = item["poll"];
+  if (pollRaw !== undefined && !issues) throw new Error("poll is for a github or forgejo rule");
+  if (pollRaw !== undefined && (typeof pollRaw !== "string" || !pollRaw.trim())) throw new Error("poll must be a cron line such as */15 * * * *");
+  const given = typeof pollRaw === "string" ? pollRaw.trim() : undefined;
+  if (given !== undefined) {
+    if (given.length > CRON_MAX) throw new Error(`poll must be at most ${CRON_MAX} characters`);
+    const cron = parseCron(given);
+    if ("error" in cron) throw new Error(`poll is not a cron line: ${cron.error}`);
+  }
+  const poll = given ?? (issues && secretEnv === undefined ? DEFAULT_POLL : undefined);
+  const apiRaw = str(item, "api");
+  if (source === "forgejo" && !apiRaw) throw new Error("api is required for a forgejo rule: the server's address, such as https://git.example.com");
+  const api = (apiRaw ?? defaults.api).replace(/\/+$/, "");
   if (!/^https?:\/\//.test(api)) throw new Error(`api must be an http(s) address, not ${api}`);
   return {
     name,
     source,
     repo,
     workflow,
-    secretEnv,
-    projects: strings(item["projects"], "projects"),
+    ...(secretEnv ? { secretEnv } : {}),
+    ...(poll ? { poll } : {}),
+    ...(issues ? { write: write ?? true } : {}),
+    projects,
     levels: levels.length ? levels : defaults.levels,
     labels: labels.length ? labels : defaults.labels,
     ignore: strings(item["ignore"], "ignore"),
@@ -408,6 +457,64 @@ export function parseLinear(body: unknown, labels: readonly string[]): Incoming 
 
 const idsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
+/** A GitHub `issues` delivery as an issue, when the label added is one of
+ *  `labels` and the issue is open and not a pull request. Anything else
+ *  (another action, another label, a closed issue, a PR) is null. The
+ *  delivery carries no comments; the detail read fills them in. */
+export function parseGithubIssue(body: unknown, labels: readonly string[]): Incoming | null {
+  if (!isRecord(body) || str(body, "action") !== "labeled") return null;
+  const added = isRecord(body["label"]) ? str(body["label"], "name") : undefined;
+  if (!added || !hasLabel(labels, [added])) return null;
+  const issue = openIssue(body["issue"]);
+  return issue ? incomingFromIssueView(issue) : null;
+}
+
+/** A Forgejo `issues` delivery as an issue: its labels were updated, or it
+ *  was opened with labels on, and one of `labels` is on the open issue. The
+ *  delivery names every label the issue has, not the one that changed, so
+ *  any later update on the same issue finds its event through `knownEvent`
+ *  whatever state it is in. */
+export function parseForgejoIssue(body: unknown, labels: readonly string[]): Incoming | null {
+  if (!isRecord(body)) return null;
+  const action = str(body, "action");
+  if (action !== "label_updated" && action !== "opened") return null;
+  const issue = openIssue(body["issue"]);
+  return issue && hasLabel(labels, issue.labels) ? incomingFromIssueView(issue) : null;
+}
+
+/** whether one of the rule's labels is among `names`, by name, ignoring case */
+const hasLabel = (labels: readonly string[], names: readonly string[]): boolean => names.some((n) => labels.some((l) => l.toLowerCase() === n.toLowerCase()));
+
+/** The issue object a GitHub or Forgejo delivery carries, as an `IssueView`
+ *  with no comments, or null when it is closed, a pull request (GitHub puts
+ *  a `pull_request` key on one, Forgejo sets it where an issue has null) or
+ *  not an issue at all. */
+function openIssue(v: unknown): IssueView | null {
+  if (!isRecord(v) || typeof v["number"] !== "number" || str(v, "state") !== "open" || v["pull_request"]) return null;
+  const labels = Array.isArray(v["labels"]) ? v["labels"].filter(isRecord).map((l) => str(l, "name")).filter((x): x is string => x !== undefined) : [];
+  return { number: v["number"], title: str(v, "title") ?? "", body: typeof v["body"] === "string" ? v["body"] : "", url: str(v, "html_url") ?? "", labels, comments: [] };
+}
+
+/** An issue as gh or the Forgejo API gives it, as the incoming shape a hook
+ *  delivery takes, so a polled issue and a delivered one make the same event
+ *  and the same note: the number keys it, the body is its description, the
+ *  labels are its detail, and the newest `ISSUE_COMMENTS` comments ride along. */
+export function incomingFromIssueView(issue: IssueView): Incoming {
+  const title = issue.title.replace(/\s+/g, " ").trim();
+  const description = issue.body.trim().slice(0, MAX_DESCRIPTION);
+  const comments = issue.comments.slice(-ISSUE_COMMENTS).map((c) => ({ author: c.author, body: c.body.trim().slice(0, MAX_COMMENT) }));
+  return {
+    key: String(issue.number),
+    short: `#${issue.number}`,
+    title: (title || "an untitled issue").slice(0, 300),
+    ...(issue.url && /^https?:\/\//.test(issue.url) ? { link: issue.url } : {}),
+    detail: issue.labels.length ? [`labels: ${issue.labels.join(", ")}`] : [],
+    frames: [],
+    ...(description ? { description } : {}),
+    ...(comments.length ? { comments } : {}),
+  };
+}
+
 /** A Linear agent session event: a new session (the issue delegated to
  *  canopy, or canopy mentioned on it), or a message in one. */
 export type AgentDelivery =
@@ -501,19 +608,39 @@ export function ignoreReason(rule: TriggerRule, inc: Incoming): string | null {
 }
 
 /** States after which the same issue coming in again starts a new event:
- *  canopy could not start it, or it was fixed and came back. Any other
+ *  canopy could not start it, its PR was closed unmerged, or it was fixed
+ *  and came back. Any other
  *  state, open or ended, keeps it to one event and one PR. */
-const AGAIN: readonly TriggerStatus[] = ["failed", "merged", "ignored"];
+const AGAIN: readonly TriggerStatus[] = ["failed", "merged", "closed", "ignored"];
+
+/** The newest event this issue has under this rule, in any state. A poll
+ *  checks this one: an issue still labelled carries no word that it is
+ *  meant again, so it starts over only by Retry, a dismiss, or a hook's
+ *  delivery of the label. */
+export function anyEvent(events: readonly TriggerEvent[], rule: string, key: string): TriggerEvent | undefined {
+  return events.filter((e) => e.rule === rule && e.key === key).sort((a, b) => b.firstAt - a.firstAt)[0];
+}
 
 /** The event this issue already has under this rule, when one counts. */
 export function existing(events: readonly TriggerEvent[], rule: string, key: string): TriggerEvent | undefined {
-  const same = events.filter((e) => e.rule === rule && e.key === key).sort((a, b) => b.firstAt - a.firstAt)[0];
+  const same = anyEvent(events, rule, key);
   return same && !AGAIN.includes(same.status) ? same : undefined;
+}
+
+/** The event a delivery of this issue bumps instead of starting another:
+ *  `existing` as a rule, since Sentry's alert, Linear's label and GitHub's
+ *  `labeled` delivery each say the issue is meant again after an event in
+ *  `AGAIN`; but on Forgejo any event at all, since its `label_updated`
+ *  delivery lists every label the issue has and not the one that changed,
+ *  so a label edit says nothing about canopy's. A Forgejo issue starts
+ *  over by Retry or a dismiss, as a polled one does. */
+export function knownEvent(events: readonly TriggerEvent[], rule: TriggerRule, key: string): TriggerEvent | undefined {
+  return rule.source === "forgejo" ? anyEvent(events, rule.name, key) : existing(events, rule.name, key);
 }
 
 /** The run's first message after the workflow's task: the issue, fenced as
  *  data, since anyone who can make the app throw, or write in the Linear
- *  workspace, chooses its words. */
+ *  workspace, or file an issue on the repo, chooses its words. */
 export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: TriggerSource = "sentry"): string {
   const lines = [
     `title: ${inc.title}`,
@@ -526,6 +653,7 @@ export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: 
     inc.frames.length ? `stack, innermost last:\n${inc.frames.map((f) => `  ${f}`).join("\n")}` : "",
     inc.description ? `description:\n${inc.description}` : "",
     inc.context ? `context from Linear:\n${inc.context}` : "",
+    ...(inc.comments ?? []).map((c) => `comment by ${c.author}:\n${c.body}`),
   ].filter(Boolean);
   // the first words name the branch (run/<work id>-<slug>), so they lead with the
   // id; Linear's GitHub integration links a PR to the issue its branch names
@@ -662,11 +790,27 @@ export function fromPr(e: TriggerEvent, w: PrWatch, now: number): TriggerEvent {
   return next;
 }
 
-/** A committed event the landing queue held back says why: its PR did not
- *  open (no GitHub remote, gh not signed in). The newest held notice for
- *  the event's branch wins. */
-export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[]): TriggerEvent {
+/** Whether an event's run opens a PR when it settles ready. A Forgejo run
+ *  lands through the landing queue instead: canopy opens PRs with gh,
+ *  which is GitHub's, and the queue is canopy's own merge. An event written
+ *  before services were named is Sentry's. */
+export const opensPr = (e: Pick<TriggerEvent, "service">): boolean => e.service !== "forgejo";
+
+/** A committed event and the landing queue. Its branch landed, as the
+ *  queue's entry (`landed`) or its notice says, is the event merged: the
+ *  word stays `merged` so the page's sections hold, and `endedAt` is when
+ *  it landed. Else the newest held notice for the branch says why it
+ *  waits (its PR did not open, main moved under it). A caller from before
+ *  entries were passed sends the notices alone. */
+export function fromLanding(e: TriggerEvent, notices: readonly LandNotice[], entries: readonly LandEntry[] = []): TriggerEvent {
   if (e.status !== "ready" || !e.branch) return e;
+  const entry = entries.find((x) => x.id === e.branch && x.state === "landed");
+  const landed = notices.filter((n) => n.entry === e.branch && n.kind === "landed").sort((a, b) => b.at - a.at)[0];
+  if (entry || landed) {
+    const merged: TriggerEvent = { ...e, status: "merged", endedAt: entry?.landedAt ?? landed?.at ?? e.lastAt };
+    delete merged.reason;
+    return merged;
+  }
   const held = notices.filter((n) => n.entry === e.branch && n.kind === "held" && n.why).sort((a, b) => b.at - a.at)[0];
   if (!held?.why || held.why === e.reason) return e;
   return { ...e, reason: held.why };
@@ -728,12 +872,17 @@ export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent):
   }
 }
 
-/** The comment a labeled Linear issue gets when its run ends without a PR,
- *  so whoever labeled it hears why, or null. An issue with an agent session
- *  hears through `activityFor` instead, and a test fire tells Linear nothing.
- *  `origin` is canopy's public address, for the way to retry. */
+/** The services whose issues canopy comments on: a note when a run ends
+ *  without a PR, the PR's link. Sentry's issues are only resolved. */
+const COMMENTED: ReadonlySet<string> = new Set<TriggerSource>(["linear", "github", "forgejo"]);
+
+/** The comment a labeled Linear, GitHub or Forgejo issue gets when its run
+ *  ends without a PR, so whoever labeled it hears why, or null. An issue
+ *  with an agent session hears through `activityFor` instead, and a test
+ *  fire tells the service nothing. `origin` is canopy's public address,
+ *  for the way to retry. */
 export function issueNoteFor(prev: TriggerEvent | undefined, next: TriggerEvent, origin?: string): string | null {
-  if (next.service !== "linear" || next.source === "manual" || next.session || prev?.status === next.status) return null;
+  if (!next.service || !COMMENTED.has(next.service) || next.source === "manual" || next.session || prev?.status === next.status) return null;
   const lead =
     next.status === "no-fix"
       ? "canopy ran on this issue and committed nothing."
@@ -765,6 +914,8 @@ export function pruneEvents(events: TriggerEvent[]): TriggerEvent[] {
 export const SAMPLE_TITLE: Record<TriggerSource, string> = {
   sentry: "TypeError: Cannot read properties of undefined (reading 'percent')",
   linear: "Show the last sync time on the settings page",
+  github: "Show the last sync time on the settings page",
+  forgejo: "Show the last sync time on the settings page",
 };
 
 /** A made-up issue for "try it": the hub fires it as if the service had. */

@@ -36,7 +36,7 @@ Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25).
 ### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
-Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25).
+Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 implemented locally 2026-10-27 (github and forgejo rules, hooks and polling, issue-fix, the Forgejo landing path, write-back, canopy issues); batch verification and live-service checks pending; plans 2 (the rebase and conflict loop, needsYou, canopy pr rebase) and 3 (the stall watchdog and the digest) open. Plan 1's review left four spec corrections for plan 2 (the plan's last section).
 
 ### FR-033 · Best-of-N branch runs
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)

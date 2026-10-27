@@ -96,6 +96,7 @@ usage:
   canopy work show <id>              the item in full: what served it and every line on it
   canopy work note [<id>] "<text>"   a line on an item; in a run's worktree the id is read off the branch
   canopy work close <id> --landed | --dropped [-m why]  end an item by hand; refused while a run on it is going
+  canopy issues [repo]               every GitHub or Forgejo issue a trigger rule took: its state, branch, PR and why it waits
   canopy secrets [list] [--json]     the secret store's names, tags, rotation dates and sinks; never a value
   canopy secrets status [--json]     this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
   canopy secrets unlock              unlock this machine's key (asks for its passphrase); its sinks are written then

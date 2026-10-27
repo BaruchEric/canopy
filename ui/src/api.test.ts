@@ -136,6 +136,15 @@ describe("a page with two backends", () => {
     expect(r.id).toBe("b|x");
   });
 
+  test("a poll of a rule on a foreign backend posts there", async () => {
+    reply = () => json({ ok: true });
+    await expect(api.pollTrigger("b", "tracker")).resolves.toBeUndefined();
+    expect(calls[0]?.url).toBe("http://b.test/api/triggers/poll");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.init?.body).toBe(JSON.stringify({ rule: "tracker" }));
+    expect(header(calls[0], "Content-Type")).toBe("application/json");
+  });
+
   test("a search across backends is one request each, answered in the order asked", async () => {
     reply = (c) => {
       const { ids } = JSON.parse(String(c.init?.body)) as { ids: string[] };

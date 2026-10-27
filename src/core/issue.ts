@@ -92,6 +92,24 @@ export function issueNote(issue: IssueView, rest: string): string {
 /** last line of what gh said, the words the run sheet shows on a failure */
 const lastLine = (r: GhResult): string => (r.stderr.trim() || r.stdout.trim()).split("\n").filter(Boolean).pop() ?? `gh exited ${r.code}`;
 
+/** One gh call that must exit 0; what it prints is not read. */
+async function ghDo(args: string[], gh: GhRun): Promise<void> {
+  let r: GhResult;
+  try {
+    r = await gh(args);
+  } catch (err) {
+    throw new Error(`gh did not run: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (r.code !== 0) throw new Error(lastLine(r));
+}
+
+/** Comments on an issue in the repo `slug`, as gh's login: `gh issue comment`. */
+export const commentIssue = (slug: string, number: number, body: string, gh: GhRun): Promise<void> => ghDo(["issue", "comment", String(number), "-R", slug, "-b", body], gh);
+
+/** Closes an issue in the repo `slug`, with a closing comment when given: `gh issue close`. */
+export const closeIssue = (slug: string, number: number, comment: string | undefined, gh: GhRun): Promise<void> =>
+  ghDo(["issue", "close", String(number), "-R", slug, ...(comment ? ["-c", comment] : [])], gh);
+
 /** Reads the issue a ref names from the repo `slug` (its GitHub remote). A
  *  URL naming another repo is refused: the run works on this one. */
 export async function fetchIssue(ref: IssueRef, slug: string, gh: GhRun): Promise<{ issue: IssueView } | { error: string }> {
@@ -121,6 +139,70 @@ export interface IssueFrom {
   title: string;
   url: string;
   slug: string;
+}
+
+/** The oldest `limit` of several label listings merged by number: an issue
+ *  carrying two of the rule's labels is listed once, and the newest wait
+ *  for the next poll. The same moment orders by number, and an unreadable
+ *  time sorts first rather than being lost. */
+export function oldestIssues<T extends { number: number; createdAt: string }>(lists: readonly (readonly T[])[], limit: number): T[] {
+  const byNumber = new Map<number, T>();
+  for (const list of lists) for (const issue of list) if (!byNumber.has(issue.number)) byNumber.set(issue.number, issue);
+  const when = (issue: T): number => {
+    const t = Date.parse(issue.createdAt);
+    return Number.isNaN(t) ? 0 : t;
+  };
+  return [...byNumber.values()].sort((a, b) => when(a) - when(b) || a.number - b.number).slice(0, limit);
+}
+
+/** gh's JSON for `issue list`: each issue as a view with no comments, and
+ *  when it was opened; null when the answer is not a list. */
+function parseListedIssues(json: unknown): (IssueView & { createdAt: string })[] | null {
+  if (!Array.isArray(json)) return null;
+  const out: (IssueView & { createdAt: string })[] = [];
+  for (const item of json) {
+    const view = parseIssueView(item);
+    if (view && isRecord(item)) out.push({ ...view, createdAt: str(item["createdAt"]) });
+  }
+  return out;
+}
+
+/** How many open labelled issues a poll's listing looks at per rule, oldest
+ *  first. It reaches well past `POLL_ISSUES` (core/trigger.ts), the number
+ *  one poll reads in full: the hub drops the issues it already knows before
+ *  it caps, so known ones in front of the list hide none behind them. A
+ *  repo with more labelled issues than this has only its oldest looked at. */
+export const LIST_ISSUES = 500;
+
+/** The open issues on `slug` carrying one of `labels`, oldest first and at
+ *  most `LIST_ISSUES` of them: one `gh issue list` per label, merged by
+ *  number. Each is a view with no comments; `fetchIssue` reads one in full. */
+export async function listLabelledIssues(
+  slug: string,
+  labels: readonly string[],
+  gh: GhRun,
+): Promise<{ issues: (IssueView & { createdAt: string })[] } | { error: string }> {
+  const limit = LIST_ISSUES;
+  const lists: (IssueView & { createdAt: string })[][] = [];
+  for (const label of labels) {
+    let r: GhResult;
+    try {
+      r = await gh(["issue", "list", "-R", slug, "--label", label, "--state", "open", "--search", "sort:created-asc", "--limit", String(limit), "--json", "number,title,body,url,labels,createdAt"]);
+    } catch (err) {
+      return { error: `gh did not run: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (r.code !== 0) return { error: lastLine(r) };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(r.stdout);
+    } catch {
+      return { error: `gh's answer for the ${label} issues is not JSON` };
+    }
+    const list = parseListedIssues(parsed);
+    if (!list) return { error: `gh's answer for the ${label} issues is not a list` };
+    lists.push(list);
+  }
+  return { issues: oldestIssues(lists, limit) };
 }
 
 /** The note a branch run starts with: the issue's when the note opens with

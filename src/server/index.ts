@@ -4,7 +4,7 @@ import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
-import { resolveIssueNote } from "../core/issue";
+import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, type GhRun } from "../core/issue";
 import { titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
@@ -56,7 +56,7 @@ import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scr
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
-import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos } from "../core/forge";
+import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos, readToken } from "../core/forge";
 import { isSshHost, parseLocator, parseSshHosts, shellQuote, tildeQuote, toLocator, TOKEN_REF } from "../core/host";
 import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
@@ -223,12 +223,14 @@ import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
 import { takeTriggerSecrets } from "../core/envnames";
-import { triggerPlan, type TriggerEvent } from "../core/trigger";
+import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
+import { parseRemote } from "../core/remote";
+import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
-import { addRunTree, defaultBranch, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
+import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
 import { HEALTH_FILE } from "../core/repohealth";
@@ -1324,6 +1326,39 @@ async function triggerSpec(name: string, repo: Repo): Promise<{ kind: "run"; spe
 const TRIGGER_UNATTENDED =
   "No one answers this run: it is canopy's trigger run, started by an outside event. Do not ask questions or use tools outside your allowed list. When you cannot finish, commit nothing you are unsure of and say what stopped you.";
 
+/** Where a github or forgejo rule reads its issues: the repo's slug on the
+ *  rule's forge and, for Forgejo, a token (`own`, the rule's `tokenEnv`
+ *  value, else the configured forge source's, else CANOPY_FORGEJO_TOKEN).
+ *  GitHub is read with gh off the repo's GitHub remote, as the issue start
+ *  is; Forgejo through its API on the remote whose host is the rule's `api`. */
+async function issueForge(
+  state: ServerState,
+  rule: TriggerRule,
+  repo: Repo,
+  own: string | undefined,
+): Promise<{ kind: "github"; slug: string; gh: GhRun } | { kind: "forgejo"; slug: string; token: string }> {
+  if (rule.source === "github") {
+    const remote = await githubRemote(repo);
+    if (!remote) throw new Error(`${repo.id} has no GitHub remote`);
+    return { kind: "github", slug: remote.slug, gh: (args) => exec(["gh", ...args], { cwd: repo.path, timeoutMs: 30_000 }) };
+  }
+  const host = new URL(rule.api).hostname.toLowerCase();
+  const hostOf = (url: string): string | null => {
+    try {
+      return new URL(apiBase(url)).hostname.toLowerCase();
+    } catch {
+      return null;
+    }
+  };
+  const urls = repo.remotes ?? (await listRemotes(repo.path)).map((r) => r.url);
+  const ref = urls.map(parseRemote).find((r) => r !== null && r.host.toLowerCase() === host);
+  if (!ref) throw new Error(`${repo.id} has no remote on ${host}`);
+  const source = state.sources.map((rt) => rt.src).find((s) => s.kind === "forgejo" && hostOf(s.url) === host);
+  const token = own?.trim() || (await readToken(source?.kind === "forgejo" ? source : {}));
+  if (!token) throw new Error(`no token for ${host}: set tokenEnv on the ${rule.name} rule, or add the forge as a source with a token file`);
+  return { kind: "forgejo", slug: `${ref.owner}/${ref.name}`, token };
+}
+
 /** A trigger event's branch run, or its flow on a branch, after the checks a
  *  branch run route makes; a repo whose branch slots are full answers busy,
  *  and the event waits. A flow counts for a slot from its start to its end,
@@ -1347,12 +1382,13 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
     if (agent.harness !== "claude") throw new Error(`${repo.name}'s trigger route starts ${agent.harness}; a trigger run needs Claude Code`);
     await needHarness(state, agent.harness, repo.path);
   }
+  const pr = opensPr(event);
   const work: WorkStart = { title: event.title, from: { kind: "trigger", event: event.id } };
-  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, true, got.spec, {}, work) };
+  if (got.kind === "run") return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work) };
   const item = state.work.mint({ ...work, repos: [repo.id] });
   let start: BranchStart | undefined;
   try {
-    start = await cutBranch(repo, event.note, true, item.id);
+    start = await cutBranch(repo, event.note, pr, item.id);
     return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: start }) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2547,6 +2583,10 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   // reported by the PR loop after each read; ok until it reads one
   state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
   state.health.report(PRS_CHECK, { state: "ok" });
+  // reported after each issue poll, and by a hook that could not read an
+  // issue in full; ok until a rule polls
+  state.health.add({ id: TRIGGERS_CHECK, label: "issue polls (triggers)", scope: canopy, heal: "self" });
+  state.health.report(TRIGGERS_CHECK, { state: "ok" });
   // reported after each pull; off until the first one says otherwise
   state.health.add({ id: LIBRARY_SYNC_CHECK, label: "Library sync", scope: canopy, heal: "self" });
   state.health.report(LIBRARY_SYNC_CHECK, { state: "off", why: "librarySync is off" });
@@ -2591,6 +2631,7 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
 }
 
 const PRS_CHECK = "canopy:prs";
+const TRIGGERS_CHECK = "canopy:triggers";
 const LIBRARY_SYNC_CHECK = "canopy:library-sync";
 const CALLERS_CHECK = "canopy:callers";
 
@@ -5303,7 +5344,7 @@ export async function startServer(opts: {
       judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
         broadcast(state, ev);
-        if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? []);
+        if (ev.type === "landing") state.triggers.onLanding(ev.landing.notices ?? [], ev.landing.entries);
         if (ev.type === "landing") state.coordinator.recheck();
         if (ev.type === "landing") state.work.recheck();
         if (ev.type === "landing") state.collisions.onLanding(ev.landing);
@@ -5453,6 +5494,55 @@ export async function startServer(opts: {
       runKnown: (id) => state.runner.get(id) !== undefined,
       flowKnown: (id) => state.flows.get(id) !== undefined,
       env: (name) => triggerSecrets.get(name),
+      listIssues: async (rule, repo) => {
+        const forge = await issueForge(state, rule, repo, rule.tokenEnv ? triggerSecrets.get(rule.tokenEnv) : undefined);
+        if (forge.kind === "github") {
+          const got = await listLabelledIssues(forge.slug, rule.labels, forge.gh);
+          if ("error" in got) throw new Error(got.error);
+          return got.issues.map(incomingFromIssueView);
+        }
+        return (await forgejoListIssues(rule.api, forge.slug, rule.labels, forge.token)).map(incomingFromIssueView);
+      },
+      readIssue: async (rule, repo, inc) => {
+        const number = Number(inc.key);
+        const forge = await issueForge(state, rule, repo, rule.tokenEnv ? triggerSecrets.get(rule.tokenEnv) : undefined);
+        if (forge.kind === "github") {
+          const got = await fetchIssue({ number, slug: null, rest: "" }, forge.slug, forge.gh);
+          if ("error" in got) throw new Error(got.error);
+          return incomingFromIssueView(got.issue);
+        }
+        return incomingFromIssueView(await forgejoReadIssue(rule.api, forge.slug, number, forge.token));
+      },
+      reportPoll: (r) => state.health.report(TRIGGERS_CHECK, r),
+      writeIssue: async (rule, repo, event, write) => {
+        const number = Number(event.key);
+        const own = rule.tokenEnv ? triggerSecrets.get(rule.tokenEnv) : undefined;
+        const forge = await issueForge(state, rule, repo, own);
+        if (forge.kind === "github") {
+          // gh's login writes, unless the rule names a token of its own
+          const gh: GhRun = own ? (args) => exec(["gh", ...args], { cwd: repo.path, timeoutMs: 30_000, env: { GH_TOKEN: own } }) : forge.gh;
+          if (write.kind === "comment") await commentIssue(forge.slug, number, write.body, gh);
+          else await closeIssue(forge.slug, number, write.comment, gh);
+          return;
+        }
+        if (write.kind === "comment") {
+          await forgejoComment(rule.api, forge.slug, number, forge.token, write.body);
+          return;
+        }
+        if (write.comment) await forgejoComment(rule.api, forge.slug, number, forge.token, write.comment);
+        await forgejoClose(rule.api, forge.slug, number, forge.token);
+      },
+      // the landing queue fast-forwards the repo's own target and never
+      // pushes, so the close on a landed issue says when the remote still
+      // lacks the commit: one fetch of the target, then an ancestry check
+      // against what came back; a repo with no remote, or one that cannot
+      // be reached, is not claimed either way
+      missingFrom: async (repo, target, head) => {
+        const remote = await pushRemote(repo.path, target);
+        if (!remote) return null;
+        if ((await git(repo.path, ["fetch", "--quiet", remote, target], 60_000)).code !== 0) return null;
+        return (await git(repo.path, ["merge-base", "--is-ancestor", head, "FETCH_HEAD"])).code === 0 ? null : remote;
+      },
       // a message written in a Linear agent session, read by a run on the
       // event's branch; fenced, since anyone in the workspace can write one
       followUp: async (event, text) => {

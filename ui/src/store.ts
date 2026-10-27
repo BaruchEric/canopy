@@ -1188,6 +1188,8 @@ export interface CanopyState {
   loadTriggers: (backend?: string) => Promise<void>;
   /** fires a made-up issue through one backend's rule */
   fireTrigger: (backend: string, rule: string, title: string) => Promise<Delivery>;
+  /** runs one backend's rule's poll now */
+  pollTrigger: (backend: string, rule: string) => Promise<void>;
   /** resume, retry or stop a trigger event, by its id */
   triggerAct: (id: string, act: "resume" | "retry" | "stop") => Promise<void>;
   /** drops an ended trigger event from the list */
@@ -3543,6 +3545,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     const d = await api.fireTrigger(backend, rule, title);
     void get().loadTriggers(backend);
     return d;
+  },
+  pollTrigger: async (backend, rule) => {
+    await api.pollTrigger(backend, rule);
+    void get().loadTriggers(backend);
   },
   triggerAct: async (id, act) => {
     await api.triggerAct(id, act);

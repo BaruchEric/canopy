@@ -153,6 +153,19 @@ describe("a check line", () => {
     if (!e.ok) return;
     expect(e.workflow.steps[0]?.check).toBe("@gates");
   });
+
+  test("the bundled issue-fix file is one unlisted step that commits and never pushes", async () => {
+    const file = join(import.meta.dir, "../../lib/workflows/issue-fix.md");
+    const e = parseWorkflow(await readFile(file, "utf8"), { name: "issue-fix", source: "bundled", file });
+    expect(e.ok).toBe(true);
+    if (!e.ok) return;
+    expect(e.workflow.listed).toBe(false);
+    expect(e.workflow.expectsChange).toBe(true);
+    expect(e.workflow.steps).toHaveLength(1);
+    expect(e.workflow.steps[0]?.tools).toContain("Bash(git commit:*)");
+    expect(e.workflow.steps[0]?.tools.some((t) => t.includes("push"))).toBe(false);
+    expect(e.workflow.steps[0]?.body).toContain("do not push");
+  });
 });
 
 describe("retries, back, evidence and budget", () => {

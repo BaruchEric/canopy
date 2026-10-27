@@ -1,7 +1,7 @@
 /** The triggers view's model: every shown backend's events in sections, the
  *  words for each state, and the tab's count. Pure; Triggers.tsx draws it. */
 
-import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
+import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerRuleInfo, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
 import type { Badge } from "./badges";
 
 export interface TriggerRow {
@@ -83,14 +83,35 @@ export const serviceOf = (e: Pick<TriggerEvent, "service">): string => SERVICE_N
 export function outcomeLine(e: TriggerEvent): string | null {
   const name = serviceOf(e);
   const linear = e.service === "linear";
+  const forge = e.service === "github" || e.service === "forgejo";
   if (e.status === "merged") {
     if (e.source === "manual") return `a test fire, so ${name} was not told`;
-    if (!e.resolved) return `merged; the rule holds no token, so the issue stays open in ${name}`;
-    if ("at" in e.resolved) return linear ? "Moved to done in Linear" : "Resolved in Sentry";
-    return `merged, but ${name} refused ${linear ? "the move to done" : "the resolve"}: ${e.resolved.error}`;
+    if (!e.resolved) return `merged; the rule ${forge ? "does not write back" : "holds no token"}, so the issue stays open in ${name}`;
+    if ("at" in e.resolved) return forge ? `Closed in ${name}` : linear ? "Moved to done in Linear" : "Resolved in Sentry";
+    return `merged, but ${name} refused ${forge ? "the close" : linear ? "the move to done" : "the resolve"}: ${e.resolved.error}`;
   }
-  if (e.status === "review" && e.linked && "error" in e.linked) return `Linear refused the PR's link: ${e.linked.error}`;
+  if (e.status === "review" && e.linked && "error" in e.linked) return `${name} refused the PR's link: ${e.linked.error}`;
   return e.reason ?? null;
+}
+
+/** Whether a rule writes back to its service, the words the rule's card
+ *  shows for that, and why. A GitHub or Forgejo rule writes as gh's login
+ *  or with the forge's token unless its `write` is off; a Sentry or Linear
+ *  rule needs its token, or the Linear app's. */
+export function ruleWrites(rule: Pick<TriggerRuleInfo, "source" | "write" | "tokenSet" | "agentSet">): { on: boolean; words: string; why: string } {
+  const name = SERVICE_NAME[rule.source];
+  const forge = rule.source === "github" || rule.source === "forgejo";
+  const on = forge ? rule.write !== false : rule.tokenSet || rule.agentSet;
+  const why =
+    rule.source === "github"
+      ? "canopy comments the PR's link on the issue, or why a run ended without one, and closes it once the PR merges; write: false in the rule turns this off"
+      : rule.source === "forgejo"
+        ? "canopy comments on the issue when a run ends without a fix, and closes it once its branch lands; write: false in the rule turns this off"
+        : rule.source === "linear"
+          ? "A Linear API key, or the Linear app's own token, lets canopy put the PR's link on the issue and move it to done once the fix merges"
+          : "A Sentry token lets canopy mark the issue resolved once the fix merges";
+  const words = on ? (rule.source === "sentry" ? "resolves in Sentry" : `writes back to ${name}`) : `leaves issues open in ${name}`;
+  return { on, words, why };
 }
 
 /** What can be done to an event right now, in the order the row shows them. */
@@ -115,5 +136,33 @@ export function triggersBadge(triggers: Readonly<Record<string, Pick<TriggersInf
   return { text: String(going.length), tone: "sky", title: `${going.length} ${going.length === 1 ? "fix" : "fixes"} going` };
 }
 
-/** The address to paste into Sentry's integration or Linear's webhook: the backend's own origin and the hook's path. */
+/** The address to paste into the service's webhook settings: the backend's own origin and the hook's path. */
 export const hookAddress = (origin: string, hook: string): string => `${origin.replace(/\/+$/, "")}${hook}`;
+
+const EVERY = /^\*\/(\d+)$/;
+
+/** The words for a rule's poll line: the common every-N-minutes and
+ *  every-N-hours lines read as such, any other as the cron line itself. */
+export function pollWords(cron: string): string {
+  const line = cron.trim();
+  const [min = "", hour = "", dom = "", mon = "", dow = ""] = line.split(/\s+/);
+  const daily = dom === "*" && mon === "*" && dow === "*";
+  if (daily && hour === "*") {
+    if (min === "*" || min === "*/1") return "polls every minute";
+    const m = EVERY.exec(min);
+    if (m) return `polls every ${m[1]} min`;
+  }
+  if (daily && min === "0") {
+    if (hour === "*" || hour === "*/1") return "polls every hour";
+    const h = EVERY.exec(hour);
+    if (h) return `polls every ${h[1]} hours`;
+  }
+  return `polls on ${line}`;
+}
+
+/** How a rule's issues reach canopy: the hook's address when the rule has
+ *  a secret (a Sentry or Linear rule always has), and the poll's words when
+ *  it polls. A GitHub or Forgejo rule with both has the poll as its safety net. */
+export function ruleIntake(rule: Pick<TriggerRuleInfo, "hook" | "secretEnv" | "poll">, origin: string): { hook: string | null; poll: string | null } {
+  return { hook: rule.secretEnv ? hookAddress(origin, rule.hook) : null, poll: rule.poll ? pollWords(rule.poll) : null };
+}
