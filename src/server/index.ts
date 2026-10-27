@@ -34,7 +34,7 @@ import {
 } from "../core/git";
 import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
-import { linkFavorites } from "../core/favorite";
+import { linkFavorites, linkHarness } from "../core/favorite";
 import { AUTHORED_QUERY, linkPulls, parseAuthoredPulls, parsePullCounts, PULLS_QUERY } from "../core/github";
 import {
   HistoryError,
@@ -124,6 +124,8 @@ import {
   removeWorkspace,
   setArchived,
   setFavorite,
+  seedHarnessList,
+  setHarness,
   setAwake,
   setKeepShells,
   setLaunch,
@@ -377,6 +379,8 @@ interface ServerState {
   archived: Set<string>;
   /** the paths of the repos starred in canopy, kept the same way */
   favorites: Set<string>;
+  /** the paths of the repos marked as the harness, kept in step with config */
+  harness: Set<string>;
   /** the names of each repo's own remotes, by path, settled once per repo:
    *  what the background fetch pulls and where a tip may come from */
   own: Map<string, string[]>;
@@ -2302,17 +2306,42 @@ function rebuildResult(state: ServerState, repos: Repo[]): void {
     // source is in the same list, so it is settled on the way out; the pull
     // request counts and the peer states ride along from the last activity
     // pass and the last peer pass.
-    repos: linkFavorites(
-      linkArchived(
-        linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
-        state.archived,
+    repos: linkHarness(
+      linkFavorites(
+        linkArchived(
+          linkPeers(linkPulls(linkForgeClones([...repos].sort(bySource(order))), state.pulls), state.peerStates),
+          state.archived,
+        ),
+        state.favorites,
       ),
-      state.favorites,
+      state.harness,
     ),
     scannedAt: Date.now(),
     backend: backendCaps(state.harnesses()),
   };
   syncRepoHealthSoon(state);
+}
+
+/** Seeds the harness mark once, from local repos whose root package declares
+ *  the canopy name. A broken manifest skips that repo without leaving the
+ *  config eligible for a later guess. */
+async function seedHarness(state: ServerState): Promise<void> {
+  const cfg = await loadConfig();
+  if (cfg.harness !== null) return;
+  const found: string[] = [];
+  for (const repo of state.result.repos) {
+    if (repo.host || repo.forge) continue;
+    try {
+      const manifest: unknown = JSON.parse(await readFile(join(repo.path, "package.json"), "utf8"));
+      if (manifest !== null && typeof manifest === "object" && !Array.isArray(manifest) && "name" in manifest && manifest.name === "canopy") {
+        found.push(repo.path);
+      }
+    } catch {
+      // Missing, unreadable, or malformed package files do not block seeding.
+    }
+  }
+  state.harness = new Set(await seedHarnessList(found));
+  rebuildResult(state, state.result.repos);
 }
 
 /** the folder the health file sits in: its removal takes the file too */
@@ -4077,6 +4106,23 @@ async function handleApi(
       broadcast(state, { type: "repo", repo: starred! });
       return json(starred);
     }
+    // Harness membership is canopy's own path mark, so it can be set before
+    // the forge-only repo refusal just like the star and archive marks.
+    if (method === "POST" && action === "harness") {
+      const body: unknown = await req.json().catch(() => null);
+      if (body === null || typeof body !== "object" || Array.isArray(body) || !("harness" in body) || typeof body.harness !== "boolean") {
+        throw new HttpError(400, "harness must be true or false");
+      }
+      state.harness = new Set(await setHarness(repo.path, body.harness));
+      const idx = state.result.repos.findIndex((r) => r.id === repo.id);
+      const now = state.result.repos[idx];
+      if (!now) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      const marked = linkHarness([now], state.harness)[0];
+      if (!marked) throw new HttpError(404, `unknown repo: ${repo.id}`);
+      state.result.repos[idx] = marked;
+      broadcast(state, { type: "repo", repo: marked });
+      return json(marked);
+    }
     // A forge repo is a listing, not a checkout: git has nothing to run
     // against and no folder to open. Where the clone is known, say so — the
     // card next to it is the one that answers.
@@ -5191,6 +5237,7 @@ export async function startServer(opts: {
     pulls: new Map(),
     archived: new Set(cfg.archived),
     favorites: new Set(cfg.favorites),
+    harness: new Set(cfg.harness ?? []),
     own: new Map(),
     // Seeded from settings at startup, not []: fetchLocal can run before
     // the first peer pass does (refreshActivity fetches, then peers), and
@@ -5593,6 +5640,7 @@ export async function startServer(opts: {
   // nothing to show. An extra source failing is a note on that source.
   const launch = state.sources[0];
   if (launch?.src.error) throw new Error(launch.src.error);
+  await seedHarness(state);
   // The shells the last server left on tmux, before listening, so a
   // browser rejoining finds them held. Said out loud, since a missing
   // tmux falls back to plain ptys and looks the same until a restart.
