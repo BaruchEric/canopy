@@ -22,11 +22,6 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orc
 canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacted and kept 30 days, so a finished run opens after a restart and replays in the sheet. "Fork from here" starts a new branch run from the original's base with `--fork-session`; a fork onto the other harness is a fenced summary handoff. `canopy run export` writes a markdown transcript.
 Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25).
 
-### FR-042 · A PWA with web push for asks and "needs you"
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo, Happy, Orca mobile)
-A manifest and a hand-written service worker that caches the shell only make canopy installable on a phone; web push (VAPID keys under the config dir, subscriptions per browser) tells the phone about a new ask, a sent-back branch, a check that gave up or a trigger event that needs Eric while the page is closed. A push carries the item's key and a title, never a token. Telegram stays for the ranger.
-Spec: docs/superpowers/specs/2026-10-25-pwa-push-design.md (2026-10-25).
-
 ### FR-041 · Spec drift and convergence, on a schedule
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode)
 A third trigger source, `schedule` (a cron line, fired by the flows-lock holder, one event per repo per fire, `repo: "*"` for every local repo with a SPEC.md), and a bundled `spec-converge` workflow: a read-only Check step compares SPEC.md with the lockfile, the scripts, the files the code writes and the dated decisions, then a Fix step edits it on a branch. SPEC.md is on the sensitive list, so the fix always waits for a look.
@@ -109,6 +104,12 @@ P3 · added 2026-10-07 · source: dock pass
 The gear still marks "panels side by side" once the dock is a grid of split cells.
 
 ## In Progress
+
+### FR-042 · A PWA with web push for asks and "needs you"
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo, Happy, Orca mobile)
+A manifest and a hand-written service worker that caches the shell only make canopy installable on a phone; web push (VAPID keys under the config dir, subscriptions per browser) tells the phone about a new ask, a sent-back branch, a check that gave up or a trigger event that needs Eric while the page is closed. A push carries the item's key and a title, never a token. Telegram stays for the ranger.
+Spec: docs/superpowers/specs/2026-10-25-pwa-push-design.md (2026-10-25).
+Plan 1 implemented locally 2026-10-26: manifest and icons, shell-only worker, registration and the device settings row. Browser activation, cache boundaries and offline loading verified; phone installation and Access checks remain pending deployment. Plan 2 (push keys, subscriptions, routes, setting and CLI) and plan 3 (badge and polish) remain open.
 
 ### FR-032 · Holdout scenario gates in the landing queue
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)

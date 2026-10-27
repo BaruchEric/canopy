@@ -14,7 +14,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 | [Spec converge, plan 1: the schedule trigger source](2026-10-26-spec-converge-1.md) | planned | | [spec converge](../specs/2026-10-25-spec-converge-design.md) |
 | [Workflow graph, plan 1: after, when and mode in the parser and the flow engine](2026-10-26-workflow-graph-1.md) | planned | | [workflow graph](../specs/2026-10-25-workflow-graph-design.md) |
 | [Work ledger, plan 1: a work item per branch, minted at start and carried by git](2026-10-26-work-ledger-1.md) | planned | | [work ledger](../specs/2026-10-25-work-ledger-design.md) |
-| [PWA and push, plan 1: an installable page with a shell-only service worker](2026-10-26-pwa-push-1.md) | planned | | [PWA and push](../specs/2026-10-25-pwa-push-design.md) |
+| [PWA and push, plan 1: an installable page with a shell-only service worker](2026-10-26-pwa-push-1.md) | implemented locally; phone/Access checks pending | 2026-10-26 | [PWA and push](../specs/2026-10-25-pwa-push-design.md) |
 | [Worktree stacks, plan 1: a warm worktree pool per repo](2026-10-26-worktree-stacks-1.md) | planned | | [worktree stacks](../specs/2026-10-25-worktree-stacks-design.md) |
 | [Run replay, plan 1: the wire on disk, kept for 30 days and redacted](2026-10-26-run-replay-1.md) | planned | | [run replay](../specs/2026-10-25-run-replay-design.md) |
 | [Harness share: how much of the spend goes into canopy itself](2026-10-26-harness-share.md) | planned | | [harness share](../specs/2026-10-25-harness-share-design.md) |

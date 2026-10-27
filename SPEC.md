@@ -26,7 +26,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 
 - Bun 1.4.2 runs the server, the CLI and the tests (`bun test`).
 - TypeScript 7.0.2, `strict` in both `tsconfig.json` and `ui/tsconfig.json`.
-- React 19.3.0, Zustand 5.0.15, Vite 8.3.2 with @vitejs/plugin-react 6.1.1 for the SPA.
+- React 19.3.0, Zustand 5.0.15, Vite 8.3.2 with @vitejs/plugin-react 6.1.1 for the SPA; a second Vite build makes the service worker (`ui/sw.ts`) into `dist/web/sw.js`.
 - @xterm/xterm 6.0.0 for shells; tmux on the backend keeps them alive.
 - ai 7.0.127 and @ai-sdk/gateway 4.0.103 for commit message suggestions.
 - oxlint 1.86.0 for lint, configured in `.oxlintrc.json`; a hook called after an early return fails lint (`react/rules-of-hooks`).
@@ -47,7 +47,7 @@ canopy ui ~/dev
 ```
 
 - Development: `bun run dev` (API on :7850) and `bun run dev:web` (Vite on :7851, proxying `/api`).
-- Production: the Bun server on :7850 serves the built `dist/web`, so a stale build shows a stale UI.
+- Production: the Bun server on :7850 serves the built `dist/web` (the page, `sw.js`, `manifest.webmanifest` and `icons/`), so a stale build shows a stale UI.
 - Shared backend: docker compose (`canopy`, `shells`, `stages`, `coord` (the coordinator's runner, always up, used only once `.env` sets `CANOPY_COORD_SOCKET`, `CANOPY_COORD_API` and `CANOPY_COORD_PORT` and canopy enforces caller tokens, its lane held on that port's own listener), `coord-proxy` (the coordinator's egress proxy, its one way to the internet, which tunnels to Anthropic's names alone), `secrets`, and `tunnel` under its profile). Deploy committed `main` with `bun run redeploy`; `bun run redeploy status` says what is running. See `docs/deploy.md`.
 - Run `bun test` with `SHELL=/bin/bash` when an interactive zsh config slows shells down.
 
@@ -56,7 +56,7 @@ canopy ui ~/dev
 - Config, workspaces, sources, agent and launch settings: `~/.config/canopy/config.json`, or `$CANOPY_CONFIG_DIR`.
 - Next to it: `bin/canopy-mcp.js` (in compose, the MCP bundle copied at each backend start for the shells container's `canopy` launcher), `tmux.sock` (the shells' tmux server), `shells/` (kept-shell snapshots), `pastes/` (images pasted into shells and design-mode pictures, kept 7 days), `callers.json` (the token hashes of every signed-in page, CLI, helper, shell and the ranger, 0600) and, written by `canopy auth login` and `canopy helper --pair`, `token-<host>-<port>` and `token-helper-<host>-<port>` (0600), `tasks/` (state and logs), `ranger/` (the always-on agent's conversation, wakes and brief), `builds/` (installed releases and PR worktrees), `worktrees/<repo key>/<id>/` (branch runs' worktrees), `scenarios/<repo key>/` (a repo's holdout scenarios, one markdown file each, written by hand and by `canopy scenarios add`; never synced with the repo), `landing/` (`runs/<id>.json` per branch run with its latest sort, `queue/<repo key>.json` per repo and `notices.json` for the queue's quiet lines, written only by the server holding the flows lock), `prs/` (`<branch id>.json` per PR a branch run opened, written only by the server holding the flows lock), `sweep/` (`chats.json`, the chats the sweep stopped, kept 14 days so each can be resumed, and `log.json`, the newest 50 closes; a shell the sweep closes leaves its snapshot in `shells/`, kept 14 days), `triggers.json` (the trigger rules, written by hand, naming secrets only by their environment variable) and `triggers/events.json` (every trigger event kept, written only by the server holding the flows lock), `library/<root-hash>/` (the project library, with `sync.json`, the Library sync's stamps, written only by the canopy server, and `sync-backups/`, the newest 10 copies of the files a sync replaced), `costs/<YYYY-MM>.jsonl` (the cost ledger: a line per run reply, voice call and dictated clip), `capacity.json` (the last usage-limit hit per harness, retained across restarts, with no credential), and `prices.json` (optional, written by hand: the prices that turn usage into estimates).
 - In a repo: `.canopy/tasks.json`, `.canopy/workflows/`, `.canopy/spec.json`, `.canopy/gates.json` (the landing queue's gates and setup line), `.canopy/scenarios.json` (the scenarios' default run line, judge, minimum and timeout) and `.canopy/review.json` (what lands on its own and what needs an approval), all checked in by that repo's owner.
-- Per browser: preferences, open panels and shell tabs in localStorage.
+- Per browser: preferences, open panels and shell tabs in localStorage; the service worker's one cache, `canopy-<build>`, holds the page shell and hashed assets, never `/api` or `/library`.
 - Runs live in server memory; the last 60 finished ones stay until a restart. A branch run's record and its landing queue entry outlive a restart in `landing/`.
 - Session history is read from claude-history's CLI (`--json`), never its sqlite file.
 - The secret store: `secrets.json` in the private Forgejo repo `eric/secrets`, its values sealed with age and the file signed. On the mini the `secrets-data` volume holds the checkout, the keys, `passkeys.json`, `audit.jsonl` and `applied.json`. On every other backend, next to the config: `secrets/` (a pulled copy), `secrets-config.json` (the pinned key and remote), `secrets-key.age` (that machine's passphrase-wrapped key) and `secrets-applied.json`.
