@@ -2350,3 +2350,176 @@ describe("manual operational parks (FR-034)", () => {
     expect(runner.specs).toHaveLength(1);
   });
 });
+
+function deferredEngineResult<T>() {
+  let resolve: (value: T) => void = () => { throw new Error("deferred result not initialized"); };
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+const engineReviewBranch = (): BranchStart => ({ branch: {
+  name: "run/engine-review", target: "main", base: "abc", dir: "/tmp/engine-review", state: "working", origin: "engine-review",
+} });
+
+const engineReviewWork = (gate = "continue", evidence = "") => wf(`---\nblurb: b\n---\n\n## Work\ntools: git-commit\ncheck: true\ngate: ${gate}\n${evidence}\nwork\n`);
+
+describe("attempt ownership after stop and pick-up (engine review)", () => {
+  const preparations: ("fingerprint" | "checkTools")[] = ["fingerprint", "checkTools"];
+  for (const preparation of preparations) {
+    test(`an old ${preparation} preparation cannot start a second writer`, async () => {
+      const old = deferredEngineResult<void>();
+      const replacement = deferredEngineResult<void>();
+      let reads = 0;
+      const prepare = async () => {
+        reads += 1;
+        if (reads === 1) await old.promise;
+        if (reads === 2) await replacement.promise;
+      };
+      const { runner, flows } = setup(preparation === "fingerprint"
+        ? { fingerprint: async () => { await prepare(); return "tree"; } }
+        : { checkTools: async () => { await prepare(); return []; } });
+      const flow = flows.start(repo(), engineReviewWork(), "", DEFAULT_AGENT, { branch: engineReviewBranch() });
+      flows.stop(flow.id);
+      expect(flow.status).toBe("stopped");
+      flows.pickUp(flow.id);
+      replacement.resolve(); await flush();
+      old.resolve(); await flush();
+      expect(runner.specs.map((spec) => spec.label)).toEqual(["Work"]);
+      expect(flow.steps[0]?.runId).toBe("run1");
+      expect([...runner.runs.values()].filter((run) => run.status === "working")).toHaveLength(1);
+      runner.end("run1", "done"); await flush();
+      expect(flow.status).toBe("done");
+    });
+  }
+
+  test("an old after-run fingerprint cannot start the replacement attempt's check", async () => {
+    const old = deferredEngineResult<string | null>();
+    const replacement = deferredEngineResult<string | null>();
+    let reads = 0;
+    const { runner, flows, checks } = setup({ fingerprint: () => {
+      reads += 1;
+      if (reads === 2) return old.promise;
+      if (reads === 4) return replacement.promise;
+      return Promise.resolve("before");
+    } });
+    const flow = flows.start(repo(), engineReviewWork(), "", DEFAULT_AGENT, { branch: engineReviewBranch() });
+    await flush(); runner.end("run1", "done"); await flush();
+    flows.stop(flow.id); flows.pickUp(flow.id);
+    await flush(); runner.end("run2", "done"); await flush();
+    old.resolve("old-after"); await flush();
+    expect(checks).toHaveLength(0);
+    expect(flow.steps[0]?.status).toBe("checking");
+    replacement.resolve("new-after"); await flush();
+    expect(checks).toHaveLength(1);
+    expect(flow.steps[0]?.changed).toBe(true);
+    expect(flow.status).toBe("done");
+  });
+
+  test("an old verdict cannot pass a replacement attempt awaiting its verdict", async () => {
+    const old = deferredEngineResult<VerdictAnswers>();
+    const replacement = deferredEngineResult<VerdictAnswers>();
+    let evaluations = 0;
+    const { runner, flows } = setup({ evaluator: () => ++evaluations === 1 ? old.promise : replacement.promise });
+    const flow = flows.start(repo(), engineReviewWork("verdict"), "", DEFAULT_AGENT, { branch: engineReviewBranch() });
+    runner.end("run1", "done"); await flush();
+    flows.stop(flow.id); flows.pickUp(flow.id);
+    runner.end("run2", "done"); await flush();
+    const done: VerdictAnswers = { outcome: { choice: "done" }, needsYou: { probability: 0 }, offScope: { probability: 0 } };
+    old.resolve(done); await flush();
+    expect(flow.steps[0]?.status).toBe("checking");
+    expect(flow.steps[0]?.verdict).toBeUndefined();
+    replacement.resolve(done); await flush();
+    expect(flow.status).toBe("done");
+  });
+
+  test("an old evidence read cannot invoke the judge for a replacement attempt", async () => {
+    const old = deferredEngineResult<EvidenceFile[]>();
+    const replacement = deferredEngineResult<EvidenceFile[]>();
+    let reads = 0;
+    let judgments = 0;
+    const { runner, flows } = setup({
+      evidence: () => ++reads === 1 ? old.promise : replacement.promise,
+      judge: async () => { judgments += 1; return MEETS; },
+    });
+    const flow = flows.start(repo(), engineReviewWork("judge", "evidence: result.md"), "", DEFAULT_AGENT, { branch: engineReviewBranch() });
+    runner.end("run1", "done"); await flush();
+    flows.stop(flow.id); flows.pickUp(flow.id);
+    runner.end("run2", "done"); await flush();
+    old.resolve([]); await flush();
+    expect(judgments).toBe(0);
+    expect(flow.steps[0]?.status).toBe("checking");
+    replacement.resolve([]); await flush();
+    expect(judgments).toBe(1);
+    expect(flow.status).toBe("done");
+  });
+});
+
+describe("scheduler metadata on reset (engine review)", () => {
+  test("a check rewind to a parked ask step reruns Ask before it can pass", async () => {
+    const first = deferredEngineResult<CheckResult>();
+    let checks = 0;
+    const { runner, flows } = setup({ check: () => ++checks === 1 ? first.promise : { exit: 0, output: "ok" } });
+    const graph = wf(`---\nblurb: b\n---\n\n## Build\n\nbuild\n\n## Ask\nafter: Build\ntools: read\ngate: ask\n\nask\n\n## Test\nafter: Build\ncheck: @gates\nretries: 1\nback: Ask\n`);
+    const flow = flows.start(repo(), graph, "", DEFAULT_AGENT);
+    runner.end("run1", "done"); await flush();
+    runner.end("run2", "done"); await flush();
+    expect(flow.steps[1]?.status).toBe("gated");
+    first.resolve({ exit: 1, output: "retry" }); await flush();
+    expect(runner.specs.map((spec) => spec.label)).toEqual(["Build", "Ask", "Ask"]);
+    expect(flow.steps[1]?.status).toBe("running");
+    expect(flow.status).toBe("working");
+    runner.end("run3", "done"); await flush();
+    flows.resume(flow.id, "continue"); await flush();
+    expect(flow.status).toBe("done");
+  });
+});
+
+describe("resumed fallback respects terminal intent (engine review)", () => {
+  const terminalCases: ("failed" | "stopped")[] = ["failed", "stopped"];
+  for (const terminal of terminalCases) {
+    test(`a zero-turn resume cannot start fallback while ${terminal} is pending`, async () => {
+      const { runner, flows } = setup();
+      const flow = flows.start(repo(), FAN, "", DEFAULT_AGENT, { branch: engineReviewBranch() });
+      runner.end("run1", "done"); await flush();
+      runner.session("run2", "session-a"); runner.session("run3", "session-b");
+      flows.stop(flow.id); flows.pickUp(flow.id);
+      expect(runner.specs[3]?.resume).toBe("session-a");
+      expect(runner.specs[4]?.resume).toBe("session-b");
+      if (terminal === "stopped") {
+        runner.stop = (id) => { const run = runner.get(id); if (!run) throw new Error(id); return run; };
+        flows.stop(flow.id);
+        runner.end("run4", "stopped");
+      } else runner.end("run4", "failed", "a turn", "A failed");
+      runner.end("run5", "failed", "", "session not found"); await flush();
+      expect(runner.specs.map((spec) => spec.label)).toEqual(["Build", "Lint", "Docs", "Lint", "Docs"]);
+      expect(flow.status).toBe(terminal);
+      if (terminal === "failed") expect(flow.error).toBe("A failed");
+      expect([...runner.runs.values()].filter((run) => run.status === "working")).toHaveLength(0);
+    });
+  }
+});
+
+describe("flow lifecycle ownership (engine review)", () => {
+  test("an old stopped branch read cannot settle a later picked-up completion", async () => {
+    const stoppedRead = deferredEngineResult<"nothing" | "ready">();
+    let reads = 0;
+    let handed = 0;
+    const runner = new FakeRunner();
+    const flows = new Flows(runner, {
+      onChange: () => {}, onGone: () => {}, onFleet: () => {}, onFleetGone: () => {},
+      evaluator: null, check: async () => ({ exit: 0, output: "ok" }),
+      branchState: () => ++reads === 1 ? stoppedRead.promise : Promise.resolve("ready"),
+      onBranchEnd: () => { handed += 1; },
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    const flow = flows.start(repo(), engineReviewWork(), "", DEFAULT_AGENT, { branch: engineReviewBranch() });
+    flows.stop(flow.id); flows.pickUp(flow.id);
+    runner.end("run2", "done"); await flush();
+    expect(flow.branch?.state).toBe("ready");
+    expect(handed).toBe(1);
+    stoppedRead.resolve("nothing"); await flush();
+    expect(flow.branch?.state).toBe("ready");
+    expect(flow.outcome).toBe("changed");
+    expect(handed).toBe(1);
+  });
+});
