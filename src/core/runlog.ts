@@ -15,6 +15,7 @@ export const WIRE = "wire.jsonl";
 export const WIRE_GZ = "wire.jsonl.gz";
 export const RUN_FILE = "run.json";
 export const INDEX = "index.json";
+const REJECTED = ".privacy-rejected";
 export const RUN_ID = /^[A-Za-z0-9_-]{1,64}$/;
 export const runsDir = (): string => join(configDir(), "runs");
 type Terminal = KeptRunHead["status"];
@@ -96,22 +97,22 @@ function privacyOf(init: Pick<RunLogInit, "secrets" | "credentials">): RunLogPri
 class CredentialCollision extends Error {
   constructor() { super("credential collides with required transcript metadata"); }
 }
-function trusted<T extends string | number | boolean>(value: T, privacy: RunLogPrivacy): T {
+function trusted<T extends string | number | boolean | null>(value: T, privacy: RunLogPrivacy): T {
   const source = String(value);
   if (redactLine(source, privacy.credentials).count > 0) throw new CredentialCollision();
   return value;
 }
-/** Arbitrary protocol JSON includes dynamic keys and numeric payloads. */
+/** Every arbitrary protocol scalar and dynamic key passes redaction. */
 function payload(v: unknown, privacy: RunLogPrivacy): unknown {
   if (text(v)) return redactLine(v, privacy.secrets).line;
   if (Array.isArray(v)) return v.map((x: unknown) => payload(x, privacy));
   if (record(v)) return Object.fromEntries(Object.entries(v).map(([key, value]) => [redactLine(key, privacy.secrets).line, payload(value, privacy)]));
-  if (number(v)) { const redacted = redactLine(String(v), privacy.secrets); return redacted.count ? redacted.line : v; }
+  if (number(v) || boolean(v) || v === null) { const redacted = redactLine(String(v), privacy.secrets); return redacted.count ? redacted.line : v; }
   return v;
 }
-/** Only typed schema keys and numeric/boolean facts enter this check. */
+/** Only typed schema keys and numeric, boolean or null facts enter here. */
 function checkFacts(v: unknown, privacy: RunLogPrivacy): void {
-  if (number(v) || boolean(v)) trusted(v, privacy);
+  if (number(v) || boolean(v) || v === null) trusted(v, privacy);
   else if (Array.isArray(v)) v.forEach((x: unknown) => checkFacts(x, privacy));
   else if (record(v)) for (const [key, value] of Object.entries(v)) { trusted(key, privacy); checkFacts(value, privacy); }
 }
@@ -206,7 +207,7 @@ function atomic(path: string, text: string): void {
 }
 function folders(dir: string): string[] {
   if (!directory(dir)) return [];
-  return readdirSync(dir).filter((id) => RUN_ID.test(id) && directory(join(dir, id))).sort();
+  return readdirSync(dir).filter((id) => RUN_ID.test(id) && directory(join(dir, id)) && !exists(join(dir, id, REJECTED))).sort();
 }
 function parse(text: string | null): unknown { try { return text === null ? null : JSON.parse(text); } catch { return null; } }
 function safeFolder(dir: string, id: string): string | null { return RUN_ID.test(id) && directory(dir) && directory(join(dir, id)) ? join(dir, id) : null; }
@@ -230,7 +231,7 @@ export function headOf(run: Run): KeptRunHead {
   return { id: run.id, repo: run.repoId, action: run.action, verb: run.verb, harness: run.harness, status: run.status, started: run.startedAt, ended: run.endedAt ?? run.startedAt, cost: run.result?.costUsd ?? null, ...(run.session ? { session: run.session } : {}), ...(run.branch ? { origin: run.branch.origin } : {}) };
 }
 export async function readKeptRun(dir: string, id: string): Promise<Run | null> {
-  const folder = safeFolder(dir, id); if (!folder) return null;
+  const folder = safeFolder(dir, id); if (!folder || exists(join(folder, REJECTED))) return null;
   try { chmodSync(folder, 0o700); } catch { return null; }
   const value = parse(read(join(folder, RUN_FILE)));
   return isRun(value) && value.id === id ? { ...value, kept: true } : null;
@@ -302,12 +303,18 @@ export class RunLog {
     this.folder = join(init.dir, init.run.id); directory(this.folder, true); chmodSync(this.folder, 0o700);
     try {
       this.fd = fileFd(join(this.folder, WIRE), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND); fchmodSync(this.fd, 0o600);
-      this.bytes = fstatSync(this.fd).size; checkFacts(start, this.privacy); trusted(start.canopy, this.privacy); this.append(JSON.stringify(start));
+      this.bytes = fstatSync(this.fd).size; checkFacts(start, this.privacy); trusted(start.canopy, this.privacy); this.bounded(JSON.stringify(start));
+      if (this.cut) {
+        // A header too large for the wire never writes its argv. A private
+        // provisional snapshot retains enough identity for restart recovery.
+        const head: Run = { id: init.run.id, repoId: init.run.repoId, action: init.run.action, verb: init.run.action, harness: init.run.harness, progress: "", expectsChange: false, chat: false, note: "", status: "stopped", startedAt: start.at, steps: [], prompt: null };
+        atomic(join(this.folder, RUN_FILE), JSON.stringify(snapshot(head, this.privacy)) + "\n");
+      }
     } catch (error) { this.close(); this.discardCredentialCollision(error); throw error; }
   }
   private discardCredentialCollision(error: unknown): void {
     if (error instanceof CredentialCollision && safeFolder(this.init.dir, this.init.run.id)) {
-      try { rmSync(this.folder, { recursive: true }); } catch { /* no further logging */ }
+      try { atomic(join(this.folder, REJECTED), ""); rmSync(this.folder, { recursive: true }); } catch { /* a durable rejection marker excludes undeletable records */ }
     }
   }
   private close(): void {
@@ -359,6 +366,7 @@ export class RunLog {
 
 export class DiskRunLogger implements RunLogger {
   private applied: Applied = {};
+  private appliedState: "initial" | "absent" | "complete" | "unavailable" = "initial";
   private dir: string;
   private env: () => Readonly<Record<string, string | undefined>>;
   private appliedFile: string;
@@ -367,23 +375,46 @@ export class DiskRunLogger implements RunLogger {
   }
   async refresh(): Promise<void> { this.refreshNow(); }
   private refreshNow(): void {
-    const value = parse(read(this.appliedFile));
+    let fd: number | undefined;
+    let source: string;
+    try {
+      fd = fileFd(this.appliedFile, constants.O_RDONLY);
+      source = readFileSync(fd, "utf8");
+    } catch (error) {
+      const initiallyAbsent = record(error) && error["code"] === "ENOENT" && (this.appliedState === "initial" || this.appliedState === "absent");
+      this.appliedState = initiallyAbsent ? "absent" : "unavailable";
+      return;
+    } finally { if (fd !== undefined) closeSync(fd); }
+    const value = parse(source);
+    if (!record(value)) { this.appliedState = "unavailable"; return; }
     const applied: [string, Record<string, string>][] = [];
-    if (record(value)) for (const [sink, entries] of Object.entries(value)) {
-      if (record(entries)) applied.push([sink, Object.fromEntries(Object.entries(entries).filter((entry): entry is [string, string] => text(entry[1])))]);
+    for (const [sink, entries] of Object.entries(value)) {
+      if (!record(entries) || !Object.values(entries).every(text)) { this.appliedState = "unavailable"; return; }
+      const stamps: [string, string][] = [];
+      for (const [name, stamp] of Object.entries(entries)) if (text(stamp)) stamps.push([name, stamp]);
+      applied.push([sink, Object.fromEntries(stamps)]);
     }
-    this.applied = Object.fromEntries(applied);
+    // Never discard known credential names on a partial or failed read.
+    this.applied = Object.fromEntries(applied); this.appliedState = "complete";
   }
   /** Caller recovery must supply current secrets explicitly, never raw hints. */
   currentSecrets(env: Readonly<Record<string, string>> = {}): RunLogPrivacy {
+    this.refreshNow();
+    if (this.appliedState === "unavailable") throw new Error("applied secret names unavailable; transcript disabled");
+    return this.knownSecrets(env);
+  }
+  private knownSecrets(env: Readonly<Record<string, string>>): RunLogPrivacy {
     const secrets = secretValues({ ...this.env(), ...env }, this.applied);
     const applied = new Set(Object.values(this.applied).flatMap(Object.keys));
     return { secrets, credentials: secrets.filter((s) => credentialName(s.name) || applied.has(s.name)) };
   }
   open(run: Run, argv: readonly string[], env: Readonly<Record<string, string>>, onError: (why: string) => void): RunLog | null {
     this.refreshNow();
-    const privacy = this.currentSecrets(env);
-    try { return new RunLog({ dir: this.dir, run, argv, ...privacy, onError, now: this.opts.now, max: this.opts.max }); }
+    const privacy = this.knownSecrets(env);
+    try {
+      if (this.appliedState === "unavailable") throw new Error("applied secret names unavailable; transcript disabled");
+      return new RunLog({ dir: this.dir, run, argv, ...privacy, onError, now: this.opts.now, max: this.opts.max });
+    }
     catch (error) { try { onError(redactLine(errText(error), privacy.secrets).line); } catch { /* logging cannot fail the run */ } return null; }
     finally { void this.refresh(); }
   }
@@ -396,10 +427,12 @@ export async function closeOpen(dir: string, hint: (id: string) => Partial<Pick<
     const closed: string[] = [];
     for (const id of folders(dir)) {
       const folder = join(dir, id); const path = join(folder, WIRE); const original = read(path); if (original === null) continue;
-      const lines = original.split("\n").filter(Boolean); const start = parse(lines[0] ?? null);
+      const lines = original.split("\n").filter(Boolean); const first = parse(lines[0] ?? null);
+      const existing = await readKeptRun(dir, id);
+      const start = record(first) && first["canopy"] === "cut" && existing ? { canopy: "start", run: id, repo: existing.repoId, action: existing.action, harness: existing.harness, at: existing.startedAt } : first;
       if (!record(start) || start["canopy"] !== "start" || start["run"] !== id || !number(start["at"]) || !text(start["repo"]) || !text(start["action"]) || !harness(start["harness"])) continue;
       try {
-        const existing = await readKeptRun(dir, id);
+        if (existing) snapshot(existing, privacy); // validate every typed routing fact before retaining it
         const ended = lines.some((line) => { const v = parse(line); return record(v) && (v["canopy"] === "end" || v["canopy"] === "cut"); });
         const hints = hint(id);
         const recovered: Run = { id, repoId: start["repo"], action: start["action"], verb: hints?.verb ?? start["action"], progress: "", expectsChange: false, chat: false, harness: start["harness"], note: hints?.note ?? "", status: "stopped", startedAt: start["at"], endedAt: now, steps: [], prompt: null,
@@ -409,15 +442,23 @@ export async function closeOpen(dir: string, hint: (id: string) => Partial<Pick<
         // Existing bytes already passed the old logger's boundary. Only new
         // hints and the new end marker are serialized here, avoiding a second
         // pass over generated redaction markers in an existing snapshot/wire.
-        const safe = existing ?? snapshot(recovered, recoveryPrivacy);
+        const provisional = existing && existing.endedAt === undefined;
+        const safe = existing ? (provisional ? { ...existing, endedAt: now } : existing) : snapshot(recovered, recoveryPrivacy);
         if (!terminal(safe.status)) continue;
         trusted(id, privacy); trusted(safe.repoId, privacy); trusted(safe.harness, privacy); trusted(safe.status, privacy); checkFacts(safe, privacy);
         const end: CanopyLine = { canopy: "end", at: now, status: safe.status };
         checkFacts(end, privacy); trusted(end.canopy, privacy);
         if (!ended) atomic(path, original + (original.endsWith("\n") ? "" : "\n") + JSON.stringify(end) + "\n");
-        if (!existing) atomic(join(folder, RUN_FILE), JSON.stringify(safe) + "\n");
+        if (!existing || provisional) atomic(join(folder, RUN_FILE), JSON.stringify(safe) + "\n");
         chmodSync(folder, 0o700); await gzip(folder); closed.push(id);
-      } catch { /* a corrupt or unsafe run does not compromise other recovery */ }
+      } catch (error) {
+        if (error instanceof CredentialCollision) {
+          // Exclusion survives a later listing or restart even if removal fails.
+          atomic(join(folder, REJECTED), "");
+          try { await drop(dir, id); } catch { /* the rejection marker remains */ }
+        }
+        // Other corrupt or unsafe candidates do not compromise recovery peers.
+      }
     }
     await rebuild(dir); return closed;
   });

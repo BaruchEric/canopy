@@ -252,3 +252,111 @@ test("recovery redacts echoed routing values in hints and rejects an absent sani
   await closeOpen(dir, () => ({ note: "head repo" }), { secrets: [], credentials: [] }, 77);
   expect(await readKeptRun(dir, "head")).toMatchObject({ id: "head", repoId: "repo", note: "<redacted:CANOPY_RUN> <redacted:CANOPY_REPO>" });
 });
+
+test("arbitrary boolean and null protocol scalars redact in both directions", async () => {
+  for (const value of [true, false, null]) {
+    const spelling = String(value); const dir = join(root, `scalar-${spelling}`);
+    const secrets = [{ name: "CANOPY_CONTEXT", value: spelling }];
+    const log = open(dir, run(), { secrets });
+    log.wire("out", JSON.stringify({ value })); log.wire("in", JSON.stringify({ value }));
+    await log.settle(run());
+    const lines = await wire(log.folder);
+    expect(lines[1]).toEqual({ value: "<redacted:CANOPY_CONTEXT>" });
+    expect(lines[2]).toMatchObject({ canopy: "in", line: '{"value":"<redacted:CANOPY_CONTEXT>"}' });
+  }
+  const log = open(join(root, "scalar-plain"));
+  log.wire("out", '[true,false,null]'); await log.settle(run());
+  expect((await wire(log.folder))[1]).toEqual([true, false, null]);
+});
+
+test("credential-rejected recovery folders cannot reappear through head-only or snapshot listing", async () => {
+  for (const [id, repoId, snapshot, origin] of [["identity", "repo", false, ""], ["snapshot", "identity", true, ""], ["branch", "repo", true, "identity"]] satisfies [string, string, boolean, string][]) {
+    const dir = join(root, `reject-${id}`); const folder = join(dir, id); await mkdir(folder, { recursive: true });
+    await writeFile(join(folder, WIRE), JSON.stringify({ canopy: "start", at: 5, run: id, repo: repoId, action: "ask", harness: "codex", argv: [] }) + "\n");
+    if (snapshot) await writeFile(join(folder, RUN_FILE), JSON.stringify(run({ id, repoId, ...(origin ? { branch: { name: "run/work", target: "main", base: "base", dir: "/owned", state: "ready", origin } } : {}) })));
+    const secrets = [{ name: "CANOPY_TOKEN", value: "identity" }];
+    expect(await closeOpen(dir, () => undefined, { secrets, credentials: secrets }, 77)).toEqual([]);
+    expect(await listKept(dir)).toEqual([]); expect(await rebuildIndex(dir)).toEqual([]);
+    expect(await readKeptRun(dir, id)).toBeNull();
+    expect(await readFile(join(dir, INDEX), "utf8")).not.toContain("identity");
+  }
+});
+
+test("malformed, unreadable and vanished applied sources fail closed until repaired", async () => {
+  for (const broken of ["json", "shape", "directory", "missing"]) {
+    const dir = join(root, `bad-applied-${broken}`); const file = join(root, `bad-applied-${broken}.json`);
+    const valid = JSON.stringify({ sink: { PROVIDER_KEY: "stamp" } }); await writeFile(file, valid);
+    const logger = new DiskRunLogger({ dir, appliedFile: file, env: () => ({ PROVIDER_KEY: "provider-secret" }) });
+    await logger.refresh();
+    if (broken === "json") await writeFile(file, "{");
+    if (broken === "shape") await writeFile(file, JSON.stringify({ sink: { PROVIDER_KEY: 1 } }));
+    if (broken === "directory" || broken === "missing") await rm(file);
+    if (broken === "directory") await mkdir(file);
+    const errors: string[] = [];
+    expect(logger.open(run(), [], {}, (why) => errors.push(why))).toBeNull(); expect(errors).toHaveLength(1);
+    expect(() => logger.currentSecrets()).toThrow("applied");
+    expect(await listKept(dir)).toEqual([]);
+    if (broken === "directory") await rm(file, { recursive: true });
+    await writeFile(file, valid); await logger.refresh();
+    const log = logger.open(run(), [], {}, () => {}); if (!log) throw new Error("repair must restore logging");
+    log.wire("out", '{"value":"provider-secret"}'); await log.settle(run());
+    expect((await wire(log.folder))[1]).toEqual({ value: "<redacted:PROVIDER_KEY>" });
+  }
+});
+
+test("an initially absent applied source is allowed but an initially malformed source is refused", async () => {
+  const dir = join(root, "initial-applied"); const file = join(root, "initial-applied.json");
+  const logger = new DiskRunLogger({ dir, appliedFile: file, env: () => ({}) });
+  const log = logger.open(run(), [], {}, () => {}); expect(log).not.toBeNull(); await log?.settle(run());
+  await writeFile(file, "[]"); const other = new DiskRunLogger({ dir, appliedFile: file, env: () => ({}) });
+  const errors: string[] = []; expect(other.open(run({ id: "bad" }), [], {}, (why) => errors.push(why))).toBeNull(); expect(errors).toHaveLength(1);
+});
+
+test("oversized start records cut before argv bytes and retain a recoverable private head", async () => {
+  for (const settle of [true, false]) {
+    const dir = join(root, `big-header-${settle}`); const value = run({ id: "header" });
+    const log = open(dir, value, { max: 100, argv: ["claude", "large-argument-".repeat(10000)], now: () => 5 });
+    expect((await stat(join(log.folder, WIRE))).size).toBeLessThanOrEqual(100);
+    expect(await readFile(join(log.folder, WIRE), "utf8")).not.toContain("large-argument");
+    expect(await readKeptRun(dir, "header")).toMatchObject({ id: "header", status: "stopped", repoId: "repo" });
+    if (settle) await log.settle(run({ id: "header", status: "limited" }));
+    else expect(await closeOpen(dir, () => undefined, { secrets: [], credentials: [] }, 77)).toEqual(["header"]);
+    expect(await wire(log.folder)).toEqual([{ canopy: "cut", at: 5, bytes: 0 }]);
+    expect(await readKeptRun(dir, "header")).toMatchObject({ status: settle ? "limited" : "stopped" });
+  }
+});
+
+test("private boolean and null scalar values redact without relying on context-name classification", async () => {
+  for (const value of [true, false, null]) {
+    const spelling = String(value); const dir = join(root, `private-scalar-${spelling}`);
+    const secrets = [{ name: "VERCEL_TOKEN", value: spelling }];
+    const current = run({ expectsChange: value === false, chat: value === false, ...(value === null ? { prompt: { id: "p", kind: "proposal", plan: "", auto: false } } : {}) });
+    const log = open(dir, current, { secrets });
+    log.wire("out", JSON.stringify({ value })); log.wire("in", JSON.stringify({ value })); await log.settle(current);
+    const lines = await wire(log.folder);
+    expect(lines[1]).toEqual({ value: "<redacted:VERCEL_TOKEN>" });
+    expect(lines[2]).toMatchObject({ canopy: "in", line: '{"value":"<redacted:VERCEL_TOKEN>"}' });
+  }
+});
+
+test("a credential colliding with a typed null fact fails closed", async () => {
+  const errors: string[] = []; const dir = join(root, "null-fact");
+  const log = open(dir, run(), { secrets: [{ name: "VERCEL_TOKEN", value: "null" }], onError: (why) => errors.push(why) });
+  await log.settle(run()); expect(errors).toHaveLength(1); expect(await listKept(dir)).toEqual([]);
+});
+
+test("a rejected recovery record stays excluded when its folder cannot be removed", async () => {
+  const dir = join(root, "reject-undeletable"); const folder = join(dir, "identity"); await mkdir(folder, { recursive: true });
+  await writeFile(join(folder, WIRE), JSON.stringify({ canopy: "start", at: 5, run: "identity", repo: "repo", action: "ask", harness: "codex", argv: [] }) + "\n");
+  const actualRm = fs.rmSync;
+  const blocked = spyOn(fs, "rmSync").mockImplementation((path, opts) => {
+    if (path === folder) throw new Error("synthetic removal failure");
+    actualRm(path, opts);
+  });
+  const secrets = [{ name: "CANOPY_TOKEN", value: "identity" }];
+  try { expect(await closeOpen(dir, () => undefined, { secrets, credentials: secrets }, 77)).toEqual([]); }
+  finally { blocked.mockRestore(); }
+  expect(existsSync(folder)).toBe(true);
+  expect(await listKept(dir)).toEqual([]); expect(await rebuildIndex(dir)).toEqual([]);
+  expect(await readKeptRun(dir, "identity")).toBeNull();
+});
