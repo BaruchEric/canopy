@@ -2,10 +2,10 @@
  *  a repo's part of it, a run's word and buttons, the card chip. Pure; the
  *  words for an entry's state are `core/landing.ts`'s, shared with the CLI. */
 
-import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, sentBack, stoppedWhole } from "../../src/core/landing";
+import { inQueue, landAllPick, landCounts, landWord, queueOf, reviewWord, SCORE_GATE, sentBack, stoppedWhole } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
 import { withName } from "../../src/core/touch";
-import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioRun } from "../../src/core/types";
+import type { LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, PrWatch, ReviewFile, Run, RunAction, ScenarioResult, ScenarioRun } from "../../src/core/types";
 
 export const EMPTY_LANDING: LandingInfo = { runs: [], entries: [], orphans: [], notices: [], collisions: [] };
 
@@ -155,6 +155,8 @@ export interface RunLanding {
   canFix: boolean;
   /** ready, with no PR yet: "open PR" applies (FR-011) */
   canPr: boolean;
+  /** An explicit bypass is offered only on a judge hold. */
+  canSkipJudge?: true;
   entry?: LandEntry;
   /** a ready run's verdict in words, once sorted */
   verdict?: string;
@@ -171,7 +173,9 @@ export interface RunLanding {
 }
 
 /** The scenarios' pass in one line: "scenarios 7/8 · 0.88". */
-export const scenarioLine = (s: Pick<ScenarioRun, "total" | "passed" | "score">): string => `scenarios ${s.passed}/${s.total} · ${s.score.toFixed(2)}`;
+export const scenarioLine = (s: Pick<ScenarioRun, "total" | "passed" | "score" | "skipped">): string => `scenarios ${s.passed}/${s.total} · ${s.score.toFixed(2)}${s.skipped?.length ? ` · ${s.skipped.length} left out` : ""}`;
+
+export const resultWord = (r: ScenarioResult): string => r.kind === "command" ? r.ok ? "ok" : "red" : r.p === undefined ? "unjudged" : r.p.toFixed(2);
 
 /** "rust" when a scenario went red, else "moss". */
 export const scenarioTone = (s: Pick<ScenarioRun, "total" | "passed">): "moss" | "rust" => (s.passed < s.total ? "rust" : "moss");
@@ -205,6 +209,7 @@ export function runLanding(run: Run, info: LandingInfo): RunLanding | null {
       canFix: back,
       // a sent-back branch may change course to a PR
       canPr: back,
+      ...(entry.state === "judge" ? { canSkipJudge: true as const } : {}),
       entry,
       scenarios: info.runs.find((r) => r.id === b.origin)?.scenarios,
       ...overlapMark,
@@ -228,7 +233,7 @@ export const branchByDefault = (action: RunAction, workspace?: string): boolean 
 
 /** A sent-back entry's reason in one line, for a list. */
 export function backLine(e: LandEntry): string {
-  if (e.state === "red") return `${e.gate ?? "a gate"} failed`;
+  if (e.state === "red") return e.gate?.startsWith(SCORE_GATE) ? e.gate : `${e.gate ?? "a gate"} failed`;
   return e.reason ?? e.state;
 }
 

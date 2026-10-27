@@ -87,6 +87,17 @@ describe("a page with two backends", () => {
     expect(calls[1]?.init?.credentials).toBeUndefined();
   });
 
+  test("land anyway keeps the bypass and approval on the right backend", async () => {
+    reply = () => json({});
+    await api.land("b|branch", undefined, true);
+    expect(calls[0]?.url).toBe("http://b.test/api/landing/land");
+    const bypass: unknown = JSON.parse(String(calls[0]?.init?.body));
+    expect(bypass).toEqual({ run: "branch", skipJudge: true });
+    await api.land("branch", "patch-id");
+    const approved: unknown = JSON.parse(String(calls[1]?.init?.body));
+    expect(approved).toEqual({ run: "branch", approve: "patch-id" });
+  });
+
   test("a backend's runs come back under its name, home's as they came", async () => {
     reply = () => json([run("r1", "x")]);
     const foreign = await api.runs("b");

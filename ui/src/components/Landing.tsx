@@ -147,6 +147,12 @@ export function LandingSection({ repo }: { repo: Repo }) {
                 {e.approved && <span className="landing-state" title="You approved its sensitive files">approved</span>}
                 {e.reason && <span className="landing-why">{e.reason}</span>}
                 {e.noGates && <span className="landing-why">no gates to run</span>}
+                {e.state === "judge" && (
+                  <span className="landing-tools">
+                    <button type="button" className="mini strong" disabled={busy !== null} title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => act(e.id, () => landRun(e.id, undefined, true))}>land anyway</button>
+                    <button type="button" className="mini" disabled={busy !== null} title="Give the branch up: its worktree and its commits go" onClick={() => act(`drop:${e.id}`, () => dropLanding(e.id))}>drop</button>
+                  </span>
+                )}
                 {e.overlap && <OverlapChip name={e.overlap.with} paths={e.overlap.paths} />}
                 {runOverlaps(info, entryRun(e).runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 <span className="landing-note">{e.note}</span>

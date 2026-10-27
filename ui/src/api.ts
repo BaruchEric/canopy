@@ -833,9 +833,9 @@ export const api = {
   },
   /** "land" on a ready branch run, by its run's or its branch's id;
    *  `approve` is the sensitive patch id the approve sheet showed */
-  land: async (id: string, approve?: string) => {
+  land: async (id: string, approve?: string, skipJudge?: boolean) => {
     const [b, plain] = on(id);
-    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain, ...(approve ? { approve } : {}) }) });
+    await req<LandEntry>(b, "/api/landing/land", { method: "POST", body: JSON.stringify({ run: plain, ...(approve ? { approve } : {}), ...(skipJudge ? { skipJudge: true } : {}) }) });
   },
   /** "land all" in one repo: the ready runs that need no approval */
   landAll: async (repoId: string) => {

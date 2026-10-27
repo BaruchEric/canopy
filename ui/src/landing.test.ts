@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { advance, enqueue } from "../../src/core/landing";
+import { advance, enqueue, entryFor } from "../../src/core/landing";
 import { touchedOf, type Collision } from "../../src/core/touch";
 import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, runOverlaps, type OpenedRun, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, runOverlaps, type OpenedRun, resultWord, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
 
 const rec = (id: string, over: Partial<LandingRun> = {}): LandingRun => ({
   id,
@@ -226,4 +226,17 @@ test("runLanding carries the record's scenarios for a queued entry and a ready r
   const branchRun = run("a");
   expect(runLanding(branchRun, { runs: [r], entries, orphans: [] })?.scenarios).toEqual(pass);
   expect(runLanding(branchRun, { runs: [r], entries: [], orphans: [] })?.scenarios).toEqual(pass);
+});
+
+test("judge hold offers only land anyway and preserves scenario results", () => {
+  const held = advance(entryFor(rec("a"), 1), { t: "unjudged", name: "refund", why: "no gateway key" }, 2);
+  const scenarios = { head: "h", at: 1, total: 1, passed: 0, score: 0, results: [{ name: "refund", kind: "judge" as const, ok: false, unjudged: "no gateway key" }] };
+  expect(runLanding(run("a"), info([rec("a", { scenarios })], [held]))).toMatchObject({ canLand: false, canFix: false, canPr: false, canSkipJudge: true, word: "needs a judge", scenarios });
+  expect(backLine({ ...held, state: "red", gate: "satisfaction 0.73 < 1" })).toBe("satisfaction 0.73 < 1");
+  expect(scenarioLine({ total: 1, passed: 1, score: 1, skipped: ["refund"] })).toBe("scenarios 1/1 · 1.00 · 1 left out");
+  expect(resultWord({ name: "a", kind: "command", ok: true })).toBe("ok");
+  expect(resultWord({ name: "a", kind: "command", ok: false })).toBe("red");
+  expect(resultWord({ name: "r", kind: "judge", ok: true, p: 0.9 })).toBe("0.90");
+  expect(resultWord({ name: "r", kind: "judge", ok: false, p: 0.3 })).toBe("0.30");
+  expect(resultWord({ name: "r", kind: "judge", ok: false, unjudged: "no gateway key" })).toBe("unjudged");
 });

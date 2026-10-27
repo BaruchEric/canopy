@@ -1165,7 +1165,7 @@ export interface CanopyState {
   loadLanding: (backend?: string) => Promise<void>;
   /** "land" on a ready branch run, by its run's or branch's id; `approve`
    *  is the sensitive patch id the approve sheet showed */
-  landRun: (id: string, approve?: string) => Promise<void>;
+  landRun: (id: string, approve?: string, skipJudge?: boolean) => Promise<void>;
   /** "land all" in a repo; the answer names the runs it skipped */
   landAll: (repoId: string) => Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }>;
   /** one file's diff from a branch run's latest sort */
@@ -3497,8 +3497,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no landing queue; nothing shows for it
     }
   },
-  landRun: async (id, approve) => {
-    await api.land(id, approve);
+  landRun: async (id, approve, skipJudge) => {
+    await api.land(id, approve, skipJudge);
   },
   landAll: (repoId) => api.landAll(repoId),
   landingDiff: async (id, path) => (await api.landingDiff(id, path)).diff,
@@ -3816,9 +3816,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (item.source === "landing") {
-      if (!("landing" in answer)) throw new Error("a sent-back branch takes fix it or drop");
+      if (!("landing" in answer)) throw new Error("a landing item takes fix it, land anyway or drop");
       if (answer.landing === "drop") return get().dropLanding(item.id);
       get().closeInbox();
+      if (answer.landing === "land") return get().landRun(item.id, undefined, true);
       return get().fixLanding(item.id);
     }
     if (item.source === "pr") {

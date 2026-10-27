@@ -418,6 +418,20 @@ describe("the landing queue's sent-back branches", () => {
     const ctx = { repos: [repo("app")], cards: {}, landing: { ...landing([]), notices } };
     expect(mergeInbox([], {}, {}, 0, ctx)).toEqual([]);
   });
+
+  test("a judge hold offers its own action and a low score stays distinct from a failed command", () => {
+    const ctx = { repos: [repo("app")], cards: {}, landing: landing([
+      entry({ id: "judge", branch: "run/judge", state: "judge", gate: "refund", reason: "scenario refund needs a judge: no gateway key" }),
+      entry({ id: "score", branch: "run/score", gate: "satisfaction 0.73 < 1", reason: "scenario refund: partly" }),
+    ]) };
+    const items = mergeInbox([], {}, {}, 0, ctx);
+    expect(items.map(i => [i.key, i.kind, i.title, i.detail])).toEqual([
+      ["landing:judge", "needs-judge", "held run/judge: needs a judge", "scenario refund needs a judge: no gateway key"],
+      ["landing:score", "sent-back", "sent run/score back: satisfaction 0.73 < 1", "scenario refund: partly"],
+    ]);
+    expect(toRunAnswer({ landing: "land" })).toBeNull();
+    expect(toAskAnswer({ landing: "land" })).toBeNull();
+  });
 });
 
 describe("PRs that need a look", () => {

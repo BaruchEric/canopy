@@ -4574,6 +4574,9 @@ button.dl-gut.has {
 .st-waiting {
   --tone: var(--lichen);
 }
+.st-judge {
+  --tone: var(--lichen);
+}
 .st-done {
   --tone: var(--moss);
 }

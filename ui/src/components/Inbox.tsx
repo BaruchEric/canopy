@@ -45,7 +45,7 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧" };
 const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
@@ -258,7 +258,7 @@ export function InboxRow({
                 </button>
               </div>
             </div>
-          ) : item.kind === "sent-back" ? (
+          ) : item.kind === "sent-back" || item.kind === "needs-judge" ? (
             <div className="ask">
               <div className="eyebrow">
                 {item.repo} {item.title}
@@ -269,10 +269,10 @@ export function InboxRow({
                   type="button"
                   className="mini strong"
                   disabled={busy}
-                  title="The run continues on its branch with this reason as its next message, and rejoins the queue once it is ready again"
-                  onClick={() => answer({ landing: "fix" })}
+                  title={item.kind === "needs-judge" ? "Land it with its judge scenarios left out; its command scenarios ran and passed" : "The run continues on its branch with this reason as its next message, and rejoins the queue once it is ready again"}
+                  onClick={() => answer({ landing: item.kind === "needs-judge" ? "land" : "fix" })}
                 >
-                  fix it
+                  {item.kind === "needs-judge" ? "land anyway" : "fix it"}
                 </button>
                 <span className="spacer" />
                 <button type="button" className="mini" disabled={busy} title="Give the branch up: its worktree and its commits go" onClick={() => answer({ landing: "drop" })}>

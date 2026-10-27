@@ -6,7 +6,7 @@ import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
 import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
-import { branchByDefault, runLanding, scenarioLine, scenarioTone, stoppedLandTitle } from "../landing";
+import { branchByDefault, resultWord, runLanding, scenarioLine, scenarioTone, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick } from "../agents";
@@ -654,7 +654,8 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
           <ul>
             {l.scenarios.results.map((r) => (
               <li key={r.name} className={r.ok ? "" : "rust"}>
-                <span>{r.ok ? "ok" : "red"}</span> <span>{r.name}</span> <span className="dim">{r.kind}</span>
+                <span>{resultWord(r)}</span> <span>{r.name}</span> <span className="dim">{r.kind}</span>
+                {(r.why ?? r.unjudged) && <span className="dim"> {r.why ?? r.unjudged}</span>}
                 {r.tail && <pre>{r.tail}</pre>}
               </li>
             ))}
@@ -675,6 +676,11 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
       {l.canFix && (
         <button type="button" className="mini strong" title="Continue on the branch with the reason as the next message" onClick={() => void act(() => fixLanding(b.origin))}>
           fix it
+        </button>
+      )}
+      {l.canSkipJudge && (
+        <button type="button" className="mini strong" title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => void act(() => landRun(b.origin, undefined, true))}>
+          land anyway
         </button>
       )}
       {l.canPr && (
