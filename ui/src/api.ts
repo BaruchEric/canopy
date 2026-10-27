@@ -778,9 +778,9 @@ export const api = {
     if (!r || !Array.isArray(r.events)) return null;
     return { ...r, events: from(b, r.events, qTriggers) };
   },
-  /** fires a made-up issue through a rule, as if its source had sent it */
-  fireTrigger: (b: string, rule: string, title: string) =>
-    req<Delivery>(b, "/api/triggers/fire", { method: "POST", body: JSON.stringify({ rule, title }) }),
+  /** Fires an issue rule, or a schedule for every matching repo or one. */
+  fireTrigger: (b: string, rule: string, title: string, repo?: string) =>
+    req<Delivery>(b, "/api/triggers/fire", { method: "POST", body: JSON.stringify({ rule, title, ...(repo ? { repo: plainOf(repo) } : {}) }) }),
   /** runs one rule's poll now; the events it makes come over the stream */
   pollTrigger: async (b: string, rule: string) => {
     await req<{ ok: true }>(b, "/api/triggers/poll", { method: "POST", body: JSON.stringify({ rule }) });

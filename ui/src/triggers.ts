@@ -54,6 +54,10 @@ export const STATUS_WORD: Record<TriggerStatus, string> = {
   ignored: "ignored",
 };
 
+export function statusWord(e: Pick<TriggerEvent, "status" | "land">): string {
+  return e.status === "ready" && e.land === "queue" ? "in the landing queue" : STATUS_WORD[e.status];
+}
+
 export const STATUS_TONE: Record<TriggerStatus, "moss" | "lichen" | "rust" | "sky" | "faint"> = {
   queued: "faint",
   working: "sky",
@@ -85,6 +89,7 @@ export function outcomeLine(e: TriggerEvent): string | null {
   const linear = e.service === "linear";
   const forge = e.service === "github" || e.service === "forgejo";
   if (e.status === "merged") {
+    if (e.service === "schedule") return e.pr ? null : "landed on main through the queue";
     if (e.source === "manual") return `a test fire, so ${name} was not told`;
     if (!e.resolved) return `merged; the rule ${forge ? "does not write back" : "holds no token"}, so the issue stays open in ${name}`;
     if ("at" in e.resolved) return forge ? `Closed in ${name}` : linear ? "Moved to done in Linear" : "Resolved in Sentry";
@@ -129,7 +134,7 @@ export function triggersBadge(triggers: Readonly<Record<string, Pick<TriggersInf
   const events = Object.values(triggers).flatMap((t) => t.events);
   const needs = events.filter((e) => SECTION_OF[e.status] === "needs");
   if (needs.length > 0) {
-    return { text: String(needs.length), tone: "rust", title: needs.map((e) => `${e.short ?? e.key}: ${STATUS_WORD[e.status]}`).join("\n") };
+    return { text: String(needs.length), tone: "rust", title: needs.map((e) => `${e.short ?? e.key}: ${statusWord(e)}`).join("\n") };
   }
   const going = events.filter((e) => e.status === "queued" || eventLive(e));
   if (going.length === 0) return null;
@@ -165,4 +170,18 @@ export function pollWords(cron: string): string {
  *  it polls. A GitHub or Forgejo rule with both has the poll as its safety net. */
 export function ruleIntake(rule: Pick<TriggerRuleInfo, "hook" | "secretEnv" | "poll">, origin: string): { hook: string | null; poll: string | null } {
   return { hook: rule.secretEnv && rule.hook ? hookAddress(origin, rule.hook) : null, poll: rule.poll ? pollWords(rule.poll) : null };
+}
+
+export function scheduleWord(rule: Pick<TriggerRuleInfo, "repo" | "only">, repoName: string): string {
+  const words = { "spec-adopted": "with a spec", dirty: "with changes", unpushed: "with unpushed commits", clean: "with a clean tree" };
+  return `${rule.repo === "*" ? "every local repo" : repoName}${rule.only.length ? ` ${rule.only.map((only) => words[only]).join(", ")}` : ""}`;
+}
+
+export function nextFireWord(next: number | undefined, now: number): string {
+  if (next === undefined) return "never fires again";
+  if (next <= now) return "due now";
+  const minutes = Math.floor((next - now) / 60_000);
+  if (minutes < 60) return `next fire in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 48 ? `next fire in ${hours} h` : `next fire in ${Math.floor(hours / 24)} days`;
 }

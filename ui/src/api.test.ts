@@ -66,6 +66,15 @@ describe("a page with two backends", () => {
   const run = (id: string, repoId: string) => ({ id, repoId, action: "chat", status: "done" }) as unknown as Run;
   const repo = (id: string) => ({ id, name: id, path: `/x/${id}`, group: "", source: "launch", status: null }) as unknown as Repo;
 
+  test("a scheduled manual fire sends the selected backend's plain repo id", async () => {
+    reply = () => json({ kind: "fired", events: [], skipped: [] });
+    expect(await api.fireTrigger("b", "spec-weekly", "", "b|web/shop")).toEqual({ kind: "fired", events: [], skipped: [] });
+    expect(calls[0]?.url).toBe("http://b.test/api/triggers/fire");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ rule: "spec-weekly", title: "", repo: "web/shop" });
+    await api.fireTrigger("b", "spec-weekly", "");
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ rule: "spec-weekly", title: "" });
+  });
+
   test("a backend with no URL yet is never asked at the page's own origin", async () => {
     setBase("b", "");
     reply = () => json({ access: "unknown" });

@@ -1200,7 +1200,7 @@ export interface CanopyState {
   /** reads one backend's trigger rules and events, home by default */
   loadTriggers: (backend?: string) => Promise<void>;
   /** fires a made-up issue through one backend's rule */
-  fireTrigger: (backend: string, rule: string, title: string) => Promise<Delivery>;
+  fireTrigger: (backend: string, rule: string, title: string, repo?: string) => Promise<Delivery>;
   /** runs one backend's rule's poll now */
   pollTrigger: (backend: string, rule: string) => Promise<void>;
   /** resume, retry or stop a trigger event, by its id */
@@ -3560,8 +3560,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no triggers; nothing shows for it
     }
   },
-  fireTrigger: async (backend, rule, title) => {
-    const d = await api.fireTrigger(backend, rule, title);
+  fireTrigger: async (backend, rule, title, repo) => {
+    const d = await api.fireTrigger(backend, rule, title, repo);
     void get().loadTriggers(backend);
     return d;
   },
