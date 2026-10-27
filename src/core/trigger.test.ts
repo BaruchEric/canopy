@@ -848,6 +848,12 @@ describe("queue trigger lifecycle", () => {
   const branch = { name: "run/x", target: "main", base: "b", dir: "/d", origin: "br1", state: "ready" } satisfies NonNullable<Run["branch"]>;
   const entry = (over: Partial<LandEntry> = {}): LandEntry => ({ id: "br1", repoId: "web/shop", repoPath: "/dev/shop", branch: "run/x", target: "main", dir: "/d", note: "", state: "waiting", tries: 0, queuedAt: 1, updatedAt: 2, ...over });
   const notice = (over: Partial<LandNotice> = {}): LandNotice => ({ id: "n", entry: "br1", repoId: "web/shop", branch: "run/x", note: "", kind: "held", at: 2, why: "needs approval", ...over });
+  const scheduled = (land: TriggerEvent["land"], over: Partial<TriggerEvent> = {}): TriggerEvent =>
+    event({ rule: "weekly", source: "schedule", service: "schedule", repoId: "shop", branch: "br1", status: "ready", land, ...over });
+  const landedByEntryAndNotice = (e: TriggerEvent): TriggerEvent[] => [
+    fromLanding(e, [], [entry({ state: "landed", landedAt: 7 })]),
+    fromLanding(e, [notice({ kind: "landed", at: 9 })]),
+  ];
 
   test("ready queue runs and flows name the landing queue while old events still name PRs", () => {
     const e = event({ runId: "r1", status: "working", land: "queue" });
@@ -866,30 +872,32 @@ describe("queue trigger lifecycle", () => {
     expect(fromLanding(e, [], [entry({ id: "other", state: "landed" })])).toBe(e);
   });
 
-  test("a late run cannot reopen a queue event after an entry or notice lands it", () => {
-    const e = event({ rule: "weekly", source: "schedule", service: "schedule", repoId: "shop", runId: "r1", branch: "br1", status: "ready", land: "queue" });
-    const landedEvents = [fromLanding(e, [], [entry({ state: "landed", landedAt: 7 })]), fromLanding(e, [notice({ kind: "landed", at: 9 })])];
-    for (const landed of landedEvents) {
-      const late = fromRun(landed, run({ status: "done", branch }), 11);
-      expect(late).toBe(landed);
-      expect(late.status).toBe("merged");
-      expect(late.endedAt).toBe(landed.endedAt);
-      expect(scheduleBusy([late], "weekly", "shop")).toBe(false);
-    }
-  });
+  for (const [landMode, land] of [["omitted", undefined], ["PR", "pr"], ["queue", "queue"]] as const) {
+    test(`a late run cannot reopen a landed ${landMode}-mode event`, () => {
+      const e = scheduled(land, { runId: "r1" });
+      for (const landed of landedByEntryAndNotice(e)) {
+        expect(landed).toMatchObject({ status: "merged", endedAt: expect.any(Number) });
+        const late = fromRun(landed, run({ status: "done", branch }), 11);
+        expect(late).toBe(landed);
+        expect(late.status).toBe("merged");
+        expect(late.endedAt).toBe(landed.endedAt);
+        expect(scheduleBusy([late], "weekly", "shop")).toBe(false);
+      }
+    });
 
-  test("a late flow cannot reopen a queue event after an entry or notice lands it", () => {
-    const e = event({ rule: "weekly", source: "schedule", service: "schedule", repoId: "shop", flowId: "f1", branch: "br1", status: "ready", land: "queue" });
-    const f: Flow = { id: "f1", repoId: "shop", workflow: "spec-converge", verb: "fix", note: "", status: "done", steps: [], current: 0, startedAt: 1, branch };
-    const landedEvents = [fromLanding(e, [], [entry({ state: "landed", landedAt: 7 })]), fromLanding(e, [notice({ kind: "landed", at: 9 })])];
-    for (const landed of landedEvents) {
-      const late = fromFlow(landed, f, 11);
-      expect(late).toBe(landed);
-      expect(late.status).toBe("merged");
-      expect(late.endedAt).toBe(landed.endedAt);
-      expect(scheduleBusy([late], "weekly", "shop")).toBe(false);
-    }
-  });
+    test(`a late flow cannot reopen a landed ${landMode}-mode event`, () => {
+      const e = scheduled(land, { flowId: "f1" });
+      const f: Flow = { id: "f1", repoId: "shop", workflow: "spec-converge", verb: "fix", note: "", status: "done", steps: [], current: 0, startedAt: 1, branch };
+      for (const landed of landedByEntryAndNotice(e)) {
+        expect(landed).toMatchObject({ status: "merged", endedAt: expect.any(Number) });
+        const late = fromFlow(landed, f, 11);
+        expect(late).toBe(landed);
+        expect(late.status).toBe("merged");
+        expect(late.endedAt).toBe(landed.endedAt);
+        expect(scheduleBusy([late], "weekly", "shop")).toBe(false);
+      }
+    });
+  }
 
   test("a sent-back or judge-held queue entry keeps the event ready with its observation", () => {
     const e = event({ status: "ready", branch: "br1", land: "queue" });

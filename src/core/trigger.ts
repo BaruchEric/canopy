@@ -640,7 +640,7 @@ export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: s
 /** The event's state as its latest run says. Only moves an event that is
  *  waiting on its run; once a PR is open the PR speaks. */
 export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
-  if (e.runId !== run.id || e.pr || e.flowId || (e.land === "queue" && e.status === "merged")) return e;
+  if (e.runId !== run.id || e.pr || e.flowId || e.status === "merged") return e;
   const next: TriggerEvent = { ...e };
   if (run.branch) next.branch = run.branch.origin;
   if (run.status === "working" || run.status === "idle") next.status = "working";
@@ -672,7 +672,7 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
 /** The event's state as its flow says, while it follows one. A done flow
  *  reads as working until its worktree has been read into the branch's state. */
 export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent {
-  if (e.flowId !== flow.id || e.pr || (e.land === "queue" && e.status === "merged")) return e;
+  if (e.flowId !== flow.id || e.pr || e.status === "merged") return e;
   const next: TriggerEvent = { ...e };
   const runId = [...flow.steps].reverse().find((s) => s.runId)?.runId;
   if (runId) next.runId = runId;
