@@ -122,46 +122,46 @@ git commit -m "feat(triggers): accept github and forgejo rules"
 - Produces in core/trigger.ts: parseGithubIssue(body: unknown, labels: readonly string[]): Incoming | null; parseForgejoIssue(body: unknown, labels: readonly string[]): Incoming | null; incomingFromIssueView(issue: IssueView): Incoming.
 - Produces in core/forgejoissues.ts: ForgejoIssue.createdAt: string; forgejoIssuesPath(api: string, slug: string, label: string): string; forgejoIssuePath(api: string, slug: string, number: number): string; forgejoCommentsPath(api: string, slug: string, number: number): string; parseIssueList(body: unknown, label: string): ForgejoIssue[]; parseIssueView(body: unknown): ForgejoIssue | null; parseIssueComments(body: unknown): { author: string; body: string }[]; openedComment(pr: number, branch: string): string; fixedComment(pr: number): string; closedBody(): { state: "closed" }.
 
-- [ ] **Step 1: Write failing tests** for GitHub labeled actions, another label, closed issues, pull requests, and other actions; Forgejo label_updated with and without the label plus opened with an existing label; issue view mapping, createdAt parsing, and issue note text. Assert the note starts with "GitHub issue #123 came in." and its issue fence contains the title, truncated body, labels, and newest comments while excluding comments beyond ISSUE_COMMENTS. For Forgejo API helpers, assert the /api/v1/repos/{o}/{r}/issues path, open-state, label, oldest sort, limit and page query, issue comments path, open/closed filtering, PR exclusion, and the exact comment strings "Opened #12 from run/fix." and "Fixed by #12.".
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 1: Write failing tests** for GitHub labeled actions, another label, closed issues, pull requests, and other actions; Forgejo label_updated with and without the label plus opened with an existing label; issue view mapping, createdAt parsing, and issue note text. Assert the note starts with "GitHub issue #123 came in." and its issue fence contains the title, truncated body, labels, and newest comments while excluding comments beyond ISSUE_COMMENTS. For Forgejo API helpers, assert the /api/v1/repos/{o}/{r}/issues path, open-state, label, oldest sort, limit and page query, issue comments path, open/closed filtering, PR exclusion, and the exact comment strings "Opened #12 from run/fix." and "Fixed by #12.".
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: bun test src/core/trigger.test.ts src/core/forgejoissues.test.ts
 Expected: FAIL because the issue parsers and Forgejo helpers are absent.
 
-- [ ] **Step 3: Implement the pure source parsers and API helpers**
+- [x] **Step 3: Implement the pure source parsers and API helpers**
 
 GitHub accepts action labeled only when label.name matches the rule, issue.state is open, and pull_request is absent. Forgejo accepts label_updated or opened only when the open issue's labels contain a rule label. Both carry number as key, #number as short, title, URL, body, labels, and available comments. Parse only JSON-shaped values; keep these files free of node and Bun imports.
 
-- [ ] **Step 4: Build notes from source data**
+- [x] **Step 4: Build notes from source data**
 
 Have noteFor lead with "GitHub issue #123 came in." or "Forgejo issue #123 came in." Put title, body, labels, and the newest 10 comments in fence("The issue", ...). Cut the body at MAX_DESCRIPTION. Map an IssueView to the same Incoming shape for list and detail reads.
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: bun test src/core/trigger.test.ts src/core/forgejoissues.test.ts
 Expected: PASS, including the existing Sentry, Linear, and issue-start note cases.
 
-- [ ] **Step 6: Run typecheck**
+- [x] **Step 6: Run typecheck**
 
 Run: bun run typecheck
 Expected: PASS.
 
-- [ ] **Step 7: Run lint**
+- [x] **Step 7: Run lint**
 
 Run: bun run lint
 Expected: PASS.
 
-- [ ] **Step 8: Run the full test suite**
+- [x] **Step 8: Run the full test suite**
 
 Run: bun test
 Expected: PASS.
 
-- [ ] **Step 9: Build**
+- [x] **Step 9: Build**
 
 Run: bun run build
 Expected: PASS.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ~~~sh
 git add src/core/trigger.ts src/core/trigger.test.ts src/core/forgejoissues.ts src/core/forgejoissues.test.ts

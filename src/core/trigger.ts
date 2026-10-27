@@ -1,11 +1,13 @@
-/** Triggers: an outside event (a Sentry issue, a labeled Linear issue)
- *  starts a workflow on a branch run of its own, with nobody typing. The
- *  rules, the event records, the Sentry and Linear payload readers, dedupe,
- *  and the event's state read off its run and its PR. Browser-safe and pure;
- *  the hub in server/triggers.ts keeps the records and starts the runs. */
+/** Triggers: an outside event (a Sentry issue, a labeled Linear, GitHub or
+ *  Forgejo issue) starts a workflow on a branch run of its own, with nobody
+ *  typing. The rules, the event records, each service's payload reader,
+ *  dedupe, and the event's state read off its run and its PR. Browser-safe
+ *  and pure; the hub in server/triggers.ts keeps the records and starts the
+ *  runs. */
 
 import { CRON_MAX, parseCron } from "./cron";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
+import { ISSUE_COMMENTS, type IssueView } from "./issue";
 import { fence } from "./pr";
 import type { Flow, LandNotice, PrWatch, Run, Workflow } from "./types";
 
@@ -193,11 +195,18 @@ export interface Incoming {
   /** a Linear agent session's context: the issue, its comments and the
    *  workspace's guidance, as Linear formats it */
   context?: string;
+  /** a GitHub or Forgejo issue's newest comments, at most `ISSUE_COMMENTS`,
+   *  oldest first; a hook delivery carries none, the detail read fills them */
+  comments?: { author: string; body: string }[];
 }
 
 export const KEEP_EVENTS = 200;
-/** the most of a Linear issue's description the run's note carries */
+/** the most of an issue's description the run's note carries */
 export const MAX_DESCRIPTION = 6000;
+/** the most of one comment the run's note carries */
+const MAX_COMMENT = 4000;
+/** how many open issues one poll takes per rule, oldest first; the rest wait for the next tick */
+export const POLL_ISSUES = 50;
 /** how far a Linear delivery's `webhookTimestamp` may sit from canopy's clock */
 export const LINEAR_SKEW = 60_000;
 const NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -443,6 +452,63 @@ export function parseLinear(body: unknown, labels: readonly string[]): Incoming 
 
 const idsOf = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
+/** A GitHub `issues` delivery as an issue, when the label added is one of
+ *  `labels` and the issue is open and not a pull request. Anything else
+ *  (another action, another label, a closed issue, a PR) is null. The
+ *  delivery carries no comments; the detail read fills them in. */
+export function parseGithubIssue(body: unknown, labels: readonly string[]): Incoming | null {
+  if (!isRecord(body) || str(body, "action") !== "labeled") return null;
+  const added = isRecord(body["label"]) ? str(body["label"], "name") : undefined;
+  if (!added || !hasLabel(labels, [added])) return null;
+  const issue = openIssue(body["issue"]);
+  return issue ? incomingFromIssueView(issue) : null;
+}
+
+/** A Forgejo `issues` delivery as an issue: its labels were updated, or it
+ *  was opened with labels on, and one of `labels` is on the open issue. The
+ *  delivery names every label the issue has, not the one that changed, so a
+ *  second update on the same issue finds its event through `existing`. */
+export function parseForgejoIssue(body: unknown, labels: readonly string[]): Incoming | null {
+  if (!isRecord(body)) return null;
+  const action = str(body, "action");
+  if (action !== "label_updated" && action !== "opened") return null;
+  const issue = openIssue(body["issue"]);
+  return issue && hasLabel(labels, issue.labels) ? incomingFromIssueView(issue) : null;
+}
+
+/** whether one of the rule's labels is among `names`, by name, ignoring case */
+const hasLabel = (labels: readonly string[], names: readonly string[]): boolean => names.some((n) => labels.some((l) => l.toLowerCase() === n.toLowerCase()));
+
+/** The issue object a GitHub or Forgejo delivery carries, as an `IssueView`
+ *  with no comments, or null when it is closed, a pull request (GitHub puts
+ *  a `pull_request` key on one, Forgejo sets it where an issue has null) or
+ *  not an issue at all. */
+function openIssue(v: unknown): IssueView | null {
+  if (!isRecord(v) || typeof v["number"] !== "number" || str(v, "state") !== "open" || v["pull_request"]) return null;
+  const labels = Array.isArray(v["labels"]) ? v["labels"].filter(isRecord).map((l) => str(l, "name")).filter((x): x is string => x !== undefined) : [];
+  return { number: v["number"], title: str(v, "title") ?? "", body: typeof v["body"] === "string" ? v["body"] : "", url: str(v, "html_url") ?? "", labels, comments: [] };
+}
+
+/** An issue as gh or the Forgejo API gives it, as the incoming shape a hook
+ *  delivery takes, so a polled issue and a delivered one make the same event
+ *  and the same note: the number keys it, the body is its description, the
+ *  labels are its detail, and the newest `ISSUE_COMMENTS` comments ride along. */
+export function incomingFromIssueView(issue: IssueView): Incoming {
+  const title = issue.title.replace(/\s+/g, " ").trim();
+  const description = issue.body.trim().slice(0, MAX_DESCRIPTION);
+  const comments = issue.comments.slice(-ISSUE_COMMENTS).map((c) => ({ author: c.author, body: c.body.trim().slice(0, MAX_COMMENT) }));
+  return {
+    key: String(issue.number),
+    short: `#${issue.number}`,
+    title: (title || "an untitled issue").slice(0, 300),
+    ...(issue.url && /^https?:\/\//.test(issue.url) ? { link: issue.url } : {}),
+    detail: issue.labels.length ? [`labels: ${issue.labels.join(", ")}`] : [],
+    frames: [],
+    ...(description ? { description } : {}),
+    ...(comments.length ? { comments } : {}),
+  };
+}
+
 /** A Linear agent session event: a new session (the issue delegated to
  *  canopy, or canopy mentioned on it), or a message in one. */
 export type AgentDelivery =
@@ -549,7 +615,7 @@ export function existing(events: readonly TriggerEvent[], rule: string, key: str
 
 /** The run's first message after the workflow's task: the issue, fenced as
  *  data, since anyone who can make the app throw, or write in the Linear
- *  workspace, chooses its words. */
+ *  workspace, or file an issue on the repo, chooses its words. */
 export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: TriggerSource = "sentry"): string {
   const lines = [
     `title: ${inc.title}`,
@@ -562,6 +628,7 @@ export function noteFor(inc: Incoming, source: TriggerEvent["source"], service: 
     inc.frames.length ? `stack, innermost last:\n${inc.frames.map((f) => `  ${f}`).join("\n")}` : "",
     inc.description ? `description:\n${inc.description}` : "",
     inc.context ? `context from Linear:\n${inc.context}` : "",
+    ...(inc.comments ?? []).map((c) => `comment by ${c.author}:\n${c.body}`),
   ].filter(Boolean);
   // the first words name the branch (run/<slug>-<id>), so they lead with the
   // id; Linear's GitHub integration links a PR to the issue its branch names
