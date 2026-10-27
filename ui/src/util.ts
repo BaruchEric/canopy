@@ -30,19 +30,7 @@ export function ago(unixSeconds: number | undefined): string {
   return `${Math.floor(s / 86400 / 30)}mo ago`;
 }
 
-/** API-equivalent dollars the way claude-history prints them: cents until
- *  the number is big enough that they stop meaning anything. */
-export function usd(n: number | null | undefined): string {
-  if (n === null || n === undefined) return "n/a";
-  return n >= 100 ? `$${n.toFixed(0)}` : `$${n.toFixed(2)}`;
-}
-
-export function fmtTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
+export { usdWord as usd, tokensWord as fmtTokens } from "../../src/core/costsheet";
 
 export function duration(ms: number | null): string {
   if (ms === null || ms < 0) return "";

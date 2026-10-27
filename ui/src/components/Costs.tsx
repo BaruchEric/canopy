@@ -2,10 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { joinRepos } from "../checkouts";
-import { COST_WINDOWS, claudeLeads, costSheet, sessionLines, usageWords, windowStart, type ClaudeLead, type CostLine, type CostWindow, type LeadSessions, type ServedRow } from "../costs";
+import { COST_WINDOWS, claudeLeads, costSheet, sessionLines, tokensWord as fmtTokens, usageWords, usdWord as usd, windowStart, type ClaudeLead, type CostLine, type CostWindow, type LeadSessions, type ServedRow } from "../../../src/core/costsheet";
 import { backendOf, plainOf, qual } from "../registry";
 import { isOnline, useStore } from "../store";
-import { fmtTokens, usd } from "../util";
 import { Seg } from "./Seg";
 
 type Fetched = { kind: "loading" } | { kind: "done"; rows: ServedRow[]; priced: boolean; failed: string[] };
