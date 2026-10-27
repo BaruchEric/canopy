@@ -41,7 +41,7 @@ const VIEWS: readonly CoordView[] = ["cards", "chat"];
 export function CoordTasks({ run, act, layout, error = null }: { run: Run; act: Act; layout: CoordLayout; error?: string | null }) {
   const coordStart = useStore((s) => s.coordStart);
   const tasks = run.tasks ?? [];
-  const active = isRunActive(run);
+  const active = !run.kept && isRunActive(run);
   if (tasks.length === 0 && !active) return null;
   const headOnly = layout.kind === "phone" ? layout.view === "chat" : layout.folded;
   const fill = layout.kind === "phone" && layout.view === "cards";
@@ -50,7 +50,7 @@ export function CoordTasks({ run, act, layout, error = null }: { run: Run; act: 
       <div className="coord-head">
         <span className="coord-count">{tasks.length ? cardCounts(tasks) : "No cards yet. The coordinator proposes them here."}</span>
         <span className="spacer" />
-        {canStartCards(run) && (
+        {!run.kept && canStartCards(run) && (
           <button
             type="button"
             className="mini strong"
@@ -110,7 +110,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
   const [editing, setEditing] = useState(false);
   const status = cardStatus(task, child, landing, prs);
   const chip = status.pr ? ciChip(status.pr) : null;
-  const editable = task.state === "proposed" && isRunActive(run);
+  const editable = !run.kept && task.state === "proposed" && isRunActive(run);
 
   return (
     <li className="coord-card">

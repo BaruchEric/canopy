@@ -399,7 +399,7 @@ export function Timeline({
   extra?: ReactNode;
 }) {
   const chat = run.chat;
-  const active = isRunActive(run);
+  const active = !run.kept && isRunActive(run);
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const harness = harnessOf(run);
   const list = useRef<HTMLDivElement>(null);
@@ -484,7 +484,7 @@ export function Timeline({
           </li>
         )}
       </ol>
-      {run.prompt && (
+      {!run.kept && run.prompt && (
         <RunPromptForm
           key={run.prompt.id}
           prompt={run.prompt}
@@ -545,7 +545,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
-  const active = isRunActive(run);
+  const active = !run.kept && isRunActive(run);
   const chat = run.chat;
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const now = useTick(active);
@@ -554,7 +554,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
 
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
-    return runConsoleAction(fn, setError, propagate);
+    return run.kept ? Promise.resolve() : runConsoleAction(fn, setError, propagate);
   };
   const harness = harnessOf(run);
   const name = AGENT_NAME[harness];
@@ -579,6 +579,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             with {name}
             {run.workspace && <span className="run-by" title="it works in this repo and sees the workspace's other members"> · in workspace {run.workspace}</span>}
             {run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}
+            {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>
           <h2 className="sheet-title">
             {run.verb} <span className="sheet-repo">{idText(run.repoId)}</span>
@@ -651,7 +652,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
           >
             {chat && run.status === "idle" ? "end chat" : "stop"}
           </button>
-        ) : (
+        ) : !run.kept && (
           <button type="button" className="mini" onClick={() => void act(() => dismissRun(run.id))}>
             dismiss
           </button>
@@ -703,27 +704,27 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         </details>
       )}
       <span className="spacer" />
-      {l.canLand && l.approve && (
+      {!run.kept && l.canLand && l.approve && (
         <button type="button" className="mini strong" title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(b.origin)}>
           look and land
         </button>
       )}
-      {l.canLand && !l.approve && (
+      {!run.kept && l.canLand && !l.approve && (
         <button type="button" className="mini strong" title={l.stopped ? stoppedLandTitle(b.target) : `Rebase onto ${b.target}, run the gates, fast-forward ${b.target}; nothing is pushed`} onClick={() => void act(() => landRun(b.origin))}>
           land
         </button>
       )}
-      {l.canFix && (
+      {!run.kept && l.canFix && (
         <button type="button" className="mini strong" title="Continue on the branch with the reason as the next message" onClick={() => void act(() => fixLanding(b.origin))}>
           fix it
         </button>
       )}
-      {l.canSkipJudge && (
+      {!run.kept && l.canSkipJudge && (
         <button type="button" className="mini strong" title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => void act(() => landRun(b.origin, undefined, true))}>
           land anyway
         </button>
       )}
-      {l.canPr && (
+      {!run.kept && l.canPr && (
         <button
           type="button"
           className="mini"
@@ -776,13 +777,13 @@ function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Pro
           </details>
         )}
         <span className="spacer" />
-        {open && (
+        {!run.kept && open && (
           <button type="button" className="mini" title="Close the PR on GitHub. The branch stays, and the run may land here again" onClick={() => void act(() => closePr(w.id))}>
             close PR
           </button>
         )}
       </div>
-      {open && (
+      {!run.kept && open && (
         <div className="run-pr-toggles">
           <label title="A failed check or a review comment from someone with write access starts a fix run on the branch, which canopy pushes. Up to 3 tries each">
             <input type="checkbox" checked={w.autoFix} onChange={(e) => void act(() => setPr(w.id, { autoFix: e.target.checked }))} />
@@ -832,12 +833,12 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const [error, setError] = useState<string | null>(null);
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
-    return runConsoleAction(fn, setError, propagate);
+    return run.kept ? Promise.resolve() : runConsoleAction(fn, setError, propagate);
   };
   return (
     <div className="run-pane" data-voice-run={run.id}>
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
-      {run.chat && isRunActive(run) && (
+      {!run.kept && run.chat && isRunActive(run) && (
         <Composer
           who={AGENT_NAME[harnessOf(run)]}
           repoId={run.repoId}

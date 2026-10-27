@@ -216,3 +216,11 @@ test("sessionLines keeps the sessions that began in the window, the costliest fi
     ["fix the build", "api · mac · 3 turns", 1.5],
   ]);
 });
+
+
+test("a run line names its run and backend so the page can open its kept record", () => {
+  const sheet = costSheet([row({ backend: "mini", run: "ab12cd34", label: "Build" })], null, 7, []);
+  expect(sheet.runs[0]).toMatchObject({ key: "mini:ab12cd34", run: { backend: "mini", id: "ab12cd34" } });
+  expect(sheet.services[0]).not.toHaveProperty("run");
+  expect(sheet.repos[0]).not.toHaveProperty("run");
+});

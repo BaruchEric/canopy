@@ -1384,6 +1384,8 @@ export interface CanopyState {
   syncPeers: (repoId: string) => Promise<void>;
   /** shows a run's console */
   showRun: (runId: string) => void;
+  /** Opens a run absent from the page from its kept record, if one exists. */
+  loadKeptRun: (runId: string) => Promise<void>;
   showGroup: (groupId: string) => void;
   pickRunGroup: (groupId: string, origin: string) => Promise<void>;
   reviewGroup: (groupId: string) => Promise<void>;
@@ -1684,6 +1686,14 @@ const streams = new Map<string, { epoch: number; off: () => void }>();
  *  late (after a retry, a hide, or the page's cleanup) lands nothing. */
 const connecting = new Map<string, number>();
 
+/** Only the latest run-open request can open a sheet. Closing or choosing
+ *  another sheet cancels it even while its GET is still on the way. */
+let runOpen = 0;
+/** A stream reconnect invalidates reads from before the reconnect. */
+const runSyncs = new Map<string, number>();
+/** A run event takes precedence over a GET, including a run-gone event. */
+const runsHeard = new Map<string, number>();
+
 /** Each backend's automatic reconnect after a failed connect: the timer
  *  waiting to try again (null while a try is under way), how many tries
  *  have failed in a row, and the init that owns it, so a cleanup clears
@@ -1890,6 +1900,7 @@ function authOf(b: string, info: AuthInfo, needed: boolean, sent: string | null)
  *  broadcast to this stream), and the helpers that dialled back in before
  *  this stream did. A failure leaves what is here until the next event. */
 function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<CanopyState>) => void, b: string): void {
+  runSyncs.set(b, (runSyncs.get(b) ?? 0) + 1);
   void get()
     .rescan(b)
     .catch(() => {});
@@ -3180,8 +3191,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     } else if (ev.type === "agents") {
       set((s) => ({ agents: { ...s.agents, [b]: ev.agents } }));
     } else if (ev.type === "run") {
+      runsHeard.set(ev.run.id, (runsHeard.get(ev.run.id) ?? 0) + 1);
       set((s) => ({ runs: { ...s.runs, [ev.run.id]: ev.run } }));
     } else if (ev.type === "run-gone") {
+      runsHeard.set(ev.id, (runsHeard.get(ev.id) ?? 0) + 1);
       set((s) => {
         const { [ev.id]: _gone, ...runs } = s.runs;
         const sheet =
@@ -4435,7 +4448,33 @@ export const useStore = create<CanopyState>((set, get) => ({
   syncPeers: async (repoId) => {
     applyPeerRepo(get, await api.peerAction(repoId, { action: "sync" }));
   },
+  loadKeptRun: async (runId) => {
+    const request = ++runOpen;
+    const b = ownerOf(runId);
+    const e = epoch;
+    const attempt = connecting.get(b);
+    const sync = runSyncs.get(b);
+    const heard = runsHeard.get(runId);
+    if (dead.has(e) || !isShown(get(), b)) return;
+    try {
+      const run = await api.keptRun(runId);
+      if (runOpen !== request || epoch !== e || dead.has(e) || !isShown(get(), b) || connecting.get(b) !== attempt || runSyncs.get(b) !== sync) return;
+      set((s) => {
+        // A newer SSE/live run wins. A newer removal must stay removed.
+        const current = s.runs[runId];
+        if (!current && runsHeard.get(runId) !== heard) return {};
+        return { runs: current ? s.runs : { ...s.runs, [runId]: run }, sheet: { kind: "run", runId } };
+      });
+    } catch {
+      // No kept record, or its backend is unavailable: leave the page as it was.
+    }
+  },
   showRun: (runId) => {
+    ++runOpen;
+    if (!get().runs[runId]) {
+      void get().loadKeptRun(runId);
+      return;
+    }
     // a chat docked as a panel of its own (FR-047) comes forward there
     // instead of over the page, while the dock is the view
     const panel = runPanel(runId);
@@ -4443,7 +4482,10 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (onDock && get().panels.includes(panel)) get().showPanel(panel);
     else set({ sheet: { kind: "run", runId } });
   },
-  closeSheet: () => set({ sheet: null }),
+  closeSheet: () => {
+    ++runOpen;
+    set({ sheet: null });
+  },
   openSearch: () => set({ sheet: { kind: "search" } }),
   openKeys: (view) => set({ sheet: { kind: "keys", view } }),
   setSearchQuery: (q) => set({ searchQuery: q }),
@@ -4492,6 +4534,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }));
   },
   answerRun: async (runId, promptId, answer) => {
+    if (get().runs[runId]?.kept) return;
     const run = await api.answerRun(runId, promptId, answer, get().answerKey);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
@@ -4512,6 +4555,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({ remembered: { ...s.remembered, [backend]: rules } }));
   },
   sayRun: async (runId, text) => {
+    if (get().runs[runId]?.kept) return;
     const run = await api.say(runId, text);
     set((s) => {
       // a draft once sent is done with
@@ -4520,6 +4564,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   stopRun: async (runId) => {
+    if (get().runs[runId]?.kept) return;
     const run = await api.stopRun(runId);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
@@ -4527,6 +4572,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
   coordStart: (runId) => api.coordStart(runId),
   dismissRun: async (runId) => {
+    if (get().runs[runId]?.kept) return;
     await api.dismissRun(runId);
     // a chat docked as a panel (FR-047) goes with its run
     const panel = runPanel(runId);
@@ -4679,6 +4725,11 @@ function readClips(): void {
     .then((msgs) => useStore.setState((st) => ({ chanMsgs: { ...st.chanMsgs, clipboard: mergeMessages(st.chanMsgs["clipboard"], msgs) } })))
     .catch(() => {});
 }
+
+// A new sheet takes precedence over a pending run-open, whoever opened it.
+useStore.subscribe((s, prev) => {
+  if (s.sheet !== prev.sheet) ++runOpen;
+});
 
 // A strip shell coming forward (a new one, a join, a move) takes the strip
 // back from a section tab showing there (FR-030), so no action that sets

@@ -762,6 +762,11 @@ export const api = {
   chanNotify: (on: boolean) =>
     req<{ notify: boolean }>(homeName(), "/api/tailchan/notify", { method: "POST", body: JSON.stringify({ on }) }),
   runs: async (b: string = homeName()) => fromAll(b, await req<Run[]>(b, "/api/runs"), qRun),
+  /** One run by its page id: live, else its kept record; throws on 404. */
+  keptRun: async (id: string): Promise<Run> => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, `/api/runs/${encodeURIComponent(plain)}`), qRun);
+  },
   /** `client` is this browser's id, so the run says which device started it */
   run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean) => {
     const [b, plain] = on(id);

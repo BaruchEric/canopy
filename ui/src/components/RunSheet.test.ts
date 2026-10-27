@@ -25,10 +25,10 @@ describe("run console actions", () => {
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { GroupPreflight, freeBranchSlots } from "./RunSheet";
+import { Console, GroupPreflight, RunPane, freeBranchSlots } from "./RunSheet";
 import { api } from "../api";
 import { useStore } from "../store";
-import type { Flow, Run } from "../../../src/core/types";
+import type { Flow, PrWatch, Run } from "../../../src/core/types";
 
 const branch = { name: "run/a", origin: "a", target: "main", base: "b", dir: "/a", state: "working" as const };
 const active = (id: string, origin: string): Run => ({ id, repoId: "repo", action: "ask", verb: "ask", progress: "working", expectsChange: true, chat: false, harness: "claude", note: "n", status: "working", startedAt: 1, steps: [], prompt: null, branch: { ...branch, origin } });
@@ -67,4 +67,87 @@ describe("group preflight", () => {
       expect(calls[1]).toEqual(["repo", "ask", "n", true, undefined]);
     } finally { api.startGroup = original; useStore.setState({ ...before, startRun: single }); }
   });
+});
+
+
+function renderConsole(run: Run): string {
+  const initial = useStore.getInitialState();
+  const previous = { ...initial };
+  Object.assign(initial, useStore.getState());
+  try { return renderToStaticMarkup(createElement(Console, { run, repo: undefined })); }
+  finally { Object.assign(initial, previous); }
+}
+
+describe("kept run console", () => {
+  test("shows its recorded timeline and kept marker with close, never dismiss", () => {
+    const html = renderConsole({ ...active("kept", "kept"), kept: true, status: "done", note: "Recorded note", steps: [{ id: "s", kind: "text", text: "Recorded reply", at: 1 }] });
+    expect(html).toContain(" · kept");
+    expect(html).toContain("Recorded note");
+    expect(html).toContain("Recorded reply");
+    expect(html).toContain(">close</button>");
+    expect(html).not.toContain(">dismiss</button>");
+    expect(html).not.toContain("<textarea");
+  });
+
+  test("an active-looking kept chat cannot show a composer, answer form or stop action", () => {
+    const html = renderConsole({ ...active("kept", "kept"), kept: true, chat: true, status: "waiting", prompt: { id: "p", kind: "proposal", plan: "Waiting plan", auto: true } });
+    expect(html).toContain(" · kept");
+    expect(html).not.toContain("<textarea");
+    expect(html).not.toContain("<form");
+    expect(html).not.toContain(">stop</button>");
+    expect(html).not.toContain(">hide</button>");
+    expect(html).not.toContain(">dismiss</button>");
+    expect(html).toContain(">close</button>");
+  });
+
+  test("a kept run pane has no message composer even with an active-looking status", () => {
+    const html = renderToStaticMarkup(createElement(RunPane, { run: { ...active("kept", "kept"), chat: true, kept: true, status: "idle" }, repo: undefined }));
+    expect(html).not.toContain("<textarea");
+    expect(html).not.toContain(">send</button>");
+  });
+
+  test("kept coordinator cards stay visible without start, edit or remove actions", () => {
+    const html = renderConsole({ ...active("coord", "coord"), action: "coordinate", kept: true, chat: true, tasks: [{ id: "card", repo: "repo", action: "ask", title: "Recorded card", note: "Do the work", state: "proposed" }] });
+    expect(html).toContain("Recorded card");
+    expect(html).not.toContain("start these");
+    expect(html).not.toContain(">edit</button>");
+    expect(html).not.toContain(">remove</button>");
+  });
+
+  test("a kept ready branch keeps its branch context without land or open-PR actions", () => {
+    const ready: Run = { ...active("kept", "kept"), status: "done", branch: { ...branch, state: "ready" } };
+    const live = renderConsole(ready);
+    expect(live).toContain(">land</button>");
+    expect(live).toContain("open PR");
+    const html = renderConsole({ ...ready, kept: true });
+    expect(html).toContain("run/a");
+    expect(html).not.toContain(">land</button>");
+    expect(html).not.toContain("open PR");
+  });
+});
+
+
+test("a kept PR retains its link and status without PR mutations, while the live PR keeps its controls", () => {
+  const before = useStore.getState();
+  const watch: PrWatch = { id: "a", runId: "kept", repoId: "repo", repoPath: "/r", branch: "run/a", target: "main", dir: "/a", note: "n", slug: "o/r", remote: "origin", number: 12, url: "https://github.com/o/r/pull/12", autoFix: false, autoMerge: false, pushed: "h", attempts: {}, seenComment: 0, openedAt: 1, updatedAt: 1 };
+  useStore.setState({ prs: { "": [watch] } });
+  try {
+    const run = { ...active("kept", "a"), status: "done" } satisfies Run;
+    const live = renderConsole(run);
+    expect(live).toContain("close PR");
+    expect(live).toContain('type="checkbox"');
+    const kept = renderConsole({ ...run, kept: true });
+    expect(kept).toContain('href="https://github.com/o/r/pull/12"');
+    expect(kept).not.toContain("close PR");
+    expect(kept).not.toContain('type="checkbox"');
+  } finally { useStore.setState(before, true); }
+});
+
+test("live chats retain prompt, composer and stop controls; finished live runs retain dismiss", () => {
+  const run: Run = { ...active("live", "a"), chat: true, status: "waiting", prompt: { id: "p", kind: "proposal", plan: "Live plan", auto: true } };
+  const html = renderConsole(run);
+  expect(html).toContain("Live plan");
+  expect(html).toContain('aria-label="Your message"');
+  expect(html).toContain(">stop</button>");
+  expect(renderConsole({ ...run, chat: false, status: "done", prompt: null })).toContain(">dismiss</button>");
 });
