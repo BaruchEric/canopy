@@ -4972,6 +4972,13 @@ export async function startServer(opts: {
   sweepShell: (id: string, seen?: number) => Promise<"ended" | "in use" | "unkept">;
   stop: () => Promise<void>;
 }> {
+  // Keep original sources before any await or startup environment stripping.
+  const retainedSecrets = Object.entries(process.env).flatMap(([name, value]) => {
+    if (!value || !(name.startsWith("CANOPY_") || PRIVATE_ENV.some((n) => n === name))) return [];
+    const original = { name, value };
+    const trimmed = name.startsWith(TRIGGER_ENV_PREFIX) ? value.trim() : value;
+    return trimmed && trimmed !== value ? [original, { name, value: trimmed }] : [original];
+  });
   // what the sweep counts a shell's idle from at the latest: keystrokes
   // before it were held in memory and are gone
   const serverStart = Date.now();
@@ -5100,10 +5107,8 @@ export async function startServer(opts: {
   const remembered = new RememberedRules();
   // every run is told which backend started it (CANOPY_BACKEND), and codex
   // hears canopy's version in its handshake
-  // Preserve values removed from the live environment before any child starts.
-  const capturedSecrets = Object.fromEntries(Object.entries(process.env).filter(([name]) => PRIVATE_ENV.some((n) => n === name) || name.startsWith(TRIGGER_ENV_PREFIX)));
   const ledgerOff = process.env["NODE_ENV"] === "test" && !process.env["CANOPY_CONFIG_DIR"];
-  const runlog = new DiskRunLogger({ env: () => ({ ...process.env, ...capturedSecrets }) });
+  const runlog = new DiskRunLogger({ retainedSecrets });
   await runlog.refresh();
   let recordOwner = false;
   let recoveredRunlog = false;
@@ -5321,8 +5326,6 @@ export async function startServer(opts: {
   for (const k of SECRET_ENV) delete process.env[k];
   // the trigger rules' secrets, the same way: the hub holds them, the env does not
   const triggerSecrets = takeTriggerSecrets(process.env);
-  // The trigger hub uses trimmed values, so retain that effective source too.
-  Object.assign(capturedSecrets, Object.fromEntries(triggerSecrets));
   if (process.env["NODE_ENV"] !== "test") {
     if (!vault) console.error("incubator: no CANOPY_VAULT_TOKEN, so no vault notes");
     if (!speech) console.error("incubator: no CANOPY_TRANSCRIBE_URL, so voice memos stay untranscribed and the fields' mics stay off");

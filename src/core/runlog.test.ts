@@ -477,3 +477,46 @@ test("kept snapshots reject malformed merged group and priority fields", async (
     expect(await readKeptRun(dir, value.id)).toBeNull();
   }
 });
+
+
+test("retained secrets add old values to current and applied sources without shadowing or mutating", async () => {
+  const dir = join(root, "retained-source");
+  const file = join(root, "retained-applied.json");
+  await writeFile(file, JSON.stringify({ process: { PROVIDER_KEY: "stamp" } }));
+  const retained = [{ name: "CANOPY_VOICE_KEY", value: "old-voice-value" }, { name: "PROVIDER_KEY", value: "old-provider-value" }, { name: "CANOPY_REPO", value: "repo" }];
+  const logger = new DiskRunLogger({ dir, appliedFile: file, retainedSecrets: retained, env: () => ({ CANOPY_VOICE_KEY: "new-voice-value", PROVIDER_KEY: "new-provider-value" }) });
+  // The logger owns its captured source even if the caller reuses its collection.
+  const old = retained[0]; if (!old) throw new Error("missing old value"); old.value = "caller-mutated-value"; retained.length = 0;
+  await logger.refresh();
+  const privacy = logger.currentSecrets();
+  expect(privacy.secrets).toContainEqual({ name: "CANOPY_VOICE_KEY", value: "old-voice-value" });
+  expect(privacy.secrets).toContainEqual({ name: "CANOPY_VOICE_KEY", value: "new-voice-value" });
+  expect(privacy.credentials).toContainEqual({ name: "PROVIDER_KEY", value: "old-provider-value" });
+  expect(privacy.credentials).toContainEqual({ name: "PROVIDER_KEY", value: "new-provider-value" });
+  expect(privacy.credentials.some((secret) => secret.name === "CANOPY_REPO")).toBe(false);
+  const value = run({ note: "old-voice-value new-voice-value old-provider-value new-provider-value run-provider-value repo" });
+  const errors: string[] = [];
+  const log = logger.open(value, [], { PROVIDER_KEY: "run-provider-value" }, (why) => errors.push(why));
+  if (!log) throw new Error("retained context must preserve trusted metadata");
+  log.wire("out", JSON.stringify({ text: value.note }));
+  await log.settle(value);
+  expect(errors).toEqual([]);
+  expect(await readKeptRun(dir, value.id)).toMatchObject({ id: value.id, repoId: "repo", note: "<redacted:CANOPY_VOICE_KEY> <redacted:CANOPY_VOICE_KEY> <redacted:PROVIDER_KEY> <redacted:PROVIDER_KEY> <redacted:PROVIDER_KEY> <redacted:CANOPY_REPO>" });
+  const wireText = JSON.stringify(await wire(log.folder));
+  for (const secret of privacy.secrets) if (secret.name !== "CANOPY_REPO") expect(wireText).not.toContain(secret.value);
+  expect(wireText).not.toContain("run-provider-value");
+  await writeFile(file, "broken");
+  expect(() => logger.currentSecrets()).toThrow("applied");
+  expect(logger.open(run({ id: "unavailable-retained" }), [], {}, () => {})).toBeNull();
+  await writeFile(file, JSON.stringify({ process: { PROVIDER_KEY: "new-stamp" } }));
+  await logger.refresh();
+  expect(logger.currentSecrets().credentials).toContainEqual({ name: "PROVIDER_KEY", value: "old-provider-value" });
+});
+
+test("retained credential collisions still fail closed on trusted routing metadata", async () => {
+  const errors: string[] = [];
+  const logger = new DiskRunLogger({ dir: join(root, "retained-collision"), appliedFile: join(root, "retained-absent"), env: () => ({}), retainedSecrets: [{ name: "CANOPY_TAILCHAN_ANSWER_TOKEN", value: "ab12cd34" }] });
+  expect(logger.open(run(), [], {}, (why) => errors.push(why))).toBeNull();
+  expect(errors).toHaveLength(1);
+  expect(await listKept(join(root, "retained-collision"))).toEqual([]);
+});
