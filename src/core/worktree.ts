@@ -28,9 +28,6 @@ export function repoKey(path: string): string {
 
 export const runTreeDir = (repoPath: string, runId: string, root = worktreesRoot()): string => join(root, repoKey(repoPath), runId);
 
-/** Legacy branch naming for starts that have not migrated to WorkHub yet. */
-export const runBranchName = (note: string, runId: string): string => `run/${branchSlug(note)}-${runId}`;
-
 const out = (r: { stdout: string }): string => r.stdout.trim();
 const why = (r: { stderr: string; stdout: string; code: number }, what: string): string =>
   (r.stderr.trim() || r.stdout.trim()).split("\n").filter(Boolean).pop() ?? `${what} exited ${r.code}`;
