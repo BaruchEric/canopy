@@ -1367,6 +1367,9 @@ export interface PrWatch {
   attempts: Record<string, number>;
   /** the fix run going now and what it works on */
   fixing?: { run: string; key: string };
+  /** the rebase onto the target going now, from the head canopy pushed;
+   *  present only while the hub rebases */
+  rebasing?: { from: string };
   /** the highest comment id canopy has looked at */
   seenComment: number;
   /** comments from people without write access: shown, never acted on */

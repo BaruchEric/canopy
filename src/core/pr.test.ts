@@ -5,6 +5,7 @@ import {
   exhausted,
   fixPromptForCheck,
   fixPromptForComment,
+  fixPromptForConflict,
   MAX_ATTEMPTS,
   mergeMethod,
   nextPoll,
@@ -15,6 +16,8 @@ import {
   POLL_QUIET,
   prNumberOf,
   readyToMerge,
+  readyToRebase,
+  rebaseKey,
   trusted,
 } from "./pr";
 import type { PrState, PrWatch } from "./types";
@@ -216,6 +219,36 @@ describe("readyToMerge", () => {
     expect(why({ queued: "other" })).toBe("ready");
     expect(why({ approve: { head, why: "CLAUDE.md" } })).toBe("it touches files that need your approval (CLAUDE.md); merge it on GitHub yourself");
     expect(why({ approve: { head: "other", why: "x" } })).toBe("ready");
+  });
+});
+
+describe("the rebase step", () => {
+  test("readyToRebase: only BEHIND or DIRTY, on the head canopy pushed, with no fix or rebase going", () => {
+    expect(readyToRebase(state({ mergeState: "BEHIND" }), watch())).toEqual({ ok: true });
+    expect(readyToRebase(state({ mergeState: "DIRTY" }), watch())).toEqual({ ok: true });
+    for (const [s, w, why] of [
+      [state({ mergeState: "CLEAN" }), watch(), "it is not behind main (CLEAN)"],
+      [state({ mergeState: "UNKNOWN" }), watch(), "it is not behind main (UNKNOWN)"],
+      [state({ mergeState: "BEHIND", status: "merged" }), watch(), "it is merged"],
+      [state({ mergeState: "BEHIND", head: "h2" }), watch(), "the head moved since canopy pushed"],
+      [state({ mergeState: "BEHIND" }), watch({ fixing: { run: "f", key: "check:test" } }), "a fix is going"],
+      [state({ mergeState: "BEHIND" }), watch({ rebasing: { from: "h1" } }), "a rebase is going"],
+    ] as const)
+      expect(readyToRebase(s, w)).toEqual({ ok: false, why });
+    expect(readyToRebase(state({ mergeState: "BEHIND" }), watch({ target: "develop" }))).toEqual({ ok: true });
+    expect(readyToRebase(state({ mergeState: "CLEAN" }), watch({ target: "develop" }))).toEqual({ ok: false, why: "it is not behind develop (CLEAN)" });
+    expect(rebaseKey("abc")).toBe("rebase:abc");
+  });
+
+  test("a conflict's prompt fences the files, names the remote and target, and says canopy pushes with a lease", () => {
+    const p = fixPromptForConflict(watch({ number: 12, branch: "run/x-b1", remote: "origin", target: "main" }), ["src/a.ts", "src/b.ts"]);
+    expect(p).toContain("PR #12 from run/x-b1: rebasing it onto origin/main stops on conflicts in 2 files.");
+    expect(p).toContain("<<<\nsrc/a.ts\nsrc/b.ts\n>>>");
+    expect(p).toContain("git fetch origin main");
+    expect(p).toContain("git rebase origin/main");
+    expect(p).toContain("keeping both the branch's intent and main's change");
+    expect(p).toContain("do not push: canopy pushes the branch to the PR once you end, with a lease on the commit it pushed last");
+    expect(fixPromptForConflict(watch(), ["a.txt"])).toContain("stops on conflicts in 1 file.");
   });
 });
 

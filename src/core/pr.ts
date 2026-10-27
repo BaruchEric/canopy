@@ -161,6 +161,23 @@ export const commentKey = (id: number): string => `comment:${id}`;
 /** Whether a check or comment has had its `MAX_ATTEMPTS` fixes. */
 export const exhausted = (w: Pick<PrWatch, "attempts">, key: string): boolean => (w.attempts[key] ?? 0) >= MAX_ATTEMPTS;
 
+/** Whether canopy should rebase the PR's branch onto its target as just
+ *  read: GitHub says BEHIND or DIRTY on the head canopy pushed, with no
+ *  fix and no rebase going. UNKNOWN, which GitHub answers right after a
+ *  push, waits for the next read. */
+export function readyToRebase(s: PrState, w: Pick<PrWatch, "pushed" | "fixing" | "rebasing" | "target">): { ok: true } | { ok: false; why: string } {
+  const no = (why: string) => ({ ok: false as const, why });
+  if (s.status !== "open") return no(`it is ${s.status}`);
+  if (s.mergeState !== "BEHIND" && s.mergeState !== "DIRTY") return no(`it is not behind ${w.target} (${s.mergeState})`);
+  if (s.head !== w.pushed) return no("the head moved since canopy pushed");
+  if (w.fixing) return no("a fix is going");
+  if (w.rebasing) return no("a rebase is going");
+  return { ok: true };
+}
+
+/** The attempts key of the conflict fixes onto one base commit. */
+export const rebaseKey = (base: string): string => `rebase:${base}`;
+
 const tailOf = (text: string): string => (text.length > LOG_CHARS ? text.slice(-LOG_CHARS) : text);
 
 const pushLine = (w: Pick<PrWatch, "branch">): string =>
@@ -175,6 +192,13 @@ export const fence = (what: string, text: string): string =>
 export function fixPromptForCheck(w: Pick<PrWatch, "number" | "branch">, check: PrCheck, log: string): string {
   const where = log.trim() ? `The end of its failed log follows. ${fence("The log", tailOf(log.trim()))}` : check.url ? `Its log is at ${check.url}.` : "canopy could not read its log.";
   return `PR #${w.number} from ${w.branch}: The check ${check.name} failed. ${where}\n\nFind why it fails, fix it, and run that check's command here if you can. ${pushLine(w)}`;
+}
+
+/** The message a fix run for a rebase conflict starts with. */
+export function fixPromptForConflict(w: Pick<PrWatch, "number" | "branch" | "remote" | "target">, files: readonly string[]): string {
+  const onto = `${w.remote}/${w.target}`;
+  const count = `${files.length} file${files.length === 1 ? "" : "s"}`;
+  return `PR #${w.number} from ${w.branch}: rebasing it onto ${onto} stops on conflicts in ${count}. ${fence("The file list", files.join("\n"))}\n\nIn this worktree, run \`git fetch ${w.remote} ${w.target}\` and \`git rebase ${onto}\`, resolve each listed file keeping both the branch's intent and ${w.target}'s change, run the gates, and leave the branch rebased and committed; do not push: canopy pushes the branch to the PR once you end, with a lease on the commit it pushed last.`;
 }
 
 /** The message a fix run for a review comment starts with. */
