@@ -1,7 +1,13 @@
 import { expect, test } from "bun:test";
 import type { LandingInfo } from "../core/types";
 import type { RunGroup } from "../core/group";
+import { setHomeBase, setTokenFlag } from "./api";
 import { main } from "./index";
+
+function resetCliApiState(): void {
+  setHomeBase(undefined);
+  setTokenFlag(undefined);
+}
 
 const group: RunGroup = {
   id: "g-1234abcd",
@@ -39,6 +45,7 @@ const landing: LandingInfo = {
 };
 
 test("canopy groups dispatch lists each group with its member branch and state", async () => {
+  resetCliApiState();
   const seen: string[] = [];
   const server = Bun.serve({
     port: 0,
@@ -54,6 +61,7 @@ test("canopy groups dispatch lists each group with its member branch and state",
   try {
     await main(["groups", "app", "--backend", `http://127.0.0.1:${server.port}`]);
   } finally {
+    resetCliApiState();
     console.log = oldLog;
     server.stop(true);
   }
@@ -66,6 +74,7 @@ test("canopy groups dispatch lists each group with its member branch and state",
 });
 
 test("canopy groups pick routes a foreign group ID to the backend that owns it", async () => {
+  resetCliApiState();
   const homeCalls: string[] = [];
   const peerCalls: { path: string; body?: unknown }[] = [];
   const peer = Bun.serve({
@@ -97,6 +106,7 @@ test("canopy groups pick routes a foreign group ID to the backend that owns it",
   try {
     await main(["groups", "pick", group.id, "run-1"]);
   } finally {
+    resetCliApiState();
     console.log = oldLog;
     if (oldApi === undefined) delete process.env["CANOPY_API"];
     else process.env["CANOPY_API"] = oldApi;

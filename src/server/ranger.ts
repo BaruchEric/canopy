@@ -187,6 +187,8 @@ export interface RangerHubDeps {
   claudeHome?: string;
   /** the brief's text, before its slots are filled */
   brief?: () => Promise<string>;
+  /** last week's harness share for the brief; none when absent or when it throws */
+  harnessShare?: () => Promise<string | null>;
   /** whether user settings still give the Telegram plugin to every session */
   telegramContested?: () => Promise<boolean>;
   loadSettings?: () => Promise<RangerSettings>;
@@ -690,6 +692,8 @@ export class RangerHub {
     // a conversation that never got a message has no file, and --resume finds nothing
     const first = !(await exists(this.transcript(this.rec.session)));
     if (!this.launchCurrent(epoch)) return;
+    const harnessShare = this.deps.harnessShare ? await this.deps.harnessShare().catch(() => null) : null;
+    if (!this.launchCurrent(epoch)) return;
     const brief = rangerBrief(await this.brief(), {
       backend: this.deps.backend(),
       handle,
@@ -697,6 +701,7 @@ export class RangerHub {
       home,
       previous: this.rec.previous ?? null,
       telegram: this.settings.telegram,
+      harnessShare,
     });
     if (!this.launchCurrent(epoch)) return;
     // a file rather than an argument: the brief would make the tmux command

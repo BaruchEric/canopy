@@ -190,6 +190,23 @@ export function targetsOf(home: string, self: string, list: readonly BackendEntr
   return out;
 }
 
+/** Every backend the home one lists, in `targetsOf`'s order; home alone
+ *  when --backend was given without --on; the one --on names, else `fail`. */
+export async function backendTargets(
+  home: string,
+  opts: { given?: string; on?: string },
+  fail: (msg: string) => never,
+): Promise<Target[]> {
+  const homeTarget: Target = { name: "home", urls: [home] };
+  if (opts.given !== undefined && opts.on === undefined) return [homeTarget];
+  const listed = await ask<{ self?: string; backends?: BackendEntry[] }>(homeTarget, "GET", "/api/backends").catch(() => null);
+  // an older backend lists none: it is the only one
+  const all = listed?.self ? targetsOf(home, listed.self, listed.backends ?? []) : [homeTarget];
+  if (opts.on === undefined) return all;
+  const one = all.find((t) => t.name === opts.on);
+  return one ? [one] : fail(`no backend named ${opts.on}; the home backend lists ${all.map((t) => t.name).join(", ")}`);
+}
+
 export class Unreachable extends Error {}
 
 export const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -241,13 +258,7 @@ export async function healthCommand(argv: string[], { fail }: HealthDeps): Promi
   let known: Target[] | null = null;
   const targets = async (): Promise<Target[]> => {
     if (known) return known;
-    if (given !== undefined && on === undefined) return (known = [homeTarget]);
-    const listed = await ask<{ self?: string; backends?: BackendEntry[] }>(homeTarget, "GET", "/api/backends").catch(() => null);
-    // an older backend lists none: it is the only one
-    const all = listed?.self ? targetsOf(home, listed.self, listed.backends ?? []) : [homeTarget];
-    if (on === undefined) return (known = all);
-    const one = all.find((t) => t.name === on);
-    return one ? (known = [one]) : fail(`no backend named ${on}; the home backend lists ${all.map((t) => t.name).join(", ")}`);
+    return (known = await backendTargets(home, { given, on }, fail));
   };
   /** the backend a repo command speaks to: --on's, else home */
   const repoTarget = async (): Promise<Target> => (on === undefined ? homeTarget : ((await targets())[0] ?? homeTarget));

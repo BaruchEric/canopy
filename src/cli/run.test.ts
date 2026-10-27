@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
+import { setHomeBase, setTokenFlag } from "./api";
 import { main } from "./index";
 import { dispatchRunCommand, parseRunArgs } from "./run";
+
+function resetCliApiState(): void {
+  setHomeBase(undefined);
+  setTokenFlag(undefined);
+}
 
 test("parseRunArgs reads a grouped branch run and its flags", () => {
   expect(parseRunArgs(["app", "ask", "-m", "add a file", "--times", "3", "--auto-land", "--pr"])).toEqual({
@@ -45,6 +51,7 @@ test("run dispatch hands transcript subcommands to the supplied handler", async 
 });
 
 test("canopy run dispatch sends the group body to the selected backend", async () => {
+  resetCliApiState();
   const requests: { method: string; path: string; body?: unknown }[] = [];
   const server = Bun.serve({
     port: 0,
@@ -72,6 +79,7 @@ test("canopy run dispatch sends the group body to the selected backend", async (
   try {
     await main(["run", "app", "ask", "-m", "add a file", "--times", "3", "--auto-land", "--pr", "--backend", `http://127.0.0.1:${server.port}`]);
   } finally {
+    resetCliApiState();
     console.log = oldLog;
     server.stop(true);
   }
@@ -85,6 +93,7 @@ test("canopy run dispatch sends the group body to the selected backend", async (
 });
 
 test("canopy run without --times keeps the single branch-run request", async () => {
+  resetCliApiState();
   const requests: { method: string; path: string; body?: unknown }[] = [];
   const server = Bun.serve({
     port: 0,
@@ -101,6 +110,7 @@ test("canopy run without --times keeps the single branch-run request", async () 
   try {
     await main(["run", "app", "ask", "--backend", `http://127.0.0.1:${server.port}`]);
   } finally {
+    resetCliApiState();
     console.log = oldLog;
     server.stop(true);
   }

@@ -30,3 +30,7 @@ Memory:
 - Keep what you learn in your auto memory. A fresh conversation starts without this one.
 {{#previous}}- Your previous conversation's transcript is {{previous}}. Read its end only when you need to know what happened before.
 {{/previous}}
+{{#harnessShare}}
+Harness share:
+- Harness share last week: {{harnessShare}}. That is the share of this backend's Claude spend that went into canopy itself, the repos marked as the harness. You may say so in your weekly words to Eric; nothing in canopy acts on it.
+{{/harnessShare}}

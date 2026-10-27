@@ -88,13 +88,19 @@ describe("rangerArgv", () => {
 });
 
 describe("rangerBrief", () => {
-  const vars = { backend: "mini", handle: "ranger", root: "/home/eric/dev", home: "/config/ranger/home", previous: null, telegram: false };
+  const vars = { backend: "mini", handle: "ranger", root: "/home/eric/dev", home: "/config/ranger/home", previous: null, telegram: false, harnessShare: null };
 
   test("fills the slots and keeps a block only when its var is set", () => {
     expect(rangerBrief("{{home}} beside {{root}}", vars)).toBe("/config/ranger/home beside /home/eric/dev");
     const t = "You are {{handle}} on {{backend}} in {{root}}.\n\n{{#previous}}Before: {{previous}}{{/previous}}\n\n{{#telegram}}Telegram too.{{/telegram}}\n{{nope}}";
     expect(rangerBrief(t, vars)).toBe("You are ranger on mini in /home/eric/dev.\n\n{{nope}}");
     expect(rangerBrief(t, { ...vars, previous: "/t/a.jsonl", telegram: true })).toBe("You are ranger on mini in /home/eric/dev.\n\nBefore: /t/a.jsonl\n\nTelegram too.\n{{nope}}");
+  });
+
+  test("the harness share block stays only with a figure", () => {
+    const t = "{{#harnessShare}}Share: {{harnessShare}}{{/harnessShare}}";
+    expect(rangerBrief(t, vars)).toBe("");
+    expect(rangerBrief(t, { ...vars, harnessShare: "34%, over the 25% line" })).toBe("Share: 34%, over the 25% line");
   });
 });
 
