@@ -72,7 +72,10 @@ that closes the issue. Ranked fourth in
   `X-Gitea-Signature` on older servers), hex HMAC-SHA256 of the raw body;
   the `issues` event has `action: label_updated` and the issue's `labels`
   list, not the one label that changed. The design reads the list and uses
-  `existing` to keep one event per issue.
+  `knownEvent` (an event in any state) to keep one event per issue, since
+  the list says only that the issue is still labelled. (Plan 1's review:
+  the first draft said `existing`, which let a label edit restart a
+  finished issue.)
 - **P5.** `gh issue list --label canopy --state open --json number,title,
   body,labels,updatedAt` and Forgejo's `GET /api/v1/repos/{o}/{r}/issues?
   labels=canopy&state=open` for the polled path; and `gh api graphql` to
@@ -136,20 +139,34 @@ either new source:
   `label_updated`, `opened` (with a label already on), and the rule's label
   in `issue.labels[].name`. One event per issue, so a second
   `label_updated` on the same open issue finds the event through
-  `existing` and bumps `count`, as a repeated Sentry alert does.
+  `knownEvent`, an event in any state, and bumps `count`, as a repeated
+  Sentry alert does; a Forgejo label edit on a failed or closed issue bumps
+  it too rather than starting over, since the delivery lists every label
+  the issue has, not the one that changed. GitHub keeps `existing`: its
+  `labeled` names the one label put back on, and that starts the issue
+  over.
+- A delivery whose full read fails (`readIssue`) starts from the title and
+  body the delivery carried, with `comments: not read; <why>` in the fence
+  and `unread` in the hook's answer: neither forge sends a failed delivery
+  again, and a rule with a secret polls only when told to. A poll's failed
+  read, by contrast, leaves the issue for the next tick.
 - Both are filed `open` already (`hooks/*`), and the edge gate must let
   `/api/hooks/*` through, as docs/deploy.md says for Sentry.
 
 ### Polling
 
 `TriggerHub.poll(rule)` on the rule's cron: list open issues with the label
-(P5), and for each one with no live event (`existing` finds none that is
-not `failed | ignored | merged | closed`), make an `Incoming` as the hook
-would and run it through the same `take`. A poll is skipped while the
-previous one has not returned, and a listing that fails is one health line
-(`canopy:triggers`), never an event. The poll reads at most `POLL_ISSUES`
-(50) issues; a repo with more labelled issues waits for the next tick,
-oldest first.
+(P5), and for each one with no event in any state (`anyEvent`: a listing
+says only that the issue is still labelled, so a failed, closed or ignored
+issue stays until its event is dismissed, which lets the poll take it
+again), make an `Incoming` as the hook would and run it through the same
+`take`. A poll is skipped while the previous one has not returned, and a
+listing that fails is one health line (`canopy:triggers`), never an event.
+The readers list up to `LIST_ISSUES` (500) issues per label, oldest first
+(`forgejoListIssues` pages by `FORGE_PAGE`, 50); the hub drops the known
+ones and reads the oldest `POLL_ISSUES` (50) of the rest in full, so fifty
+known labelled issues in front hide none behind them. A repo with more
+than `LIST_ISSUES` labelled issues has only its oldest looked at.
 
 ### The note and the workflow
 
@@ -157,7 +174,14 @@ oldest first.
 came in.", so the branch reads `run/github-issue-123-…`; the title, body
 (cut to `MAX_DESCRIPTION`), labels and the newest `ISSUE_COMMENTS` (10)
 comments ride in the fence as data, as `issueNote` does for a hand-started
-run. A new bundled `lib/workflows/issue-fix.md` (`listed: false`) has
+run. On GitHub only comments from the repo's owner, an org member or a
+collaborator get in (gh's `authorAssociation`; `trustedComments` in
+`core/issue.ts`), since anyone can comment on a public issue and the run
+reads comments as text; the rest are counted in a "comments left out: N"
+detail line so the run knows there were more. Forgejo comments are not
+filtered: the instance is the user's own, behind its own sign-in. A
+hand-started run's `issueNote` is not filtered either, since the user chose
+that issue. A new bundled `lib/workflows/issue-fix.md` (`listed: false`) has
 `linear-issue`'s shape: check first that the issue is clear and small enough
 for one run and commit nothing when it is not; otherwise the smallest fix
 with a test, the gates, a commit, never a push. The rule may name another
@@ -290,7 +314,13 @@ Needs you.
   `tokenEnv` or the forge source's token, in a new `src/server/forgejo.ts`
   with the shape of `linear.ts` (`writer`, `mark`, a 2xx check, errors kept
   on the event, never thrown into the hub's loop). The landing record's
-  `landed` is the merge.
+  `landed` is the merge, and the close names the landed commit and, after
+  one fetch, whether the remote still lacks it (`landedComment`: "Fixed by
+  1a2b3c4 on main, not yet pushed to origin."; `missingFrom` in
+  `server/index.ts`), since the landing queue never pushes. Holding the
+  close until the remote has the commit was weighed for plan 2 and left
+  out: the queue's rule is that pushing main is Eric's, so the close says
+  where the fix is and the issue closes when the fix lands here.
 - A token that cannot write leaves `resolved: { error }` on the event, as
   Sentry's resolve does; nothing retries forever.
 
@@ -373,9 +403,11 @@ For Eric:
 - `trigger.test.ts`: `parseGithubIssue` (labeled with the rule's label,
   another label, a closed issue, a pull request), `parseForgejoIssue`
   (`label_updated` with and without the label, `opened` with it),
-  `existing` across the new states, `needsYou` for each reason, the three
-  states in `fromPr`, a rule with `poll` and no `secretEnv`, bad lines
-  (`projects` on github).
+  `anyEvent` and `knownEvent` across the states, `needsYou` for each
+  reason, the three states in `fromPr`, a rule with `poll` and no
+  `secretEnv`, bad lines (`projects` on github).
+- `issue.test.ts`: `trustedComments` keeps the owner's, a member's and a
+  collaborator's comments and counts the rest out.
 - `forgejoissues.test.ts`: list parsing, comment and close bodies.
 - `pr.test.ts`: `readyToRebase`, `fixPromptForConflict` fences the files,
   `rebaseKey` attempts to 3 then gave up.
@@ -402,7 +434,10 @@ For Eric:
    landing path, write-back, `canopy issues`. Nothing changes in the PR
    watch.
 2. **The loop**: `readyToRebase`, the lease push, `fixPromptForConflict`,
-   the states, `needsYou` and the inbox item, `canopy pr rebase`. Waits on
-   call 7.
+   the states `rebasing` and `conflict`, `needsYou` and the inbox item,
+   `canopy pr rebase`, and one `canopy:triggers:<rule>` health check per
+   rule in place of the shared one, so a rule whose listing fails does
+   not look like every rule failing. Waits on call 7 for the lease push;
+   the rest of the plan does not.
 3. **Watchdog and digest**: the quiet check, wrap-up and resume, the daily
    line and the ranger DM.
