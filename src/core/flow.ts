@@ -2,7 +2,7 @@
  *  normal Run through the Runner; ready steps start together when all but
  *  one only read; between a run and its dependants come the check and gate. */
 
-import { chained, readOnlyStep, type RecordedWorkflow } from "./workflow";
+import { chained, readOnlyStep, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
 import { limitHit, resetWord } from "./capacity";
 import type { BranchStart } from "./runner";
@@ -246,6 +246,11 @@ const errText = (err: unknown): string => String(err instanceof Error ? err.mess
 /** The end of a check's output, which is where a failure says what failed. */
 const tailOf = (s: string, n = 2000): string => (s.length > n ? s.slice(-n) : s);
 
+interface StepStart {
+  done: Promise<void>;
+  finish: () => void;
+}
+
 interface LiveFlow {
   flow: Flow;
   repo: Repo;
@@ -263,6 +268,7 @@ interface LiveFlow {
   marks: Map<number, string>;
   /** Identity survives each async boundary, but never a reset or stop. */
   attempts: Map<number, symbol>;
+  starting: Map<number, StepStart>;
   lifecycle: symbol;
   pending?: { park: number } | PendingEnd;
   parks: Map<number, ParkCause>;
@@ -335,7 +341,7 @@ export class Flows {
   private byRun = new Map<string, string>();
   private fleetsLive = new Map<
     string,
-    { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo, profile?: string) => AgentSettings }
+    { fleet: Fleet; workflow: Workflow; note: string; pending: Repo[]; agentFor: (repo: Repo, profile?: string) => AgentSettings; workflowFor: (repo: Repo) => Workflow }
   >();
   /** fleet ids whose pump() is on the call stack right now, to keep a flow that
    *  ends inside start() from re-entering and finishing the fleet early */
@@ -356,6 +362,17 @@ export class Flows {
 
   list(): Flow[] {
     return [...this.live.values()].map((l) => l.flow);
+  }
+
+  /** Initial preparations only: never waits for an agent, command or gate. */
+  async whenStarted(id?: string): Promise<void> {
+    for (;;) {
+      const pending = [...this.live.values()]
+        .filter((live) => id === undefined || live.flow.id === id)
+        .flatMap((live) => [...live.starting.values()].map((start) => start.done));
+      if (!pending.length) return;
+      await Promise.all(pending);
+    }
   }
 
   get(id: string): Flow | undefined {
@@ -426,7 +443,7 @@ export class Flows {
       workflow,
       agent: stepAgent(agent),
       before: statusFingerprint(repo.status),
-      checking: new Map(), marks: new Map(), attempts: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
+      checking: new Map(), marks: new Map(), attempts: new Map(), starting: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
       parks: new Map(),
       ...(branch?.prepare ? { prepare: branch.prepare } : {}),
     };
@@ -636,6 +653,7 @@ export class Flows {
     if (live.pending && "end" in live.pending && live.pending.end === "stopped") return live.flow;
     live.pending = { end: "stopped" };
     live.attempts.clear();
+    for (const start of live.starting.values()) start.finish();
     const indices = this.liveSteps(live);
     if (live.checking.size) {
       live.stopping = setTimeout(() => {
@@ -711,7 +729,7 @@ export class Flows {
       workflow: chained(rec.workflow),
       agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
       before: rec.before,
-      checking: new Map(), marks: new Map(), attempts: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
+      checking: new Map(), marks: new Map(), attempts: new Map(), starting: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
       parks: restoredParks(rec.parks, flow.steps.length),
     };
     this.live.set(flow.id, live);
@@ -785,6 +803,8 @@ export class Flows {
     note: string,
     agentFor: (repo: Repo, profile?: string) => AgentSettings,
     request?: string,
+    /** A repo's resolved modes; a throw skips that repo with its message. */
+    workflowFor: (repo: Repo) => Workflow = () => workflow,
   ): Fleet {
     const again = request ? this.fleetForRequest(request) : undefined;
     if (again) return again;
@@ -802,7 +822,7 @@ export class Flows {
       ...(request ? { request } : {}),
     };
     const pending = repos.filter((r) => !fleetSkipReason(r, workflow));
-    this.fleetsLive.set(fleet.id, { fleet, workflow, note, pending, agentFor });
+    this.fleetsLive.set(fleet.id, { fleet, workflow, note, pending, agentFor, workflowFor });
     this.pump(fleet.id);
     return fleet;
   }
@@ -891,7 +911,10 @@ export class Flows {
       if (!repo) break;
       const entry = lf.fleet.repos.find((x) => x.repoId === repo.id);
       try {
-        const flow = this.start(repo, lf.workflow, lf.note, (profile) => lf.agentFor(repo, profile), { fleetId });
+        const workflow = lf.workflowFor(repo);
+        const refusal = unattendedRefusal(workflow, "a fleet's run");
+        if (refusal) throw new Error(refusal);
+        const flow = this.start(repo, workflow, lf.note, (profile) => lf.agentFor(repo, profile), { fleetId });
         if (entry) entry.flowId = flow.id;
       } catch (err) {
         if (entry) entry.skipped = String(err instanceof Error ? err.message : err);
@@ -993,6 +1016,7 @@ export class Flows {
     const step = live.flow.steps[i];
     if (!step) return;
     live.attempts.delete(i);
+    live.starting.get(i)?.finish();
     live.marks.delete(i);
     if (step.runId) {
       this.byRun.delete(step.runId);
@@ -1054,7 +1078,26 @@ export class Flows {
       .map((s) => ({ name: s.name, summary: s.summary ?? "" }));
   }
 
-  private async runStep(live: LiveFlow, i: number): Promise<void> {
+  private runStep(live: LiveFlow, i: number): void {
+    const step = live.flow.steps[i];
+    if (!step || !isFlowActive(live.flow)) return;
+    if (live.pending && "end" in live.pending) { this.advance(live); return; }
+    if (step.status === "running" || step.status === "checking") return;
+    let resolve: () => void = () => {};
+    const done = new Promise<void>((finish) => { resolve = finish; });
+    const start: StepStart = { done, finish: () => {
+      if (live.starting.get(i) === start) live.starting.delete(i);
+      resolve();
+    } };
+    live.starting.set(i, start);
+    void this.prepareStep(live, i).then(start.finish, (err) => {
+      const current = live.starting.get(i) === start;
+      start.finish();
+      if (current && isFlowActive(live.flow)) this.fail(live, i, errText(err));
+    });
+  }
+
+  private async prepareStep(live: LiveFlow, i: number): Promise<void> {
     const { flow, workflow } = live;
     const def = workflow.steps[i];
     const step = flow.steps[i];
@@ -1073,7 +1116,7 @@ export class Flows {
       if (!live.restarting.size) delete flow.restarted;
       // check-only: no agent, straight to the command
       flow.status = "working";
-      await this.check(live, i, attempt);
+      void this.check(live, i, attempt);
       return;
     }
     let agent: AgentSettings;
@@ -1466,6 +1509,7 @@ export class Flows {
     clearTimeout(live.stopping);
     delete live.stopping;
     live.attempts.clear();
+    for (const start of live.starting.values()) start.finish();
     this.clock(live, false);
     live.flow.status = status;
     delete live.flow.retryReason;

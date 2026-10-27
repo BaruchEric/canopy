@@ -22,6 +22,7 @@ import {
   getCommit,
   getDiff,
   getLog,
+  getStatus,
   elsewhereDetail,
   isHash,
   pull,
@@ -49,6 +50,8 @@ import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
+import { applyModes } from "../core/flowmodes";
+import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
@@ -101,7 +104,7 @@ import { listMentions } from "../core/mentions";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
-import { BUNDLED_DIR, findWorkflow, loadWorkflows } from "../core/workflows";
+import { BUNDLED_DIR, findWorkflow, loadWorkflows, readFlowModes } from "../core/workflows";
 import {
   launchSource,
   refreshRepo,
@@ -195,7 +198,7 @@ import {
   TERM_GONE,
 } from "../core/types";
 import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { AWAKE_MODES, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES } from "../core/types";
+import { AWAKE_MODES, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -1288,11 +1291,12 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
  *  its branch run starts with: the step's task, tools and turns, no one to
  *  answer it, and a PR when it settles ready. Anything more is a flow on a
  *  branch, every step unattended the same way. Read from the bundled and
- *  user workflows only, like a fleet's, so a repo cannot rewrite what its
- *  own trigger runs. */
-async function triggerSpec(name: string): Promise<{ kind: "run"; spec: ActionSpec; workflow: string; profile?: string } | { kind: "flow"; workflow: Workflow } | string> {
-  const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
-  if (!wf) return `unknown workflow: ${name}`;
+ *  user workflows only, like a fleet's: repo modes decide whether a step
+ *  may start, while its task still comes from the trusted workflow file. */
+async function triggerSpec(name: string, repo: Repo): Promise<{ kind: "run"; spec: ActionSpec; workflow: string; profile?: string } | { kind: "flow"; workflow: Workflow } | string> {
+  const base = findWorkflow(await loadWorkflows({ path: "", host: "none" }), name);
+  if (!base) return `unknown workflow: ${name}`;
+  const wf = await withRepoModes(repo, base);
   const step = triggerPlan(wf);
   if (typeof step === "string") return step;
   if (step.kind === "flow") return { kind: "flow", workflow: { ...wf, unattended: TRIGGER_UNATTENDED, agentRole: "job" } };
@@ -1325,7 +1329,7 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
   if (repo.host) throw new Error(`${repo.name} is on ${repo.host}; a trigger runs only on this machine`);
   if (repo.forge) throw new Error(`${repo.name} is on the forge; a trigger runs in a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
-  const got = await triggerSpec(event.workflow);
+  const got = await triggerSpec(event.workflow, repo);
   if (typeof got === "string") throw new Error(got);
   const runs = state.runner.branchRunsFor(repo.id).filter((r) => !r.branch?.held).length;
   const flowsGoing = state.flows.list().filter((f) => f.repoId === repo.id && f.branch && isFlowActive(f)).length;
@@ -1409,6 +1413,18 @@ function stepProfileRefusal(cfg: CanopyConfig, wf: Workflow): string | null {
   const profiles = agentRoutes(cfg).profiles;
   const step = wf.steps.find((s) => s.agent && !hasProfile(profiles, s.agent));
   return step ? `step ${step.name} of ${wf.name} names agent profile ${step.agent ?? ""}, which this backend does not have` : null;
+}
+
+/** Committed repo modes have the last word. Seeds never supply stage policy. */
+async function withRepoModes(repo: Repo, wf: Workflow): Promise<Workflow> {
+  if (isSeedRepoId(repo.id)) return wf;
+  try {
+    const { workflow, warnings } = applyModes(wf, await readFlowModes(repo.path));
+    for (const warning of warnings) console.error(`workflows: ${repo.name}: ${warning}`);
+    return workflow;
+  } catch (err) {
+    throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
 }
 
 /** The settings a workflow step's run starts with on a repo: the step's own
@@ -3770,13 +3786,14 @@ async function handleApi(
     if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
     const request = b.request;
     const again = request ? state.flows.fleetForRequest(request) : undefined;
-    if (again) return json(again);
+    if (again) {
+      await Promise.all(again.repos.flatMap((entry) => entry.flowId ? [state.flows.whenStarted(entry.flowId)] : []));
+      return json(again);
+    }
     const ids = b.ids as string[];
     const repos = ids.map((id) => state.result.repos.find((r) => r.id === id)).filter((r): r is Repo => r !== undefined);
     if (!repos.length) return json({ error: "no known repos in ids" }, 400);
-    // The fleet's workflow is resolved once, from the bundled and user
-    // sources: a fleet runs the same file everywhere, so repo overrides
-    // do not apply.
+    // The fleet uses one bundled/user file, with each repo's committed modes.
     const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), b.workflow);
     if (!wf) return json({ error: `unknown workflow: ${b.workflow}` }, 400);
     if (wf.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
@@ -3785,8 +3802,24 @@ async function handleApi(
     const cfg = await loadConfig();
     const refused = stepProfileRefusal(cfg, wf);
     if (refused) return json({ error: refused }, 400);
-    await needStepHarnesses(state, cfg, wf, repos.filter((r) => !fleetSkipReason(r, wf)).map((r) => r.path));
-    return json(state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile, wf.name), request), 201);
+    const byRepo = new Map<string, Workflow | string>();
+    const eligible = repos.filter((r) => !fleetSkipReason(r, wf));
+    await Promise.all(eligible.map(async (repo) => {
+      try { byRepo.set(repo.id, await withRepoModes(repo, wf)); }
+      catch (err) { byRepo.set(repo.id, String(err instanceof Error ? err.message : err)); }
+    }));
+    const runnable = eligible.filter((r) => {
+      const resolved = byRepo.get(r.id);
+      return typeof resolved !== "string" && !unattendedRefusal(resolved ?? wf, "a fleet's run");
+    });
+    await needStepHarnesses(state, cfg, wf, runnable.map((r) => r.path));
+    const fleet = state.flows.startFleet(repos, wf, note, (r, profile) => stepAgentFor(cfg, r.path, profile, wf.name), request, (repo) => {
+      const resolved = byRepo.get(repo.id);
+      if (typeof resolved === "string") throw new Error(resolved);
+      return resolved ?? wf;
+    });
+    await Promise.all(fleet.repos.flatMap((entry) => entry.flowId ? [state.flows.whenStarted(entry.flowId)] : []));
+    return json(fleet, 201);
   }
   if (path === "/api/fleet/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
@@ -4384,7 +4417,11 @@ async function handleApi(
       if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
       const request = b.request;
       const again = request ? state.flows.forRequest(request) : undefined;
-      if (again) return again.repoId === repo.id ? json(again) : json({ error: "that request started a flow on another repo" }, 409);
+      if (again) {
+        if (again.repoId !== repo.id) return json({ error: "that request started a flow on another repo" }, 409);
+        await state.flows.whenStarted(again.id);
+        return json(again);
+      }
       const entries = await loadWorkflows(repo);
       const wf = findWorkflow(entries, b.workflow);
       if (wf?.listed === false) return json({ error: `${wf.name} runs only inside the incubator` }, 400);
@@ -4398,7 +4435,9 @@ async function handleApi(
       if (refused) return json({ error: refused }, 400);
       await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        return json(state.flows.start(repo, wf, note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), request ? { request } : {}), 201);
+        const flow = state.flows.start(repo, await withRepoModes(repo, wf), note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), request ? { request } : {});
+        await state.flows.whenStarted(flow.id);
+        return json(flow, 201);
       } catch (err) {
         throw new HttpError(400, String(err instanceof Error ? err.message : err));
       }
@@ -4931,6 +4970,12 @@ export async function startServer(opts: {
       if (repo && isSeedPath(root, repo.path)) await runner.whenQuiet(repo.path);
       return freshStatus(state, repoId);
     },
+    fingerprint: async (repo) => {
+      try {
+        if (isSeedPath(root, repo.path)) await runner.whenQuiet(repo.path);
+        return statusFingerprint(await getStatus(repo.path));
+      } catch { return null; }
+    },
   });
   const launcher = new Launcher({
     onJob: (job) => broadcast(state, { type: "job", job }),
@@ -5359,8 +5404,8 @@ export async function startServer(opts: {
     triggers: new TriggerHub({
       broadcast: (ev) => broadcast(state, ev),
       repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
-      workflowProblem: async (name) => {
-        const got = await triggerSpec(name);
+      workflowProblem: async (name, repo) => {
+        const got = await triggerSpec(name, repo);
         return typeof got === "string" ? got : null;
       },
       start: (event, repo) => startTriggerRun(state, event, repo),
@@ -5430,7 +5475,7 @@ export async function startServer(opts: {
         active: item.runs.some((id) => {
           const r = state.runner.get(id);
           return r !== undefined && isRunActive(r);
-        }),
+        }) || state.flows.list().some((flow) => flow.branch?.work === item.id && isFlowActive(flow)),
         branches: item.branches.flatMap((id) => {
           const rec = state.landing.record(id);
           if (!rec) return [];
@@ -5922,6 +5967,7 @@ export async function startServer(opts: {
       // a seed's flow is an incubator stage, held to the same rule as a fresh one
       (repo) => (profile, workflow, role) => (isSeedPath(root, repo.path) ? stageAgent(stepAgentFor(restoreCfg, repo.path, profile, workflow, role)) : stepAgentFor(restoreCfg, repo.path, profile, workflow, role)),
     );
+    await state.flows.whenStarted();
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();

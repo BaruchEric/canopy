@@ -57,7 +57,9 @@ afterAll(async () => {
 async function settled(): Promise<void> {
   for (let i = 0; i < 100; i++) {
     const runs: unknown = await (await fetch(`http://127.0.0.1:${server.port}/api/runs`)).json();
-    if (Array.isArray(runs) && runs.every((r: unknown) => typeof r === "object" && r !== null && "status" in r && (r.status === "done" || r.status === "failed"))) return;
+    const flows: unknown = await (await fetch(`http://127.0.0.1:${server.port}/api/flows`)).json();
+    const finished = (entry: unknown) => typeof entry === "object" && entry !== null && "status" in entry && (entry.status === "done" || entry.status === "failed" || entry.status === "stopped");
+    if (Array.isArray(runs) && runs.every(finished) && Array.isArray(flows) && flows.every(finished)) return;
     await Bun.sleep(10);
   }
   throw new Error("runs did not settle");

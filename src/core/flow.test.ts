@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
-import { parseWorkflow, type RecordedWorkflow } from "./workflow";
+import { parseWorkflow, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
 import type { BranchStart } from "./runner";
@@ -532,7 +532,7 @@ describe("fleets", () => {
   });
 
   test("a parked flow holds its slot", async () => {
-    const ASK = wf(`---\nblurb: b\n---\n\n## Do\ngate: ask\n\nx\n`);
+    const ASK = wf(`---\nblurb: b\n---\n\n## Do\ngate: verdict\n\nx\n`);
     const { runner, flows } = setup();
     flows.startFleet([dirty("a"), dirty("b"), dirty("c"), dirty("d")], ASK, "", () => DEFAULT_AGENT);
     runner.end("run1", "done", "ok");
@@ -1482,8 +1482,9 @@ describe("a start sent twice", () => {
   test("the same request finds the fleet it started", () => {
     const { runner, flows } = setup();
     const repos = [{ ...repo(), id: "a", name: "a" }, { ...repo(), id: "b", name: "b" }];
-    const first = flows.startFleet(repos, TWO, "", () => DEFAULT_AGENT, "req-2");
-    const again = flows.startFleet(repos, TWO, "", () => DEFAULT_AGENT, "req-2");
+    const automatic: Workflow = { ...TWO, steps: TWO.steps.map((s) => ({ ...s, gate: "continue" })) };
+    const first = flows.startFleet(repos, automatic, "", () => DEFAULT_AGENT, "req-2");
+    const again = flows.startFleet(repos, automatic, "", () => DEFAULT_AGENT, "req-2");
     expect(again.id).toBe(first.id);
     expect(flows.fleets()).toHaveLength(1);
     expect(runner.specs).toHaveLength(2);
@@ -2521,5 +2522,87 @@ describe("flow lifecycle ownership (engine review)", () => {
     expect(flow.branch?.state).toBe("ready");
     expect(flow.outcome).toBe("changed");
     expect(handed).toBe(1);
+  });
+});
+
+describe("unattended fleets after modes (Task 6)", () => {
+  const automatic: Workflow = { ...TWO, steps: TWO.steps.map((s) => ({ ...s, gate: "continue" })) };
+  test("a fleet refuses repo manual modes and skips an unreadable modes file", () => {
+    const { runner, flows } = setup();
+    const a = { ...repo(), id: "a", name: "a" };
+    const b = { ...repo(), id: "b", name: "b" };
+    const manual: Workflow = { ...automatic, steps: automatic.steps.map((s) => ({ ...s, mode: "manual", modeFrom: "repo" })) };
+    const fleet = flows.startFleet([a, b], automatic, "", () => DEFAULT_AGENT, undefined, (r) => {
+      if (r.id === "b") throw new Error(".canopy/workflows.json must be an object");
+      return manual;
+    });
+    expect(fleet.repos).toEqual([
+      { repoId: "a", skipped: `${TWO.name}'s First step waits for a go, made manual by the repo's .canopy/workflows.json, and no one gives one in a fleet's run` },
+      { repoId: "b", skipped: ".canopy/workflows.json must be an object" },
+    ]);
+    expect(runner.specs).toHaveLength(0);
+    expect(fleet.repos.every((entry) => entry.flowId === undefined)).toBe(true);
+  });
+
+  test("a fleet refuses file manual and ask steps with no runs", () => {
+    const definitions: Workflow[] = [TWO, { ...automatic, steps: automatic.steps.map((s) => ({ ...s, mode: "manual" })) }];
+    for (const definition of definitions) {
+      const { runner, flows } = setup();
+      const fleet = flows.startFleet([repo()], definition, "", () => DEFAULT_AGENT);
+      const refusal = unattendedRefusal(definition, "a fleet's run");
+      if (!refusal) throw new Error("fixture must need attendance");
+      expect(fleet.repos[0]?.skipped).toBe(refusal);
+      expect(runner.specs).toHaveLength(0);
+      expect(fleet.repos[0]?.flowId).toBeUndefined();
+    }
+  });
+
+  test("a repo auto override can release a file manual step for its fleet", () => {
+    const { runner, flows } = setup();
+    const manual: Workflow = { ...automatic, steps: automatic.steps.map((s) => ({ ...s, mode: "manual" })) };
+    const fleet = flows.startFleet([repo()], manual, "", () => DEFAULT_AGENT, undefined, () => automatic);
+    expect(fleet.repos[0]?.skipped).toBeUndefined();
+    expect(fleet.repos[0]?.flowId).toBeDefined();
+    expect(runner.specs).toHaveLength(1);
+  });
+});
+
+describe("pre-start readiness (Task 6)", () => {
+  test("whenStarted waits for preparation and stops before agent completion", async () => {
+    const read = deferredEngineResult<string | null>();
+    const { runner, flows } = setup({ fingerprint: () => read.promise });
+    const flow = flows.start(repo(), engineReviewWork(), "", DEFAULT_AGENT);
+    let ready = false;
+    const started = flows.whenStarted(flow.id).then(() => { ready = true; });
+    await flush();
+    expect(ready).toBe(false);
+    expect(runner.specs).toHaveLength(0);
+    read.resolve("tree"); await started;
+    expect(runner.specs).toHaveLength(1);
+    expect(flow.status).toBe("working");
+    flows.stop(flow.id);
+  });
+
+  test("stop resolves preparation readiness even when the fingerprint has not returned", async () => {
+    const read = deferredEngineResult<string | null>();
+    const { flows, runner } = setup({ fingerprint: () => read.promise });
+    const flow = flows.start(repo(), engineReviewWork(), "", DEFAULT_AGENT);
+    const started = flows.whenStarted(flow.id);
+    flows.stop(flow.id);
+    await started;
+    expect(flow.status).toBe("stopped");
+    expect(runner.specs).toHaveLength(0);
+    read.resolve("tree"); await flush();
+    expect(runner.specs).toHaveLength(0);
+  });
+
+  test("whenStarted does not wait for a check-only command to finish", async () => {
+    const check = deferredEngineResult<CheckResult>();
+    const { flows } = setup({ check: () => check.promise });
+    const flow = flows.start(repo(), wf(`---\nblurb: b\n---\n\n## Check\ncheck: true\n`), "", DEFAULT_AGENT);
+    await flows.whenStarted();
+    expect(flow.steps[0]?.status).toBe("checking");
+    check.resolve({ exit: 0, output: "done" }); await flush();
+    expect(flow.status).toBe("done");
   });
 });
