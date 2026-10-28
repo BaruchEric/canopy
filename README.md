@@ -4,6 +4,10 @@ canopy is a workbench for building software with Claude across every repo you ha
 
 The write-capable, many-repo complement to [diffscope](../diffscope) (single-repo, read-only).
 
+## User guides
+
+Start with [Getting started](docs/guides/getting-started.md), or browse the [guide index](docs/guides/README.md) for step-by-step help with daily Git work, shells, tasks and previews, agents, workflows, and troubleshooting. The sections below provide the command and feature reference.
+
 ## TL;DR
 
 - One screen for the whole grove. A Bun server finds every `.git` dir under the folders you give it (on this machine, over ssh, or on a Forgejo), shells out to `git`, watches the tree, and streams changes to a React SPA over SSE. Stage, commit (Claude writes the message if you ask), push, pull, drill into any commit's diff.
