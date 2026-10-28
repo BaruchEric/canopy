@@ -1957,12 +1957,36 @@ describe("canopy peers CLI honours peerSync", () => {
           peerSync: "on",
         }),
       );
-      const r = await exec([process.execPath, bin, "peers", "take", "clidetached-mac", "mini"], {
-        cwd: root,
+      const r = await exec([process.execPath, bin, "peers", "take", "clidetached-mac", "mini", "--root", root], {
         env: { CANOPY_CONFIG_DIR: cfgDir },
       });
       expect(r.code).toBe(1);
       expect(r.stderr).toContain("HEAD is detached; name a branch");
+    } finally {
+      await rm(cfgDir, { recursive: true, force: true });
+    }
+  });
+
+  test("with no --root and no backend to ask, sync refuses instead of using the current directory", async () => {
+    const cwd = await repo("clinoroot");
+    const cfgDir = await mkdtemp(join(tmpdir(), "canopy-peers-noroot-"));
+    try {
+      await writeFile(
+        join(cfgDir, "config.json"),
+        JSON.stringify({
+          self: "mac",
+          peers: [{ name: "mini", alias: "mini", root: "/tmp/nowhere", role: "git" }],
+          peerSync: "on",
+        }),
+      );
+      // port 9 (discard) has no canopy on it, so the CLI never reaches a live server
+      const r = await exec([process.execPath, bin, "peers", "sync"], {
+        cwd,
+        env: { CANOPY_CONFIG_DIR: cfgDir, CANOPY_API: "http://127.0.0.1:9" },
+      });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain("pass --root");
+      expect(await sh(cwd, "status", "--porcelain")).toBe("");
     } finally {
       await rm(cfgDir, { recursive: true, force: true });
     }

@@ -56,6 +56,7 @@ import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } fr
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
 import { landCommand } from "./land";
 import { worktreesCommand } from "./worktrees";
+import { peersRoot, type PeersAnswer } from "./peersroot";
 import { issuesCommand } from "./issues";
 import { scenariosCommand } from "./scenarios";
 import { prCommand } from "./pr";
@@ -618,7 +619,30 @@ export async function main(argv: string[]): Promise<void> {
       if (!cfg.self || cfg.peers.length === 0) {
         return fail("canopy: set self and peers in the config first (see docs/superpowers/specs/2026-09-23-peer-sync-design.md)");
       }
-      const rootDir = await realpath(resolve(rootFlag ?? process.cwd()));
+      if (sub === "status") {
+        console.log(`self: ${cfg.self}  sync: ${cfg.peerSync}`);
+        for (const p of cfg.peers) console.log(`  ${p.name}  ${p.role}  ${p.alias}:${p.root}${p.repos ? `  (${p.repos.join(", ")})` : ""}`);
+        return;
+      }
+      const backend = apiBase(opt(args, "--backend"));
+      let answer: PeersAnswer = { ok: false, reason: "not asked" };
+      if (rootFlag === undefined) {
+        try {
+          const res = await fetch(`${backend}/api/peers`, { redirect: "manual", headers: callerHeaders(backend), signal: AbortSignal.timeout(10_000) });
+          const body = (await res.json().catch(() => null)) as { self?: string | null; root?: unknown; error?: string } | null;
+          answer = res.ok && body ? { ok: true, self: body.self ?? null, root: body.root } : { ok: false, reason: body?.error ?? `it answered ${res.status}` };
+        } catch (err) {
+          answer = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+        }
+      }
+      const picked = peersRoot(rootFlag, cfg.self, backend, answer);
+      if ("error" in picked) return fail(`canopy: ${picked.error}`);
+      let rootDir: string;
+      try {
+        rootDir = await realpath(resolve(picked.root));
+      } catch {
+        return fail(`canopy: ${picked.root} is not a folder on this machine`);
+      }
       const opts = { self: cfg.self, peers: cfg.peers, seed: cfg.seed, dry: cfg.peerSync !== "on", root: rootDir };
       // Repo ids under the launch root, read the same way the `tree` case
       // scans it, less the linked worktrees peer sync leaves alone. Only
@@ -648,11 +672,6 @@ export async function main(argv: string[]): Promise<void> {
             if (st.error) console.log(`${id}: ${st.error}`);
           }
           if (opts.dry) console.log(`peerSync is ${cfg.peerSync}: nothing was written`);
-          return;
-        }
-        case "status": {
-          console.log(`self: ${cfg.self}  sync: ${cfg.peerSync}`);
-          for (const p of cfg.peers) console.log(`  ${p.name}  ${p.role}  ${p.alias}:${p.root}${p.repos ? `  (${p.repos.join(", ")})` : ""}`);
           return;
         }
         case "take": {

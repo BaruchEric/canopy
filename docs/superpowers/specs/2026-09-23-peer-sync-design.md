@@ -113,14 +113,14 @@ interface PeerState {
 
 - The pass joins `refreshActivity` on the `REMOTE_REFRESH` timer (5 minutes), after the origin fetch, skipping a repo with an active run, the same way `fetchLocal` does.
 - `state.peerSeen` holds a `PeerSeen` per peer.
-- `GET /api/peers` is `{ self, peers, seen, sync }`.
+- `GET /api/peers` is `{ self, peers, seen, sync, root }`. `root` (added 2026-10-28) is the folder this backend syncs, which the CLI reads.
 - `POST /api/repos/peer?id=` `{ action: "take" | "track" | "sync" | "seed", peer, branch }`.
 - A `peers` event carries `seen`; each repo whose `PeerState` changed is broadcast as a repo event, so the card updates through the existing path.
 - One `ctl notify soft` the first time a branch becomes diverged; the feed gets a line per move, divergence and new WIP.
 
 ### CLI (`src/cli/`)
 
-`canopy peers status | init | sync [id] | take <id> <peer> [branch] | track <id> <peer> <branch> | seed <id> | gate --root dir`. `init` adds or repairs every peer's remote in every repo under the root and is safe to re-run; `gate` is what a peer's `authorized_keys` command runs and is never invoked by hand.
+`canopy peers status | init | sync [id] | take <id> <peer> [branch] | track <id> <peer> <branch> | seed <id> | gate --root dir`. `init` adds or repairs every peer's remote in every repo under the root and is safe to re-run; `gate` is what a peer's `authorized_keys` command runs and is never invoked by hand. Since 2026-10-28 the root for `init`, `sync`, `take`, `track` and `seed` is `--root`, else the `root` this machine's backend reports. It is never the current directory: a hand-run `sync` from inside the canopy checkout cloned the mini's whole workspace into it. A backend whose `self` is another machine is refused.
 
 ### UI (`ui/src/`)
 

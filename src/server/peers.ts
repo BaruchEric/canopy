@@ -110,7 +110,8 @@ export async function withPeering<T>(state: { peering: Promise<void> | null }, f
 /** GET /api/peers */
 export async function getPeers(d: PeerDeps): Promise<Response> {
   const s = await d.peerSettings();
-  return json({ self: s.self, peers: s.peers, seen: d.state.peerSeen, sync: s.peerSync });
+  // root: where this backend clones and syncs, which `canopy peers` asks for
+  return json({ self: s.self, peers: s.peers, seen: d.state.peerSeen, sync: s.peerSync, root: d.state.root });
 }
 
 /** POST /api/peers/sync */

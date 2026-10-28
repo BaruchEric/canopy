@@ -358,6 +358,8 @@ canopy peers gate --root dir              what a peer key's authorized_keys entr
 
 The CLI's peers commands are not serialized with a running server, so while the server runs prefer the UI's actions, which queue behind its own pass.
 
+`init`, `sync`, `take`, `track` and `seed` work on the folder this machine's running backend scans (`GET /api/peers` says which, and `--backend` picks the backend). Pass `--root dir` when no backend runs. They never fall back to the current directory, since `sync` clones every repo a peer has and this one lacks into that folder. The command refuses a backend that names itself as another machine.
+
 A peer reaches this machine through a dedicated ssh key whose `authorized_keys` entry forces the gate and nothing else:
 
 ```

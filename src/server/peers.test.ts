@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { peerUrl } from "../core/peers";
@@ -103,7 +103,8 @@ afterAll(async () => {
 describe("peer routes", () => {
   test("GET /api/peers", async () => {
     const body = await (await fetch(url("/api/peers"))).json();
-    expect(body).toMatchObject({ self: "mac", sync: "on", peers: [{ name: "mini" }] });
+    // the server keeps its root with symlinks resolved (/var is /private/var on macOS)
+    expect(body).toMatchObject({ self: "mac", sync: "on", peers: [{ name: "mini" }], root: await realpath(root) });
   });
 
   test("sync one repo: init, fetch, fast-forward, state on the repo", async () => {
