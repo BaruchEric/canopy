@@ -52,6 +52,8 @@ usage:
   canopy peers take <id> <peer> [branch]    land a peer's WIP here
   canopy peers track <id> <peer> <branch>   a local branch at a peer's tip
   canopy peers seed <id>             copy allowlisted ignored files from a peer
+    [--root dir] [--backend URL]     init/sync/take/track/seed work on the folder this machine's
+                                     backend scans, or --root; never the current directory
   canopy peers gate --root dir       what a peer key's authorized_keys entry runs
   canopy new "<idea>" [--file f]... [--url u]... [--repo url]
                                      start a project in the incubator; prints its link
