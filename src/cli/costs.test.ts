@@ -231,10 +231,11 @@ test("main dispatches costs across listed backends and merges qualified repos", 
   expect(miniRequests).toContain("GET /api/history?window=90d");
   expect(miniRequests).toContain("GET /api/costs?days=30");
   expect(devhubRequests).toContain("GET /api/costs?days=30");
-  expect(output.join("\n")).toContain("30 days: $23.00");
-  expect(output.join("\n")).toContain("harness 74% of $23.00 · 80% of 5 sessions  (canopy, runner, devhub)");
-  expect(output.join("\n")).toContain("  canopy                         $11.00");
-  expect(output.filter((line) => line.includes("  canopy "))).toHaveLength(1);
+  const printed = output.map(plain);
+  expect(printed.join("\n")).toContain("30 days: $23.00");
+  expect(printed.join("\n")).toContain("harness 74% of $23.00 · 80% of 5 sessions  (canopy, runner, devhub)");
+  expect(printed.join("\n")).toContain("  canopy                         $11.00");
+  expect(printed.filter((line) => line.includes("  canopy "))).toHaveLength(1);
 });
 
 test("costs names a backend after excluding it when any required endpoint fails", async () => {
@@ -273,5 +274,5 @@ test("costs names a backend after excluding it when any required endpoint fails"
 
   expect(homeRequests).toContain("GET /api/costs?days=1");
   expect(peerRequests).toContain("GET /api/history?window=90d");
-  expect(output.at(-1)).toBe("not counted: mini: archive offline");
+  expect(plain(output.at(-1) ?? "")).toBe("not counted: mini: archive offline");
 });

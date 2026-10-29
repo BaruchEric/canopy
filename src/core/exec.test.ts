@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { exec, KILL_GRACE, onHost } from "./exec";
 
 /** whether a pid is still running (a zombie waiting on its reaper counts as gone) */
@@ -71,27 +74,54 @@ describe("exec", () => {
   });
 
   test("a process that leaves the group and keeps a pipe is not waited on forever", async () => {
+    if (!Bun.which("python3")) return;
+    const dir = mkdtempSync(join(tmpdir(), "canopy-exec-"));
+    const ready = join(dir, "ready");
     // a daemon: forks, starts a session of its own, holds stdout open
     const script = [
       "import os, sys, time",
       "pid = os.fork()",
       "if pid == 0:",
       "    os.setsid()",
+      "    print(os.getpid(), flush=True)",
+      "    with open(sys.argv[1], 'w') as f:",
+      "        f.write(str(os.getpid()))",
       "    time.sleep(30)",
       "else:",
-      "    print(pid, flush=True)",
       "    time.sleep(30)",
     ].join("\n");
-    if (!Bun.which("python3")) return;
-    const start = Date.now();
-    const r = await exec(["python3", "-c", script], { timeoutMs: 300 });
-    expect(Date.now() - start).toBeLessThan(300 + 3 * KILL_GRACE);
-    const daemon = Number(r.stdout.trim());
-    expect(daemon).toBeGreaterThan(0);
+    const ctl = new AbortController();
+    const running = exec(["python3", "-c", script, ready], { timeoutMs: 10_000, signal: ctl.signal });
     try {
-      process.kill(daemon, "SIGKILL");
-    } catch {
-      // gone already
+      // Interpreter startup can exceed 300 ms on a busy machine. Begin
+      // measuring shutdown only once the child has left the process group.
+      const deadline = performance.now() + 5_000;
+      let daemon = 0;
+      while (performance.now() < deadline) {
+        if (existsSync(ready)) daemon = Number(readFileSync(ready, "utf8"));
+        if (daemon > 0) break;
+        await Bun.sleep(10);
+      }
+      expect(daemon).toBeGreaterThan(0);
+      const start = performance.now();
+      ctl.abort();
+      const r = await running;
+      expect(performance.now() - start).toBeLessThan(3 * KILL_GRACE);
+      expect(r.code).not.toBe(0);
+      expect(r.stdout.trim()).toBe(String(daemon));
+      expect(await alive(daemon)).toBe(true);
+    } finally {
+      ctl.abort();
+      await running;
+      const daemon = existsSync(ready) ? Number(readFileSync(ready, "utf8")) : 0;
+      if (daemon > 0) {
+        try {
+          process.kill(daemon, "SIGKILL");
+        } catch {
+          // gone already
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
     }
   }, 15_000);
 });
