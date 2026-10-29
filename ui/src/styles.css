@@ -9229,63 +9229,38 @@ button.machine:hover {
 }
 
 /* ---------- the views ---------- */
-/* the views as tabs beside the name, the one showing underlined in moss. The
-   row gives way before anything else on the bar: it scrolls, and an edge
-   with tabs past it fades, so the row says it goes on */
-.view-nav {
-  flex: 0 1 auto;
-  min-width: 0;
-  display: inline-flex;
-  gap: 2px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.view-nav::-webkit-scrollbar {
-  display: none;
-}
-.view-nav button {
+/* the three groups as words beside the name, the one holding the view
+   showing underlined in moss and naming that view */
+.view-groups {
   flex: none;
   display: inline-flex;
   align-items: center;
-  min-height: 28px;
-  padding: 1px 8px;
-  border-radius: var(--r) var(--r) 0 0;
+  gap: 2px;
+}
+.view-group .pick-btn {
   color: var(--ink-dim);
-  white-space: nowrap;
+  border-radius: var(--r) var(--r) 0 0;
 }
-.view-nav button:hover {
-  color: var(--ink);
-  background: var(--wash);
-}
-.view-nav button.on {
+.view-group.on .pick-btn {
   color: var(--moss);
   box-shadow: inset 0 -2px 0 var(--moss);
 }
-/* the repos, the agents and the system: a wider step between the groups */
-.view-nav button.group-start {
-  margin-left: 10px;
+.view-group .pick-btn:hover,
+.view-group .pick-btn.open {
+  color: var(--ink);
 }
-.view-nav.more-end {
-  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+.view-group.on .pick-btn:hover,
+.view-group.on .pick-btn.open {
+  color: var(--moss);
 }
-.view-nav.more-start {
-  mask-image: linear-gradient(to left, #000 calc(100% - 28px), transparent);
+.view-group-sep {
+  margin-inline: 5px;
+  color: var(--ink-faint);
 }
-.view-nav.more-start.more-end {
-  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+.view-group .pick-pop {
+  width: 340px;
 }
-/* the first row keeps to one line: the tabs scroll rather than wrap it */
-.topbar:not(.phone) .tb-top {
-  flex-wrap: nowrap;
-}
-/* the folder's path gives its room to the tabs first; the folder list
-   still names every folder */
-@media (max-width: 1560px) {
-  .topbar:not(.phone) .root-path {
-    display: none;
-  }
-}
-/* a view's live count, after its name in the view tabs and the phone's menu */
+/* a view's live count, after its name in the view menus and on their buttons */
 .view-badge {
   margin-left: 4px;
   font-size: 10px;
@@ -9735,7 +9710,6 @@ button.machine:hover {
       rotate: 360deg;
     }
   }
-  .view-nav button,
   .filter,
   .fold::before,
   .live-dot i {
@@ -9753,7 +9727,7 @@ button.machine:hover {
   .icon-btn:active,
   .seg button:active,
   .palettes button:active,
-  .view-nav button:active,
+
   .option:active {
     transform: translateY(1px) scale(0.97);
   }

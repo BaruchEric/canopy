@@ -117,8 +117,13 @@ function ViewBadge({ k }: { k: string }) {
 /** The most pressing tone among the views other than `view` that carry a
  *  count: rust before lichen before sky. A string, so the selector settles. */
 function elsewhereTone(s: CanopyState, view: string): BadgeTone | null {
+  return worstTone(s, VIEWS, view);
+}
+
+/** The most pressing tone among `views` other than `view`. */
+function worstTone(s: CanopyState, views: ViewDef[], view: string): BadgeTone | null {
   let worst: BadgeTone | null = null;
-  for (const { key } of VIEWS) {
+  for (const { key } of views) {
     if (key === view) continue;
     const t = badgeOf(s, key)?.tone;
     if (t && (worst === null || TONE_RANK[t] > TONE_RANK[worst])) worst = t;
@@ -166,74 +171,74 @@ function ViewMenu({ view, navigate }: { view: string; navigate: (next: string) =
   );
 }
 
-/** The views as one row of tabs in the top bar, each with its live count,
- *  a wider gap between the groups. A row too narrow for them all scrolls
- *  rather than pushing the bar wide: the current tab is kept in sight, and
- *  an edge with tabs past it fades. */
-function ViewTabs({ view, navigate }: { view: string; navigate: (next: string) => void }) {
-  const row = useRef<HTMLElement>(null);
-  const [more, setMore] = useState({ start: false, end: false });
-  useEffect(() => {
-    const el = row.current;
-    if (!el) return;
-    // placed again whenever the row's size changes: the badges and the
-    // fonts arrive after the first paint and widen it. A swipe is a scroll,
-    // not a resize, so it is left where the finger put it.
-    const place = () => {
-      const on = el.querySelector<HTMLElement>("button.on");
-      if (!on || el.scrollWidth <= el.clientWidth) return;
-      // the row alone, never the page: scrollIntoView would move the window too
-      const left = on.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft;
-      const right = left + on.offsetWidth;
-      if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth + 28;
-      else if (left < el.scrollLeft) el.scrollLeft = left - 28;
-    };
-    const measure = () => {
-      const start = el.scrollLeft > 1;
-      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
-      setMore((m) => (m.start === start && m.end === end ? m : { start, end }));
-    };
-    const settle = () => {
-      place();
-      measure();
-    };
-    settle();
-    el.addEventListener("scroll", measure, { passive: true });
-    const seen = new ResizeObserver(settle);
-    seen.observe(el);
-    for (const b of el.children) seen.observe(b);
-    return () => {
-      el.removeEventListener("scroll", measure);
-      seen.disconnect();
-    };
-  }, [view]);
-  const fade = [more.start ? "more-start" : "", more.end ? "more-end" : ""].filter(Boolean).join(" ");
+/** The views' three groups as words on the bar, each opening a menu of its
+ *  own views with their counts and what each is for. The group holding the
+ *  view showing is underlined in moss and names that view with its count;
+ *  another group carries a dot in the tone of its most pressing count. */
+function ViewGroups({ view, navigate }: { view: string; navigate: (next: string) => void }) {
   return (
-    <nav ref={row} className={fade ? `view-nav ${fade}` : "view-nav"} aria-label="Canopy views">
-      {VIEW_GROUPS.map((g, gi) =>
-        g.views.map(({ key, label, what }, vi) => (
-          <button
-            type="button"
-            key={key}
-            title={`${label}: ${what}`}
-            aria-current={view === key ? "page" : undefined}
-            className={[view === key ? "on" : "", gi > 0 && vi === 0 ? "group-start" : ""].filter(Boolean).join(" ")}
-            onClick={() => navigate(key)}
-          >
-            {label}
-            <ViewBadge k={key} />
-          </button>
-        )),
-      )}
+    <nav className="view-groups" aria-label="Canopy views">
+      {VIEW_GROUPS.map((g) => (
+        <ViewGroup key={g.label} group={g} view={view} navigate={navigate} />
+      ))}
     </nav>
   );
 }
 
-/** Tabs on anything wider than a phone; a phone has no room for eleven, so
- *  it keeps the one-word menu. */
+function ViewGroup({
+  group,
+  view,
+  navigate,
+}: {
+  group: (typeof VIEW_GROUPS)[number];
+  view: string;
+  navigate: (next: string) => void;
+}) {
+  const current = group.views.find((v) => v.key === view);
+  const tone = useStore((s) => worstTone(s, group.views, view));
+  return (
+    <PickMenu
+      className={current ? "view-group on" : "view-group"}
+      label={`Canopy views: ${group.label}`}
+      value={current?.key ?? null}
+      groups={[
+        {
+          options: group.views.map((v) => ({
+            value: v.key,
+            label: (
+              <>
+                {v.label}
+                <ViewBadge k={v.key} />
+              </>
+            ),
+            what: v.what,
+          })),
+        },
+      ]}
+      onPick={navigate}
+      title={current ? `${current.label}: ${current.what}` : `${group.label}: ${group.views.map((v) => v.label).join(", ")}`}
+      trigger={
+        <>
+          {group.label}
+          {current && (
+            <>
+              <span className="view-group-sep" aria-hidden="true">/</span>
+              {current.label}
+              <ViewBadge k={current.key} />
+            </>
+          )}
+          {tone && <span className={`dot view-elsewhere t-${tone}`} aria-label={`a ${group.label} view has something to show`} />}
+        </>
+      }
+    />
+  );
+}
+
+/** The three groups on anything wider than a phone; a phone has no room for
+ *  them, so it keeps the one-word menu of every view. */
 function ViewSwitch(props: { view: string; navigate: (next: string) => void }) {
   const phone = useMedia(PHONE);
-  return phone ? <ViewMenu {...props} /> : <ViewTabs {...props} />;
+  return phone ? <ViewMenu {...props} /> : <ViewGroups {...props} />;
 }
 
 /** The phone's status bar in the palette's own bark: each theme-color meta
