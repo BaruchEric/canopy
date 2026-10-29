@@ -166,6 +166,76 @@ function ViewMenu({ view, navigate }: { view: string; navigate: (next: string) =
   );
 }
 
+/** The views as one row of tabs in the top bar, each with its live count,
+ *  a wider gap between the groups. A row too narrow for them all scrolls
+ *  rather than pushing the bar wide: the current tab is kept in sight, and
+ *  an edge with tabs past it fades. */
+function ViewTabs({ view, navigate }: { view: string; navigate: (next: string) => void }) {
+  const row = useRef<HTMLElement>(null);
+  const [more, setMore] = useState({ start: false, end: false });
+  useEffect(() => {
+    const el = row.current;
+    if (!el) return;
+    // placed again whenever the row's size changes: the badges and the
+    // fonts arrive after the first paint and widen it. A swipe is a scroll,
+    // not a resize, so it is left where the finger put it.
+    const place = () => {
+      const on = el.querySelector<HTMLElement>("button.on");
+      if (!on || el.scrollWidth <= el.clientWidth) return;
+      // the row alone, never the page: scrollIntoView would move the window too
+      const left = on.getBoundingClientRect().left - el.getBoundingClientRect().left + el.scrollLeft;
+      const right = left + on.offsetWidth;
+      if (right > el.scrollLeft + el.clientWidth) el.scrollLeft = right - el.clientWidth + 28;
+      else if (left < el.scrollLeft) el.scrollLeft = left - 28;
+    };
+    const measure = () => {
+      const start = el.scrollLeft > 1;
+      const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+      setMore((m) => (m.start === start && m.end === end ? m : { start, end }));
+    };
+    const settle = () => {
+      place();
+      measure();
+    };
+    settle();
+    el.addEventListener("scroll", measure, { passive: true });
+    const seen = new ResizeObserver(settle);
+    seen.observe(el);
+    for (const b of el.children) seen.observe(b);
+    return () => {
+      el.removeEventListener("scroll", measure);
+      seen.disconnect();
+    };
+  }, [view]);
+  const fade = [more.start ? "more-start" : "", more.end ? "more-end" : ""].filter(Boolean).join(" ");
+  return (
+    <nav ref={row} className={fade ? `view-nav ${fade}` : "view-nav"} aria-label="Canopy views">
+      {VIEW_GROUPS.map((g, gi) =>
+        g.views.map(({ key, label, what }, vi) => (
+          <button
+            type="button"
+            key={key}
+            title={`${label}: ${what}`}
+            aria-current={view === key ? "page" : undefined}
+            className={[view === key ? "on" : "", gi > 0 && vi === 0 ? "group-start" : ""].filter(Boolean).join(" ")}
+            onClick={() => navigate(key)}
+          >
+            {label}
+            <ViewBadge k={key} />
+          </button>
+        )),
+      )}
+    </nav>
+  );
+}
+
+/** Tabs on anything wider than a phone; a phone has no room for eleven, so
+ *  it keeps the one-word menu. */
+function ViewSwitch(props: { view: string; navigate: (next: string) => void }) {
+  const phone = useMedia(PHONE);
+  return phone ? <ViewMenu {...props} /> : <ViewTabs {...props} />;
+}
+
 /** The phone's status bar in the palette's own bark: each theme-color meta
  *  in index.html takes `--bark1` as its media's scheme paints it, or as the
  *  scheme the setting forces does. A probe with its own color-scheme is
@@ -505,7 +575,7 @@ export function App() {
         <DictationFloat />
       </>
     );
-  const nav = <ViewMenu view={view} navigate={navigate} />;
+  const nav = <ViewSwitch view={view} navigate={navigate} />;
   return (
     <div className="app">
       {OTHER_VIEWS.includes(view) ? <>
