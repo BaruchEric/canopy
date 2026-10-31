@@ -2,6 +2,10 @@
 
 ## Open
 
+### FR-048 · A rejected push names an upstream amend and offers to drop the stale copy
+P2 · added 2026-10-30 · source: Eric (atlas push, 2026-10-30)
+When a push is rejected as non-fast-forward and upstream holds an amended copy of the local commit (same message and author time, upstream tree a superset), the push card says so and offers to move the branch onto upstream with rebase --onto, instead of a rebase that stops on conflicts. Seen in web-apps/atlas: main had pulled 9944ed5 from the mac peer, then the Mac pushed its amend b254442.
+
 ### FR-046 · Paseo interop study
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo)
 Paseo (getpaseo/paseo, Apache-2.0) has canopy's daemon-plus-clients shape, multi-host model, voice and worktrees, and the native phone apps canopy lacks. A two-half-day study with written thresholds decides between an adapter that speaks its protocol, a landing-queue plugin contributed upstream, or no, which is the default while FR-042 covers the phone.
