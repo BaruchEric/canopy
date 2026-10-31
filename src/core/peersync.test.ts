@@ -14,6 +14,7 @@ import {
   gateCommand,
   type GateCommand,
   gitSshCommand,
+  hasWork,
   initRepo,
   isBusy,
   isDirty,
@@ -122,6 +123,33 @@ describe("snapshotWip", () => {
     expect(await sh(r, "show", "refs/wip/main:new.txt")).toBe("untracked");
     expect(await sh(r, "rev-parse", "refs/wip/main^")).toBe(await sh(r, "rev-parse", "HEAD"));
     expect(await sh(r, "log", "-1", "--format=%s", "refs/wip/main")).toMatch(/^wip mac /);
+  });
+
+  test("node_modules at any depth stays out of a snapshot, even when nothing ignores it", async () => {
+    const r = await repo("nodemods");
+    await mkdir(join(r, "node_modules", "x"), { recursive: true });
+    await writeFile(join(r, "node_modules", "x", "i.js"), "1\n");
+    await mkdir(join(r, "app", "node_modules", "y"), { recursive: true });
+    await writeFile(join(r, "app", "node_modules", "y", "i.js"), "2\n");
+    await writeFile(join(r, "app", "k.ts"), "3\n");
+    expect((await snapshotWip(r, "mac", false))?.wrote).toBe(true);
+    const files = (await sh(r, "ls-tree", "-r", "--name-only", "refs/wip/main")).split("\n");
+    expect(files.sort()).toEqual(["a.txt", "app/k.ts"]);
+  });
+
+  test("a tree dirty only in node_modules writes nothing and drops an old snapshot", async () => {
+    const r = await repo("onlymods");
+    await writeFile(join(r, "b.txt"), "b\n");
+    expect((await snapshotWip(r, "mac", false))?.wrote).toBe(true);
+    await rm(join(r, "b.txt"));
+    await mkdir(join(r, "node_modules", "x"), { recursive: true });
+    await writeFile(join(r, "node_modules", "x", "i.js"), "1\n");
+    expect(await isDirty(r)).toBe(true);
+    expect(await hasWork(r)).toBe(false);
+    expect(await snapshotWip(r, "mac", false)).toBeNull();
+    expect(await hasRef(r, "refs/wip/main")).toBe(false);
+    await writeFile(join(r, "b.txt"), "b\n");
+    expect(await hasWork(r)).toBe(true);
   });
 
   test("the same tree again writes no new commit, and reports the snapshot's own time", async () => {
@@ -2014,6 +2042,15 @@ describe("resetTree", () => {
     expect(await readFile(join(r, "a.txt"), "utf8")).toBe("one\n");
     expect(existsSync(join(r, "new.txt"))).toBe(false);
     expect(existsSync(join(r, "secret.env"))).toBe(true);
+  });
+  test("leaves an unignored node_modules in place, since the snapshot left it out", async () => {
+    const { r, wip } = await dirtied("reset-mods");
+    await mkdir(join(r, "app", "node_modules", "y"), { recursive: true });
+    await writeFile(join(r, "app", "node_modules", "y", "i.js"), "2\n");
+    expect(await treeIs(r, wip)).toBe(true);
+    expect(await resetTree(r, wip, S)).toBe("reset");
+    expect(existsSync(join(r, "new.txt"))).toBe(false);
+    expect(existsSync(join(r, "app", "node_modules", "y", "i.js"))).toBe(true);
   });
   test("keeps a staged version that differs from the tree under refs/canopy-moved-index", async () => {
     const r = await repo("reset-index");

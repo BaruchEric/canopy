@@ -79,7 +79,7 @@ import { shipConfig, shipper, type Shipper } from "../core/shipper";
 import { seedSource, type SeedSource } from "../core/seedsource";
 import { vaultConfig, vaultNotes } from "../core/vault";
 import { linkPeers, NO_PUSH, peerUrl } from "../core/peers";
-import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, initRepo, isBusy, isDirty, isLinkedWorktree, PassSeen, resetBlocker, resetTree, snapshotWip, syncAll, syncRepo, takeWip, treeIs } from "../core/peersync";
+import { currentBranch, fetchPeer, gitSshCommand, type FetchOutcome, hasWork, initRepo, isBusy, isDirty, isLinkedWorktree, PassSeen, resetBlocker, resetTree, snapshotWip, syncAll, syncRepo, takeWip, treeIs } from "../core/peersync";
 import { endAgent, MOVE_MAX, MoveError, moveFileList, placeTranscript, rewriteTranscript, transcriptConflict, type PaneDriver } from "../core/move";
 import { normalizeLaunch } from "../core/launch";
 import { repoSpecState, syncRepo as syncSpec } from "../core/spec";
@@ -3772,7 +3772,7 @@ async function handleApi(
     const out = await withPeering(state, async (): Promise<MoveOut> => {
       const head = (await git(at, ["rev-parse", "HEAD"])).stdout.trim();
       let wip: string | null = null;
-      if (await isDirty(at)) {
+      if (await hasWork(at)) {
         const notSaved = new HttpError(500, "the snapshot was not written; resume here to carry on");
         // a failed write leaves whatever refs/wip/<branch> a peer pass wrote
         // earlier, so the ref counts only when this call wrote or confirmed

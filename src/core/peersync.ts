@@ -51,6 +51,13 @@ async function commitTimeMs(repo: string, ref: string): Promise<number | null> {
   return Number.isFinite(secs) ? secs * 1000 : null;
 }
 
+/** What a snapshot picks up: the whole worktree except node_modules at any
+ *  depth. A repo whose .gitignore misses node_modules (or lost the nested
+ *  .gitignore that listed it) would otherwise snapshot and ship every
+ *  installed package to each peer. Tracked files under node_modules keep
+ *  their indexed version; changes to them are not carried. */
+const SNAPSHOT_PATHS = [":(top)", ":(top,exclude,glob)**/node_modules", ":(top,exclude,glob)**/node_modules/**"];
+
 /** The tree the working copy would commit, built in a copy of the index so
  *  the user's own index is never written or locked. Dry runs also keep new
  *  objects out of the repo's real store: new blobs and the tree land in a
@@ -69,7 +76,7 @@ async function worktreeTree(repo: string, dry: boolean): Promise<string | null> 
       env.GIT_OBJECT_DIRECTORY = scratchObjects;
       env.GIT_ALTERNATE_OBJECT_DIRECTORIES = await gitPath(repo, "objects");
     }
-    if ((await git(repo, ["add", "-A"], 60_000, env)).code !== 0) return null;
+    if ((await git(repo, ["add", "-A", "--", ...SNAPSHOT_PATHS], 60_000, env)).code !== 0) return null;
     const t = await git(repo, ["write-tree"], 30_000, env);
     return t.code === 0 ? t.stdout.trim() : null;
   } finally {
@@ -168,6 +175,13 @@ export async function snapshotWip(
   }
   const tree = await worktreeTree(repo, dry);
   if (!tree) return null;
+  // Dirty only in what a snapshot leaves out (an untracked node_modules):
+  // nothing to carry, so treat it like a clean tree.
+  const headTree = await git(repo, ["rev-parse", "HEAD^{tree}"]);
+  if (headTree.code === 0 && headTree.stdout.trim() === tree) {
+    if (had.code === 0 && !dry) await git(repo, ["update-ref", "-d", ref, had.stdout.trim()]);
+    return null;
+  }
   if (had.code === 0) {
     const last = await git(repo, ["rev-parse", `${ref}^{tree}`]);
     if (last.stdout.trim() === tree) {
@@ -1208,6 +1222,14 @@ export async function takeWip(repo: string, peer: string, branch: string): Promi
 
 /** whether the working copy, untracked files included and ignored ones
  *  not, is exactly `commit`'s tree; built in scratch, writing nothing */
+/** Whether the working copy holds anything a snapshot would carry: dirty,
+ *  and not only in what a snapshot leaves out (SNAPSHOT_PATHS). */
+export async function hasWork(repo: string): Promise<boolean> {
+  if (!(await isDirty(repo))) return false;
+  const head = await git(repo, ["rev-parse", "-q", "--verify", "HEAD^{tree}"]);
+  return head.code !== 0 || (await worktreeTree(repo, true)) !== head.stdout.trim();
+}
+
 export async function treeIs(repo: string, commit: string): Promise<boolean> {
   const want = await git(repo, ["rev-parse", "-q", "--verify", `${commit}^{tree}`]);
   if (want.code !== 0) return false;
@@ -1298,8 +1320,9 @@ export async function resetTree(repo: string, wip: string, session: string): Pro
   if (!(await treeIs(repo, wip))) throw new Error("the tree changed since the move began; nothing was reset");
   await keepIndex(repo, wip, session);
   // clean first: it must see the same ignore rules the snapshot used, and
-  // reset --hard can restore an older .gitignore that un-ignores a file
-  const clean = await git(repo, ["clean", "-f", "-d", "--quiet"]);
+  // reset --hard can restore an older .gitignore that un-ignores a file.
+  // The snapshot also left node_modules out, so clean leaves it too.
+  const clean = await git(repo, ["clean", "-f", "-d", "--quiet", "-e", "node_modules"]);
   if (clean.code !== 0) throw new Error(clean.stderr.trim());
   const reset = await git(repo, ["-c", "submodule.recurse=false", "reset", "--hard", "--quiet", "HEAD"]);
   if (reset.code !== 0) throw new Error(reset.stderr.trim());
