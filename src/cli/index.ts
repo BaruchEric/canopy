@@ -44,6 +44,7 @@ import { parseNewArgs, sproutLink } from "./newargs";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
 import { helperName, localOpeners, runHelper } from "../core/helperd";
+import { localEmulators } from "../core/emulatord";
 import { readBuild } from "../core/build";
 import { versionLine } from "../core/version";
 import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
@@ -276,7 +277,9 @@ export async function main(argv: string[]): Promise<void> {
           return fail(`pairing failed: ${e instanceof Error ? e.message : String(e)}`);
         }
       }
-      const handle = runHelper({ backend, name, openers, token: () => readHelperToken(tokenPath), log: (line) => console.log(`${stamp()} ${line}`) });
+      // the simulators and emulators here, read at each dial (FR-050)
+      const emulators = flag(args, "--no-emulators") ? undefined : localEmulators;
+      const handle = runHelper({ backend, name, openers, emulators, token: () => readHelperToken(tokenPath), log: (line) => console.log(`${stamp()} ${line}`) });
       console.log(`${moss("canopy helper")} ${dim("→")} ${sky(backend)} ${dim(`as ${name}: ${openers.join(", ") || "no openers"}`)}`);
       const bye = () => {
         handle.stop();

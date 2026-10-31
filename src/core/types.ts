@@ -336,6 +336,9 @@ export interface HelperInfo {
    *  helper older than harnesses, which drops an intent's harness and
    *  would start claude with another harness's flags */
   harnesses?: Harness[];
+  /** the iOS simulators and Android emulators it can start a preview in
+   *  (FR-050); absent from a helper older than them */
+  emulators?: Emulator[];
   /** unix ms of the registration */
   since: number;
   /** the address the backend saw the helper dial in from */
@@ -381,6 +384,8 @@ export interface ClientInfo {
    *  front of a container hands the backend its own gateway for every
    *  client), so it says nothing about which machine the browser is on */
   shared: boolean;
+  /** the backend's own simulators and emulators, when `local` (FR-050) */
+  emulators?: Emulator[];
 }
 
 /** One browser on the backend, as presence shows it: a browser profile is
@@ -414,6 +419,38 @@ export interface ClientCaps {
   openers: OpenerId[];
   via: "backend" | "helper" | null;
   helper: HelperInfo | null;
+  /** the simulators and emulators that machine can show a preview in */
+  emulators: Emulator[];
+}
+
+/* ---------- emulators: a preview on a simulated device (FR-050) ---------- */
+
+export const EMULATOR_KINDS = ["ios", "android"] as const;
+/** an iOS simulator (Xcode's simctl) or an Android emulator (an AVD) */
+export type EmulatorKind = (typeof EMULATOR_KINDS)[number];
+
+export const EMULATOR_FORMS = ["phone", "tablet", "other"] as const;
+/** what the device is shaped like; "other" is a watch, a TV, glasses */
+export type EmulatorForm = (typeof EMULATOR_FORMS)[number];
+
+/** One device a machine can start and open a page in. */
+export interface Emulator {
+  kind: EmulatorKind;
+  /** the simulator's UDID, or the AVD's name */
+  id: string;
+  /** what the user sees: "iPhone 17 · iOS 26.5", "Pixel 7 (privatelm)" */
+  name: string;
+  form: EmulatorForm;
+  /** it is running now */
+  running?: boolean;
+}
+
+/** `POST /api/repos/emulator`'s answer: the device and the address it was
+ *  sent to, and a note when it was still starting as the answer went */
+export interface EmulatorOpened {
+  ok: true;
+  url: string;
+  note?: string;
 }
 
 export interface ScanResult {

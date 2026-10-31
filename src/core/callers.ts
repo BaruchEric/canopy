@@ -98,7 +98,7 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["scenarios/run"], right: "operate" },
   {
     methods: POST,
-    paths: ["repos/archive", "repos/open", "repos/openfile", "repos/launch", "repos/halt", "repos/install", "repos/uninstall", "repos/build", "repos/launcher"],
+    paths: ["repos/archive", "repos/open", "repos/openfile", "repos/emulator", "repos/launch", "repos/halt", "repos/install", "repos/uninstall", "repos/build", "repos/launcher"],
     right: "admin",
   },
 ];

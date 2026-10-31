@@ -12,7 +12,9 @@
 import { hostname } from "node:os";
 import { HELPER_DEAD, HELPER_PING, helperOpeners, parseHelperIntent, type HelperIntent, type HelperReply } from "./helper";
 import { openFile, openGroup, openIn } from "./openers";
-import { DEFAULT_AGENT, HARNESSES, type Harness, type OpenerId } from "./types";
+import { emulatorsParam } from "./emulators";
+import { openInEmulator } from "./emulatord";
+import { DEFAULT_AGENT, HARNESSES, type Emulator, type Harness, type OpenerId } from "./types";
 
 export interface HelperOptions {
   /** the backend's http(s) origin, e.g. `http://macmini-2018:7850` */
@@ -23,8 +25,12 @@ export interface HelperOptions {
   openers?: OpenerId[];
   /** where a line of progress goes */
   log?: (line: string) => void;
-  /** runs one intent; the real openers by default, a fake in tests */
-  run?: (intent: HelperIntent) => Promise<void>;
+  /** runs one intent; the real openers by default, a fake in tests. A
+   *  string is a note for the caller to hear with the success. */
+  run?: (intent: HelperIntent) => Promise<string | void>;
+  /** the simulators and emulators to offer, read again at every dial so a
+   *  device added since shows up on the next one; none when absent */
+  emulators?: () => Promise<Emulator[]>;
   /** how often to ping the backend; `HELPER_PING` by default, short in tests */
   ping?: number;
   /** how long unanswered before the backend counts as gone; `HELPER_DEAD` */
@@ -49,6 +55,7 @@ export function helperUrl(
   platform: string,
   openers: OpenerId[],
   harnesses: readonly Harness[] = HARNESSES,
+  emulators?: readonly Emulator[],
 ): string {
   const u = new URL("/api/helper", backend);
   u.protocol = u.protocol === "https:" ? "wss:" : "ws:";
@@ -56,6 +63,7 @@ export function helperUrl(
   u.searchParams.set("platform", platform);
   u.searchParams.set("openers", openers.join(","));
   u.searchParams.set("harnesses", harnesses.join(","));
+  if (emulators) u.searchParams.set("emulators", emulatorsParam(emulators));
   return u.toString();
 }
 
@@ -79,8 +87,13 @@ export function localOpeners(platform = process.platform): OpenerId[] {
   return helperOpeners(platform, has);
 }
 
-/** run one intent through the openers here */
-export async function runIntent(intent: HelperIntent): Promise<void> {
+/** run one intent through the openers here; a device still booting comes
+ *  back as a note, its outcome going to `log` */
+export async function runIntent(intent: HelperIntent, log: (line: string) => void = () => {}): Promise<string | void> {
+  if ("emulator" in intent) {
+    const { kind, device, url } = intent.emulator;
+    return openInEmulator(kind, device, url, { log });
+  }
   if ("open" in intent) {
     const { app, path, agent, tab } = intent.open;
     await openIn(app, path, agent, { tab });
@@ -102,8 +115,8 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
   const name = opts.name ?? helperName();
   const openers = opts.openers ?? localOpeners();
   const log = opts.log ?? (() => {});
-  const run = opts.run ?? runIntent;
-  const url = helperUrl(opts.backend, name, process.platform, openers);
+  const run = opts.run ?? ((intent: HelperIntent) => runIntent(intent, log));
+  const listEmulators = opts.emulators;
   const every = opts.ping ?? HELPER_PING;
   const dead = opts.dead ?? HELPER_DEAD;
   let ws: WebSocket | null = null;
@@ -175,6 +188,9 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
       return;
     }
     if (stopped) return;
+    const emulators = listEmulators ? await listEmulators().catch(() => []) : undefined;
+    if (stopped) return;
+    const url = helperUrl(opts.backend, name, process.platform, openers, HARNESSES, emulators);
     const sock = new WebSocket(ticket === null ? url : `${url}&ticket=${encodeURIComponent(ticket)}`);
     ws = sock;
     // Anything from the other end, a pong included, is proof its host is
@@ -199,7 +215,8 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
         }
         if (sock.readyState === WebSocket.OPEN) sock.ping();
       }, every);
-      log(`registered with ${opts.backend} as ${name} (${openers.join(", ") || "no openers"})`);
+      const devices = emulators?.length ? `; ${emulators.length} simulators and emulators` : "";
+      log(`registered with ${opts.backend} as ${name} (${openers.join(", ") || "no openers"}${devices})`);
     };
     sock.onmessage = (ev) => {
       alive();
@@ -211,11 +228,12 @@ export function runHelper(opts: HelperOptions): { stop: () => void; readonly con
       }
       const what = "open" in intent ? `${intent.open.app} at ${intent.open.path}`
         : "file" in intent ? `${intent.file.file}:${intent.file.line} in ${intent.file.path}`
-        : `${intent.group.app} for ${intent.group.repos.length} repos`;
+        : "group" in intent ? `${intent.group.app} for ${intent.group.repos.length} repos`
+        : `${intent.emulator.url} in ${intent.emulator.kind} ${intent.emulator.device}`;
       run(intent).then(
-        () => {
-          log(`opened ${what}`);
-          reply(sock, { id: intent.id, ok: true });
+        (note) => {
+          log(note ? `${what}: ${note}` : `opened ${what}`);
+          reply(sock, note ? { id: intent.id, ok: true, note } : { id: intent.id, ok: true });
         },
         (e: unknown) => {
           const error = e instanceof Error ? e.message : String(e);

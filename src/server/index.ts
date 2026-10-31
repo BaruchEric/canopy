@@ -97,7 +97,9 @@ import {
   openIn,
   userShell,
 } from "../core/openers";
-import { clientKey, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
+import { emulatorIdOk, emulatorTarget } from "../core/emulators";
+import { localEmulators, openInEmulator } from "../core/emulatord";
+import { clientKey, EMULATOR_TIMEOUT, HELPER_PING, HELPER_TIMEOUT, helperRefusal, isLoopback, isLoopbackHost, parseDefaultGateway, parseHelperQuery, parseHelperReply, reachFrom, staleHelpers, type HelperAsk } from "../core/helper";
 import { devicesOf, parseStream, type Stream } from "../core/presence";
 import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
@@ -203,8 +205,8 @@ import {
   type WsColor,
   TERM_GONE,
 } from "../core/types";
-import type { About, AdviceAccepted, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { AWAKE_MODES, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
+import type { About, AdviceAccepted, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
+import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { STAGE_AWAY } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -546,7 +548,7 @@ interface TermSocket {
 interface Helper {
   info: HelperInfo;
   ws: ServerWebSocket<Socket>;
-  pending: Map<number, { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>;
+  pending: Map<number, { resolve: (note?: string) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>;
   next: number;
   /** when this end last heard from the helper, a pong included */
   seen: number;
@@ -577,7 +579,24 @@ const NO_HELPER = "no canopy helper is attached for this browser; run `canopy he
  *  own, and whether it is the address docker's proxy hands a container for
  *  every client. */
 function clientInfo(state: ServerState, key: string, here: boolean): ClientInfo {
-  return { address: key, local: here && hostOpeners(), shared: key === state.gateway };
+  const local = here && hostOpeners();
+  // a test server lists nothing: simctl would run behind every test
+  const emulators = local && process.env["NODE_ENV"] !== "test" ? hostEmulators() : null;
+  return { address: key, local, shared: key === state.gateway, ...(emulators ? { emulators } : {}) };
+}
+
+/** This Mac's own simulators and emulators, for a browser on it (FR-050):
+ *  the last listing, read again in the background once it is a minute old,
+ *  since simctl can take seconds and /api/client answers at once. */
+let hostDevices: { list: Emulator[]; at: number; reading: boolean } = { list: [], at: 0, reading: false };
+function hostEmulators(now = Date.now()): Emulator[] {
+  if (!hostDevices.reading && now - hostDevices.at > 60_000) {
+    hostDevices = { ...hostDevices, reading: true };
+    void localEmulators()
+      .then((list) => (hostDevices = { list, at: Date.now(), reading: false }))
+      .catch(() => (hostDevices = { ...hostDevices, at: Date.now(), reading: false }));
+  }
+  return hostDevices.list;
 }
 
 /** Whether a request comes from a browser on this machine: from loopback,
@@ -605,18 +624,19 @@ function tellHelpers(state: ServerState): void {
   broadcast(state, { type: "helpers", helpers: helperList(state) });
 }
 
-/** one intent to the helper `name`, settled by its reply or the timeout */
-function askHelper(state: ServerState, name: string, intent: HelperAsk): Promise<void> {
+/** one intent to the helper `name`, settled by its reply or the timeout;
+ *  a success may carry the helper's note */
+function askHelper(state: ServerState, name: string, intent: HelperAsk, timeout = HELPER_TIMEOUT): Promise<string | undefined> {
   const helper = state.helpers.get(name);
   if (!helper) return Promise.reject(new HttpError(400, NO_HELPER));
   const refused = helperRefusal(helper.info, intent);
   if (refused) return Promise.reject(new HttpError(400, refused));
   const id = helper.next++;
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<string | undefined>((resolve, reject) => {
     const timer = setTimeout(() => {
       helper.pending.delete(id);
       reject(new HttpError(504, `the helper ${helper.info.name} did not answer in time`));
-    }, HELPER_TIMEOUT);
+    }, timeout);
     helper.pending.set(id, { resolve, reject, timer });
     helper.ws.send(JSON.stringify({ id, ...intent }));
   });
@@ -631,7 +651,7 @@ function helperReplied(state: ServerState, name: string, text: string): void {
   if (!p) return;
   helper.pending.delete(reply.id);
   clearTimeout(p.timer);
-  if ("ok" in reply) p.resolve();
+  if ("ok" in reply) p.resolve(reply.note);
   else p.reject(new HttpError(502, `${helper.info.name}: ${reply.error}`));
 }
 
@@ -4591,6 +4611,43 @@ async function handleApi(
       if (via.via === "backend") await openIn(b.app, repo.path, agent, { tab });
       else await askHelper(state, via.name, { open: { app: b.app, path: helperPath(repo.path), agent, tab } });
       return json({ ok: true });
+    }
+    // a preview in a simulator or emulator on the browser's machine (FR-050):
+    // the backend's own Mac sends it to the dev server itself, a helper's
+    // machine to the preview slot at the backend's tailnet address
+    if (method === "POST" && action === "emulator") {
+      const b = (await req.json().catch(() => null)) as { kind?: unknown; device?: unknown; port?: unknown; path?: unknown; helper?: unknown } | null;
+      const kind = EMULATOR_KINDS.find((k) => k === b?.kind);
+      const device = b?.device;
+      if (!kind || typeof device !== "string" || !emulatorIdOk(kind, device)) throw new HttpError(400, "a simulator or emulator is needed: kind ios or android, and its device id");
+      if (repo.host || repo.forge) throw new HttpError(400, `${repo.name} is not on this backend, so neither is its dev server`);
+      const reserved = state.preview?.reserved ?? [];
+      if (!previewable(b?.port, reserved)) throw new HttpError(400, "a dev server's port is needed (not canopy's own)");
+      const port = b.port;
+      const path = typeof b.path === "string" && b.path.startsWith("/") && b.path.length <= 1000 ? b.path : "/";
+      const via = openVia(state, here, b.helper);
+      const log = (line: string) => process.env["NODE_ENV"] !== "test" && console.log(`emulator: ${line}`);
+      let url: string;
+      let note: string | undefined;
+      if (via.via === "backend") {
+        url = `http://localhost:${port}${path}`;
+        try {
+          note = await openInEmulator(kind, device, url, { log });
+        } catch (e) {
+          throw new HttpError(502, e instanceof Error ? e.message : String(e));
+        }
+      } else {
+        const helper = state.helpers.get(via.name);
+        if (!(helper?.info.emulators ?? []).some((e) => e.kind === kind && e.id === device)) {
+          throw new HttpError(400, `the helper on ${via.name} does not list that device; restart canopy helper there to list it again`);
+        }
+        const slot = state.preview ? await state.preview.serve(port) : null;
+        const target = emulatorTarget({ local: false, host: state.preview?.host ?? null, slot }, port, path);
+        if (typeof target !== "string") throw new HttpError(400, target.error);
+        url = target;
+        note = await askHelper(state, via.name, { emulator: { kind, device, url } }, EMULATOR_TIMEOUT);
+      }
+      return json({ ok: true, url, ...(note ? { note } : {}) } satisfies EmulatorOpened);
     }
     if (method === "POST" && action === "agent") {
       // Validated field by field: a stray value must not reach a command

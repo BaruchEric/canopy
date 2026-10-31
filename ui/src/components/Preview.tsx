@@ -3,7 +3,8 @@ import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { backendOf, isHome } from "../registry";
-import { tasksOf, useStore } from "../store";
+import { capsFor, helperFor, tasksOf, useStore } from "../store";
+import { emulatorKey, emulatorOrder, readEmulatorKey } from "../../../src/core/emulators";
 import { devTask, quietPreview } from "../tasks";
 import { useMentions } from "./Mentions";
 import { Section, useSectionClosed } from "./Surface";
@@ -36,7 +37,7 @@ import { copyText } from "../share";
 import { NO_SHOTS, Shooter, canShoot, shotError } from "../shots";
 import { PICK_SAID, PickNotes } from "./PickNotes";
 import { ClipLayer, DrawBar, DrawLayer } from "./PreviewLayers";
-import type { ListeningPort, Repo } from "../../../src/core/types";
+import type { EmulatorForm, ListeningPort, Repo } from "../../../src/core/types";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -129,6 +130,48 @@ function DeviceSwitch({ view, setView, scale }: { view: DeviceView; setView: (v:
         </>
       )}
     </>
+  );
+}
+
+/** The simulators and emulators on this browser's machine (FR-050), the
+ *  backend's own Mac's or its helper's, as a menu: the device the page is
+ *  shown as comes first. Picking one starts it and opens the dev server
+ *  there; the menu hides when the machine has none. */
+function EmulatorMenu({ repoId, port, path, form, say }: { repoId: string; port: number; path: string; form: EmulatorForm | null; say: (s: { text: string; bad: boolean } | null) => void }) {
+  const backend = backendOf(repoId);
+  const list = useStore(useShallow((s) => capsFor(s, backend).emulators));
+  const [busy, setBusy] = useState(false);
+  if (list.length === 0) return null;
+  const ordered = emulatorOrder(list, form);
+  const run = (key: string) => {
+    const picked = readEmulatorKey(key);
+    const device = list.find((e) => picked && e.kind === picked.kind && e.id === picked.id);
+    if (!picked || !device) return;
+    setBusy(true);
+    say({ text: `starting ${device.name}…`, bad: false });
+    api
+      .emulator(repoId, { kind: picked.kind, device: picked.id, port, path }, helperFor(useStore.getState(), backend))
+      .then((r) => say({ text: r.note ?? `opened ${r.url} in ${device.name}`, bad: false }))
+      .catch((e: unknown) => say({ text: errText(e), bad: true }))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <select
+      className="preview-select preview-emulator"
+      aria-label="Open in a simulator"
+      title="Open this page in an iOS simulator or Android emulator on this machine"
+      value=""
+      disabled={busy}
+      onChange={(e) => run(e.target.value)}
+    >
+      <option value="">{busy ? "starting…" : "▶ simulator"}</option>
+      {ordered.map((e) => (
+        <option key={emulatorKey(e)} value={emulatorKey(e)}>
+          {e.kind === "ios" ? "iOS" : "Android"} · {e.name}
+          {e.running ? " · on" : ""}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -241,6 +284,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   }, [wrapEl]);
   const size = deviceSize(view);
   const scale = size && box ? fitScale(box, size) : 1;
+  // what the last simulator start said (FR-050), and the form it favours
+  const [emuSay, setEmuSay] = useState<{ text: string; bad: boolean } | null>(null);
+  const emuForm: EmulatorForm | null = view.device === "desktop" ? null : view.device;
   // a device's screen sits centred in the box, drawn at `scale` from its
   // top left; on desktop the frame fills the box as it always did
   const screenStyle: CSSProperties | undefined = size
@@ -292,6 +338,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     saveChoice(repo.id, next);
     setPathDraft(next?.path ?? "/");
     setError(null);
+    setEmuSay(null);
   };
 
   // the port list, re-read while nothing shows
@@ -759,7 +806,9 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       ↗
                     </a>
                   )}
+                  <EmulatorMenu repoId={repo.id} port={choice.port} path={choice.path} form={emuForm} say={setEmuSay} />
                 </div>
+                {emuSay && <p className={emuSay.bad ? "panel-error" : "panel-clean preview-emu-say"}>{emuSay.text}</p>}
                 <div
                   ref={wrapRef}
                   className={`preview-frame-wrap${size ? " device" : ""}${shooting ? " shooting" : ""}${mode === "draw" ? " drawing" : ""}`}
@@ -967,6 +1016,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       <a className="mini" href={url} target="_blank" rel="noreferrer" title="Open in a browser tab" aria-label="Open in a browser tab">
                         ↗
                       </a>
+                      <EmulatorMenu repoId={repo.id} port={choice.port} path={choice.path} form={emuForm} say={setEmuSay} />
                       <button
                         type="button"
                         className={`mini${soloed ? " on" : ""}`}

@@ -41,13 +41,13 @@ describe("clientCaps", () => {
   });
 
   test("a choice that is not attached opens nothing, and does not fall to another helper", () => {
-    expect(clientCaps({ address: "100.72.29.68", local: false, shared: false }, helpers, "gone")).toEqual({ openers: [], via: null, helper: null });
+    expect(clientCaps({ address: "100.72.29.68", local: false, shared: false }, helpers, "gone")).toEqual({ openers: [], via: null, helper: null, emulators: [] });
   });
 
   test("with no choice, the one helper at the browser's address is adopted", () => {
     const c = clientCaps({ address: "100.72.29.68", local: false, shared: false }, helpers, null);
     expect(c.helper?.name).toBe("mbp");
-    expect(clientCaps(far, helpers, null)).toEqual({ openers: [], via: null, helper: null });
+    expect(clientCaps(far, helpers, null)).toEqual({ openers: [], via: null, helper: null, emulators: [] });
   });
 
   test("a shared address (docker's proxy in front of the backend) adopts nothing, even one helper there", () => {

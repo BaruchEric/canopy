@@ -4,7 +4,7 @@
  * and `clientKey` to say what it knows of a browser. Tested in
  * client.test.ts.
  */
-import { OPENER_IDS, type ClientCaps, type ClientInfo, type HelperInfo, type OpenerId } from "./types";
+import { OPENER_IDS, type ClientCaps, type ClientInfo, type Emulator, type HelperInfo, type OpenerId } from "./types";
 
 /** What a browser can open and through what. Its own choice of helper
  *  (`chosen`, a name in its settings) wins when that helper is attached;
@@ -16,15 +16,16 @@ import { OPENER_IDS, type ClientCaps, type ClientInfo, type HelperInfo, type Ope
 export function clientCaps(client: ClientInfo, helpers: HelperInfo[], chosen: string | null): ClientCaps {
   const picked = chosen === null ? null : (helpers.find((h) => h.name === chosen) ?? null);
   const helper = picked ?? (chosen === null ? adoptable(client, helpers) : null);
-  if (helper) return { openers: helper.openers, via: "helper", helper };
-  if (client.local) return { openers: ALL, via: "backend", helper: null };
-  return { openers: NONE, via: null, helper: null };
+  if (helper) return { openers: helper.openers, via: "helper", helper, emulators: helper.emulators ?? NO_EMULATORS };
+  if (client.local) return { openers: ALL, via: "backend", helper: null, emulators: client.emulators ?? NO_EMULATORS };
+  return { openers: NONE, via: null, helper: null, emulators: NO_EMULATORS };
 }
 
 // the same arrays every time, so a store selector over this compares
 // shallow-equal between calls and does not re-render its component forever
 const ALL: OpenerId[] = [...OPENER_IDS];
 const NONE: OpenerId[] = [];
+const NO_EMULATORS: Emulator[] = [];
 
 function adoptable(client: ClientInfo, helpers: HelperInfo[]): HelperInfo | null {
   if (client.shared || isLoopback(client.address)) return null;

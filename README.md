@@ -58,6 +58,7 @@ canopy source add --forgejo https://git.example.com --token ~/secrets/forgejo.tx
 canopy source rm <id>              # stop scanning it
 canopy helper [--backend URL]      # lend this machine's desktop openers to a shared backend
 canopy helper --pair [--code C]    # first get a helper token from the backend, then dial
+canopy helper --no-emulators       # offer no simulators or emulators for previews
 canopy auth login [--backend URL] [--code C]   # sign this CLI in to a backend
 canopy auth status | logout        # the mode and who you are | revoke this CLI's session
 canopy mcp                         # an MCP server on stdio: canopy's tools with $CANOPY_TOKEN's rights (claude mcp add canopy -- canopy mcp)

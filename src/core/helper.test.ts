@@ -11,7 +11,7 @@ import {
   staleHelpers,
 } from "./helper";
 import { helperUrl } from "./helperd";
-import { DEFAULT_AGENT, type AgentSettings } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type Emulator } from "./types";
 
 describe("parseHelperQuery", () => {
   test("reads a registration off the query", () => {
@@ -46,6 +46,16 @@ describe("parseHelperQuery", () => {
     expect(new URL(helperUrl("http://mini:7850", "mbp", "darwin", ["agent"])).searchParams.get("harnesses")).toBe("claude,codex");
   });
 
+  test("the simulators and emulators it lists (FR-050); absent from an older helper, and a bad one dropped", () => {
+    const phone: Emulator = { kind: "ios", id: "1A627B96-6489-42B5-B90F-8DF99F59A631", name: "iPhone 17 · iOS 26.5", form: "phone" };
+    const list = JSON.stringify([phone, { kind: "android", id: "../x", name: "x", form: "phone" }]);
+    const q = new URLSearchParams({ name: "a", platform: "darwin", emulators: list });
+    expect(parseHelperQuery(q, "x", 1)).toMatchObject({ emulators: [phone] });
+    expect(parseHelperQuery(new URLSearchParams("name=a&platform=darwin"), "x", 1)).not.toHaveProperty("emulators");
+    expect(new URL(helperUrl("http://mini:7850", "mbp", "darwin", [], undefined, [phone])).searchParams.get("emulators")).toBe(JSON.stringify([phone]));
+    expect(new URL(helperUrl("http://mini:7850", "mbp", "darwin", [])).searchParams.has("emulators")).toBe(false);
+  });
+
   test("refuses a bad name, platform or opener", () => {
     expect(parseHelperQuery(new URLSearchParams("platform=darwin"), "a")).toHaveProperty("error");
     expect(parseHelperQuery(new URLSearchParams("name=a%20b&platform=darwin"), "a")).toHaveProperty("error");
@@ -63,6 +73,11 @@ describe("parseHelperReply", () => {
     expect(parseHelperReply('{"id":4,"error":"no kitty"}')).toEqual({ id: 4, error: "no kitty" });
   });
 
+  test("a success may carry a note", () => {
+    expect(parseHelperReply('{"id":5,"ok":true,"note":"still booting"}')).toEqual({ id: 5, ok: true, note: "still booting" });
+    expect(parseHelperReply('{"id":5,"ok":true,"note":""}')).toEqual({ id: 5, ok: true });
+  });
+
   test("clips a long error", () => {
     const r = parseHelperReply(JSON.stringify({ id: 1, error: "e".repeat(900) }));
     expect(r && "error" in r ? r.error.length : 0).toBe(500);
@@ -78,6 +93,14 @@ describe("parseHelperReply", () => {
 });
 
 describe("parseHelperIntent", () => {
+  test("an emulator intent with a device id of its kind's shape and an http address (FR-050)", () => {
+    const ok = { kind: "android" as const, device: "privatelm", url: "http://100.68.139.95:7861/app" };
+    expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: ok }))).toEqual({ id: 2, emulator: ok });
+    expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, device: "-wipe-data" } }))).toBeNull();
+    expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, kind: "ios" } }))).toBeNull();
+    expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, url: "file:///etc/hosts" } }))).toBeNull();
+  });
+
   test("open, with the agent settings normalized", () => {
     const text = JSON.stringify({ id: 1, open: { app: "kitty", path: "ssh://mini/home/eric/dev/x", agent: { model: "opus", yolo: "yes" }, tab: true } });
     expect(parseHelperIntent(text)).toEqual({

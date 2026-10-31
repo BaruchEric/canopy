@@ -14,6 +14,7 @@ usage:
   canopy helper [--backend URL]     lend this machine's desktop openers to a shared backend
     --name N | --openers a,b        what to register as (default: the hostname, what is installed)
     --pair [--code CODE]            first get a helper token from the backend (approve it in the inbox)
+    --no-emulators                  offer no iOS simulators or Android emulators for previews
   canopy auth login [--backend URL] [--code CODE]   sign this CLI in to a backend
   canopy auth logout | status       sign out (revokes this CLI's session) | show mode and who you are
   canopy commit <repo> -m "msg"     commit staged changes

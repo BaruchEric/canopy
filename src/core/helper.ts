@@ -9,7 +9,8 @@
  * lands on that helper. Nothing here touches a process; this is the wire
  * shape and the pure decisions, tested in helper.test.ts.
  */
-import { HARNESSES, OPENER_IDS, type AgentSettings, type Harness, type HelperInfo, type OpenerId } from "./types";
+import { EMULATOR_KINDS, HARNESSES, OPENER_IDS, type AgentSettings, type EmulatorKind, type Harness, type HelperInfo, type OpenerId } from "./types";
+import { emulatorIdOk, emulatorUrlOk, parseEmulatorsParam } from "./emulators";
 import { normalizeAgent } from "./agent";
 import { HARNESS } from "./harness";
 import { parseLocator } from "./host";
@@ -26,15 +27,22 @@ export type HelperIntent =
       /** `primary` is where the agent opener starts; a backend from before
        *  it leaves it out, and the first member stands in */
       group: { app: OpenerId; name: string; repos: string[]; agents: Record<string, AgentSettings>; primary?: string };
-    };
+    }
+  /** a page in one of the simulators or emulators the helper listed (FR-050) */
+  | { id: number; emulator: { kind: EmulatorKind; device: string; url: string } };
 
-export type HelperReply = { id: number; ok: true } | { id: number; error: string };
+/** `note` says something the caller should hear on a success: a device
+ *  still booting as the answer went */
+export type HelperReply = { id: number; ok: true; note?: string } | { id: number; error: string };
 
 /** an intent before the backend numbers it */
 export type HelperAsk = HelperIntent extends infer T ? (T extends unknown ? Omit<T, "id"> : never) : never;
 
 /** how long the backend waits for a helper to answer an intent */
 export const HELPER_TIMEOUT = 20_000;
+/** how long it waits on an emulator intent, which the helper answers by
+ *  `ANSWER_BY` (40 s) with the device up or a note that it is still starting */
+export const EMULATOR_TIMEOUT = 60_000;
 
 /** How often each end pings the other, and how long it goes unanswered
  *  before that end treats the socket as gone. A peer that dies with its host
@@ -75,7 +83,8 @@ export function parseHelperQuery(params: URLSearchParams, address: string, now =
   const listed = params.get("harnesses");
   const harnesses =
     listed === null ? null : HARNESSES.filter((h) => listed.split(",").some((raw) => raw.trim() === h));
-  return { name, platform, openers, ...(harnesses ? { harnesses } : {}), since: now, address };
+  const emulators = parseEmulatorsParam(params.get("emulators"));
+  return { name, platform, openers, ...(harnesses ? { harnesses } : {}), ...(emulators ? { emulators } : {}), since: now, address };
 }
 
 /** The openers that start the agent, and so read an intent's harness. */
@@ -110,7 +119,7 @@ export function parseHelperReply(text: string): HelperReply | null {
   if (typeof v !== "object" || v === null) return null;
   const o = v as Record<string, unknown>;
   if (typeof o.id !== "number" || !Number.isInteger(o.id)) return null;
-  if (o.ok === true) return { id: o.id, ok: true };
+  if (o.ok === true) return typeof o.note === "string" && o.note ? { id: o.id, ok: true, note: o.note.slice(0, 300) } : { id: o.id, ok: true };
   if (typeof o.error === "string") return { id: o.id, error: o.error.slice(0, 500) };
   return null;
 }
@@ -151,6 +160,13 @@ export function parseHelperIntent(text: string): HelperIntent | null {
     }
     const primary = typeof x.primary === "string" && repos.includes(x.primary) ? { primary: x.primary } : {};
     return { id, group: { app: x.app, name: x.name, repos, agents, ...primary } };
+  }
+  if (typeof o.emulator === "object" && o.emulator !== null) {
+    const x = o.emulator as Record<string, unknown>;
+    const kind = EMULATOR_KINDS.find((k) => k === x.kind);
+    if (!kind || typeof x.device !== "string" || !emulatorIdOk(kind, x.device) || typeof x.url !== "string") return null;
+    const url = emulatorUrlOk(x.url);
+    return url ? { id, emulator: { kind, device: x.device, url } } : null;
   }
   return null;
 }

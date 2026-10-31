@@ -109,6 +109,8 @@ import type {
   AdviceAccepted,
   AdviceOffer,
   ScreenProfile,
+  EmulatorKind,
+  EmulatorOpened,
 } from "../../src/core/types";
 import type { SecretAct } from "../../src/core/secretwire";
 import type { Delivery, TriggerEvent, TriggersInfo } from "../../src/core/trigger";
@@ -397,6 +399,13 @@ export const api = {
     repoReq<{ ok: true }>(id, (p) => `/api/repos/open?${rq(p)}`, {
       method: "POST",
       body: JSON.stringify({ app, tab, helper }),
+    }),
+  /** the dev server on `port` at `path` in a simulator or emulator on this
+   *  browser's machine (FR-050), through `helper` as `open` does */
+  emulator: (id: string, body: { kind: EmulatorKind; device: string; port: number; path: string }, helper?: string) =>
+    repoReq<EmulatorOpened>(id, (p) => `/api/repos/emulator?${rq(p)}`, {
+      method: "POST",
+      body: JSON.stringify({ ...body, helper }),
     }),
   /** a backend's agent routing: profiles, the route per role, and the repo
    *  overrides by path; an older backend's plain map of settings reads as

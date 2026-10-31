@@ -8840,6 +8840,15 @@ body:has(.focus-grip.se.dragging) {
 .preview-device {
   flex: none;
 }
+/* the simulator menu (FR-050): its label is short, its options name the device */
+.preview-emulator {
+  flex: none;
+  max-width: 9rem;
+}
+.preview-emu-say {
+  margin: 0 14px;
+  font-size: 12px;
+}
 .preview-scale {
   flex: none;
   font-family: var(--mono);
