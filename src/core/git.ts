@@ -1067,7 +1067,11 @@ export function netError(stderr: string, what: string, tookMs: number): Error {
 
 export async function pull(repoPath: string): Promise<string> {
   const t0 = Date.now();
-  const r = await git(repoPath, ["pull", "--ff-only"], NET_TIMEOUT_MS);
+  // --no-rebase: with pull.rebase=true in the user's config, git takes the
+  // rebase path despite --ff-only and refuses any dirty tree before it even
+  // fetches. A fast-forward never needs a rebase, and it carries unstaged
+  // edits along unless upstream touches the same files.
+  const r = await git(repoPath, ["pull", "--ff-only", "--no-rebase"], NET_TIMEOUT_MS);
   if (r.code !== 0) throw netError(r.stderr, "pull", Date.now() - t0);
   return r.stdout.trim();
 }
