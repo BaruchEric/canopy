@@ -178,3 +178,12 @@ test("marksMessage lists the notes' selectors in order, a blank where a note has
     list: ["main > h1.title", "", "p"],
   });
 });
+
+test("the device the page was shown as goes in the opening line, or on each note when they differ", () => {
+  const one = annotationsPrompt([note("too wide", "change", { view: "phone (390x844)" })], "http://localhost:1/");
+  expect(one.startsWith("In the preview of http://localhost:1/, shown as a phone (390x844), I left a note on the page.\n\n1. Change: too wide")).toBe(true);
+  const mixed = annotationsPrompt([note("a", "change", { view: "phone (390x844)" }), note("b", "question")], "http://localhost:1/");
+  expect(mixed.startsWith("In the preview of http://localhost:1/ I left 2 notes on the page.")).toBe(true);
+  expect(mixed).toContain("1. Change, shown as a phone (390x844): a");
+  expect(mixed).toContain("2. Question, shown at the panel's own width: b");
+});

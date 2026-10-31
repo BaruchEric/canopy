@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
@@ -11,8 +11,16 @@ import { TermGrip } from "./TermDock";
 import { flipMode, type SurfaceMode } from "../surface";
 import { benchIs, benchSolo } from "../front";
 import {
+  DEVICE_PAD,
   PREVIEW_H,
+  deviceSize,
+  fitScale,
   loadChoice,
+  loadDevice,
+  saveDevice,
+  viewWords,
+  type Device,
+  type DeviceView,
   portsFor,
   defaultPort,
   previewBlocked,
@@ -75,6 +83,51 @@ function ModeButtons({ mode, disabled, toggle }: { mode: Mode; disabled?: boolea
           </button>
         );
       })}
+    </>
+  );
+}
+
+const DEVICE_NAMES: { device: Device; word: string }[] = [
+  { device: "desktop", word: "desktop" },
+  { device: "tablet", word: "tablet" },
+  { device: "phone", word: "phone" },
+];
+
+/** The width the page is shown at (FR-049): the panel's own, or a tablet's
+ *  or a phone's screen, upright or sideways, shrunk to fit when the panel
+ *  is smaller. In the bar and in the bench's float. */
+function DeviceSwitch({ view, setView, scale }: { view: DeviceView; setView: (v: DeviceView) => void; scale: number }) {
+  const size = deviceSize(view);
+  const turn = view.turned ? "Turn it upright" : "Turn it sideways";
+  return (
+    <>
+      <select
+        className="preview-select preview-device"
+        aria-label="Show the page as"
+        title="Show the page at a tablet's or a phone's size"
+        value={view.device}
+        onChange={(e) => {
+          const device = DEVICE_NAMES.find((d) => d.device === e.target.value)?.device ?? "desktop";
+          setView({ device, turned: device === "desktop" ? false : view.turned });
+        }}
+      >
+        {DEVICE_NAMES.map((d) => (
+          <option key={d.device} value={d.device}>
+            {d.word}
+          </option>
+        ))}
+      </select>
+      {size && (
+        <>
+          <button type="button" className={`mini${view.turned ? " on" : ""}`} onClick={() => setView({ ...view, turned: !view.turned })} title={turn} aria-label={turn} aria-pressed={view.turned}>
+            ⇄
+          </button>
+          <span className="preview-scale" title={scale < 1 ? "Shrunk to fit the panel" : "At full size"}>
+            {size.width}×{size.height}
+            {scale < 1 && ` · ${Math.round(scale * 100)}%`}
+          </span>
+        </>
+      )}
     </>
   );
 }
@@ -169,6 +222,36 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   const height = useStore((s) => s.settings.previewHeight);
   const setSetting = useStore((s) => s.setSetting);
   const frameBox = useRef<HTMLDivElement>(null);
+  // the device the page is shown as, kept per repo (FR-049), and the frame
+  // box's inner size, followed as the grip, the bench or the window moves it
+  const [view, setViewState] = useState<DeviceView>(() => loadDevice(repo.id));
+  const [wrapEl, setWrapEl] = useState<HTMLDivElement | null>(null);
+  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
+  const wrapRef = useCallback((el: HTMLDivElement | null) => {
+    frameBox.current = el;
+    setWrapEl(el);
+  }, []);
+  useEffect(() => {
+    if (!wrapEl) return;
+    const seen = new ResizeObserver(([entry]) => {
+      if (entry) setBox({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    seen.observe(wrapEl);
+    return () => seen.disconnect();
+  }, [wrapEl]);
+  const size = deviceSize(view);
+  const scale = size && box ? fitScale(box, size) : 1;
+  // a device's screen sits centred in the box, drawn at `scale` from its
+  // top left; on desktop the frame fills the box as it always did
+  const screenStyle: CSSProperties | undefined = size
+    ? {
+        width: size.width,
+        height: size.height,
+        left: Math.max(DEVICE_PAD, Math.round(((box?.width ?? 0) - size.width * scale) / 2)),
+        top: Math.max(DEVICE_PAD, Math.round(((box?.height ?? 0) - size.height * scale) / 2)),
+        transform: scale < 1 ? `scale(${scale})` : undefined,
+      }
+    : undefined;
   // in the bench the frame takes the main pane, and its grip has no place
   const inBench = useStore((s) => benchIs(s.front, repo.id));
   const soloed = useStore((s) => benchSolo(s.front, repo.id) === "app");
@@ -308,9 +391,18 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       open({ kind, path: null, rect, marks, thumb: null });
       return true;
     }
-    const fr = frame.current?.getBoundingClientRect();
-    if (!fr) return false;
-    const onScreen = { x: fr.left + rect.x, y: fr.top + rect.y, width: rect.width, height: rect.height };
+    const el = frame.current;
+    const fr = el?.getBoundingClientRect();
+    if (!el || !fr) return false;
+    // `rect` is in the page's pixels; a device screen shrunk to fit draws
+    // them smaller, by its scale (FR-049)
+    const k = el.offsetWidth ? fr.width / el.offsetWidth : 1;
+    const onScreen = {
+      x: Math.round(fr.left + rect.x * k),
+      y: Math.round(fr.top + rect.y * k),
+      width: Math.round(rect.width * k),
+      height: Math.round(rect.height * k),
+    };
     flushSync(() => setShooting(true));
     try {
       shooter.current ??= new Shooter();
@@ -468,12 +560,24 @@ export function PreviewSection({ repo }: { repo: Repo }) {
       return null;
     });
   };
+  // another device reflows the page: a pick, a box or marks under way no
+  // longer line up with it, so they go; notes already added stay
+  const setView = (next: DeviceView) => {
+    setViewState(next);
+    saveDevice(repo.id, next);
+    if (mode === "pick") pageOff();
+    setMode(null);
+    setShapes([]);
+    setPickWarn(null);
+    cancelPending();
+  };
   const pageUrl = choice ? devUrl(choice.port, choice.path) : "";
   // the note being written joins the list; "add" goes back to picking for
   // the next element, "send now" sends the lot to the repo's agent
   const addPick = (then: "pick" | "send") => {
     if (!pending || !pickNote.trim() || pickBusy) return;
-    const all = [...notes, { pick: pending.pick, clip: pending.clip, note: pickNote.trim(), intent }];
+    const seen = viewWords(view);
+    const all = [...notes, { pick: pending.pick, clip: pending.clip, note: pickNote.trim(), intent, ...(seen ? { view: seen } : {}) }];
     setNotes(all);
     setPending(null);
     setPickNote("");
@@ -495,9 +599,10 @@ export function PreviewSection({ repo }: { repo: Repo }) {
   };
   // a picture of the whole frame with the marks on it, then a note
   const snap = () => {
-    const fr = frame.current?.getBoundingClientRect();
-    if (!fr) return;
-    void takeClipRef.current("markup", { x: 0, y: 0, width: Math.round(fr.width), height: Math.round(fr.height) }, null, markupWords(shapes)).then((opened) => {
+    // the whole page, in its own pixels
+    const el = frame.current;
+    if (!el) return;
+    void takeClipRef.current("markup", { x: 0, y: 0, width: el.offsetWidth, height: el.offsetHeight }, null, markupWords(shapes)).then((opened) => {
       if (!opened) return;
       setShapes([]);
       setMode(null);
@@ -638,6 +743,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                     ⟳
                   </button>
                   <ModeButtons mode={mode} disabled={!url || shooting} toggle={toggleMode} />
+                  <DeviceSwitch view={view} setView={setView} scale={scale} />
                   <input
                     className="preview-path"
                     aria-label="Path on the dev server"
@@ -655,44 +761,49 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                   )}
                 </div>
                 <div
-                  ref={frameBox}
-                  className={`preview-frame-wrap${shooting ? " shooting" : ""}${mode === "draw" ? " drawing" : ""}`}
+                  ref={wrapRef}
+                  className={`preview-frame-wrap${size ? " device" : ""}${shooting ? " shooting" : ""}${mode === "draw" ? " drawing" : ""}`}
                   style={{ "--preview-h": `${height}px` } as CSSProperties}
                 >
+                  {url ? (
+                    // the page's screen: the box itself on desktop, a device's
+                    // size otherwise; the clip and draw layers are in it, so
+                    // they share the page's pixels
+                    <div className={`preview-screen${size ? " sized" : ""}`} style={screenStyle}>
+                      <iframe
+                        key={`${url}#${nonce}`}
+                        ref={frame}
+                        className="preview-frame"
+                        src={url}
+                        onLoad={() => {
+                          setLoadedAt(`${url}#${nonce}`);
+                          setLoads((n) => n + 1);
+                        }}
+                        title={`${repo.name} on port ${choice.port}`}
+                        // its own origin already (another port); no top navigation
+                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                      />
+                      {/* the clip and draw tools work on a layer over the frame,
+                          so the page never sees the pointer */}
+                      {mode === "clip" && (
+                        <ClipLayer
+                          onClip={(rect) => {
+                            void takeClipRef.current("region", rect, null, "").then((opened) => {
+                              if (opened) setMode(null);
+                            });
+                          }}
+                        />
+                      )}
+                      {mode === "draw" && <DrawLayer shapes={shapes} onChange={setShapes} tool={tool} color={color} />}
+                    </div>
+                  ) : (
+                    <p className="panel-clean">Opening a preview port…</p>
+                  )}
                   {url && loadedAt !== `${url}#${nonce}` && (
                     <p className="preview-loading" role="status">
                       Loading the app… the first load can take a while from outside the tailnet.
                     </p>
                   )}
-                  {url ? (
-                    <iframe
-                      key={`${url}#${nonce}`}
-                      ref={frame}
-                      className="preview-frame"
-                      src={url}
-                      onLoad={() => {
-                        setLoadedAt(`${url}#${nonce}`);
-                        setLoads((n) => n + 1);
-                      }}
-                      title={`${repo.name} on port ${choice.port}`}
-                      // its own origin already (another port); no top navigation
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-                    />
-                  ) : (
-                    <p className="panel-clean">Opening a preview port…</p>
-                  )}
-                  {/* the clip and draw tools work on a layer over the frame,
-                      so the page never sees the pointer */}
-                  {url && mode === "clip" && (
-                    <ClipLayer
-                      onClip={(rect) => {
-                        void takeClipRef.current("region", rect, null, "").then((opened) => {
-                          if (opened) setMode(null);
-                        });
-                      }}
-                    />
-                  )}
-                  {url && mode === "draw" && <DrawLayer shapes={shapes} onChange={setShapes} tool={tool} color={color} />}
                   {url && mode === "draw" && (
                     <DrawBar
                       tool={tool}
@@ -832,6 +943,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                         ⟳
                       </button>
                       <ModeButtons mode={mode} disabled={shooting} toggle={toggleMode} />
+                      <DeviceSwitch view={view} setView={setView} scale={scale} />
                       {[...mine, ...loose].length > 1 && (
                         <select
                           className="preview-select"

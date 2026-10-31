@@ -145,6 +145,10 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 
 ## Shipped
 
+### FR-049 · Preview shows the page at tablet and phone widths
+P2 · added 2026-10-31 · source: Eric · shipped 2026-10-31
+The preview toolbar gets a size switch (desktop, tablet, phone) that renders the page in a frame of that device's width and height, so a layout can be checked at each breakpoint without resizing the panel. Shipped as phone 390x844 and tablet 820x1180 with a sideways toggle, kept per repo, shrunk to fit the panel; pick, clip and draw map through the scale, and notes tell the agent which device they were left on.
+
 ### FR-047 · Chats, agents and popups as cards in the dock
 P2 · added 2026-10-26 · source: Eric (canopy chat) · shipped 2026-10-26
 A chat (an agent's run or a coordinator), an agent session and any top-bar popup can sit in the dock as a panel of its own, a card beside the repos' or a tab of a cell, the way an agent could from the board's tile. It drags, splits, sizes and is kept per kind of screen like any panel, and it is in one place at a time: docked, it leaves the sheet and any shell window's tab; tabbed, it leaves the dock.

@@ -103,6 +103,9 @@ export interface Annotation {
   clip: Clip | null;
   note: string;
   intent: Intent;
+  /** the device the page was shown as when the note was left, in words
+   *  ("phone (390x844)"), or absent at the panel's own width (FR-049) */
+  view?: string;
 }
 
 /** what the page reported about a picked element, as text: what the
@@ -151,10 +154,15 @@ function clipLines(clip: Clip, n: number): string {
  *  before it acts; questions are to be answered, not acted on. */
 export function annotationsPrompt(list: readonly Annotation[], pageUrl: string): string {
   const one = list.length === 1;
-  const head = one ? `In the preview of ${pageUrl} I left a note on the page.` : `In the preview of ${pageUrl} I left ${list.length} notes on the page.`;
+  // one device for the lot goes in the opening line, a mix on each note
+  const mixed = new Set(list.map((a) => a.view)).size > 1;
+  const shared = mixed ? undefined : list[0]?.view;
+  const where = shared ? `In the preview of ${pageUrl}, shown as a ${shared},` : `In the preview of ${pageUrl}`;
+  const head = one ? `${where} I left a note on the page.` : `${where} I left ${list.length} notes on the page.`;
   const items = list.map((a, i) => {
     const n = i + 1;
-    const parts = [`${n}. ${INTENT_WORD[a.intent]}: ${a.note.trim()}`];
+    const seen = mixed ? `, shown ${a.view ? `as a ${a.view}` : "at the panel's own width"}` : "";
+    const parts = [`${n}. ${INTENT_WORD[a.intent]}${seen}: ${a.note.trim()}`];
     if (a.clip) parts.push(clipLines(a.clip, n));
     if (a.pick) parts.push(fence(`What the page reported about element ${n}`, pickText(a.pick)));
     return parts.join("\n\n");

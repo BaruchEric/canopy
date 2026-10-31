@@ -5,10 +5,15 @@ import { COLORS, arrowHead, colorName, penPath, tooSmall, type Point, type Shape
 /** the least a dragged box must span to be a picture */
 const CLIP_LEAST = 8;
 
-/** a pointer's place inside `el`, CSS pixels from its top left */
+/** a pointer's place inside `el`, in its own CSS pixels from its top left.
+ *  The layers sit in the device screen, which may be scaled down to fit
+ *  (FR-049), so the on-screen offset is divided by that scale and marks
+ *  and boxes are kept in the page's own pixels. */
 function inside(el: HTMLElement | null, e: ReactPointerEvent): Point {
   const r = el?.getBoundingClientRect();
-  return r ? { x: e.clientX - r.left, y: e.clientY - r.top } : { x: e.clientX, y: e.clientY };
+  if (!r || !el) return { x: e.clientX, y: e.clientY };
+  const k = el.offsetWidth ? r.width / el.offsetWidth : 1;
+  return { x: (e.clientX - r.left) / k, y: (e.clientY - r.top) / k };
 }
 
 const span = (a: Point, b: Point): Rect => ({
@@ -20,7 +25,7 @@ const span = (a: Point, b: Point): Rect => ({
 
 /**
  * The clip tool's layer over the frame (FR-029): a drag draws a box, and
- * letting go hands the box over for its picture. The box is cleared before
+ * letting go hands the box over for its picture, in the page's pixels. The box is cleared before
  * that, so the picture shows the page alone. The layer covers the frame,
  * so the page sees none of the pointer.
  */

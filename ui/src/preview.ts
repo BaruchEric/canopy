@@ -179,3 +179,90 @@ export function saveChoice(repoId: string, choice: PreviewChoice | null) {
     // storage off: the choice lasts the page
   }
 }
+
+/** the width the preview shows a page at: the panel's own, or a device's */
+export type Device = "desktop" | "tablet" | "phone";
+
+/** a device's screen, upright, in CSS px (FR-049): an iPhone 14 and an iPad Air */
+export const DEVICES: Record<Exclude<Device, "desktop">, { width: number; height: number }> = {
+  phone: { width: 390, height: 844 },
+  tablet: { width: 820, height: 1180 },
+};
+
+/** which device a repo's preview shows, and whether it is turned sideways */
+export interface DeviceView {
+  device: Device;
+  turned: boolean;
+}
+
+export const DESKTOP: DeviceView = { device: "desktop", turned: false };
+
+/** where each repo's device view was left, by repo id (localStorage); apart
+ *  from the port choice, which every port switch resets */
+export const DEVICES_KEY = "canopy.previewDevices";
+
+/** the page's viewport in CSS px, or null on desktop, where the frame
+ *  takes the panel's size */
+export function deviceSize(view: DeviceView): { width: number; height: number } | null {
+  if (view.device === "desktop") return null;
+  const d = DEVICES[view.device];
+  return view.turned ? { width: d.height, height: d.width } : { ...d };
+}
+
+/** the gap kept around a device inside the frame's box, in px */
+export const DEVICE_PAD = 12;
+
+/**
+ * How much a device's screen is shrunk to fit `box` with DEVICE_PAD around
+ * it: never enlarged, and never below a tenth so a box measured at zero
+ * (hidden, not laid out yet) still draws something.
+ */
+export function fitScale(box: { width: number; height: number }, size: { width: number; height: number }): number {
+  const room = Math.min((box.width - 2 * DEVICE_PAD) / size.width, (box.height - 2 * DEVICE_PAD) / size.height);
+  return clamp(room, 0.1, 1);
+}
+
+/** a device view as words for the agent's prompt, or undefined on desktop */
+export function viewWords(view: DeviceView): string | undefined {
+  const size = deviceSize(view);
+  if (!size) return undefined;
+  return `${view.device}${view.turned ? " turned sideways" : ""} (${size.width}x${size.height})`;
+}
+
+/** stored device views read back, anything malformed dropped */
+export function readDevices(raw: string | null): Record<string, DeviceView> {
+  const out: Record<string, DeviceView> = {};
+  if (!raw) return out;
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (!v || typeof v !== "object" || Array.isArray(v)) return out;
+    for (const [id, c] of Object.entries(v as Record<string, unknown>)) {
+      if (!c || typeof c !== "object") continue;
+      const { device, turned } = c as { device?: unknown; turned?: unknown };
+      if (device === "phone" || device === "tablet") out[id] = { device, turned: turned === true };
+    }
+  } catch {
+    // unreadable: start over
+  }
+  return out;
+}
+
+export function loadDevice(repoId: string): DeviceView {
+  try {
+    return readDevices(localStorage.getItem(DEVICES_KEY))[repoId] ?? DESKTOP;
+  } catch {
+    return DESKTOP;
+  }
+}
+
+/** desktop is the default, so it is stored as nothing */
+export function saveDevice(repoId: string, view: DeviceView) {
+  try {
+    const all = readDevices(localStorage.getItem(DEVICES_KEY));
+    if (view.device === "desktop") delete all[repoId];
+    else all[repoId] = view;
+    localStorage.setItem(DEVICES_KEY, JSON.stringify(all));
+  } catch {
+    // storage off: the view lasts the page
+  }
+}

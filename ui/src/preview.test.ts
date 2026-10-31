@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { PREVIEW_H, defaultPort, portsFor, previewBlocked, previewHeightOf, previewPath, previewUrl, readChoices } from "./preview";
+import { DESKTOP, DEVICE_PAD, PREVIEW_H, defaultPort, deviceSize, fitScale, portsFor, previewBlocked, previewHeightOf, previewPath, previewUrl, readChoices, readDevices, viewWords } from "./preview";
 
 test("previewBlocked", () => {
   expect(previewBlocked({ protocol: "http:", hostname: "mini" })).toBeNull();
@@ -90,4 +90,38 @@ test("a saved preview height is clamped, and anything else is the default", () =
   expect(previewHeightOf(612.4)).toBe(612);
   expect(previewHeightOf("800")).toBe(PREVIEW_H.initial);
   expect(previewHeightOf(Number.NaN)).toBe(PREVIEW_H.initial);
+});
+
+test("a device's size, upright or turned, and none on desktop", () => {
+  expect(deviceSize(DESKTOP)).toBeNull();
+  expect(deviceSize({ device: "phone", turned: false })).toEqual({ width: 390, height: 844 });
+  expect(deviceSize({ device: "phone", turned: true })).toEqual({ width: 844, height: 390 });
+  expect(deviceSize({ device: "tablet", turned: false })).toEqual({ width: 820, height: 1180 });
+});
+
+test("fitScale shrinks a device into the box and never enlarges it", () => {
+  const phone = { width: 390, height: 844 };
+  // a roomy box: full size
+  expect(fitScale({ width: 2000, height: 2000 }, phone)).toBe(1);
+  // the default 600px frame: the height decides
+  expect(fitScale({ width: 1000, height: 600 }, phone)).toBeCloseTo((600 - 2 * DEVICE_PAD) / 844);
+  // a narrow panel: the width decides
+  expect(fitScale({ width: 300, height: 2000 }, phone)).toBeCloseTo((300 - 2 * DEVICE_PAD) / 390);
+  // a box not laid out yet still draws something
+  expect(fitScale({ width: 0, height: 0 }, phone)).toBe(0.1);
+});
+
+test("viewWords names the device for the prompt, and nothing on desktop", () => {
+  expect(viewWords(DESKTOP)).toBeUndefined();
+  expect(viewWords({ device: "phone", turned: false })).toBe("phone (390x844)");
+  expect(viewWords({ device: "tablet", turned: true })).toBe("tablet turned sideways (1180x820)");
+});
+
+test("readDevices keeps phone and tablet views and drops the rest", () => {
+  expect(readDevices(null)).toEqual({});
+  expect(readDevices("not json")).toEqual({});
+  expect(readDevices("[]")).toEqual({});
+  expect(
+    readDevices(JSON.stringify({ a: { device: "phone", turned: true }, b: { device: "tablet" }, c: { device: "watch" }, d: { device: "desktop" }, e: 3 })),
+  ).toEqual({ a: { device: "phone", turned: true }, b: { device: "tablet", turned: false } });
 });
