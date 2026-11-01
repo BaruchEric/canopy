@@ -20,7 +20,7 @@ import { shellQuote } from "./host";
 import type { Emulator, EmulatorKind } from "./types";
 
 /** what a sideways page on iOS says, since simctl cannot turn a device */
-export const IOS_NO_TURN = "opened upright: simctl cannot turn an iOS simulator, so turn it with ⌘→ there";
+export const IOS_NO_TURN = "opened upright: simctl cannot turn an iOS simulator, so turn it from the simulator window";
 
 /** how long listing the devices may take, per kind */
 export const LIST_TIMEOUT = 10_000;
