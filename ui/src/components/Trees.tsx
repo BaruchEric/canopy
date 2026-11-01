@@ -35,6 +35,95 @@ export function TreesChip({ repoId }: { repoId: string }) {
   );
 }
 
+/** rows a card shows before the rest folds into a count */
+export const CARD_TREES = 4;
+
+const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
+
+/** The kept trees on the card itself, at cozy density (compact keeps the
+ *  chip): a row per tree with its branch, words and age, a shell and the
+ *  agent into it, and the count past CARD_TREES. The branch opens the
+ *  worktrees section. In select mode the rows are inert, like the
+ *  machine strip. */
+export function TreeRows({ repo, selecting }: { repo: Repo; selecting: boolean }) {
+  const trees = useStore((s) => repoTrees(s.trees, repo.id)?.trees);
+  const openTerm = useStore((s) => s.openTerm);
+  const showSection = useStore((s) => s.showSection);
+  const agent = useStore((s) => agentFor(s, repo, "shell"));
+  const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
+  if (!trees || trees.length === 0) return null;
+  const now = Date.now();
+  const agentHere = shellHas.includes(agent.harness);
+  const agentLabel = HARNESS[agent.harness].label;
+  const shown = trees.slice(0, CARD_TREES);
+  const more = trees.length - shown.length;
+  const section = (e: { stopPropagation(): void }) => {
+    stop(e);
+    showSection(repo.id, "worktrees");
+  };
+  return (
+    <div className="card-trees" role="group" aria-label={`Worktrees kept for ${repo.name}`}>
+      {shown.map((t) => {
+        const row = treeRow(t, now);
+        const words = `${row.words}${row.age ? ` · ${row.age}` : ""}`;
+        const title = `${t.dir}${t.state === "failed" && t.why ? `\n${t.why}` : ""}`;
+        return (
+          <div key={t.slug} className={`card-tree${row.tone ? ` ${row.tone}` : ""}`} title={title}>
+            {selecting ? (
+              <span className="card-tree-name">⑂ {t.branch}</span>
+            ) : (
+              <button type="button" className="card-tree-name" title={`${t.dir}: the worktrees section`} onClick={section} onPointerDown={stop} onKeyDown={keepKeys}>
+                ⑂ {t.branch}
+              </button>
+            )}
+            <span className="card-tree-words">{words}</span>
+            {!selecting && (
+              <span className="card-tree-tools">
+                <button
+                  type="button"
+                  className="mini"
+                  title={`A shell in ${t.dir}`}
+                  onClick={(e) => {
+                    stop(e);
+                    openTerm(repo.id, undefined, undefined, undefined, undefined, t.branch, t.slug);
+                  }}
+                  onPointerDown={stop}
+                  onKeyDown={keepKeys}
+                >
+                  shell
+                </button>
+                {agentHere && (
+                  <button
+                    type="button"
+                    className="mini"
+                    title={`A shell in the tree with ${agentLabel} started in it`}
+                    onClick={(e) => {
+                      stop(e);
+                      openTerm(repo.id, undefined, "agent", undefined, undefined, t.branch, t.slug);
+                    }}
+                    onPointerDown={stop}
+                    onKeyDown={keepKeys}
+                  >
+                    {HARNESS[agent.harness].glyph}
+                  </button>
+                )}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      {more > 0 &&
+        (selecting ? (
+          <span className="card-tree-more">{more} more</span>
+        ) : (
+          <button type="button" className="card-tree-more" title="The worktrees section lists every tree" onClick={section} onPointerDown={stop} onKeyDown={keepKeys}>
+            {more} more
+          </button>
+        ))}
+    </div>
+  );
+}
+
 /** A repo's kept worktrees (FR-051): one row per tree with where its branch
  *  stands, a shell and an agent shell into it, and its removal; under them
  *  a form for a new tree on a branch, new or existing, with the repo's setup
@@ -103,10 +192,11 @@ export function TreesSection({ repo }: { repo: Repo }) {
       setBranch("");
       setBase("");
       setAdding(false);
-      if (withAgent && agentHere) openTerm(repo.id, "strip", "agent", undefined, undefined, name, slug);
+      if (withAgent && agentHere) openTerm(repo.id, undefined, "agent", undefined, undefined, name, slug);
     });
   };
-  const shellIn = (t: BranchTree, start?: "agent") => openTerm(repo.id, "strip", start, undefined, undefined, t.branch, t.slug);
+  // where the shell lands is the shells setting, as for the card's own shell
+  const shellIn = (t: BranchTree, start?: "agent") => openTerm(repo.id, undefined, start, undefined, undefined, t.branch, t.slug);
   return (
     <Section
       repo={repo}

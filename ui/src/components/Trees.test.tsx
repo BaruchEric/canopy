@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { BranchTree, Repo } from "../../../src/core/types";
 import { registry, setRegistry } from "../registry";
 import { useStore } from "../store";
-import { TreesChip, TreesSection } from "./Trees";
+import { CARD_TREES, TreeRows, TreesChip, TreesSection } from "./Trees";
 
 const pristine = useStore.getState();
 const originalRegistry = registry();
@@ -31,15 +31,42 @@ afterEach(() => {
   setRegistry(originalRegistry.home, [...originalRegistry.names]);
 });
 
-function render(trees: BranchTree[], what: "section" | "chip" = "section"): string {
+function render(trees: BranchTree[], what: "section" | "chip" | "rows" | "rows-selecting" = "section"): string {
   setRegistry("a", ["a", "b"]);
   useStore.setState({ home: "a", backendOrder: ["a", "b"], closedSections: {}, trees: { b: { root: "/t", ports: "7900-7949", repos: [{ repoId: repo.id, repoPath: repo.path, trees }] } } });
   const initial = useStore.getInitialState();
   const previous = { ...initial };
   Object.assign(initial, useStore.getState());
-  try { return renderToStaticMarkup(what === "section" ? <TreesSection repo={repo} /> : <TreesChip repoId={repo.id} />); }
+  const el =
+    what === "section" ? <TreesSection repo={repo} />
+    : what === "chip" ? <TreesChip repoId={repo.id} />
+    : <TreeRows repo={repo} selecting={what === "rows-selecting"} />;
+  try { return renderToStaticMarkup(el); }
   finally { Object.assign(initial, previous); }
 }
+
+test("a card's rows name each tree with its words and age, a shell into it, and open the section", () => {
+  const html = render([tree({ ahead: 2, files: 1 }), tree({ slug: "b", branch: "fix/b", state: "preparing", at: undefined })], "rows");
+  expect(html).toContain('class="card-trees" role="group" aria-label="Worktrees kept for a"');
+  expect(html).toMatch(/<button[^>]*class="card-tree-name"[^>]*>⑂ feat\/x<\/button>/);
+  expect(html).toContain('class="card-tree-words">↑2 ●1 :7912 · 2h<');
+  expect(html).toContain('class="card-tree lichen"');
+  expect(html).toContain('class="card-tree-words">preparing :7912<');
+  expect(html).toContain('title="A shell in /t/a-abc/feat-x"');
+  expect(html).not.toContain("more");
+});
+
+test("a card's rows stop at the cap and count the rest; select mode makes them inert", () => {
+  const many = Array.from({ length: CARD_TREES + 2 }, (_, i) => tree({ slug: `t${i}`, branch: `t${i}` }));
+  const html = render(many, "rows");
+  expect(html.match(/class="card-tree-name"/g)).toHaveLength(CARD_TREES);
+  expect(html).toMatch(/<button[^>]*class="card-tree-more"[^>]*>2 more<\/button>/);
+  const inert = render(many, "rows-selecting");
+  expect(inert).not.toContain("<button");
+  expect(inert).toContain('<span class="card-tree-name">⑂ t0</span>');
+  expect(inert).toContain('<span class="card-tree-more">2 more</span>');
+  expect(render([], "rows")).toBe("");
+});
 
 test("a repo's kept trees render a row each with the branch, its words and the tools", () => {
   const html = render([tree({ ahead: 2, files: 1, shells: 1 })]);

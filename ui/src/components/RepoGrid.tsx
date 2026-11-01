@@ -34,7 +34,7 @@ import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
 import { RepoHealthChip } from "./Health";
 import { LandingChip, PrChip } from "./Landing";
-import { TreesChip } from "./Trees";
+import { TreeRows, TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
 import { historyFor, type Repo } from "../../../src/core/types";
 
@@ -307,6 +307,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           </span>
         </span>
       </div>
+      {/* the kept worktrees, a row each, at cozy density (FR-051) */}
+      <TreeRows repo={repo} selecting={selecting} />
       {history && overview?.available && (
         <Rings history={history} days={overview.days} maxDay={overview.maxDay} />
       )}

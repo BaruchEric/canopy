@@ -13888,3 +13888,87 @@ body.resizing-nesw {
 .trees-check { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; opacity: 0.8; }
 .trees-why { margin: 2px 0 0; white-space: pre-wrap; font-size: 11px; max-height: 8em; overflow: auto; flex-basis: 100%; }
 .trees-refused { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }
+
+/* the kept worktrees on a card (FR-051): a row each at cozy density, where
+   the chip gives way to them; compact density keeps the chip alone */
+.card-trees {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 0 0;
+}
+.card-tree {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 10.5px;
+  line-height: 16px;
+  color: var(--ink-faint);
+}
+.card-tree-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+}
+button.card-tree-name {
+  cursor: pointer;
+}
+button.card-tree-name:hover {
+  text-decoration: underline;
+}
+.card-tree.rust .card-tree-name {
+  color: var(--rust);
+}
+.card-tree.lichen .card-tree-name {
+  color: var(--lichen);
+}
+.card-tree-words {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card-tree-tools {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+.card-tree-tools .mini {
+  padding: 0 5px;
+  font-size: 10.5px;
+  line-height: 15px;
+}
+.card-tree-more {
+  align-self: flex-start;
+  font: inherit;
+  font-size: 10.5px;
+  line-height: 16px;
+  color: var(--ink-faint);
+  background: none;
+  border: 0;
+  padding: 0;
+}
+button.card-tree-more {
+  cursor: pointer;
+}
+button.card-tree-more:hover {
+  color: var(--ink);
+}
+:root[data-density="compact"] .card-trees {
+  display: none;
+}
+:root:not([data-density="compact"]) .card-state .trees-card {
+  display: none;
+}
