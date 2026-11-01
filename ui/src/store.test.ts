@@ -1039,6 +1039,7 @@ describe("several backends", () => {
         "/api/backends",
         "/api/capacity",
         "/api/tree",
+        "/api/trees",
         "/api/workspaces",
         "/api/runs",
         "/api/agents",

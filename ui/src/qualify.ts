@@ -20,6 +20,7 @@ import type {
   SproutDetail,
   TermInfo,
   WorktreesInfo,
+  BranchTreesInfo,
 } from "../../src/core/types";
 import type { TriggerEvent } from "../../src/core/trigger";
 import type { Collision } from "../../src/core/touch";
@@ -93,6 +94,13 @@ export const qLanding = (q: Q, l: LandingInfo): LandingInfo => ({
 });
 
 /** Pool and run ids belong to the backend; paths and warm slots stay local. */
+/** The kept worktrees (FR-051): each repo's id under the backend's name;
+ *  the folders stay the backend's own. */
+export const qTrees = (q: Q, info: BranchTreesInfo): BranchTreesInfo => ({
+  ...info,
+  repos: info.repos.map((repo) => ({ ...repo, repoId: q(repo.repoId) })),
+});
+
 export const qWorktrees = (q: Q, info: WorktreesInfo): WorktreesInfo => ({
   ...info,
   repos: info.repos.map(repo => ({
@@ -236,6 +244,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return { ...ev, landing: qLanding(q, ev.landing) };
     case "worktrees":
       return { ...ev, worktrees: qWorktrees(q, ev.worktrees) };
+    case "trees":
+      return { ...ev, trees: qTrees(q, ev.trees) };
     case "prs":
       return { ...ev, prs: qPrs(q, ev.prs) };
     case "triggers":

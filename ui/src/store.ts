@@ -54,7 +54,7 @@ import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -787,6 +787,8 @@ export interface CanopyState {
   landing: Record<string, LandingInfo>;
   /** Warm pools, with qualified ids, by shown backend. */
   worktrees: Record<string, WorktreesInfo>;
+  /** the worktrees kept by hand (FR-051), with qualified ids, by shown backend */
+  trees: Record<string, BranchTreesInfo>;
   /** each backend's PRs that branch runs opened (server/prs); an older
    *  backend that has none is missing */
   prs: Record<string, PrWatch[]>;
@@ -1092,7 +1094,7 @@ export interface CanopyState {
   setSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
-  openTerm: (repoId: string, place?: ShellPlace, start?: "agent", prompt?: string, pick?: LaunchPick, label?: string) => void;
+  openTerm: (repoId: string, place?: ShellPlace, start?: "agent", prompt?: string, pick?: LaunchPick, label?: string, tree?: string) => void;
   closeTerm: (id: string) => void;
   /** puts a shell's tab down here and leaves the shell running for the
    *  other devices, and for picking back up from the shells list */
@@ -1180,6 +1182,15 @@ export interface CanopyState {
   /** reads one backend's landing queue, home by default */
   loadLanding: (backend?: string) => Promise<void>;
   loadWorktrees: (backend?: string) => Promise<void>;
+  /** reads one backend's kept worktrees (FR-051), home by default */
+  loadTrees: (backend?: string) => Promise<void>;
+  /** a new kept worktree on `branch`, from `base` or the default branch;
+   *  the list arrives on the event, and the tree is handed back for a shell */
+  addTree: (repoId: string, branch: string, base?: string, caches?: boolean) => Promise<string>;
+  /** removes a kept worktree by its slug; `force` loses its work and shells */
+  removeTree: (repoId: string, slug: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
+  /** opens the repo's panel with one of its sections unfolded */
+  showSection: (repoId: string, key: SectionKey) => void;
   /** "land" on a ready branch run, by its run's or branch's id; `approve`
    *  is the sensitive patch id the approve sheet showed */
   landRun: (id: string, approve?: string, skipJudge?: boolean) => Promise<void>;
@@ -1740,6 +1751,9 @@ const kitEvents = new Map<string, number>();
 /* and each backend's landing events */
 const landingEvents = new Map<string, number>();
 const worktreeEvents = new Map<string, number>();
+/* and the kept worktrees' (FR-051) */
+const treeEvents = new Map<string, number>();
+const treeLoads = new Map<string, number>();
 /* Pool reads may overlap across a stream reconnect; only the newest may land. */
 const worktreeLoads = new Map<string, number>();
 /* and each backend's PR events */
@@ -1921,6 +1935,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadKit(b);
   void get().loadLanding(b);
   void get().loadWorktrees(b);
+  void get().loadTrees(b);
   void get().loadPrs(b);
   void get().loadTriggers(b);
   void get().loadAuth(b);
@@ -2118,6 +2133,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   kit: {},
   landing: {},
   worktrees: {},
+  trees: {},
   prs: {},
   triggers: {},
   authByBackend: {},
@@ -2336,6 +2352,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadKit();
     void get().loadLanding();
     void get().loadWorktrees();
+    void get().loadTrees();
     void get().loadPrs();
     void get().loadTriggers();
     void get().loadAuth();
@@ -2501,6 +2518,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadKit(name);
     void get().loadLanding(name);
     void get().loadWorktrees(name);
+    void get().loadTrees(name);
     void get().loadPrs(name);
     void get().loadTriggers(name);
     void get().loadAuth(name);
@@ -2563,6 +2581,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _landing, ...landing } = s.landing;
     const { [name]: _worktrees, ...worktrees } = s.worktrees;
     worktreeEvents.set(name, (worktreeEvents.get(name) ?? 0) + 1);
+    const { [name]: _trees, ...trees } = s.trees;
+    treeEvents.set(name, (treeEvents.get(name) ?? 0) + 1);
     const { [name]: _prs, ...prs } = s.prs;
     const { [name]: _triggers, ...triggers } = s.triggers;
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
@@ -2596,6 +2616,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       kit,
       landing,
       worktrees,
+      trees,
       prs,
       triggers,
       authByBackend,
@@ -3109,6 +3130,11 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ worktrees: { ...st.worktrees, [b]: ev.worktrees } }));
       return;
     }
+    if (ev.type === "trees") {
+      treeEvents.set(b, (treeEvents.get(b) ?? 0) + 1);
+      set((st) => ({ trees: { ...st.trees, [b]: ev.trees } }));
+      return;
+    }
     if (ev.type === "triggers") {
       triggersEvents.set(b, (triggersEvents.get(b) ?? 0) + 1);
       set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events } } }));
@@ -3342,7 +3368,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       saveSettings(settings);
       return { settings };
     }),
-  openTerm: (repoId, place, start, prompt, pick, label) => {
+  openTerm: (repoId, place, start, prompt, pick, label, tree) => {
     const s = get();
     const repo = s.repos.find((r) => r.id === repoId);
     if (!repo || repo.forge) return;
@@ -3365,6 +3391,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       place: where,
       ...(given ? { label: given } : {}),
       ...(start ? { start, ...(prompt ? { prompt } : {}), ...pickFields(pick) } : {}),
+      ...(tree ? { tree } : {}),
     };
     // A panel shell shows only inside its repo's panel and only while that
     // section is unfolded, so open both. Otherwise the click does nothing you
@@ -3567,6 +3594,25 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // An older backend has no pool endpoint; nothing shows for it.
     }
+  },
+  loadTrees: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = treeEvents.get(b) ?? 0;
+    const load = (treeLoads.get(b) ?? 0) + 1;
+    treeLoads.set(b, load);
+    try {
+      const trees = await api.trees(b);
+      if (treeLoads.get(b) === load && (treeEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ trees: { ...s.trees, [b]: trees } }));
+    } catch {
+      // An older backend keeps no worktrees by hand; nothing shows for it.
+    }
+  },
+  addTree: async (repoId, branch, base, caches = true) => {
+    const tree = await api.addTree(repoId, branch, base, caches);
+    return tree.slug;
+  },
+  removeTree: async (repoId, slug, force = false, deleteBranch = false) => {
+    await api.removeTree(repoId, slug, force, deleteBranch);
   },
   landRun: async (id, approve, skipJudge) => {
     await api.land(id, approve, skipJudge);
@@ -4382,6 +4428,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({
       ...dockPanel(s, repoId),
       closedSections: unfoldIn(s.closedSections, repoId, "landing"),
+    })),
+  showSection: (repoId, key) =>
+    set((s) => ({
+      ...dockPanel(s, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, key),
     })),
   bringTask: (repoId, task = null) =>
     set((s) => ({ ...dockPanel(s, repoId), front: frontForTask(s.front, repoId, task) })),

@@ -48,6 +48,7 @@ import { AgentScreen, AskHere, pageIds, useAgentCard, useShellProbe } from "./Ag
 import { AgentActions, useNow } from "./Registry";
 import { HealthList, HealthSection } from "./Health";
 import { LandingSection } from "./Landing";
+import { TreesSection } from "./Trees";
 import { CliBody } from "./CommandLine";
 import { WaitingBody } from "./Waiting";
 import { benchHolds, benchIs, benchSolo } from "../front";
@@ -1295,6 +1296,8 @@ export function PanelSection({ k, repo }: { k: SectionKey; repo: Repo }) {
       return <ChangesSection repo={repo} />;
     case "landing":
       return <LandingSection repo={repo} />;
+    case "worktrees":
+      return <TreesSection repo={repo} />;
     case "search":
       return <SearchSection repo={repo} />;
     case "files":

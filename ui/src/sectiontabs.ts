@@ -149,6 +149,9 @@ export function sectionApplies(k: SectionKey, repo: Pick<Repo, "forge" | "spec" 
       return !repo.forge;
     case "spec":
       return repo.spec !== undefined;
+    // a kept worktree is made on the backend's own disk (FR-051)
+    case "worktrees":
+      return !repo.forge && !repo.host;
     case "preview":
       return !repo.host;
     default:

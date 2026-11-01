@@ -1760,6 +1760,54 @@ export interface WorktreesInfo {
   repos: WorktreeRepoInfo[];
 }
 
+/** A worktree kept by hand on a branch of its own (FR-051): made from a
+ *  card or `canopy worktrees add`, kept until removed, with the repo's setup
+ *  run and its build caches cloned in. `preparing` while that runs. */
+export type BranchTreeState = "preparing" | "ready" | "failed";
+
+export interface BranchTree {
+  /** the folder's name under the repo's trees folder, from the branch */
+  slug: string;
+  /** absolute, on this backend */
+  dir: string;
+  branch: string;
+  /** the ref the branch was made from, which ahead and behind count against */
+  base: string;
+  /** the port its shells get as PORT; null when the range had none free */
+  port: number | null;
+  madeAt: number;
+  /** whether the main checkout's ignored entries were cloned in */
+  caches: boolean;
+  state: BranchTreeState;
+  /** the last lines of what failed, for a failed tree */
+  why?: string;
+  /** HEAD, short */
+  head: string;
+  /** commits the branch has that its base lacks, and the reverse */
+  ahead: number;
+  behind: number;
+  /** changed entries in its tree, untracked files included */
+  files: number;
+  /** the last commit's time, unix ms; absent on an unborn branch */
+  at?: number;
+  /** live canopy shells sitting in it */
+  shells: number;
+}
+
+export interface BranchTreeRepo {
+  repoId: string;
+  repoPath: string;
+  trees: BranchTree[];
+}
+
+/** `GET /api/trees` and the `trees` event: every kept worktree on the backend. */
+export interface BranchTreesInfo {
+  root: string;
+  /** the port range trees draw from, as configured */
+  ports: string;
+  repos: BranchTreeRepo[];
+}
+
 /** The parts of a status a run is expected to move: the working tree and
  *  the branch's position. Equal fingerprints before and after a commit or
  *  push mean the run did nothing the card can show. */
@@ -1814,6 +1862,8 @@ export type ServerEvent =
   | { type: "landing"; landing: LandingInfo }
   /** every repo's run and warm worktrees, whole, whenever one changes */
   | { type: "worktrees"; worktrees: WorktreesInfo }
+  /** the worktrees kept by hand (FR-051), whole, after any of them changes */
+  | { type: "trees"; trees: BranchTreesInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
   /** every work item, whole, whenever one changes (FR-037) */

@@ -246,6 +246,10 @@ test("worktree routes: the listing reads, warm is admin, prune operates", () => 
   expect(needs("POST", "/api/worktrees/prune")).toBe("operate");
   expect(allows("shell", needs("POST", "/api/worktrees/warm"))).toBe(false);
   expect(allows("shell", needs("POST", "/api/worktrees/prune"))).toBe(true);
+  expect(needs("GET", "/api/trees")).toBe("read");
+  expect(needs("POST", "/api/trees/add")).toBe("operate");
+  expect(needs("POST", "/api/trees/remove")).toBe("operate");
+  expect(allows("shell", needs("POST", "/api/trees/add"))).toBe(true);
   expect(allows("cli", needs("POST", "/api/worktrees/warm"))).toBe(true);
 });
 

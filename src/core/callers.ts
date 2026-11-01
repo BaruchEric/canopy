@@ -70,6 +70,9 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["landing/*", "groups/*", "prs/*", "incubator/*"], right: "operate" },
   // prune removes what the landing section's remove already lets operate remove
   { methods: POST, paths: ["worktrees/prune"], right: "operate" },
+  // a kept worktree is a shell's to make and drop: an agent in one spins
+  // its siblings up the way worktrunk's does
+  { methods: POST, paths: ["trees/add", "trees/remove"], right: "operate" },
   { methods: POST, paths: ["tailchan/send", "tailchan/put", "tailchan/notify"], right: "operate" },
   { methods: POST, paths: ["asks/answer", "presence", "presence/beat", "layouts/reset", "rescan", "preview"], right: "operate" },
   // a voice session is billed by the minute on the backend's key, and a

@@ -12,6 +12,8 @@ import type {
   LandEntry,
   LandingInfo,
   WorktreesInfo,
+  BranchTree,
+  BranchTreesInfo,
   PrWatch,
   KitInstallResult,
   KitMcpPreview,
@@ -132,6 +134,7 @@ import {
   qRepo,
   qLanding,
   qWorktrees,
+  qTrees,
   qGroup,
   qPrs,
   qTriggers,
@@ -891,6 +894,19 @@ export const api = {
   },
   /** One backend's worktree pool; qualify ids at the same boundary as SSE. */
   worktrees: async (b: string = homeName()): Promise<WorktreesInfo> => from(b, await req<WorktreesInfo>(b, "/api/worktrees"), qWorktrees),
+  /** One backend's kept worktrees (FR-051); ids qualified as the event's are. */
+  trees: async (b: string = homeName()): Promise<BranchTreesInfo> => from(b, await req<BranchTreesInfo>(b, "/api/trees"), qTrees),
+  /** a new kept worktree on `branch`, from `base` (the default branch when unsaid) */
+  addTree: async (repoId: string, branch: string, base?: string, caches = true): Promise<BranchTree> => {
+    const [b, plain] = on(repoId);
+    const r = await req<{ tree: BranchTree }>(b, "/api/trees/add", { method: "POST", body: JSON.stringify({ repo: plain, branch, ...(base ? { base } : {}), caches }) });
+    return r.tree;
+  },
+  /** removes a kept worktree by its slug or branch; `force` loses its work */
+  removeTree: async (repoId: string, tree: string, force = false, deleteBranch = false): Promise<void> => {
+    const [b, plain] = on(repoId);
+    await req<{ removed: string }>(b, "/api/trees/remove", { method: "POST", body: JSON.stringify({ repo: plain, tree, force, deleteBranch }) });
+  },
   /** "land" on a ready branch run, by its run's or its branch's id;
    *  `approve` is the sensitive patch id the approve sheet showed */
   land: async (id: string, approve?: string, skipJudge?: boolean) => {

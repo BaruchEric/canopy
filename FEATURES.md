@@ -34,7 +34,7 @@ A topic section's heading in the tree and the grid carries more than the dirty c
 
 ### FR-019 · Drill from a card into a branch and its worktree
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14)
-From a repo card, open one branch and see the changes in its worktree, not only the main checkout's. The note reads "drill to branch; work tree on changes", so confirm the intent before writing a spec.
+From a repo card, open one branch and see the changes in its worktree, not only the main checkout's. The note reads "drill to branch; work tree on changes", so confirm the intent before writing a spec. FR-051 (shipped 2026-11-01) covers the worktree half: a card keeps trees by hand and drills into each one's changes.
 
 ### FR-020 · Quick notes and reminders
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)

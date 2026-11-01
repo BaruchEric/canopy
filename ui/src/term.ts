@@ -47,6 +47,9 @@ export interface TermTab {
   harness?: Harness;
   /** or the profile picked at launch */
   profile?: string;
+  /** the kept worktree (FR-051) the shell lands in, by its slug; the
+   *  socket that starts it carries the name, and the path is the tree's */
+  tree?: string;
 }
 
 /** Whether a repo's panel has no shell of its own yet: no panel tab here and

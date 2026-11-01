@@ -226,6 +226,7 @@ import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { WarmPool, type Take } from "./warm";
+import { BranchTrees } from "./branchtrees";
 import { GroupHub } from "./groups";
 import { GROUP_MAX, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
@@ -361,6 +362,8 @@ interface ServerState {
   /** branch runs and the landing queue (server/landing) */
   landing: LandingHub;
   warm: WarmPool;
+  /** the worktrees kept by hand, one per branch (server/branchtrees) */
+  trees: BranchTrees;
   groups: GroupHub;
   /** serial branch preflights/fanout for each repo */
   branchStarts: Map<string, Promise<void>>;
@@ -514,6 +517,11 @@ export const WATCH_SPAN = 2 * 60_000;
 /** what a terminal websocket carries from the upgrade to its handlers */
 interface TermSocket {
   repo: Repo;
+  /** where the shell lands: the repo's locator, or one of its kept
+   *  worktrees' folders (FR-051) */
+  path: string;
+  /** the kept worktree the shell is in, for its environment; null at the checkout */
+  tree: { slug: string; port: number | null } | null;
   /** the browser's name for the shell */
   id: string;
   place: ShellPlace;
@@ -1715,7 +1723,8 @@ async function restoreTerm(state: ServerState, id: string, size: TermSize, resum
   try {
     await newSession(
       tmux,
-      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), ...(rec.label ? { label: rec.label } : {}), env: sessionEnv(state, rec.repoId, rec.path, id) },
+      // a shell kept in a worktree comes back into it, with the tree's port again
+      { id, repoId: rec.repoId, path: rec.path, place: rec.place, ...handleOf(state, rec.repoId, rec.path, id), ...(rec.label ? { label: rec.label } : {}), env: { ...sessionEnv(state, rec.repoId, rec.path, id), ...treeEnv(state.trees.treeAt(rec.path)) } },
       size,
       command,
     );
@@ -1779,7 +1788,7 @@ async function resumeTerm(
     await Bun.sleep(400);
     await sendLine(tmux, id, line);
   } else {
-    live = openPtyTerm(state, { repo, id, place, attach: false, start: null, refused: null, prompt: "", label: "", device: null, caller: null, ...size }, size);
+    live = openPtyTerm(state, { repo, path: repo.path, tree: null, id, place, attach: false, start: null, refused: null, prompt: "", label: "", device: null, caller: null, ...size }, size);
     await Bun.sleep(400);
     live.pty?.session.write(`${line}\r`);
   }
@@ -2031,6 +2040,14 @@ function sessionEnv(state: ServerState, repoId: string, path: string, id: string
   return { ...newProcessEnv(state, repoId, path, id), ...(tz && parseLocator(path).host === null ? { TZ: tz } : {}) };
 }
 
+/** What a shell in a kept worktree (FR-051) adds: the tree's name, and its
+ *  port as `PORT`, which most dev servers read, and under canopy's own name
+ *  for a script that wants to be sure where it came from. */
+function treeEnv(tree: { slug: string; port: number | null } | null): Record<string, string> {
+  if (!tree) return {};
+  return { CANOPY_TREE: tree.slug, ...(tree.port !== null ? { PORT: String(tree.port), CANOPY_TREE_PORT: String(tree.port) } : {}) };
+}
+
 /** `CANOPY_API` off the address the server binds: loopback for a loopback
  *  or wildcard bind, else that address itself */
 function apiUrlFor(bind: string, port: number): string {
@@ -2053,11 +2070,11 @@ function handleOf(state: ServerState, repoId: string, path: string, id: string):
  *  to them all. Throws when the spawn fails (a folder that is gone, a shell
  *  that is not there). */
 function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): LiveTerm {
-  const { repo, id, place, label } = data;
+  const { repo, id, place, label, path } = data;
   const scrollback = new Scrollback();
   const sockets = new Set<ServerWebSocket<TermSocket>>();
-  const env = shellEnv(state, repo.id, repo.path, id);
-  const session = startTerm(repo.path, size, {
+  const env = { ...shellEnv(state, repo.id, path, id), ...treeEnv(data.tree) };
+  const session = startTerm(path, size, {
     data: (chunk) => {
       scrollback.push(chunk);
       for (const ws of sockets) ws.sendBinary(chunk);
@@ -2079,7 +2096,7 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
     },
   }, Object.keys(env).length ? env : undefined);
   const live: LiveTerm = {
-    info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id), ...(label ? { label } : {}) },
+    info: { id, repoId: repo.id, path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, path, id), ...(label ? { label } : {}) },
     pty: { session, scrollback },
     sockets,
   };
@@ -2094,14 +2111,14 @@ function openPtyTerm(state: ServerState, data: TermSocket, size: TermSize): Live
  *  terminal while the browser is there to answer. A session that turns out
  *  gone (the shell exited with no one watching) is told so. */
 async function joinTmuxTerm(state: ServerState, tmux: string[], ws: ServerWebSocket<TermSocket>): Promise<void> {
-  const { repo, id, place, label, cols, rows } = ws.data;
+  const { repo, id, place, label, cols, rows, path } = ws.data;
   const size = { cols, rows };
   let live = state.terms.get(id);
   if (!live) {
     const named = label ? { label } : {};
-    await newSession(tmux, { id, repoId: repo.id, path: repo.path, place, ...handleOf(state, repo.id, repo.path, id), ...named, env: sessionEnv(state, repo.id, repo.path, id) }, size);
+    await newSession(tmux, { id, repoId: repo.id, path, place, ...handleOf(state, repo.id, path, id), ...named, env: { ...sessionEnv(state, repo.id, path, id), ...treeEnv(ws.data.tree) } }, size);
     live = {
-      info: { id, repoId: repo.id, path: repo.path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, repo.path, id), ...named },
+      info: { id, repoId: repo.id, path, place, attached: false, viewers: [], startedAt: Date.now(), ...handleOf(state, repo.id, path, id), ...named },
       pty: null,
       sockets: new Set(),
     };
@@ -2310,6 +2327,9 @@ async function finding<T>(run: () => Promise<T>): Promise<T> {
 }
 
 function broadcast(state: ServerState, event: ServerEvent): void {
+  // a commit in a kept worktree moves refs in the common git dir, which the
+  // main checkout's watcher reports: its trees' counts are read again
+  if (event.type === "repo") state.trees.touched(event.repo.path);
   const data = enc.encode(`data: ${JSON.stringify(event)}\n\n`);
   for (const c of state.clients) {
     try {
@@ -3413,6 +3433,8 @@ async function handleApi(
   if (landingRes) return landingRes;
   const worktreesRes = await state.warm.handle(req, url);
   if (worktreesRes) return worktreesRes;
+  const treesRes = await state.trees.handle(req, url);
+  if (treesRes) return treesRes;
   const scenariosRes = await state.scenarios.handle(req, url);
   if (scenariosRes) return scenariosRes;
   const prsRes = await state.prs.handle(req, url);
@@ -5739,6 +5761,18 @@ export async function startServer(opts: {
       removeOrphan: (dir, assertOwner) => state.landing.orphan(dir, "remove", assertOwner),
       broadcast: (ev) => broadcast(state, ev),
     }),
+    trees: new BranchTrees({
+      repos: () => state.result.repos,
+      gates: (path) => readGates(path),
+      setup: (dir, line) => runGate(dir, line),
+      listening: async () => (await listeningPorts()).map((l) => l.port),
+      shellsIn: (dir) => {
+        let count = 0;
+        for (const t of state.terms.values()) if (t.info.path === dir && !t.info.task && !t.info.ranger) count++;
+        return count;
+      },
+      broadcast: (ev) => broadcast(state, ev),
+    }),
     collisions: new CollisionHub({
       runs: () => state.runner.list(),
       repo: (id) => state.result.repos.find((repo) => repo.id === id),
@@ -6184,7 +6218,7 @@ export async function startServer(opts: {
         const size = termSize(url.searchParams.get("cols"), url.searchParams.get("rows"));
         const dev = url.searchParams.get("client") ?? "";
         const repo = { id: "", name: "ranger", path: root } as Repo;
-        const data: Socket = { kind: "term", repo, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", label: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, caller, ...size };
+        const data: Socket = { kind: "term", repo, path: repo.path, tree: null, id: rangerTerm, place: "strip", attach: true, start: null, refused: null, prompt: "", label: "", device: /^[0-9a-f]{16}$/.test(dev) ? dev : null, caller, ...size };
         if (srv.upgrade(req, { data })) return undefined;
         return json({ error: "a websocket is expected here" }, 426);
       }
@@ -6198,6 +6232,12 @@ export async function startServer(opts: {
         return json({ error: String(err instanceof Error ? err.message : err) }, status);
       }
       if (repo.forge) return json({ error: `${repo.name} is on the forge; there is no folder to open a shell in` }, 400);
+      // a kept worktree of the repo (FR-051), named by its slug or branch:
+      // the shell lands in it, with the tree's name and port in its environment
+      const treeName = url.searchParams.get("tree");
+      const tree = treeName ? state.trees.shellTree(repo.path, treeName) : null;
+      if (treeName && !tree) return json({ error: `${repo.name} keeps no worktree named ${treeName}` }, 404);
+      const path = tree ? tree.dir : repo.path;
       const id = url.searchParams.get("term");
       if (!isTermId(id)) return json({ error: "a shell is named by 32 hex digits in term=" }, 400);
       const place = termPlace(url.searchParams.get("place"));
@@ -6216,7 +6256,7 @@ export async function startServer(opts: {
       const dev = url.searchParams.get("client") ?? "";
       const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
       const label = attach ? "" : (cleanLabel(url.searchParams.get("label") ?? "") ?? "");
-      const data: Socket = { kind: "term", repo, id, place, attach, start, refused, prompt, label, device, caller, ...size };
+      const data: Socket = { kind: "term", repo, path, tree: tree ? { slug: tree.slug, port: tree.port } : null, id, place, attach, start, refused, prompt, label, device, caller, ...size };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }
@@ -6486,6 +6526,7 @@ export async function startServer(opts: {
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
     await state.warm.adopt();
+    await state.trees.adopt();
     // Preserve PR activation order; public retention waits for these protection facts.
     await state.prs.adopt();
     runlogFactsReady = true;
@@ -6497,11 +6538,13 @@ export async function startServer(opts: {
     // and the trigger events waiting on both
     await state.triggers.adopt();
     state.warm.start();
+    state.trees.start();
   };
   if (flowsLock.owner) {
     await adoptFlows();
   } else {
     state.warm.stop();
+    state.trees.stop();
     state.incubator.notKeeping(flowsLock.holder);
     if (flowsLock.holder) {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);

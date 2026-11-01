@@ -13877,3 +13877,14 @@ body.resizing-nesw {
 }
 .group-column p { margin: 8px 0; }
 .group-column .landing-tools { flex-wrap: wrap; }
+
+/* the worktrees section (FR-051): rows as the landing's, the tools at the
+   end of each, a one-line form for a new tree */
+.trees-row { align-items: center; }
+.trees-row.rust .landing-branch { color: var(--rust); }
+.trees-tools { display: inline-flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+.trees-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0 2px; }
+.trees-form input[type="text"] { flex: 1 1 150px; min-width: 110px; font-size: 12px; }
+.trees-check { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; opacity: 0.8; }
+.trees-why { margin: 2px 0 0; white-space: pre-wrap; font-size: 11px; max-height: 8em; overflow: auto; flex-basis: 100%; }
+.trees-refused { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }

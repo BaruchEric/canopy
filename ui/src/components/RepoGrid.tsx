@@ -34,6 +34,7 @@ import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
 import { RepoHealthChip } from "./Health";
 import { LandingChip, PrChip } from "./Landing";
+import { TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
 import { historyFor, type Repo } from "../../../src/core/types";
 
@@ -285,6 +286,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           <TaskChip repoId={repo.id} />
           <RepoHealthChip repoId={repo.id} />
           <LandingChip repoId={repo.id} />
+          <TreesChip repoId={repo.id} />
           <PrChip repoId={repo.id} />
           <AgentChip repoId={repo.id} />
           {forge ? (

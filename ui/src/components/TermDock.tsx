@@ -174,6 +174,8 @@ function socketUrl(tab: TermTab, cols: number, rows: number, rejoin: boolean, ti
       else if (tab.harness) q.set("harness", tab.harness);
       if (tab.prompt) q.set("prompt", tab.prompt);
     }
+    // a kept worktree's shell lands in that tree (FR-051)
+    if (tab.tree) q.set("tree", tab.tree);
   }
   if (ticket) q.set("ticket", ticket);
   return backendSocket(backendOf(tab.id), `/api/term?${q}`);

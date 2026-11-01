@@ -107,6 +107,10 @@ usage:
   canopy worktrees [repo] [--json]   every run and warm worktree on the backend, the failed refills, the orphans and the free disk
   canopy worktrees warm <repo> [N]   keep N prepared worktrees for the repo on this machine; no N takes the gates file's warm
   canopy worktrees prune [repo]      remove orphans and stale warm trees and forget failed refills, so the pool tries again
+  canopy worktrees add <repo> <branch> [--base REF] [--no-caches]   keep a worktree on the branch (new, from the base) with setup run and build caches cloned in
+  canopy worktrees rm <repo> <branch> [--force] [--delete-branch]   remove a kept worktree; refused while it holds changes, commits or shells unless forced
+  canopy worktrees path <repo> <branch>   print a kept worktree's folder
+  canopy worktrees shell-init        print the cw function: cw <branch> changes into the kept worktree for the repo the shell sits in
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout
