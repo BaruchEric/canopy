@@ -68,6 +68,10 @@ canopy worktrees shell-init                      prints a shell function, cw, th
 
 `core/branchtrees.test.ts` makes real repos in a temp dir: slugs and branch names, the hashed port and its walk, the ignored-entry list, the copy, the status counts, add and remove. `server/branchtrees.test.ts` drives the hub with a fake setup and listening list through `handle`, including the refusal paths and adoption. `ui/src/trees.test.ts` covers the words and the chip. The callers test pins the rights.
 
+## The card's work-elsewhere chip
+
+A kept tree with uncommitted changes or commits the main checkout lacks also appears in the card's `⧉` chip and the changes section's work-elsewhere rows, like any linked worktree. That stays, by choice (2026-11-01): the `⧉` chip is the signal that work sits uncommitted somewhere, the `⑂ N trees` chip is the count of trees kept, and the section's **changes** button drills through the work-elsewhere rows, which exist only because the tree is listed there. Hiding kept trees from `readElsewhere` the way run and warm trees are hidden would take the drill with it.
+
 ## Left to the builder
 
 Row and form markup follow the landing section's classes. The chip's tone is quiet; a failed tree turns it rust.
