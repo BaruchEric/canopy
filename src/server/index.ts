@@ -6574,6 +6574,9 @@ export async function startServer(opts: {
       )
     : null;
   tellStages();
+  // the Mac's own simulators are read now, so the first page's /api/client
+  // already lists them (FR-050)
+  if (hostOpeners() && process.env["NODE_ENV"] !== "test") hostEmulators();
   // the coordinator's runner redials on a watch of its own, so harnessesNow
   // and the fence stay fresh for a coordinate run's start and /api/about
   const stopCoordWatch = coord
