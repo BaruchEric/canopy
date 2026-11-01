@@ -4616,7 +4616,7 @@ async function handleApi(
     // the backend's own Mac sends it to the dev server itself, a helper's
     // machine to the preview slot at the backend's tailnet address
     if (method === "POST" && action === "emulator") {
-      const b = (await req.json().catch(() => null)) as { kind?: unknown; device?: unknown; port?: unknown; path?: unknown; helper?: unknown } | null;
+      const b = (await req.json().catch(() => null)) as { kind?: unknown; device?: unknown; port?: unknown; path?: unknown; helper?: unknown; turned?: unknown } | null;
       const kind = EMULATOR_KINDS.find((k) => k === b?.kind);
       const device = b?.device;
       if (!kind || typeof device !== "string" || !emulatorIdOk(kind, device)) throw new HttpError(400, "a simulator or emulator is needed: kind ios or android, and its device id");
@@ -4626,13 +4626,14 @@ async function handleApi(
       const port = b.port;
       const path = typeof b.path === "string" && b.path.startsWith("/") && b.path.length <= 1000 ? b.path : "/";
       const via = openVia(state, here, b.helper);
+      const turned = typeof b.turned === "boolean" ? { turned: b.turned } : {};
       const log = (line: string) => process.env["NODE_ENV"] !== "test" && console.log(`emulator: ${line}`);
       let url: string;
       let note: string | undefined;
       if (via.via === "backend") {
         url = `http://localhost:${port}${path}`;
         try {
-          note = await openInEmulator(kind, device, url, { log });
+          note = await openInEmulator(kind, device, url, { log, ...turned });
         } catch (e) {
           throw new HttpError(502, e instanceof Error ? e.message : String(e));
         }
@@ -4641,11 +4642,13 @@ async function handleApi(
         if (!(helper?.info.emulators ?? []).some((e) => e.kind === kind && e.id === device)) {
           throw new HttpError(400, `the helper on ${via.name} does not list that device; restart canopy helper there to list it again`);
         }
-        const slot = state.preview ? await state.preview.serve(port) : null;
-        const target = emulatorTarget({ local: false, host: state.preview?.host ?? null, slot }, port, path);
+        // a helper on this backend's own machine reaches the dev server itself
+        const target = helper?.info.local
+          ? emulatorTarget({ local: true }, port, path)
+          : emulatorTarget({ local: false, host: state.preview?.host ?? null, slot: state.preview ? await state.preview.serve(port) : null }, port, path);
         if (typeof target !== "string") throw new HttpError(400, target.error);
         url = target;
-        note = await askHelper(state, via.name, { emulator: { kind, device, url } }, EMULATOR_TIMEOUT);
+        note = await askHelper(state, via.name, { emulator: { kind, device, url, ...turned } }, EMULATOR_TIMEOUT);
       }
       return json({ ok: true, url, ...(note ? { note } : {}) } satisfies EmulatorOpened);
     }
@@ -6169,7 +6172,7 @@ export async function startServer(opts: {
       // rides in the query, one helper per name (a newer one wins)
       const info = parseHelperQuery(url.searchParams, key);
       if ("error" in info) return json({ error: info.error }, 400);
-      const data: HelperSocket = { kind: "helper", info, caller };
+      const data: HelperSocket = { kind: "helper", info: onThisMachine(key, url) ? { ...info, local: true } : info, caller };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }

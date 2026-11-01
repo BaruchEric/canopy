@@ -29,7 +29,7 @@ export type HelperIntent =
       group: { app: OpenerId; name: string; repos: string[]; agents: Record<string, AgentSettings>; primary?: string };
     }
   /** a page in one of the simulators or emulators the helper listed (FR-050) */
-  | { id: number; emulator: { kind: EmulatorKind; device: string; url: string } };
+  | { id: number; emulator: { kind: EmulatorKind; device: string; url: string; turned?: boolean } };
 
 /** `note` says something the caller should hear on a success: a device
  *  still booting as the answer went */
@@ -166,7 +166,9 @@ export function parseHelperIntent(text: string): HelperIntent | null {
     const kind = EMULATOR_KINDS.find((k) => k === x.kind);
     if (!kind || typeof x.device !== "string" || !emulatorIdOk(kind, x.device) || typeof x.url !== "string") return null;
     const url = emulatorUrlOk(x.url);
-    return url ? { id, emulator: { kind, device: x.device, url } } : null;
+    if (!url) return null;
+    const turned = typeof x.turned === "boolean" ? { turned: x.turned } : {};
+    return { id, emulator: { kind, device: x.device, url, ...turned } };
   }
   return null;
 }

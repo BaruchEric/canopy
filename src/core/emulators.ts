@@ -158,6 +158,24 @@ export function parseAdbDevices(out: string): string[] {
   return serials;
 }
 
+/** The adb shell commands that turn Chrome's first-run screens off on an
+ *  emulator: its flags file, read only while Chrome is the debug app, and
+ *  the notification permission, whose own prompt covers the first page. */
+export const CHROME_NO_FIRST_RUN: readonly (readonly string[])[] = [
+  ["echo", "'_ --disable-fre --no-default-browser-check --no-first-run'", ">", "/data/local/tmp/chrome-command-line"],
+  ["am", "set-debug-app", "--persistent", "com.android.chrome"],
+  ["pm", "grant", "com.android.chrome", "android.permission.POST_NOTIFICATIONS"],
+];
+
+/** The adb shell commands that hold an emulator upright or sideways:
+ *  auto-rotate off, then the rotation from its natural (portrait) one. */
+export function androidRotation(turned: boolean): string[][] {
+  return [
+    ["settings", "put", "system", "accelerometer_rotation", "0"],
+    ["settings", "put", "system", "user_rotation", turned ? "1" : "0"],
+  ];
+}
+
 /** whether an address is the machine's own loopback, which an Android
  *  emulator reaches only through `adb reverse` */
 export function loopbackUrl(url: string): number | null {

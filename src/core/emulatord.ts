@@ -14,10 +14,13 @@ import { existsSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { avdEmulator, emulatorIdOk, emulatorUrlOk, loopbackUrl, parseAdbDevices, parseIni, parseSimctl } from "./emulators";
+import { androidRotation, avdEmulator, CHROME_NO_FIRST_RUN, emulatorIdOk, emulatorUrlOk, loopbackUrl, parseAdbDevices, parseIni, parseSimctl } from "./emulators";
 import { exec } from "./exec";
 import { shellQuote } from "./host";
 import type { Emulator, EmulatorKind } from "./types";
+
+/** what a sideways page on iOS says, since simctl cannot turn a device */
+export const IOS_NO_TURN = "opened upright: simctl cannot turn an iOS simulator, so turn it with ⌘→ there";
 
 /** how long listing the devices may take, per kind */
 export const LIST_TIMEOUT = 10_000;
@@ -121,7 +124,7 @@ const failed = (what: string, r: { stderr: string; stdout: string }): Error =>
  *  DeviceHub from Xcode 27, which dropped Simulator.app. */
 const SIMULATOR_APPS = ["com.apple.iphonesimulator", "com.apple.dt.Devices"];
 
-async function openIos(id: string, url: string): Promise<void> {
+async function openIos(id: string, url: string): Promise<string | undefined> {
   const xcrun = xcrunBin();
   if (!xcrun) throw new Error("Xcode's xcrun is not here");
   // bootstatus -b boots the device when it is down and returns once it is
@@ -139,9 +142,10 @@ async function openIos(id: string, url: string): Promise<void> {
   const open = await exec([xcrun, "simctl", "openurl", id, url], { timeoutMs: 30_000 });
   if (open.code !== 0) throw failed("the simulator did not open the page", open);
   if (!shown) throw new Error("the page is open in the simulator, but neither Simulator nor DeviceHub opened to show it");
+  return undefined;
 }
 
-async function openAndroid(id: string, url: string): Promise<void> {
+async function openAndroid(id: string, url: string, turned: boolean | undefined): Promise<void> {
   const adb = adbBin();
   const emulator = emulatorBin();
   if (!adb || !emulator) throw new Error("the Android SDK's adb and emulator are not here");
@@ -164,6 +168,17 @@ async function openAndroid(id: string, url: string): Promise<void> {
     if (Date.now() > until) throw new Error(`the emulator ${id} did not finish booting in time`);
     await sleep(1_000);
   }
+  // Chrome's first-run screens stand between a fresh AVD and the page: the
+  // flags file turns them off, and Chrome reads it only as a debug app.
+  // Best effort, since a Play Store image refuses set-debug-app; a Chrome
+  // already running keeps the flags it started with.
+  for (const cmd of CHROME_NO_FIRST_RUN) await exec([adb, "-s", serial, "shell", ...cmd], { timeoutMs: 10_000 });
+  if (turned !== undefined) {
+    for (const cmd of androidRotation(turned)) {
+      const r = await exec([adb, "-s", serial, "shell", ...cmd], { timeoutMs: 10_000 });
+      if (r.code !== 0) throw failed("the emulator did not turn", r);
+    }
+  }
   // the machine's own loopback is the emulator's own inside it; reverse
   // hands that port back to this machine, so the page stays on localhost
   const port = loopbackUrl(url);
@@ -185,20 +200,31 @@ export async function openInEmulator(
   kind: EmulatorKind,
   id: string,
   url: string,
-  opts: { answerBy?: number; log?: (line: string) => void; list?: () => Promise<Emulator[]> } = {},
+  opts: {
+    answerBy?: number;
+    log?: (line: string) => void;
+    list?: () => Promise<Emulator[]>;
+    /** the page is shown sideways (true) or upright (false); left as it is when absent */
+    turned?: boolean;
+  } = {},
 ): Promise<string | undefined> {
   if (!emulatorIdOk(kind, id)) throw new Error("that is not a simulator or emulator id");
   const href = emulatorUrlOk(url);
   if (!href) throw new Error("only an http or https address opens in a simulator");
   const device = (await (opts.list ?? localEmulators)()).find((e) => e.kind === kind && e.id === id);
   if (!device) throw new Error(`no ${kind === "ios" ? "iOS simulator" : "Android emulator"} ${id} here`);
-  const work = kind === "ios" ? openIos(id, href) : openAndroid(id, href);
+  // simctl has no way to turn a simulator, so iOS says so instead
+  const work: Promise<string | undefined> =
+    kind === "ios"
+      ? openIos(id, href).then((n) => n ?? (opts.turned ? IOS_NO_TURN : undefined))
+      : openAndroid(id, href, opts.turned).then(() => undefined);
   let timer: ReturnType<typeof setTimeout> | undefined;
   const late = new Promise<"late">((r) => {
     timer = setTimeout(() => r("late"), opts.answerBy ?? ANSWER_BY);
   });
   try {
-    if ((await Promise.race([work.then(() => "done" as const), late])) === "done") return undefined;
+    const first = await Promise.race([work.then((note) => ({ note })), late]);
+    if (first !== "late") return first.note;
   } finally {
     clearTimeout(timer);
   }

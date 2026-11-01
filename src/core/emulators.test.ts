@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  androidRotation,
   avdEmulator,
+  CHROME_NO_FIRST_RUN,
   avdForm,
   emulatorIdOk,
   emulatorKey,
@@ -136,6 +138,22 @@ describe("where the device is sent", () => {
     expect(loopbackUrl("http://localhost:5173/")).toBe(5173);
     expect(loopbackUrl("http://127.0.0.1/")).toBe(80);
     expect(loopbackUrl("http://100.68.139.95:7861/")).toBeNull();
+  });
+});
+
+describe("Android's settings", () => {
+  test("upright or sideways, with auto-rotate off first", () => {
+    expect(androidRotation(true)).toEqual([
+      ["settings", "put", "system", "accelerometer_rotation", "0"],
+      ["settings", "put", "system", "user_rotation", "1"],
+    ]);
+    expect(androidRotation(false)[1]).toEqual(["settings", "put", "system", "user_rotation", "0"]);
+  });
+
+  test("Chrome's first run is turned off by its flags file, one quoted word for the device's sh", () => {
+    expect(CHROME_NO_FIRST_RUN[0]).toEqual(["echo", "'_ --disable-fre --no-default-browser-check --no-first-run'", ">", "/data/local/tmp/chrome-command-line"]);
+    expect(CHROME_NO_FIRST_RUN[1]).toEqual(["am", "set-debug-app", "--persistent", "com.android.chrome"]);
+    expect(CHROME_NO_FIRST_RUN[2]).toEqual(["pm", "grant", "com.android.chrome", "android.permission.POST_NOTIFICATIONS"]);
   });
 });
 

@@ -91,8 +91,8 @@ export function localOpeners(platform = process.platform): OpenerId[] {
  *  back as a note, its outcome going to `log` */
 export async function runIntent(intent: HelperIntent, log: (line: string) => void = () => {}): Promise<string | void> {
   if ("emulator" in intent) {
-    const { kind, device, url } = intent.emulator;
-    return openInEmulator(kind, device, url, { log });
+    const { kind, device, url, turned } = intent.emulator;
+    return openInEmulator(kind, device, url, { log, ...(turned === undefined ? {} : { turned }) });
   }
   if ("open" in intent) {
     const { app, path, agent, tab } = intent.open;

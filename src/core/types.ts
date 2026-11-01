@@ -339,6 +339,9 @@ export interface HelperInfo {
   /** the iOS simulators and Android emulators it can start a preview in
    *  (FR-050); absent from a helper older than them */
   emulators?: Emulator[];
+  /** it dialled in from the backend's own machine, by a loopback address
+   *  and a loopback name, so a dev server's localhost is its localhost too */
+  local?: boolean;
   /** unix ms of the registration */
   since: number;
   /** the address the backend saw the helper dial in from */

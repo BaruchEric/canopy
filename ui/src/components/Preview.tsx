@@ -137,7 +137,7 @@ function DeviceSwitch({ view, setView, scale }: { view: DeviceView; setView: (v:
  *  backend's own Mac's or its helper's, as a menu: the device the page is
  *  shown as comes first. Picking one starts it and opens the dev server
  *  there; the menu hides when the machine has none. */
-function EmulatorMenu({ repoId, port, path, form, say }: { repoId: string; port: number; path: string; form: EmulatorForm | null; say: (s: { text: string; bad: boolean } | null) => void }) {
+function EmulatorMenu({ repoId, port, path, form, turned, say }: { repoId: string; port: number; path: string; form: EmulatorForm | null; turned: boolean; say: (s: { text: string; bad: boolean } | null) => void }) {
   const backend = backendOf(repoId);
   const list = useStore(useShallow((s) => capsFor(s, backend).emulators));
   const [busy, setBusy] = useState(false);
@@ -150,7 +150,8 @@ function EmulatorMenu({ repoId, port, path, form, say }: { repoId: string; port:
     setBusy(true);
     say({ text: `starting ${device.name}…`, bad: false });
     api
-      .emulator(repoId, { kind: picked.kind, device: picked.id, port, path }, helperFor(useStore.getState(), backend))
+      // a device view's turn goes with it; on desktop the device stays as it is
+      .emulator(repoId, { kind: picked.kind, device: picked.id, port, path, ...(form ? { turned } : {}) }, helperFor(useStore.getState(), backend))
       .then((r) => say({ text: r.note ?? `opened ${r.url} in ${device.name}`, bad: false }))
       .catch((e: unknown) => say({ text: errText(e), bad: true }))
       .finally(() => setBusy(false));
@@ -806,7 +807,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       ↗
                     </a>
                   )}
-                  <EmulatorMenu repoId={repo.id} port={choice.port} path={choice.path} form={emuForm} say={setEmuSay} />
+                  <EmulatorMenu repoId={repo.id} port={choice.port} path={choice.path} form={emuForm} turned={view.turned} say={setEmuSay} />
                 </div>
                 {emuSay && <p className={emuSay.bad ? "panel-error" : "panel-clean preview-emu-say"}>{emuSay.text}</p>}
                 <div
@@ -1016,7 +1017,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       <a className="mini" href={url} target="_blank" rel="noreferrer" title="Open in a browser tab" aria-label="Open in a browser tab">
                         ↗
                       </a>
-                      <EmulatorMenu repoId={repo.id} port={choice.port} path={choice.path} form={emuForm} say={setEmuSay} />
+                      <EmulatorMenu repoId={repo.id} port={choice.port} path={choice.path} form={emuForm} turned={view.turned} say={setEmuSay} />
                       <button
                         type="button"
                         className={`mini${soloed ? " on" : ""}`}

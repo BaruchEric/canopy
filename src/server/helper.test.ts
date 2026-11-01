@@ -31,9 +31,11 @@ interface Fake {
   closed: Promise<{ code: number; reason: string }>;
 }
 
-function dial(query: Record<string, string>): Fake {
+/** `host` names the backend the way a helper elsewhere does; without it the
+ *  helper dials a loopback name and counts as on the backend's machine */
+function dial(query: Record<string, string>, host?: string): Fake {
   const q = new URLSearchParams({ name: "mbp", platform: "darwin", openers: "kitty,terminal,code,finder,agent", ...query });
-  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/helper?${q}`);
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/helper?${q}`, host ? { headers: { host, "x-forwarded-proto": "https" } } : undefined);
   const intents: Array<Record<string, unknown>> = [];
   ws.onmessage = (e: MessageEvent<string>) => {
     if (typeof e.data === "string") intents.push(JSON.parse(e.data) as Record<string, unknown>);
@@ -96,7 +98,7 @@ function listen(): { events: HelperInfo[][]; stop: () => void } {
 
 beforeAll(async () => {
   scratch = await mkdtemp(join(tmpdir(), "canopy-helper-"));
-  for (const k of ["CANOPY_CONFIG_DIR", "CANOPY_NO_DESKTOP", "CANOPY_SSH_HOST", "CANOPY_TMUX", "CANOPY_PREVIEW_PORTS", "CANOPY_PREVIEW_HOST"]) saved[k] = process.env[k];
+  for (const k of ["CANOPY_CONFIG_DIR", "CANOPY_NO_DESKTOP", "CANOPY_SSH_HOST", "CANOPY_TMUX", "CANOPY_PREVIEW_PORTS", "CANOPY_PREVIEW_HOST", "CANOPY_PUBLIC_ORIGIN"]) saved[k] = process.env[k];
   process.env["CANOPY_CONFIG_DIR"] = join(scratch, "config");
   process.env["CANOPY_NO_DESKTOP"] = "1";
   process.env["CANOPY_SSH_HOST"] = "mini";
@@ -106,6 +108,8 @@ beforeAll(async () => {
   const slot = 30000 + Math.floor(Math.random() * 20000);
   process.env["CANOPY_PREVIEW_PORTS"] = `${slot}-${slot}`;
   process.env["CANOPY_PREVIEW_HOST"] = "100.64.0.9";
+  // a tunnel's name, so a helper can dial in as one on another machine
+  process.env["CANOPY_PUBLIC_ORIGIN"] = "https://canopy.example";
   root = join(scratch, "root");
   const repo = join(root, "app");
   await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
@@ -273,7 +277,7 @@ describe("a preview in a simulator through a helper (FR-050)", () => {
   const phone = { kind: "ios", id: "1A627B96-6489-42B5-B90F-8DF99F59A631", name: "iPhone 17 · iOS 26.5", form: "phone" };
 
   test("goes to the preview slot at the tailnet address, only for a device the helper listed, and carries its note back", async () => {
-    const h = dial({ emulators: JSON.stringify([phone]) });
+    const h = dial({ emulators: JSON.stringify([phone]) }, "canopy.example");
     await h.opened;
     await until(async () => (await helpers())[0]?.emulators?.length === 1, "the helper's devices");
     const slot = Number(process.env["CANOPY_PREVIEW_PORTS"]!.split("-")[0]);
@@ -285,14 +289,27 @@ describe("a preview in a simulator through a helper (FR-050)", () => {
     expect(bad.status).toBe(400);
     expect(h.intents).toEqual([]);
 
-    const sent = post("/api/repos/emulator?id=app", { kind: "ios", device: phone.id, port: 5173, path: "/app?x=1", helper: "mbp" });
+    const sent = post("/api/repos/emulator?id=app", { kind: "ios", device: phone.id, port: 5173, path: "/app?x=1", helper: "mbp", turned: true });
     await until(() => h.intents.length === 1, "the emulator intent");
     const url = `http://100.64.0.9:${slot}/app?x=1`;
-    expect(h.intents[0]!.emulator).toEqual({ kind: "ios", device: phone.id, url });
+    expect(h.intents[0]!.emulator).toEqual({ kind: "ios", device: phone.id, url, turned: true });
     h.ws.send(JSON.stringify({ id: h.intents[0]!.id, ok: true, note: "iPhone 17 is still starting" }));
     const res = await sent;
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, url, note: "iPhone 17 is still starting" });
+    h.ws.close();
+    await until(async () => (await helpers()).length === 0, "the helper to go");
+  });
+
+  test("a helper on the backend's own machine is sent the dev server itself", async () => {
+    const h = dial({ emulators: JSON.stringify([phone]) });
+    await h.opened;
+    await until(async () => (await helpers())[0]?.local === true, "the local helper");
+    const sent = post("/api/repos/emulator?id=app", { kind: "ios", device: phone.id, port: 5173, path: "/", helper: "mbp" });
+    await until(() => h.intents.length === 1, "the emulator intent");
+    expect(h.intents[0]!.emulator).toEqual({ kind: "ios", device: phone.id, url: "http://localhost:5173/" });
+    h.ws.send(JSON.stringify({ id: h.intents[0]!.id, ok: true }));
+    expect(await (await sent).json()).toEqual({ ok: true, url: "http://localhost:5173/" });
     h.ws.close();
     await until(async () => (await helpers()).length === 0, "the helper to go");
   });

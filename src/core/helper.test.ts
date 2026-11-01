@@ -96,6 +96,8 @@ describe("parseHelperIntent", () => {
   test("an emulator intent with a device id of its kind's shape and an http address (FR-050)", () => {
     const ok = { kind: "android" as const, device: "privatelm", url: "http://100.68.139.95:7861/app" };
     expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: ok }))).toEqual({ id: 2, emulator: ok });
+    expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, turned: true } }))).toEqual({ id: 2, emulator: { ...ok, turned: true } });
+    expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, turned: "yes" } }))).toEqual({ id: 2, emulator: ok });
     expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, device: "-wipe-data" } }))).toBeNull();
     expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, kind: "ios" } }))).toBeNull();
     expect(parseHelperIntent(JSON.stringify({ id: 2, emulator: { ...ok, url: "file:///etc/hosts" } }))).toBeNull();

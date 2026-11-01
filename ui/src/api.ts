@@ -402,7 +402,7 @@ export const api = {
     }),
   /** the dev server on `port` at `path` in a simulator or emulator on this
    *  browser's machine (FR-050), through `helper` as `open` does */
-  emulator: (id: string, body: { kind: EmulatorKind; device: string; port: number; path: string }, helper?: string) =>
+  emulator: (id: string, body: { kind: EmulatorKind; device: string; port: number; path: string; turned?: boolean }, helper?: string) =>
     repoReq<EmulatorOpened>(id, (p) => `/api/repos/emulator?${rq(p)}`, {
       method: "POST",
       body: JSON.stringify({ ...body, helper }),
