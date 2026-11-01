@@ -50,7 +50,12 @@ const categories = (host: string) => ({
   notes: { alpha: "first note" },
 });
 
-async function makeSide(name: string, host: string): Promise<Side> {
+const MAC_AND_MINI: LibrarySyncSettings["backends"] = [
+  { name: "mac", tailnet: "http://mac.test" },
+  { name: "mini", tailnet: "http://mini.test" },
+];
+
+async function makeSide(name: string, host: string, backends = MAC_AND_MINI): Promise<Side> {
   const root = join(base, name, "dev");
   const dir = join(base, name, "state");
   await mkdir(join(root, "apps", "alpha"), { recursive: true });
@@ -62,10 +67,7 @@ async function makeSide(name: string, host: string): Promise<Side> {
   const settings: LibrarySyncSettings = {
     mode: "on",
     self: name,
-    backends: [
-      { name: "mac", tailnet: "http://mac.test" },
-      { name: "mini", tailnet: "http://mini.test" },
-    ],
+    backends,
   };
   const side: Side = { name, root, dir, settings, refreshed: 0, hub: null as unknown as LibrarySync };
   side.hub = new LibrarySync({
@@ -236,6 +238,104 @@ describe("Library sync between two backends", () => {
     expect(st.error).toBeNull();
     expect(st.peers.find((p) => p.name === "gpd")?.away).toContain("not answering");
     mini.settings = { ...mini.settings, backends: mini.settings.backends.filter((b) => b.name !== "gpd") };
+  });
+});
+
+describe("Library sync keeps its data when a file is missing or a peer is away", () => {
+  const peers: LibrarySyncSettings["backends"] = [
+    { name: "a", tailnet: "http://a.test" },
+    { name: "b", tailnet: "http://b.test" },
+    { name: "c", tailnet: "http://c.test" },
+  ];
+  let a: Side;
+  let b: Side;
+  const peerOf = async (side: Side, name: string) => (await status(side)).peers.find((p) => p.name === name);
+
+  beforeAll(async () => {
+    a = await makeSide("a", "/Users/ericbaruch/dev", peers);
+    b = await makeSide("b", "/home/eric/dev", peers);
+    sides["a"] = a;
+    sides["b"] = b;
+    clock.at = T0 + 20_000;
+    await post(a, { action: "seed" });
+    clock.at = T0 + 21_000;
+    await post(b, { action: "adopt", backend: "a" });
+  });
+
+  test("a pull is refused while librarySync is off, and nothing is written", async () => {
+    clock.at = T0 + 22_000;
+    await writeFile(join(a.dir, "tags.json"), JSON.stringify({ alpha: ["react"], off: ["edit"] }, null, 2));
+    b.settings = { ...b.settings, mode: "off" };
+    const r = await post(b, { action: "pull" });
+    expect(r.status).toBe(409);
+    expect(String(r.body["error"])).toContain("off");
+    expect(await readJson(b, "tags.json")).toEqual({ alpha: ["react"] });
+    b.settings = { ...b.settings, mode: "on" };
+    await b.hub.pullAll();
+    expect(await readJson(b, "tags.json")).toEqual({ alpha: ["react"], off: ["edit"] });
+  });
+
+  test("an accept spent on an away peer does not let a later mass deletion through", async () => {
+    clock.at = T0 + 23_000;
+    const many: Record<string, string[]> = {};
+    for (let i = 0; i < 30; i++) many[`t${i}`] = ["x"];
+    await writeFile(join(a.dir, "tags.json"), JSON.stringify(many, null, 2));
+    await b.hub.pullAll();
+    expect(Object.keys(await readJson(b, "tags.json")).length).toBe(30);
+    delete sides["a"];
+    const r = await post(b, { action: "accept", backend: "a" });
+    expect(r.status).toBe(200);
+    expect((await peerOf(b, "a"))?.away).toContain("not answering");
+    sides["a"] = a;
+    clock.at = T0 + 24_000;
+    await writeFile(join(a.dir, "tags.json"), "{}\n");
+    await b.hub.pullAll();
+    expect(Object.keys(await readJson(b, "tags.json")).length).toBe(30);
+    expect((await peerOf(b, "a"))?.held).toContain("--accept a");
+    await post(b, { action: "accept", backend: "a" });
+    expect(await readJson(b, "tags.json")).toEqual({});
+  });
+
+  test("a Library file missing here comes back whole from the peer, deleting nothing there", async () => {
+    clock.at = T0 + 25_000;
+    await writeFile(join(a.dir, "tags.json"), JSON.stringify({ x: ["1"], y: ["2"], z: ["3"] }, null, 2));
+    await b.hub.pullAll();
+    expect(await readJson(b, "tags.json")).toEqual({ x: ["1"], y: ["2"], z: ["3"] });
+    await rm(join(b.dir, "tags.json"));
+    clock.at = T0 + 26_000;
+    await writeFile(join(a.dir, "tags.json"), JSON.stringify({ x: ["1"], y: ["2"], z: ["3"], w: ["4"] }, null, 2));
+    await b.hub.pullAll();
+    expect(await readJson(b, "tags.json")).toEqual({ x: ["1"], y: ["2"], z: ["3"], w: ["4"] });
+    clock.at = T0 + 27_000;
+    await a.hub.pullAll();
+    expect(await readJson(a, "tags.json")).toEqual({ x: ["1"], y: ["2"], z: ["3"], w: ["4"] });
+    expect(await peerOf(a, "b")).toMatchObject({ deleted: 0, held: null });
+  });
+
+  test("an adopt on a joined backend is refused", async () => {
+    const r = await post(b, { action: "adopt", backend: "a" });
+    expect(r.status).toBe(409);
+    expect(String(r.body["error"])).toContain("already joined");
+  });
+
+  test("an adopt before the Library has run here never tombstones the peer's categories", async () => {
+    clock.at = T0 + 28_000;
+    const c = await makeSide("c", "/home/eric/dev", peers);
+    sides["c"] = c;
+    await rm(join(c.dir, "categories.json"));
+    const r = await post(c, { action: "adopt", backend: "a" });
+    expect(r.status).toBe(200);
+    expect(await readJson(c, "tags.json")).toEqual({ x: ["1"], y: ["2"], z: ["3"], w: ["4"] });
+    // the engine's first run writes a default categories.json
+    clock.at = T0 + 29_000;
+    const fresh = { ...categories("/home/eric/dev"), categories: { misc: { label: "Misc", keywords: [] } }, links: {}, notes: {} };
+    await writeFile(join(c.dir, "categories.json"), JSON.stringify(fresh, null, 2));
+    await c.hub.pullAll();
+    clock.at = T0 + 30_000;
+    await a.hub.pullAll();
+    const cats = (await readJson(a, "categories.json"))["categories"] as Record<string, unknown>;
+    expect(Object.keys(cats).sort()).toEqual(["apps", "misc", "tools"]);
+    expect(await peerOf(a, "c")).toMatchObject({ deleted: 0, held: null });
   });
 });
 

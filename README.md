@@ -425,7 +425,13 @@ Library's metadata between them: every minute each backend pulls the others'
 entries over their `tailnet` URLs and merges them entry by entry, the newer
 edit winning. The host keys (`host_root`, `terminal_app`, `trusted_origins`,
 `helper_port`) stay per machine, and project folders are not moved yet. A backend
-joins once, either as the starting copy or by taking another's whole:
+joins once, either as the starting copy or by taking another's whole; a second
+`--adopt` is refused until its `sync.json` is removed. `"dry"` reports what a
+pull would change and writes nothing; `"off"` refuses pulls, scheduled and from
+the CLI alike. `--accept` is spent on the one pull it is given to, even when that
+peer does not answer, so a hold still there on the next pull needs a new
+`--accept`. A Library file missing on this backend is not read as a deletion of
+what it held: its entries come back from the peer and nothing is tombstoned.
 
 ```bash
 canopy library sync --seed                     # this backend's copy is the start

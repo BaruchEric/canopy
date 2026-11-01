@@ -22,6 +22,7 @@ import {
   adoptDoc,
   docOf,
   type Entries,
+  fileOf,
   flatten,
   LIB_FILE_NAMES,
   LIB_FILES,
@@ -86,6 +87,31 @@ export class LibrarySyncError extends Error {
   ) {
     super(message);
   }
+}
+
+const OFF = 'librarySync is off in the config: set it to "dry" or "on" before a pull';
+
+/** `state` without the live stamps of files outside `scope`. A file that is
+ *  missing here is unknown, not empty: its keys come back whole from a peer,
+ *  instead of the file being rebuilt with only what a merge took and the
+ *  next stamping pass tombstoning the rest on every backend. */
+function known(state: SyncState, scope: ReadonlySet<LibFile>): SyncState {
+  const entries: SyncState["entries"] = {};
+  for (const [key, held] of Object.entries(state.entries)) {
+    const file = fileOf(key);
+    if (file && scope.has(file)) entries[key] = held;
+  }
+  return { ...state, entries };
+}
+
+/** `state` with live stamps only for the keys `files` hold, so no stamp
+ *  outlives its value (a merge into a file unflatten could not create would
+ *  otherwise leave stamps the next pass turns into tombstones) */
+function stampedOnly(state: SyncState, files: LibFiles): SyncState {
+  const have = flatten(files);
+  const entries: SyncState["entries"] = {};
+  for (const [key, held] of Object.entries(state.entries)) if (key in have) entries[key] = held;
+  return { ...state, entries };
 }
 
 /** the state dir as one pass read it */
@@ -284,9 +310,10 @@ export class LibrarySync {
     return out;
   }
 
-  /** Pulls from every other backend, one after another. */
+  /** Pulls from every other backend, one after another; refused while off. */
   async pullAll(): Promise<void> {
     const s = await this.deps.settings();
+    if (s.mode === "off") throw new LibrarySyncError(409, OFF);
     for (const b of this.others(s)) await this.pull(b, s.mode === "dry");
   }
 
@@ -294,6 +321,8 @@ export class LibrarySync {
     return this.run(async () => {
       const p = this.peer(b);
       p.at = this.now();
+      // spent on this pull whatever comes of it, never kept for a later one
+      const accept = this.accepting.delete(b.name);
       let st: Stamped | null;
       try {
         st = await this.stamped();
@@ -317,8 +346,7 @@ export class LibrarySync {
       p.away = null;
       const tombed = Object.keys(doc.tombs).filter((k) => k.startsWith("cat:")).map((k) => k.slice("cat:".length));
       const busy = await this.busyCategories(tombed);
-      const accept = this.accepting.delete(b.name);
-      const r = merge({ state: st.state, values: st.values }, doc, { keepCategory: (n) => busy.has(n), accept });
+      const r = merge({ state: known(st.state, st.scope), values: st.values }, doc, { keepCategory: (n) => busy.has(n), accept });
       p.kept = r.keptCategories;
       p.dry = dry;
       p.taken = r.taken.length;
@@ -335,8 +363,9 @@ export class LibrarySync {
 
   /** Writes a merge's outcome: the changed files and sync.json through the
    *  adapter, or sync.json alone when no file changed. Queued callers only. */
-  private async apply(st: Stamped, state: SyncState, values: Entries): Promise<void> {
+  private async apply(st: Stamped, merged: SyncState, values: Entries): Promise<void> {
     const next = unflatten(values, st.files);
+    const state = stampedOnly(merged, { ...st.files, ...next });
     const names = Object.keys(next) as LibFile[];
     if (!names.length) {
       if (JSON.stringify(state) !== JSON.stringify(st.state)) await this.saveState(state);
@@ -380,6 +409,10 @@ export class LibrarySync {
       if (!s.self) throw new LibrarySyncError(409, "set self in the config first");
       const b = this.others(s).find((x) => x.name === name);
       if (!b) throw new LibrarySyncError(404, `no other backend named ${name} in the config's backends`);
+      const prev = await this.loadState();
+      if (prev) {
+        throw new LibrarySyncError(409, `already joined (${prev.joined.how}${prev.joined.from ? ` from ${prev.joined.from}` : ""}); a pull merges from here on, or remove sync.json to adopt again`);
+      }
       let doc: SyncDoc;
       try {
         doc = await this.fetchDoc(b);
@@ -388,8 +421,9 @@ export class LibrarySync {
       }
       if (!doc.ready) throw new LibrarySyncError(409, `${name} has not joined: seed it first`);
       const read = await this.readState();
-      const { values, state } = adoptDoc(doc, this.now());
+      const { values, state: adopted } = adoptDoc(doc, this.now());
       const next = unflatten(values, read.files);
+      const state = stampedOnly(adopted, { ...read.files, ...next });
       const expect: Record<string, string | null> = {};
       const files: Record<string, string> = {};
       for (const file of Object.keys(next) as LibFile[]) {
@@ -407,6 +441,7 @@ export class LibrarySync {
   /** `--accept <backend>`: its next merge may delete en masse, and it runs now */
   async accept(name: string): Promise<void> {
     const s = await this.deps.settings();
+    if (s.mode === "off") throw new LibrarySyncError(409, OFF);
     const b = this.others(s).find((x) => x.name === name);
     if (!b) throw new LibrarySyncError(404, `no other backend named ${name} in the config's backends`);
     this.accepting.add(name);

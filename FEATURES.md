@@ -142,6 +142,7 @@ Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: eigh
 P2 · added 2026-10-18 · source: Eric (Mac vs mini Library compare)
 A link, tag, note, move or new category made in one backend's Library shows up in the other's. Today each backend keeps its own copy of categories.json, references.json, tags.json, relations.json and health.json, and peer sync carries only commits, so the mini started from defaults and drifts again after every edit. Host-specific keys (host_root, terminal_app, trusted_origins) stay per machine.
 Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Phase 1 syncs the data; phase 2 replays folder moves when safe and asks otherwise (Eric's call). Phase 1 is live on the Mac and the mini since 2026-10-24 (d2cc24a, librarySync on for both).
+The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. librarySync is off on the Mac until the mini runs the fix, then both go back on.
 
 ## Shipped
 
