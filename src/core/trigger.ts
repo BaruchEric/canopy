@@ -190,6 +190,10 @@ export interface TriggerEvent {
   session?: string;
   /** the run's closing message, which a Linear agent session is shown */
   summary?: string;
+  /** the event's runs that ended `limited` in a row (FR-036): the last such
+   *  run and the count; the event waits for the reset after the first and
+   *  fails on the second */
+  limited?: { run: string; row: number };
   endedAt?: number;
 }
 
@@ -790,8 +794,18 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     next.status = "stopped";
     next.reason = run.stall?.stopped !== undefined ? stallReason() : "stopped before it finished";
   } else if (run.status === "limited") {
-    next.status = "stopped";
-    next.reason = `waiting for capacity: ${run.limited?.text || run.error || "the plan's usage limit"}`;
+    // counted once per run: a run's later changes (its branch read) come here too
+    const row = e.limited?.run === run.id ? e.limited.row : (e.limited?.row ?? 0) + 1;
+    const text = run.limited?.text || run.error || "the plan's usage limit";
+    next.limited = { run: run.id, row };
+    if (row >= 2) {
+      next.status = "failed";
+      next.reason = `${text} (limited twice in a row)`;
+    } else {
+      // resumed on its branch once the governor lets low work go
+      next.status = "stopped";
+      next.reason = `waiting for capacity: ${text}`;
+    }
   } else if (run.status === "failed") {
     next.status = "failed";
     next.reason = run.error ?? "the run failed";
@@ -805,6 +819,8 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
     else if (state === "uncommitted") next.reason = "the run ended with changes it did not commit";
     else if (state !== "working") next.reason = opensPr(e) ? "committed; canopy opens the PR once the landing queue has sorted the branch" : "committed; the landing queue sorts the branch";
   }
+  // an end other than the limit starts the count over
+  if (run.status === "done" || run.status === "failed" || run.status === "stopped") delete next.limited;
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
   else delete next.endedAt;
   return next;
@@ -827,6 +843,11 @@ export function stalledEvent(e: TriggerEvent, runId: string, why: string, now: n
   if (e.runId !== runId || e.pr || e.flowId) return e;
   return { ...e, status: "stalled", reason: why, needsYou: why, endedAt: now };
 }
+
+/** Whether an event waits for capacity: queued while the governor holds its
+ *  start, or stopped on its branch after its run hit the limit. */
+export const waitsForCapacity = (e: TriggerEvent): boolean =>
+  (e.status === "queued" || (e.status === "stopped" && e.limited !== undefined)) && (e.reason?.startsWith("waiting for capacity") ?? false);
 
 /** The event's state as its flow says, while it follows one. A done flow
  *  reads as working until its worktree has been read into the branch's state. */

@@ -12428,6 +12428,74 @@ span.effective-flag:not(:first-child) {
 .capacity-limited-name {
   font-weight: 600;
 }
+.capacity-held-count {
+  color: var(--ink-faint);
+}
+.capacity-held {
+  margin-top: 8px;
+}
+.capacity-held .panel-label {
+  margin-bottom: 4px;
+}
+.capacity-held ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.capacity-held li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  align-items: center;
+  padding: 6px 0;
+  font-size: 12px;
+}
+.capacity-held li > .capacity-limited-error {
+  grid-column: 1;
+}
+.capacity-held li > button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.capacity-held li + li {
+  border-top: 1px solid var(--hair);
+}
+.capacity-block .capacity-rows {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+.capacity-holds summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-faint);
+  padding: 6px 0;
+}
+.capacity-settings {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  align-items: end;
+  padding: 8px 0;
+  font-size: 12px;
+}
+.capacity-settings + .capacity-settings {
+  border-top: 1px solid var(--hair);
+}
+.capacity-settings h4 {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+.capacity-field {
+  display: grid;
+  gap: 3px;
+  color: var(--ink-faint);
+}
+.capacity-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .health-pop {
   width: 420px;
   max-height: min(70vh, 640px);

@@ -82,6 +82,12 @@ usage:
                                      what the paid services spent across every backend the home one lists, by service and by repo;
                                      --share adds the harness share, dollars and Claude sessions, and eight weeks of it
     --on NAME / --backend URL        as canopy health
+  canopy capacity [--json]           each backend's usage windows, the limit hit that holds work, and the starts held for capacity
+  canopy capacity read               read the windows now
+  canopy capacity release <id>       start one held start now, as interactive
+  canopy capacity set [--low N] [--normal N] [--weekly N] [--usd N|none]
+                                     the governor's holds (0.7 or 70%) and what a 5-hour window is worth in Claude dollars
+    --on NAME / --backend URL        as canopy health
   canopy health [--bad] [--repo R] [--canopy] [--json]
                                      every check on every backend the home one lists; exit 1 while one is down
     --on NAME                        only that backend (checks, add and rm speak to it too)
@@ -99,6 +105,7 @@ usage:
   canopy mcp                         an MCP server on stdio for the agent that started it: canopy's tools with the rights of $CANOPY_TOKEN
   canopy mcp tools                   the tools that token holds, one per line
   canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr]   start one branch run or a group to compare
+    --priority interactive|normal|low  who goes first when the plan's window runs low; a group is low unless raised
     --backend URL | --on NAME       select the backend that owns the repo
   canopy groups [repo]              list best-of-N groups and each member's branch and state
   canopy groups pick <group> <run>  choose a green member as the winner

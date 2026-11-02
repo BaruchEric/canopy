@@ -69,7 +69,11 @@ interface World {
   hub: PrHub;
   gh: Gh;
   events: ServerEvent[];
-  fixes: { id: string; prompt: string; label: string }[];
+  fixes: { id: string; prompt: string; label: string; priority?: string }[];
+  /** the governor's words for a held fix, else null (FR-036) */
+  hold: string | null;
+  /** fix runs that ended on the plan's usage limit, with their marks */
+  limitedRuns: Map<string, { at: number; text: string }>;
   notes: string[];
   closes: string[];
   links: [string, unknown][];
@@ -129,7 +133,7 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const scen: World["scen"] = { root: join(root, `scen${n}`), calls: [], answers: {}, wait: null };
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null, scen } as unknown as World;
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, hold: null, limitedRuns: new Map(), recDir, clock: null, scen } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
@@ -177,16 +181,18 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
         w.forgot.push(x);
         records.delete(x);
       },
-      startFix: async (r, prompt, label) => {
+      startFix: async (r, prompt, label, priority) => {
         const runId = `fix${++fixN}`;
-        w.fixes.push({ id: runId, prompt, label });
+        w.fixes.push({ id: runId, prompt, label, ...(priority ? { priority } : {}) });
         w.active.add(runId);
         const cur = records.get(r.id);
         if (cur) records.set(r.id, { ...cur, runId });
         return { id: runId, repoId: r.repoId, branch: { name: r.branch, target: r.target, base: r.base, dir: r.dir, state: "working", origin: r.id } } as unknown as Run;
       },
       runActive: (x) => w.active.has(x),
-      runOk: (x) => !w.active.has(x) && !w.failed.has(x),
+      runOk: (x) => !w.active.has(x) && !w.failed.has(x) && !w.limitedRuns.has(x),
+      hold: () => w.hold,
+      limitedRun: (x) => w.limitedRuns.get(x) ?? null,
       scenarios: {
         root: scen.root,
         judge: null,
@@ -442,6 +448,47 @@ describe("auto-fix", () => {
     expect(w.fixes[0]!.prompt).not.toContain("rm -rf");
     expect(pr.untrusted?.map((c) => c.id)).toEqual([5]);
     expect(pr.seenComment).toBe(6);
+  });
+
+  test("a fix the governor holds counts no attempt and waits; it starts once the hold lifts, or once as interactive on a release (FR-036 plan 2)", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    w.hold = "waiting for capacity: the 5-hour window is spent (resets 15:00)";
+    let pr = await pollNow(w);
+    expect([w.fixes.length, pr.waiting, pr.attempts]).toEqual([0, w.hold, {}]);
+    expect(w.hub.heldStarts()).toEqual([{ id: `pr:${w.rec.id}`, what: "fix PR #7", repoId: w.rec.repoId, priority: "normal", why: w.hold, since: pr.updatedAt }]);
+    await w.hub.release(w.rec.id);
+    await w.hub.idle();
+    pr = w.hub.info()[0]!;
+    expect([w.fixes.map((f) => f.priority), pr.waiting, pr.attempts]).toEqual([["interactive"], undefined, { "check:test": 1 }]);
+    expect(w.hub.heldStarts()).toEqual([]);
+  });
+
+  test("a fix run that ends limited counts no attempt, waits, starts again after the reset, and stops auto-fix on a second limit", async () => {
+    const w = await world();
+    await w.hub.open(w.rec.id);
+    await w.hub.set(w.rec.id, { autoFix: true });
+    w.gh.head = await revOf(w.dir, "HEAD");
+    w.gh.checks = [checkRun("test", "COMPLETED", "FAILURE")];
+    await pollNow(w);
+    const text = "You've hit your limit · resets 3pm";
+    w.limitedRuns.set("fix1", { at: Date.UTC(2026, 9, 26, 12), text });
+    w.hold = "waiting for capacity: the 5-hour window is spent (resets 15:00)";
+    await endFix(w, "fix1");
+    let pr = w.hub.info()[0]!;
+    expect([pr.fixing, pr.attempts, pr.limited, pr.waiting, pr.gaveUp]).toEqual([undefined, { "check:test": 0 }, "check:test", w.hold, undefined]);
+    w.hold = null;
+    w.hub.wake();
+    await w.hub.idle();
+    pr = w.hub.info()[0]!;
+    expect([w.fixes.map((f) => f.priority), pr.fixing?.run, pr.attempts, pr.waiting]).toEqual([["normal", "normal"], "fix2", { "check:test": 1 }, undefined]);
+    w.limitedRuns.set("fix2", { at: 1, text });
+    await endFix(w, "fix2");
+    pr = w.hub.info()[0]!;
+    expect(pr.gaveUp).toBe(`fixes stopped at the plan's usage limit twice in a row: ${text}`);
   });
 
   test("a fix run that was stopped pushes nothing, however much it committed", async () => {

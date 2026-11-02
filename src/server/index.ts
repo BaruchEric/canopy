@@ -147,6 +147,7 @@ import {
   setAgentScope,
   setWorkspaceLook,
   upsertWorkspace,
+  setCapacitySettings,
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
@@ -169,6 +170,8 @@ import {
   type AgentTable,
   type CanopyConfig,
   type Harness,
+  type HeldStart,
+  type Priority,
   type MoveCheck,
   type MoveOut,
   type MoveFile,
@@ -229,6 +232,7 @@ import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
 import { CapacityHub, capacityFile } from "./capacity";
+import { CapacityHeldError, holdWords, parsePriority } from "../core/capacity";
 import { CollisionHub } from "./collisions";
 import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
@@ -1097,6 +1101,72 @@ async function needHarness(state: ServerState, h: Harness, path: string): Promis
   if (why) throw new HttpError(400, why);
 }
 
+/** The governor before a start cuts a branch or mints a work item (FR-036):
+ *  a start at this priority that must wait throws `CapacityHeldError`, which
+ *  a route answers 409 and a pump reads as "stay queued". The Runner checks
+ *  again at the start itself. */
+function needCapacity(state: ServerState, harness: Harness, priority: Priority): void {
+  if (priority === "interactive") return;
+  const decision = state.capacity.may(harness, priority);
+  if (decision !== "go") throw new CapacityHeldError(decision);
+}
+
+const isCapacityHeld = (err: unknown): err is CapacityHeldError => err instanceof Error && err.name === "CapacityHeldError";
+
+/** Every start a pump holds for capacity, from its owner's own record:
+ *  trigger events, flows, coordinator cards, PR fixes and landing fixes. */
+function heldStarts(state: ServerState): HeldStart[] {
+  return [
+    ...state.triggers.heldStarts(),
+    ...state.flows.heldStarts(),
+    ...state.coordinator.heldStarts(),
+    ...state.prs.heldStarts(),
+    ...state.landing.heldStarts(),
+  ].sort((a, b) => a.since - b.since);
+}
+
+/** The readings changed: each pump looks again at what it holds, so a
+ *  reset starts held and limited work without a timer of its own. Trigger
+ *  runs and fixes are Claude Code's; a flow's step names its own harness. */
+function wakeForCapacity(state: ServerState): void {
+  const go = (harness: Harness, priority: Priority): boolean => state.capacity.may(harness, priority) === "go";
+  state.flows.resumeCapacityParks(go);
+  state.triggers.wake(() => go("claude", "low"));
+  state.coordinator.wake(() => go("claude", "normal"));
+  state.prs.wake();
+  state.landing.wake(() => go("claude", "normal"));
+}
+
+/** "Start anyway" (`POST /api/capacity/release`): the held start its id
+ *  names starts once as interactive, through its owner. */
+async function releaseHeld(state: ServerState, id: string): Promise<void> {
+  const at = id.indexOf(":");
+  const kind = id.slice(0, at);
+  const key = id.slice(at + 1);
+  if (kind === "trigger") {
+    await state.triggers.release(key);
+    return;
+  }
+  if (kind === "flow") {
+    state.flows.resume(key, "continue");
+    return;
+  }
+  if (kind === "card") {
+    const [coord = "", card = ""] = key.split(":");
+    await state.coordinator.release(coord, card);
+    return;
+  }
+  if (kind === "pr") {
+    await state.prs.release(key);
+    return;
+  }
+  if (kind === "fix") {
+    await state.landing.fix(key);
+    return;
+  }
+  throw new Error(`no held start ${id}`);
+}
+
 /** Starts a built-in action's run on a repo, after the checks every run
  *  route makes: the repo is a folder on this machine (not on another host,
  *  not a forge listing), no workflow or other run has it, and its route's
@@ -1112,6 +1182,9 @@ async function startRepoRun(
   branch?: boolean,
   /** open a PR when it settles ready instead of landing here (FR-011) */
   pr = false,
+  /** who may go first when the window runs low (FR-036): a start from the
+   *  page or the CLI is interactive unless it says otherwise */
+  priority: Priority = "interactive",
 ): Promise<Run> {
   // A coordinator runs only through its own start, in its sandbox with its
   // token; this path would spawn it here, unisolated.
@@ -1154,11 +1227,13 @@ async function startRepoRun(
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  needCapacity(state, agent.harness, priority);
+  const extras = priority === "interactive" ? {} : { priority };
   if (onBranch) {
     const resolved = await issueNoteFor(repo, note);
-    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], {}, resolved.work);
+    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], extras, resolved.work);
   }
-  return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope);
+  return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, extras);
 }
 
 /** A group reserves its preflight through fanout against other API branch starts. */
@@ -1173,7 +1248,7 @@ async function withBranchStart<T>(state: ServerState, repoId: string, start: () 
   finally { release(); if (state.branchStarts.get(repoId) === pending) state.branchStarts.delete(repoId); }
 }
 
-async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: string[] | undefined, autoLand: boolean, pr: boolean): Promise<RunGroup> {
+async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: string[] | undefined, autoLand: boolean, pr: boolean, priority: Priority = "low"): Promise<RunGroup> {
   return withBranchStart(state, repo.id, async () => {
     if (action === "compare" || action === "coordinate") throw new HttpError(400, "that action does not start a branch group");
     if (repo.host || repo.forge) throw new HttpError(400, "branch groups run only in local checkouts");
@@ -1187,6 +1262,8 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
     const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action });
     if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
     await needHarness(state, agent.harness, repo.path);
+    // a fan-out is low work unless its start says otherwise (FR-036)
+    needCapacity(state, agent.harness, priority);
     const resolved = await issueNoteFor(repo, note);
     const group = await state.groups.create({ repoId: repo.id, repoPath: repo.path, action, note: resolved.note, autoLand, expectedMembers: times, startedAt: Date.now(), ...(pr ? { pr: true } : {}) });
     const cuts: BranchStart[] = [];
@@ -1202,7 +1279,7 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
         cuts.push(cut);
       }
       for (const cut of cuts) {
-        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, agent, by, undefined, cut, { group: group.id, priority: "low" });
+        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, agent, by, undefined, cut, { group: group.id, priority });
         runs.push(run);
         await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: profile ?? null });
       }
@@ -1225,7 +1302,7 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
       const message = error instanceof Error ? error.message : String(error);
       for (const id of items) state.work.close(id, "dropped", `the group did not start: ${message}`);
       await state.groups.remove(group.id).catch(cleanup => console.error(`groups: rollback group ${group.id}: ${String(cleanup)}`));
-      if (error instanceof HttpError) throw error;
+      if (error instanceof HttpError || isCapacityHeld(error)) throw error;
       if (error instanceof BranchCapError) throw new SlotsFullError(message);
       throw new HttpError(400, message);
     }
@@ -1272,6 +1349,8 @@ async function startBranchRun(
     current();
     const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new SlotsFullError(`${repo.name} has ${going} branch runs going; wait for one to end`);
+    // before the work item and the branch, so a held start leaves neither
+    needCapacity(state, agent.harness, extras.priority ?? "interactive");
     const item = state.work.mint({ ...work, repos: [repo.id] });
     let start: BranchStart | undefined;
     try {
@@ -1285,6 +1364,7 @@ async function startBranchRun(
       state.work.close(item.id, "dropped", `the run did not start: ${message}`);
       if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
       if (err instanceof Error && err.name === "StageAwayError") throw err;
+      if (isCapacityHeld(err)) throw err;
       if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
       if (!start && err instanceof HttpError) throw err;
       throw new HttpError(400, message);
@@ -1428,15 +1508,25 @@ async function startFixRun(state: ServerState, rec: LandingRun, entry: LandEntry
   return startBranchFix(state, rec, fixPrompt(entry), `fix it: ${landWord(entry, [entry])}`, true);
 }
 
+/** What a fix on a branch starts with beyond its words: who may go first
+ *  (FR-036; a group's member is low, anything else interactive unless it
+ *  says), and the coordinator a resumed child belongs to. */
+interface FixStart {
+  priority?: Priority;
+  parent?: string;
+}
+
 /** A fix on a branch: Claude resumes the branch's last session with
  *  `reason`; anything else starts fresh with the run's note and it. Same
  *  worktree, same branch. A PR's fix (FR-011) says canopy pushes, so the
  *  landing queue's branch paragraph stays off its resumed message. */
-async function startBranchFix(state: ServerState, rec: LandingRun, reason: string, note: string, queueLine: boolean): Promise<Run> {
+async function startBranchFix(state: ServerState, rec: LandingRun, reason: string, note: string, queueLine: boolean, how: FixStart = {}): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === rec.repoId);
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: "ask" });
   await needHarness(state, agent.harness, repo.path);
+  const priority: Priority = how.priority ?? (rec.group ? "low" : "interactive");
+  needCapacity(state, agent.harness, priority);
   const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
   const message = resume ? (queueLine ? `${reason}\n\n${branchLine(b)}` : reason) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b);
@@ -1445,9 +1535,14 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
       branch: b,
       message,
       ...(resume ? { resume } : {}),
-    }, rec.group ? { group: rec.group, priority: "low" } : {});
+    }, {
+      ...(rec.group ? { group: rec.group } : {}),
+      ...(priority !== "interactive" ? { priority } : {}),
+      ...(how.parent ? { parent: how.parent } : {}),
+    });
   } catch (err) {
     if (err instanceof Error && err.name === "StageAwayError") throw err;
+    if (isCapacityHeld(err)) throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
 }
@@ -1524,12 +1619,17 @@ async function issueForge(
  *  and the event waits. A flow counts for a slot from its start to its end,
  *  checks and gates between steps included. Queue events keep their branch
  *  for local landing; PR events open a pull request when ready. */
-async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo, valid: () => boolean): Promise<StartOutcome> {
+async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Repo, valid: () => boolean, priority: Priority = "low"): Promise<StartOutcome> {
   const current = () => { if (!valid()) throw new Error("the trigger no longer holds the flows lock"); };
   current();
   if (repo.host) throw new Error(`${repo.name} is on ${repo.host}; a trigger runs only on this machine`);
   if (repo.forge) throw new Error(`${repo.name} is on the forge; a trigger runs in a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed`);
+  // a trigger's run is low work (FR-036), and always Claude Code's: a held
+  // start stays queued with the governor's words, before anything is read
+  try { needCapacity(state, "claude", priority); }
+  catch (err) { if (isCapacityHeld(err)) return { busy: err.message }; throw err; }
+  const extras = priority === "interactive" ? {} : { priority };
   const got = await triggerSpec(event.workflow, repo);
   current();
   if (typeof got === "string") throw new Error(got);
@@ -1550,8 +1650,8 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
   const pr = opensPr(event);
   const work: WorkStart = { title: event.title, from: { kind: "trigger", event: event.id } };
   if (got.kind === "run") {
-    try { return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, {}, work, valid) }; }
-    catch (err) { if (err instanceof SlotsFullError) return { busy: err.message }; throw err; }
+    try { return { run: await startBranchRun(state, repo, "ask", event.note, select(got.profile), `trigger ${event.rule}`, pr, got.spec, extras, work, valid) }; }
+    catch (err) { if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message }; throw err; }
   }
   return withBranchStart(state, repo.id, async () => {
     current();
@@ -1564,7 +1664,7 @@ async function startTriggerRun(state: ServerState, event: TriggerEvent, repo: Re
       current();
       const prepare = start.prepare;
       const owned = { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } };
-      return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: owned }) };
+      return { flow: state.flows.start(repo, got.workflow, event.note, select, { branch: owned, priority }) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       state.work.close(item.id, "dropped", `the run did not start: ${message}`);
@@ -1588,7 +1688,7 @@ function branchSlotsTaken(state: ServerState, repoId: string): number {
  *  a PR on its own: canopy has no per-repo setting for that yet, and "open
  *  PR" on the ready run still can. A repo whose branch slots are full
  *  answers busy, and the card waits. */
-async function startCoordChild(state: ServerState, coordId: string, task: CoordTask): Promise<ChildStart> {
+async function startCoordChild(state: ServerState, coordId: string, task: CoordTask, priority: Priority = "normal"): Promise<ChildStart> {
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
   if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
@@ -1601,11 +1701,25 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   await needHarness(state, agent.harness, repo.path);
   try {
     return {
-      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId }, { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } }),
+      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) }, { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } }),
     };
   } catch (err) {
-    // another branch run took the last slot while this one got ready
-    if (err instanceof SlotsFullError) return { busy: err.message };
+    // another branch run took the last slot while this one got ready, or
+    // the governor holds the card (FR-036): it waits either way
+    if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
+    throw err;
+  }
+}
+
+/** A coordinator's child that hit the plan's usage limit carries on on its
+ *  branch, its session resumed, as a new child of the same coordinator. */
+async function resumeCoordChild(state: ServerState, coordId: string, child: Run, priority: Priority): Promise<ChildStart> {
+  const rec = child.branch ? state.landing.record(child.branch.origin) : undefined;
+  if (!rec) throw new Error("its branch is gone, so the card cannot carry on");
+  try {
+    return { run: await startBranchFix(state, rec, "The plan's usage window has reset. Carry on with the task from where you stopped.", "carry on after the limit", true, { priority, parent: coordId }) };
+  } catch (err) {
+    if (isCapacityHeld(err)) return { busy: err.message };
     throw err;
   }
 }
@@ -4837,8 +4951,10 @@ async function handleApi(
     }
     if (method === "POST" && action === "flow") {
       if (repo.host) return json({ error: `agent runs only work on this machine; ${repo.name} is on ${repo.host}` }, 400);
-      const b = (await req.json()) as { workflow?: unknown; note?: unknown; request?: unknown };
+      const b = (await req.json()) as { workflow?: unknown; note?: unknown; request?: unknown; priority?: unknown };
       if (typeof b.workflow !== "string") return json({ error: "missing workflow" }, 400);
+      const flowPriority = b.priority === undefined ? undefined : parsePriority(b.priority);
+      if (flowPriority === null) return json({ error: "priority must be interactive, normal or low" }, 400);
       // a start sent again (its answer lost) finds the flow the first one made
       if (b.request !== undefined && !isRequestId(b.request)) return json({ error: "request must be 32 hex digits" }, 400);
       const request = b.request;
@@ -4861,7 +4977,7 @@ async function handleApi(
       if (refused) return json({ error: refused }, 400);
       await needStepHarnesses(state, cfg, wf, [repo.path]);
       try {
-        const flow = state.flows.start(repo, await withRepoModes(repo, wf), note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), request ? { request } : {});
+        const flow = state.flows.start(repo, await withRepoModes(repo, wf), note, (profile) => stepAgentFor(cfg, repo.path, profile, wf.name), { ...(request ? { request } : {}), ...(flowPriority ? { priority: flowPriority } : {}) });
         await state.flows.whenStarted(flow.id);
         return json(flow, 201);
       } catch (err) {
@@ -4882,12 +4998,16 @@ async function handleApi(
       const rawProfiles = b.profiles;
       if (rawProfiles !== undefined && (!Array.isArray(rawProfiles) || rawProfiles.length > 1 || !rawProfiles.every(isProfileName))) return json({ error: "profiles must contain at most one valid shared profile" }, 400);
       const profiles = Array.isArray(rawProfiles) ? rawProfiles.filter(isProfileName) : undefined;
-      if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true), 201);
+      // who may go first when the window runs low (FR-036): the CLI's
+      // --priority and the pre-flight's raise; absent, by who starts it
+      const priority = b.priority === undefined ? undefined : parsePriority(b.priority);
+      if (priority === null) return json({ error: "priority must be interactive, normal or low" }, 400);
+      if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
       }
-      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true), 201);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
@@ -5317,6 +5437,8 @@ export async function startServer(opts: {
           (coord.harnessesNow() ? (coordUnfenced() ?? STAGE_AWAY) : "the isolated coordinator runner is not answering")),
     ...(opts.runner?.driver ? { driver: opts.runner.driver } : {}),
     ...(opts.runner?.quietWait !== undefined ? { quietWait: opts.runner.quietWait } : {}),
+    // the capacity governor (FR-036); the hub exists by the first start
+    may: (harness: Harness, priority: Priority) => state.capacity.may(harness, priority),
   };
   /** seeds with a check running, by the seed's path */
   const seedChecks = new Map<string, number>();
@@ -5363,6 +5485,7 @@ export async function startServer(opts: {
   const flows = new Flows(runner, {
     onChange: (flow) => {
       broadcast(state, { type: "flow", flow });
+      state.capacity.touch();
       state.groups.recheck(flow.repoId);
       state.chan.onFlow(flow);
       state.incubator.onFlow(flow);
@@ -5517,6 +5640,10 @@ export async function startServer(opts: {
     config: loadConfig,
     file: capacityFile(),
     reader: null,
+    held: () => heldStarts(state),
+    wake: () => wakeForCapacity(state),
+    saveSettings: setCapacitySettings,
+    release: (id) => releaseHeld(state, id),
   });
   // the Library itself is built after the state, so its rebuild is reached through this
   let refreshLibrary: () => Promise<void> = async () => {};
@@ -5808,6 +5935,7 @@ export async function startServer(opts: {
         if (ev.type === "landing") state.coordinator.recheck();
         if (ev.type === "landing") state.work.recheck();
         if (ev.type === "landing") state.collisions.onLanding(ev.landing);
+        if (ev.type === "landing") state.capacity.touch();
       },
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
@@ -5898,12 +6026,24 @@ export async function startServer(opts: {
         if (ev.type === "prs") state.triggers.onPrs(ev.prs);
         if (ev.type === "prs") state.coordinator.recheck();
         if (ev.type === "prs") state.work.recheck();
+        if (ev.type === "prs") state.capacity.touch();
       },
       record: (id) => state.landing.record(id),
       queueHold: (id) => state.landing.queueHold(id),
       markPr: (id, pr) => state.landing.markPr(id, pr),
       forget: (id) => state.landing.forget(id),
-      startFix: (rec, prompt, label) => startBranchFix(state, rec, prompt, label, false),
+      startFix: (rec, prompt, label, priority) => startBranchFix(state, rec, prompt, label, false, { priority: priority ?? "normal" }),
+      // a PR's fix is normal work (FR-036); its harness is the job route's,
+      // read at the start, so the hold is asked of Claude Code's window
+      hold: (priority) => {
+        const decision = state.capacity.may("claude", priority);
+        return decision === "go" ? null : holdWords(decision);
+      },
+      // followed past a watchdog's resume, as runOk is
+      limitedRun: (id) => {
+        const run = state.runner.get(state.stalls.latest(id));
+        return run?.status === "limited" ? (run.limited ?? { at: run.endedAt ?? Date.now(), text: run.error ?? "" }) : null;
+      },
       // a fix run the stall watchdog stopped and resumes is followed to the
       // run that resumed it: still going while that starts and runs, and
       // finished as that run finishes
@@ -5964,7 +6104,10 @@ export async function startServer(opts: {
       holdsFlowsLock: () => state.prs.keeps,
     }),
     triggers: new TriggerHub({
-      broadcast: (ev) => broadcast(state, ev),
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        state.capacity.touch();
+      },
       repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
       repos: () => state.result.repos.filter((r) => !r.host && !r.forge && !isSeedPath(state.root, r.path)),
       workflowProblem: async (name, repo) => {
@@ -5975,15 +6118,16 @@ export async function startServer(opts: {
           return String(err instanceof Error ? err.message : err);
         }
       },
-      start: (event, repo, valid) => startTriggerRun(state, event, repo, valid),
-      resume: async (event) => {
+      start: (event, repo, valid, priority) => startTriggerRun(state, event, repo, valid, priority),
+      resume: async (event, priority) => {
         // a flow still kept is picked up at the step it stopped in; one the
         // server has let go of leaves its branch to a run, like a branch run's
         const flow = event.flowId ? state.flows.get(event.flowId) : undefined;
         if (flow?.branch && flow.status === "stopped") return { flow: state.flows.pickUp(flow.id) };
         const rec = event.branch ? state.landing.record(event.branch) : undefined;
         if (!rec) throw new HttpError(404, "its branch is gone, so start it again instead");
-        return { run: await startBranchFix(state, rec, "Carry on with the task from where you stopped.", "resume", true) };
+        // a resume by hand is interactive; the governor's wake resumes low
+        return { run: await startBranchFix(state, rec, "Carry on with the task from where you stopped.", "resume", true, { priority: priority ?? "interactive" }) };
       },
       stopRun: (id) => state.runner.stop(id),
       stopFlow: (id) => state.flows.stop(id),
@@ -6093,7 +6237,8 @@ export async function startServer(opts: {
     coordinator: new CoordinatorHub({
       run: (id) => state.runner.get(id),
       runs: () => state.runner.list(),
-      startChild: (coordId, task) => startCoordChild(state, coordId, task),
+      startChild: (coordId, task, priority) => startCoordChild(state, coordId, task, priority),
+      resumeChild: (coordId, _task, child, priority) => resumeCoordChild(state, coordId, child, priority),
       say: (id, text) => void state.runner.say(id, text),
       repoFull: (repo) => branchSlotsTaken(state, repo) >= BRANCH_RUNS_PER_REPO,
       known: (repo) => {
@@ -6114,7 +6259,10 @@ export async function startServer(opts: {
           ...(rec?.openPr ? { openPr: true } : {}),
         };
       },
-      broadcast: (run) => broadcast(state, { type: "run", run }),
+      broadcast: (run) => {
+        broadcast(state, { type: "run", run });
+        state.capacity.touch();
+      },
       work: {
         note: (id, text) => state.work.note(id, text),
         close: (id, end, text) => state.work.close(id, end, text),
@@ -6397,6 +6545,8 @@ export async function startServer(opts: {
       try {
         return await handleApi(state, req, url, clientKey(srv.requestIP(req)?.address ?? "127.0.0.1"), caller);
       } catch (err) {
+        // a start the governor held (FR-036): a 409 with when it may go
+        if (isCapacityHeld(err)) return json({ error: err.message, until: err.until }, 409);
         const status =
           err instanceof HttpError || err instanceof HistoryError || err instanceof LauncherError || err instanceof PeerError
             ? err.status

@@ -206,6 +206,67 @@ describe("deliveries", () => {
     expect(h.list()[0]).toMatchObject({ status: "working", runId: "r2" });
   });
 
+  test("a held start waits as queued with the governor's words, is listed, starts on a wake, or once as interactive on a release (FR-036 plan 2)", async () => {
+    const HOLD = "waiting for capacity: the 5-hour window is spent (resets 15:00)";
+    let held = true;
+    const priorities: (string | undefined)[] = [];
+    const h = hub({
+      start: async (_e, _repo, _valid, priority): Promise<StartOutcome> => {
+        priorities.push(priority);
+        if (held && priority !== "interactive") return { busy: HOLD };
+        const r = run();
+        runs.push(r);
+        return { run: r };
+      },
+    });
+    await h.adopt();
+    await h.handle(hookReq(issueBody()), new URL("http://x/api/hooks/sentry/shop"));
+    const [e] = h.list();
+    expect(e).toMatchObject({ status: "queued", reason: HOLD });
+    expect(h.heldStarts()).toEqual([{ id: `trigger:${e?.id}`, what: expect.any(String), repoId: REPO.id, priority: "low", why: HOLD, since: 1000 }]);
+    await h.release(e?.id ?? "");
+    expect(h.list()[0]).toMatchObject({ status: "working" });
+    expect(priorities).toEqual([undefined, "interactive"]);
+    expect(h.heldStarts()).toEqual([]);
+
+    // a second event waits too, and the wake starts it once the hold lifts
+    await h.fire("shop", "another");
+    expect(h.list().find((x) => x.status === "queued")?.reason).toBe(HOLD);
+    held = false;
+    h.wake(() => true);
+    await h.idle();
+    await Bun.sleep(0);
+    await h.idle();
+    expect(h.list().filter((x) => x.status === "queued")).toEqual([]);
+  });
+
+  test("an event stopped by the limit resumes on its branch on a wake that says go, not before", async () => {
+    const resumed: (string | undefined)[] = [];
+    const h = hub({
+      resume: async (_e, priority) => {
+        resumed.push(priority);
+        const r = run();
+        runs.push(r);
+        return { run: r };
+      },
+    });
+    await h.adopt();
+    await h.fire("shop", "");
+    const [e] = h.list();
+    const text = "You've hit your limit · resets 3pm";
+    h.onRun({ ...runs[0]!, status: "limited", error: text, limited: { at: 1000, text }, branch: { ...runs[0]!.branch!, state: "working" } });
+    await h.idle();
+    expect(h.list()[0]).toMatchObject({ status: "stopped", reason: `waiting for capacity: ${text}`, limited: { row: 1 } });
+    expect(h.heldStarts().map((x) => x.id)).toEqual([`trigger:${e?.id}`]);
+    h.wake(() => false);
+    await h.idle();
+    expect(resumed).toEqual([]);
+    h.wake(() => true);
+    await h.idle();
+    expect(resumed).toEqual(["low"]);
+    expect(h.list()[0]).toMatchObject({ status: "working", limited: { row: 1 } });
+  });
+
   test("a start that throws fails the event, and retry starts it on a new branch", async () => {
     let fail = true;
     const h = hub({

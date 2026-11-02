@@ -52,6 +52,7 @@ import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
 import { HELP_TEXT } from "../core/help";
 import { healthCommand } from "./health";
 import { costsCommand } from "./costs";
+import { capacityCommand } from "./capacity";
 import { kitCommand } from "./kit";
 import { mcpCommand } from "./mcp";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
@@ -119,6 +120,7 @@ const COMMANDS = new Set([
   "groups",
   "health",
   "costs",
+  "capacity",
   "kit",
   "mcp",
   "land",
@@ -903,6 +905,8 @@ export async function main(argv: string[]): Promise<void> {
       return healthCommand(args, { fail });
     case "costs":
       return costsCommand(args, { fail });
+    case "capacity":
+      return capacityCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
     case "mcp":

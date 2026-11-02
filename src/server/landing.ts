@@ -48,7 +48,8 @@ import type { Collision, Touched } from "../core/touch";
 import type { GroupDry } from "../core/group";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
-import type { EvidenceFile, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
+import { limitedWords } from "../core/capacity";
+import type { EvidenceFile, HeldStart, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
 import type { WorkSink } from "../core/work";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
@@ -564,8 +565,20 @@ export class LandingHub {
       void this.saveRun(next);
     }
     const entry = this.entries.find((e) => e.id === next.id);
-    if (ended && entry?.fixing === run.id && next.state !== "working") {
-      const { fixing: _f, ...rest } = entry;
+    if (ended && entry?.fixing === run.id && next.state !== "working" && run.status === "limited") {
+      // the fix stopped at the plan's usage limit: it starts again the same
+      // way once the governor lets go (`wake`); a second in a row stops it
+      const { fixing: _f, waiting: _w, ...rest } = entry;
+      const row = (entry.limitedFixes ?? 0) + 1;
+      const waits = row < 2;
+      const kept: LandEntry = { ...rest, limitedFixes: row, updatedAt: this.now(), ...(waits ? { waiting: limitedWords(run.limited, this.now()) } : {}) };
+      this.entries = this.entries.map((e) => (e.id === entry.id ? kept : e));
+      if (!waits) this.notice({ entry: next.id, repoId: next.repoId, branch: next.branch, note: next.note, kind: "held", why: `the fix stopped at the plan's usage limit twice in a row: ${run.limited?.text ?? run.error ?? ""}` });
+      else this.tell(next.id, "fix stopped at the plan's usage limit; it starts again after the reset");
+      void this.saveQueue(next.repoPath);
+      moved = true;
+    } else if (ended && entry?.fixing === run.id && next.state !== "working") {
+      const { fixing: _f, limitedFixes: _l, ...rest } = entry;
       this.entries = this.entries.map((e) => (e.id === entry.id ? rest : e));
       if (next.state === "ready") this.track(this.rejoin(next.id));
       void this.saveQueue(next.repoPath);
@@ -864,11 +877,39 @@ export class LandingHub {
     if (!sentBack(entry)) throw new LandError(`it is ${entry.state}, not sent back`);
     if (entry.fixing && this.deps.runActive(entry.fixing)) throw new LandError("a fix is going already");
     const run = await this.deps.startFix(rec, entry);
-    this.entries = this.entries.map((e) => (e.id === entry.id ? { ...e, fixing: run.id, updatedAt: this.now() } : e));
+    this.entries = this.entries.map((e) => {
+      if (e.id !== entry.id) return e;
+      const { waiting: _w, ...rest } = e;
+      return { ...rest, fixing: run.id, updatedAt: this.now() };
+    });
     this.tell(rec.id, `fix started: ${landWord(entry, this.entries)}`);
     void this.saveQueue(rec.repoPath);
     this.publish();
     return run;
+  }
+
+  /* ---------- capacity (FR-036) ---------- */
+
+  /** The "fix it" runs waiting to start again after the limit, as the chip lists them. */
+  heldStarts(): HeldStart[] {
+    return this.entries.flatMap((e) => e.waiting === undefined ? [] : [{
+      id: `fix:${e.id}`,
+      what: `fix it: ${e.branch}`,
+      repoId: e.repoId,
+      priority: "normal" as const,
+      why: e.waiting,
+      since: e.updatedAt,
+    }]);
+  }
+
+  /** The governor may have let go: each fix that stopped at the limit
+   *  starts again the same way when `go` says normal work may start. */
+  wake(go: () => boolean): void {
+    if (this.recovery.kind === "records" || this.stopped || !go()) return;
+    for (const e of this.entries) {
+      if (e.waiting === undefined || e.fixing) continue;
+      this.fix(e.id).catch((err: unknown) => console.error(`landing: fix ${e.id} again: ${errText(err)}`));
+    }
   }
 
   /** Drops a sent-back entry, its branch and its worktree: the work is

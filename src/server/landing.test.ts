@@ -410,6 +410,37 @@ describe("landing", () => {
     expect(await sh(w.repo.path, "show", "HEAD:a.txt")).toBe("one\nTWO both\nthree");
   });
 
+  test("a fix that stops at the plan's usage limit waits, starts again the same way on a wake that says go, and stops on a second limit (FR-036 plan 2)", async () => {
+    const w = await world();
+    await readyRun(w, "lf01", "a.txt", "one\nTWO first\nthree\n");
+    await readyRun(w, "lf02", "a.txt", "one\nTWO second\nthree\n");
+    await w.hub.land("lf01");
+    await w.hub.land("lf02");
+    await w.hub.idle();
+    const text = "You've hit your limit · resets 3pm";
+    const fix = await w.hub.fix("lf02");
+    w.hub.onRun({ ...fix, status: "limited", error: text, limited: { at: Date.now(), text }, endedAt: 5, branch: { ...fix.branch!, state: "uncommitted" } });
+    await w.hub.idle();
+    let e = entryOf(w, "lf02");
+    expect([e?.state, e?.fixing, e?.limitedFixes, e?.waiting?.startsWith("waiting for capacity")]).toEqual(["conflict", undefined, 1, true]);
+    expect(w.hub.heldStarts().map((h) => [h.id, h.priority])).toEqual([["fix:lf02", "normal"]]);
+    w.hub.wake(() => false);
+    await w.hub.idle();
+    expect(w.fixes).toHaveLength(1);
+    w.hub.wake(() => true);
+    await w.hub.idle();
+    expect(w.fixes).toHaveLength(2);
+    e = entryOf(w, "lf02");
+    expect([e?.waiting, e?.limitedFixes, typeof e?.fixing]).toEqual([undefined, 1, "string"]);
+    const again = { ...fix, id: e!.fixing! };
+    w.hub.onRun({ ...again, status: "limited", error: text, limited: { at: Date.now(), text }, endedAt: 6, branch: { ...fix.branch!, state: "uncommitted" } });
+    await w.hub.idle();
+    e = entryOf(w, "lf02");
+    expect([e?.waiting, e?.limitedFixes]).toEqual([undefined, 2]);
+    expect(w.hub.info().notices?.at(-1)).toMatchObject({ kind: "held", entry: "lf02", why: `the fix stopped at the plan's usage limit twice in a row: ${text}` });
+    expect(w.hub.heldStarts()).toEqual([]);
+  });
+
   test("a red gate comes back with the end of its output", async () => {
     const w = await world();
     await readyRun(w, "ee11", "b.txt", "b\n");

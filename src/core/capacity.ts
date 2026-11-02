@@ -342,3 +342,101 @@ export function decide(capacity: Capacity, priority: Priority, settings: Capacit
   }
   return "go";
 }
+
+/* ---------- plan 2: priorities, holds and the CLI's own reset ---------- */
+
+export type Hold = Exclude<Decision, "go">;
+
+/** a priority from the wire, or null for anything else */
+export const parsePriority = (value: unknown): Priority | null =>
+  value === "interactive" || value === "normal" || value === "low" ? value : null;
+
+/** The priority a flow's later steps start at and a limited run's retry
+ *  waits on: interactive work becomes normal, the rest keeps its own. A
+ *  retry after a limit waits on `may(normal)` at least, so a page's run is
+ *  not started into a window that is still spent. */
+export const laterPriority = (priority: Priority): Priority =>
+  priority === "interactive" ? "normal" : priority;
+
+/** what a held start says where it waits: a trigger event's reason, a
+ *  coordinator card's outcome, a flow step's reason */
+export const holdWords = (hold: Hold): string => `waiting for capacity: ${hold.why}`;
+
+/** whether a reason is a capacity hold's or a limited end's words */
+export const isCapacityWords = (text: string | undefined): boolean =>
+  text !== undefined && text.startsWith("waiting for capacity");
+
+/** The words a limited end leaves where its work waits: "waiting for
+ *  capacity (resets 15:00)", the reset read from the run's own mark. */
+export function limitedWords(limited: { at: number; text: string; resetsAt?: number } | undefined, now: number): string {
+  const hit = limited ? hitOfLimited(limited) : null;
+  return hit ? `waiting for capacity (resets ${resetWord(hit.resetsAt, now)})` : "waiting for capacity";
+}
+
+/** A start the governor held, thrown by the Runner and by each start path
+ *  before it cuts a branch. Matched by name across modules, as
+ *  StageAwayError is; a route answers 409 with `until`. */
+export class CapacityHeldError extends Error {
+  override name = "CapacityHeldError";
+  readonly until: number | null;
+  constructor(readonly hold: Hold) {
+    super(holdWords(hold));
+    this.until = hold.until;
+  }
+}
+
+/** The CLI's `rate_limit_event` in stream-json: `rate_limit_info` with
+ *  `status` ("allowed", "allowed_warning", "rejected"), `resetsAt` in unix
+ *  seconds and `rateLimitType` ("five_hour", "seven_day", or a model's own
+ *  weekly window). Null for any other line or a shape it does not know. */
+export interface RateLimitInfo {
+  status: string;
+  resetsAt: number | null;
+  window: CapacityWindow | null;
+}
+
+export function readRateLimit(message: unknown): RateLimitInfo | null {
+  if (!isRecord(message) || message["type"] !== "rate_limit_event") return null;
+  const info = message["rate_limit_info"];
+  if (!isRecord(info) || typeof info["status"] !== "string") return null;
+  const seconds = info["resetsAt"];
+  const ms = isFiniteNumber(seconds) && seconds > 0 ? seconds * 1000 : null;
+  const kind = info["rateLimitType"];
+  const window: CapacityWindow | null = kind === "five_hour"
+    ? "fiveHour"
+    : typeof kind === "string" && kind.startsWith("seven_day") ? "weekly" : null;
+  return { status: info["status"], resetsAt: ms !== null && Number.isFinite(new Date(ms).getTime()) ? ms : null, window };
+}
+
+/** A run's limited mark as a hit: the text read as `limitHit` reads it,
+ *  with the exact reset and window the CLI's `rate_limit_event` gave when
+ *  the run heard one. Null when the text is not a limit. */
+export function hitOfLimited(limited: { at: number; text: string; resetsAt?: number; window?: CapacityWindow }): CapacityHit | null {
+  const hit = limitHit(limited.text, limited.at);
+  if (!hit) return null;
+  return {
+    ...hit,
+    ...(limited.resetsAt !== undefined && limited.resetsAt > limited.at ? { resetsAt: limited.resetsAt } : {}),
+    ...(limited.window ? { window: limited.window } : {}),
+  };
+}
+
+/** The settings a patch from the costs block leaves, or what is wrong with
+ *  it: each hold a number above 0 and at most 1, the dollar figure a
+ *  number above 0 or null to clear it. A field the patch leaves out stays. */
+export function patchCapacity(current: CapacitySettings, patch: unknown): CapacitySettings | string {
+  if (!isRecord(patch)) return "the settings must be an object";
+  const next: CapacitySettings = { ...current };
+  for (const key of ["lowHold", "normalHold", "weeklyLowHold"] as const) {
+    if (!(key in patch)) continue;
+    const value = patch[key];
+    if (!isFiniteNumber(value) || value <= 0 || value > 1) return `${key} must be above 0 and at most 1`;
+    next[key] = value;
+  }
+  if ("observedFiveHourUsd" in patch) {
+    const value = patch["observedFiveHourUsd"];
+    if (value !== null && (!isFiniteNumber(value) || value <= 0)) return "observedFiveHourUsd must be a dollar figure above 0, or null";
+    next.observedFiveHourUsd = value;
+  }
+  return next;
+}

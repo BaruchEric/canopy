@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CAPACITY, emptyCapacity, limitHit, type Capacity } from "../../src/core/capacity";
 import type { CapacityInfo } from "../../src/core/types";
-import { ageWord, capacityLine, capacityRows, capacityTone, capacityWord, rowsTone, windowWord } from "./capacity";
+import { ageWord, capacityLine, capacityRows, capacityTone, capacityWord, heldRows, holdPercent, rowsTone, settingsPatch, windowWord } from "./capacity";
 
 const NOW = Date.UTC(2026, 9, 26, 12);
 const THU_3PM = Date.UTC(2026, 9, 29, 15);
@@ -58,4 +58,20 @@ test("capacityRows: every backend that answered, in order, one row per harness; 
   expect([capacityWord(hit), rowsTone(hit)]).toEqual(["limit", "rust"]);
   const expiredHit = capacityRows({ mac: info([cap({ hit: limitHit("usage limit reached", NOW), source: "observed" })]) }, ["mac"], NOW + min(62));
   expect(capacityWord(expiredHit)).toBe("no reading");
+});
+
+test("heldRows: every backend's held starts in order, oldest first within each (FR-036 plan 2)", () => {
+  const held = (id: string, since: number) => ({ id, what: id, repoId: "a", priority: "low" as const, why: "waiting for capacity", since });
+  const mac = { capacity: [], held: [held("flow:b", 2), held("trigger:a", 1)], settings: DEFAULT_CAPACITY };
+  const mini = { capacity: [], held: [held("card:c:t1", 5)], settings: DEFAULT_CAPACITY };
+  expect(heldRows({ mac, mini }, ["mini", "mac", "old"]).map((r) => `${r.backend} ${r.held.id}`)).toEqual(["mini card:c:t1", "mac trigger:a", "mac flow:b"]);
+});
+
+test("settingsPatch: percentages and a dollar figure, or what is wrong", () => {
+  const form = { low: holdPercent(0.7), normal: "90%", weekly: "85", usd: "" };
+  expect(settingsPatch(form)).toEqual({ lowHold: 0.7, normalHold: 0.9, weeklyLowHold: 0.85, observedFiveHourUsd: null });
+  expect(settingsPatch({ ...form, usd: "$40" })).toMatchObject({ observedFiveHourUsd: 40 });
+  expect(settingsPatch({ ...form, low: "0" })).toBe("the hold for low work is a percentage above 0 and at most 100");
+  expect(settingsPatch({ ...form, normal: "" })).toBe("the hold for normal work is a percentage above 0 and at most 100");
+  expect(settingsPatch({ ...form, usd: "-2" })).toBe("the dollar figure is above 0, or empty for none");
 });

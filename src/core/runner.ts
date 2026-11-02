@@ -12,6 +12,7 @@
 
 import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions";
 import { normalizeAgent } from "./agent";
+import { CapacityHeldError, type Decision } from "./capacity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
 import type { RpcProc } from "./codexrpc";
 import { appServerArgs, CodexDriver, runsInside } from "./codexrun";
@@ -72,6 +73,8 @@ export interface StartExtras {
   flowOwner?: symbol;
   /** best-of-N attribution, including the first event and costs */
   group?: string;
+  /** who may go first when the plan's window runs low (FR-036); absent is
+   *  interactive, which the governor never holds */
   priority?: Priority;
   /** the coordinator that started it, set before the run's first change is
    *  heard, so every listener sees a child as one */
@@ -141,6 +144,10 @@ export interface RunnerOptions {
   quietWait?: number;
   /** the remembered rules as they are now, read at every permission */
   remembered?: () => readonly RememberedRule[];
+  /** The capacity governor (FR-036): whether a start at this priority may
+   *  go on this harness now. A hold refuses the start with
+   *  `CapacityHeldError`; interactive work is never asked about. */
+  may?: (harness: Harness, priority: Priority) => Decision;
 }
 
 /** Why a stage run cannot start through the stage runner, in the words the
@@ -356,6 +363,14 @@ export class Runner {
     }
     if (spec.noteRequired && !note.trim() && !branch?.message && !spec.message) {
       throw new Error("write what the agent should do first");
+    }
+    // the governor last of the refusals that need nothing spawned: a start
+    // that would wait for capacity says so rather than starting into a
+    // spent window. The callers check first, before a branch is cut; this
+    // is the one place no start can get past.
+    if (extras.priority && extras.priority !== "interactive" && this.opts.may) {
+      const decision = this.opts.may(settings.harness, extras.priority);
+      if (decision !== "go") throw new CapacityHeldError(decision);
     }
     const stage = this.opts.stage?.(repo) ?? false;
     if (branch && stage) throw new Error("an incubator stage works in its seed, not on a branch");

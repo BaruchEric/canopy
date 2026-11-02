@@ -1,7 +1,7 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
 import type { TriggerDigest } from "./digest";
-import type { Capacity, CapacitySettings } from "./capacity";
+import type { Capacity, CapacitySettings, CapacityWindow } from "./capacity";
 import type { WorkItem } from "./work";
 import type { Collision } from "./touch";
 import type { RunGroup } from "./group";
@@ -1081,8 +1081,13 @@ export interface CoordTask {
   run?: string;
   /** the child's work item, once it started (FR-037) */
   work?: string;
-  /** how it settled, in a word or two: "landed", "sent back", or a start's error */
+  /** how it settled, in a word or two: "landed", "sent back", or a start's
+   *  error; while it waits for capacity, the governor's words */
   outcome?: string;
+  /** its child hit the plan's usage limit (FR-036): 0 while the card waits
+   *  for the reset, 1 once the child resumed on its branch; a second limit
+   *  fails the card */
+  limited?: 0 | 1;
 }
 
 export type RunStatus =
@@ -1294,7 +1299,8 @@ export interface Run {
   repoId: string;
   /** the best-of-N group, set before the first run event */
   group?: string;
-  /** requested priority; grouped members are marked low */
+  /** who may go first when the plan's window runs low (FR-036): set by
+   *  canopy at every start, never by the agent; absent reads as interactive */
   priority?: Priority;
   /** a built-in action's name, or the workflow's name for a flow's step */
   action: string;
@@ -1337,8 +1343,10 @@ export interface Run {
   /** why a failed run failed */
   error?: string;
   /** the last usage limit the harness reported on this run, as it said it;
-   *  a job ends `limited` on it, a chat stays idle and carries it (FR-036) */
-  limited?: { at: number; text: string };
+   *  a job ends `limited` on it, a chat stays idle and carries it (FR-036).
+   *  `resetsAt` and `window` are the CLI's own, from the `rate_limit_event`
+   *  that refused the turn, when it sent one. */
+  limited?: { at: number; text: string; resetsAt?: number; window?: CapacityWindow };
   /** a stage run that failed because the stage runner went away under it,
    *  as a hello confirmed; a flow parks on this, never on the error's words,
    *  which carry the stage's own stderr. Also set when the runner refused
@@ -1514,6 +1522,12 @@ export interface PrWatch {
   untrusted?: PrComment[];
   /** why auto-fix stopped for this PR */
   gaveUp?: string;
+  /** the governor holds the next fix, or the last one stopped at the plan's
+   *  usage limit: the words, while it waits for capacity (FR-036) */
+  waiting?: string;
+  /** the key whose fix run last ended `limited`; a second in a row stops
+   *  auto-fix with the text */
+  limited?: string;
   /** the head GitHub took into its merge queue or its own auto-merge: not
    *  merged yet, and not asked again */
   queued?: string;
@@ -1584,6 +1598,12 @@ export interface LandEntry {
   noGates?: true;
   /** the "fix it" run working on it now */
   fixing?: string;
+  /** the "fix it" run stopped at the plan's usage limit: the words while the
+   *  fix waits to start again after the reset (FR-036) */
+  waiting?: string;
+  /** fix runs on this entry that ended `limited` in a row; the second stops
+   *  the retries */
+  limitedFixes?: number;
   /** joined the queue on its own: its sort said `auto` (FR-013) */
   auto?: true;
   /** the sensitive files' patch id Eric approved when he landed it */
@@ -2773,6 +2793,9 @@ export interface FlowStep {
   harness?: Harness;
   /** whether the step's run moved the tree's fingerprint */
   changed?: boolean;
+  /** the step's runs that ended `limited` in a row (FR-036): the step waits
+   *  for the reset after the first and fails on the second */
+  limited?: number;
 }
 
 /** A check or gate that said no and sent the flow back. */
@@ -2813,9 +2836,14 @@ export interface Flow {
   /** agent step runs started and working time so far */
   spent?: { runs: number; workMs: number };
   /** set while the flow is parked because its budget is spent, the stage
-   *  runner was not answering, or its step's run ended `limited`; continuing
-   *  runs the step again */
+   *  runner was not answering, or the governor held its step or the step's
+   *  run ended `limited` (FR-036); continuing runs the step again, and a
+   *  capacity park goes on by itself once the governor says go */
   parkedFor?: "budget" | "stage" | "capacity";
+  /** who started the flow, for the governor (FR-036): its first agent step
+   *  starts at this, the steps after it at `laterPriority`; absent is
+   *  interactive */
+  priority?: Priority;
   /** with `parkedFor` "stage": it was the step's check, not its run, that
    *  found the stage runner away, so continuing runs the check alone */
   stageCheck?: boolean;
@@ -3676,7 +3704,10 @@ export interface HealthInfo {
   checks: HealthCheck[];
 }
 
-/** a start a pump holds for capacity (plan 2 fills it; this plan serves none) */
+/** A start a pump holds for capacity, as the chip lists it. `id` names the
+ *  owner's record: `trigger:<event>`, `flow:<flow>`, `card:<coordinator>:<card>`,
+ *  `pr:<branch>` or `fix:<branch>`; `POST /api/capacity/release` starts it
+ *  once as interactive. */
 export interface HeldStart {
   id: string;
   what: string;

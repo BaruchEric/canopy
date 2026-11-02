@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang",
   message = "do the thing",
   unattended?: string,
   opts: {
@@ -198,6 +198,16 @@ describe("the plan's usage limit (FR-036)", () => {
     const d = await drive("limitdie");
     const run = await d.until(d.done, "the exit");
     expect([run.status, run.error]).toEqual(["limited", LIMIT]);
+  });
+  test("the rate_limit_event's refusal puts the exact reset and window on the mark (plan 2)", async () => {
+    const d = await drive("ratelimited");
+    const run = await d.until(d.done, "the limit");
+    expect([run.status, run.limited?.text, run.limited?.resetsAt, run.limited?.window]).toEqual(["limited", LIMIT, 1793026800 * 1000, "fiveHour"]);
+  });
+  test("a limit with no refusal event carries the text alone", async () => {
+    const d = await drive("limited");
+    const run = await d.until(d.done, "the limit");
+    expect([run.limited?.resetsAt, run.limited?.window]).toEqual([undefined, undefined]);
   });
 });
 

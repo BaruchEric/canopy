@@ -34,6 +34,13 @@ test("parseRunArgs keeps a single branch run as the default and rejects invalid 
   expect(parseRunArgs(["app", "ask", "--times"])).toBe("--times needs a value");
 });
 
+test("parseRunArgs reads --priority and refuses a word it does not know (FR-036)", () => {
+  expect(parseRunArgs(["app", "ask", "--priority", "low"])).toMatchObject({ repo: "app", action: "ask", priority: "low" });
+  expect(parseRunArgs(["app", "ask", "--priority", "urgent"])).toBe("--priority must be interactive, normal or low");
+  expect(parseRunArgs(["app", "ask", "--priority"])).toBe("--priority must be interactive, normal or low");
+  expect(parseRunArgs(["app", "ask"])).not.toHaveProperty("priority");
+});
+
 test("run dispatch hands transcript subcommands to the supplied handler", async () => {
   const called: string[][] = [];
   const transcript = async (args: string[]) => {

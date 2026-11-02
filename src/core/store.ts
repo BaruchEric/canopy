@@ -21,7 +21,7 @@ import { DEFAULT_SEED, PEER_SYNC, isPeerName, normalizePeers, normalizeSeed } fr
 import { normalizeRanger } from "./ranger";
 import { normalizeSweep } from "./sweep";
 import { LIBRARY_SYNC_MODES } from "./libsync";
-import { normalizeCapacity } from "./capacity";
+import { normalizeCapacity, type CapacitySettings } from "./capacity";
 import { WARM_MAX } from "./warm";
 import {
   AWAKE_MODES,
@@ -309,6 +309,14 @@ function withConfig<T>(fn: (cfg: CanopyConfig) => Promise<T> | T): Promise<T> {
   });
   queue = run.catch(() => {});
   return run;
+}
+
+/** The capacity governor's thresholds and observed dollar figure, as the
+ *  costs block sets them (FR-036); the caller has checked them. */
+export function setCapacitySettings(settings: CapacitySettings): Promise<void> {
+  return withConfig((cfg) => {
+    cfg.capacity = normalizeCapacity(settings);
+  });
 }
 
 export async function rememberRoot(root: string): Promise<void> {

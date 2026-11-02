@@ -6,7 +6,7 @@ import {
   type CapacityWindow,
   type Window,
 } from "../../src/core/capacity";
-import type { CapacityInfo } from "../../src/core/types";
+import type { CapacityInfo, HeldStart } from "../../src/core/types";
 
 export const CAPACITY_GLYPH = "◔";
 
@@ -102,4 +102,38 @@ export function rowsTone(rows: readonly CapacityRow[]): "moss" | "lichen" | "rus
   if (rows.some((row) => row.tone === "rust")) return "rust";
   if (rows.some((row) => row.tone === "lichen")) return "lichen";
   return "moss";
+}
+
+/** A start the governor holds, with the backend that holds it (FR-036). */
+export interface HeldRow {
+  backend: string;
+  held: HeldStart;
+}
+
+/** Every held start of every backend that answered, in `order`, oldest first within each. */
+export function heldRows(info: Readonly<Record<string, CapacityInfo>>, order: readonly string[]): HeldRow[] {
+  return order.flatMap((backend) => [...(info[backend]?.held ?? [])].sort((a, b) => a.since - b.since).map((held) => ({ backend, held })));
+}
+
+/** A hold as the settings form shows it: a whole percentage. */
+export const holdPercent = (share: number): string => String(Math.round(share * 100));
+
+/** The settings form's words as a patch, or what is wrong with them: each
+ *  hold a percentage above 0 and at most 100, the dollar figure above 0 or
+ *  empty to clear it. */
+export function settingsPatch(form: { low: string; normal: string; weekly: string; usd: string }): Partial<CapacitySettings> | string {
+  const patch: Partial<CapacitySettings> = {};
+  for (const [field, key, name] of [["low", "lowHold", "low work"], ["normal", "normalHold", "normal work"], ["weekly", "weeklyLowHold", "the week"]] as const) {
+    const n = Number(form[field].trim().replace(/%$/, ""));
+    if (!form[field].trim() || !Number.isFinite(n) || n <= 0 || n > 100) return `the hold for ${name} is a percentage above 0 and at most 100`;
+    patch[key] = n / 100;
+  }
+  const usd = form.usd.trim().replace(/^\$/, "");
+  if (usd === "") patch.observedFiveHourUsd = null;
+  else {
+    const n = Number(usd);
+    if (!Number.isFinite(n) || n <= 0) return "the dollar figure is above 0, or empty for none";
+    patch.observedFiveHourUsd = n;
+  }
+  return patch;
 }

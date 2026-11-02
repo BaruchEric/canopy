@@ -20,7 +20,7 @@
 import type { RpcProc, RpcSpawn } from "./codexrpc";
 // a type alone: codexrun imports this module at run time
 import type { ApprovalFacts } from "./codexrun";
-import { isLimitText } from "./capacity";
+import { isLimitText, type RateLimitInfo } from "./capacity";
 import { stageEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
@@ -162,6 +162,11 @@ export interface DriveCtx {
    *  limited when the problem is the plan's usage limit. A chat goes idle,
    *  the problem said as a note. */
   result(result: DriveResult, problem: string | null): void;
+  /** The harness's own word on the plan's window (Claude Code's
+   *  `rate_limit_event`): a refusal's exact reset and window ride on the
+   *  run's limited mark when the turn then ends on the limit. Optional, as
+   *  Codex has no such event. */
+  rateLimit?(info: RateLimitInfo): void;
   /** The process is gone. Called once, whatever ended it. Whether that is a
    *  stop, the end of a chat, or a failure is the Runner's call. */
   exited(exit: DriveExit): void;
@@ -170,7 +175,7 @@ export interface DriveCtx {
 /** What a harness's fold (`foldClaude`, `foldCodex`) writes into: the live
  *  run's ctx, or the plain list a replay of its kept wire builds
  *  (`core/wirereplay.ts`). The fold itself is pure. */
-export type FoldOut = Pick<DriveCtx, "step" | "changed" | "note" | "todos" | "result">;
+export type FoldOut = Pick<DriveCtx, "step" | "changed" | "note" | "todos" | "result" | "rateLimit">;
 
 /** The environment a run's process starts with: canopy's live one with the
  *  run's own laid over it, and for an incubator stage without what
@@ -365,6 +370,8 @@ export class RunCtx implements DriveCtx {
   private seq = 0;
   /** limited replies in a row on this process; a good reply starts it over */
   private limitedRow = 0;
+  /** the last refusal the harness's rate-limit event named, for the mark */
+  private refused: { resetsAt: number | null; window: RateLimitInfo["window"] } | null = null;
   private wireTap: RunCtxInit["wire"];
   private label: string;
   private remember: RememberHook | null;
@@ -595,8 +602,26 @@ export class RunCtx implements DriveCtx {
     this.finish(problem ? "failed" : "done");
   }
 
+  rateLimit(info: RateLimitInfo): void {
+    // only a refusal names the reset the limit waits on; an allowed word
+    // after one means the window opened again
+    this.refused = info.status === "rejected" ? { resetsAt: info.resetsAt, window: info.window } : null;
+  }
+
+  /** The run's limited mark: the text, and the refusal's reset and window
+   *  when the harness named them. */
+  private mark(text: string): void {
+    const refused = this.refused;
+    this.run.limited = {
+      at: Date.now(),
+      text,
+      ...(refused?.resetsAt != null ? { resetsAt: refused.resetsAt } : {}),
+      ...(refused?.window ? { window: refused.window } : {}),
+    };
+  }
+
   private limited(text: string): void {
-    this.run.limited = { at: Date.now(), text };
+    this.mark(text);
     this.limitedRow += 1;
     if (this.run.chat) {
       if (this.limitedRow >= 2) {
@@ -619,7 +644,7 @@ export class RunCtx implements DriveCtx {
     const out = exitOutcome({ stopping: this.stopping, ending: this.ending }, exit, this.label);
     if (out.status === "limited") {
       const text = out.error ?? "";
-      this.run.limited = { at: Date.now(), text };
+      this.mark(text);
       this.finish("limited", text);
       return;
     }

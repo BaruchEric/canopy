@@ -16,6 +16,8 @@
  *    die   writes "boom" to stderr and exits 3 before any result
  *    limited answers every user message with a synthetic usage-limit result
  *    limitdie writes a synthetic usage limit to stderr and exits 1
+ *    ratelimited is limited with the CLI's rate_limit_event first: a refusal
+ *          of the five-hour window that resets at unix 1793026800
  *    async starts a background Agent and sends a result while it runs, then
  *          a permission request from inside the subagent; once that is
  *          answered, the task notification and the real result
@@ -141,7 +143,11 @@ function onUser(): void {
     process.stderr.write("You've hit your limit · resets 3pm\n");
     process.exit(1);
   }
-  if (mode === "limited") {
+  if (mode === "ratelimited") {
+    out({ type: "rate_limit_event", rate_limit_info: { status: "allowed", resetsAt: 1793000000, rateLimitType: "five_hour" }, session_id: "sess-1" });
+    out({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: 1793026800, rateLimitType: "five_hour" }, session_id: "sess-1" });
+  }
+  if (mode === "limited" || mode === "ratelimited") {
     out({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 3pm", num_turns: 1, total_cost_usd: 0, duration_ms: 2, session_id: "sess-1" });
     return;
   }

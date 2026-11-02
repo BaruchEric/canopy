@@ -8,6 +8,7 @@ import {
   fromLanding,
   fromPr,
   fromRun,
+  waitsForCapacity,
   ignoreReason,
   incomingFromIssueView,
   issueNoteFor,
@@ -859,6 +860,20 @@ describe("fromRun", () => {
     );
     expect(next).toMatchObject({ status: "stopped", reason: `waiting for capacity: ${text}`, branch: "br1", session: "session-1", runId: "r1" });
     expect(eventLive(next)).toBe(false);
+  });
+  test("a limited run counts once however often it changes; the second in a row fails the event; a good end starts over (FR-036 plan 2)", () => {
+    const text = "You've hit your limit · resets 3pm";
+    const limitedRun = (id: string) => run({ id, status: "limited", error: text, limited: { at: 1, text }, branch: { ...branch, state: "working" } });
+    const first = fromRun(event({ runId: "r1", status: "working", branch: "br1" }), limitedRun("r1"), 5);
+    expect([first.status, first.limited, waitsForCapacity(first)]).toEqual(["stopped", { run: "r1", row: 1 }, true]);
+    expect(fromRun(first, limitedRun("r1"), 6).limited).toEqual({ run: "r1", row: 1 });
+    const resumed = { ...first, status: "working" as const, runId: "r2" };
+    const second = fromRun(resumed, limitedRun("r2"), 7);
+    expect([second.status, second.reason, second.endedAt, waitsForCapacity(second)]).toEqual(["failed", `${text} (limited twice in a row)`, 7, false]);
+    const good = fromRun(resumed, run({ id: "r2", status: "done", branch: { ...branch, state: "ready" } }), 8);
+    expect(good.limited).toBeUndefined();
+    expect(waitsForCapacity(event({ status: "queued", reason: "waiting for capacity: the 5-hour window is spent" }))).toBe(true);
+    expect(waitsForCapacity(event({ status: "queued", reason: "web/shop has 3 branch runs going" }))).toBe(false);
   });
   test("another run, or an event with a PR, is left alone", () => {
     const e = event({ runId: "r2", status: "working" });

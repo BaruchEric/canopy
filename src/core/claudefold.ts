@@ -14,6 +14,7 @@
  *  clock are passed in. */
 
 import { describeTool } from "./actions";
+import { readRateLimit } from "./capacity";
 import type { FoldOut } from "./driver";
 import { writtenPaths } from "./explain";
 import { relPath, toolTouch } from "./touch";
@@ -214,6 +215,13 @@ export function foldClaude(state: ClaudeFold, m: Record<string, unknown>, out: F
       }
     }
     if (changed) out.changed();
+    return;
+  }
+  if (type === "rate_limit_event") {
+    // the CLI's word on the plan's window: a refusal's exact reset rides on
+    // the run's limited mark (FR-036)
+    const info = readRateLimit(m);
+    if (info) out.rateLimit?.(info);
     return;
   }
   if (type === "result") {

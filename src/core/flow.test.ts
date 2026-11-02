@@ -1,10 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
-import { Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { CapacityHeldError } from "./capacity";
+import { CAPACITY_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
-import type { BranchStart } from "./runner";
+import type { BranchStart, StartExtras } from "./runner";
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -49,9 +50,15 @@ class FakeRunner implements FlowRunner {
   stopped: string[] = [];
   dismissed: string[] = [];
   branches: (BranchStart | undefined)[] = [];
+  /** each start's priority, absent for one that named none */
+  priorities: (string | undefined)[] = [];
+  /** the governor: a priority it names is refused, as the Runner refuses one */
+  held = new Set<string>();
   onChange: (run: Run) => void = () => {};
   private n = 0;
-  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT, _by?: string, _scope?: undefined, branch?: BranchStart): Run {
+  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT, _by?: string, _scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner" | "priority">): Run {
+    if (extras?.priority && this.held.has(extras.priority)) throw new CapacityHeldError({ hold: "hit", until: 99, why: "the 5-hour window is spent (resets 15:00)" });
+    this.priorities.push(extras?.priority);
     this.agents.push(agent);
     this.branches.push(branch);
     this.n += 1;
@@ -201,6 +208,88 @@ describe("Flows", () => {
     b.runner.end("run1", "limited", "", "usage limit reached");
     await flush();
     expect(b.flows.get(fallback.id)?.steps[0]?.reason).toBe("waiting for capacity (resets 13:00)");
+  });
+
+  test("a flow's first step starts at its own priority, the rest at normal; a low flow stays low (FR-036 plan 2)", async () => {
+    const { runner, flows } = setup();
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "first");
+    await flush();
+    flows.resume(flow.id, "continue");
+    await flush();
+    expect(runner.priorities).toEqual(["interactive", "normal"]);
+    const low = setup();
+    const lowFlow = low.flows.start(repo(), TWO, "", DEFAULT_AGENT, { priority: "low" });
+    low.runner.end("run1", "done", "first");
+    await flush();
+    low.flows.resume(lowFlow.id, "continue");
+    await flush();
+    expect(low.runner.priorities).toEqual(["low", "low"]);
+  });
+
+  test("a step the governor holds parks for capacity, is listed as held, and goes on once the governor says go (FR-036 plan 2)", async () => {
+    const NOW = Date.UTC(2026, 9, 26, 12);
+    const { runner, flows } = setup({ now: () => NOW });
+    runner.held.add("low");
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT, { priority: "low" });
+    await flush();
+    expect([flows.get(flow.id)?.status, flows.get(flow.id)?.parkedFor, flows.get(flow.id)?.steps[0]?.reason]).toEqual(["gated", "capacity", "waiting for capacity: the 5-hour window is spent (resets 15:00)"]);
+    expect(flows.heldStarts()).toEqual([{ id: `flow:${flow.id}`, what: `${flow.verb}: ${flow.steps[0]?.name}`, repoId: "r", priority: "low", why: "waiting for capacity: the 5-hour window is spent (resets 15:00)", since: NOW }]);
+    const asked: string[] = [];
+    expect(flows.resumeCapacityParks((harness, priority) => { asked.push(`${harness} ${priority}`); return false; })).toBe(0);
+    expect(asked).toEqual(["claude low"]);
+    runner.held.clear();
+    expect(flows.resumeCapacityParks(() => true)).toBe(1);
+    await flush();
+    expect([flows.get(flow.id)?.steps[0]?.status, flows.get(flow.id)?.parkedFor, runner.priorities]).toEqual(["running", undefined, ["low"]]);
+    expect(flows.heldStarts()).toEqual([]);
+  });
+
+  test("continuing a capacity park by hand starts the step once as interactive", async () => {
+    const { runner, flows } = setup();
+    runner.held.add("low");
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT, { priority: "low" });
+    await flush();
+    flows.resume(flow.id, "continue");
+    await flush();
+    expect([flows.get(flow.id)?.steps[0]?.status, runner.priorities]).toEqual(["running", ["interactive"]]);
+    runner.end("run1", "done", "first");
+    await flush();
+    flows.resume(flow.id, "continue");
+    await flush();
+    // the next step is the flow's own priority again, and still held
+    expect([flows.get(flow.id)?.steps[1]?.status, flows.get(flow.id)?.parkedFor]).toEqual(["gated", "capacity"]);
+  });
+
+  test("a limited step resumes its session after the reset, waiting on normal; a second limited end in a row fails it (FR-036 plan 2)", async () => {
+    const NOW = Date.UTC(2026, 9, 26, 12);
+    const { runner, flows } = setup({ now: () => NOW });
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    runner.session("run1", "sess-1");
+    runner.end("run1", "limited", "", "You've hit your limit · resets 3pm");
+    await flush();
+    expect([flows.get(flow.id)?.parkedFor, flows.get(flow.id)?.steps[0]?.limited]).toEqual(["capacity", 1]);
+    const asked: string[] = [];
+    flows.resumeCapacityParks((_h, priority) => { asked.push(priority); return true; });
+    await flush();
+    expect(asked).toEqual(["normal"]);
+    expect([runner.specs[1]?.resume, runner.specs[1]?.message]).toEqual(["sess-1", CAPACITY_NOTE]);
+    runner.end("run2", "limited", "", "You've hit your limit · resets 3pm");
+    await flush();
+    const failed = flows.get(flow.id);
+    expect([failed?.status, failed?.steps[0]?.status, failed?.steps[0]?.reason, failed?.steps[0]?.limited]).toEqual(["failed", "failed", "You've hit your limit · resets 3pm", undefined]);
+  });
+
+  test("a good end between two limited ones starts the count over", async () => {
+    const { runner, flows } = setup();
+    const flow = flows.start(repo(), TWO, "", DEFAULT_AGENT);
+    runner.end("run1", "limited", "", "usage limit reached");
+    await flush();
+    flows.resumeCapacityParks(() => true);
+    await flush();
+    runner.end("run2", "done", "first");
+    await flush();
+    expect(flows.get(flow.id)?.steps[0]?.limited).toBeUndefined();
   });
 
   test("runs steps in order, parks at an ask gate, continues on resume, and settles the outcome", async () => {

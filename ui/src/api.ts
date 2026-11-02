@@ -1,6 +1,7 @@
 import type { RunGroup } from "../../src/core/group";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
+import type { CapacitySettings } from "../../src/core/capacity";
 import type { VoiceEngine } from "./voicelive";
 import type {
   AwakeInfo,
@@ -692,6 +693,14 @@ export const api = {
   },
   /** this backend's usage windows and any starts held for capacity */
   capacity: (b: string = homeName()) => req<CapacityInfo>(b, "/api/capacity"),
+  /** reads the windows now (FR-036) */
+  capacityRead: (b: string) => req<CapacityInfo>(b, "/api/capacity/read", { method: "POST", body: "{}" }),
+  /** "start anyway": one held start, once, as interactive */
+  capacityRelease: (b: string, id: string) =>
+    req<CapacityInfo>(b, "/api/capacity/release", { method: "POST", body: JSON.stringify({ id }) }),
+  /** the governor's holds and the observed dollar figure, a patch */
+  capacitySettings: (b: string, patch: Partial<CapacitySettings>) =>
+    req<CapacityInfo>(b, "/api/capacity", { method: "POST", body: JSON.stringify(patch) }),
   /** the kit on one backend: the machines it reaches, their cells and plans */
   kit: (b: string = homeName()) => req<KitInfo>(b, "/api/kit"),
   kitScan: (b: string) => req<KitInfo>(b, "/api/kit/scan", { method: "POST", body: "{}" }),

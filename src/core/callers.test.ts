@@ -11,6 +11,12 @@ describe("needs", () => {
     expect(needs("GET", "/library/open")).toBe("admin");
   });
 
+  test("the capacity routes: reading now and a release operate, the thresholds are the admin's (FR-036)", () => {
+    expect([needs("POST", "/api/capacity/read"), needs("POST", "/api/capacity/release"), needs("POST", "/api/capacity")]).toEqual(["operate", "operate", "admin"]);
+    expect(allows("shell", needs("POST", "/api/capacity/release"))).toBe(true);
+    expect(allows("shell", needs("POST", "/api/capacity"))).toBe(false);
+  });
+
   test("each read-only Library path is read", () => {
     for (const p of [
       "/api/library",

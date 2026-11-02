@@ -68,6 +68,9 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["repos/tasks", "repos/tasks/def"], right: "operate" },
   { methods: POST, paths: ["work/*"], right: "operate" },
   { methods: POST, paths: ["landing/*", "groups/*", "prs/*", "incubator/*"], right: "operate" },
+  // reading the windows now and starting a held start as interactive are a
+  // hand's; the thresholds are the admin's (POST capacity, below)
+  { methods: POST, paths: ["capacity/read", "capacity/release"], right: "operate" },
   // prune removes what the landing section's remove already lets operate remove
   { methods: POST, paths: ["worktrees/prune"], right: "operate" },
   // a kept worktree is a shell's to make and drop: an agent in one spins
@@ -86,7 +89,7 @@ const RULES: readonly Rule[] = [
   },
   { methods: DEL, paths: ["terms", "terms/kept"], right: "shell" },
   // Admin is also the default; these are written out so the test can pin them.
-  { methods: POST, paths: ["agents/profile", "agents/role", "peers/sync", "repos/peer", "keep", "awake", "worktrees/warm", "health/heal", "remembered/forget"], right: "admin" },
+  { methods: POST, paths: ["agents/profile", "agents/role", "peers/sync", "repos/peer", "keep", "awake", "worktrees/warm", "health/heal", "remembered/forget", "capacity"], right: "admin" },
   { methods: POST_DEL, paths: ["sources"], right: "admin" },
   { methods: POST, paths: ["sources/rescan", "kit/*", "secrets/*", "ranger", "ranger/restart", "ranger/fresh"], right: "admin" },
   { methods: POST, paths: ["auth/approve", "auth/deny", "auth/revoke"], right: "admin" },

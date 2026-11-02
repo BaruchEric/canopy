@@ -86,7 +86,7 @@ function isRun(v: unknown): v is Run {
   return optStrFields(v, ["session", "by", "workspace", "proposal", "error", "awayWhy", "parent", "group"]) && optional(v, "kept", (x) => x === true) && optional(v, "away", boolean) &&
     optional(v, "priority", (x) => oneOf(x, PRIORITIES)) &&
     optional(v, "outcome", (x) => x === "changed" || x === "unchanged") && optional(v, "proposalState", (x) => oneOf(x, ["waiting", "approved", "approved-auto", "sent back", "turned down"])) &&
-    optional(v, "branch", isBranch) && optional(v, "limited", (x) => record(x) && number(x["at"]) && text(x["text"])) &&
+    optional(v, "branch", isBranch) && optional(v, "limited", (x) => record(x) && number(x["at"]) && text(x["text"]) && optional(x, "resetsAt", number) && optional(x, "window", (w) => w === "fiveHour" || w === "weekly")) &&
     optional(v, "flowStep", (x) => record(x) && strFields(x, ["workflow", "step"]) && oneOf(x["source"], ["bundled", "user", "repo"])) &&
     optional(v, "agentSettings", (x) => record(x) && harness(x["harness"]) && text(x["model"]) && oneOf(x["effort"], AGENT_EFFORTS) && optional(x, "provider", text)) &&
     optional(v, "todos", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "subject"]) && oneOf(t["status"], ["pending", "in_progress", "completed"]) && optional(t, "active", text))) &&
@@ -149,7 +149,7 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
   if (run.proposalState) safe.proposalState = t(run.proposalState);
   if (run.agentSettings) safe.agentSettings = { harness: t(run.agentSettings.harness), model: r(run.agentSettings.model), effort: t(run.agentSettings.effort), ...(run.agentSettings.provider !== undefined ? { provider: r(run.agentSettings.provider) } : {}) };
   if (run.flowStep) safe.flowStep = { workflow: r(run.flowStep.workflow), step: r(run.flowStep.step), source: t(run.flowStep.source) };
-  if (run.limited) safe.limited = { at: run.limited.at, text: r(run.limited.text) };
+  if (run.limited) safe.limited = { at: run.limited.at, text: r(run.limited.text), ...(run.limited.resetsAt !== undefined ? { resetsAt: run.limited.resetsAt } : {}), ...(run.limited.window ? { window: t(run.limited.window) } : {}) };
   if (run.branch) {
     const b = run.branch;
     safe.branch = { name: r(b.name), target: r(b.target), base: r(b.base), dir: r(b.dir), origin: t(b.origin), state: t(b.state),

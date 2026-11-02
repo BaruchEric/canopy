@@ -9,6 +9,7 @@ import type { RepoCard } from "../../../src/core/cards";
 import type { HistoryOverview } from "../../../src/core/types";
 import { backendOf, plainOf, qual } from "../registry";
 import { isOnline, useStore } from "../store";
+import { CapacityBlock } from "./Capacity";
 import { Seg } from "./Seg";
 
 type Fetched = { kind: "loading" } | { kind: "done"; rows: ServedRow[]; priced: boolean; failed: string[] };
@@ -249,6 +250,7 @@ export function CostsView() {
           </span>
         )}
       </header>
+      <CapacityBlock />
       {sheet && <HarnessLine sheet={sheet} history={history} days={days} cards={cards} />}
       {got.kind === "loading" && <p className="cost-note">reading the ledgers…</p>}
       {got.kind === "done" && got.failed.length > 0 && (

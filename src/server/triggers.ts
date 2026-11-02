@@ -51,6 +51,7 @@ import {
   pruneEvents,
   resumable,
   retryable,
+  waitsForCapacity,
   sampleIncoming,
   scheduleBusy,
   scheduleEvent,
@@ -71,7 +72,7 @@ import {
   type TriggerSource,
   type TriggersInfo,
 } from "../core/trigger";
-import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, ServerEvent } from "../core/types";
+import type { Flow, HeldStart, LandEntry, LandNotice, Priority, PrWatch, Repo, Run, ServerEvent } from "../core/types";
 import type { WorkSink } from "../core/work";
 import { repoKey } from "../core/worktree";
 import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearNote, linearSessionLinks, type LinearInstall } from "./linear";
@@ -126,11 +127,13 @@ export interface TriggerDeps {
   /** why a rule's workflow cannot run as a trigger, or null */
   workflowProblem: (name: string, repo: Repo) => Promise<string | null>;
   /** Starts its branch work. Recheck valid after async preparation, before
-   *  cutting a branch or launching an agent. It expires with lock ownership. */
-  start: (event: TriggerEvent, repo: Repo, valid: () => boolean) => Promise<StartOutcome>;
+   *  cutting a branch or launching an agent. It expires with lock ownership.
+   *  `priority` is low unless a held start is released (FR-036); a start
+   *  the governor holds answers busy with its words. */
+  start: (event: TriggerEvent, repo: Repo, valid: () => boolean, priority?: Priority) => Promise<StartOutcome>;
   /** resumes the stopped work on the event's branch: its flow picked up
    *  where it stopped, or a run resuming the branch's last session */
-  resume: (event: TriggerEvent) => Promise<{ run: Run } | { flow: Flow }>;
+  resume: (event: TriggerEvent, priority?: Priority) => Promise<{ run: Run } | { flow: Flow }>;
   /** stops a run by id */
   stopRun: (id: string) => void;
   /** whether this server holds a run by id */
@@ -605,8 +608,9 @@ export class TriggerHub {
     });
   }
 
-  /** Starts an event's run, or leaves it queued when the repo's branch slots are full. */
-  private async begin(event: TriggerEvent, repo: Repo): Promise<TriggerEvent> {
+  /** Starts an event's run, or leaves it queued when the repo's branch slots
+   *  are full or the governor holds it. */
+  private async begin(event: TriggerEvent, repo: Repo, priority?: Priority): Promise<TriggerEvent> {
     const ownership = this.ownership;
     let attached: { kind: "run"; id: string } | { kind: "flow"; id: string } | null = null;
     const valid = () => {
@@ -617,7 +621,7 @@ export class TriggerHub {
     };
     if (!valid()) return event;
     try {
-      const out = await this.deps.start(event, repo, valid);
+      const out = await this.deps.start(event, repo, valid, priority);
       if (!valid()) {
         if ("run" in out) this.deps.stopRun(out.run.id);
         if ("flow" in out) this.deps.stopFlow?.(out.flow.id);
@@ -1047,12 +1051,54 @@ export class TriggerHub {
     });
   }
 
-  resume(id: string): Promise<TriggerEvent> {
+  /* ---------- capacity (FR-036) ---------- */
+
+  /** The events waiting for capacity, as the chip lists them. */
+  heldStarts(): HeldStart[] {
+    return this.list().filter(waitsForCapacity).map((e) => ({
+      id: `trigger:${e.id}`,
+      what: e.short ? `${e.short}: ${e.title}` : e.title,
+      repoId: e.repoId,
+      priority: "low" as const,
+      why: e.reason ?? "waiting for capacity",
+      since: e.lastAt,
+    }));
+  }
+
+  /** The governor may have let go: the queue is worked again, and an event
+   *  stopped on its branch by the limit resumes there when `go` says low
+   *  work may start. Only the flows-lock holder starts anything. */
+  wake(go: () => boolean): void {
+    if (!this.keeping) return;
+    void this.pump();
+    if (!go()) return;
+    for (const e of this.list()) {
+      if (e.status !== "stopped" || !waitsForCapacity(e)) continue;
+      this.resume(e.id, "low").catch((err: unknown) => console.error(`triggers: resume ${e.id}: ${errText(err)}`));
+    }
+  }
+
+  /** "Start anyway" on a held event: a queued one starts, a limited one
+   *  resumes, once, as interactive. */
+  release(id: string): Promise<TriggerEvent> {
+    const e = this.events.get(id);
+    if (!e || !waitsForCapacity(e)) return Promise.reject(new TriggerError(`trigger event ${id} is not waiting for capacity`, 404));
+    if (e.status === "stopped") return this.resume(id, "interactive");
+    return this.queue(async () => {
+      const now = this.events.get(id);
+      if (now?.status !== "queued") return now ?? e;
+      const repo = this.deps.repo(now.repoId);
+      if (!repo) throw new TriggerError(`${now.repoId} is no longer in the tree`, 404);
+      return this.begin(now, repo, "interactive");
+    });
+  }
+
+  resume(id: string, priority?: Priority): Promise<TriggerEvent> {
     return this.queue(async () => {
       const e = this.events.get(id);
       if (!e) throw new TriggerError(`no trigger event ${id}`, 404);
       if (!resumable(e)) throw new TriggerError(`${e.short ?? e.title} is ${e.status}, not stopped on a branch`);
-      const out = await this.deps.resume(e);
+      const out = await this.deps.resume(e, priority);
       const next: TriggerEvent = "flow" in out ? { ...e, status: "working", flowId: out.flow.id } : { ...e, status: "working", runId: out.run.id };
       // a run in place of a flow the server no longer keeps: the event follows that run
       if ("run" in out) {
@@ -1077,9 +1123,10 @@ export class TriggerHub {
       const repo = this.deps.repo(e.repoId);
       if (!repo) throw new TriggerError(`${e.repoId} is no longer in the tree`, 404);
       const fresh: TriggerEvent = { ...e, status: "queued", lastAt: this.now() };
-      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved", "linked", "summary"] as const) delete fresh[k];
+      for (const k of ["runId", "flowId", "step", "branch", "reason", "endedAt", "pr", "resolved", "linked", "summary", "limited"] as const) delete fresh[k];
       this.set(fresh);
-      return this.begin(fresh, repo);
+      // a retry is a hand on the button: it goes as interactive
+      return this.begin(fresh, repo, "interactive");
     });
   }
 

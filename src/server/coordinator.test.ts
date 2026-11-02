@@ -518,3 +518,81 @@ describe("the brief", () => {
     expect("tasks" in validatePlan(body.tasks, { known: () => "local", have: 0 })).toBe(true);
   });
 });
+
+describe("capacity (FR-036 plan 2)", () => {
+  const HOLD = "waiting for capacity: the 5-hour window is spent (resets 15:00)";
+  const LIMIT = "You've hit your limit · resets 3pm";
+
+  test("a held start leaves every queued card waiting with the governor's words; a wake starts them; a release goes as interactive", async () => {
+    let held = true;
+    const priorities: (string | undefined)[] = [];
+    const h = hub({
+      startChild: async (coordId, t, priority) => {
+        priorities.push(priority);
+        if (held && priority !== "interactive") return { busy: HOLD };
+        started.push({ coord: coordId, task: t.id });
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: branch(`c${n}`) } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([["queued", HOLD], ["queued", HOLD]]);
+    // one start is tried for the pair: they share the window
+    expect(priorities).toEqual(["normal"]);
+    expect(h.heldStarts().map((x) => [x.id, x.priority, x.why])).toEqual([["card:co1:t1", "normal", HOLD], ["card:co1:t2", "normal", HOLD]]);
+    await h.release("co1", "t1");
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    expect(priorities.at(-2)).toBe("interactive");
+    held = false;
+    h.wake(() => true);
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["running", "running"]);
+    expect(card("t2")?.outcome).toBeUndefined();
+  });
+
+  test("a child that hits the limit keeps its card waiting, resumes on its branch on a wake that says go, and fails the card on a second limit", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    const resumed: string[] = [];
+    const h = hub({
+      resumeChild: async (coordId, t, old, priority) => {
+        resumed.push(`${old.id} ${priority}`);
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: old.branch } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const first = child("t1");
+    first.status = "limited";
+    first.endedAt = clock;
+    first.error = LIMIT;
+    first.limited = { at: clock, text: LIMIT };
+    h.onRun(first);
+    await settled(h);
+    expect([card("t1")?.state, card("t1")?.outcome, card("t1")?.limited]).toEqual(["running", "waiting for capacity (resets 15:00)", 0]);
+    expect(h.heldStarts().map((x) => x.id)).toEqual(["card:co1:t1"]);
+    h.wake(() => false);
+    await settled(h);
+    expect(resumed).toEqual([]);
+    h.wake(() => true);
+    await settled(h);
+    expect(resumed).toEqual([`${first.id} normal`]);
+    expect([card("t1")?.run, card("t1")?.outcome, card("t1")?.limited]).toEqual(["c2", undefined, 1]);
+    const second = child("t1");
+    second.status = "limited";
+    second.endedAt = clock;
+    second.error = LIMIT;
+    second.limited = { at: 1, text: LIMIT };
+    h.onRun(second);
+    await settled(h);
+    expect([card("t1")?.state, card("t1")?.outcome]).toEqual(["failed", "the plan's usage limit, twice in a row"]);
+  });
+});

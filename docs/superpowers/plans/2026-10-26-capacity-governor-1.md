@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** implemented and independently reviewed locally 2026-10-27 on `main`. The earlier combined gates and desktop/mobile browser checks passed, including clock advancement and hit expiry. Live quota and credential/refresh observations remain unobserved in the probes record. Endpoint reads, dispatch holds/retries and the credits lane remain unwired; plans 2 and 3 remain open. Deployment to the Mac and mini was verified 2026-10-27.
+**Status:** implemented and independently reviewed locally 2026-10-27 on `main`. The earlier combined gates and desktop/mobile browser checks passed, including clock advancement and hit expiry. Live quota and credential/refresh observations remain unobserved in the probes record. Endpoint reads and the credits lane remain unwired. Plan 2 (priorities, dispatch holds, the limited retries, `canopy capacity`, the costs block) was built 2026-11-02 on `fr/fr036-governor`; plan 3 remains open. Deployment to the Mac and mini was verified 2026-10-27.
 
 **Goal:** canopy can tell when a harness has hit the Max plan's usage window and
 how much of it is left: a run whose reply is the limit text ends `limited`, not

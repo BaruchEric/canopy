@@ -8,8 +8,9 @@
  *  live object, so they go out with every run change and die with the run,
  *  like the rest of it. The notes waiting for an idle turn live here. */
 
+import { isCapacityWords, limitedWords } from "../core/capacity";
 import { childSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
-import { isFlowActive, isRunActive, type CoordTask, type Flow, type Run } from "../core/types";
+import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type Priority, type Run } from "../core/types";
 import type { WorkSink } from "../core/work";
 import type { Caller } from "./callers";
 
@@ -35,8 +36,13 @@ export interface CoordinatorDeps {
   run: (id: string) => Run | undefined;
   runs: () => Run[];
   /** starts a card as a branch run with `parent` set to the coordinator and
-   *  `by` coordinator; throws when it cannot start at all */
-  startChild: (coordId: string, task: CoordTask) => Promise<ChildStart>;
+   *  `by` coordinator; throws when it cannot start at all. `priority` is
+   *  normal unless a held card is released (FR-036); a start the governor
+   *  holds answers busy with its words. */
+  startChild: (coordId: string, task: CoordTask, priority?: Priority) => Promise<ChildStart>;
+  /** resumes a child that ended `limited` on its own branch, its session
+   *  carried on, as a new run with the same parent (FR-036) */
+  resumeChild?: (coordId: string, task: CoordTask, child: Run, priority: Priority) => Promise<ChildStart>;
   /** the next user message into a chat (`Runner.say`); throws when it is not idle */
   say: (runId: string, text: string) => void;
   /** whether the repo has no branch slot free */
@@ -75,6 +81,8 @@ export class CoordinatorHub {
   /** every pump runs here, one after another, so two run ends never start
    *  more than three children between them */
   private serial: Promise<void> = Promise.resolve();
+  /** cards "start anyway" let go once as interactive, `<coordinator>:<card>` */
+  private released = new Set<string>();
 
   constructor(private deps: CoordinatorDeps) {}
 
@@ -223,29 +231,39 @@ export class CoordinatorHub {
    *  card and queues a note saying why. */
   pump(coordId: string): Promise<void> {
     return this.queue(async () => {
-      const passed = new Set<string>();
+      /** cards looked at this pass, with the words they wait with */
+      const passed = new Map<string, string>();
       for (;;) {
         const coord = this.deps.run(coordId);
         if (!coord || !isRunActive(coord)) return;
         const tasks = coord.tasks ?? [];
         for (const t of tasks) {
-          if (t.state === "queued") this.update(coordId, t.id, (x) => withOutcome(x, passed.has(x.id) || this.deps.repoFull(x.repo) ? slotWord(x.repo) : undefined));
+          if (t.state === "queued") this.update(coordId, t.id, (x) => withOutcome(x, passed.get(x.id) ?? (this.deps.repoFull(x.repo) ? slotWord(x.repo) : isCapacityWords(x.outcome) ? x.outcome : undefined)));
         }
         const [next] = nextToStart(
           tasks.filter((t) => !passed.has(t.id)),
           { working: this.working(coord), repoFull: this.deps.repoFull },
         );
         if (!next) return;
+        const key = `${coordId}:${next.id}`;
+        const priority: Priority = this.released.delete(key) ? "interactive" : "normal";
         let out: ChildStart;
         try {
-          out = await this.deps.startChild(coordId, next);
+          out = await this.deps.startChild(coordId, next, priority);
         } catch (err) {
           this.update(coordId, next.id, (x) => withOutcome({ ...x, state: "failed" }, errText(err)));
           this.queueNote(coordId, startNote(next, errText(err)));
           continue;
         }
         if ("busy" in out) {
-          passed.add(next.id);
+          // the governor holds every card at once: they share its window,
+          // so the rest wait with the same words and none is tried this pass
+          if (isCapacityWords(out.busy)) {
+            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id)) passed.set(t.id, out.busy);
+            for (const [id, words] of passed) this.update(coordId, id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
+            return;
+          }
+          passed.set(next.id, slotWord(next.repo));
           this.update(coordId, next.id, (x) => withOutcome(x, slotWord(x.repo)));
           continue;
         }
@@ -292,6 +310,22 @@ export class CoordinatorHub {
    *  waits on the landing and PR broadcasts' `recheck` and sets none. */
   private settle(coord: Run, task: CoordTask, child: Run): void {
     if (isRunActive(child)) return;
+    if (child.status === "limited" && (task.limited ?? 0) < 1) {
+      // the work is sound and waits for the reset: the card keeps its run
+      // until the child resumes on its branch (FR-036)
+      if (task.limited === undefined || !isCapacityWords(task.outcome)) {
+        this.update(coord.id, task.id, (x) => ({ ...withOutcome(x, limitedWords(child.limited, this.now())), limited: 0 }));
+        this.queueNote(coord.id, `canopy: task ${task.id} (${task.title}) stopped at the plan's usage limit; it carries on on its branch after the reset`);
+      }
+      return;
+    }
+    if (child.status === "limited") {
+      // limited again after its resume: it fails, so a misread text cannot loop
+      this.cancel(child.id);
+      this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: "failed" }, "the plan's usage limit, twice in a row"));
+      this.queueNote(coord.id, settleNote(task, child, this.deps.landing(child)));
+      return;
+    }
     const branch = this.deps.landing(child);
     const ended = child.endedAt ?? this.now();
     const wait = this.deps.readyWait ?? READY_WAIT;
@@ -306,6 +340,77 @@ export class CoordinatorHub {
     this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
     if (task.work) this.deps.work?.note(task.work, `card ${task.id} settled: ${got.outcome}`);
     this.queueNote(coord.id, settleNote(task, child, branch));
+  }
+
+  /* ---------- capacity (FR-036) ---------- */
+
+  /** The cards waiting for capacity, as the chip lists them: queued ones the
+   *  governor holds and running ones whose child hit the limit. */
+  heldStarts(): HeldStart[] {
+    const out: HeldStart[] = [];
+    for (const coord of this.deps.runs()) {
+      if (coord.action !== "coordinate" || !isRunActive(coord)) continue;
+      for (const t of coord.tasks ?? []) {
+        const waits = (t.state === "queued" || t.state === "running") && isCapacityWords(t.outcome);
+        if (!waits) continue;
+        const child = t.run ? this.deps.run(t.run) : undefined;
+        out.push({ id: `card:${coord.id}:${t.id}`, what: t.title, repoId: t.repo, priority: "normal", why: t.outcome ?? "waiting for capacity", since: child?.endedAt ?? coord.startedAt });
+      }
+    }
+    return out;
+  }
+
+  /** The governor may have let go: queued cards are pumped again, and a
+   *  card whose child hit the limit resumes it on its branch when `go` says
+   *  normal work may start. */
+  wake(go: () => boolean): void {
+    this.pumpAll();
+    if (!go()) return;
+    for (const coord of this.deps.runs()) {
+      if (coord.action !== "coordinate" || !isRunActive(coord)) continue;
+      for (const t of coord.tasks ?? []) {
+        if (t.state === "running" && t.limited === 0) void this.resumeLimited(coord.id, t.id, "normal");
+      }
+    }
+  }
+
+  /** "Start anyway" on a held card, once as interactive. */
+  async release(coordId: string, taskId: string): Promise<void> {
+    const coord = this.deps.run(coordId);
+    const task = coord?.tasks?.find((t) => t.id === taskId);
+    if (!coord || !task || !isCapacityWords(task.outcome)) throw new CoordError(`card ${taskId} is not waiting for capacity`, 404);
+    if (task.state === "running") {
+      await this.resumeLimited(coordId, taskId, "interactive");
+      return;
+    }
+    this.released.add(`${coordId}:${taskId}`);
+    await this.pump(coordId);
+  }
+
+  /** The child that hit the limit carries on on its branch: a new run, the
+   *  card following it, its count kept so a second limit fails the card. */
+  private resumeLimited(coordId: string, taskId: string, priority: Priority): Promise<void> {
+    return this.queue(async () => {
+      const coord = this.deps.run(coordId);
+      const task = coord?.tasks?.find((t) => t.id === taskId);
+      const child = task?.run ? this.deps.run(task.run) : undefined;
+      if (!coord || !isRunActive(coord) || !task || task.state !== "running" || task.limited !== 0 || child?.status !== "limited" || !this.deps.resumeChild) return;
+      let out: ChildStart;
+      try {
+        out = await this.deps.resumeChild(coordId, task, child, priority);
+      } catch (err) {
+        this.update(coordId, taskId, (x) => withOutcome({ ...x, state: "failed" }, errText(err)));
+        this.queueNote(coordId, startNote(task, errText(err)));
+        return;
+      }
+      if ("busy" in out) {
+        this.update(coordId, taskId, (x) => withOutcome(x, out.busy));
+        return;
+      }
+      const next = out.run;
+      this.update(coordId, taskId, (x) => ({ ...withOutcome(x, undefined), run: next.id, limited: 1 }));
+      this.follow(next);
+    });
   }
 
   /** Every card waiting on a child that ended is looked at again: the

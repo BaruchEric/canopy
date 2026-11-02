@@ -3,7 +3,8 @@
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { groupWord, type RunGroup } from "../core/group";
-import { RUN_ACTIONS, type BackendEntry, type Run, type RunAction, type ScanResult } from "../core/types";
+import { parsePriority } from "../core/capacity";
+import { RUN_ACTIONS, type BackendEntry, type Priority, type Run, type RunAction, type ScanResult } from "../core/types";
 import { apiBase } from "./api";
 import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
 import { RUN_USAGE, runTranscriptCommand } from "./run-transcripts";
@@ -18,6 +19,9 @@ export interface RunArgs {
   explicitTimes: boolean;
   autoLand: boolean;
   pr: boolean;
+  /** who may go first when the plan's window runs low (FR-036); absent, the
+   *  backend's default for the start */
+  priority?: Priority;
   backend?: string;
   on?: string;
 }
@@ -38,10 +42,14 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
   const rawTimes = take(args, "--times");
   const autoLand = has(args, "--auto-land");
   const pr = has(args, "--pr");
+  const priorityFlag = args.includes("--priority");
+  const rawPriority = take(args, "--priority");
   if (backendFlag && backend === undefined) return "--backend needs a value";
   if (onFlag && on === undefined) return "--on needs a value";
   if (noteFlag && note === undefined) return "-m needs a note";
   if (timesFlag && rawTimes === undefined) return "--times needs a value";
+  const priority = rawPriority === undefined ? undefined : parsePriority(rawPriority);
+  if (priorityFlag && (priority === undefined || priority === null)) return "--priority must be interactive, normal or low";
   if (backend !== undefined && !/^https?:\/\/[^/\s]+$/.test(apiBase(backend))) {
     return `--backend must be an http(s) origin, got ${backend}`;
   }
@@ -68,6 +76,7 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     explicitTimes: timesFlag,
     autoLand,
     pr,
+    ...(priority ? { priority } : {}),
     ...(backend !== undefined ? { backend } : {}),
     ...(on !== undefined ? { on } : {}),
   };
@@ -102,7 +111,7 @@ export function runCommand(argv: string[], deps: RunCommandDeps): Promise<void> 
 function firstWord(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     const value = args[i];
-    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on") {
+    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority") {
       i += 1;
       continue;
     }
@@ -155,6 +164,7 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     ...(parsed.explicitTimes ? { times: parsed.times } : {}),
     ...(parsed.autoLand ? { autoLand: true } : {}),
     ...(parsed.pr ? { pr: true } : {}),
+    ...(parsed.priority ? { priority: parsed.priority } : {}),
   };
   const result = await ask<Run | RunGroup>(
     target,

@@ -51,6 +51,24 @@ test("a run keeps the resolved settings snapshot for its accounting row", () => 
   expect(run.agentSettings).toEqual({ harness: "codex", model: "gpt-x", effort: "high", provider: "team_1" });
 });
 
+describe("the capacity governor at the start (FR-036 plan 2)", () => {
+  const driver = (): RunDriver => ({ harness: "claude", label: "Claude Code", check: () => null, start: () => {}, say: () => {}, stop: () => {} });
+  const repo = (id: string): Repo => ({ id, name: id, path: `/r/${id}`, group: "", source: "root", status: null });
+  const hold = { hold: "hit" as const, until: 42, why: "the 5-hour window is spent (resets 15:00)" };
+  test("a held priority refuses with CapacityHeldError; interactive and an unmarked start are never asked", () => {
+    const asked: string[] = [];
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver, may: (harness, priority) => { asked.push(`${harness} ${priority}`); return priority === "low" ? hold : "go"; } });
+    let err: unknown;
+    try { runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { priority: "low" }); } catch (e) { err = e; }
+    expect(err).toMatchObject({ name: "CapacityHeldError", message: "waiting for capacity: the 5-hour window is spent (resets 15:00)", until: 42 });
+    expect(runner.list()).toEqual([]);
+    expect(runner.start(repo("b"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { priority: "normal" }).priority).toBe("normal");
+    runner.start(repo("c"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { priority: "interactive" });
+    runner.start(repo("d"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT);
+    expect(asked).toEqual(["claude low", "claude normal"]);
+  });
+});
+
 test("Runner.note adds a timeline remark only to a live known run", () => {
   const driver: RunDriver = { harness: "codex", label: "Codex", check: () => null, start: () => {}, say: () => {}, stop: () => {} };
   const changes: Run[] = [];

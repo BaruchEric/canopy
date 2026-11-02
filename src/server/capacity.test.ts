@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CAPACITY, HIT_GRACE, type CapacitySettings } from "../core/capacity";
 import type { CostEntry } from "../core/costs";
-import type { CapacityInfo, Harness, Run, ServerEvent } from "../core/types";
-import { CapacityHub } from "./capacity";
+import type { CapacityInfo, Harness, HeldStart, Run, ServerEvent } from "../core/types";
+import { CapacityHub, type CapacityHubDeps } from "./capacity";
 
 let dir = "";
 beforeAll(async () => {
@@ -28,10 +28,11 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const limited = (over: Partial<Run> = {}): Run => ({ id: "r1", repoId: "a", action: "ask", verb: "ask", progress: "", expectsChange: false, chat: false, harness: "claude", note: "", status: "limited", startedAt: NOW, steps: [], prompt: null, error: LIMIT, limited: { at: NOW, text: LIMIT }, ...over });
 const row = (at: number, usd: number | null, service: CostEntry["service"] = "claude"): CostEntry => ({ at, service, provider: "anthropic", model: null, repo: null, repoName: null, run: null, label: null, session: null, usd, tokens: null, seconds: null });
 
-function hub(opts: { file?: string; rows?: CostEntry[]; reader?: (harness: Harness) => Promise<unknown>; now?: number; settings?: Partial<CapacitySettings>; timings?: { every: number; idle: number } } = {}) {
+function hub(opts: { file?: string; rows?: CostEntry[]; reader?: (harness: Harness) => Promise<unknown>; now?: number; settings?: Partial<CapacitySettings>; timings?: { every: number; idle: number }; extra?: Partial<CapacityHubDeps> } = {}) {
   const events: CapacityInfo[] = [];
   const now = opts.now ?? NOW;
   const instance = new CapacityHub({
+    ...opts.extra,
     broadcast: (event: ServerEvent) => {
       if (event.type === "capacity") events.push(event.capacity);
     },
@@ -42,6 +43,7 @@ function hub(opts: { file?: string; rows?: CostEntry[]; reader?: (harness: Harne
     now: () => now,
     debounce: 5,
     timings: opts.timings ?? { every: 20, idle: 10_000 },
+    ...(opts.extra?.config ? { config: opts.extra.config } : {}),
   });
   hubs.push(instance);
   return { h: instance, events };
@@ -151,4 +153,90 @@ test("GET /api/capacity answers the info with no held starts; other paths are no
   });
   const otherUrl = new URL("http://x/api/health");
   expect(await h.handle(new Request(otherUrl.toString()), otherUrl)).toBeNull();
+});
+
+const post = (h: CapacityHub, path: string, body?: unknown) =>
+  h.handle(new Request(`http://x${path}`, { method: "POST", ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), new URL(`http://x${path}`));
+
+test("may: the governor on this harness's reading; interactive goes through a hit (plan 2)", async () => {
+  const { h } = hub();
+  await h.start();
+  expect(h.may("claude", "low")).toBe("go");
+  h.onRun(limited());
+  expect(h.may("claude", "low")).toMatchObject({ hold: "hit", until: AT_3PM + HIT_GRACE });
+  expect(h.may("claude", "normal")).toMatchObject({ hold: "hit" });
+  expect(h.may("claude", "interactive")).toBe("go");
+  expect(h.may("codex", "low")).toBe("go");
+});
+
+test("a limited mark with the CLI's exact reset holds until that reset, not the text's", async () => {
+  const { h } = hub();
+  await h.start();
+  const exact = Date.UTC(2026, 9, 26, 13, 40);
+  h.onRun(limited({ limited: { at: NOW, text: LIMIT, resetsAt: exact, window: "fiveHour" } }));
+  expect(h.get("claude").hit).toEqual({ window: "fiveHour", at: NOW, resetsAt: exact, text: LIMIT });
+});
+
+test("the held starts come from their owners; a held-list change alone sends the event and never wakes the pumps", async () => {
+  let held: HeldStart[] = [];
+  let woke = 0;
+  const { h, events } = hub({ extra: { held: () => held, wake: () => { woke += 1; } } });
+  await h.start();
+  await sleep(20);
+  const wokeAtStart = woke;
+  const sent = events.length;
+  held = [{ id: "trigger:e1", what: "fix the crash", repoId: "a", priority: "low", why: "waiting for capacity: the 5-hour window is spent (resets 15:00)", since: NOW }];
+  h.touch();
+  await sleep(20);
+  expect(events.length).toBe(sent + 1);
+  expect(events.at(-1)?.held.map((x) => x.id)).toEqual(["trigger:e1"]);
+  expect(woke).toBe(wokeAtStart);
+  h.onRun(limited());
+  await sleep(20);
+  expect(woke).toBe(wokeAtStart + 1);
+});
+
+test("POST /api/capacity patches the settings through the config; a bad value is a 400", async () => {
+  let saved: CapacitySettings = { ...DEFAULT_CAPACITY };
+  const { h } = hub({ extra: { saveSettings: async (next) => { saved = next; }, config: async () => ({ capacity: saved }) } });
+  await h.start();
+  const res = await post(h, "/api/capacity", { lowHold: 0.5, observedFiveHourUsd: 40 });
+  expect(res?.status).toBe(200);
+  expect(((await res!.json()) as CapacityInfo).settings).toEqual({ ...DEFAULT_CAPACITY, lowHold: 0.5, observedFiveHourUsd: 40 });
+  expect(saved.lowHold).toBe(0.5);
+  const bad = await post(h, "/api/capacity", { normalHold: 3 });
+  expect([bad?.status, ((await bad!.json()) as { error: string }).error]).toEqual([400, "normalHold must be above 0 and at most 1"]);
+  expect(h.info().settings.normalHold).toBe(DEFAULT_CAPACITY.normalHold);
+});
+
+test("POST /api/capacity/read refreshes; release starts a held start and refuses one not held", async () => {
+  let reads = 0;
+  const released: string[] = [];
+  const { h } = hub({
+    reader: async () => { reads += 1; return {}; },
+    extra: {
+      held: () => [{ id: "flow:f1", what: "review", repoId: "a", priority: "normal", why: "waiting", since: NOW }],
+      release: async (id) => { released.push(id); },
+    },
+  });
+  await h.start();
+  const before = reads;
+  expect((await post(h, "/api/capacity/read"))?.status).toBe(200);
+  expect(reads).toBe(before + 2);
+  expect((await post(h, "/api/capacity/release", { id: "flow:f1" }))?.status).toBe(200);
+  expect(released).toEqual(["flow:f1"]);
+  expect((await post(h, "/api/capacity/release", { id: "flow:nope" }))?.status).toBe(404);
+  expect((await post(h, "/api/capacity/release", {}))?.status).toBe(400);
+});
+
+test("a release the owner refuses answers 409 with its words", async () => {
+  const { h } = hub({
+    extra: {
+      held: () => [{ id: "pr:b1", what: "fix PR #3", repoId: "a", priority: "normal", why: "waiting", since: NOW }],
+      release: async () => { throw new Error("the PR is closed"); },
+    },
+  });
+  await h.start();
+  const res = await post(h, "/api/capacity/release", { id: "pr:b1" });
+  expect([res?.status, ((await res!.json()) as { error: string }).error]).toEqual([409, "the PR is closed"]);
 });

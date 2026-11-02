@@ -43,7 +43,8 @@ import {
 import { configDir } from "../core/store";
 import { SWEEP_COMMENT_PREFIX } from "../core/sweep";
 import type { WorkSink } from "../core/work";
-import type { LandingRun, PrComment, PrNow, PrState, PrWatch, Run, RunReview, ServerEvent } from "../core/types";
+import { limitedWords } from "../core/capacity";
+import type { HeldStart, LandingRun, PrComment, PrNow, PrState, PrWatch, Priority, Run, RunReview, ServerEvent } from "../core/types";
 import { isRunActive } from "../core/types";
 import { dirtyFiles, pushBranch, pushBranchLease, pushRemote, rebaseOnto, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
 import { sortRun } from "./landing";
@@ -163,8 +164,13 @@ export interface PrDeps {
   markPr: (id: string, pr: number | null) => void;
   /** a merged PR's branch: its landing record goes */
   forget: (id: string) => Promise<void>;
-  /** starts a fix run on the branch with this message; `label` is its note */
-  startFix: (rec: LandingRun, prompt: string, label: string) => Promise<Run>;
+  /** starts a fix run on the branch with this message; `label` is its note;
+   *  `priority` is normal unless a held fix is released (FR-036) */
+  startFix: (rec: LandingRun, prompt: string, label: string, priority?: Priority) => Promise<Run>;
+  /** the governor's words when a fix at this priority must wait, else null */
+  hold?: (priority: Priority) => string | null;
+  /** a fix run's limited mark, when it ended on the plan's usage limit */
+  limitedRun?: (id: string) => Run["limited"] | null;
   /** whether a run is still going, by id */
   runActive: (id: string) => boolean;
   /** whether a run ended with the agent finishing; false for one stopped,
@@ -204,6 +210,8 @@ export class PrHub {
   private due = new Map<string, number>();
   /** every change to a watch runs here, one after another */
   private serial: Promise<void> = Promise.resolve();
+  /** watches whose next fix "start anyway" lets go once as interactive */
+  private released = new Set<string>();
   private keeping = false;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
@@ -699,6 +707,12 @@ export class PrHub {
     if (had.state?.status !== "closed" && w.state?.status === "closed" && w.work) {
       this.deps.work?.note(w.work, `PR #${w.number} closed`);
     }
+    // a fix that waited for capacity is looked at afresh: it starts now, or
+    // the governor's words come back with the hold
+    if (w.waiting !== undefined && !w.fixing) {
+      const { waiting: _wait, ...fresh } = w;
+      w = fresh;
+    }
     if (w.state?.status === "open") {
       // behind or conflicting on the head canopy pushed: rebased first, so
       // the comment loop and the merge see the pushed head on a later read
@@ -736,6 +750,19 @@ export class PrHub {
       const id = fixing.key.startsWith("comment:") ? Number(fixing.key.slice("comment:".length)) : NaN;
       return { ...done, error, ...(Number.isFinite(id) ? { seenComment: Math.min(done.seenComment, id - 1) } : {}) };
     };
+    const limited = this.deps.limitedRun?.(fixing.run) ?? null;
+    if (limited) {
+      // the work is sound and waits for the reset: its attempt does not
+      // count, and the next read starts it again once the governor lets go;
+      // a second limited fix in a row stops auto-fix with the text
+      const { limited: _l, ...rest } = failed("");
+      const { error: _err, ...clean } = rest;
+      if (done.limited === fixing.key) return { ...clean, error: limited.text, gaveUp: `fixes stopped at the plan's usage limit twice in a row: ${limited.text}` };
+      const attempts = { ...done.attempts, [fixing.key]: Math.max(0, (done.attempts[fixing.key] ?? 1) - 1) };
+      return { ...clean, attempts, limited: fixing.key, waiting: limitedWords(limited, this.now()) };
+    }
+    // an end other than the limit starts the count over
+    delete done.limited;
     if (!this.deps.runOk(fixing.run)) {
       return { ...done, error: "the fix run did not finish; nothing was pushed", gaveUp: "a fix run did not finish, so nothing was pushed; turn auto-fix on again to go on" };
     }
@@ -781,21 +808,64 @@ export class PrHub {
     return { ...went, pushed: head };
   }
 
-  /** Starts a fix run for a key, counting the attempt. */
+  /** Starts a fix run for a key, counting the attempt. A fix the governor
+   *  holds (FR-036) counts nothing and waits; a comment's is read again. */
   private async startFix(w: PrWatch, key: string, prompt: string): Promise<PrWatch> {
     const rec = this.deps.record(w.id);
     if (!rec) return { ...w, error: "its branch run's record is gone" };
+    const priority: Priority = this.released.delete(w.id) ? "interactive" : "normal";
+    const hold = priority === "interactive" ? null : (this.deps.hold?.(priority) ?? null);
+    if (hold) {
+      const comment = key.startsWith("comment:") ? Number(key.slice("comment:".length)) : NaN;
+      return { ...w, waiting: hold, ...(Number.isFinite(comment) ? { seenComment: Math.min(w.seenComment, comment - 1) } : {}) };
+    }
+    const { waiting: _wait, ...open } = w;
+    w = open;
     const attempt = (w.attempts[key] ?? 0) + 1;
     const attempts = { ...w.attempts, [key]: attempt };
     const what = key.startsWith("check:") ? `${key.slice("check:".length)} failed` : key.startsWith("rebase:") ? `rebase onto ${w.target}` : "a review comment";
     try {
-      const run = await this.deps.startFix(rec, prompt, `fix PR #${w.number}: ${what} (${attempt}/${MAX_ATTEMPTS})`);
+      const run = await this.deps.startFix(rec, prompt, `fix PR #${w.number}: ${what} (${attempt}/${MAX_ATTEMPTS})`, priority);
       const lineWhat = key.startsWith("check:") ? `check ${key.slice("check:".length)}` : what;
       if (w.work) this.deps.work?.note(w.work, `fix ${attempt} of ${MAX_ATTEMPTS} for ${lineWhat}`);
       return { ...w, attempts, runId: run.id, fixing: { run: run.id, key } };
     } catch (err) {
       return { ...w, attempts, error: `could not start a fix: ${errText(err)}` };
     }
+  }
+
+  /* ---------- capacity (FR-036) ---------- */
+
+  /** The fixes waiting for capacity, as the chip lists them. */
+  heldStarts(): HeldStart[] {
+    return [...this.watches.values()].flatMap((w) => w.waiting === undefined ? [] : [{
+      id: `pr:${w.id}`,
+      what: `fix PR #${w.number}`,
+      repoId: w.repoId,
+      priority: "normal" as const,
+      why: w.waiting,
+      since: w.updatedAt,
+    }]);
+  }
+
+  /** The governor may have let go: every watch waiting for capacity is read now. */
+  wake(): void {
+    let any = false;
+    for (const w of this.watches.values()) {
+      if (w.waiting === undefined || !this.due.has(w.id)) continue;
+      this.due.set(w.id, this.now());
+      any = true;
+    }
+    if (any) void this.tick();
+  }
+
+  /** "Start anyway" on a held fix: its next start goes once as interactive. */
+  async release(id: string): Promise<void> {
+    const w = this.watches.get(id);
+    if (!w || w.waiting === undefined) throw new Error(`PR watch ${id} is not waiting for capacity`);
+    this.released.add(id);
+    this.due.set(id, this.now());
+    await this.tick();
   }
 
   /** Auto-fix on the head canopy pushed: the first failed check with

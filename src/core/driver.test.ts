@@ -73,6 +73,17 @@ describe("the plan's usage limit (FR-036)", () => {
     ctx.result({ ...reply, text: LIMIT }, LIMIT);
     expect([run.status, run.error, run.limited?.text, ended]).toEqual(["limited", LIMIT, LIMIT, ["limited"]]);
   });
+  test("a refusal from the rate-limit event rides on the mark; an allowed word after it clears it (plan 2)", () => {
+    const a = makeCtx();
+    a.ctx.rateLimit({ status: "rejected", resetsAt: 1793026800_000, window: "fiveHour" });
+    a.ctx.result({ ...reply, text: LIMIT }, LIMIT);
+    expect([a.run.limited?.resetsAt, a.run.limited?.window]).toEqual([1793026800_000, "fiveHour"]);
+    const b = makeCtx();
+    b.ctx.rateLimit({ status: "rejected", resetsAt: 1793026800_000, window: "weekly" });
+    b.ctx.rateLimit({ status: "allowed", resetsAt: null, window: null });
+    b.ctx.exited({ code: 1, stderr: LIMIT });
+    expect([b.run.status, b.run.limited?.resetsAt, b.run.limited?.window]).toEqual(["limited", undefined, undefined]);
+  });
   test("a chat's limited reply goes idle with a note; a second in a row fails the run", () => {
     const { run, ctx } = makeCtx(true);
     ctx.result(reply, "usage limit reached\ntry later");

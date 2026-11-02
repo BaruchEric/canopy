@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CostEntry } from "./costs";
-import { DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, hitStands, isLimitText, limitHit, normalizeCapacity, observe, readUsage, resetWord, stale, type Capacity } from "./capacity";
+import { CapacityHeldError, DEFAULT_CAPACITY, HIT_GRACE, HIT_HOLD, READ_EVERY, decide, emptyCapacity, hitOfLimited, hitStands, holdWords, isCapacityWords, isLimitText, laterPriority, limitHit, limitedWords, normalizeCapacity, observe, parsePriority, patchCapacity, readRateLimit, readUsage, resetWord, stale, type Capacity } from "./capacity";
 
 // These are synthetic fixtures for the documented response/text shapes, not
 // captured output from a live endpoint or credential.
@@ -165,4 +165,44 @@ test("normalizeCapacity", () => {
   expect(normalizeCapacity({ lowHold: 0.5, normalHold: 2, weeklyLowHold: 0, observedFiveHourUsd: 40 })).toEqual({ lowHold: 0.5, normalHold: 0.9, weeklyLowHold: 0.85, observedFiveHourUsd: 40 });
   expect(normalizeCapacity({ observedFiveHourUsd: -1 }).observedFiveHourUsd).toBeNull();
   expect(normalizeCapacity({ observedFiveHourUsd: "40" }).observedFiveHourUsd).toBeNull();
+});
+
+describe("plan 2: priorities, holds and the CLI's own reset", () => {
+  test("parsePriority and laterPriority", () => {
+    expect(["interactive", "normal", "low", "high", 3, undefined].map(parsePriority)).toEqual(["interactive", "normal", "low", null, null, null]);
+    expect((["interactive", "normal", "low"] as const).map(laterPriority)).toEqual(["normal", "normal", "low"]);
+  });
+  test("a hold's words, and the error a held start throws", () => {
+    const hold = decide(cap({ hit: limitHit(SPENT, NOW), source: "observed" }), "low", DEFAULT_CAPACITY, NOW);
+    if (hold === "go") throw new Error("expected a hold");
+    expect(holdWords(hold)).toBe("waiting for capacity: the 5-hour window is spent (resets 15:00)");
+    const err = new CapacityHeldError(hold);
+    expect([err.name, err.message, err.until]).toEqual(["CapacityHeldError", holdWords(hold), AT_3PM + HIT_GRACE]);
+    expect([isCapacityWords(err.message), isCapacityWords("waiting for capacity (resets 15:00)"), isCapacityWords("busy"), isCapacityWords(undefined)]).toEqual([true, true, false, false]);
+  });
+  test("readRateLimit reads the CLI's rate_limit_event and nothing else", () => {
+    expect(readRateLimit({ type: "rate_limit_event", rate_limit_info: { status: "rejected", resetsAt: AT_3PM / 1000, rateLimitType: "five_hour" } })).toEqual({ status: "rejected", resetsAt: AT_3PM, window: "fiveHour" });
+    expect(readRateLimit({ type: "rate_limit_event", rate_limit_info: { status: "allowed", rateLimitType: "seven_day_opus" } })).toEqual({ status: "allowed", resetsAt: null, window: "weekly" });
+    expect(readRateLimit({ type: "rate_limit_event", rate_limit_info: { resetsAt: 5 } })).toBeNull();
+    expect(readRateLimit({ type: "result" })).toBeNull();
+    expect(readRateLimit("nope")).toBeNull();
+  });
+  test("hitOfLimited takes the event's exact reset and window over the text's", () => {
+    const at = NOW;
+    expect(hitOfLimited({ at, text: SPENT })).toEqual(limitHit(SPENT, at));
+    expect(hitOfLimited({ at, text: SPENT, resetsAt: THU_3PM, window: "weekly" })).toEqual({ window: "weekly", at, resetsAt: THU_3PM, text: SPENT });
+    // a reset in the past is the event's stale word, not the reset
+    expect(hitOfLimited({ at, text: SPENT, resetsAt: at - 1 })?.resetsAt).toBe(AT_3PM);
+    expect(hitOfLimited({ at, text: "the run failed" })).toBeNull();
+    expect(limitedWords({ at, text: SPENT }, NOW)).toBe("waiting for capacity (resets 15:00)");
+    expect(limitedWords({ at, text: "no limit here" }, NOW)).toBe("waiting for capacity");
+    expect(limitedWords(undefined, NOW)).toBe("waiting for capacity");
+  });
+  test("patchCapacity keeps what the patch leaves out and refuses a bad value", () => {
+    expect(patchCapacity(DEFAULT_CAPACITY, { lowHold: 0.6, observedFiveHourUsd: 40 })).toEqual({ ...DEFAULT_CAPACITY, lowHold: 0.6, observedFiveHourUsd: 40 });
+    expect(patchCapacity({ ...DEFAULT_CAPACITY, observedFiveHourUsd: 40 }, { observedFiveHourUsd: null })).toEqual(DEFAULT_CAPACITY);
+    expect(patchCapacity(DEFAULT_CAPACITY, { normalHold: 2 })).toBe("normalHold must be above 0 and at most 1");
+    expect(patchCapacity(DEFAULT_CAPACITY, { observedFiveHourUsd: -3 })).toBe("observedFiveHourUsd must be a dollar figure above 0, or null");
+    expect(patchCapacity(DEFAULT_CAPACITY, [])).toBe("the settings must be an object");
+  });
 });

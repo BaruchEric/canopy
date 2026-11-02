@@ -4,7 +4,7 @@
 
 import { chained, readOnlyStep, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { busyWith, checkWhen, type ActionSpec } from "./actions";
-import { limitHit, resetWord } from "./capacity";
+import { laterPriority, limitedWords } from "./capacity";
 import type { BranchStart, StartExtras } from "./runner";
 import { isSeedId } from "./sprout";
 import { STAGE_AWAY } from "./stagewire";
@@ -19,7 +19,10 @@ import {
   type Fleet,
   type Flow,
   type FlowChoice,
+  type Harness,
+  type HeldStart,
   type JudgeAnswers,
+  type Priority,
   type Repo,
   type RepoStatus,
   type Run,
@@ -176,6 +179,11 @@ export const RESUME_NOTE =
 
 /** The whole message that continues a step's Claude session when a stopped
  *  flow on a branch is picked up again. */
+/** The whole message that continues a step's Claude session once the
+ *  plan's usage window has reset after the step's run hit it (FR-036). */
+export const CAPACITY_NOTE =
+  "Your last turn on this step stopped at the plan's usage limit, which has now reset. Read the repo's state and finish the step.";
+
 export const PICKED_UP_NOTE =
   "You were stopped partway through this step, and are now picked up again on the same branch. Read the repo's state and finish the step.";
 
@@ -188,7 +196,7 @@ export const STOP_GRACE = 10_000;
 /** What Flows needs from the Runner; the real one satisfies it. A flow on a
  *  branch passes the branch as the runner's last argument. */
 export interface FlowRunner {
-  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner">): Run;
+  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner" | "priority">): Run;
   get(id: string): Run | undefined;
   activeFor(repoId: string): Run | undefined;
   stop(id: string): Run;
@@ -293,6 +301,14 @@ interface LiveFlow {
   /** set by a pick-up until its step's run starts: the resumed session is
    *  told it was stopped, not cut short by a restart */
   pickedUp?: boolean;
+  /** set by a capacity park's go until its step's run starts: the resumed
+   *  session is told the window reset (FR-036) */
+  capacityResumed?: boolean;
+  /** Eric continued a capacity park by hand: the next step start goes as
+   *  interactive, once */
+  released?: boolean;
+  /** when the current capacity park began, for the chip's held list */
+  heldSince?: number;
 }
 
 /** Where a flow's checks and evidence read: the branch's worktree, else the repo. */
@@ -416,9 +432,9 @@ export class Flows {
     workflow: Workflow,
     note: string,
     agent: AgentSettings | StepAgent,
-    opts: { fleetId?: string; request?: string; branch?: BranchStart } = {},
+    opts: { fleetId?: string; request?: string; branch?: BranchStart; priority?: Priority } = {},
   ): Flow {
-    const { fleetId, request, branch } = opts;
+    const { fleetId, request, branch, priority } = opts;
     if (request) {
       const again = this.forRequest(request);
       if (again) {
@@ -447,6 +463,7 @@ export class Flows {
       spent: { runs: 0, workMs: 0 },
       ...(request ? { request } : {}),
       ...(branch ? { branch: branchOf(branch.branch, "working") } : {}),
+      ...(priority ? { priority } : {}),
     };
     const live: LiveFlow = {
       flow,
@@ -543,11 +560,20 @@ export class Flows {
       return;
     }
     if (run.status === "limited") {
+      // the work is sound and waits for the reset; a second limited end in
+      // a row fails, so a misread text cannot loop (the spec's call 3)
+      const row = (step.limited ?? 0) + 1;
+      if (row >= 2) {
+        delete step.limited;
+        this.fail(live, i, run.error ?? "the plan's usage limit, twice in a row");
+        return;
+      }
+      step.limited = row;
       const now = this.now();
-      const hit = limitHit(run.error ?? "", now);
-      this.park(live, i, hit ? `waiting for capacity (resets ${resetWord(hit.resetsAt, now)})` : "waiting for capacity", "gated", { kind: "capacity" });
+      this.park(live, i, limitedWords(run.limited ?? (run.error ? { at: now, text: run.error } : undefined), now), "gated", { kind: "capacity" });
       return;
     }
+    delete step.limited;
     if (run.status === "failed") {
       step.status = "failed";
       step.reason = run.error ?? "the run failed";
@@ -603,9 +629,10 @@ export class Flows {
       return live.flow;
     }
     if (live.flow.parkedFor === "capacity" && choice !== "stop") {
+      // continued by hand: "start anyway", this one start as interactive
       delete live.flow.parkedFor;
-      this.resetStep(live, i);
-      this.resumeReady(live, i);
+      live.released = true;
+      this.capacityGo(live, i);
       return live.flow;
     }
     delete live.flow.parkedFor;
@@ -634,6 +661,81 @@ export class Flows {
   private resumeReady(live: LiveFlow, i: number): void {
     if (live.workflow.steps[i]?.mode === "manual") void this.runStep(live, i);
     else this.advance(live);
+  }
+
+  /** A capacity park goes on: a step whose run hit the limit resumes its
+   *  Claude session with `CAPACITY_NOTE`; one the governor held at its
+   *  start simply starts. */
+  private capacityGo(live: LiveFlow, i: number): void {
+    const step = live.flow.steps[i];
+    const resumes = (step?.limited ?? 0) > 0 && step?.session !== undefined;
+    delete live.heldSince;
+    this.resetStep(live, i, resumes);
+    if (resumes) {
+      live.restarting.add(i);
+      live.flow.restarted = true;
+      live.capacityResumed = true;
+    }
+    this.resumeReady(live, i);
+  }
+
+  /** The priority step `i` starts at: the flow's own for its first agent
+   *  step, `laterPriority` of it after; interactive once Eric continued a
+   *  capacity park by hand. */
+  private stepPriority(live: LiveFlow, i: number): Priority {
+    if (live.released) return "interactive";
+    const base = live.flow.priority ?? "interactive";
+    const first = live.workflow.steps.findIndex((s) => s.body);
+    return i <= first ? base : laterPriority(base);
+  }
+
+  /** Every flow parked for capacity whose step the governor now lets go,
+   *  gone on (FR-036). A step whose run hit the limit waits on `normal` at
+   *  least, so a page's flow is not started into a window still spent.
+   *  `go` answers for the step's harness. Returns how many went on. */
+  resumeCapacityParks(go: (harness: Harness, priority: Priority) => boolean): number {
+    let n = 0;
+    for (const live of this.live.values()) {
+      const { flow } = live;
+      if (flow.status !== "gated" || flow.parkedFor !== "capacity") continue;
+      const i = flow.current;
+      const step = flow.steps[i];
+      const def = live.workflow.steps[i];
+      if (!step || !def) continue;
+      const own = this.stepPriority(live, i);
+      const priority = (step.limited ?? 0) > 0 ? laterPriority(own) : own;
+      let harness: Harness = step.harness ?? "claude";
+      try {
+        harness = live.agent(def.agent, live.workflow.name, live.workflow.agentRole ?? "flow").harness;
+      } catch {
+        // the step's own start says what is wrong with its profile
+      }
+      if (!go(harness, priority)) continue;
+      live.parks.delete(i);
+      delete flow.parkedFor;
+      this.capacityGo(live, i);
+      n += 1;
+    }
+    return n;
+  }
+
+  /** The flows parked for capacity, as the chip lists them. */
+  heldStarts(): HeldStart[] {
+    const out: HeldStart[] = [];
+    for (const live of this.live.values()) {
+      const { flow } = live;
+      if (flow.status !== "gated" || flow.parkedFor !== "capacity") continue;
+      const step = flow.steps[flow.current];
+      out.push({
+        id: `flow:${flow.id}`,
+        what: step ? `${flow.verb}: ${step.name}` : flow.verb,
+        repoId: flow.repoId,
+        priority: this.stepPriority(live, flow.current),
+        why: step?.reason ?? "waiting for capacity",
+        since: live.heldSince ?? flow.startedAt,
+      });
+    }
+    return out;
   }
 
   /** Every flow parked for the stage runner, tried again now that a hello
@@ -1175,7 +1277,7 @@ export class Flows {
     // and the work so far; anything else starts fresh with the restart note.
     const resume = restarted && step.session && step.harness === "claude" && agent.harness === "claude" ? step.session : undefined;
     let spec = stepSpec(workflow, i, this.summaries(live), flow.retryReason, restarted);
-    if (resume) spec = { ...spec, resume, message: live.pickedUp ? PICKED_UP_NOTE : RESUME_NOTE };
+    if (resume) spec = { ...spec, resume, message: live.capacityResumed ? CAPACITY_NOTE : live.pickedUp ? PICKED_UP_NOTE : RESUME_NOTE };
     const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
     if (tools) {
       const extra = await tools.catch(() => []);
@@ -1216,10 +1318,17 @@ export class Flows {
       : undefined;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { flowOwner: live.owner });
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { flowOwner: live.owner, priority: this.stepPriority(live, i) });
       delete live.prepare;
       delete live.startNote;
+      delete live.released;
     } catch (err) {
+      // the governor held the step (FR-036): it waits, and goes on by
+      // itself once the window allows. By name, as below.
+      if (err instanceof Error && err.name === "CapacityHeldError") {
+        this.park(live, i, err.message, "gated", { kind: "capacity" });
+        return;
+      }
       // The stage runner is away: the step waits for it, and keeps the
       // restart note for when it runs. By name, not class, as a thrown
       // error is matched across modules.
@@ -1233,7 +1342,7 @@ export class Flows {
       return;
     }
     live.restarting.delete(i);
-    if (!live.restarting.size) { delete flow.restarted; delete live.pickedUp; }
+    if (!live.restarting.size) { delete flow.restarted; delete live.pickedUp; delete live.capacityResumed; }
     if (resume) live.resuming.add(run.id);
     step.status = "running";
     step.runId = run.id;
@@ -1408,6 +1517,7 @@ export class Flows {
     step.status = status;
     step.reason = reason;
     live.parks.set(i, cause);
+    if (cause.kind === "capacity") live.heldSince = this.now();
     if (!live.pending) {
       live.pending = { park: i };
       this.showPark(live, i);
