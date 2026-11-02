@@ -146,6 +146,22 @@ export function repoOfCwd(cwd: string | undefined, repos: { id: string; path: st
   return best?.id;
 }
 
+/**
+ * Daemons that listen on TCP but never speak HTTP, so a preview of their
+ * port can only ever show the "nothing answers" page. They matter because
+ * a shell in a repo starts them with the repo as their cwd (`adb` forks its
+ * server from whatever folder the first adb command ran in), which tags
+ * the port as the repo's and, at 5037, makes it the repo's lowest port and
+ * so its default preview.
+ */
+const NEVER_HTTP = new Set(["adb", "postgres", "mysqld", "mariadbd", "mongod", "redis-server", "memcached"]);
+
+/** whether a listener's process could be a web server, as far as its name
+ *  tells: an unknown or unread name passes, only `NEVER_HTTP` is left out */
+export function mayServeHttp(command: string | undefined): boolean {
+  return command === undefined || !NEVER_HTTP.has(command);
+}
+
 async function procListeners(): Promise<Listener[]> {
   const ls: Listener[] = [];
   for (const [file, family] of [["/proc/net/tcp", 4], ["/proc/net/tcp6", 6]] as const) {

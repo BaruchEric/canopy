@@ -8,7 +8,7 @@ import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueN
 import { titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
-import { listeningPorts, repoOfCwd } from "../core/ports";
+import { listeningPorts, mayServeHttp, repoOfCwd } from "../core/ports";
 import { mkdirSync, existsSync, watch, type FSWatcher } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
@@ -3477,7 +3477,7 @@ async function handleApi(
     const reserved = state.preview?.reserved ?? [];
     const local = state.result.repos.filter((r) => !r.host && !r.forge);
     const ports: ListeningPort[] = (await listeningPorts())
-      .filter((l) => !reserved.includes(l.port))
+      .filter((l) => !reserved.includes(l.port) && mayServeHttp(l.command))
       .map((l) => {
         const repo = repoOfCwd(l.cwd, local);
         return { port: l.port, ...(l.command ? { command: l.command } : {}), ...(repo ? { repo } : {}) };

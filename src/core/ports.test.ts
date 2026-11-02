@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mergeListeners, parseLsofCwd, parseLsofListen, parseProcNet, repoOfCwd } from "./ports";
+import { mayServeHttp, mergeListeners, parseLsofCwd, parseLsofListen, parseProcNet, repoOfCwd } from "./ports";
 
 const HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
 const row = (addr: string, st: string, inode: string) =>
@@ -76,4 +76,15 @@ test("repoOfCwd: the deepest repo holding the folder", () => {
   expect(repoOfCwd("/dev/app/sub/x", repos)).toBe("app/sub");
   expect(repoOfCwd("/dev/apple2", repos)).toBeUndefined();
   expect(repoOfCwd(undefined, repos)).toBeUndefined();
+});
+
+test("mayServeHttp: adb and the databases never do, anything else or unknown may", () => {
+  // adb forks its server with the caller's cwd, so a shell in a repo makes
+  // 5037 the repo's lowest port and its default preview
+  expect(mayServeHttp("adb")).toBe(false);
+  expect(mayServeHttp("postgres")).toBe(false);
+  expect(mayServeHttp("redis-server")).toBe(false);
+  expect(mayServeHttp("bun")).toBe(true);
+  expect(mayServeHttp("node")).toBe(true);
+  expect(mayServeHttp(undefined)).toBe(true);
 });
