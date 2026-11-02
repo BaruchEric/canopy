@@ -61,6 +61,7 @@ import { worktreesCommand } from "./worktrees";
 import { peersRoot, type PeersAnswer } from "./peersroot";
 import { issuesCommand } from "./issues";
 import { scenariosCommand } from "./scenarios";
+import { workflowCommand } from "./workflow";
 import { prCommand } from "./pr";
 import { workCommand } from "./work";
 import { awakeCommand } from "./awake";
@@ -125,6 +126,7 @@ const COMMANDS = new Set([
   "queue",
   "collisions",
   "scenarios",
+  "workflow",
   "pr",
   "prs",
   "work",
@@ -915,6 +917,8 @@ export async function main(argv: string[]): Promise<void> {
       return worktreesCommand(args, { fail });
     case "scenarios":
       return scenariosCommand(args, { fail });
+    case "workflow":
+      return workflowCommand(args, { fail });
     case "pr":
     case "prs":
       return prCommand(cmd, args, { fail });

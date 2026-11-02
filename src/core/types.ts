@@ -2241,9 +2241,27 @@ export interface Workflow {
   file: string;
 }
 
+/** A step as the graph picture and `canopy workflow show` read it. */
+export type GraphStep = Pick<WorkflowStep, "name" | "after" | "when" | "mode" | "modeFrom" | "gate" | "check" | "retries" | "back">;
+
+/** What `GET /api/repos/workflows` adds to each workflow it lists (FR-034):
+ *  the steps with the repo's `.canopy/workflows.json` laid over their modes,
+ *  as HEAD holds the file, and what the file says about this workflow. */
+export interface WorkflowGraph {
+  steps: GraphStep[];
+  /** the repo's word on this workflow's steps, by step name: the
+   *  workflow's own entry over `*`, only for steps it has */
+  modes: Record<string, StepMode>;
+  /** entries under this workflow's name that name no step of it */
+  warnings: string[];
+  /** the file is at HEAD and cannot be read; a start is refused until it is
+   *  fixed, and `steps` carry the workflow file's own modes */
+  error?: string;
+}
+
 /** what the menu lists: a workflow, or a file that failed to parse */
 export type WorkflowEntry =
-  | { ok: true; workflow: Workflow }
+  | { ok: true; workflow: Workflow; graph?: WorkflowGraph }
   | { ok: false; name: string; source: WorkflowSource; file: string; error: string };
 
 /* ---------- the verdict gate: Jev reads a step's summary ---------- */

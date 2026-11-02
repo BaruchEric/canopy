@@ -114,6 +114,10 @@ usage:
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there
   canopy scenarios <repo> run [<run>]   run the set against a branch run's worktree, else against the main checkout
+  canopy workflow show <name> [--repo R] [--dot]   a workflow's steps, one line each, indented by what they wait for;
+                                     --dot prints Graphviz DOT; --repo asks the backend, which marks the repo's modes (repo)
+  canopy workflow check <file>       parse a workflow file and print its error, or its steps; exit 1 when it does not parse
+  canopy workflow list [--repo R]    the workflows a repo can run, or this machine's bundled and user ones, with their problems
   canopy pr <run> [--draft]          push a ready branch run and open a PR on GitHub in place of landing it
   canopy pr rebase <run>             rebase a PR's branch onto its target by hand and push it with a lease on the commit canopy pushed last
   canopy prs [repo]                  every PR branch runs opened: where it stands, its checks, auto-fix and auto-merge

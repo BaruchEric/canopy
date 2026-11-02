@@ -57,6 +57,7 @@ import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/c
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
 import { applyModes } from "../core/flowmodes";
+import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
@@ -203,6 +204,7 @@ import {
   type Source,
   type SourceInput,
   type Workflow,
+  type WorkflowEntry,
   type SourceState,
   type TermInfo,
   type Workspace,
@@ -1631,6 +1633,18 @@ async function withRepoModes(repo: Repo, wf: Workflow): Promise<Workflow> {
     return workflow;
   } catch (err) {
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
+  }
+}
+
+/** The repo's modes as the workflows list shows them: read at HEAD like
+ *  `withRepoModes`, with a broken file said rather than thrown. A seed's
+ *  file is never read, and a repo with no checkout here runs no flow. */
+async function listedModes(repo: Repo): Promise<ModesRead> {
+  if (isSeedRepoId(repo.id) || repo.host || repo.forge) return { ok: true, modes: {} };
+  try {
+    return { ok: true, modes: await readFlowModes(repo.path) };
+  } catch (err) {
+    return { ok: false, error: String(err instanceof Error ? err.message : err) };
   }
 }
 
@@ -4742,8 +4756,11 @@ async function handleApi(
       return json(await refreshAndBroadcast(state, repo.id));
     }
     if (method === "GET" && action === "workflows") {
-      // the incubator's stages run only from the incubator
-      return json((await loadWorkflows(repo)).filter((e) => !e.ok || e.workflow.listed !== false));
+      // the incubator's stages run only from the incubator; each workflow
+      // carries its graph with the repo's modes laid over (FR-034)
+      const listed = (await loadWorkflows(repo)).filter((e) => !e.ok || e.workflow.listed !== false);
+      const modes = await listedModes(repo);
+      return json(listed.map((e): WorkflowEntry => (e.ok ? { ...e, graph: workflowGraph(e.workflow, modes) } : e)));
     }
     // The launcher. Releases are read and installed for any repo with a
     // GitHub remote, wherever its checkout is: the download lands here and

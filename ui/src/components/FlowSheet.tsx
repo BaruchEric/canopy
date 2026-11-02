@@ -1,10 +1,13 @@
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
-import { isFlowActive, type Fleet, type Flow, type FlowStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
+import { graphStep, isChain } from "../../../src/core/flowgraph";
+import { isFlowActive, type Fleet, type Flow, type FlowStep, type GraphStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
 import { budgetWord, continueWord, fleetCounts, flowWord, oldestParked, rewindLines, stepWord } from "../flows";
+import { fit, flowGraphSteps, picture, stateWord } from "../flowgraph";
+import { PHONE, useMedia } from "../media";
 import { agentFor, idText, pickedIds, useStore } from "../store";
 import { termId } from "../term";
 import { BackendWord } from "./IdLabel";
@@ -46,7 +49,11 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
     );
   }
   const w = entry.workflow;
-  const ready = !busy && (!w.noteRequired || note.trim().length > 0);
+  // the repo's modes laid over the steps, as the list carries them (FR-034)
+  const steps = entry.graph?.steps ?? w.steps.map(graphStep);
+  const chain = isChain(steps);
+  const refused = entry.graph?.error;
+  const ready = !busy && !refused && (!w.noteRequired || note.trim().length > 0);
   const go = async () => {
     if (!ready) return;
     setBusy(true);
@@ -75,18 +82,26 @@ export function FlowPlan({ repo, workflow }: { repo: Repo; workflow: string }) {
         </div>
         <p className="blurb">{w.blurb}</p>
         <ol className="plan-steps">
-          {w.steps.map((s) => (
-            <li key={s.name}>
-              <span className="plan-step-name">{s.name}</span>
-              <span className="plan-step-meta">
-                {s.body ? "" : "check only"}
-                {s.check ? ` · check: ${s.check}` : ""}
-                {s.gate !== "continue" ? ` · gate: ${s.gate}` : ""}
-                {s.agent && s.body ? ` · agent: ${s.agent}` : ""}
-              </span>
-            </li>
-          ))}
+          {w.steps.map((s, i) => {
+            const g = steps[i];
+            return (
+              <li key={s.name}>
+                <span className="plan-step-name">{s.name}</span>
+                <span className="plan-step-meta">
+                  {s.body ? "" : "check only"}
+                  {!chain && g && g.after.length > 0 ? ` · after: ${g.after.join(", ")}` : ""}
+                  {g && !(g.when.length === 1 && g.when[0] === "always") ? ` · when: ${g.when.join(", ")}` : ""}
+                  {g && (g.mode === "manual" || g.modeFrom === "repo") ? ` · ${g.mode}${g.modeFrom === "repo" ? " (repo)" : ""}` : ""}
+                  {s.check ? ` · check: ${s.check}` : ""}
+                  {s.gate !== "continue" ? ` · gate: ${s.gate}` : ""}
+                  {s.agent && s.body ? ` · agent: ${s.agent}` : ""}
+                </span>
+              </li>
+            );
+          })}
         </ol>
+        {refused && <p className="note err">{refused}: this repo starts no workflow until the file is fixed.</p>}
+        {(entry.graph?.warnings ?? []).map((warning) => <p key={warning} className="note">{warning}</p>)}
         <textarea
           ref={noteBox}
           className="plan-note"
@@ -144,6 +159,98 @@ export function StepStrip({ flow, shown, onPick }: { flow: Flow; shown: number; 
         </li>
       ))}
     </ol>
+  );
+}
+
+/* ---------- the step graph (FR-034) ---------- */
+
+/** The steps as boxes in columns by what they wait for, wires for `after`,
+ *  dashed ones for `back`, a diamond where a condition decides, a hand on a
+ *  manual step. Each box carries its state word, and a click picks it as a
+ *  strip click does. Layout is `picture` in flowgraph.ts; this only draws. */
+export function StepGraph({ steps, flow, shown, onPick }: { steps: readonly GraphStep[]; flow: Flow; shown: number; onPick: (i: number) => void }) {
+  // a marker's id is the page's, so two graphs must not share one
+  const arrow = `fg-arrow${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const p = picture(steps);
+  return (
+    <div className="step-graph">
+      <svg className="fg" width={p.width} height={p.height} viewBox={`0 0 ${p.width} ${p.height}`} role="group" aria-label="Steps">
+        <defs>
+          <marker id={arrow} viewBox="0 0 6 6" refX="6" refY="3" markerWidth="6" markerHeight="6" markerUnits="userSpaceOnUse" orient="auto">
+            <path className="fg-arrow" d="M0 0 L6 3 L0 6 Z" />
+          </marker>
+        </defs>
+        {p.wires.map((w) => (
+          <path key={w.key} className={`fg-wire ${w.kind}`} d={w.d} markerEnd={w.arrow ? `url(#${arrow})` : undefined} />
+        ))}
+        {p.diamonds.map((d) => (
+          <path key={d.name} className="fg-diamond" d={d.d}>
+            <title>{`${d.name} runs when ${d.label}`}</title>
+          </path>
+        ))}
+        {p.nodes.map((n) => {
+          const i = flow.steps.findIndex((s) => s.name === n.name);
+          const s = flow.steps[i];
+          if (!s) return null;
+          const can = Boolean(s.runId || s.check);
+          const pick = () => {
+            if (can) onPick(i);
+          };
+          const key = (e: KeyboardEvent<SVGGElement>) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            pick();
+          };
+          return (
+            <g
+              key={n.name}
+              className={`fg-node st-${s.status}${i === shown ? " shown" : ""}${can ? "" : " off"}`}
+              transform={`translate(${n.x} ${n.y})`}
+              role="button"
+              tabIndex={can ? 0 : -1}
+              aria-disabled={can ? undefined : true}
+              aria-current={i === flow.current ? "step" : undefined}
+              aria-label={`${n.name}: ${stepWord(s)}`}
+              onClick={pick}
+              onKeyDown={key}
+            >
+              <title>{`${n.name}: ${stepWord(s)}${s.reason ? `, ${s.reason}` : ""}${n.manual ? ". Released by hand" : ""}${s.profile ? ` · agent profile ${s.profile}` : ""}`}</title>
+              <rect width={n.w} height={n.h} rx={6} />
+              <circle className="fg-dot" cx={10} cy={14} r={3.5} />
+              <text className="fg-name" x={19} y={18}>{fit(n.name, n.manual ? 11 : 13)}</text>
+              {n.manual && <text className="fg-hand" x={n.w - 8} y={18} textAnchor="end">{"\u270B\uFE0E"}</text>}
+              <text className="fg-word" x={19} y={32}>{stateWord(s.status)}</text>
+              {n.when && <text className="fg-cond" x={10} y={45}>{fit(`when ${n.when}`, 17)}</text>}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+/** The strip for a chain; the graph for anything else, read from the
+ *  repo's workflows list (fetched here when the menu has not), and on a
+ *  phone folded under a "graph" disclosure below the strip. */
+function FlowSteps({ flow, shown, onPick }: { flow: Flow; shown: number; onPick: (i: number) => void }) {
+  const phone = useMedia(PHONE);
+  const entries = useStore((s) => s.workflows[flow.repoId]);
+  const loadWorkflows = useStore((s) => s.loadWorkflows);
+  const listed = entries !== undefined;
+  useEffect(() => {
+    if (!listed) loadWorkflows(flow.repoId).catch(() => {});
+  }, [listed, loadWorkflows, flow.repoId]);
+  const steps = flowGraphSteps(flow, entries);
+  if (!steps) return <StepStrip flow={flow} shown={shown} onPick={onPick} />;
+  if (!phone) return <StepGraph steps={steps} flow={flow} shown={shown} onPick={onPick} />;
+  return (
+    <>
+      <StepStrip flow={flow} shown={shown} onPick={onPick} />
+      <details className="step-graph-fold">
+        <summary>graph</summary>
+        <StepGraph steps={steps} flow={flow} shown={shown} onPick={onPick} />
+      </details>
+    </>
   );
 }
 
@@ -275,7 +382,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
         <PopGear />
         <button type="button" className="mini close" onClick={close} aria-label="Close">✕</button>
       </header>
-      <StepStrip flow={flow} shown={shown} onPick={(i) => setPicked(i === flow.current ? null : i)} />
+      <FlowSteps flow={flow} shown={shown} onPick={(i) => setPicked(i === flow.current ? null : i)} />
       {step && flow.status === "gated" && shown === flow.current ? (
         <div className="sheet-body console">
           <Gate flow={flow} step={step} onChoose={(c) => void act(() => resumeFlow(flow.id, c))} />

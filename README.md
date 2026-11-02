@@ -113,6 +113,11 @@ canopy scenarios <repo> run [<run>]         # run the set against a branch run's
 # the ship workflow's Gates step checks the same list (.canopy/gates.json as the last commit holds it)
 # after the gates, the queue runs the repo's holdout scenarios kept under the config dir, which a run never sees; a red
 # one sends the branch back with the scenario's name and output
+canopy workflow show <name> [--repo R] [--dot]   # a workflow's steps, one line each, indented by what they wait for; --dot prints Graphviz DOT
+canopy workflow check <file>       # parse a workflow file before a flow runs it: its error and exit 1, or its steps
+canopy workflow list [--repo R]    # the workflows a repo can run with their problems; without --repo, this machine's bundled and user ones
+# with --repo (an id or a path) the backend answers, adding the repo's own workflows and marking the steps its
+# .canopy/workflows.json, as the last commit holds it, makes manual or auto with (repo)
 canopy pr <run> [--draft]          # push a ready branch run and open a PR on GitHub in place of landing it; never a force push
 canopy pr rebase <run>             # rebase a PR's branch onto its target by hand and push it with a lease on the commit canopy pushed last
 canopy prs [repo]                  # every PR branch runs opened: open, merged or closed, its checks, auto-fix and auto-merge
@@ -261,7 +266,7 @@ A chat is a run whose process outlives its first reply: stdin stays open after e
 
 A workflow is a markdown file. Frontmatter names it and sets its precondition; each `##` heading names a step run through the same Runner a plain job uses. Steps form a graph through `after`, with a check and gate after each step's run. Files without the new keys keep their original chain order.
 
-FR-034 plan 1 is implemented locally as of 2026-10-27. Combined batch verification and live checks remain pending; this implementation has not shipped or been deployed. Plan 2 covers the graph view and workflow CLI, and plan 3 updates the bundled workflows.
+FR-034 plan 1 is implemented locally as of 2026-10-27, and plan 2 (the graph on the flow sheet and `canopy workflow`) as of 2026-11-02; neither has been deployed. Plan 3 updates the bundled workflows.
 
 Frontmatter keys:
 
@@ -298,6 +303,8 @@ When a dependant uses `when: check fail`, its predecessor's failed check is reco
 The repo's `.canopy/workflows.json` overrides step modes from the workflow file. For example, `{"modes":{"ship":{"Push":"manual"},"*":{"Deploy":"manual"}}}` holds Ship's Push step and any workflow's Deploy step. A workflow-specific entry wins over `*`. Canopy reads the committed file at the repo checkout's HEAD, so a dirty edit or a run's worktree cannot loosen that policy. An entry naming no step is a logged warning. A malformed committed file rejects a direct start with 400 and skips that repo in a fleet.
 
 A trigger, fleet or incubator stage, including retro, refuses `ask` and `manual` steps before starting work. The reason names the step and whether its manual mode came from the workflow file or repo policy. A fleet records that repo's skipped reason and continues with eligible repos. Seeds never supply their own modes file.
+
+A workflow that is not a chain draws as a graph on the flow sheet in place of the step strip: a box per step in columns by what it waits for, arrows for `after`, dashed arrows for `back`, a diamond before a step with a `when` and its conditions on the box's last line, a hand on a manual step, and the step's state as a word in its box. Click a box to follow that step, as with the strip. On a phone the strip stays and the graph folds under "graph". The pre-flight lists each step's `after`, `when` and mode, marks the ones `.canopy/workflows.json` decided with `(repo)`, shows that file's warnings, and will not start while the file is broken. `canopy workflow show|check|list` prints the same from a terminal.
 
 A manual step shows `held` with `<step> waits for your go`. Continue or retry starts it; stop ends the flow. If a sibling parks or fails while another step is still live, the flow waits for the live work to finish before applying that park or failure. Stop stops all live runs and aborts checks. A restart preserves held steps without starting them, reruns interrupted steps with their saved sessions where possible, and retains a recorded pending failure or stop without launching more work.
 

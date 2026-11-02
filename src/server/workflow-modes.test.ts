@@ -105,6 +105,29 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
+test("the workflows list carries each workflow's graph with the committed modes, and a broken file's error", async () => {
+  const graphOf = async (id: string, name: string): Promise<unknown> => {
+    const list = await json(await call(`/api/repos/workflows?id=${id}`));
+    if (!Array.isArray(list)) throw new Error("missing list");
+    const entry: unknown = list.find((e: unknown) => typeof e === "object" && e !== null && "workflow" in e && typeof e.workflow === "object" && e.workflow !== null && "name" in e.workflow && e.workflow.name === name);
+    if (typeof entry !== "object" || entry === null || !("graph" in entry)) throw new Error(`no graph for ${name} on ${id}`);
+    return entry.graph;
+  };
+  // HEAD says manual even though the working tree says auto
+  expect(await graphOf("held", "graph-modes")).toEqual({
+    steps: [{ name: "Work", after: [], when: ["always"], mode: "manual", modeFrom: "repo", gate: "continue", check: null, retries: 0, back: "Work" }],
+    modes: { Work: "manual" },
+    warnings: [],
+  });
+  expect(await graphOf("auto", "file-manual")).toMatchObject({ steps: [{ name: "Work", mode: "auto", modeFrom: "repo" }], modes: { Work: "auto" } });
+  expect(await graphOf("broken", "file-manual")).toEqual({
+    steps: [{ name: "Work", after: [], when: ["always"], mode: "manual", gate: "continue", check: null, retries: 0, back: "Work" }],
+    modes: {},
+    warnings: [],
+    error: ".canopy/workflows.json must be an object",
+  });
+});
+
 test("flow mode uses committed HEAD and cannot be loosened by dirty working-tree content", async () => {
   const response = await call("/api/repos/flow?id=held", { workflow: "graph-modes" });
   expect(response.status).toBe(201);
