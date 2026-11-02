@@ -125,12 +125,7 @@ Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). P
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)
 Every start carries a priority (interactive, normal, low); a pure governor holds `low` work past 70% of the five-hour window and `normal` past 90%, never a chat or an ask, and a limit hit makes a run `limited` and retried after the reset rather than failed. A top-bar chip shows each login's windows and their resets (FR-028). The credits lane (an API key funded by the plan's monthly credits for the ranger and low work) is written out and held for Eric, since it reverses the 2026-08-24 decision.
 Spec: docs/superpowers/specs/2026-10-25-capacity-governor-design.md (2026-10-25).
-Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded; live-window and credential checks remain unobserved. Plan 2 dispatch holds/retries and plan 3 credits lane remain open and unwired.
-
-### FR-028 · What is left on each subscription, in the status line
-P3 · added 2026-10-24 · source: Eric (Orca video, 08:20)
-Orca's status bar shows each subscription's usage beside its reset ("3% used 4h 32m", "24% used 6d 6h") for Claude, Codex and Grok. The costs view shows what was spent after the fact; this is the quota left now, so a long run can go to the harness with room.
-Folded into FR-036 plan 1. The local chip shows Claude/Codex readings and resets by backend; unknown readings stay visible as unknown. Deployment to the Mac and mini was verified 2026-10-27; live subscription observations remain pending.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded. A real spent five-hour window (2026-10-10, found in a transcript) was recorded 2026-11-02 and showed the CLI's wording had moved: `5-hour limit` was not recognized, and the zone and dated reset were ignored. Both were fixed that day. A spent weekly window and credential refresh remain unobserved, and reading stream-json's `rate_limit_event` for an exact reset is left to plan 2. Plan 2 dispatch holds/retries and plan 3 credits lane remain open and unwired.
 
 ### FR-038 · The agent surface: `canopy mcp` and run tokens
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)
@@ -145,6 +140,11 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. librarySync is off on the Mac until the mini runs the fix, then both go back on.
 
 ## Shipped
+
+### FR-028 · What is left on each subscription, in the status line
+P3 · added 2026-10-24 · source: Eric (Orca video, 08:20) · shipped 2026-10-27
+Orca's status bar shows each subscription's usage beside its reset ("3% used 4h 32m", "24% used 6d 6h") for Claude, Codex and Grok. The costs view shows what was spent after the fact; this is the quota left now, so a long run can go to the harness with room.
+Folded into FR-036 plan 1. The local chip shows Claude/Codex readings and resets by backend; unknown readings stay visible as unknown. Deployment to the Mac and mini was verified 2026-10-27. Moved to Shipped 2026-11-02 as absorbed (the capacity spec's call 6); the live subscription observations still open are tracked under FR-036.
 
 ### FR-052 · A Claude Code provider: a settings file canopy passes as --settings
 P2 · added 2026-11-01 · source: Eric (a backup offline LLM with tools for the homelab) · shipped 2026-11-01

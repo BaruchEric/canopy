@@ -59,6 +59,37 @@ describe("isLimitText and limitHit", () => {
   test("no reset named: an hour from now", () => {
     expect(limitHit(CODEX, NOW)).toEqual({ window: "fiveHour", at: NOW, resetsAt: NOW + HIT_HOLD, text: CODEX });
   });
+  test("observed CLI wording: a session or 5-hour limit, with the zone the CLI names", () => {
+    // Claude Code 2.1.296 wrote this on a real spent window, 2026-10-10.
+    const SESSION = "You've hit your session limit · resets 1:40pm (UTC)";
+    expect(limitHit(SESSION, NOW)).toEqual({ window: "fiveHour", at: NOW, resetsAt: Date.UTC(2026, 9, 26, 13, 40), text: SESSION });
+    // 2.1.316 names the window "5-hour limit" and may add "progress saved".
+    const FIVE = "You've hit your 5-hour limit · resets 1:40pm (UTC) · progress saved";
+    expect(isLimitText(FIVE)).toBe(true);
+    expect(limitHit(FIVE, NOW)?.window).toBe("fiveHour");
+    expect(limitHit(FIVE, NOW)?.resetsAt).toBe(Date.UTC(2026, 9, 26, 13, 40));
+    // Two words before "limit" stay out: a monthly spend cap is not the plan's window.
+    expect(isLimitText("You've hit your monthly spend limit.")).toBe(false);
+  });
+  test("a named zone is read in that zone, not the backend's clock", () => {
+    // noon UTC is 5am in Los Angeles, so 8am there is 15:00 UTC today
+    expect(limitHit("You've hit your 5-hour limit · resets 8am (America/Los_Angeles)", NOW)?.resetsAt).toBe(AT_3PM);
+    // 4am there has passed, so it is tomorrow's
+    expect(limitHit("You've hit your 5-hour limit · resets 4am (America/Los_Angeles)", NOW)?.resetsAt).toBe(Date.UTC(2026, 9, 27, 11));
+    // a zone the runtime does not know falls back to the backend's clock
+    expect(limitHit("You've hit your 5-hour limit · resets 3pm (Mars/Base)", NOW)?.resetsAt).toBe(AT_3PM);
+  });
+  test("past a day out the CLI prints a date, with the year only when it differs", () => {
+    expect(limitHit("You've hit your weekly limit · resets Oct 29, 3pm (UTC)", NOW)).toEqual({
+      window: "weekly",
+      at: NOW,
+      resetsAt: THU_3PM,
+      text: "You've hit your weekly limit · resets Oct 29, 3pm (UTC)",
+    });
+    expect(limitHit("You've hit your weekly limit · resets Oct 29, 8:30am (America/Los_Angeles)", NOW)?.resetsAt).toBe(Date.UTC(2026, 9, 29, 15, 30));
+    expect(limitHit("You've hit your weekly limit · resets Jan 2, 2027, 3pm (UTC)", NOW)?.resetsAt).toBe(Date.UTC(2027, 0, 2, 15));
+    expect(limitHit("You've hit your weekly limit · resets Oct 29, 3pm", NOW)?.resetsAt).toBe(THU_3PM);
+  });
   test("a hit stands until its reset plus the grace", () => {
     const hit = limitHit(SPENT, NOW);
     expect(hitStands(hit, AT_3PM + HIT_GRACE - 1)).toBe(true);

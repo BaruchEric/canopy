@@ -2,8 +2,8 @@
  * Capacity readings for a backend's agent harness. Endpoint readings come
  * from the harness usage endpoint; observed readings estimate Claude's
  * five-hour spend from the cost ledger; unknown means there is no reading.
- * This module is pure and browser-safe. The response and limit-text fixtures
- * are synthetic until the probes record has observed those shapes.
+ * This module is pure and browser-safe. The response fixtures are synthetic;
+ * the limit text follows the CLI's wording as the probes record observed it.
  */
 
 import type { CostEntry } from "./costs";
@@ -131,9 +131,10 @@ export function readUsage(json: unknown, now: number): { fiveHour: Window | null
   };
 }
 
-/** Whether a harness's words are the plan's usage limit. */
+/** Whether a harness's words are the plan's usage limit. One word, hyphens
+ *  allowed, may name the window: "session", "5-hour", "weekly", "Opus". */
 export function isLimitText(text: string): boolean {
-  return /\bhit your (?:\w+ )?limit\b/i.test(text) || /\busage limit\b/i.test(text);
+  return /\bhit your (?:[\w-]+ )?limit\b/i.test(text) || /\busage limit\b/i.test(text);
 }
 
 const WEEKDAY: Record<string, number> = {
@@ -146,25 +147,93 @@ const WEEKDAY: Record<string, number> = {
   sat: 6,
 };
 
-const resetFromWords = (text: string, now: number): number | null => {
-  const match = /\bresets (?:(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w* )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i.exec(text);
-  if (!match) return null;
-  const weekday = match[1]?.slice(0, 3).toLowerCase();
-  const hour12 = Number(match[2]);
-  const minute = Number(match[3] ?? "0");
-  const meridiem = match[4]?.toLowerCase();
-  if (hour12 < 1 || hour12 > 12 || minute > 59 || meridiem === undefined) return null;
-  const hour = (hour12 % 12) + (meridiem === "pm" ? 12 : 0);
-  const candidate = new Date(now);
-  if (weekday !== undefined) {
-    const targetDay = WEEKDAY[weekday];
-    if (targetDay === undefined) return null;
-    const dayDelta = (targetDay - candidate.getDay() + 7) % 7;
-    candidate.setDate(candidate.getDate() + dayDelta);
+const MONTH: Record<string, number> = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
+/** How far a named zone's wall clock is ahead of UTC at an instant, or null
+ *  when the runtime does not know the zone. */
+const zoneOffset = (zone: string, at: number): number | null => {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    }).formatToParts(new Date(at));
+    const part = (type: Intl.DateTimeFormatPartTypes): number => Number(parts.find((p) => p.type === type)?.value);
+    const wall = Date.UTC(part("year"), part("month") - 1, part("day"), part("hour"), part("minute"), part("second"));
+    return Number.isFinite(wall) ? wall - Math.floor(at / 1000) * 1000 : null;
+  } catch {
+    return null;
   }
-  candidate.setHours(hour, minute, 0, 0);
-  if (candidate.getTime() <= now) candidate.setDate(candidate.getDate() + (weekday === undefined ? 1 : 7));
-  return candidate.getTime();
+};
+
+/** The instant a wall-clock time names, in a zone or (null) the backend's
+ *  own clock. Days past the month's end roll over, as Date does. */
+const fromWall = (zone: string | null, year: number, month: number, day: number, hour: number, minute: number): number => {
+  if (zone === null) return new Date(year, month, day, hour, minute).getTime();
+  const guess = Date.UTC(year, month, day, hour, minute);
+  const first = zoneOffset(zone, guess) ?? 0;
+  return guess - (zoneOffset(zone, guess - first) ?? first);
+};
+
+/** Today's date in a zone or (null) the backend's own clock. */
+const wallDay = (zone: string | null, at: number): { year: number; month: number; day: number; weekday: number } => {
+  const local = zone === null;
+  const d = new Date(local ? at : at + (zoneOffset(zone, at) ?? 0));
+  return local
+    ? { year: d.getFullYear(), month: d.getMonth(), day: d.getDate(), weekday: d.getDay() }
+    : { year: d.getUTCFullYear(), month: d.getUTCMonth(), day: d.getUTCDate(), weekday: d.getUTCDay() };
+};
+
+/** Claude Code prints the reset as "1:40pm (UTC)" within a day and as
+ *  "Oct 29, 3pm (UTC)" past one, adding the year when it differs; older text
+ *  and the design used "Thu 3pm" and no zone. The zone in brackets is the
+ *  CLI's own, so it is honored when the runtime knows it. */
+const RESET_WORDS =
+  /\bresets (?:(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w* |(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w* (\d{1,2}),? (?:(\d{4}),? )?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b(?:\s*\(([\w+\-/]+)\))?/i;
+
+const resetFromWords = (text: string, now: number): number | null => {
+  const match = RESET_WORDS.exec(text);
+  if (!match) return null;
+  const [, weekdayWord, monthWord, dateWord, yearWord, hourWord, minuteWord, meridiem, zoneWord] = match;
+  const hour12 = Number(hourWord);
+  const minute = Number(minuteWord ?? "0");
+  if (hour12 < 1 || hour12 > 12 || minute > 59 || meridiem === undefined) return null;
+  const hour = (hour12 % 12) + (meridiem.toLowerCase() === "pm" ? 12 : 0);
+  const zone = zoneWord !== undefined && zoneOffset(zoneWord, now) !== null ? zoneWord : null;
+  const today = wallDay(zone, now);
+  if (monthWord !== undefined) {
+    const month = MONTH[monthWord.slice(0, 3).toLowerCase()];
+    const date = Number(dateWord);
+    if (month === undefined || date < 1 || date > 31) return null;
+    return fromWall(zone, yearWord === undefined ? today.year : Number(yearWord), month, date, hour, minute);
+  }
+  let dayDelta = 0;
+  if (weekdayWord !== undefined) {
+    const targetDay = WEEKDAY[weekdayWord.slice(0, 3).toLowerCase()];
+    if (targetDay === undefined) return null;
+    dayDelta = (targetDay - today.weekday + 7) % 7;
+  }
+  const at = fromWall(zone, today.year, today.month, today.day + dayDelta, hour, minute);
+  if (at > now) return at;
+  return fromWall(zone, today.year, today.month, today.day + dayDelta + (weekdayWord === undefined ? 1 : 7), hour, minute);
 };
 
 /** Parse a recognized limit message into the hit and its reset time. */
