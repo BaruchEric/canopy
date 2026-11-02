@@ -17,6 +17,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextFire, parseCron } from "../core/cron";
+import { DIGEST_CRON, digestLine, rangerDigest, type TriggerDigest } from "../core/digest";
 import { fixedComment, landedComment, openedComment } from "../core/forgejoissues";
 import { fail, pass, type ProbeResult } from "../core/health";
 import { configDir } from "../core/store";
@@ -24,6 +25,7 @@ import {
   activityFor,
   afterRestart,
   anyEvent,
+  carriedEvent,
   dueRules,
   fireMinute,
   fromFlow,
@@ -56,6 +58,7 @@ import {
   scheduleRepos,
   SERVICE_NAME,
   SKIPS_KEPT,
+  stalledEvent,
   eventLive,
   type AgentActivity,
   type AgentDelivery,
@@ -185,6 +188,11 @@ export interface TriggerDeps {
    *  there is none, or it could not be asked. The close on a landed
    *  issue says so, since the queue never pushes. */
   missingFrom: (repo: Repo, target: string, head: string) => Promise<string | null>;
+  /** DMs the day's line to the ranger: true once sent, false when the
+   *  ranger is off or not running; throws when the post fails */
+  tellRanger?: (text: string) => Promise<boolean>;
+  /** when the daily line is written, a cron line; `DIGEST_CRON` by default */
+  digestCron?: string;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -296,6 +304,10 @@ export class TriggerHub {
   private polled = new Map<string, number>();
   /** when this hub began keeping, which a rule's first poll counts from */
   private started: number;
+  /** the last daily line written, and when the digest last came due (with
+   *  or without a line), which the next one counts from */
+  private digest: TriggerDigest | null = null;
+  private digested: number | null = null;
 
   constructor(private deps: TriggerDeps) {
     this.started = this.now();
@@ -385,7 +397,7 @@ export class TriggerHub {
         ...(r.source === "schedule" ? { ...(scheduled !== null ? { next: scheduled } : {}), ...(last !== null ? { lastFire: last } : {}), skips: this.skips.get(r.name) ?? [] } : {}),
       });
     }
-    return { rules, problems: this.problems, events: this.list(), keeping: this.keeping };
+    return { rules, problems: this.problems, events: this.list(), keeping: this.keeping, ...(this.digest ? { digest: this.digest } : {}) };
   }
 
   list(): TriggerEvent[] {
@@ -399,7 +411,7 @@ export class TriggerHub {
   /* ---------- records ---------- */
 
   private publish(): void {
-    this.deps.broadcast({ type: "triggers", events: this.list() });
+    this.deps.broadcast({ type: "triggers", events: this.list(), ...(this.digest ? { digest: this.digest } : {}) });
   }
 
   private set(e: TriggerEvent): void {
@@ -454,6 +466,8 @@ export class TriggerHub {
       // nothing kept yet, or unreadable: start empty and say so once
     }
     if (!this.owns(ownership)) return;
+    await this.readDigest();
+    if (!this.owns(ownership)) return;
     this.persist();
     this.publish();
     void this.pump();
@@ -485,6 +499,62 @@ export class TriggerHub {
       return next !== null && next <= now;
     });
     await Promise.all(due.map((r) => this.poll(r.name)));
+    await this.digestIfDue();
+  }
+
+  /* ---------- the daily line ---------- */
+
+  /** The day's line, once its cron comes due after the last one (or after
+   *  this hub began keeping): written for the inbox's foot over every event
+   *  kept, and DMed to the ranger when it is on. A day with nothing to say
+   *  writes no line and sends nothing, and the last line stays as it was. */
+  private async digestIfDue(): Promise<void> {
+    if (!this.keeping) return;
+    const cron = parseCron(this.deps.digestCron ?? DIGEST_CRON);
+    if ("error" in cron) return;
+    const now = this.now();
+    const next = nextFire(cron, this.digested ?? this.started);
+    if (next === null || next > now) return;
+    this.digested = now;
+    const text = digestLine(this.list(), now);
+    if (text !== null) {
+      this.digest = { at: now, text };
+      this.publish();
+    }
+    await this.saveDigest();
+    if (text === null || !this.deps.tellRanger) return;
+    try {
+      await this.deps.tellRanger(rangerDigest(text));
+    } catch (err) {
+      // the line is in the inbox either way; a DM that failed is not sent again
+      console.error(`triggers: the digest's DM to the ranger: ${errText(err)}`);
+    }
+  }
+
+  private async readDigest(): Promise<void> {
+    try {
+      const v: unknown = JSON.parse(await readFile(join(this.dir, "digest.json"), "utf8"));
+      if (!isRecord(v)) return;
+      if (typeof v["digested"] === "number") this.digested = v["digested"];
+      const d = v["digest"];
+      if (isRecord(d) && typeof d["at"] === "number" && typeof d["text"] === "string") this.digest = { at: d["at"], text: d["text"] };
+    } catch {
+      // no line written yet
+    }
+  }
+
+  private async saveDigest(): Promise<void> {
+    if (!this.keeping) return;
+    const path = join(this.dir, "digest.json");
+    const data = JSON.stringify({ digested: this.digested, ...(this.digest ? { digest: this.digest } : {}) }, null, 2);
+    try {
+      await mkdir(this.dir, { recursive: true });
+      const tmp = `${path}.tmp-${process.pid}`;
+      await writeFile(tmp, data);
+      await rename(tmp, path);
+    } catch (err) {
+      console.error(`triggers: ${errText(err)}`);
+    }
   }
 
   /** When a rule's poll next fires: the first time its cron line allows
@@ -714,6 +784,24 @@ export class TriggerHub {
     }
     // a run ending may free a branch slot a queued event waits for
     if (run.status !== "working" && run.status !== "waiting" && run.status !== "idle") void this.pump();
+  }
+
+  /** The stall watchdog resumed a run it stopped (`StallHub`): the event
+   *  that followed the stopped run follows the resumed one. */
+  carried(from: Run, to: Run): void {
+    for (const e of this.events.values()) {
+      const next = carriedEvent(e, from.id, to, this.now());
+      if (next !== e) this.set(next);
+    }
+  }
+
+  /** The stall watchdog stopped a run and left it for Eric: the event that
+   *  followed it reads stalled, with why as what it needs. */
+  stalled(run: Run, why: string): void {
+    for (const e of this.events.values()) {
+      const next = stalledEvent(e, run.id, why, this.now());
+      if (next !== e) this.set(next);
+    }
   }
 
   /** The flows' every change: the event following that flow moves with it. */
@@ -973,6 +1061,8 @@ export class TriggerHub {
       }
       delete next.reason;
       delete next.endedAt;
+      // a stalled event's sentence goes with its stop
+      delete next.needsYou;
       const now = "flow" in out ? fromFlow(next, out.flow, this.now()) : next;
       this.set(now);
       return now;

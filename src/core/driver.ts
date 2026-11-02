@@ -192,6 +192,13 @@ export interface RunDriver {
   start(ctx: DriveCtx, message: string): void;
   /** A chat's next message; the Runner only calls it while the run is idle. */
   say(text: string): void;
+  /** One message into a job's running turn, from the stall watchdog: true
+   *  when it went down the wire. A harness that takes no message mid-turn
+   *  has none, and the watchdog only notes the quiet. */
+  nudge?(text: string): boolean;
+  /** Whether the run waits on work its steps do not show, such as a
+   *  subagent in the background: the watchdog never calls such a run quiet. */
+  holding?(): boolean;
   /** Ends the run's process. While a turn runs, it interrupts and kills. A
    *  chat between turns is closed politely, and the exit after is its end.
    *  Prompts still waiting have been answered "deny" by the Runner first. */

@@ -21,6 +21,7 @@ import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remembe
 import type { RunLog, RunLogger } from "./runlog";
 import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
+import { noWrapUpNote, STALL_AFTER, stallStep, stallStopNote, WRAP_UP_NOTE, wrapUpMessage } from "./stall";
 import { StageAwayError } from "./stagewire";
 import {
   DEFAULT_AGENT,
@@ -615,6 +616,44 @@ export class Runner {
     live.ctx.denyAll();
     live.driver.stop();
     return run;
+  }
+
+  /** One pass of the stall watchdog (`stall.ts`) over the jobs going here:
+   *  a quiet one is told to wrap up, through the driver's `nudge` where the
+   *  harness takes a message mid-turn and with a note alone where it does
+   *  not; one quiet again after that is stopped, with `stall.stopped` set.
+   *  Chats, coordinators (which wait on their children), incubator stages,
+   *  a branch run still in its setup, and a run whose driver says it waits
+   *  on work its steps do not show are never watched. Returns the runs it
+   *  stopped, whose ends are still to come. */
+  watchdog(now = Date.now(), after = STALL_AFTER): Run[] {
+    const stopped: Run[] = [];
+    for (const live of this.live.values()) {
+      const run = live.ctx.run;
+      if (run.chat || isCoordinate(run) || (this.opts.stage?.(live.repo) ?? false)) continue;
+      if (live.preparing || live.process.kind !== "running" || live.ctx.stopping || live.ctx.ending) continue;
+      if (live.driver.holding?.()) continue;
+      const step = stallStep(run, now, after);
+      if (step === "warn") {
+        const told = live.driver.nudge?.(wrapUpMessage(after)) ?? false;
+        run.stall = { warned: now };
+        live.ctx.note(told ? WRAP_UP_NOTE : noWrapUpNote(live.driver.label, after));
+      } else if (step === "stop") {
+        run.stall = { warned: run.stall?.warned ?? now, stopped: now };
+        live.ctx.note(stallStopNote(after));
+        this.stop(run.id);
+        stopped.push(run);
+      }
+    }
+    return stopped;
+  }
+
+  /** Settles once a run has ended and its end is read: the status, the
+   *  process, the transcript and, for a branch run, the worktree's state.
+   *  Null for a run this runner never had. */
+  whenEnded(id: string): Promise<void> | null {
+    const live = this.owned.get(id) ?? this.live.get(id);
+    return live ? live.ended : null;
   }
 
   /** Non-stopping barrier for the work this run owns. It never waits for

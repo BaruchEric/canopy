@@ -224,6 +224,7 @@ import { ScreenLayouts } from "./layouts";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
 import { TaskHub } from "./tasks";
 import { RangerHub, realTmux, type RangerTimings, type RangerTmux } from "./ranger";
+import { StallHub } from "./stalls";
 import { SweepHub } from "./sweep";
 import type { PlanInputs, ShellFacts } from "../core/sweep";
 import { HealthHub, rangerResult, streamResult } from "./health";
@@ -387,6 +388,8 @@ interface ServerState {
   librarySync: LibrarySync;
   /** outside events (Sentry, Linear) that start branch runs, and what became of each (server/triggers) */
   triggers: TriggerHub;
+  /** the stall watchdog: wraps up, stops and resumes quiet jobs (server/stalls) */
+  stalls: StallHub;
   /** a coordinator's cards, start these and the notes back into its chat (server/coordinator) */
   coordinator: CoordinatorHub;
   /** the branch runs' ledger: an item per branch and the lines on it (server/work) */
@@ -5802,8 +5805,11 @@ export async function startServer(opts: {
         link: (id, ref) => state.work.link(id, ref),
       },
       scenario: runScenario,
+      // a run the stall watchdog is resuming counts as going, so its
+      // branch is not sorted into the queue between the stop and the resume
       runActive: (id) => {
-        const run = state.runner.get(id);
+        if (state.stalls.starting(id)) return true;
+        const run = state.runner.get(state.stalls.latest(id));
         return run !== undefined && isRunActive(run);
       },
       openPr: (id) => state.prs.open(id),
@@ -5884,12 +5890,16 @@ export async function startServer(opts: {
       markPr: (id, pr) => state.landing.markPr(id, pr),
       forget: (id) => state.landing.forget(id),
       startFix: (rec, prompt, label) => startBranchFix(state, rec, prompt, label, false),
+      // a fix run the stall watchdog stopped and resumes is followed to the
+      // run that resumed it: still going while that starts and runs, and
+      // finished as that run finishes
       runActive: (id) => {
-        const run = state.runner.get(id);
+        if (state.stalls.starting(id)) return true;
+        const run = state.runner.get(state.stalls.latest(id));
         return run !== undefined && isRunActive(run);
       },
       // a run a restart took is unknown here, which counts as not finished
-      runOk: (id) => state.runner.get(id)?.status === "done",
+      runOk: (id) => state.runner.get(state.stalls.latest(id))?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
       scenarios: { run: runScenario, judge: hasGatewayKey() ? jevScenario : null },
       work: {
@@ -6041,6 +6051,29 @@ export async function startServer(opts: {
         note: (id, text) => state.work.note(id, text),
         close: (id, end, text) => state.work.close(id, end, text),
         link: (id, ref) => state.work.link(id, ref),
+      },
+      // the day's line reaches the ranger as a wake does: a DM from canopy's
+      // bot to its handle, only while it is on and running
+      tellRanger: async (text) => {
+        const r = state.ranger.info();
+        if (!r.on || r.state !== "running") return false;
+        await state.chan.dm(r.handle, text);
+        return true;
+      },
+    }),
+    stalls: new StallHub({
+      watchdog: (now, after) => state.runner.watchdog(now, after),
+      ended: (id) => state.runner.whenEnded(id),
+      record: (id) => state.landing.record(id),
+      countStall: (id) => state.landing.countStall(id),
+      // a PR's fix keeps the PR's words (canopy pushes); any other run gets
+      // the landing queue's line, as a resume by hand does
+      resume: (rec, message) => startBranchFix(state, rec, message, "resume after a stall", rec.pr === undefined),
+      carried: (from, to) => state.triggers.carried(from, to),
+      left: (run, why) => {
+        state.triggers.stalled(run, why);
+        const work = run.branch?.work;
+        if (work) state.work.note(work, `stalled: ${why}`);
       },
     }),
     coordinator: new CoordinatorHub({
@@ -6757,6 +6790,8 @@ export async function startServer(opts: {
   // a test server pulls no other backend's Library
   if (process.env["NODE_ENV"] !== "test") state.librarySync.start();
   if (process.env["NODE_ENV"] !== "test") state.triggers.start();
+  // a test server never stops a run for going quiet
+  if (process.env["NODE_ENV"] !== "test") state.stalls.start();
   state.asks.start();
   // a test server pulls nothing and asks no socket
   if (process.env["NODE_ENV"] !== "test") state.secrets.start();
@@ -6804,6 +6839,7 @@ export async function startServer(opts: {
       state.sweep.stop();
       state.librarySync.stop();
       state.triggers.stop();
+      state.stalls.stop();
       state.secrets.stop();
       state.tasks.stop();
       state.ranger.stop();

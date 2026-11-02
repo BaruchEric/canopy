@@ -443,3 +443,33 @@ For Eric:
    the rest of the plan does not.
 3. **Watchdog and digest**: the quiet check, wrap-up and resume, the daily
    line and the ranger DM.
+
+### Plan 3 as built (2026-11-02)
+
+- The pure rules are `core/stall.ts` (`quiet`, `stallStep`, the words) and
+  `core/digest.ts` (`needWord`, `digestLine`), not `runner.ts` and
+  `trigger.ts`; the Runner's pass is `Runner.watchdog`, the decisions
+  `server/stalls.ts` (`StallHub`).
+- The wrap-up message goes through a new optional `RunDriver.nudge`, not
+  `Runner.say`: `say` is a chat's next turn and resets the turn's clock.
+  Codex has no nudge, so its quiet run gets the note alone and is stopped
+  on the next quiet spell. A driver's `holding()` (Claude's background
+  subagent or a held result) keeps a run from being called quiet.
+- The stall count is one number per branch, `LandingRun.stalls`, which
+  every run on the branch shares (a PR's fix runs included), in place of
+  `stalls` on both `PrWatch` and `LandingRun`. The PR watch is not
+  changed: the server follows a stalled fix run to its resumed run in the
+  watch's `runActive`/`runOk`, so the resumed run's commits are pushed.
+- A flow's step that stalls only stops its flow, which is picked up by
+  hand; a job in the checkout is only stopped. Only a Claude run with a
+  session is resumed; the rest are left for Eric.
+- `stalled` is resumable from the triggers page. An event on a PR does not
+  read `stalled`: the PR watch gives up auto-fix when its fix run does not
+  finish, and `needsYouFromPr` says so.
+- The digest hour is `DIGEST_CRON` (`DEFAULT_SWEEP.cron`), not the
+  configured sweep's cron. A day with nothing to say writes no line. The
+  line lives in `triggers/digest.json` and `TriggersInfo.digest`, not the
+  landing queue's notices, and the inbox's "seen" is per browser.
+- Not checked live: no real Claude run was left to go quiet, and no DM was
+  sent to a real ranger; the tests drive the wrap-up with a stand-in CLI
+  and the DM with a fake.

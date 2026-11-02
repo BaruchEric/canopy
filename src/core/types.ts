@@ -1,5 +1,6 @@
 import type { PairKind } from "./callers";
 import type { TriggerEvent } from "./trigger";
+import type { TriggerDigest } from "./digest";
 import type { Capacity, CapacitySettings } from "./capacity";
 import type { WorkItem } from "./work";
 import type { Collision } from "./touch";
@@ -1355,6 +1356,16 @@ export interface Run {
   parent?: string;
   /** a coordinator's cards, in the order it proposed them */
   tasks?: CoordTask[];
+  /** the stall watchdog's marks (FR-035, `core/stall.ts`): when canopy told
+   *  the quiet run to wrap up, and when it stopped the run for going quiet
+   *  again */
+  stall?: RunStall;
+}
+
+/** When the stall watchdog spoke to a run and when it stopped it, unix ms. */
+export interface RunStall {
+  warned: number;
+  stopped?: number;
 }
 
 /** One finished run in the local transcript index. */
@@ -1707,6 +1718,9 @@ export interface LandingRun {
   pr?: number;
   /** it opens a PR on its own once it settles ready */
   openPr?: true;
+  /** how many of the branch's runs the stall watchdog stopped (FR-035):
+   *  the first is resumed once, a second is left for Eric */
+  stalls?: number;
 }
 
 /** Whether a run a restart stopped may land as its worktree is now: clean,
@@ -1903,7 +1917,7 @@ export type ServerEvent =
   /** every work item, whole, whenever one changes (FR-037) */
   | { type: "work"; items: WorkItem[] }
   /** every trigger event kept, whole, whenever one changes */
-  | { type: "triggers"; events: TriggerEvent[] }
+  | { type: "triggers"; events: TriggerEvent[]; digest?: TriggerDigest }
   /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */
   | { type: "auth"; pending: PendingPair[] }
   /** where the incubator's stages run, whenever that changes; home backend only */

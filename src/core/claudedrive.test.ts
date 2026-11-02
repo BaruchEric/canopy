@@ -24,7 +24,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang",
   message = "do the thing",
   unattended?: string,
   opts: {
@@ -763,4 +763,30 @@ test("cliArgs passes a Claude provider as this machine's settings file, except t
   expect(cliArgs(spec, DEFAULT_AGENT)).not.toContain("--settings");
   // a stage runs in a container that has no canopy config dir
   expect(cliArgs(spec, { ...DEFAULT_AGENT, provider: "local" }, true)).not.toContain("--settings");
+});
+
+describe("the stall watchdog's message", () => {
+  test("a nudge goes down stdin into the job's turn, which then ends; none once the run is over", async () => {
+    const d = await drive("hang");
+    await d.until((r) => r.steps.some((s) => s.kind === "text" && s.text === "looking"), "the first word");
+    expect(d.driver.holding()).toBe(false);
+    expect(d.driver.nudge("wrap up now")).toBe(true);
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("wrapped up");
+    const users = (await d.sent()).filter((m) => m["type"] === "user");
+    expect(users.map((m) => (m["message"] as { content: string }).content).at(-1)).toBe("wrap up now");
+    expect(d.driver.nudge("again")).toBe(false);
+  });
+
+  test("a result held for a background subagent is holding, and a chat takes no nudge", async () => {
+    const d = await drive("quiet");
+    await d.until(() => d.driver.holding(), "the held result");
+    d.driver.stop();
+    await d.until(d.done, "the stop");
+    const chat = await drive("chat");
+    await chat.until((r) => r.status === "idle", "the first reply");
+    expect(chat.driver.nudge("hello")).toBe(false);
+    chat.driver.stop();
+  });
 });

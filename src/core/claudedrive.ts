@@ -316,6 +316,23 @@ export class ClaudeDriver implements RunDriver {
     void this.send(userMessage(text));
   }
 
+  /** The stall watchdog's one message into a job's turn: a plain user
+   *  message down the same stdin, which stays open while the turn runs
+   *  (for the control replies). The CLI takes it into the turn, or as the
+   *  next turn once this one ends. The turn's clock is left alone. */
+  nudge(text: string): boolean {
+    const ctx = this.ctx;
+    if (!this.proc || this.closed || !ctx || ctx.chat || ctx.status() !== "working") return false;
+    void this.send(userMessage(text));
+    return true;
+  }
+
+  /** A subagent in the background, or a result held for one, is work the
+   *  main thread's steps do not show. */
+  holding(): boolean {
+    return this.agents.size > 0 || this.held !== null;
+  }
+
   /** A chat between turns closes stdin and the CLI exits on its own;
    *  anything else is killed. */
   stop(): void {

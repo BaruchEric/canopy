@@ -735,6 +735,19 @@ export class LandingHub {
     this.publish();
   }
 
+  /** One more of the branch's runs stopped by the stall watchdog (FR-035):
+   *  the count goes on the record, which every run on the branch shares,
+   *  and comes back; 0 for a branch with no record. */
+  countStall(id: string): number {
+    const rec = this.find(id);
+    if (!rec) return 0;
+    const next: LandingRun = { ...rec, stalls: (rec.stalls ?? 0) + 1 };
+    this.runs.set(rec.id, next);
+    this.written.set(rec.id, JSON.stringify(next));
+    void this.saveRun(next);
+    return next.stalls ?? 0;
+  }
+
   /** A branch whose PR merged: its record goes. The PR hub removed the
    *  worktree and the branch already. */
   async forget(id: string): Promise<void> {

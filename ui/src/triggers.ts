@@ -2,6 +2,7 @@
  *  words for each state, and the tab's count. Pure; Triggers.tsx draws it. */
 
 import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerRuleInfo, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
+import { digestShown, type TriggerDigest } from "../../src/core/digest";
 import type { Badge } from "./badges";
 
 export interface TriggerRow {
@@ -23,6 +24,7 @@ const SECTION_OF: Record<TriggerStatus, SectionKey> = {
   failed: "needs",
   ready: "needs",
   closed: "needs",
+  stalled: "needs",
   queued: "working",
   working: "working",
   rebasing: "working",
@@ -55,6 +57,7 @@ export const STATUS_WORD: Record<TriggerStatus, string> = {
   conflict: "fixing a rebase conflict",
   merged: "merged",
   closed: "PR closed",
+  stalled: "stalled",
   ignored: "ignored",
 };
 
@@ -75,6 +78,7 @@ export const STATUS_TONE: Record<TriggerStatus, "moss" | "lichen" | "rust" | "sk
   conflict: "sky",
   merged: "moss",
   closed: "rust",
+  stalled: "rust",
   ignored: "faint",
 };
 
@@ -195,4 +199,25 @@ export function nextFireWord(next: number | undefined, now: number): string {
   if (minutes < 60) return `next fire in ${minutes} min`;
   const hours = Math.floor(minutes / 60);
   return hours < 48 ? `next fire in ${hours} h` : `next fire in ${Math.floor(hours / 24)} days`;
+}
+
+/** One backend's daily line as the inbox's foot shows it. */
+export interface DigestRow {
+  backend: string;
+  digest: TriggerDigest;
+  /** what "seen" keeps in this browser */
+  key: string;
+}
+
+/** The daily lines the inbox shows: each shown backend's last one, while it
+ *  is under a day old and this browser has not marked it seen; newest first. */
+export function digestRows(triggers: Readonly<Record<string, Pick<TriggersInfo, "digest">>>, order: readonly string[], now: number, seen: readonly string[]): DigestRow[] {
+  return order
+    .flatMap((backend) => {
+      const digest = triggers[backend]?.digest;
+      if (!digest || !digestShown(digest, now)) return [];
+      const key = `${backend}@${digest.at}`;
+      return seen.includes(key) ? [] : [{ backend, digest, key }];
+    })
+    .sort((a, b) => b.digest.at - a.digest.at);
 }

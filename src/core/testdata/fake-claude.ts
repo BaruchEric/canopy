@@ -38,6 +38,9 @@
  *          wakes sends a second result while the other still runs, which
  *          then asks a permission; once answered it ends and the real
  *          result follows
+ *    hang  says one word and then nothing, as a stalled turn does; the
+ *          next user message (the stall watchdog's wrap-up) ends the turn
+ *          with the result "wrapped up"
  *    propose plan mode: makes a task, then calls ExitPlanMode. A deny of the
  *          first plan brings a second one, any other deny ends "declined".
  *          FAKE_CLAUDE_EMPTY_PLAN=1 sends a blank first plan, whose deny
@@ -140,6 +143,14 @@ function onUser(): void {
   }
   if (mode === "limited") {
     out({ type: "result", subtype: "success", is_error: true, result: "You've hit your limit · resets 3pm", num_turns: 1, total_cost_usd: 0, duration_ms: 2, session_id: "sess-1" });
+    return;
+  }
+  if (mode === "hang") {
+    if (turns === 1) {
+      out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: "looking" }] } });
+      return;
+    }
+    out({ type: "result", subtype: "success", is_error: false, result: "wrapped up", num_turns: 1, total_cost_usd: 0, duration_ms: 1, session_id: "sess-1" });
     return;
   }
   if (mode === "chat") {

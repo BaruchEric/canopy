@@ -3197,7 +3197,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     if (ev.type === "triggers") {
       triggersEvents.set(b, (triggersEvents.get(b) ?? 0) + 1);
-      set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events } } }));
+      set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events, ...(ev.digest ? { digest: ev.digest } : {}) } } }));
     }
     if (ev.type === "prs") {
       prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);

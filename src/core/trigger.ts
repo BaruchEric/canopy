@@ -9,6 +9,8 @@ import { isSeedRepoId } from "./sprout";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
 import { approveWords, fence } from "./pr";
+import { stallReason } from "./stall";
+import type { TriggerDigest } from "./digest";
 import { unattendedRefusal } from "./workflow";
 import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, Workflow } from "./types";
 
@@ -125,10 +127,13 @@ export type TriggerStatus =
   | "merged"
   /** the PR closed without merging */
   | "closed"
+  /** the stall watchdog stopped its run and left it for Eric: quiet twice
+   *  on the branch, or with no session to resume (`stalledEvent`) */
+  | "stalled"
   /** a level, project or ignore line passed it over; no run */
   | "ignored";
 
-export const TRIGGER_STATUSES: readonly TriggerStatus[] = ["queued", "working", "waiting", "stopped", "failed", "no-fix", "ready", "review", "rebasing", "conflict", "merged", "closed", "ignored"];
+export const TRIGGER_STATUSES: readonly TriggerStatus[] = ["queued", "working", "waiting", "stopped", "failed", "no-fix", "ready", "review", "rebasing", "conflict", "merged", "closed", "stalled", "ignored"];
 
 /** One event a rule took, and everything canopy did about it. */
 export interface TriggerEvent {
@@ -196,6 +201,8 @@ export interface TriggersInfo {
   events: TriggerEvent[];
   /** whether this backend holds the flows lock, so starts runs for its hooks */
   keeping: boolean;
+  /** the last daily line (`core/digest.ts`), when one was written; an older backend has none */
+  digest?: TriggerDigest;
 }
 
 /** What a hook delivery became. */
@@ -772,13 +779,16 @@ export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: s
  *  waiting on its run; once a PR is open the PR speaks. */
 export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
   if (e.runId !== run.id || e.pr || e.flowId || e.status === "merged") return e;
+  // left for Eric by the stall watchdog: the stopped run's later changes
+  // (its worktree read) keep it so
+  if (e.status === "stalled" && run.status === "stopped") return e;
   const next: TriggerEvent = { ...e };
   if (run.branch) next.branch = run.branch.origin;
   if (run.status === "working" || run.status === "idle") next.status = "working";
   else if (run.status === "waiting") next.status = "waiting";
   else if (run.status === "stopped") {
     next.status = "stopped";
-    next.reason = "stopped before it finished";
+    next.reason = run.stall?.stopped !== undefined ? stallReason() : "stopped before it finished";
   } else if (run.status === "limited") {
     next.status = "stopped";
     next.reason = `waiting for capacity: ${run.limited?.text || run.error || "the plan's usage limit"}`;
@@ -798,6 +808,24 @@ export function fromRun(e: TriggerEvent, run: Run, now: number): TriggerEvent {
   if (next.status === "no-fix" || next.status === "failed") next.endedAt = now;
   else delete next.endedAt;
   return next;
+}
+
+/** A run the stall watchdog stopped was resumed as `to`: the event that
+ *  followed it follows `to`, working again. Any other event is unchanged. */
+export function carriedEvent(e: TriggerEvent, from: string, to: Run, now: number): TriggerEvent {
+  if (e.runId !== from || e.pr || e.flowId) return e;
+  const next: TriggerEvent = { ...e, runId: to.id, status: "working", lastAt: now };
+  for (const k of ["reason", "endedAt", "needsYou"] as const) delete next[k];
+  return next;
+}
+
+/** A run the stall watchdog stopped and left for Eric: the event that
+ *  followed it reads `stalled`, with why as what it needs. An event on a
+ *  PR is the PR watch's to word: its fix run's stop gives up auto-fix,
+ *  which `needsYouFromPr` says. */
+export function stalledEvent(e: TriggerEvent, runId: string, why: string, now: number): TriggerEvent {
+  if (e.runId !== runId || e.pr || e.flowId) return e;
+  return { ...e, status: "stalled", reason: why, needsYou: why, endedAt: now };
 }
 
 /** The event's state as its flow says, while it follows one. A done flow
@@ -960,6 +988,8 @@ export function activityFor(prev: TriggerEvent | undefined, next: TriggerEvent):
       return { type: "response", body: `Merged ${pr}.` };
     case "closed":
       return { type: "response", body: `Closed ${pr} without merging it.` };
+    case "stalled":
+      return { type: "error", body: `Stopped: ${next.reason ?? "the run went quiet"}.` };
     case "ignored":
       return { type: "response", body: `Not taking this one: ${next.reason ?? "the rule passes it over"}.` };
   }
@@ -988,8 +1018,9 @@ export function issueNoteFor(prev: TriggerEvent | undefined, next: TriggerEvent,
   return `${lead}${said}${retry}`;
 }
 
-/** Whether an event can be resumed: its run stopped and its branch is kept. */
-export const resumable = (e: TriggerEvent): boolean => e.status === "stopped" && e.branch !== undefined;
+/** Whether an event can be resumed: its run stopped, by hand, a restart or
+ *  the stall watchdog, and its branch is kept. */
+export const resumable = (e: TriggerEvent): boolean => (e.status === "stopped" || e.status === "stalled") && e.branch !== undefined;
 
 /** Whether an event can be started again from scratch, on a new branch. */
 export const retryable = (e: TriggerEvent): boolean => e.status === "failed" || e.status === "no-fix" || (e.status === "stopped" && e.branch === undefined);

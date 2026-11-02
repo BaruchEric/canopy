@@ -20,6 +20,7 @@ import { INBOX_TEXT } from "../settings";
 import { canAnswer as canAnswerHere, harnessNoticeOf, inboxItems, prsAll, useStore } from "../store";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { LandingNotices } from "./Landing";
+import { digestRows } from "../triggers";
 import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
 import { useZoom, zoomStyle } from "./Surface";
 import { kbKey } from "../kbfocus";
@@ -606,6 +607,55 @@ export function InboxChip({ onGit }: { onGit?: () => void } = {}) {
   );
 }
 
+/** where this browser keeps the daily lines it has marked seen */
+const DIGEST_SEEN_KEY = "canopy.digestSeen";
+
+function readDigestSeen(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(DIGEST_SEEN_KEY) ?? "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The triggers' daily line from each backend that wrote one in the last
+ *  day (FR-035), outside the inbox's ask count; "seen" hides it in this
+ *  browser until the next one. */
+export function TriggerDigestLine() {
+  const triggers = useStore((s) => s.triggers);
+  const order = useStore(useShallow((s) => [s.home, ...s.backendOrder.filter((b) => b !== s.home)]));
+  const [seen, setSeen] = useState(readDigestSeen);
+  const now = useNow(true, 60_000);
+  const rows = digestRows(triggers, order, now, seen);
+  if (rows.length === 0) return null;
+  const markSeen = () => {
+    const next = [...seen, ...rows.map((r) => r.key)].slice(-20);
+    setSeen(next);
+    try {
+      localStorage.setItem(DIGEST_SEEN_KEY, JSON.stringify(next));
+    } catch {
+      // kept for this page only
+    }
+  };
+  return (
+    <section className="settings-row">
+      <h3 className="panel-label">issues today</h3>
+      <ul className="inbox-recent">
+        {rows.map((r) => (
+          <li key={r.key}>
+            <span>{order.length > 1 ? `${r.backend}: ` : ""}{r.digest.text}</span>
+            <span className="inbox-left dim">{ago(r.digest.at, now)}</span>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="mini" onClick={markSeen}>
+        seen
+      </button>
+    </section>
+  );
+}
+
 /** A quiet weekly line outside the inbox's ask count. */
 export function HarnessNoticeLine() {
   const notice = useStore(harnessNoticeOf);
@@ -703,6 +753,7 @@ export function InboxPopBody({ onGit, popEntries = [] }: { onGit?: () => void; p
         )}
       </section>
       <LandingNotices />
+      <TriggerDigestLine />
       <HarnessNoticeLine />
       {recent.length > 0 && (
         <section className="settings-row">
