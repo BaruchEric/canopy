@@ -146,6 +146,7 @@ describe("qEvent", () => {
       [{ type: "job", job }, (e) => (e.type === "job" ? [e.job.id, e.job.repoId] : [])],
       [{ type: "job-gone", id: "j1" }, (e) => (e.type === "job-gone" ? [e.id] : [])],
       [{ type: "builds", repoId: "a/b", what: "built", build: "local" }, (e) => (e.type === "builds" ? [e.repoId] : [])],
+      [{ type: "scenarios", repoId: "a/b", names: [{ name: "checkout", kind: "command" }], errors: [] }, (e) => (e.type === "scenarios" ? [e.repoId] : [])],
       [{ type: "terms", terms: [term] }, (e) => (e.type === "terms" ? e.terms.flatMap((t) => [t.id, t.repoId]) : [])],
       [{ type: "devices", devices: [device] }, (e) => (e.type === "devices" ? e.devices.map((d) => d.id) : [])],
       [{ type: "kept", kept: [kept] }, (e) => (e.type === "kept" ? e.kept.flatMap((k) => [k.id, k.repoId]) : [])],

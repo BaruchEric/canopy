@@ -1,5 +1,5 @@
 import { groupWord } from "../groups";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
 import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { repoWorktrees, warmRows, warmWords } from "../landing";
@@ -8,7 +8,9 @@ import { idText, landingAll, prsAll, runFor, useStore } from "../store";
 import { repoPrChip } from "../prs";
 import { keepKeys } from "../surface";
 import { ago } from "../util";
+import { setChip } from "../scenarios";
 import { DiffView } from "./DiffView";
+import { ScenarioList } from "./Scenarios";
 import { Section } from "./Surface";
 import { PopGear } from "./PopGrip";
 
@@ -77,8 +79,9 @@ export function PrChip({ repoId }: { repoId: string }) {
 /** A repo's branch runs and landing queue: what is queued in order, what
  *  came back and why, what is ready to land, what landed lately, and any
  *  run worktree no record names. A run a restart stopped lands from the
- *  rest once its work is whole, or says why not. Shows only when there is
- *  something. */
+ *  rest once its work is whole, or says why not. A repo with holdout
+ *  scenarios gets a chip that opens their list, by name and kind only.
+ *  Shows only when there is something. */
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
   const pool = useStore((s) => repoWorktrees(s.worktrees, repo.id));
@@ -95,10 +98,19 @@ export function LandingSection({ repo }: { repo: Repo }) {
   const [error, setError] = useState("");
   const [skipped, setSkipped] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const set = useStore((s) => s.scenarioNames[repo.id]);
+  const loadScenarioNames = useStore((s) => s.loadScenarioNames);
+  const [listOpen, setListOpen] = useState(false);
+  // the routes answer only for a checkout on the backend's own disk
+  const ownDisk = !repo.host && !repo.forge;
+  useEffect(() => {
+    if (ownDisk) void loadScenarioNames(repo.id).catch(() => {});
+  }, [ownDisk, repo.id, loadScenarioNames]);
+  const chip = ownDisk ? setChip(set) : null;
   const l = repoLanding(info, repo.id);
   const all = landAllOf(info, repo.id);
   const orphans = repo.host ? [] : repoOrphans(info, repo.path);
-  if (!hasLanding(l) && orphans.length === 0 && warm === null) return null;
+  if (!hasLanding(l) && orphans.length === 0 && warm === null && chip === null) return null;
   const act = (key: string, fn: () => Promise<void>) => {
     setError("");
     setBusy(key);
@@ -125,7 +137,24 @@ export function LandingSection({ repo }: { repo: Repo }) {
       className="landing-section"
       label="Landing"
       head={<>{words && <span className={words.tone === "back" ? "rust" : "lichen"}>{words.text}</span>}{words && warm && " · "}{warm}</>}
-      title="Branch runs and the queue that lands them on main: rebase, the repo's gates, then a fast-forward. Nothing is pushed."
+      title="Branch runs and the queue that lands them on main: rebase, the repo's gates and holdout scenarios, then a fast-forward. Nothing is pushed."
+      tools={
+        chip && (
+          <button
+            type="button"
+            className={`mini landing-scen ${chip.tone}`}
+            aria-expanded={listOpen}
+            title="The repo's holdout scenarios, by name and kind; their text stays on the backend"
+            onClick={() => {
+              // a file written by hand since the last read shows up here
+              if (!listOpen) void loadScenarioNames(repo.id).catch(() => {});
+              setListOpen(!listOpen);
+            }}
+          >
+            {chip.text}
+          </button>
+        )
+      }
       copy={() =>
         [
           ...l.queue.map((e) => `${e.branch}  ${landWord(e, info.entries)}`),
@@ -138,6 +167,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
       }
     >
       <div className="landing-body">
+        {listOpen && chip && set && <ScenarioList set={set} />}
         {l.groups.map(group => (
           <details key={group.id}>
             <summary>

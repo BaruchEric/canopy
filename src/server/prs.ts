@@ -1,7 +1,8 @@
 /** The PR watch's server half (FR-011): "open PR" on a ready branch run,
  *  one loop that reads every open PR it opened, auto-fix (a failed check or
  *  a trusted review comment starts a fix run on the branch, and canopy
- *  pushes what it commits), auto-merge, the routes, and the `prs` event.
+ *  pushes what it commits), auto-merge with the holdout scenarios run
+ *  before it (`prscenarios.ts`), the routes, and the `prs` event.
  *  The model and its words are `core/pr.ts`; the git is `core/worktree.ts`.
  *
  *  Records live under `<configDir>/prs/<branch id>.json`. Only the server
@@ -12,6 +13,7 @@
 
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { runScenario } from "../core/check";
 import { exec, git, type ExecResult } from "../core/exec";
 import { githubSlug } from "../core/github";
 import type { ProbeResult } from "../core/health";
@@ -45,6 +47,7 @@ import type { LandingRun, PrComment, PrNow, PrState, PrWatch, Run, RunReview, Se
 import { isRunActive } from "../core/types";
 import { dirtyFiles, pushBranch, pushBranchLease, pushRemote, rebaseOnto, removeRunTree, revOf, showAtHead, subjectsSince } from "../core/worktree";
 import { sortRun } from "./landing";
+import { PrScenarios, type PassChange, type PrScenarioDeps } from "./prscenarios";
 
 export const prsDir = (): string => join(configDir(), "prs");
 /** how often the loop looks for a PR that is due a read */
@@ -169,6 +172,9 @@ export interface PrDeps {
   runOk: (id: string) => boolean;
   /** sorts a branch run's worktree by its repo's review rules */
   sort?: (rec: LandingRun, now: number) => Promise<RunReview>;
+  /** the holdout scenarios' pass before a merge (FR-032); `runScenario`
+   *  with no judge unless the server says otherwise */
+  scenarios?: PrScenarioDeps;
   /** the work item's note, link and close lines; absent for pre-ledger watches */
   work?: WorkSink;
   /** the `canopy:prs` health check */
@@ -208,6 +214,12 @@ export class PrHub {
   /** collaborator permissions by `slug login`, asked once per server */
   private perms = new Map<string, string | null>();
   private chains = new Map<string, Promise<void>>();
+  /** the holdout scenarios' pass before a merge, off the serial queue */
+  private holdout = new PrScenarios(
+    () => this.deps.scenarios ?? { run: runScenario, judge: null },
+    () => this.now(),
+    (id, change) => this.passEnded(id, change),
+  );
 
   constructor(private deps: PrDeps) {}
 
@@ -251,9 +263,16 @@ export class PrHub {
     return p;
   }
 
-  /** Resolves once every change asked for so far is done and on disk. */
+  /** Resolves once every change asked for so far is done and on disk,
+   *  scenario passes going included. */
   async idle(): Promise<void> {
-    await this.serial;
+    // a read may start a pass, and a pass's end is a change on the queue
+    let at: Promise<void>;
+    do {
+      at = this.serial;
+      await at;
+      await this.holdout.idle();
+    } while (at !== this.serial);
     while (this.chains.size > 0) await Promise.all(this.chains.values());
   }
 
@@ -312,9 +331,10 @@ export class PrHub {
       try {
         const v: unknown = JSON.parse(await readFile(join(this.dir, n), "utf8"));
         if (isRecord(v) && typeof v["id"] === "string" && typeof v["number"] === "number" && !this.watches.has(v["id"])) {
-          // a rebase the last server was in the middle of died with it: the
-          // next read runs the step again, so the watch must not say it goes
-          const { rebasing: _r, ...w } = v as unknown as PrWatch;
+          // a rebase or a scenario pass the last server was in the middle
+          // of died with it: the next read runs it again, so the watch must
+          // not say it goes
+          const { rebasing: _r, checking: _k, ...w } = v as unknown as PrWatch;
           this.watches.set(w.id, w);
         }
       } catch (err) {
@@ -686,6 +706,7 @@ export class PrHub {
       if (w.autoFix && !w.fixing) w = await this.autoFix(w);
       if (w.autoMerge && !w.fixing && w.state && readyToMerge(w.state, w).ok) {
         w = await this.screen(w, w.state);
+        if (w.state && readyToMerge(w.state, w).ok) w = await this.holdout.gate(w, w.state);
         if (w.state && readyToMerge(w.state, w).ok) w = await this.merge(w, w.state);
         if (w.state?.status === "merged") return null;
       }
@@ -861,6 +882,20 @@ export class PrHub {
     } catch (err) {
       return hold(`its files could not be sorted: ${errText(err)}`);
     }
+  }
+
+  /** A scenario pass ended (`PrScenarios`): its result goes on the watch,
+   *  on the queue like every change, and the watch is read soon, so a
+   *  green pass merges and a hold shows. */
+  private passEnded(id: string, change: PassChange): Promise<void> {
+    return this.queue(async () => {
+      const had = this.watches.get(id);
+      if (!had) return;
+      const w = { ...change(had), updatedAt: this.now() };
+      this.save(w);
+      if (pace(w) !== null) this.due.set(id, this.now());
+      this.publish();
+    });
   }
 
   /** Merges on the head just read, with the repo's own method; the head

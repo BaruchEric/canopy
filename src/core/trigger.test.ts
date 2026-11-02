@@ -902,6 +902,7 @@ describe("fromPr", () => {
   test("needsYou from the PR: approval, auto-fix gave up, a comment without write access and nothing going; gone once the watch is clean", () => {
     expect(needsYouFromPr(watch({ approve: { head: "h1", why: "infra/" } }))).toBe("it touches files that need your approval (infra/); merge it on GitHub yourself");
     expect(needsYouFromPr(watch({ approve: { head: "h0", why: "infra/" } }))).toBeUndefined();
+    expect(needsYouFromPr(watch({ approve: { head: "h1", why: "scenario checkout failed", by: "scenarios" } }))).toBe("its holdout scenarios hold it (scenario checkout failed); merge it on GitHub yourself");
     expect(needsYouFromPr(watch({ gaveUp: "could not rebase onto main after 3 tries" }))).toBe("auto-fix gave up: could not rebase onto main after 3 tries");
     expect(needsYouFromPr(watch({ untrusted: [comment("bob"), comment("ann")] }))).toBe("a review comment by ann, who has no write access, waits for you");
     expect(needsYouFromPr(watch({ untrusted: [comment("ann")], fixing: { run: "f", key: "check:test" } }))).toBeUndefined();

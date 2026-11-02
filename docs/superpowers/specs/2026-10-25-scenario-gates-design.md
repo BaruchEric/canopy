@@ -341,4 +341,10 @@ For Eric:
    only, the record, the sheet's line, `canopy scenarios`. Lands on its own.
 2. Judge scenarios: the questions, `jevScenario`, the hold, "land anyway",
    the score and `minimum`.
-3. The PR watch's pre-merge pass and the repo panel's list.
+3. The PR watch's pre-merge pass and the repo panel's list. Implemented
+   2026-11-02 without a plan document: `server/prscenarios.ts` and
+   `core/prscenarios.ts` (the pass runs off the hub's queue, with
+   `PrWatch.checking` while it goes), the landing section's chip and list,
+   and the `scenarios` event. `ApproveSheet` lists no scenarios: in the
+   queue a red one sends the branch back, and on a PR the merge is left to
+   Eric on GitHub, so neither reaches the sheet.

@@ -57,7 +57,7 @@ import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -930,6 +930,9 @@ export interface CanopyState {
   taskAll: TaskInfo[];
   /** repo id → bumped whenever its builds changed, so the launch section re-reads */
   buildsAt: Record<string, number>;
+  /** repo id → its holdout set by name and kind (FR-032), as last read or
+   *  told by the `scenarios` event; never a file's text */
+  scenarioNames: Record<string, ScenarioNames>;
   /** every shell open in this window, in the order opened */
   terms: TermTab[];
   /** saved tabs of a backend that has not answered yet (or is hidden),
@@ -1228,6 +1231,8 @@ export interface CanopyState {
   landAll: (repoId: string) => Promise<{ queued: string[]; skipped: { id: string; branch: string; why: string }[] }>;
   /** one file's diff from a branch run's latest sort */
   landingDiff: (id: string, path: string) => Promise<string>;
+  /** reads a repo's holdout set by name and kind into `scenarioNames` */
+  loadScenarioNames: (repoId: string) => Promise<void>;
   /** "seen" on landing notices */
   seenLanding: (ids: readonly string[]) => Promise<void>;
   /** opens the approve sheet for a branch run that needs one */
@@ -2236,6 +2241,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   taskErrors: {},
   taskAll: [],
   buildsAt: {},
+  scenarioNames: {},
   terms: [],
   parkedTerms: [],
   stripPage: null,
@@ -3316,6 +3322,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       });
     } else if (ev.type === "builds") {
       set((s) => ({ buildsAt: { ...s.buildsAt, [ev.repoId]: Date.now() } }));
+    } else if (ev.type === "scenarios") {
+      set((s) => ({ scenarioNames: { ...s.scenarioNames, [ev.repoId]: { names: ev.names, errors: ev.errors } } }));
     } else if (ev.type === "launchers") {
       set((s) => ({ launchers: { ...s.launchers, [b]: ev.launchers } }));
     } else if (ev.type === "remembered") {
@@ -3684,6 +3692,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   landAll: (repoId) => api.landAll(repoId),
   landingDiff: async (id, path) => (await api.landingDiff(id, path)).diff,
+  loadScenarioNames: async (repoId) => {
+    const got = await api.scenarioNames(repoId);
+    set((s) => ({ scenarioNames: { ...s.scenarioNames, [repoId]: { names: got.names, errors: got.errors } } }));
+  },
   seenLanding: async (ids) => {
     await api.seenLanding(ids);
   },

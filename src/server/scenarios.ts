@@ -11,7 +11,7 @@ import { DEFAULT_SETTINGS, MAX_TIMEOUT, parseScenario, parseScenarioSet, parseSc
 import type { Scenario, ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
 import { isForge } from "../core/types";
-import type { EvidenceFile, Repo, ScenarioAnswers, ScenarioResult, ScenarioRun } from "../core/types";
+import type { EvidenceFile, Repo, ScenarioAnswers, ScenarioNames, ScenarioResult, ScenarioRun, ServerEvent } from "../core/types";
 import { decideScenario, scenarioState } from "../core/verdict";
 import { repoKey, revOf } from "../core/worktree";
 import type { CheckOutcome } from "./landing";
@@ -41,6 +41,14 @@ async function readSetFiles(root: string, repoPath: string): Promise<{ file: str
 export async function readScenarioSet(root: string, repoPath: string): Promise<ScenarioSet> {
   return parseScenarioSet(await readSetFiles(root, repoPath));
 }
+
+/** A set as a read caller sees it: names and kinds, and an unreadable
+ *  file by its file name only, since the parser's message could quote a
+ *  line typed above the closing `---`. */
+export const namesOf = (set: ScenarioSet): ScenarioNames => ({
+  names: set.scenarios.map((s) => ({ name: s.name, kind: s.kind })),
+  errors: set.errors.map((e) => ({ file: e.file })),
+});
 
 /** `.canopy/scenarios.json` in the main checkout, or the defaults; throws on a file that is there but wrong, like `readGates` */
 export async function readScenarioSettings(mainPath: string): Promise<ScenarioSettings> {
@@ -183,6 +191,8 @@ export interface ScenarioDeps {
   runDir: (run: string, repoPath: string) => string | undefined;
   run: ScenarioRunner;
   judge: ScenarioJudge | null;
+  /** the `scenarios` event after an add or a remove, for the panel's chip */
+  broadcast?: (ev: ServerEvent) => void;
   now?: () => number;
 }
 
@@ -215,11 +225,8 @@ export class Scenarios {
         const repo = this.repoFor(url.searchParams.get("repo"));
         if (repo instanceof Response) return repo;
         if (req.method === "GET" && path === "/api/scenarios") return json(await this.list(repo));
-        if (req.method === "GET" && path === "/api/scenarios/names") {
-          const set = await readScenarioSet(this.deps.root, repo.path);
-          // a read caller gets names and kinds only, so an error file is its file name and no message
-          return json({ names: set.scenarios.map((s) => ({ name: s.name, kind: s.kind })), errors: set.errors.map((e) => ({ file: e.file })) });
-        }
+        // a read caller gets names and kinds only, so an error file is its file name and no message
+        if (req.method === "GET" && path === "/api/scenarios/names") return json(namesOf(await readScenarioSet(this.deps.root, repo.path)));
         if (req.method === "DELETE" && path === "/api/scenarios") return await this.remove(repo, url.searchParams.get("name"));
         return json({ error: "not found" }, 404);
       }
@@ -269,6 +276,7 @@ export class Scenarios {
       if (codeOf(e) === "EEXIST") return json({ error: `a scenario named ${name} is there already` }, 409);
       throw e;
     }
+    await this.told(repo);
     return json({ path: file }, 201);
   }
 
@@ -280,7 +288,16 @@ export class Scenarios {
       if (isMissing(e)) return json({ error: `no scenario named ${name}` }, 404);
       throw e;
     }
+    await this.told(repo);
     return json({ ok: true });
+  }
+
+  /** The set's names to every stream, after canopy changed it. A file
+   *  changed by hand is read again when the panel opens. */
+  private async told(repo: Repo): Promise<void> {
+    if (!this.deps.broadcast) return;
+    const set = await readScenarioSet(this.deps.root, repo.path).catch((): ScenarioSet => ({ scenarios: [], errors: [] }));
+    this.deps.broadcast({ type: "scenarios", repoId: repo.id, ...namesOf(set) });
   }
 
   /** a pass against a branch run's worktree when `run` names one, else the main checkout */

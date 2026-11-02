@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecResult } from "../core/exec";
@@ -9,6 +9,7 @@ import { needsYouFromPr } from "../core/trigger";
 import type { LandingRun, PrWatch, Run, ServerEvent } from "../core/types";
 import { addRunTree, revOf, runTreeDir } from "../core/worktree";
 import { PrHub } from "./prs";
+import { setDirOf } from "./scenarios";
 
 let root = "";
 const sh = async (cwd: string, ...args: string[]): Promise<string> => {
@@ -82,6 +83,10 @@ interface World {
   clock: number | null;
   /** a new hub on the same records, as after a restart */
   restart: () => Promise<PrHub>;
+  /** the holdout scenarios: the sets' root (empty unless a test writes a
+   *  set), each line the fake runner got, what it answers by line, and a
+   *  promise it waits on before answering when set */
+  scen: { root: string; calls: { cwd: string; line: string; setDir: string }[]; answers: Record<string, { exit: number; output: string }>; wait: Promise<void> | null };
 }
 
 const view = (g: Gh, number = 7) => ({
@@ -123,7 +128,8 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
   const g: Gh = { calls: [], auth: true, checks: [], head: null, state: "OPEN", review: "", mergeable: "MERGEABLE", mergeState: "CLEAN", comments: [], perms: {}, mergeFails: false, mergeQueued: false, permDown: false, closeFails: null, prComments: [], closedAt: null, viewer: "eric", now: {} };
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null } as unknown as World;
+  const scen: World["scen"] = { root: join(root, `scen${n}`), calls: [], answers: {}, wait: null };
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, recDir, clock: null, scen } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
@@ -181,6 +187,15 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
       },
       runActive: (x) => w.active.has(x),
       runOk: (x) => !w.active.has(x) && !w.failed.has(x),
+      scenarios: {
+        root: scen.root,
+        judge: null,
+        run: async (cwd, line, setDir) => {
+          scen.calls.push({ cwd, line, setDir });
+          if (scen.wait) await scen.wait;
+          return scen.answers[line] ?? { exit: 0, output: "" };
+        },
+      },
       work: {
         note: (work, text) => w.notes.push(`${work} ${text}`),
         close: (work, state, text) => w.closes.push(`${work} ${state} ${text}`),
@@ -771,6 +786,8 @@ describe("auto-merge", () => {
     expect(existsSync(w.dir)).toBe(false);
     expect((await exec(["git", "rev-parse", "-q", "--verify", `refs/heads/${w.rec.branch}`], { cwd: w.bare })).code).not.toBe(0);
     expect(w.forgot).toEqual([w.rec.id]);
+    // no holdout set: nothing ran before the merge
+    expect(w.scen.calls).toEqual([]);
     const calls = w.gh.calls.length;
     await pollNow(w);
     expect(w.gh.calls.length).toBe(calls);
@@ -852,6 +869,122 @@ describe("auto-merge", () => {
     expect(pr.state?.status).toBe("merged");
     expect(existsSync(w.dir)).toBe(false);
     expect(w.forgot).toEqual([w.rec.id]);
+  });
+});
+
+describe("the holdout scenarios before a merge (FR-032)", () => {
+  const cmd = (name: string, run: string) => `---\nname: ${name}\nkind: command\nrun: ${run}\n---\n`;
+  const writeSet = async (w: World, files: Record<string, string>): Promise<void> => {
+    const dir = setDirOf(w.scen.root, w.path);
+    await mkdir(dir, { recursive: true });
+    for (const [f, text] of Object.entries(files)) await writeFile(join(dir, f), text);
+  };
+  /** a PR whose every condition for auto-merge holds, but the scenarios */
+  const mergeable = async (w: World, change: { autoMerge: boolean; autoFix?: boolean } = { autoMerge: true }): Promise<string> => {
+    await w.hub.open(w.rec.id);
+    const head = (await revOf(w.dir, "HEAD"))!;
+    w.gh.head = head;
+    w.gh.checks = [checkRun("test", "COMPLETED", "SUCCESS")];
+    await w.hub.set(w.rec.id, change);
+    return head;
+  };
+  /** one read, without waiting for a pass it starts; a tick a toggle
+   *  started may be the one that reads, so the queue is waited on */
+  const readOnce = async (w: World): Promise<PrWatch> => {
+    const hub = w.hub as unknown as { due: Map<string, number>; serial: Promise<void> };
+    for (const id of hub.due.keys()) hub.due.set(id, 0);
+    await w.hub.tick();
+    await hub.serial;
+    return w.hub.info()[0]!;
+  };
+
+  test("a red scenario holds the head for Eric with its name and tail, starts no fix, and does not run again on that head", async () => {
+    const w = await world();
+    await writeSet(w, { "checkout.md": cmd("checkout", "e2e checkout") });
+    w.scen.answers["e2e checkout"] = { exit: 1, output: "expected a receipt, got none" };
+    const head = await mergeable(w, { autoMerge: true, autoFix: true });
+    let pr = await pollNow(w);
+    expect(w.gh.calls.some((c) => c[1] === "merge")).toBe(false);
+    expect(pr.approve).toEqual({ head, why: "scenario checkout failed", by: "scenarios" });
+    expect(pr.scenarios).toMatchObject({ head, total: 1, passed: 0, results: [{ name: "checkout", kind: "command", ok: false, tail: "expected a receipt, got none" }] });
+    expect(pr.checking).toBeUndefined();
+    // in the PR's worktree, with a copy of the set rather than the set itself
+    expect(w.scen.calls.map((c) => c.cwd)).toEqual([w.dir]);
+    expect(w.scen.calls[0]!.setDir).not.toBe(setDirOf(w.scen.root, w.path));
+    expect(needsYouFromPr(pr)).toBe("its holdout scenarios hold it (scenario checkout failed); merge it on GitHub yourself");
+    pr = await pollNow(w);
+    expect(w.scen.calls).toHaveLength(1);
+    expect(w.fixes).toEqual([]);
+    expect(w.gh.calls.some((c) => c[1] === "merge")).toBe(false);
+    expect(existsSync(w.dir)).toBe(true);
+  });
+
+  test("auto-merge waits while the pass runs, off the queue, then merges on a green one", async () => {
+    const w = await world();
+    await writeSet(w, { "checkout.md": cmd("checkout", "e2e checkout") });
+    let release!: () => void;
+    w.scen.wait = new Promise((res) => (release = res));
+    const head = await mergeable(w);
+    let pr = await readOnce(w);
+    expect(pr.checking?.head).toBe(head);
+    // the hub's queue is free while the set runs: a toggle answers
+    expect((await w.hub.set(w.rec.id, { autoFix: false })).checking?.head).toBe(head);
+    pr = await readOnce(w);
+    expect(w.gh.calls.some((c) => c[1] === "merge")).toBe(false);
+    release();
+    await w.hub.idle();
+    pr = w.hub.info()[0]!;
+    expect([pr.checking, pr.approve, pr.scenarios?.passed, pr.scenarios?.head]).toEqual([undefined, undefined, 1, head]);
+    pr = await pollNow(w);
+    expect(w.gh.calls.find((c) => c[1] === "merge")).toEqual(["pr", "merge", "7", "-R", "o/r", "--match-head-commit", head, "--squash"]);
+    expect(pr.state?.status).toBe("merged");
+    expect(w.scen.calls).toHaveLength(1);
+  });
+
+  test("a green pass is kept by head: a merge GitHub refuses is tried again without running the set", async () => {
+    const w = await world();
+    await writeSet(w, { "checkout.md": cmd("checkout", "e2e checkout") });
+    w.gh.mergeFails = true;
+    await mergeable(w);
+    await pollNow(w);
+    let pr = await pollNow(w);
+    expect(pr.error).toContain("merging: Head branch was modified");
+    pr = await pollNow(w);
+    expect(w.gh.calls.filter((c) => c[1] === "merge")).toHaveLength(2);
+    expect(w.scen.calls).toHaveLength(1);
+  });
+
+  test("a judge scenario with no judge holds, and its story is in no watch and no event", async () => {
+    const w = await world();
+    await writeSet(w, { "refund.md": "---\nname: refund\nkind: judge\n---\nThe customer reads WHY-THE-REFUND-WENT in one line.\n" });
+    const head = await mergeable(w);
+    const pr = await pollNow(w);
+    expect(pr.approve).toEqual({ head, why: "scenario refund needs a judge: no gateway key", by: "scenarios" });
+    expect(JSON.stringify(w.events)).not.toContain("WHY-THE-REFUND-WENT");
+    expect(await readFile(join(w.recDir, `${w.rec.id}.json`), "utf8")).not.toContain("WHY-THE-REFUND-WENT");
+  });
+
+  test("auto-merge off runs nothing", async () => {
+    const w = await world();
+    await writeSet(w, { "checkout.md": cmd("checkout", "e2e checkout") });
+    await mergeable(w, { autoMerge: false });
+    const pr = await pollNow(w);
+    expect([pr.checking, pr.scenarios, w.scen.calls.length]).toEqual([undefined, undefined, 0]);
+  });
+
+  test("a pass a restart cut off is not still going: the next server runs it again and merges", async () => {
+    const w = await world();
+    await writeSet(w, { "checkout.md": cmd("checkout", "e2e checkout") });
+    await mergeable(w);
+    await w.hub.idle();
+    const file = join(w.recDir, `${w.rec.id}.json`);
+    const left = { ...JSON.parse(await readFile(file, "utf8")), checking: { head: w.gh.head, since: 1 } };
+    await writeFile(file, JSON.stringify(left));
+    const hub = await w.restart();
+    expect(hub.info()[0]!.checking).toBeUndefined();
+    const pr = await pollNow(w, hub);
+    expect(pr.state?.status).toBe("merged");
+    expect(w.scen.calls).toHaveLength(1);
   });
 });
 

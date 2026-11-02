@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_SETTINGS } from "../core/scenario";
-import type { Repo, ScenarioAnswers, ScenarioRun } from "../core/types";
+import type { Repo, ScenarioAnswers, ScenarioRun, ServerEvent } from "../core/types";
 import { repoKey } from "../core/worktree";
 import { copySet, readScenarioSet, readScenarioSettings, runScenarioSet, Scenarios, setDirOf, JUDGE_OFF, NO_JUDGE_KEY, OUT_OF_TIME, type ScenarioRunner } from "./scenarios";
 
@@ -192,7 +192,7 @@ function hub(
   repoPath: string,
   runDir?: string,
   answers: Record<string, { exit: number; output: string }> = {},
-  opts: { runRepo?: string; repo?: Partial<Repo>; judge?: (state: string) => Promise<ScenarioAnswers> } = {},
+  opts: { runRepo?: string; repo?: Partial<Repo>; judge?: (state: string) => Promise<ScenarioAnswers>; events?: ServerEvent[] } = {},
 ) {
   const repo: Repo = { id: "r", name: "r", path: repoPath, group: "", source: "root", status: null, ...opts.repo };
   const calls: string[] = [];
@@ -206,6 +206,7 @@ function hub(
       return answers[line] ?? { exit: 0, output: "" };
     },
     now: () => 42,
+    ...(opts.events ? { broadcast: (ev: ServerEvent) => opts.events!.push(ev) } : {}),
   });
   const call = (method: string, path: string, body?: unknown) =>
     s.handle(new Request(`http://x${path}`, { method, ...(body ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}) }), new URL(`http://x${path}`));
@@ -254,6 +255,24 @@ test("names lists an unreadable file by its file name only, never the parser's m
   // the admin list keeps the message
   const list = (await (await call("GET", "/api/scenarios?repo=r"))!.json()) as { errors: { file: string; error: string }[] };
   expect(list.errors).toEqual([{ file: "story.md", error: "story.md: frontmatter line is not key: value" }]);
+});
+
+test("an add or a remove tells every stream the set by name and kind, never a file's text", async () => {
+  const repo = join(root, "r20");
+  await mkdir(repo, { recursive: true });
+  await setFor(repo, { "story.md": "---\nname: story\nkind: judge\nThe customer gets the refund within a day.\n---\n" });
+  const events: ServerEvent[] = [];
+  const { call } = hub(repo, undefined, {}, { events });
+  expect((await call("POST", "/api/scenarios", { repo: "r", name: "refund", kind: "judge" }))!.status).toBe(201);
+  expect(events).toEqual([{ type: "scenarios", repoId: "r", names: [{ name: "refund", kind: "judge" }], errors: [{ file: "story.md" }] }]);
+  expect((await call("DELETE", "/api/scenarios?repo=r&name=refund"))!.status).toBe(200);
+  expect(events[1]).toEqual({ type: "scenarios", repoId: "r", names: [], errors: [{ file: "story.md" }] });
+  // a refused add tells nothing
+  expect((await call("POST", "/api/scenarios", { repo: "r", name: "../x" }))!.status).toBe(400);
+  expect(events).toHaveLength(2);
+  const said = JSON.stringify(events);
+  expect(said).not.toContain("customer");
+  expect(said).not.toContain("What a user does");
 });
 
 test("a repo on another host is refused", async () => {

@@ -86,3 +86,26 @@ test("a retained landing entry without a valid run ID renders branch text withou
     expect(html).not.toMatch(/<button[^>]*class="landing-branch landing-open"/);
   }
 });
+
+test("a repo with a holdout set shows the section with a chip by count, and never a scenario's text", () => {
+  useStore.setState({ scenarioNames: { [repo.id]: { names: [{ name: "checkout", kind: "command" }, { name: "refund", kind: "judge" }], errors: [] } } });
+  const html = render(pool({ want: 0 }));
+  expect(html).toContain('aria-label="Landing"');
+  expect(html).toMatch(/<button[^>]*class="mini landing-scen lichen"[^>]*aria-expanded="false"[^>]*>scenarios 2<\/button>/);
+  // folded until the chip opens it
+  expect(html).not.toContain("landing-scenarios");
+});
+
+test("a repo on another host gets no scenarios chip, since the routes answer only for the backend's own disk", () => {
+  useStore.setState({ scenarioNames: { [repo.id]: { names: [{ name: "checkout", kind: "command" }], errors: [] } } });
+  setRegistry("a", ["a", "b"]);
+  useStore.setState({ home: "a", backendOrder: ["a", "b"], closedSections: {}, worktrees: { b: { root: "/w", free: 1, repos: [pool({ want: 0 })] } } });
+  const initial = useStore.getInitialState();
+  const previous = { ...initial };
+  Object.assign(initial, useStore.getState());
+  try {
+    expect(renderToStaticMarkup(<LandingSection repo={{ ...repo, host: "mini" }} />)).toBe("");
+  } finally {
+    Object.assign(initial, previous);
+  }
+});

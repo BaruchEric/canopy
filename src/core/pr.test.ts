@@ -17,6 +17,7 @@ import {
   prNumberOf,
   prBody,
   readyToMerge,
+  approveWords,
   readyToRebase,
   rebaseKey,
   trusted,
@@ -227,6 +228,18 @@ describe("readyToMerge", () => {
     expect(why({ queued: "other" })).toBe("ready");
     expect(why({ approve: { head, why: "CLAUDE.md" } })).toBe("it touches files that need your approval (CLAUDE.md); merge it on GitHub yourself");
     expect(why({ approve: { head: "other", why: "x" } })).toBe("ready");
+  });
+
+  test("not while the holdout scenarios run on the head, nor on one they held", () => {
+    const head = state().head;
+    const why = (w: Partial<PrWatch>) => {
+      const r = readyToMerge(state(), watch(w));
+      return r.ok ? "ready" : r.why;
+    };
+    expect(why({ checking: { head, since: 1 } })).toBe("its holdout scenarios are running");
+    expect(why({ checking: { head: "other", since: 1 } })).toBe("ready");
+    expect(why({ approve: { head, why: "scenario checkout failed", by: "scenarios" } })).toBe("its holdout scenarios hold it (scenario checkout failed); merge it on GitHub yourself");
+    expect(approveWords({ head, why: "infra/" })).toBe("it touches files that need your approval (infra/); merge it on GitHub yourself");
   });
 });
 

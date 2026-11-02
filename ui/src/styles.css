@@ -5291,6 +5291,14 @@ a.landing-state {
   font-size: 11px;
   color: var(--rust);
 }
+/* a repo's holdout scenarios, opened from the section's chip: names and
+   kinds only, above the queue */
+.landing-scenarios {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--hair);
+}
 .landing-section .moss {
   color: var(--moss);
 }

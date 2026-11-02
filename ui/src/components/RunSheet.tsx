@@ -6,7 +6,7 @@ import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
 import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
-import { branchByDefault, resultWord, runLanding, scenarioLine, scenarioTone, stoppedLandTitle } from "../landing";
+import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
 import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick, profileNames } from "../agents";
@@ -14,6 +14,7 @@ import { EffectiveTable, PickEditor } from "./AgentForm";
 import { FleetPlan, FleetSheet, FlowConsole, FlowPlan } from "./FlowSheet";
 import { GroupSheet } from "./GroupSheet";
 import { ApproveSheet, OverlapChip } from "./Landing";
+import { ScenarioPass } from "./Scenarios";
 import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
 import { KeysSheet } from "./Keys";
@@ -687,22 +688,7 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
       {l.why && <span className="run-branch-why">{l.why}</span>}
       {l.entry?.reason && l.entry.state !== "red" && <span className="run-branch-why">{l.entry.reason}</span>}
       {l.overlaps?.map((overlap, index) => <OverlapChip key={`${overlap.name}:${index}`} name={overlap.name} paths={overlap.paths} />)}
-      {l.scenarios && (
-        <details className="run-scenarios">
-          <summary className={`run-branch-why ${scenarioTone(l.scenarios)}`} title="The repo's holdout scenarios over this branch; their text stays on the server">
-            {scenarioLine(l.scenarios)}
-          </summary>
-          <ul>
-            {l.scenarios.results.map((r) => (
-              <li key={r.name} className={r.ok ? "" : "rust"}>
-                <span>{resultWord(r)}</span> <span>{r.name}</span> <span className="dim">{r.kind}</span>
-                {(r.why ?? r.unjudged) && <span className="dim"> {r.why ?? r.unjudged}</span>}
-                {r.tail && <pre>{r.tail}</pre>}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {l.scenarios && <ScenarioPass pass={l.scenarios} title="The repo's holdout scenarios over this branch; their text stays on the server" />}
       <span className="spacer" />
       {!run.kept && l.canLand && l.approve && (
         <button type="button" className="mini strong" title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(b.origin)}>
@@ -797,6 +783,7 @@ function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Pro
       )}
       {w.fixing && <span className="run-pr-note">a fix is going for {w.fixing.key.replace(/^check:/, "check ").replace(/^comment:/, "comment ")}</span>}
       {why && <span className="run-pr-note">{why}</span>}
+      {w.scenarios && <ScenarioPass pass={w.scenarios} head={w.state?.head} title="The repo's holdout scenarios over the PR's head, run before auto-merge; their text stays on the server, and a red one leaves the merge to you" />}
       {w.gaveUp && <span className="run-branch-why">auto-fix gave up: {w.gaveUp}</span>}
       {w.error && <span className="run-branch-why">{w.error}</span>}
       {w.untrusted && w.untrusted.length > 0 && (

@@ -194,6 +194,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "job-gone":
       return { ...ev, id: q(ev.id) };
     case "builds":
+    case "scenarios":
       return { ...ev, repoId: q(ev.repoId) };
     case "terms":
       return { ...ev, terms: ev.terms.map((t) => qTerm(q, t)) };

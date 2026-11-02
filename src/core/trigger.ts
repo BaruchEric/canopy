@@ -8,7 +8,7 @@ import { checkWhen } from "./actions";
 import { isSeedRepoId } from "./sprout";
 import { TRIGGER_ENV_PREFIX } from "./envnames";
 import { ISSUE_COMMENTS, type IssueView } from "./issue";
-import { fence } from "./pr";
+import { approveWords, fence } from "./pr";
 import { unattendedRefusal } from "./workflow";
 import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run, Workflow } from "./types";
 
@@ -844,13 +844,13 @@ export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent
 }
 
 /** What an open PR waits on Eric for, as a sentence, or nothing: the head
- *  his review rules hold for his approval, auto-fix that gave up, a head
+ *  his review rules or its holdout scenarios hold for his approval, auto-fix that gave up, a head
  *  canopy did not push while auto-fix or auto-merge is on (both stop on
  *  it, so the PR is his from there), or a review comment from someone
  *  without write access while no fix and no rebase goes (the newest such
  *  comment's author). */
 export function needsYouFromPr(w: PrWatch): string | undefined {
-  if (w.approve && w.approve.head === w.state?.head) return `it touches files that need your approval (${w.approve.why}); merge it on GitHub yourself`;
+  if (w.approve && w.approve.head === w.state?.head) return approveWords(w.approve);
   if (w.gaveUp !== undefined) return `auto-fix gave up: ${w.gaveUp}`;
   if ((w.autoFix || w.autoMerge) && w.state && w.state.head !== w.pushed) return "the branch has a commit canopy did not push; from here you rebase, fix and merge it yourself";
   const c = w.untrusted?.[w.untrusted.length - 1];

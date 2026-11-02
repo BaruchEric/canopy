@@ -5849,6 +5849,7 @@ export async function startServer(opts: {
     }),
     scenarios: new Scenarios({
       root: scenariosRoot(),
+      broadcast: (ev) => broadcast(state, ev),
       judge: hasGatewayKey() ? jevScenario : null,
       repo: (id) => state.result.repos.find((r) => r.id === id),
       runDir: (id, repoPath) => {
@@ -5890,6 +5891,7 @@ export async function startServer(opts: {
       // a run a restart took is unknown here, which counts as not finished
       runOk: (id) => state.runner.get(id)?.status === "done",
       report: (r) => state.health.report(PRS_CHECK, r),
+      scenarios: { run: runScenario, judge: hasGatewayKey() ? jevScenario : null },
       work: {
         note: (id, text) => state.work.note(id, text),
         close: (id, end, text) => state.work.close(id, end, text),

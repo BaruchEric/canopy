@@ -556,6 +556,8 @@ export function describeEvent(
     // the card's worktrees section shows each kept tree
     case "trees":
     case "prs":
+    // the landing section's scenarios chip counts the set
+    case "scenarios":
     // the triggers view lists every event and what became of it
     case "triggers":
     // a pair request is answered where callers are listed, not in the feed

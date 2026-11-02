@@ -116,10 +116,18 @@ export function checksWord(s: Pick<PrState, "checks">): string {
   return running > 0 ? `checks: ${running} running` : "checks passed";
 }
 
+/** What a head held for Eric waits on, as auto-merge and the inbox say
+ *  it: files his review rules name, or the holdout scenarios (FR-032),
+ *  named by the scenario and never by its text. */
+export function approveWords(a: NonNullable<PrWatch["approve"]>): string {
+  if (a.by === "scenarios") return `its holdout scenarios hold it (${a.why}); merge it on GitHub yourself`;
+  return `it touches files that need your approval (${a.why}); merge it on GitHub yourself`;
+}
+
 /** Whether canopy may merge the PR as just read, or why not. Every check
  *  in the rollup counts as required, since `gh pr view` does not say which
- *  are. */
-export function readyToMerge(s: PrState, w: Pick<PrWatch, "autoMerge" | "fixing" | "pushed" | "queued" | "approve">): { ok: true } | { ok: false; why: string } {
+ *  are. A pass of the holdout scenarios going on the head holds it too. */
+export function readyToMerge(s: PrState, w: Pick<PrWatch, "autoMerge" | "fixing" | "pushed" | "queued" | "approve" | "checking">): { ok: true } | { ok: false; why: string } {
   const no = (why: string) => ({ ok: false as const, why });
   if (!w.autoMerge) return no("auto-merge is off");
   if (s.status !== "open") return no(`it is ${s.status}`);
@@ -127,7 +135,8 @@ export function readyToMerge(s: PrState, w: Pick<PrWatch, "autoMerge" | "fixing"
   if (w.fixing) return no("a fix is going");
   if (s.head !== w.pushed) return no("the head moved since canopy pushed");
   if (w.queued === s.head) return no("GitHub has the merge queued");
-  if (w.approve?.head === s.head) return no(`it touches files that need your approval (${w.approve.why}); merge it on GitHub yourself`);
+  if (w.approve?.head === s.head) return no(approveWords(w.approve));
+  if (w.checking?.head === s.head) return no("its holdout scenarios are running");
   // a head pushed a moment ago may have no checks queued yet
   if (s.checks.length === 0) return no("no checks have run on it yet");
   const failed = s.checks.find((c) => c.state === "fail");

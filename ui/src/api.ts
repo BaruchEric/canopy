@@ -91,6 +91,7 @@ import type {
   RunAction,
   RunAnswer,
   ScanResult,
+  ScenarioNames,
   ShellPlace,
   ServerEvent,
   SourceInput,
@@ -964,6 +965,8 @@ export const api = {
     const [b, plain] = on(id);
     return req<{ path: string; diff: string }>(b, `/api/landing/diff?${rq(plain, { path })}`);
   },
+  /** a repo's holdout set by name and kind (FR-032), never a file's text */
+  scenarioNames: (repoId: string) => repoReq<ScenarioNames>(repoId, (plain) => `/api/scenarios/names?${new URLSearchParams({ repo: plain }).toString()}`),
   /** "seen" on landing notices, each sent to its own backend */
   seenLanding: async (ids: readonly string[]) => {
     const by = new Map<string, string[]>();

@@ -1490,8 +1490,17 @@ export interface PrWatch {
    *  merged yet, and not asked again */
   queued?: string;
   /** a head whose files the repo's review rules hold for Eric's approval,
-   *  which auto-merge leaves for him; `why` names the files */
-  approve?: { head: string; why: string };
+   *  which auto-merge leaves for him; `why` names the files. `by:
+   *  "scenarios"` when the holdout scenarios held it instead (FR-032), and
+   *  `why` names the scenario, never its text */
+  approve?: { head: string; why: string; by?: "scenarios" };
+  /** the holdout scenarios' latest pass before a merge (FR-032), on the
+   *  head it names, kept so a read every 30 s never runs them twice on one
+   *  head */
+  scenarios?: ScenarioRun;
+  /** the head the holdout scenarios run on now and since when (unix ms),
+   *  which auto-merge waits for; present only while a pass goes */
+  checking?: { head: string; since: number };
   /** the last poll's or merge's error */
   error?: string;
   /** when the sweep closed the PR, unix ms: the watch is read once a day,
@@ -1641,6 +1650,14 @@ export interface ScenarioRun {
   results: ScenarioResult[];
   /** Judge scenarios explicitly skipped by land anyway. */
   skipped?: string[];
+}
+
+/** A repo's holdout set as anyone with read may see it (`GET
+ *  /api/scenarios/names`, the `scenarios` event): names and kinds, and a
+ *  file that does not parse by its file name alone. Never a file's text. */
+export interface ScenarioNames {
+  names: { name: string; kind: "command" | "judge" }[];
+  errors: { file: string }[];
 }
 
 /** A best-of-N member's read-only gate pass, before anyone lands it. */
@@ -1880,6 +1897,9 @@ export type ServerEvent =
   | { type: "trees"; trees: BranchTreesInfo }
   /** the PRs branch runs opened, whole, whenever one changes (FR-011) */
   | { type: "prs"; prs: PrWatch[] }
+  /** a repo's holdout set after canopy added or removed a file (FR-032):
+   *  names and kinds only, since every stream hears every event */
+  | ({ type: "scenarios"; repoId: string } & ScenarioNames)
   /** every work item, whole, whenever one changes (FR-037) */
   | { type: "work"; items: WorkItem[] }
   /** every trigger event kept, whole, whenever one changes */
