@@ -1384,6 +1384,23 @@ export interface KeptRunHead {
   origin?: string;
 }
 
+/** A finished run's story for the replay bar (FR-043 plan 2), from
+ *  `GET /api/runs/<id>/replay`: its steps in order, each at the time it
+ *  came, with the prompts the harness asked placed among them. */
+export interface RunReplay {
+  /** `record`: the run's own steps at their own times, with the prompts its
+   *  wire shows the harness asking placed among them. `wire`: every step
+   *  folded back out of the wire, for a record a restart left empty or whose
+   *  oldest steps were trimmed; canopy's own notes are not in a wire, and a
+   *  step's time is the nearest canopy line before it. */
+  source: "record" | "wire";
+  steps: RunStep[];
+  /** the ids of the steps that are a prompt the harness asked */
+  asks: string[];
+  /** the wire stops short: it reached its size limit and was cut */
+  cut: boolean;
+}
+
 /** Where a branch run's work stands: still going, commits and a clean
  *  worktree (`ready`, the one state the queue takes), changes left
  *  uncommitted, nothing at all, or cut off by a canopy restart. */

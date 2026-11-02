@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { KeptRunHead, Run } from "../core/types";
 import { askText } from "./health";
 import { RUN_USAGE, runCommand } from "./run";
-import { keptLines, showLines } from "./run-transcripts";
+import { keptLines, replayLines, showLines } from "./run-transcripts";
 
 const now = Date.UTC(2026, 9, 26, 12);
 const H = 3_600_000;
@@ -46,6 +46,24 @@ const run: Run = {
 };
 
 const fail = (message: string): never => { throw new Error(message); };
+
+test("replayLines shows the head, where the steps came from, and the replay's steps", () => {
+  const steps = [
+    { id: "w1", at: Date.UTC(2026, 9, 26, 9, 0, 1), kind: "tool" as const, tool: { name: "Bash", title: "git push", status: "ok" as const } },
+    { id: "ask1", at: Date.UTC(2026, 9, 26, 9, 0, 2), kind: "note" as const, text: "asked: git push" },
+  ];
+  const lines = replayLines({ ...run, steps: [] }, { source: "wire", steps, asks: ["ask1"], cut: true });
+  expect(lines.slice(0, 2)).toEqual(["Build in dev-tools/canopy (kept)", "run: ab12cd34"]);
+  expect(lines.slice(-4)).toEqual([
+    "steps: rebuilt from the wire, without canopy's own notes",
+    "the wire was cut at its size limit, so the steps stop short",
+    "  09:00:01  tool  Bash: git push (ok)",
+    "  09:00:02  note  asked: git push",
+  ]);
+  expect(replayLines(run, { source: "record", steps: run.steps, asks: [], cut: false })).toEqual([
+    ...showLines(run).slice(0, -run.steps.length), "steps: the record's, with the prompts its wire shows", ...showLines(run).slice(-run.steps.length),
+  ]);
+});
 
 test("keptLines sorts newest first and formats the age, repo, status, and cost", () => {
   expect(keptLines([head({ id: "older", ended: now - 50 * H, cost: null, status: "failed" }), head()], now)).toEqual([
@@ -119,6 +137,7 @@ test("runCommand lists, shows, exports verbatim, writes an export, and prunes", 
       requests.push(route);
       if (route === "GET /api/runs?kept=1") return Response.json([head()]);
       if (route === "GET /api/runs/ab12cd34") return Response.json(run);
+      if (route === "GET /api/runs/ab12cd34/replay") return Response.json({ source: "record", steps: run.steps, asks: [], cut: false });
       if (route === "GET /api/runs/ab12cd34/export") return new Response(exportText, { headers: { "content-type": "text/markdown" } });
       if (route === "POST /api/runs/prune") return Response.json({ removed: ["old1", "old2"], kept: 1 });
       return Response.json({ error: "unexpected route" }, { status: 404 });
@@ -132,6 +151,10 @@ test("runCommand lists, shows, exports verbatim, writes an export, and prunes", 
   try {
     await runCommand(["--backend", `http://127.0.0.1:${server.port}`], { fail });
     await runCommand(["show", "ab12cd34", "--backend", `http://127.0.0.1:${server.port}`], { fail });
+    const shown = logs.length;
+    await runCommand(["show", "ab12cd34", "--wire", "--backend", `http://127.0.0.1:${server.port}`], { fail });
+    expect(logs.slice(shown)).toContain("steps: the record's, with the prompts its wire shows");
+    logs.splice(shown);
     const writes: string[] = [];
     const oldWrite = process.stdout.write;
     Object.defineProperty(process.stdout, "write", {
@@ -155,6 +178,8 @@ test("runCommand lists, shows, exports verbatim, writes an export, and prunes", 
     expect(requests).toEqual([
       "GET /api/runs?kept=1",
       "GET /api/runs/ab12cd34",
+      "GET /api/runs/ab12cd34",
+      "GET /api/runs/ab12cd34/replay",
       "GET /api/runs/ab12cd34/export",
       "GET /api/runs/ab12cd34/export",
       "POST /api/runs/prune",

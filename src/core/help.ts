@@ -72,6 +72,7 @@ usage:
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy run                         the runs kept on disk, newest first: id, when, repo, what, status, cost
   canopy run show <id>               a kept run's head and timeline (a live run's too)
+  canopy run show <id> --wire        a finished run's steps as its kept wire replays them, with the prompts it asked
   canopy run export <id> [--out f]   its transcript as markdown, to stdout or a file, secrets redacted
   canopy run prune                   remove kept runs past the sweep's transcript span; a live branch's or an open PR's stays
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)

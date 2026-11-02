@@ -6,7 +6,9 @@ import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk,
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
 import { providerFile } from "./store";
-import { DEFAULT_AGENT } from "./types";
+import { DEFAULT_AGENT, type RunStep } from "./types";
+import { replayWire } from "./wirereplay";
+import { WIRE_TICK } from "./runlog";
 import { RunCtx, type DriveRun } from "./driver";
 import { STAGE_AWAY } from "./stagewire";
 
@@ -60,6 +62,8 @@ async function drive(
     prompt: null,
   };
   const wire: [string, string][] = [];
+  /** when each wire line came, as the run log would stamp it */
+  const stamps: number[] = [];
   const ended: string[] = [];
   const ctx = new RunCtx(
     run,
@@ -77,6 +81,7 @@ async function drive(
       label: "Claude Code",
       wire: (d, l) => {
         wire.push([d, l]);
+        stamps.push(Date.now());
         if (d === "out") opts.onWire?.(run, l);
       },
     },
@@ -104,7 +109,7 @@ async function drive(
       .filter(Boolean)
       .map((l) => JSON.parse(l) as Record<string, unknown>);
   const done = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
-  return { run, ctx, driver, until, sent, done, ended, wire };
+  return { run, ctx, driver, until, sent, done, ended, wire, stamps };
 }
 
 const responseTo = (log: Record<string, unknown>[], id: string) =>
@@ -788,5 +793,93 @@ describe("the stall watchdog's message", () => {
     await chat.until((r) => r.status === "idle", "the first reply");
     expect(chat.driver.nudge("hello")).toBe(false);
     chat.driver.stop();
+  });
+});
+
+/* ---------- plan 2's reducer, on the wire a live run recorded ---------- */
+
+describe("foldClaude replays the recorded wire into the steps the live run made", () => {
+  type Harness = Awaited<ReturnType<typeof drive>>;
+  /** the run's wire as the run log keeps it: canopy's start line, each in
+   *  line stamped, the out lines as read with a tick before one that came
+   *  after a quiet spell */
+  const kept = (h: Harness): string[] => {
+    let last = h.run.startedAt;
+    const lines = [JSON.stringify({ canopy: "start", at: last, run: h.run.id, repo: h.run.repoId, action: h.run.action, harness: "claude", argv: [] })];
+    h.wire.forEach(([d, l], i) => {
+      const at = h.stamps[i] ?? last;
+      if (d === "in") lines.push(JSON.stringify({ canopy: "in", at, line: l }));
+      else if (at - last >= WIRE_TICK) lines.push(JSON.stringify({ canopy: "tick", at }), l);
+      else lines.push(l);
+      if (d === "in" || at - last >= WIRE_TICK) last = at;
+    });
+    return lines;
+  };
+  /** what a step shows, with a parent named by its place among the work steps */
+  const shape = (steps: readonly RunStep[]) => {
+    const work = steps.filter((s) => s.kind === "text" || s.kind === "tool");
+    const place = new Map(work.map((s, i) => [s.id, i]));
+    return work.map((s) => ({ kind: s.kind, text: s.text, tool: s.tool, parent: s.parent === undefined ? undefined : place.get(s.parent) }));
+  };
+  const check = (h: Harness) => {
+    const rebuilt = replayWire(kept(h), { ...h.run, steps: [] }, { cwd: h.ctx.cwd, home: homedir() });
+    expect(rebuilt.source).toBe("wire");
+    expect(shape(rebuilt.steps)).toEqual(shape(h.run.steps));
+    // with the record whole, its own steps stand and the wire places the asks
+    const record = replayWire(kept(h), h.run, { cwd: h.ctx.cwd, home: homedir() });
+    expect(record.source).toBe("record");
+    expect(record.steps.filter((s) => !record.asks.includes(s.id))).toEqual(h.run.steps);
+    return { rebuilt, record };
+  };
+
+  test("a job with two prompts, one taken back", async () => {
+    const h = await drive("job");
+    const w = await h.until((r) => r.status === "waiting", "the prompt");
+    h.ctx.answer(w.prompt?.id ?? "", { kind: "allow" });
+    await h.until(h.done, "the end");
+    const { rebuilt, record } = check(h);
+    const words = (steps: readonly RunStep[]) => steps.filter((s) => s.kind === "note").map((s) => s.text);
+    // the wire's asks and answers in the live notes' words; the cancel settles as a deny
+    expect(words(rebuilt.steps)).toEqual(["asked: git push", "asked: rm x", "denied: rm x", "allowed: git push"]);
+    // placed in the record after the step the CLI asked after, before the notes that answered them
+    expect(words(record.steps)).toEqual(["asked: git push", "asked: rm x", ...words(h.run.steps)]);
+    expect(record.steps.map((s) => s.kind).slice(0, 5)).toEqual(["text", "tool", "tool", "note", "note"]);
+  });
+
+  test("a chat of two messages", async () => {
+    const h = await drive("chat", "hello");
+    await h.until((r) => r.status === "idle", "the first reply");
+    h.run.status = "working";
+    h.ctx.step({ kind: "user", text: "again" });
+    h.driver.say("again");
+    await h.until((r) => r.status === "idle" && r.result?.text === "reply 2", "the second reply");
+    h.ctx.ending = true;
+    h.driver.stop();
+    await h.until(h.done, "the end");
+    const { rebuilt } = check(h);
+    expect(rebuilt.steps.filter((s) => s.kind !== "note").map((s) => [s.kind, s.text])).toEqual([["text", "reply 1"], ["user", "again"], ["text", "reply 2"]]);
+  });
+
+  test("a subagent's steps under its Agent call, and its own checklist", async () => {
+    const h = await drive("subtodo");
+    const w = await h.until((r) => r.status === "waiting", "the subagent's prompt");
+    h.ctx.answer(w.prompt?.id ?? "", { kind: "allow" });
+    await h.until(h.done, "the end");
+    const { rebuilt } = check(h);
+    expect(rebuilt.steps.some((s) => s.parent !== undefined)).toBe(true);
+  });
+
+  test("a plan sent back with words, then approved", async () => {
+    const h = await drive("propose");
+    const w = await h.until((r) => r.prompt?.kind === "proposal", "the proposal");
+    const first = w.prompt?.id ?? "";
+    h.ctx.answer(first, { kind: "deny", message: "add a test step" });
+    const w2 = await h.until((r) => r.prompt?.kind === "proposal" && r.prompt.id !== first, "the second proposal");
+    h.ctx.answer(w2.prompt?.id ?? "", { kind: "approve", auto: false });
+    await h.until(h.done, "the end");
+    const { rebuilt } = check(h);
+    expect(rebuilt.steps.filter((s) => s.kind === "note").map((s) => s.text)).toEqual([
+      "asked: the plan", "sent the plan back: add a test step", "asked: the plan", "approved the plan, asking before commands",
+    ]);
   });
 });

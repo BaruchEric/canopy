@@ -8,7 +8,7 @@ import { spawnEnv, type DriveCtx, type RunDriver } from "../core/driver";
 import type { FlowFile } from "../core/flowstore";
 import { parseWorkflow } from "../core/workflow";
 import { RunLog } from "../core/runlog";
-import type { KeptRunHead, LandEntry, LandingRun, PrWatch, Run, SweepInfo } from "../core/types";
+import type { KeptRunHead, LandEntry, LandingRun, PrWatch, Run, RunReplay, SweepInfo } from "../core/types";
 import { startServer } from "./index";
 
 let scratch: string;
@@ -77,6 +77,42 @@ test("live memory, restart recovery, kept list, export, validation and admin pru
   expect(await exported.text()).toContain(`- run: ${id}\n`);
   for (const bad of ["../x", "nothere", "x%2Fy", "a".repeat(65)]) expect((await fetch(url(`/api/runs/${bad}`))).status).toBe(404);
   expect(await (await call("/api/runs/prune")).json()).toEqual({ removed: [], kept: 2 });
+});
+
+test("a finished run replays from its wire, a live one is refused, and a head-only record rebuilds its steps", async () => {
+  const id = await startChat();
+  expect((await fetch(url(`/api/runs/${id}/replay`))).status).toBe(409);
+  expect((await call("/api/runs/say", { id, text: "again" })).status).toBe(200);
+  await until(async () => (await runOf(id))?.steps.filter((s) => s.kind === "text").length === 2, "the second reply");
+  expect((await call("/api/runs/stop", { id })).status).toBe(200);
+  await until(async () => existsSync(join(scratch, "config/runs", id, "wire.jsonl.gz")), "transcript settlement");
+  const live = await (await fetch(url(`/api/runs/${id}/replay`))).json() as RunReplay;
+  expect(live.source).toBe("record");
+  expect(live.steps.filter((s) => s.kind !== "note").map((s) => [s.kind, s.text])).toEqual([["user", "hello"], ["text", "reply 1"], ["user", "again"], ["text", "reply 2"]]);
+  // a record a restart left empty: the steps come back out of the wire, the chat's messages with them
+  const folder = join(scratch, "config/runs", "zz2");
+  await mkdir(folder, { recursive: true });
+  const at = (n: number) => ({ canopy: "tick", at: 1000 + n });
+  const lines = [
+    { canopy: "start", at: 1000, run: "zz2", repo: "proj", action: "chat", harness: "claude", argv: [] },
+    { canopy: "in", at: 1001, line: JSON.stringify({ type: "user", message: { role: "user", content: "framing\n\nFirst message from the user:\nwhat is here?" } }) },
+    { type: "system", subtype: "init", session_id: "s", cwd: join(scratch, "root/proj") },
+    at(500), { type: "assistant", message: { content: [{ type: "text", text: "Looking." }, { type: "tool_use", id: "t1", name: "Bash", input: { command: "ls" } }] } },
+    at(900), { type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: "a.ts" }] } },
+  ];
+  await writeFile(join(folder, "wire.jsonl"), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  await restart();
+  expect(await (await fetch(url("/api/runs/zz2"))).json()).toMatchObject({ id: "zz2", kept: true, status: "stopped", steps: [] });
+  const rebuilt = await (await fetch(url("/api/runs/zz2/replay"))).json() as RunReplay;
+  expect(rebuilt.source).toBe("wire");
+  expect(rebuilt.steps.map((s) => [s.kind, s.text ?? s.tool?.title, s.tool?.status, s.tool?.output, s.at])).toEqual([
+    ["user", "what is here?", undefined, undefined, 1001],
+    ["text", "Looking.", undefined, undefined, 1500],
+    ["tool", "ls", "ok", "a.ts", 1500],
+  ]);
+  expect((await fetch(url(`/api/runs/${id}/replay`))).status).toBe(200);
+  expect((await fetch(url("/api/runs/nothere/replay"))).status).toBe(404);
+  expect((await fetch(url("/api/runs/..%2Fx/replay"))).status).toBe(404);
 });
 
 test("shutdown drains a running logged process before another owner recovers", async () => {

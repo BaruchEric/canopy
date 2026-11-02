@@ -11,6 +11,10 @@ import { configDir } from "./store";
 import { AGENT_EFFORTS, PRIORITIES, type Harness, type KeptRunHead, type Run, type RunBranch, type RunStep } from "./types";
 
 export const RUN_LOG_MAX = 50 * 1024 * 1024;
+/** Out lines carry no time of their own: one comes after a `tick` line once
+ *  this long has passed since canopy's last line, so a replay can space the
+ *  steps it folds out of the wire (FR-043 plan 2). */
+export const WIRE_TICK = 250;
 export const WIRE = "wire.jsonl";
 export const WIRE_GZ = "wire.jsonl.gz";
 export const RUN_FILE = "run.json";
@@ -22,6 +26,7 @@ type Terminal = KeptRunHead["status"];
 export type CanopyLine =
   | { canopy: "start"; at: number; run: string; repo: string; action: string; harness: Harness; argv: string[] }
   | { canopy: "in"; at: number; line: string }
+  | { canopy: "tick"; at: number }
   | { canopy: "cut"; at: number; bytes: number }
   | { canopy: "end"; at: number; status: Terminal; error?: string };
 
@@ -258,6 +263,20 @@ export async function readKeptRun(dir: string, id: string): Promise<Run | null> 
   const value = parse(read(join(folder, RUN_FILE)));
   return isRun(value) && value.id === id ? { ...value, kept: true } : null;
 }
+/** A run's wire as its lines, for the replay: the plain file while the run
+ *  is still being written or settled, else the gzip. Null when the folder is
+ *  missing or refused, or holds neither file. */
+export async function readWire(dir: string, id: string): Promise<string[] | null> {
+  const folder = safeFolder(dir, id); if (!folder || rejected(folder)) return null;
+  const plain = read(join(folder, WIRE));
+  if (plain !== null) return plain.split("\n").filter(Boolean);
+  let fd: number | undefined;
+  try {
+    fd = fileFd(join(folder, WIRE_GZ), constants.O_RDONLY);
+    const text = await new Response(Bun.file(fd).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+    return text.split("\n").filter(Boolean);
+  } catch { return null; } finally { if (fd !== undefined) closeSync(fd); }
+}
 async function startOf(folder: string): Promise<unknown> {
   let fd: number | undefined;
   let cancel: (() => Promise<void>) | undefined;
@@ -315,12 +334,15 @@ export class RunLog {
   private failed = false;
   private cut = false;
   private settled: Promise<void> | undefined;
+  /** when canopy last wrote a line of its own with a time */
+  private last: number;
   private privacy: RunLogPrivacy;
   private now: () => number;
   constructor(private init: RunLogInit) {
     if (!RUN_ID.test(init.run.id)) throw new Error("invalid run id");
     this.privacy = privacyOf(init); this.now = init.now ?? Date.now;
     const start: CanopyLine = { canopy: "start", at: this.now(), run: trusted(init.run.id, this.privacy), repo: trusted(init.run.repoId, this.privacy), action: redactLine(init.run.action, init.secrets).line, harness: trusted(init.run.harness, this.privacy), argv: redactArgv(init.argv, init.secrets) };
+    this.last = start.at;
     directory(init.dir, true); chmodSync(init.dir, 0o700);
     this.folder = join(init.dir, init.run.id); directory(this.folder, true); chmodSync(this.folder, 0o700);
     try {
@@ -358,9 +380,18 @@ export class RunLog {
     if (this.failed || this.cut || this.settled) return;
     try {
       const sanitized = wireText(line, this.privacy);
-      if (dir === "out") this.bounded(sanitized);
-      else {
-        const incoming: CanopyLine = { canopy: "in", at: this.now(), line: sanitized };
+      const at = this.now();
+      if (dir === "out") {
+        if (at - this.last >= WIRE_TICK) {
+          const tick: CanopyLine = { canopy: "tick", at };
+          checkFacts(tick, this.privacy); trusted(tick.canopy, this.privacy);
+          this.bounded(JSON.stringify(tick)); this.last = at;
+          if (this.cut) return;
+        }
+        this.bounded(sanitized);
+      } else {
+        const incoming: CanopyLine = { canopy: "in", at, line: sanitized };
+        this.last = at;
         checkFacts(incoming, this.privacy); trusted(incoming.canopy, this.privacy);
         this.bounded(JSON.stringify(incoming));
       }

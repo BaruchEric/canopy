@@ -255,7 +255,7 @@ test("worktree routes: the listing reads, warm is admin, prune operates", () => 
 
 
 test("kept runs: reading is open, pruning is admin", () => {
-  for (const path of ["/api/runs/ab12cd34", "/api/runs/ab12cd34/export", "/api/runs?kept=1"]) expect(needs("GET", path)).toBe("read");
+  for (const path of ["/api/runs/ab12cd34", "/api/runs/ab12cd34/export", "/api/runs/ab12cd34/replay", "/api/runs?kept=1"]) expect(needs("GET", path)).toBe("read");
   expect(needs("POST", "/api/runs/prune")).toBe("admin");
   expect(allows("shell", needs("POST", "/api/runs/prune"))).toBe(false);
   expect(allows("cli", needs("POST", "/api/runs/prune"))).toBe(true);

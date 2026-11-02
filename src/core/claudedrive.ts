@@ -5,28 +5,26 @@
  *  Permission requests and questions come back on stdout as control
  *  requests; the run parks on them through `ctx.ask()` until the browser
  *  answers and the reply goes down stdin. Every other message is folded into
- *  the run's steps and result. No SDK: the wire format is the one the CLI
- *  speaks to its own SDK, and only the small part of it used here.
+ *  the run's steps and result by `foldClaude` (`claudefold.ts`, pure, which
+ *  the replay of a kept wire shares). No SDK: the wire format is the one the
+ *  CLI speaks to its own SDK, and only the small part of it used here.
  *
  *  The prompt queue, "allow all", the notes a settled prompt leaves and how
  *  an exit becomes a status are the Runner's `RunCtx`, shared with Codex. */
 
 import { homedir } from "node:os";
-import { resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
+import { absolutePath, claudeFold, foldClaude, toolPaths as foldToolPaths, type ClaudeFold } from "./claudefold";
 import { bunSpawn, LineSplitter, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
-import { writtenPaths } from "./explain";
 import { agentArgs, withProviderFile } from "./harness";
 import { noteCliCommands } from "./mentions";
 import { providersDir } from "./store";
-import { relPath, toolTouch } from "./touch";
-import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo, type RunTokens, type RunTool } from "./types";
-import { TODO_TOOLS, todoCreated, todoUpdated, todoWritten } from "./todos";
+import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunTool } from "./types";
 
-/** characters of tool output kept per step */
-const OUTPUT_CAP = 2_000;
+export { claudeAccounting, foldClaude, claudeFold, type ClaudeFold } from "./claudefold";
+
 /** stderr kept for the failure message */
 const STDERR_CAP = 2_000;
 /** how long a stage run's exit waits for the last of its stderr */
@@ -46,46 +44,6 @@ const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === 
 
 const num = (o: Record<string, unknown>, k: string): number => (typeof o[k] === "number" ? o[k] : 0);
 
-function nonnegative(o: Record<string, unknown>, k: string): number {
-  const n = o[k];
-  return typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-/** The result's modelUsage is cumulative across the query pipeline (including
- *  subagents); the top-level `usage` only covers the main loop and is not a
- *  safe substitute for session accounting. */
-export function claudeAccounting(m: Record<string, unknown>): { tokens?: RunTokens; model?: string; provider?: string } {
-  const byModel = isRecord(m["modelUsage"]) ? m["modelUsage"] : null;
-  if (!byModel) return {};
-  let input = 0;
-  let cachedInput = 0;
-  let output = 0;
-  let hasTokens = false;
-  const models = new Set<string>();
-  const providers = new Set<string>();
-  for (const [name, raw] of Object.entries(byModel)) {
-    if (!isRecord(raw)) continue;
-    const model = typeof raw["canonicalModel"] === "string" ? raw["canonicalModel"] : name;
-    if (model) models.add(model);
-    if (typeof raw["provider"] === "string" && raw["provider"]) {
-      providers.add(raw["provider"] === "firstParty" ? "anthropic" : raw["provider"]);
-    }
-    const fresh = nonnegative(raw, "inputTokens");
-    const cached = nonnegative(raw, "cacheReadInputTokens");
-    const created = nonnegative(raw, "cacheCreationInputTokens");
-    const generated = nonnegative(raw, "outputTokens");
-    hasTokens ||= fresh + cached + created + generated > 0;
-    input += fresh + cached + created;
-    cachedInput += cached;
-    output += generated;
-  }
-  return {
-    ...(hasTokens ? { tokens: { input, cachedInput, output, reasoning: 0, total: input + output } } : {}),
-    ...(models.size === 1 ? { model: [...models][0] } : models.size > 1 ? { model: "multiple" } : {}),
-    ...(providers.size === 1 ? { provider: [...providers][0] } : providers.size > 1 ? { provider: "multiple" } : {}),
-  };
-}
-
 /** Whether a message is the CLI at work on a turn (a fresh init, a message,
  *  a prompt) rather than its bookkeeping about background tasks. A
  *  subagent's own message (one with `parent_tool_use_id`) is never the main
@@ -96,20 +54,6 @@ const wakes = (m: Record<string, unknown>): boolean => {
   if (type === "system") return str(m, "subtype") === "init";
   return type === "assistant" || type === "user" || type === "control_request" || type === "control_cancel_request";
 };
-
-/** Text of a tool_result block, whatever shape it arrived in. */
-function resultText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((c: unknown) => (isRecord(c) ? str(c, "text") : ""))
-    .filter(Boolean)
-    .join("\n");
-}
-
-function clip(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}\n… (${s.length - max} more characters)` : s;
-}
 
 /** AskUserQuestion input → the questions the browser renders. Anything
  *  malformed becomes an empty list, and the run answers "deny". */
@@ -149,24 +93,14 @@ export function permissionAsk(tool: string, input: Record<string, unknown>, cwd:
     detail: toolDetail(tool, input, cwd),
     ...(description ? { description } : {}),
     ...(tool === "Bash" && command ? { command } : {}),
-    ...(file ? { paths: [absolutePath(file, cwd)] } : {}),
+    ...(file ? { paths: [absolutePath(file, cwd, homedir())] } : {}),
   };
 }
 
-/** A tool's path as the file it names: `~` is the home folder, a relative
- *  path is under the run's folder, `..` folded. */
-function absolutePath(file: string, cwd: string): string {
-  if (file === "~" || file.startsWith("~/")) return resolve(homedir(), file.slice(2));
-  return resolve(cwd, file);
-}
-
-/** What a tool call touches, for the step (FR-040): a file tool's path from the
- *  run's folder, a Bash line's `writtenPaths`, nothing for a read. */
+/** What a tool call touches (FR-040), from this machine's home folder:
+ *  `claudefold.ts`'s `toolPaths`. */
 export function toolPaths(tool: string, input: Record<string, unknown>, cwd: string): Pick<RunTool, "paths" | "touchesUnknown"> {
-  if (tool === "Bash") return toolTouch(writtenPaths(str(input, "command"), cwd));
-  if (!["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(tool)) return {};
-  const file = tool === "NotebookEdit" ? str(input, "notebook_path") : str(input, "file_path");
-  return file ? { paths: [relPath(absolutePath(file, cwd), cwd)] } : {};
+  return foldToolPaths(tool, input, cwd, homedir());
 }
 
 /** The reply the CLI expects on stdin to a can_use_tool request. */
@@ -233,6 +167,10 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
   ];
 }
 
+/** What a plan turned down with no words of the user's tells the CLI; a
+ *  replay tells it from a plan sent back with words. */
+export const PLAN_TURNED_DOWN = "The user turned the plan down. Stop here and summarize what you found.";
+
 /** A user message as the CLI reads it on stdin. */
 const userMessage = (content: string) => ({
   type: "user",
@@ -261,11 +199,9 @@ export class ClaudeDriver implements RunDriver {
   private proc: RpcProc | null = null;
   /** the binary check() found */
   private bin: string | null = null;
-  /** tool_use id → its step, to attach results to their call */
-  private tools = new Map<string, RunStep>();
-  /** main-thread todo tool calls by id, read once their result arrives */
-  private todoInputs = new Map<string, { name: string; input: Record<string, unknown> }>();
-  private todos: RunTodo[] = [];
+  /** what folding the wire has kept so far: the tool steps by call id,
+   *  the checklist, the model, the turns of held results (`claudefold.ts`) */
+  private fold: ClaudeFold = claudeFold("", homedir(), Date.now());
   /** the session id is taken from the first message that carries one */
   private sessionSeen = false;
   /** live subagent task ids (spec P7): task_type local_agent only, since a
@@ -278,15 +214,6 @@ export class ClaudeDriver implements RunDriver {
   /** the subagents are done and the turn they woke has begun: the held
    *  result now waits for that turn's own, however long it runs */
   private woke = false;
-  /** the turns of results held and then outrun by a later one, which the
-   *  CLI counts per result: the run's own result adds them back. Null when
-   *  nothing was held, so a plain result keeps the CLI's own numbers. */
-  private heldTurns: number | null = null;
-  /** the model the CLI's init named, for the cost ledger */
-  private model = "";
-  /** when the message that began this turn went down stdin, for the time
-   *  of a result after a hold (the CLI times its last turn alone) */
-  private turnStart = Date.now();
   /** canopy's own control requests to the CLI, waiting on its control_response */
   private asked = new Map<string, { settle: (r: RequestReply) => void; done: Promise<RequestReply> }>();
   private asks = 0;
@@ -305,14 +232,15 @@ export class ClaudeDriver implements RunDriver {
 
   start(ctx: DriveCtx, message: string): void {
     this.ctx = ctx;
+    this.fold.cwd = ctx.cwd;
     void this.drive(message);
   }
 
   /** A chat's next message goes down the same stdin as a plain user
    *  message, and the CLI keeps the conversation. */
   say(text: string): void {
-    this.turnStart = Date.now();
-    this.heldTurns = null;
+    this.fold.turnStart = Date.now();
+    this.fold.heldTurns = null;
     void this.send(userMessage(text));
   }
 
@@ -380,8 +308,8 @@ export class ClaudeDriver implements RunDriver {
     this.agents = new Set();
     this.held = null;
     this.woke = false;
-    this.heldTurns = null;
-    this.turnStart = Date.now();
+    this.fold.heldTurns = null;
+    this.fold.turnStart = Date.now();
     this.clearGrace();
     this.closed = false;
     try {
@@ -405,7 +333,6 @@ export class ClaudeDriver implements RunDriver {
 
       for await (const m of lines(proc.stdout, (line) => ctx.wire("out", line))) {
         if (m["type"] === "system" && str(m, "subtype") === "init") {
-          this.model = str(m, "model") || this.model;
           const cmds = m["slash_commands"];
           if (Array.isArray(cmds)) noteCliCommands("claude", cmds.filter((c): c is string => typeof c === "string"));
         }
@@ -441,13 +368,13 @@ export class ClaudeDriver implements RunDriver {
           if (m["type"] === "result" && this.agents.size > 0) {
             // spec P5/P6: the main thread paused for a subagent; closing
             // stdin now would fail every later permission request
-            if (this.held) this.heldTurns = (this.heldTurns ?? 0) + num(this.held, "num_turns");
+            if (this.held) this.fold.heldTurns = (this.fold.heldTurns ?? 0) + num(this.held, "num_turns");
             this.held = m;
             this.woke = false;
             continue;
           }
           if (m["type"] === "result" && this.held) {
-            this.heldTurns = (this.heldTurns ?? 0) + num(this.held, "num_turns");
+            this.fold.heldTurns = (this.fold.heldTurns ?? 0) + num(this.held, "num_turns");
             this.held = null;
           }
           this.apply(m);
@@ -465,7 +392,7 @@ export class ClaudeDriver implements RunDriver {
               if (this.held !== held) return;
               this.held = null;
               // a held result is timed from the start too, as one that outran it is
-              this.heldTurns ??= 0;
+              this.fold.heldTurns ??= 0;
               this.apply(held);
               if (!chat) this.endInput(running);
             }, this.opts.heldGraceMs ?? HELD_GRACE_MS);
@@ -489,7 +416,7 @@ export class ClaudeDriver implements RunDriver {
       // ran is a failure, whatever the early result said. A stop dropped it.
       if (held) {
         const tail = stderr.trim();
-        this.heldTurns ??= 0;
+        this.fold.heldTurns ??= 0;
         this.apply(held, code === 0 ? null : `${this.label} exited (code ${code}) while a subagent ran${tail ? `: ${tail}` : ""}`);
       }
       ctx.exited({ code, stderr });
@@ -625,7 +552,7 @@ export class ClaudeDriver implements RunDriver {
       return {
         result: {
           behavior: "deny",
-          message: (a.kind === "deny" && a.message) || "The user turned the plan down. Stop here and summarize what you found.",
+          message: (a.kind === "deny" && a.message) || PLAN_TURNED_DOWN,
         },
       };
     }
@@ -654,101 +581,12 @@ export class ClaudeDriver implements RunDriver {
     };
   }
 
-  /** Folds one message into the run. `failure`, for a result only, is the
-   *  problem that overrides what the result itself says. */
+  /** Folds one message into the run (`foldClaude`). `failure`, for a result
+   *  only, is the problem that overrides what the result itself says. */
   private apply(m: Record<string, unknown>, failure: string | null = null): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    const type = str(m, "type");
-    if (type === "assistant" || type === "user") {
-      const message = isRecord(m["message"]) ? m["message"] : {};
-      const content = message["content"];
-      if (!Array.isArray(content)) return;
-      let changed = false;
-      const parentUse = str(m, "parent_tool_use_id");
-      const parent = parentUse ? this.tools.get(parentUse)?.id : undefined;
-      for (const block of content) {
-        if (!isRecord(block)) continue;
-        const kind = str(block, "type");
-        if (kind === "text") {
-          const text = str(block, "text").trim();
-          if (text) {
-            ctx.step({ kind: "text", text, ...(parent ? { parent } : {}) });
-            changed = true;
-          }
-        } else if (kind === "tool_use") {
-          const input = isRecord(block["input"]) ? block["input"] : {};
-          const name = str(block, "name");
-          const step = ctx.step({
-            kind: "tool",
-            tool: { name, title: describeTool(name, input, ctx.cwd), status: "running", ...toolPaths(name, input, ctx.cwd) },
-            ...(parent ? { parent } : {}),
-          });
-          this.tools.set(str(block, "id"), step);
-          if (!parentUse && TODO_TOOLS.has(name)) {
-            if (name === "TodoWrite") {
-              const next = todoWritten(input);
-              if (next) {
-                this.todos = next;
-                ctx.todos(next);
-              }
-            } else {
-              this.todoInputs.set(str(block, "id"), { name, input });
-            }
-          }
-          changed = true;
-        } else if (kind === "tool_result") {
-          const useId = str(block, "tool_use_id");
-          const step = this.tools.get(useId);
-          const todoCall = this.todoInputs.get(useId);
-          if (todoCall) {
-            this.todoInputs.delete(useId);
-            if (block["is_error"] !== true) {
-              if (todoCall.name === "TaskCreate") this.todos = todoCreated(this.todos, todoCall.input, resultText(block["content"]));
-              else if (todoCall.name === "TaskUpdate") this.todos = todoUpdated(this.todos, todoCall.input);
-              if (todoCall.name === "TaskCreate" || todoCall.name === "TaskUpdate") ctx.todos(this.todos);
-            }
-          }
-          if (!step?.tool) continue;
-          step.tool.status = block["is_error"] === true ? "error" : "ok";
-          const text = resultText(block["content"]).trim();
-          if (text) step.tool.output = clip(text, OUTPUT_CAP);
-          changed = true;
-        }
-      }
-      if (changed) ctx.changed();
-      return;
-    }
-    if (type === "result") {
-      const subtype = str(m, "subtype");
-      const isError = m["is_error"] === true;
-      const errors = Array.isArray(m["errors"])
-        ? m["errors"].filter((e): e is string => typeof e === "string")
-        : [];
-      const text = subtype === "success" ? str(m, "result") : errors.join("\n");
-      const own = num(m, "num_turns");
-      // a result that outran a held one, or a held one the run ends on,
-      // counts every turn since the message and the time since it went
-      // down stdin
-      const outran = this.heldTurns !== null;
-      const turns = own + (this.heldTurns ?? 0);
-      const durationMs = outran ? Date.now() - this.turnStart : num(m, "duration_ms");
-      this.heldTurns = null;
-      const ok = subtype === "success" && !isError;
-      const problem =
-        subtype === "error_max_turns"
-          ? `stopped after ${own} turns without finishing`
-          : subtype === "error_max_budget_usd"
-            ? "stopped at the spending limit"
-            : text.trim() || "Claude Code reported an error";
-      const accounting = claudeAccounting(m);
-      // A job ends with it; a chat's result ends one reply, not the
-      // conversation, and a reply that failed is said in the timeline.
-      ctx.result(
-        { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns, ...(this.model ? { model: this.model } : {}), ...accounting },
-        failure ?? (ok ? null : problem),
-      );
-    }
+    foldClaude(this.fold, m, ctx, { failure, now: Date.now() });
   }
 }
 

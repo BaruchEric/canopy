@@ -5608,6 +5608,43 @@ a.sweep-title:hover {
   gap: 4px;
 }
 
+/* a finished run's replay bar (FR-043 plan 2): play, speed, the scrubber
+   over the steps, jumps; it wraps to two rows on a phone */
+.replay-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+}
+.replay-speeds {
+  display: inline-flex;
+  gap: 2px;
+}
+.replay-scrub {
+  flex: 1 1 140px;
+  min-width: 100px;
+  accent-color: var(--moss);
+}
+.replay-clock {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+}
+.replay-jump {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+}
+.replay-note {
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
 /* the console: one trunk, a node per step, the same 3px as the leaf edge */
 .console {
   padding: 12px 16px 16px;

@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeOpen, DiskRunLogger, dropKept, headOf, INDEX, listKept, pruneKept, readKeptRun, rebuildIndex, RUN_FILE, RUN_ID, RUN_LOG_MAX, RunLog, WIRE, WIRE_GZ } from "./runlog";
+import { closeOpen, DiskRunLogger, dropKept, headOf, INDEX, listKept, pruneKept, readKeptRun, readWire, rebuildIndex, RUN_FILE, RUN_ID, RUN_LOG_MAX, RunLog, WIRE, WIRE_GZ, WIRE_TICK } from "./runlog";
 import type { Run } from "./types";
 
 let root = "";
@@ -30,11 +30,33 @@ test("wire directions are ordered and redacted before writing, then settle is on
   await Promise.all([log.settle(value), log.settle(run({ status: "failed" }))]);
   expect(await wire(log.folder)).toEqual([
     { canopy: "start", at: 10, run: value.id, repo: "repo", action: "ask", harness: "claude", argv: ["claude", "--mcp-config=<redacted:mcp-config>"] },
-    { token: "<redacted:CANOPY_TOKEN>" }, { canopy: "in", at: 11, line: "hello" }, { canopy: "end", at: 12, status: "done" },
+    // the out line reads the clock too (11), for its tick, which 1 ms is too soon for
+    { token: "<redacted:CANOPY_TOKEN>" }, { canopy: "in", at: 12, line: "hello" }, { canopy: "end", at: 13, status: "done" },
   ]);
   expect(await readKeptRun(dir, value.id)).toMatchObject({ kept: true, note: "<redacted:CANOPY_TOKEN>", session: "session", status: "done" });
   expect(await listKept(dir)).toEqual([headOf(value)]);
   expect(existsSync(join(log.folder, WIRE))).toBe(false);
+});
+
+test("an out line after a quiet spell is stamped by a tick, and readWire reads the wire plain or gzipped", async () => {
+  const dir = join(root, "ticks");
+  const times = [100, 100 + WIRE_TICK - 1, 100 + WIRE_TICK + 50, 100 + WIRE_TICK + 60, 100 + 3 * WIRE_TICK, 100 + 3 * WIRE_TICK + 10];
+  let i = 0;
+  const log = open(dir, run({ id: "ticks" }), { now: () => times[Math.min(i++, times.length - 1)] ?? 0 });
+  log.wire("out", '{"n":1}');
+  log.wire("out", '{"n":2}');
+  log.wire("in", "x");
+  log.wire("out", '{"n":3}');
+  // plain while the run is going
+  expect((await readWire(dir, "ticks"))?.map((line): unknown => JSON.parse(line))).toEqual([
+    expect.objectContaining({ canopy: "start", at: 100 }), { n: 1 }, { canopy: "tick", at: 100 + WIRE_TICK + 50 }, { n: 2 }, { canopy: "in", at: 100 + WIRE_TICK + 60, line: "x" }, { canopy: "tick", at: 100 + 3 * WIRE_TICK }, { n: 3 },
+  ]);
+  await log.settle(run({ id: "ticks" }));
+  const kept = await readWire(dir, "ticks");
+  expect(kept?.length).toBe(8);
+  expect(JSON.parse(kept?.at(-1) ?? "null")).toMatchObject({ canopy: "end", status: "done" });
+  expect(await readWire(dir, "missing")).toBeNull();
+  expect(await readWire(dir, "../ticks")).toBeNull();
 });
 
 test("existing folders and files become private and every output is private", async () => {

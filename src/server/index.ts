@@ -243,8 +243,10 @@ import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
-import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
+import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
 import { exportRun } from "../core/export";
+import { redactLine } from "../core/redact";
+import { redactReplay, replayWire } from "../core/wirereplay";
 import { sentBack } from "../core/landing";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX, takeTriggerSecrets } from "../core/envnames";
 import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
@@ -3642,7 +3644,7 @@ async function handleApi(
     await state.readyRunlog();
     return json((await listKeptRuns(runsDir())).sort((a, b) => b.ended - a.ended));
   }
-  const keptRoute = /^\/api\/runs\/([^/]+)(\/export)?$/.exec(path);
+  const keptRoute = /^\/api\/runs\/([^/]+)(\/export|\/replay)?$/.exec(path);
   if (keptRoute && method === "GET") {
     const id = keptRoute[1] ?? "";
     if (!RUN_ID.test(id)) return json({ error: "no run by that id" }, 404);
@@ -3650,6 +3652,18 @@ async function handleApi(
     if (!run) { await state.readyRunlog(); run = await readKeptRun(runsDir(), id); }
     if (!run) return json({ error: "no run by that id" }, 404);
     if (!keptRoute[2]) return json(run);
+    if (keptRoute[2] === "/replay") {
+      // a replay is of a run that has ended: a live one's wire is still coming
+      if (!run.kept && isRunActive(run)) return json({ error: "the run is still going" }, 409);
+      await state.readyRunlog();
+      const lines = await readWire(runsDir(), id);
+      if (!lines) return json({ error: "no wire is kept for that run" }, 404);
+      let secrets: ReturnType<DiskRunLogger["currentSecrets"]>["secrets"];
+      try { secrets = state.runlog.currentSecrets().secrets; } catch { throw new HttpError(503, "current transcript secrets are unavailable"); }
+      // where the run worked, as the wire spells it: redacted the same way
+      const cwd = run.branch?.dir ?? state.result.repos.find((r) => r.id === run.repoId)?.path ?? "";
+      return json(redactReplay(replayWire(lines, run, { cwd: redactLine(cwd, secrets).line, home: homedir() }), secrets));
+    }
     const origin = run.branch?.origin ?? run.id;
     const landing = state.landing.info().entries.find((e) => e.id === origin);
     const pr = state.prs.info().find((w) => w.id === origin);

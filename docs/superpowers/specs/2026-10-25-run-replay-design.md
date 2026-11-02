@@ -277,6 +277,14 @@ For Eric:
    `run.json`, `GET /api/runs/<id>`, the kept sheet, the sweep span,
    `canopy run show|export|prune`, redaction (P5).
 2. **Replay and the pure reducers**: `foldClaude`/`foldCodex`, replay from
-   the wire, the replay bar.
+   the wire, the replay bar. As built (2026-11-02): the reducers live in
+   their own browser-safe files (`core/claudefold.ts`, `core/codexfold.ts`),
+   since the driver files import node; the wire gains a `tick` line so the
+   steps folded out of it have times; the server folds the wire and places
+   the prompts (`core/wirereplay.ts`, `GET /api/runs/<id>/replay`), keeping
+   the record's own steps while they are whole; `ui/src/replay.ts` is the
+   bar's timeline, cursor and jumps. A finished run still in memory gets the
+   bar from a "replay" button, and `canopy run show <id> --wire` prints the
+   replay. `docs/architecture.md` "Run transcripts" has the detail.
 3. **Fork**: P1–P4, `--fork-session`, the transcript copy and cut, the
    summary handoff, `POST /api/runs/fork`, the fork sheet.

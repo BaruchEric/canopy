@@ -36,20 +36,19 @@
 
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
 import { takesProvider } from "./harness";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
-import { spawnEnv, type DriveAgent, type DriveCtx, type DriveResult, type DriveTokens, type PromptInput, type RunDriver } from "./driver";
-import { writtenPaths } from "./explain";
+import { changesInput, codexFold, codexThread, codexTurn, fileChanges, foldCodex, NO_COST, ownThread, type CodexFold, type CodexFolded, type FileChange } from "./codexfold";
+import { spawnEnv, type DriveAgent, type DriveCtx, type PromptInput, type RunDriver } from "./driver";
 import { commandWords, EDIT_TOOLS, parseRule, unwrapShell, type ToolRule } from "./shellwords";
-import { relPath, toolTouch } from "./touch";
-import type { RunAnswer, RunQuestion, RunStep, RunTool } from "./types";
+import type { RunAnswer, RunQuestion } from "./types";
 
-/** characters of tool output kept per step, as for a Claude run */
-const OUTPUT_CAP = 2_000;
+export { codexFold, codexThread, codexTurn, foldCodex, itemTool, NO_COST, tokensOf, turnResult, type CodexFold } from "./codexfold";
+
 /** characters of a prompt's detail */
 const DETAIL_CAP = 4_000;
 /** from an interrupt or a polite close to a kill */
@@ -74,7 +73,7 @@ const DEVELOPER = [
 
 /** An answer for every question in a set the user closed without answering,
  *  in the words a Claude run gets when a question is dismissed. */
-const DISMISSED = "The user closed the question without answering. Stop and summarize.";
+export const DISMISSED = "The user closed the question without answering. Stop and summarize.";
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
@@ -83,18 +82,7 @@ const rec = (v: unknown): Record<string, unknown> => (isRecord(v) ? v : {});
 
 const str = (o: Record<string, unknown>, k: string): string => (typeof o[k] === "string" ? o[k] : "");
 
-const num = (o: Record<string, unknown>, k: string): number | null => (typeof o[k] === "number" ? o[k] : null);
-
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
-
-function clip(s: string, max: number): string {
-  return s.length > max ? `${s.slice(0, max)}\n… (${s.length - max} more characters)` : s;
-}
-
-/** Paths inside the repo lose the repo prefix, as in actions.ts. */
-function shorten(path: string, root: string): string {
-  return root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path;
-}
 
 /** Where the codex binary is, or null. */
 export function codexBinary(): string | null {
@@ -321,106 +309,6 @@ export function autoAnswer(rules: readonly string[], facts: ApprovalFacts, cwd: 
     return facts.paths.every((p) => resolve(cwd, p) !== resolve(cwd) && within(p, cwd));
   }
   return false;
-}
-
-/* ---------- items: what the timeline shows ---------- */
-
-type FileChange = { path: string; kind: string; movePath: string | null; diff: string };
-
-function fileChanges(item: Record<string, unknown>): FileChange[] {
-  const raw = item["changes"];
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((c: unknown) => {
-    if (!isRecord(c) || !str(c, "path")) return [];
-    const kind = rec(c["kind"]);
-    return [{ path: str(c, "path"), kind: str(kind, "type"), movePath: str(kind, "move_path") || null, diff: str(c, "diff") }];
-  });
-}
-
-/** A file change's files as the shared Edit tool's input: its title and its
- *  diff are the same words a Claude edit gets. */
-const changesInput = (changes: FileChange[]): Record<string, unknown> => ({ changes });
-
-/** Text out of an MCP result's content blocks. */
-function contentText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  return content
-    .map((c: unknown) => (isRecord(c) && str(c, "type") === "text" ? str(c, "text") : ""))
-    .filter(Boolean)
-    .join("\n");
-}
-
-type Phase = "started" | "completed";
-
-/** Codex's item status as a step's. An item with no status of its own (a web
- *  search) is running until it completes. */
-function toolStatus(item: Record<string, unknown>, phase: Phase): RunTool["status"] {
-  const s = str(item, "status");
-  if (s === "inProgress") return "running";
-  if (s === "failed" || s === "declined" || s === "interrupted") return "error";
-  if (s === "completed") return "ok";
-  return phase === "completed" ? "ok" : "running";
-}
-
-/** A tool-like item as the timeline's tool step, or null for an item that is
- *  not one (messages, reasoning, ...). Names follow Claude's where one fits,
- *  so the console's icons and words need no second vocabulary: a command is
- *  `Bash`, a file change `Edit`, an MCP call `mcp__<server>__<tool>`. */
-export function itemTool(item: Record<string, unknown>, phase: Phase, root: string): RunTool | null {
-  const type = str(item, "type");
-  const status = toolStatus(item, phase);
-  const withOutput = (tool: RunTool, output: string): RunTool => {
-    const text = output.trim();
-    return text ? { ...tool, output: clip(text, OUTPUT_CAP) } : tool;
-  };
-  switch (type) {
-    case "commandExecution": {
-      const script = unwrapShell(str(item, "command"));
-      const itemCwd = item["cwd"];
-      const cwd = typeof itemCwd === "string" && isAbsolute(itemCwd) && !itemCwd.includes("\0") ? resolve(itemCwd) : root;
-      const exit = num(item, "exitCode");
-      const failed = status === "ok" && exit !== null && exit !== 0;
-      const declined = str(item, "status") === "declined";
-      return withOutput(
-        { name: "Bash", title: describeTool("Bash", { command: script }), status: failed ? "error" : status, ...toolTouch(writtenPaths(script, root, cwd)) },
-        declined ? "declined" : str(item, "aggregatedOutput"),
-      );
-    }
-    case "fileChange": {
-      const changes = fileChanges(item);
-      const input = changesInput(changes);
-      const paths = changes.flatMap((change) => [change.path, ...(change.movePath ? [change.movePath] : [])].map((path) => relPath(resolve(root, path), root)));
-      return withOutput(
-        { name: "Edit", title: describeTool("Edit", input, root), status, ...(paths.length ? { paths } : {}) },
-        str(item, "status") === "declined" ? "declined" : phase === "completed" ? toolDetail("Edit", input, root) : "",
-      );
-    }
-    case "mcpToolCall": {
-      const name = `mcp__${str(item, "server")}__${str(item, "tool")}`;
-      const error = str(rec(item["error"]), "message");
-      return withOutput(
-        { name, title: describeTool(name, rec(item["arguments"]), root), status },
-        error || contentText(rec(item["result"])["content"]),
-      );
-    }
-    case "webSearch":
-      return { name: "WebSearch", title: describeTool("WebSearch", { query: str(item, "query") }), status };
-    case "dynamicToolCall": {
-      const tool = str(item, "tool") || "tool";
-      const bad = item["success"] === false;
-      return { name: tool, title: describeTool(tool, rec(item["arguments"])), status: bad ? "error" : status };
-    }
-    case "collabAgentToolCall": {
-      const prompt = str(item, "prompt").split("\n")[0]?.slice(0, 80) ?? "";
-      return { name: "Agent", title: describeTool("Agent", { description: prompt || str(item, "tool") }), status };
-    }
-    case "imageView":
-      return { name: "Read", title: `view ${shorten(str(item, "path"), root)}`, status };
-    case "plan":
-      return withOutput({ name: "Plan", title: describeTool("Plan", {}), status }, str(item, "text"));
-    default:
-      return null;
-  }
 }
 
 /* ---------- approvals and questions ---------- */
@@ -715,72 +603,6 @@ export function questionReply(questions: RunQuestion[], ids: string[], a: RunAns
   return { answers };
 }
 
-/* ---------- the result ---------- */
-
-/** Codex reports no cost, but a page from before harnesses reads a run's
- *  `costUsd` as always there (`costUsd.toFixed`) and would fail to render a
- *  Codex result without one. A zero keeps it drawing; the current page
- *  shows the tokens wherever a result has them (`resultLine`). */
-export const NO_COST = { costUsd: 0 } as const;
-
-export function tokensOf(breakdown: unknown): DriveTokens | undefined {
-  if (!isRecord(breakdown)) return undefined;
-  const n = (k: string) => num(breakdown, k) ?? 0;
-  return {
-    input: n("inputTokens"),
-    cachedInput: n("cachedInputTokens"),
-    output: n("outputTokens"),
-    reasoning: n("reasoningOutputTokens"),
-    total: n("totalTokens"),
-  };
-}
-
-/** The text a turn ended with: its final answer, else its last message,
- *  else whatever the completed turn's own item summary holds. */
-function closingText(final: string, last: string, turn: Record<string, unknown>): string {
-  if (final || last) return final || last;
-  const items = Array.isArray(turn["items"]) ? turn["items"] : [];
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = rec(items[i]);
-    if (str(it, "type") === "agentMessage" && str(it, "text").trim()) return str(it, "text").trim();
-  }
-  return "";
-}
-
-/** `turn/completed` as the run's result and, when it did not complete, the
- *  problem the run reports. `turns` counts Codex turns on the thread, one per
- *  message: Codex does not report the model calls inside one. */
-export function turnResult(
-  turn: Record<string, unknown>,
-  texts: { final: string; last: string },
-  turns: number,
-  tokens: DriveTokens | undefined,
-  elapsedMs: number,
-): { result: DriveResult; problem: string | null } {
-  const status = str(turn, "status");
-  const error = rec(turn["error"]);
-  const detail = [str(error, "message"), str(error, "additionalDetails")].filter(Boolean).join("\n");
-  const problem =
-    status === "completed"
-      ? null
-      : status === "interrupted"
-        ? "the turn was interrupted"
-        : status === "failed"
-          ? detail || "Codex reported an error"
-          : `the turn ended as ${status || "unknown"}`;
-  return {
-    result: {
-      text: closingText(texts.final, texts.last, turn),
-      ...NO_COST,
-      durationMs: num(turn, "durationMs") ?? elapsedMs,
-      turns,
-      ...(tokens ? { tokens } : {}),
-    },
-    problem,
-  };
-}
-
-
 /* ---------- the driver ---------- */
 
 export interface CodexOptions {
@@ -822,24 +644,14 @@ export class CodexDriver implements RunDriver {
   readonly label = "Codex";
   private ctx: DriveCtx | null = null;
   private rpc: RpcClient | null = null;
-  private thread: string | null = null;
+  /** what folding the wire has kept so far: the thread, the turn count
+   *  and texts, the tokens, the model, the items and their steps
+   *  (`codexfold.ts`) */
+  private fold: CodexFold = codexFold("");
   /** the running turn, from turn/start's answer or turn/started */
   private turn: string | null = null;
   /** the thread or the first turn is still being set up */
   private starting = false;
-  private turns = 0;
-  private turnAt = 0;
-  private finalText = "";
-  private lastText = "";
-  private tokens: DriveTokens | undefined;
-  /** the model thread/start answered with, for the cost ledger */
-  private model = "";
-  /** the provider thread/start answered with, for the cost ledger */
-  private provider = "";
-  /** item id → its tool step */
-  private steps = new Map<string, RunStep>();
-  /** item id → the last item seen under it, for approvals about it */
-  private items = new Map<string, Record<string, unknown>>();
   /** server requests the server cleared before canopy answered */
   private resolved = new Set<string>();
   /** requests canopy is still deciding */
@@ -872,6 +684,7 @@ export class CodexDriver implements RunDriver {
 
   start(ctx: DriveCtx, message: string): void {
     this.ctx = ctx;
+    this.fold = codexFold(ctx.cwd);
     void this.open(message);
   }
 
@@ -888,8 +701,9 @@ export class CodexDriver implements RunDriver {
     }
     if (this.turn !== null || this.starting) {
       this.interrupting = true;
-      if (this.turn !== null && this.thread !== null) {
-        rpc.request("turn/interrupt", { threadId: this.thread, turnId: this.turn }).catch(() => {});
+      const thread = this.fold.thread;
+      if (this.turn !== null && thread !== null) {
+        rpc.request("turn/interrupt", { threadId: thread, turnId: this.turn }).catch(() => {});
         this.killLater();
       } else {
         // nothing to interrupt yet: the thread is still being set up
@@ -956,11 +770,8 @@ export class CodexDriver implements RunDriver {
           }),
         ),
       );
-      const id = str(rec(started["thread"]), "id");
+      const id = codexThread(this.fold, started);
       if (!id) throw new Error("codex started a thread without an id");
-      this.thread = id;
-      this.model = str(started, "model");
-      this.provider = str(started, "modelProvider");
       ctx.session(id);
       if (this.interrupting) {
         rpc.kill();
@@ -978,22 +789,20 @@ export class CodexDriver implements RunDriver {
   private async send(text: string, first: boolean): Promise<void> {
     const rpc = this.rpc;
     const ctx = this.ctx;
-    if (!rpc || !ctx || this.thread === null) return;
-    this.turns += 1;
-    this.turnAt = Date.now();
-    this.finalText = "";
-    this.lastText = "";
+    const thread = this.fold.thread;
+    if (!rpc || !ctx || thread === null) return;
+    codexTurn(this.fold, Date.now());
     this.toolCalls = 0;
     this.capped = null;
     try {
-      const r = rec(await rpc.request("turn/start", turnParams(this.thread, text, ctx.agent)));
+      const r = rec(await rpc.request("turn/start", turnParams(thread, text, ctx.agent)));
       // turn/started may have said so already, and turn/completed may have
       // come in the same chunk as this answer and been handled first
       const id = str(rec(r["turn"]), "id") || null;
       if (id !== this.ended) this.turn ??= id;
       this.starting = false;
       if (this.interrupting && this.turn !== null) {
-        rpc.request("turn/interrupt", { threadId: this.thread, turnId: this.turn }).catch(() => {});
+        rpc.request("turn/interrupt", { threadId: thread, turnId: this.turn }).catch(() => {});
         this.killLater();
       }
     } catch (err) {
@@ -1002,7 +811,7 @@ export class CodexDriver implements RunDriver {
         this.fail(err, "codex refused the message");
         return;
       }
-      ctx.result({ text: "", ...NO_COST, durationMs: 0, turns: this.turns }, `codex refused the message: ${errText(err)}`);
+      ctx.result({ text: "", ...NO_COST, durationMs: 0, turns: this.fold.turns }, `codex refused the message: ${errText(err)}`);
     }
   }
 
@@ -1046,12 +855,6 @@ export class CodexDriver implements RunDriver {
     this.timer = t;
   }
 
-  /** Notifications for another thread (a sub-agent's) are not this run's. */
-  private ours(params: Record<string, unknown>): boolean {
-    const t = params["threadId"];
-    return this.thread === null || typeof t !== "string" || t === this.thread;
-  }
-
   private notified(method: string, params: Record<string, unknown>): void {
     const ctx = this.ctx;
     if (!ctx) return;
@@ -1066,72 +869,15 @@ export class CodexDriver implements RunDriver {
       }
       return;
     }
-    if (!this.ours(params)) return;
-    switch (method) {
-      case "item/started":
-      case "item/completed":
-        this.item(rec(params["item"]), method === "item/started" ? "started" : "completed");
-        return;
-      case "turn/started":
-        this.turn = str(rec(params["turn"]), "id") || this.turn;
-        return;
-      case "thread/tokenUsage/updated":
-        this.tokens = tokensOf(rec(params["tokenUsage"])["total"]) ?? this.tokens;
-        return;
-      case "turn/completed":
-        this.completed(rec(params["turn"]));
-        return;
-      case "error":
-        if (params["willRetry"] === true) {
-          ctx.note(`codex hit an error and is retrying: ${str(rec(params["error"]), "message") || "unknown error"}`);
-        }
-        return;
-      case "warning":
-        if (str(params, "message")) ctx.note(`codex: ${str(params, "message")}`);
-        return;
-      case "configWarning":
-        if (str(params, "summary")) ctx.note(`codex config: ${str(params, "summary")}`);
-        return;
-      case "model/rerouted":
-        ctx.note(`codex moved this turn from ${str(params, "fromModel")} to ${str(params, "toModel")}`);
-        return;
-      default:
-        return;
-    }
-  }
-
-  private item(item: Record<string, unknown>, phase: Phase): void {
-    const ctx = this.ctx;
-    const id = str(item, "id");
-    if (!ctx || !id) return;
-    this.items.set(id, item);
-    const type = str(item, "type");
-    if (type === "agentMessage") {
-      const text = str(item, "text").trim();
-      if (phase !== "completed" || !text) return;
-      this.lastText = text;
-      if (str(item, "phase") === "final_answer") this.finalText = text;
-      ctx.step({ kind: "text", text });
-      ctx.changed();
+    // notifications for another thread (a sub-agent's) are not this run's
+    if (!ownThread(this.fold, params)) return;
+    if (method === "turn/started") {
+      this.turn = str(rec(params["turn"]), "id") || this.turn;
       return;
     }
-    if (type === "contextCompaction") {
-      if (phase === "completed") ctx.note("codex compacted the conversation to fit");
-      return;
-    }
-    const tool = itemTool(item, phase, ctx.cwd);
-    if (!tool) return;
-    const step = this.steps.get(id);
-    if (step?.tool) {
-      step.tool = tool;
-    } else {
-      this.steps.set(id, ctx.step({ kind: "tool", tool }));
-    }
-    ctx.changed();
-    if (phase === "completed") {
-      this.items.delete(id);
-      if (type === "commandExecution" || type === "fileChange") this.counted();
-    }
+    const folded = foldCodex(this.fold, method, params, ctx, Date.now());
+    if (folded?.kind === "counted") this.counted();
+    else if (folded?.kind === "completed") this.completed(folded);
   }
 
   /** Codex has no turn limit of its own. A Claude job's `maxTurns` caps the
@@ -1147,34 +893,26 @@ export class CodexDriver implements RunDriver {
     if (!ctx || max <= 0 || this.toolCalls <= max || this.capped !== null || this.interrupting) return;
     this.capped = `stopped after ${this.toolCalls} commands and file changes without finishing (the limit is ${max})`;
     ctx.note(`reached the limit of ${max} commands and file changes for one turn; interrupting codex`);
-    if (this.rpc && this.thread !== null && this.turn !== null) {
-      this.rpc.request("turn/interrupt", { threadId: this.thread, turnId: this.turn }).catch(() => {});
+    const thread = this.fold.thread;
+    if (this.rpc && thread !== null && this.turn !== null) {
+      this.rpc.request("turn/interrupt", { threadId: thread, turnId: this.turn }).catch(() => {});
     }
   }
 
-  private completed(turn: Record<string, unknown>): void {
+  /** A completed turn, folded: its result is the run's unless canopy's own
+   *  stop interrupted it. */
+  private completed(done: Extract<CodexFolded, { kind: "completed" }>): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    this.ended = str(turn, "id") || null;
+    this.ended = done.turn;
     this.turn = null;
-    this.steps.clear();
-    this.items.clear();
     if (this.interrupting) {
       // the stop's own interrupt: the process goes, and its exit is the stop
       this.close();
       return;
     }
-    const { result, problem } = turnResult(
-      turn,
-      { final: this.finalText, last: this.lastText },
-      this.turns,
-      this.tokens,
-      Date.now() - this.turnAt,
-    );
-    if (this.model) result.model = this.model;
-    if (this.provider) result.provider = this.provider;
     // canopy's own interrupt at the limit says why, rather than "interrupted"
-    ctx.result(result, problem && this.capped ? this.capped : problem);
+    ctx.result(done.result, done.problem && this.capped ? this.capped : done.problem);
     // a job is one turn; a chat keeps the thread for the next message
     if (!ctx.chat) this.close();
   }
@@ -1191,7 +929,7 @@ export class CodexDriver implements RunDriver {
       case "item/permissions/requestApproval":
       case "execCommandApproval":
       case "applyPatchApproval": {
-        const item = this.items.get(str(params, "itemId")) ?? null;
+        const item = this.fold.items.get(str(params, "itemId")) ?? null;
         const escalation = this.escalated ? null : escalationNote(req.method, params);
         if (escalation) {
           this.escalated = true;

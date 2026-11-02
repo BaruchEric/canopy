@@ -6,7 +6,9 @@
  *  Claude Code speaks stream-json on stdio, Codex speaks JSON-RPC through
  *  `codex app-server`. A `RunDriver` owns one run's process and its wire, and
  *  reports everything through the `DriveCtx` the Runner hands it, including
- *  the raw wire, both ways, for the run's log.
+ *  the raw wire, both ways, for the run's log. What a message adds to the
+ *  run's steps and result is each harness's pure fold (`claudefold.ts`,
+ *  `codexfold.ts`), which the replay of a kept wire runs too.
  *
  *  `RunCtx` is the Runner's half of one run: the step cap, the prompt queue
  *  with its "allow all" sweep, the notes a settled prompt leaves, and how an
@@ -164,6 +166,11 @@ export interface DriveCtx {
    *  stop, the end of a chat, or a failure is the Runner's call. */
   exited(exit: DriveExit): void;
 }
+
+/** What a harness's fold (`foldClaude`, `foldCodex`) writes into: the live
+ *  run's ctx, or the plain list a replay of its kept wire builds
+ *  (`core/wirereplay.ts`). The fold itself is pure. */
+export type FoldOut = Pick<DriveCtx, "step" | "changed" | "note" | "todos" | "result">;
 
 /** The environment a run's process starts with: canopy's live one with the
  *  run's own laid over it, and for an incubator stage without what

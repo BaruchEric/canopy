@@ -3,15 +3,15 @@
 import { writeFile } from "node:fs/promises";
 import { RUN_ID } from "../core/runlog";
 import { ago } from "../core/treelines";
-import type { KeptRunHead, Run, RunStep } from "../core/types";
+import type { KeptRunHead, Run, RunReplay, RunStep } from "../core/types";
 import { apiBase } from "./api";
-import { ask, askText, errText, take, Unreachable, type Target } from "./health";
+import { ask, askText, errText, has, take, Unreachable, type Target } from "./health";
 
 type Fail = (message: string) => never;
 
 export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr] [--backend URL] [--on NAME]
        canopy run [--backend URL]
-       canopy run show <id> [--backend URL]
+       canopy run show <id> [--wire] [--backend URL]
        canopy run export <id> [--out file.md] [--backend URL]
        canopy run prune [--backend URL]`;
 
@@ -24,6 +24,10 @@ export function keptLines(heads: readonly KeptRunHead[], now: number = Date.now(
 
 /** The run's export-style head followed by its timeline in UTC. */
 export function showLines(run: Run): string[] {
+  return [...headLines(run), ...run.steps.map(showStep)];
+}
+
+function headLines(run: Run): string[] {
   const end = run.endedAt ?? Date.now();
   const endLabel = run.endedAt === undefined ? "now" : new Date(run.endedAt).toISOString();
   const elapsedSeconds = Math.max(0, Math.floor((end - run.startedAt) / 1_000));
@@ -34,7 +38,7 @@ export function showLines(run: Run): string[] {
       ? `${new Intl.NumberFormat("en-US").format(run.result.tokens.total)} tokens`
       : "unknown";
   const model = run.result?.model ?? "unknown";
-  const lines = [
+  return [
     `${run.verb} in ${run.repoId} (${run.kept ? "kept" : "live"})`,
     `run: ${run.id}`,
     `action: ${run.action}`,
@@ -45,7 +49,17 @@ export function showLines(run: Run): string[] {
     ...(run.note !== "" ? [`note: ${run.note}`] : []),
     ...(run.branch ? [`branch: ${run.branch.name} onto ${run.branch.target}, ${run.branch.state}`] : []),
   ];
-  return [...lines, ...run.steps.map(showStep)];
+}
+
+/** `showLines` over the replay's steps: the record's own with the prompts
+ *  the wire shows the harness asking, or every step folded back out of the
+ *  wire when the record kept none of its own or trimmed its oldest. */
+export function replayLines(run: Run, replay: RunReplay): string[] {
+  const from = replay.source === "wire"
+    ? "steps: rebuilt from the wire, without canopy's own notes"
+    : "steps: the record's, with the prompts its wire shows";
+  const cut = replay.cut ? ["the wire was cut at its size limit, so the steps stop short"] : [];
+  return [...headLines(run), from, ...cut, ...replay.steps.map(showStep)];
 }
 
 function showStep(step: RunStep): string {
@@ -106,11 +120,17 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
   }
 
   if (sub === "show") {
+    const wire = has(args, "--wire");
     const id = args[0];
     if (args.length !== 1 || !id || outFlag) return fail(RUN_USAGE);
     if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
     const run = await ask<Run>(target, "GET", `/api/runs/${encodeURIComponent(id)}`).catch(requestFailure(target, fail));
-    for (const line of showLines(run)) console.log(line);
+    if (!wire) {
+      for (const line of showLines(run)) console.log(line);
+      return;
+    }
+    const replay = await ask<RunReplay>(target, "GET", `/api/runs/${encodeURIComponent(id)}/replay`).catch(requestFailure(target, fail));
+    for (const line of replayLines(run, replay)) console.log(line);
     return;
   }
 

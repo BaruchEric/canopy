@@ -293,6 +293,10 @@ export function splitMembers(
   return { others, skipped };
 }
 
+/** The line a chat's first message follows in its framed prompt, last of
+ *  all, so a replay can tell the message from the framing. */
+export const FIRST_MESSAGE = "First message from the user:";
+
 /** The full prompt for a run. The repo facts come from canopy's own status
  *  read, so the agent starts with the same picture the card shows. The
  *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
@@ -300,7 +304,7 @@ export function splitMembers(
 export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope): string {
   if (spec.detached) {
     const first = note.trim();
-    return first ? `${spec.task}\n\nFirst message from the user:\n${first}` : spec.task;
+    return first ? `${spec.task}\n\n${FIRST_MESSAGE}\n${first}` : spec.task;
   }
   const facts = repoFacts(repo);
   const rules = scope ? WS_RULES : RULES;
@@ -324,7 +328,7 @@ export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: 
     ? spec.mode === "ask"
       ? `Note from the user:\n${trimmed}`
       : spec.mode === "chat"
-        ? `First message from the user:\n${trimmed}`
+        ? `${FIRST_MESSAGE}\n${trimmed}`
         : `Note from the user (follow it where it applies):\n${trimmed}`
     : "";
   // A chat's first message comes last, where a reply naturally follows it.

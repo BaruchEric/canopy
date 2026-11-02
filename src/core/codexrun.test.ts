@@ -33,6 +33,9 @@ import {
   within,
 } from "./codexrun";
 import { RunCtx, type DriveAgent, type DriveRun } from "./driver";
+import { WIRE_TICK } from "./runlog";
+import type { RunStep } from "./types";
+import { replayWire } from "./wirereplay";
 
 const GIT_READ = [...(TOOL_SETS["git-read"] ?? [])];
 const AGENT: DriveAgent = { model: "default", effort: "default", yolo: false, extra: "" };
@@ -614,6 +617,8 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     harness: "codex",
   };
   const wire: [string, string][] = [];
+  /** when each wire line came, as the run log would stamp it */
+  const stamps: number[] = [];
   const ctx = new RunCtx(
     run,
     {
@@ -622,7 +627,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
       spec: { allowedTools: opts.allowedTools ?? [], maxTurns: opts.maxTurns ?? 10 },
       env: { FAKE_CODEX_SCENARIO: scenarioPath, FAKE_CODEX_LOG: logPath },
       label: "Codex",
-      wire: (d, l) => { wire.push([d, l]); },
+      wire: (d, l) => { wire.push([d, l]); stamps.push(Date.now()); },
     },
     { emit: () => {} },
   );
@@ -653,7 +658,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     driver.stop();
   };
   const ended = (r: DriveRun) => r.status === "done" || r.status === "failed" || r.status === "limited" || r.status === "stopped";
-  return { run, ctx, driver, repo, until, sent, stop, ended, wire };
+  return { run, ctx, driver, repo, until, sent, stop, ended, wire, stamps };
 }
 
 const replyTo = (log: Record<string, unknown>[], id: number) =>
@@ -1319,4 +1324,90 @@ test("wire hands the Codex protocol both ways to the ctx", async () => {
   expect(ins).toEqual((await h.sent()).filter((m) => !("argv" in m) && !("eof" in m)));
   expect(h.wire.filter(([d]) => d === "out").length).toBeGreaterThan(0);
   expect(h.run.result?.text).toBe("done");
+});
+
+/* ---------- plan 2's reducer, on the wire a live run recorded ---------- */
+
+describe("foldCodex replays the recorded wire into the steps the live run made", () => {
+  type Harness = Awaited<ReturnType<typeof drive>>;
+  /** the run's wire as the run log keeps it: canopy's start line, each in
+   *  line stamped, a tick before an out line after a quiet spell */
+  const kept = (h: Harness): string[] => {
+    let last = h.run.startedAt;
+    const lines = [JSON.stringify({ canopy: "start", at: last, run: h.run.id, repo: h.run.repoId, action: h.run.action, harness: "codex", argv: [] })];
+    h.wire.forEach(([d, l], i) => {
+      const at = h.stamps[i] ?? last;
+      if (d === "in") lines.push(JSON.stringify({ canopy: "in", at, line: l }));
+      else if (at - last >= WIRE_TICK) lines.push(JSON.stringify({ canopy: "tick", at }), l);
+      else lines.push(l);
+      if (d === "in" || at - last >= WIRE_TICK) last = at;
+    });
+    return lines;
+  };
+  const shape = (steps: readonly RunStep[]) => steps.filter((s) => s.kind !== "user" && !s.text?.startsWith("asked: ") && !/^(allowed|denied|answered|question dismissed)/.test(s.text ?? "")).map((s) => ({ kind: s.kind, text: s.text, tool: s.tool }));
+  const check = (h: Harness) => {
+    const rebuilt = replayWire(kept(h), { ...h.run, steps: [] }, { cwd: "/elsewhere", home: homedir() });
+    expect(rebuilt.source).toBe("wire");
+    expect(shape(rebuilt.steps)).toEqual(shape(h.run.steps));
+    const record = replayWire(kept(h), h.run, { cwd: "/elsewhere", home: homedir() });
+    expect(record.source).toBe("record");
+    expect(record.steps.filter((s) => !record.asks.includes(s.id))).toEqual(h.run.steps);
+    return { rebuilt, record };
+  };
+
+  test("items into steps, another thread's left out, the cwd from thread/start", async () => {
+    const h = await drive((repo) => ({
+      turns: [[
+        agentMessage("m1", "Looking first.", "commentary"),
+        commandItem("item/started", "c1", "git status --short"),
+        commandItem("item/completed", "c1", "git status --short", { aggregatedOutput: " M a.ts\n" }),
+        { notify: "item/completed", params: { threadId: "$THREAD", turnId: "$TURN", item: { type: "fileChange", id: "f1", status: "completed", changes: [{ path: `${repo}/a.ts`, kind: { type: "update", move_path: null }, diff: "@@\n-a\n+b" }] } } },
+        { notify: "item/completed", params: { threadId: "thr-other", turnId: "x", item: { type: "agentMessage", id: "mx", text: "sub-agent", phase: "final_answer" } } },
+        { notify: "warning", params: { threadId: "$THREAD", message: "slow down" } },
+        agentMessage("m2", "Done: edited a.ts."),
+        { complete: "completed" },
+      ]],
+    }));
+    await h.until(h.ended, "the end");
+    const { rebuilt } = check(h);
+    expect(rebuilt.steps.map((s) => s.tool?.title ?? s.text)).toEqual(["Looking first.", "git status --short", "edit a.ts", "codex: slow down", "Done: edited a.ts."]);
+  });
+
+  test("an approval allowed, one declined, a question answered, and a chat's second message", async () => {
+    const h = await drive(() => ({
+      turns: [
+        [
+          commandItem("item/started", "c1", "git push"),
+          approval("c1", "git push"),
+          commandItem("item/completed", "c1", "git push"),
+          commandItem("item/started", "c2", "rm x"),
+          approval("c2", "rm x"),
+          commandItem("item/completed", "c2", "rm x", { status: "declined", exitCode: null }),
+          { request: "item/tool/requestUserInput", params: { threadId: "$THREAD", turnId: "$TURN", itemId: "q", questions: [{ id: "color", header: "Color", question: "Which color?", options: [{ label: "red", description: "" }] }] } },
+          agentMessage("m1", "red it is"),
+          { complete: "completed" },
+        ],
+        [agentMessage("m2", "again, then"), { complete: "completed" }],
+      ],
+    }), { chat: true });
+    const answer = async (a: Parameters<typeof h.ctx.answer>[1]) => {
+      const w = await h.until((r) => r.status === "waiting", "a prompt");
+      h.ctx.answer(w.prompt?.id ?? "", a);
+    };
+    await answer({ kind: "allow" });
+    await answer({ kind: "deny" });
+    await answer({ kind: "answers", answers: { "Which color?": "red" } });
+    await h.until((r) => r.status === "idle", "the first reply");
+    h.run.status = "working";
+    h.ctx.step({ kind: "user", text: "and again" });
+    h.driver.say("and again");
+    await h.until((r) => r.status === "idle" && r.result?.text === "again, then", "the second reply");
+    h.stop();
+    await h.until(h.ended, "the end");
+    const { rebuilt, record } = check(h);
+    const notes = (steps: readonly RunStep[]) => steps.filter((s) => s.kind === "note" || s.kind === "user").map((s) => s.text);
+    expect(notes(rebuilt.steps)).toEqual(["asked: git push", "allowed: git push", "asked: rm x", "denied: rm x", "asked: Which color?", "answered: red", "and again"]);
+    expect(record.asks).toHaveLength(3);
+    expect(notes(record.steps).filter((t) => t?.startsWith("asked: "))).toEqual(["asked: git push", "asked: rm x", "asked: Which color?"]);
+  });
 });

@@ -89,6 +89,7 @@ import type {
   RememberedRule,
   Run,
   RunAction,
+  RunReplay,
   RunAnswer,
   ScanResult,
   ScenarioNames,
@@ -794,6 +795,13 @@ export const api = {
   keptRun: async (id: string): Promise<Run> => {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, `/api/runs/${encodeURIComponent(plain)}`), qRun);
+  },
+  /** A finished run's replay: its steps in order with the prompts its kept
+   *  wire shows; throws on 404 (no wire kept) and 409 (still going). Step
+   *  ids are the run's own, so nothing is qualified. */
+  runReplay: async (id: string): Promise<RunReplay> => {
+    const [b, plain] = on(id);
+    return req<RunReplay>(b, `/api/runs/${encodeURIComponent(plain)}/replay`);
   },
   /** `client` is this browser's id, so the run says which device started it */
   run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean) => {

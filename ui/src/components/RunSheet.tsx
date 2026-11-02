@@ -40,6 +40,7 @@ import {
   type Run,
   type RunAction,
   type RunAnswer,
+  type RunReplay,
   type RunStep,
 } from "../../../src/core/types";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
@@ -47,6 +48,8 @@ import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledPro
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
+import { api } from "../api";
+import { nextGap, REPLAY_SPEEDS, replayClock, replayEnd, replayTime, replayTimeline, replayView, type ReplayJumpKind, type ReplaySpeed, type ReplayTimeline } from "../replay";
 
 import { GROUP_MAX } from "../../../src/core/group";
 
@@ -564,6 +567,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   // opening on the view coordView picks; wider, they sit under the
   // timeline and fold to their head.
   const phone = useMedia(PHONE);
+  const replay = useReplay(run);
   const [view, setView] = useState<CoordView>(() => coordView(run));
   const [folded, setFolded] = useState(false);
   const cards = isCoordinator(run) && ((run.tasks?.length ?? 0) > 0 || active);
@@ -605,9 +609,10 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
 
       {/* gone rather than hidden in the cards view, so it comes back
           following the newest step */}
+      {!cardsOnly && replay.timeline && <ReplayBar replay={replay} timeline={replay.timeline} />}
       {!cardsOnly && (
         <Timeline
-          run={run}
+          run={replay.view}
           repo={repo}
           error={error}
           onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
@@ -643,7 +648,13 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             {resultLine(run.result)}
           </span>
         )}
+        {replay.failed && <span className="sheet-hint">no replay: {replay.failed}</span>}
         <span className="spacer" />
+        {!active && !replay.wanted && (
+          <button type="button" className="mini" title="Play the run back from its kept wire, step by step" onClick={replay.load}>
+            replay
+          </button>
+        )}
         {active ? (
           <button
             type="button"
@@ -663,6 +674,163 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         </button>
       </footer>
     </>
+  );
+}
+
+/* ---------- the replay bar (FR-043 plan 2) ---------- */
+
+interface Replay {
+  /** the replay was asked for, or is a kept run's, loaded as the sheet opens */
+  wanted: boolean;
+  load: () => void;
+  /** why a replay asked for could not load */
+  failed: string | null;
+  data: RunReplay | null;
+  timeline: ReplayTimeline | null;
+  /** entries on show; the end shows the run as it ended */
+  cursor: number;
+  end: number;
+  playing: boolean;
+  speed: ReplaySpeed;
+  /** the run the timeline draws: the replay's prefix, or the run itself */
+  view: Run;
+  play: () => void;
+  pause: () => void;
+  seek: (cursor: number) => void;
+  setSpeed: (speed: ReplaySpeed) => void;
+}
+
+/** A finished run's replay: loaded from its kept wire when asked for, and at
+ *  once for a kept run, whose record a restart may have left without steps;
+ *  then a cursor over its timeline, moved by a timer while it plays. */
+function useReplay(run: Run): Replay {
+  const finished = !isRunActive(run);
+  const [wanted, setWanted] = useState(run.kept === true);
+  const [asked, setAsked] = useState(false);
+  const [data, setData] = useState<RunReplay | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<ReplaySpeed>(1);
+  useEffect(() => {
+    if (!wanted || !finished || data) return;
+    let live = true;
+    api.runReplay(run.id).then(
+      (r) => {
+        if (live) setData(r);
+      },
+      // a kept run with no wire simply has no bar; one asked for says why,
+      // and can be asked for again
+      (err: unknown) => {
+        if (!live || !asked) return;
+        setFailed(errText(err));
+        setWanted(false);
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [wanted, finished, data, asked, run.id]);
+  const timeline = useMemo(() => (data ? replayTimeline(data, run) : null), [data, run]);
+  const end = timeline ? replayEnd(timeline) : 0;
+  const at = cursor === null ? end : Math.min(cursor, end);
+  useEffect(() => {
+    if (!playing || !timeline) return;
+    const gap = nextGap(timeline, at, speed);
+    if (gap === null) {
+      setPlaying(false);
+      return;
+    }
+    const timer = setTimeout(() => setCursor(at + 1), gap);
+    return () => clearTimeout(timer);
+  }, [playing, timeline, at, speed]);
+  return {
+    wanted,
+    load: () => {
+      setFailed(null);
+      setAsked(true);
+      setWanted(true);
+    },
+    failed,
+    data,
+    timeline,
+    cursor: at,
+    end,
+    playing,
+    speed,
+    view: timeline ? replayView(run, timeline, at) : run,
+    play: () => {
+      if (at >= end) setCursor(0);
+      setPlaying(true);
+    },
+    pause: () => setPlaying(false),
+    seek: (c) => {
+      setPlaying(false);
+      setCursor(Math.max(0, Math.min(end, c)));
+    },
+    setSpeed,
+  };
+}
+
+const JUMP_WORD: Record<ReplayJumpKind, string> = { prompt: "prompt", message: "message", subagent: "subagent", result: "" };
+
+/** Play at 1× or 4×, a scrubber over the steps and "jump to" the prompts,
+ *  the messages, each subagent's start and the result. */
+function ReplayBar({ replay, timeline }: { replay: Replay; timeline: ReplayTimeline }) {
+  const source = replay.data?.source;
+  return (
+    <div className="replay-bar" role="group" aria-label="Replay">
+      <button
+        type="button"
+        className="mini"
+        aria-label={replay.playing ? "Pause the replay" : "Play the run back"}
+        onClick={replay.playing ? replay.pause : replay.play}
+      >
+        {replay.playing ? "❚❚ pause" : "▶ play"}
+      </button>
+      <span className="replay-speeds">
+        {REPLAY_SPEEDS.map((s) => (
+          <button key={s} type="button" className={replay.speed === s ? "mini on" : "mini"} aria-pressed={replay.speed === s} onClick={() => replay.setSpeed(s)}>
+            {s}×
+          </button>
+        ))}
+      </span>
+      <input
+        className="replay-scrub"
+        type="range"
+        min={0}
+        max={replay.end}
+        step={1}
+        value={replay.cursor}
+        aria-label="Steps shown"
+        aria-valuetext={`${Math.min(replay.cursor, timeline.steps.length)} of ${timeline.steps.length} steps`}
+        onChange={(e) => replay.seek(Number(e.target.value))}
+      />
+      <span className="replay-clock" title="Replay time: each wait between steps is capped at 3 seconds">
+        {replayClock(replayTime(timeline, replay.cursor))} / {replayClock(timeline.length)}
+      </span>
+      <select
+        className="replay-jump"
+        aria-label="Jump to"
+        value=""
+        onChange={(e) => {
+          if (e.target.value) replay.seek(Number(e.target.value));
+        }}
+      >
+        <option value="">jump to…</option>
+        {timeline.jumps.map((j) => (
+          <option key={`${j.kind}-${j.cursor}`} value={j.cursor}>
+            {j.kind === "result" ? j.label : `${JUMP_WORD[j.kind]}: ${j.label}`}
+          </option>
+        ))}
+      </select>
+      {source === "wire" && (
+        <span className="replay-note" title="The run's record kept no steps of its own (a restart took the run) or trimmed its oldest, so these are folded back out of its wire; canopy's own notes are not in a wire.">
+          rebuilt from the wire
+        </span>
+      )}
+      {replay.data?.cut && <span className="replay-note" title="The wire reached its size limit and was cut, so the replay stops short.">cut short</span>}
+    </div>
   );
 }
 
