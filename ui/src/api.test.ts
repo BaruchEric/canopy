@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { Repo, Run, WorktreesInfo } from "../../src/core/types";
-import { api, onBackendSignal, PartialFleetError, readFrame, socketUrl, STREAM_STALE, streamAction } from "./api";
+import { api, onBackendSignal, PartialFleetError, readFrame, socketUrl, staleOf, STREAM_STALE, streamAction } from "./api";
 import type { BackendSignal } from "./backends";
 import { setBase, setRegistry } from "./registry";
 
@@ -75,6 +75,20 @@ describe("a page with two backends", () => {
     expect(info.repos[0]?.repoId).toBe("proj");
     expect(await api.worktrees()).toEqual(info);
     expect(calls[1]?.url).toBe("/api/worktrees");
+  });
+
+  test("a push refused over an upstream amend carries its offer, and the drop sends it back", async () => {
+    const offer = { branch: "main", upstream: "origin/main", onto: "f".repeat(40), copies: [{ stale: "a".repeat(40), copy: "c".repeat(40), subject: "fix nav" }], kept: 1 };
+    reply = () => json({ error: "rejected; upstream holds an amended copy", stale: offer }, 409);
+    const err = await api.push("b|atlas").then(() => null, (e: unknown) => e);
+    expect(staleOf(err)).toEqual(offer);
+    expect((err as { status?: number }).status).toBe(409);
+    reply = () => json({ error: "the push failed" }, 500);
+    expect(staleOf(await api.push("b|atlas").then(() => null, (e: unknown) => e))).toBeNull();
+    reply = () => json({ ok: true, out: "dropped" });
+    expect(await api.dropStale("b|atlas", offer)).toEqual({ ok: true, out: "dropped" });
+    expect(calls[2]?.url).toBe("http://b.test/api/repos/dropstale?id=atlas");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ stale: "a".repeat(40), onto: "f".repeat(40) });
   });
 
   test("a scheduled manual fire sends the selected backend's plain repo id", async () => {

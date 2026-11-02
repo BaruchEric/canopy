@@ -38,6 +38,7 @@ canopy commit <repo> -m "msg"      # commit staged changes
 canopy commit <repo> --ai --all --push   # AI message, stage everything, push
 canopy suggest <repo>              # print an AI-suggested commit message
 canopy push <repo> | pull <repo>
+canopy push <repo> --drop-stale    # upstream holds an amend of a local commit: drop the stale copy (rebase --onto), then push
 canopy open <repo> --app kitty     # kitty | terminal | code | finder | agent | herdr
 canopy open <repo> --app agent     # interactive Claude Code in a terminal at the repo
 canopy open <repo> --app herdr     # the same, as a herdr workspace (herdr.dev)

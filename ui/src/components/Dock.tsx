@@ -1,7 +1,7 @@
 import { agentName, allAgents } from "../allagents";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
-import { api } from "../api";
+import { api, staleOf } from "../api";
 import {
   FILE_COL_INFO,
   defaultDir,
@@ -64,7 +64,9 @@ import { backendOf, homeName, isHome } from "../registry";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
 import { AgentFix } from "./AgentFix";
+import { DropStale } from "./DropStale";
 import { fixMove, type FixMove } from "../fixit";
+import type { StaleOffer } from "../../../src/core/stalecopy";
 import { ago, GLYPH, lockedIndex, stateOf } from "../util";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
@@ -1064,7 +1066,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
       const out = await fn();
       if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
     } catch (err) {
-      showError(String(err instanceof Error ? err.message : err), fixMove(label) ?? undefined);
+      setNote(failedNote(label, err));
     } finally {
       setBusy(null);
     }
@@ -1203,8 +1205,15 @@ function ChangesSection({ repo }: { repo: Repo }) {
   );
 }
 
-/** a move's outcome; a failed one names the move when an agent can finish it */
-type Note = { kind: "ok" | "err"; text: string; move?: FixMove };
+/** a move's outcome; a failed one names the move when an agent can finish
+ *  it, and a push upstream holds an amend for carries the offer (FR-048) */
+type Note = { kind: "ok" | "err"; text: string; move?: FixMove; stale?: StaleOffer };
+
+/** the note for a move that threw */
+function failedNote(label: string, err: unknown): Note {
+  const stale = staleOf(err);
+  return { kind: "err", text: String(err instanceof Error ? err.message : err), move: fixMove(label) ?? undefined, ...(stale && { stale }) };
+}
 
 /** A git move's note. When git refused over the index lock it offers to
  *  clear a stale one (the server refuses a lock young enough that git may
@@ -1227,17 +1236,27 @@ function GitNote({ id, note, setNote, retry }: { id: string; note: Note | null; 
   };
   const locked = note.kind === "err" && lockedIndex(note.text);
   const fix = note.kind === "err" ? note.move : undefined;
+  const stale = note.kind === "err" ? note.stale : undefined;
   return (
     <p className={`note ${note.kind}`}>
       {note.text}
-      {(locked || fix) && (
+      {(locked || fix || stale) && (
         <span className="note-acts">
           {locked && (
             <button type="button" className="mini note-act" disabled={busy} title="Remove the lock if it is stale" onClick={unlock}>
               {busy ? "clearing…" : retry ? "clear lock and retry" : "clear lock"}
             </button>
           )}
-          {fix && <AgentFix repoId={id} move={fix} text={note.text} onDone={(text) => setNote({ kind: "ok", text })} />}
+          {stale && (
+            <DropStale
+              repoId={id}
+              offer={stale}
+              onDone={(text) => setNote({ kind: "ok", text })}
+              onError={(err) => setNote(failedNote("push", err))}
+            />
+          )}
+          {/* canopy has the fix for a stale copy, so the agent waits for a press */}
+          {fix && <AgentFix repoId={id} move={fix} text={note.text} wait={stale !== undefined} onDone={(text) => setNote({ kind: "ok", text })} />}
         </span>
       )}
     </p>
@@ -2970,7 +2989,7 @@ export function RepoPanel({
       const out = await fn();
       if (typeof out === "string" && out) setNote({ kind: "ok", text: out });
     } catch (err) {
-      setNote({ kind: "err", text: String(err instanceof Error ? err.message : err), move: fixMove(label) ?? undefined });
+      setNote(failedNote(label, err));
     } finally {
       setBusy(null);
     }

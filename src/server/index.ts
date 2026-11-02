@@ -27,11 +27,15 @@ import {
   isHash,
   pull,
   clearStaleLock,
+  dropStaleCopies,
+  DropRefused,
   push,
+  StaleCopyError,
   stageFile,
   UnknownCommitError,
   type DiffTarget,
 } from "../core/git";
+import { isFullHash } from "../core/stalecopy";
 import { accessFromUrls, githubLogin, listRemotes, ownRemotes, pushAccess } from "../core/access";
 import { linkArchived } from "../core/archive";
 import { cardsOf, HARNESS_SHARE_MAX, harnessSlot, harnessWeeks } from "../core/harnessshare";
@@ -4579,7 +4583,40 @@ async function handleApi(
       return json({ ok: true, out });
     }
     if (method === "POST" && action === "push") {
-      const out = await push(repo.path);
+      let out: string;
+      try {
+        out = await push(repo.path);
+      } catch (err) {
+        // upstream holds an amend of a local commit (FR-048): the note
+        // offers to drop the stale copy, and needs the offer to do it
+        if (!(err instanceof StaleCopyError)) throw err;
+        await refreshAndBroadcast(state, repo.id);
+        return json({ error: err.message, stale: err.offer }, 409);
+      }
+      await refreshAndBroadcast(state, repo.id);
+      return json({ ok: true, out });
+    }
+    // drop the stale copies a refused push offered, then push what is left;
+    // stale and onto are the offer's, so a branch that moved since refuses
+    if (method === "POST" && action === "dropstale") {
+      const b = (await req.json().catch(() => null)) as { stale?: unknown; onto?: unknown } | null;
+      if (!isFullHash(b?.stale) || !isFullHash(b?.onto)) throw new HttpError(400, "stale and onto are whole commit hashes from the push's offer");
+      let moved: { out: string; kept: number };
+      try {
+        moved = await dropStaleCopies(repo.path, { stale: b.stale, onto: b.onto });
+      } catch (err) {
+        if (err instanceof DropRefused) throw new HttpError(409, err.message);
+        throw err;
+      }
+      let out = moved.out;
+      if (moved.kept > 0) {
+        try {
+          out += `\n${await push(repo.path)}`;
+        } catch (err) {
+          await refreshAndBroadcast(state, repo.id);
+          throw new HttpError(409, `${moved.out}\n\nThe push after it failed:\n${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       await refreshAndBroadcast(state, repo.id);
       return json({ ok: true, out });
     }

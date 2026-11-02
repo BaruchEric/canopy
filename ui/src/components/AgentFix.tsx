@@ -37,8 +37,9 @@ const handed = new Set<string>();
  *  when the run failed, stopped or was dismissed. A fresh rescan after a
  *  new successful turn must show the failed status move changing to done
  *  before `onDone` gets the words for it. A seed's agents run through the
- *  incubator, so a seed gets none. */
-export function AgentFix({ repoId, short, onDone, ...what }: { repoId: string; short?: boolean; onDone?: (text: string) => void } & What) {
+ *  incubator, so a seed gets none. `wait` holds a fresh failure for a
+ *  press too, where canopy offers its own fix beside it (a stale copy). */
+export function AgentFix({ repoId, short, wait, onDone, ...what }: { repoId: string; short?: boolean; wait?: boolean; onDone?: (text: string) => void } & What) {
   const openChat = useStore((s) => s.openChat);
   const showRun = useStore((s) => s.showRun);
   const [busy, setBusy] = useState(false);
@@ -82,7 +83,7 @@ export function AgentFix({ repoId, short, onDone, ...what }: { repoId: string; s
   const at = "move" in what ? (what.at ?? mounted) : null;
   const key = "move" in what ? `${repoId}\0${what.move}\0${at}` : null;
   useEffect(() => {
-    if (seed || key === null || at === null || handed.has(key) || !freshFailure(at, Date.now())) return;
+    if (seed || wait || key === null || at === null || handed.has(key) || !freshFailure(at, Date.now())) return;
     handed.add(key);
     go();
     // once per failure: `key` names it

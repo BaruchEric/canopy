@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { joinTarget } from "../agentcards";
-import { api } from "../api";
+import { api, staleOf } from "../api";
 import { inboxTick } from "../inbox";
 import { qual } from "../registry";
 import { attentionItems, behindItems, canAnswer as canAnswerHere, closedIn, failedItems, idText, inboxItems, turnItems, useStore } from "../store";
@@ -13,6 +13,8 @@ import { HarnessNoticeLine, InboxRow, useNow } from "./Inbox";
 import { LandingNotices } from "./Landing";
 import { IdLabel } from "./IdLabel";
 import { AgentFix } from "./AgentFix";
+import { DropStale } from "./DropStale";
+import type { StaleOffer } from "../../../src/core/stalecopy";
 
 /** "4m ago" from unix ms */
 function agoMs(at: number, now: number): string {
@@ -63,11 +65,18 @@ function RepoRow({ repo, state, word, detail, act }: { repo: Repo; state: RepoSt
   const openPanel = useStore((s) => s.openPanel);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // a push upstream holds an amend for offers to drop the stale copy (FR-048)
+  const [stale, setStale] = useState<StaleOffer | null>(null);
+  const failed = (e: unknown) => {
+    setErr(errText(e));
+    setStale(staleOf(e));
+  };
   const go = (a: RowAct) => {
     setBusy(true);
     setErr(null);
+    setStale(null);
     (a.kind === "push" ? api.push(repo.id) : api.pull(repo.id))
-      .catch((e: unknown) => setErr(errText(e)))
+      .catch(failed)
       .finally(() => setBusy(false));
   };
   // clear a stale lock, then try the move again; the server refuses a
@@ -122,7 +131,18 @@ function RepoRow({ repo, state, word, detail, act }: { repo: Repo; state: RepoSt
                   clear lock and retry
                 </button>
               )}
-              <AgentFix repoId={repo.id} move={act.kind} text={err} />
+              {stale && (
+                <DropStale
+                  repoId={repo.id}
+                  offer={stale}
+                  onDone={() => {
+                    setErr(null);
+                    setStale(null);
+                  }}
+                  onError={failed}
+                />
+              )}
+              <AgentFix repoId={repo.id} move={act.kind} text={err} wait={stale !== null} />
             </span>
           )}
         </p>

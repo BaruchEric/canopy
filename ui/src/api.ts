@@ -115,6 +115,7 @@ import type {
   EmulatorOpened,
 } from "../../src/core/types";
 import type { SecretAct } from "../../src/core/secretwire";
+import { isStaleOffer, newestStale, type StaleOffer } from "../../src/core/stalecopy";
 import type { Delivery, TriggerEvent, TriggersInfo } from "../../src/core/trigger";
 import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
@@ -227,9 +228,17 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   if ((r.status === 401 || r.status === 403) && typeof body.need === "string") signal(b, { kind: "refused", status: r.status, need: body.need, token: sent });
   else signal(b, { kind: "answered" });
   // the status rides on the error for a caller that tells a refusal apart
-  // (a backend with no broker answers 503) from a failure
-  if (!r.ok) throw Object.assign(new Error(body.error ?? `${r.status} ${r.statusText}`), { status: r.status });
+  // (a backend with no broker answers 503) from a failure, and the body for
+  // one that reads more than the words (a push's stale-copy offer)
+  if (!r.ok) throw Object.assign(new Error(body.error ?? `${r.status} ${r.statusText}`), { status: r.status, body });
   return body;
+}
+
+/** The stale-copy offer a refused push carries (FR-048): upstream holds an
+ *  amend of a local commit. Null for any other failure. */
+export function staleOf(err: unknown): StaleOffer | null {
+  const stale = (err as { body?: { stale?: unknown } } | null)?.body?.stale;
+  return isStaleOffer(stale) ? stale : null;
 }
 
 /** Repo ids ride in the query string — an id can be "." and a "." path
@@ -377,6 +386,12 @@ export const api = {
     repoReq<{ ok: true; out: string }>(id, (p) => `/api/repos/push?${rq(p)}`, {
       method: "POST",
       body: "{}",
+    }),
+  /** drops the stale copies a refused push offered, then pushes what is left */
+  dropStale: (id: string, offer: StaleOffer) =>
+    repoReq<{ ok: true; out: string }>(id, (p) => `/api/repos/dropstale?${rq(p)}`, {
+      method: "POST",
+      body: JSON.stringify({ stale: newestStale(offer), onto: offer.onto }),
     }),
   pull: (id: string) =>
     repoReq<{ ok: true; out: string }>(id, (p) => `/api/repos/pull?${rq(p)}`, {

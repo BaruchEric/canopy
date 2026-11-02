@@ -4,7 +4,8 @@ import { constants as osConstants } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { exec } from "../core/exec";
 import { leadingWhen } from "../core/cron";
-import { commit, getStatus, pull, push } from "../core/git";
+import { commit, dropStaleCopies, getStatus, pull, push, StaleCopyError } from "../core/git";
+import { newestStale } from "../core/stalecopy";
 import { isOpenerId, openGroup, openIn, type OpenerId } from "../core/openers";
 import { isSshHost } from "../core/host";
 import { buildKey, isSafeTag } from "../core/launch";
@@ -321,8 +322,19 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     case "push": {
-      const repo = resolve(args[0] ?? fail("usage: canopy push <repo>"));
-      console.log(await push(repo));
+      // --drop-stale: when upstream holds an amend of a local commit
+      // (FR-048), drop the stale copy and push what is left
+      const dropStale = flag(args, "--drop-stale");
+      const repo = resolve(args[0] ?? fail("usage: canopy push <repo> [--drop-stale]"));
+      try {
+        console.log(await push(repo));
+      } catch (err) {
+        if (!(err instanceof StaleCopyError)) throw err;
+        if (!dropStale) return fail(`${err.message}\n\nRun canopy push ${args[0]} --drop-stale to drop it.`);
+        const moved = await dropStaleCopies(repo, { stale: newestStale(err.offer), onto: err.offer.onto });
+        console.log(moved.out);
+        if (moved.kept > 0) console.log(await push(repo));
+      }
       return;
     }
     case "pull": {

@@ -5,6 +5,17 @@ import { git, onHost } from "./exec";
 import { parseLocator, toLocator } from "./host";
 import { NO_PUSH } from "./peers";
 import { seedRootsNow, seedsRootOf } from "./seedgit";
+import {
+  COMMIT_FORMAT,
+  judgeCopies,
+  linesLeftOut,
+  newestStale,
+  offerWords,
+  pairCopies,
+  parseCommits,
+  type StaleOffer,
+  type StaleVerdict,
+} from "./stalecopy";
 import { configDir } from "./store";
 import {
   BRANCH_WIP_CAP,
@@ -1010,19 +1021,43 @@ async function rebaseAndPush(repoPath: string, rejected: string): Promise<string
   if (merges.stdout.trim()) refuse("The branch is behind its upstream and has merge commits of its own, so canopy left the rebase to you.");
   const rebased = await git(repoPath, ["rebase", "--autostash", "@{u}"], NET_TIMEOUT_MS);
   if (rebased.code !== 0) {
-    const conflicts = await git(repoPath, ["diff", "--name-only", "--diff-filter=U"]);
+    // the commit the rebase stopped on, read before the abort clears it
+    const [conflicts, stopped] = await Promise.all([
+      git(repoPath, ["diff", "--name-only", "--diff-filter=U"]),
+      git(repoPath, ["rev-parse", "-q", "--verify", "REBASE_HEAD"]),
+    ]);
     await git(repoPath, ["rebase", "--abort"]);
     const files = conflicts.stdout.trim().split("\n").filter(Boolean);
-    refuse(
+    const why =
       files.length > 0
         ? `Rebasing onto the upstream hit a conflict in ${files.join(", ")}. canopy put the branch back as it was.`
-        : `Rebasing onto the upstream failed, and canopy put the branch back as it was:\n${(rebased.stdout + rebased.stderr).trim()}`,
-    );
+        : `Rebasing onto the upstream failed, and canopy put the branch back as it was:\n${(rebased.stdout + rebased.stderr).trim()}`;
+    // FR-048: upstream may hold an amend of a local commit, which the
+    // rebase replays onto its own newer copy. A stop on a later commit is
+    // that commit's own conflict, so it gets no offer.
+    const found = await staleCopies(repoPath).catch(() => null);
+    const on = stopped.code === 0 ? stopped.stdout.trim() : null;
+    if (found?.verdict.kind === "drop") {
+      const offer = offerOf(found, found.verdict);
+      if (on === null || offer.copies.some((c) => c.stale === on)) {
+        throw new StaleCopyError(`${rejected}\n\n${why}\n${offerWords(offer)}`, offer);
+      }
+    }
+    refuse(found?.verdict.kind === "refuse" ? `${why}\n${found.verdict.why}` : why);
   }
-  // A commit already upstream reads "skipped previously applied commit <hash>"
-  // when git spots it up front, "dropping <hash> ... already upstream" when it
-  // empties out mid-pick. An autostash that came back with conflicts says its
-  // changes are safe in the stash.
+  const notes = await rebaseNotes(repoPath, rebased);
+  const t1 = Date.now();
+  const again = await git(repoPath, ["push"], NET_TIMEOUT_MS);
+  if (again.code !== 0) throw netError(again.stderr, "push", Date.now() - t1);
+  return ["rebased onto the upstream first", ...notes, (again.stdout + again.stderr).trim()].join("\n");
+}
+
+/** What a finished rebase said worth repeating. A commit already upstream
+ *  reads "skipped previously applied commit <hash>" when git spots it up
+ *  front, "dropping <hash> ... already upstream" when it empties out
+ *  mid-pick. An autostash that came back with conflicts says its changes
+ *  are safe in the stash. */
+async function rebaseNotes(repoPath: string, rebased: { stdout: string; stderr: string }): Promise<string[]> {
   const said = (rebased.stdout + rebased.stderr).split(/[\r\n]/);
   const dropped = said.flatMap((l) => /previously applied commit ([0-9a-f]+)|dropping ([0-9a-f]+) .*already upstream/.exec(l)?.slice(1).filter(Boolean) ?? []);
   const notes = await Promise.all(
@@ -1032,10 +1067,117 @@ async function rebaseAndPush(repoPath: string, rejected: string): Promise<string
     }),
   );
   notes.push(...said.filter((l) => /safe in the stash/.test(l)).map((l) => l.trim()));
-  const t1 = Date.now();
-  const again = await git(repoPath, ["push"], NET_TIMEOUT_MS);
-  if (again.code !== 0) throw netError(again.stderr, "push", Date.now() - t1);
-  return ["rebased onto the upstream first", ...notes, (again.stdout + again.stderr).trim()].join("\n");
+  return notes;
+}
+
+/** A push refused because upstream holds an amended copy of local commits
+ *  (FR-048): the message says so, and `offer` is what dropping them takes. */
+export class StaleCopyError extends Error {
+  constructor(
+    message: string,
+    readonly offer: StaleOffer,
+  ) {
+    super(message);
+    this.name = "StaleCopyError";
+  }
+}
+
+/** A drop of stale copies that canopy would not start, or that stopped and
+ *  was put back; the message says which. */
+export class DropRefused extends Error {
+  override name = "DropRefused";
+}
+
+type StaleFacts = { verdict: StaleVerdict; branch: string; upstream: string; onto: string };
+
+const offerOf = (f: StaleFacts, v: Extract<StaleVerdict, { kind: "drop" }>): StaleOffer => ({
+  branch: f.branch,
+  upstream: f.upstream,
+  onto: f.onto,
+  copies: v.copies,
+  kept: v.kept,
+});
+
+/** Upstream's amended copies of the branch's commits, judged by
+ *  `judgeCopies` (core/stalecopy.ts) over what git says here: the commits
+ *  on each side of the merge base with `@{u}`, and for each matched pair
+ *  the files the local commit changed and the diff from it to its copy.
+ *  Reads only, against the remote-tracking ref as last fetched. Null when
+ *  there is no branch, no upstream, or no shared history. */
+export async function staleCopies(repoPath: string): Promise<StaleFacts | null> {
+  const [head, name, tip] = await Promise.all([
+    git(repoPath, ["symbolic-ref", "-q", "--short", "HEAD"]),
+    git(repoPath, ["rev-parse", "--abbrev-ref", "@{u}"]),
+    git(repoPath, ["rev-parse", "-q", "--verify", "@{u}^{commit}"]),
+  ]);
+  if (head.code !== 0 || name.code !== 0 || tip.code !== 0) return null;
+  const onto = tip.stdout.trim();
+  const base = await git(repoPath, ["merge-base", "HEAD", onto]);
+  if (base.code !== 0) return null;
+  const since = (to: string) => git(repoPath, ["log", "--no-show-signature", "--reverse", `--format=${COMMIT_FORMAT}`, `${base.stdout.trim()}..${to}`]);
+  const [mine, theirs] = await Promise.all([since("HEAD"), since(onto)]);
+  if (mine.code !== 0 || theirs.code !== 0) return null;
+  const local = parseCommits(mine.stdout);
+  const pairing = pairCopies(local, parseCommits(theirs.stdout));
+  const leftOut = new Map<string, string[]>();
+  for (const { stale, copy } of "pairs" in pairing ? pairing.pairs : []) {
+    const [paths, numstat] = await Promise.all([
+      git(repoPath, ["diff-tree", "-r", "--root", "--no-commit-id", "--name-only", "--no-renames", "-z", stale.hash]),
+      git(repoPath, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "--no-renames", "-z", stale.hash, copy.hash]),
+    ]);
+    if (paths.code === 0 && numstat.code === 0) leftOut.set(stale.hash, linesLeftOut(paths.stdout.split("\0").filter(Boolean), numstat.stdout));
+  }
+  return { verdict: judgeCopies(local, pairing, leftOut), branch: head.stdout.trim(), upstream: name.stdout.trim(), onto };
+}
+
+/** Drops the stale copies a refused push offered (`StaleCopyError`): the
+ *  branch moved onto the upstream tip with `git rebase --onto <tip>
+ *  <newest stale> <branch>`, so the commits after them are replayed and
+ *  kept. `want` is what the offer named; the facts are read again and the
+ *  move goes on only when they give the same offer. Refused on a detached
+ *  HEAD (a rebase in progress has one) or uncommitted changes to tracked
+ *  files; a conflict aborts the rebase and leaves the branch as it was.
+ *  `kept` is how many commits are left to push. */
+export async function dropStaleCopies(repoPath: string, want: { stale: string; onto: string }): Promise<{ out: string; kept: number }> {
+  const head = await git(repoPath, ["symbolic-ref", "-q", "--short", "HEAD"]);
+  if (head.code === 1) throw new DropRefused("HEAD is detached (a rebase may be in progress), so canopy left the branch alone.");
+  if (head.code !== 0) throw new Error(head.stderr.trim() || "git could not read HEAD");
+  const status = await git(repoPath, ["status", "--porcelain=v1", "--untracked-files=no"]);
+  if (status.code !== 0) throw new Error(status.stderr.trim() || "git status failed");
+  const dirty = status.stdout.split("\n").filter(Boolean).map((l) => l.slice(3));
+  if (dirty.length > 0) {
+    const named = dirty.length > 5 ? `${dirty.slice(0, 5).join(", ")} and ${dirty.length - 5} more` : dirty.join(", ");
+    throw new DropRefused(`The working tree has uncommitted changes to ${named}. Commit or stash them, then drop the stale copy.`);
+  }
+  const found = await staleCopies(repoPath);
+  if (found === null || found.verdict.kind === "none") throw new DropRefused("Upstream holds no amended copy of a local commit now. Push again to look afresh.");
+  if (found.verdict.kind === "refuse") throw new DropRefused(found.verdict.why);
+  const offer = offerOf(found, found.verdict);
+  if (newestStale(offer) !== want.stale || offer.onto !== want.onto) {
+    throw new DropRefused(`${offer.branch} or ${offer.upstream} moved since canopy looked. Push again to look afresh.`);
+  }
+  const r = await git(repoPath, ["rebase", "--onto", offer.onto, want.stale, offer.branch], 120_000, { GIT_EDITOR: "true" });
+  if (r.code !== 0) {
+    // HEAD was on a branch before, so any rebase state now is this one's
+    const [conflicts, stopped] = await Promise.all([
+      git(repoPath, ["diff", "--name-only", "--diff-filter=U"]),
+      git(repoPath, ["log", "-1", "--format=%h %s", "REBASE_HEAD"]),
+    ]);
+    await git(repoPath, ["rebase", "--abort"]);
+    const files = conflicts.stdout.trim().split("\n").filter(Boolean);
+    const at = stopped.code === 0 && stopped.stdout.trim() ? ` (replaying ${stopped.stdout.trim()})` : "";
+    throw new DropRefused(
+      files.length > 0
+        ? `Moving ${offer.branch} onto ${offer.upstream} hit a conflict in ${files.join(", ")}${at}. canopy put the branch back as it was.`
+        : `Moving ${offer.branch} onto ${offer.upstream} failed, and canopy put the branch back as it was:\n${(r.stdout + r.stderr).trim()}`,
+    );
+  }
+  const left = await git(repoPath, ["rev-list", "--count", `${offer.onto}..HEAD`]);
+  const kept = left.code === 0 ? Number(left.stdout.trim()) || 0 : offer.kept;
+  const lines = offer.copies.map((c) => `dropped ${c.stale.slice(0, 7)} ${c.subject}: upstream holds its amend ${c.copy.slice(0, 7)}`);
+  lines.push(`moved ${offer.branch} onto ${offer.upstream}${kept > 0 ? `, ${kept} commit${kept === 1 ? "" : "s"} replayed on top` : ""}`);
+  lines.push(...(await rebaseNotes(repoPath, r)));
+  return { out: lines.join("\n"), kept };
 }
 
 /** git wanted a username or password and had no terminal to ask on
