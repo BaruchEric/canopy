@@ -198,6 +198,12 @@ describe("reachFrom", () => {
     expect(reachFrom("/home/eric/dev/x", null)).toHaveProperty("error");
     expect(reachFrom("/home/eric/dev/x", "")).toHaveProperty("error");
   });
+
+  test("a helper on the backend's own machine keeps the path, alias or not", () => {
+    expect(reachFrom("/home/eric/dev/x", "macmini-2018", true)).toBe("/home/eric/dev/x");
+    expect(reachFrom("/home/eric/dev/x", null, true)).toBe("/home/eric/dev/x");
+    expect(reachFrom("ssh://qnap/share/r", null, true)).toBe("ssh://qnap/share/r");
+  });
 });
 
 describe("parseDefaultGateway", () => {

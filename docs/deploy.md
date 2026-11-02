@@ -336,7 +336,13 @@ hit, and a workspace's code and kitty buttons all open on that machine, with
 the repo reached over ssh as `ssh://$CANOPY_SSH_HOST<path>` (so the ssh alias
 in `.env` must resolve on the helper's machine, the same one the VS Code link
 uses). A repo added as an ssh source keeps its own host in the locator; the
-helper's ssh config has to know that host too.
+helper's ssh config has to know that host too. A helper on the backend's own
+machine (one dialled in at a loopback address and name, as the Mac's launchd
+helper does with `--backend http://127.0.0.1:7850`) is handed the plain path
+and needs no `CANOPY_SSH_HOST`. The Mac's plist still sets it, to
+`erics-macbook-pro` (its MagicDNS name; Remote Login is on), for a helper on
+another machine; that machine's ssh config needs a `Host erics-macbook-pro`
+entry with `User ericbaruch`.
 
 Why the pick is by hand: the backend matches a browser to a helper by name,
 not by address. Docker's published port hands the container its own gateway

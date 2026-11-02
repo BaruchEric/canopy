@@ -717,9 +717,10 @@ function sweepHelpers(state: ServerState): void {
 /** Where a click lands: on the helper the browser named (`helper` in the
  *  body, its pick or the one it adopted), on the backend's own desktop for
  *  a browser on a Mac that runs it, or nowhere (400 saying what is
- *  missing). A helper reaches the backend's repos over ssh through
- *  `CANOPY_SSH_HOST`, so a local path is rewritten to that locator on the
- *  way; a repo already elsewhere keeps its own. */
+ *  missing). A helper elsewhere reaches the backend's repos over ssh
+ *  through `CANOPY_SSH_HOST`, so a local path is rewritten to that locator
+ *  on the way; a helper on this machine takes the path as it is, and a
+ *  repo already elsewhere keeps its own. */
 type OpenVia = { via: "backend" } | { via: "helper"; name: string };
 
 function openVia(state: ServerState, here: boolean, helper: unknown): OpenVia {
@@ -737,8 +738,9 @@ function openVia(state: ServerState, here: boolean, helper: unknown): OpenVia {
   throw new HttpError(400, hostOpeners() ? missing : `${NO_DESKTOP}; ${missing}`);
 }
 
-function helperPath(path: string): string {
-  const r = reachFrom(path, process.env.CANOPY_SSH_HOST || null);
+/** the path the helper `name` is handed for a repo at `path` here */
+function helperPath(state: ServerState, name: string, path: string): string {
+  const r = reachFrom(path, process.env.CANOPY_SSH_HOST || null, state.helpers.get(name)?.info.local === true);
   if (typeof r === "string") return r;
   throw new HttpError(400, r.error);
 }
@@ -4471,11 +4473,11 @@ async function handleApi(
     } else {
       const agents: Record<string, AgentSettings> = {};
       const repos = ws.repos.map((p) => {
-        const there = helperPath(p);
+        const there = helperPath(state, via.name, p);
         agents[there] = agentFor(cfg, p);
         return there;
       });
-      const group = { app: b.app, name: b.name, repos, agents, ...(primary ? { primary: helperPath(primary) } : {}) };
+      const group = { app: b.app, name: b.name, repos, agents, ...(primary ? { primary: helperPath(state, via.name, primary) } : {}) };
       await askHelper(state, via.name, { group });
     }
     return json({ ok: true });
@@ -4654,7 +4656,7 @@ async function handleApi(
       const line = typeof b.line === "number" && Number.isInteger(b.line) && b.line > 0 ? b.line : 1;
       const via = openVia(state, here, b.helper);
       if (via.via === "backend") await openFile(repo.path, b.file, line);
-      else await askHelper(state, via.name, { file: { path: helperPath(repo.path), file: b.file, line } });
+      else await askHelper(state, via.name, { file: { path: helperPath(state, via.name, repo.path), file: b.file, line } });
       return json({ ok: true });
     }
     if (method === "GET" && action === "search") {
@@ -4818,7 +4820,7 @@ async function handleApi(
       // be here; a helper's machine answers for itself
       if (via.via === "backend" && (b.app === "agent" || b.app === "herdr")) await needHarness(state, agent.harness, repo.path);
       if (via.via === "backend") await openIn(b.app, repo.path, agent, { tab });
-      else await askHelper(state, via.name, { open: { app: b.app, path: helperPath(repo.path), agent, tab } });
+      else await askHelper(state, via.name, { open: { app: b.app, path: helperPath(state, via.name, repo.path), agent, tab } });
       return json({ ok: true });
     }
     // a preview in a simulator or emulator on the browser's machine (FR-050):

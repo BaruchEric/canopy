@@ -4,11 +4,12 @@
  * browser naming no helper is told so, a helper that dials in registers by
  * name and the event stream hears the list, the open routes that name it
  * become intents on its socket with the repo rewritten to an ssh locator
- * through `CANOPY_SSH_HOST`, its reply settles the request, its error is
+ * through `CANOPY_SSH_HOST` (left as it is for a helper on the backend's
+ * own machine), its reply settles the request, its error is
  * the request's error, a newer helper under the name replaces it, and one
  * going away fails what it owed and tells the stream.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,9 +150,14 @@ describe("a browser with no helper", () => {
 });
 
 describe("a helper dialled in", () => {
+  // the local-helper test drops the alias; put it back even when a test dies early
+  afterEach(() => {
+    process.env["CANOPY_SSH_HOST"] = "mini";
+  });
+
   test("registers by name, relays, and its answers settle the requests", async () => {
     const stream = listen();
-    const h = dial({});
+    const h = dial({}, "canopy.example");
     await h.opened;
     await until(() => stream.events.length > 0, "the helpers event");
     const list = await helpers();
@@ -219,7 +225,7 @@ describe("a helper dialled in", () => {
 
   test("a workspace goes as one group intent with each repo's settings", async () => {
     await post("/api/workspaces", { name: "pair", repos: ["app"] });
-    const h = dial({});
+    const h = dial({}, "canopy.example");
     await h.opened;
     await until(async () => (await helpers()).length === 1, "registration");
     const open = post("/api/workspaces/open", { name: "pair", app: "kitty", helper: "mbp" });
@@ -231,6 +237,31 @@ describe("a helper dialled in", () => {
     expect(Object.keys(g.agents)).toEqual(g.repos);
     h.ws.send(JSON.stringify({ id: h.intents[0]!.id, ok: true }));
     expect((await open).status).toBe(200);
+    h.ws.close();
+    await until(async () => (await helpers()).length === 0, "the helper to go");
+  });
+
+  test("a helper on the backend's own machine is handed the repo's own path, with no CANOPY_SSH_HOST needed", async () => {
+    await post("/api/workspaces", { name: "solo", repos: ["app"] });
+    delete process.env["CANOPY_SSH_HOST"];
+    const h = dial({});
+    await h.opened;
+    await until(async () => (await helpers())[0]?.local === true, "the local helper");
+    const open = post("/api/repos/open?id=app", { app: "finder", helper: "mbp" });
+    await until(() => h.intents.length === 1, "the open intent");
+    expect(h.intents[0]!.open).toEqual({ app: "finder", path: appPath, agent: DEFAULT_AGENT, tab: false });
+    h.ws.send(JSON.stringify({ id: h.intents[0]!.id, ok: true }));
+    expect((await open).status).toBe(200);
+    const file = post("/api/repos/openfile?id=app", { file: "src/a.ts", line: 3, helper: "mbp" });
+    await until(() => h.intents.length === 2, "the file intent");
+    expect(h.intents[1]!.file).toEqual({ path: appPath, file: "src/a.ts", line: 3 });
+    h.ws.send(JSON.stringify({ id: h.intents[1]!.id, ok: true }));
+    expect((await file).status).toBe(200);
+    const group = post("/api/workspaces/open", { name: "solo", app: "code", helper: "mbp" });
+    await until(() => h.intents.length === 3, "the group intent");
+    expect((h.intents[2]!.group as { repos: string[] }).repos).toEqual([appPath]);
+    h.ws.send(JSON.stringify({ id: h.intents[2]!.id, ok: true }));
+    expect((await group).status).toBe(200);
     h.ws.close();
     await until(async () => (await helpers()).length === 0, "the helper to go");
   });

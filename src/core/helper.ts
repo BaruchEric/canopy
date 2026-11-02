@@ -200,13 +200,15 @@ export function helperOpeners(platform: string, has: (name: string) => boolean):
   return [];
 }
 
-/** Where a helper finds a repo the backend holds: a repo local to the
- *  backend is reached over ssh through the backend's alias (`sshHost`, the
- *  same one the VS Code link uses), and a repo that is already on another
- *  host keeps its own locator, which the helper's ssh config must know. */
-export function reachFrom(path: string, sshHost: string | null): string | { error: string } {
+/** Where a helper finds a repo the backend holds: a helper on the backend's
+ *  own machine (`local`) takes the path as it is; one elsewhere reaches a
+ *  repo local to the backend over ssh through the backend's alias
+ *  (`sshHost`, the same one the VS Code link uses); and a repo that is
+ *  already on another host keeps its own locator, which the helper's ssh
+ *  config must know. */
+export function reachFrom(path: string, sshHost: string | null, local = false): string | { error: string } {
   const { host } = parseLocator(path);
-  if (host !== null) return path;
+  if (local || host !== null) return path;
   if (!sshHost) return { error: "the backend has no CANOPY_SSH_HOST, so a helper cannot reach its repos over ssh" };
   return `ssh://${sshHost}${path}`;
 }
