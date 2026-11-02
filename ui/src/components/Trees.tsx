@@ -36,7 +36,7 @@ export function TreesChip({ repoId }: { repoId: string }) {
 }
 
 /** rows a card shows before the rest folds into a count */
-export const CARD_TREES = 4;
+export const CARD_TREES = 6;
 
 const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
 
