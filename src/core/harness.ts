@@ -10,7 +10,7 @@
  */
 
 import { TOKEN_REF, TOKEN_SET_WORD } from "./host";
-import { AGENT_MODELS, HARNESSES, type AgentEffort, type AgentSettings, type Harness } from "./types";
+import { AGENT_MODELS, HARNESSES, isHarness, type AgentEffort, type AgentSettings, type Harness } from "./types";
 
 export { HARNESSES, type Harness };
 
@@ -21,7 +21,13 @@ export type AgentEnv = Record<string, string>;
 /** The settings for one launch, with the folders beside its cwd it may also
  *  use: a workspace's agent tab names the members on the primary's machine.
  *  Both harnesses spell each one `--add-dir <dir>`. */
-export type AgentLaunch = AgentSettings & { dirs?: readonly string[] };
+export type AgentLaunch = AgentSettings & {
+  dirs?: readonly string[];
+  /** a Claude provider resolved to this machine: the settings file canopy
+   *  passes as `--settings` (`withProviderFile`); the pure table knows no
+   *  folder, so an unresolved id puts no flag on the line */
+  providerFile?: string;
+};
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -41,8 +47,10 @@ export interface HarnessInfo {
   /** whether a model outside `models` is taken, as long as it is a plain
    *  name (`MODEL_RE`); claude's list is closed, codex's is a hint */
   openModels: boolean;
-  /** a configured provider id's launch override, if this harness supports one */
-  providerArgs: (provider: string | undefined) => string[];
+  /** a configured provider id's launch override: codex names it in its own
+   *  config (`-c model_provider=`), claude takes the settings file the id
+   *  resolved to on this machine (`--settings file`) */
+  providerArgs: (provider: string | undefined, file?: string) => string[];
   /** the efforts it takes, "default" first */
   efforts: readonly AgentEffort[];
   modelArgs: (model: string) => string[];
@@ -70,9 +78,23 @@ export const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/;
 /** A configured provider name, kept deliberately to bare identifier words. */
 export const PROVIDER_RE = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
-/** Only Codex supports selecting a named provider in its launch protocol. */
+/** A configured provider id, on either harness: for Codex a
+ *  `model_providers` entry in its own config, for Claude Code a settings
+ *  file canopy keeps as `<configDir>/providers/<id>.json`, whose `env`
+ *  names the gateway (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN,
+ *  ANTHROPIC_MODEL), so a run or a shell can go to a local model. */
 export function takesProvider(h: Harness, provider: unknown): provider is string {
-  return h === "codex" && typeof provider === "string" && provider !== "default" && PROVIDER_RE.test(provider);
+  return isHarness(h) && typeof provider === "string" && provider !== "default" && PROVIDER_RE.test(provider);
+}
+
+/** The launch with a Claude provider resolved to `providers`, this
+ *  machine's folder of settings files (`providersDir` in core/store); null
+ *  for an agent that starts on another host, which has its own login and
+ *  none of this machine's files. A codex id stays its own config's. */
+export function withProviderFile<A extends AgentSettings>(a: A, providers: string | null): A & { providerFile?: string } {
+  return providers !== null && a.harness === "claude" && takesProvider("claude", a.provider)
+    ? { ...a, providerFile: `${providers}/${a.provider}.json` }
+    : a;
 }
 
 const CLAUDE: HarnessInfo = {
@@ -82,7 +104,7 @@ const CLAUDE: HarnessInfo = {
   binary: "claude",
   models: AGENT_MODELS,
   openModels: false,
-  providerArgs: () => [],
+  providerArgs: (provider, file) => (file && takesProvider("claude", provider) ? ["--settings", file] : []),
   efforts: ["default", "low", "medium", "high", "xhigh", "max"],
   modelArgs: (m) => (m === "default" ? [] : ["--model", m]),
   effortArgs: (e) => (e === "default" ? [] : ["--effort", e]),
@@ -188,7 +210,7 @@ export function splitArgs(s: string): string[] {
 }
 
 /** The flags an interactive agent gets for these settings, in the
- *  harness's own spelling: model, effort, permissions, what it always
+ *  harness's own spelling: model, provider, effort, permissions, what it always
  *  takes, the environment its commands are to see, the extra flags as
  *  typed, then the launch's folders. Claude's `--add-dir` takes every
  *  plain word after it, so the folders go after the typed flags (whose
@@ -197,7 +219,7 @@ export function agentArgs(a: AgentLaunch, env: AgentEnv = {}): string[] {
   const h = HARNESS[a.harness];
   return [
     ...h.modelArgs(a.model),
-    ...h.providerArgs(a.provider),
+    ...h.providerArgs(a.provider, a.providerFile),
     ...h.effortArgs(a.effort),
     ...h.permissionArgs(a.yolo),
     ...h.always,
@@ -211,19 +233,19 @@ export function agentArgs(a: AgentLaunch, env: AgentEnv = {}): string[] {
 export const agentArgv = (a: AgentLaunch, env: AgentEnv = {}): string[] => [HARNESS[a.harness].binary, ...agentArgs(a, env)];
 
 /** The argv that picks conversation `session` back up with these settings. */
-export const resumeArgv = (a: AgentSettings, session: string, env: AgentEnv = {}): string[] => {
+export const resumeArgv = (a: AgentLaunch, session: string, env: AgentEnv = {}): string[] => {
   const h = HARNESS[a.harness];
   return [h.binary, ...h.resume(agentArgs(a, env), session)];
 };
 
 /** a harness's flags: the settings' when they are this harness's, else only
  *  what the harness always takes (a restored shell whose settings are not known) */
-const flagsFor = (kind: Harness, a: AgentSettings | undefined, env: AgentEnv): string[] =>
+const flagsFor = (kind: Harness, a: AgentLaunch | undefined, env: AgentEnv): string[] =>
   a && a.harness === kind ? agentArgs(a, env) : [...HARNESS[kind].always, ...HARNESS[kind].envArgs(env)];
 
 /** The argv that picks the folder's last conversation back up, with
  *  `flagsFor`'s flags. */
-export function continueArgv(kind: Harness, a?: AgentSettings, env: AgentEnv = {}): string[] {
+export function continueArgv(kind: Harness, a?: AgentLaunch, env: AgentEnv = {}): string[] {
   const h = HARNESS[kind];
   return [h.binary, ...h.continue(flagsFor(kind, a, env))];
 }
@@ -231,7 +253,7 @@ export function continueArgv(kind: Harness, a?: AgentSettings, env: AgentEnv = {
 /** The argv that picks conversation `session` of harness `kind` back up,
  *  with `flagsFor`'s flags: `resumeArgv` for a shell whose settings may be
  *  another harness's or not known at all. */
-export function resumeKindArgv(kind: Harness, session: string, a?: AgentSettings, env: AgentEnv = {}): string[] {
+export function resumeKindArgv(kind: Harness, session: string, a?: AgentLaunch, env: AgentEnv = {}): string[] {
   const h = HARNESS[kind];
   return [h.binary, ...h.resume(flagsFor(kind, a, env), session)];
 }

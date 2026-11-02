@@ -11,8 +11,9 @@ import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecResult } from "./exec";
-import { agentArgs, agentArgv, HARNESS } from "./harness";
+import { agentArgs, agentArgv, HARNESS, withProviderFile } from "./harness";
 import { parseLocator, shellLine, shellQuote } from "./host";
+import { providersDir } from "./store";
 import { DEFAULT_AGENT, type AgentSettings } from "./types";
 
 /** `herdr agent start` waits for the agent to come up; its own default is 30s. */
@@ -56,7 +57,7 @@ export function herdrAgentName(repoName: string, taken: Iterable<string>, fallba
  *  herdr knows both harnesses as kinds of its own (`--kind claude`, `--kind
  *  codex`) and runs the kind's binary with those flags. */
 export function herdrStartArgs(name: string, paneId: string, agent: AgentSettings): string[] {
-  const flags = agentArgs(agent);
+  const flags = agentArgs(withProviderFile(agent, providersDir()));
   return [
     "agent",
     "start",

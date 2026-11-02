@@ -22,11 +22,11 @@
  */
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { continueArgv, resumeKindArgv, type AgentEnv } from "./harness";
+import { continueArgv, resumeKindArgv, withProviderFile, type AgentEnv } from "./harness";
 import { shellLine, shellQuote } from "./host";
 import { isSessionId } from "./sessions";
 import { isShellCommand } from "./shellname";
-import { configDir } from "./store";
+import { configDir, providersDir } from "./store";
 import { isTermId, termPlace } from "./term";
 import { cleanLabel, type AgentCard, type AgentKind, type AgentSettings, type KeptShell } from "./types";
 
@@ -88,14 +88,14 @@ export function agentIn(command: string, title: string, argvs: readonly (readonl
  *  (the repo's route) their flags ride along, else only what the harness
  *  always takes; null for a shell that had no agent in it. */
 export const continueLine = (agent: AgentKind | null, settings?: AgentSettings, env: AgentEnv = {}): string | null =>
-  agent ? shellLine(continueArgv(agent, settings, env)) : null;
+  agent ? shellLine(continueArgv(agent, settings && withProviderFile(settings, providersDir()), env)) : null;
 
 /** The line for a restored shell whose record names its conversation:
  *  `claude --resume <id>` or `codex resume <id>`, so three agent shells from
  *  one folder come back on their own three conversations rather than all on
  *  the newest. Flags as `continueLine` takes them. */
 export const resumeLine = (agent: AgentKind, session: string, settings?: AgentSettings, env: AgentEnv = {}): string =>
-  shellLine(resumeKindArgv(agent, session, settings, env));
+  shellLine(resumeKindArgv(agent, session, settings && withProviderFile(settings, providersDir()), env));
 
 /** The conversation running in shell `term`, off the registry's cards (the
  *  newest first, as the registry lists them): the card whose

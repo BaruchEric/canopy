@@ -4,6 +4,7 @@
  * record back, and which records are still worth offering.
  */
 import { describe, expect, test } from "bun:test";
+import { providerFile } from "./store";
 import { DEFAULT_AGENT } from "./types";
 import { agentIn, cardSession, clip, continueLine, countLines, expiredShells, KEEP_DAYS, lostShells, parseKept, replayCommand, restoredBanner, resumeLine, SWEPT_DAYS } from "./keep";
 import type { AgentCard, KeptShell } from "./types";
@@ -244,5 +245,13 @@ describe("restoredBanner", () => {
   test("says what it is and how old what follows is", () => {
     expect(restoredBanner("22/09/2026, 07:31")).toContain("[restored by canopy]");
     expect(restoredBanner("22/09/2026, 07:31")).toContain("22/09/2026, 07:31");
+  });
+});
+
+describe("a Claude provider on a restored shell's line", () => {
+  test("rides as this machine's settings file on continue and resume", () => {
+    const local = { ...DEFAULT_AGENT, provider: "local" };
+    expect(continueLine("claude", local)).toBe(`claude --settings ${providerFile("local")} --dangerously-skip-permissions --continue`);
+    expect(resumeLine("claude", "0123456789abcdef0123456789abcdef", local)).toContain(`--settings ${providerFile("local")} `);
   });
 });

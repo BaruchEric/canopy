@@ -36,7 +36,7 @@ import {
   WAKES_MAX,
 } from "../core/ranger";
 import { claudeHome, projectFolder } from "../core/sessions";
-import { configDir, loadConfig, setRanger } from "../core/store";
+import { configDir, loadConfig, providersDir, setRanger } from "../core/store";
 import { nextDelay, paneReading } from "../core/tasks";
 import { killSession, noServer, parseRangerPanes, rangerPanesArgs, rangerSessionArgs, respawnArgs, textArgs, hasSession, type RangerPane } from "../core/tmux";
 import { isLiveAgent, type AgentCard, type AgentSettings, type RangerInfo, type RangerSettings, type RangerState, type RangerWake, type ServerEvent, type TermInfo } from "../core/types";
@@ -713,7 +713,7 @@ export class RangerHub {
     if (!this.launchCurrent(epoch)) return;
     const hello = rangerHello(!first ? "resume" : this.rec.previous ? "fresh" : "new");
     const own = home !== this.deps.root;
-    const argv = rangerArgv({ settings: agent, session: this.rec.session, first, briefFile, telegram: this.settings.telegram, hello, ...(own ? { addDir: this.deps.root } : {}) });
+    const argv = rangerArgv({ settings: agent, session: this.rec.session, first, briefFile, telegram: this.settings.telegram, hello, ...(own ? { addDir: this.deps.root } : {}) }, providersDir());
     const command = [this.deps.shell, "-lic", `cd -- ${shellQuote(home)} && exec ${argv.map(shellQuote).join(" ")}`];
     this.setState("starting");
     this.tell();

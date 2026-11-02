@@ -10,8 +10,9 @@ import { join } from "node:path";
 import { configFlags } from "./codexrun";
 import { stageEnv } from "./envnames";
 import { exec, git, type ExecOptions, type ExecResult } from "./exec";
-import { HARNESS } from "./harness";
+import { HARNESS, takesProvider } from "./harness";
 import { parseLocator } from "./host";
+import { providerFile } from "./store";
 import { DEFAULT_AGENT, type AgentSettings, type RepoFile } from "./types";
 
 const PROMPT = `Write a git commit message for the changes below.
@@ -63,16 +64,31 @@ async function diffContext(repoPath: string): Promise<string> {
   ].join("\n");
 }
 
-/** No hooks for a suggestion: a user's async Stop hook (tailchan's `--wake`
- *  waiter) keeps `claude -p` alive after it prints, past the timeout, and
- *  the one-click commit + push then lands the heuristic message. */
-const NO_HOOKS = JSON.stringify({ disableAllHooks: true });
-
-/** `claude` argv after the binary: print mode, plain text, hooks off, and
- *  the route's model and effort (none at the defaults). */
-export function claudeSuggestArgs(agent: AgentSettings, prompt: string): string[] {
+/** `claude` argv after the binary: print mode, plain text, one `--settings`
+ *  (claude keeps the last one on its line, so the route's provider settings
+ *  and hooks-off share it) and the route's model and effort (none at the
+ *  defaults). No hooks for a suggestion: a user's async Stop hook
+ *  (tailchan's `--wake` waiter) keeps `claude -p` alive after it prints,
+ *  past the timeout, and the one-click commit + push then lands the
+ *  heuristic message. */
+export function claudeSuggestArgs(agent: AgentSettings, prompt: string, provider: Record<string, unknown> = {}): string[] {
   const h = HARNESS.claude;
-  return ["-p", prompt, "--output-format", "text", "--settings", NO_HOOKS, ...h.modelArgs(agent.model), ...h.effortArgs(agent.effort)];
+  const settings = JSON.stringify({ ...provider, disableAllHooks: true });
+  return ["-p", prompt, "--output-format", "text", "--settings", settings, ...h.modelArgs(agent.model), ...h.effortArgs(agent.effort)];
+}
+
+/** The route's Claude provider settings, read from this machine's file
+ *  (`providerFile`); {} when the route names none, or the file is missing
+ *  or not a JSON object, so the line runs on the login and a failure there
+ *  ends in the heuristic message. */
+async function providerSettings(agent: AgentSettings): Promise<Record<string, unknown>> {
+  if (!takesProvider("claude", agent.provider)) return {};
+  try {
+    const v: unknown = JSON.parse(await readFile(providerFile(agent.provider), "utf8"));
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Where `codex exec` runs for a suggestion: in the repo, whose AGENTS.md
@@ -140,7 +156,7 @@ export interface SuggestOpts {
 
 /** Claude's answer; a seed's from a scratch folder with the stage env */
 async function claudeSuggest(bin: string, agent: AgentSettings, context: string, o: SuggestOpts): Promise<ExecResult> {
-  const argv = [bin, ...claudeSuggestArgs(agent, `${PROMPT}\n\n${context}`)];
+  const argv = [bin, ...claudeSuggestArgs(agent, `${PROMPT}\n\n${context}`, await providerSettings(agent))];
   if (!o.seed) return (o.run ?? exec)(argv, { timeoutMs: SUGGEST_TIMEOUT });
   const dir = await mkdtemp(join(tmpdir(), "canopy-suggest-"));
   try {

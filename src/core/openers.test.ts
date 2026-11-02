@@ -31,6 +31,7 @@ import {
   userShell,
 } from "./openers";
 import { shellQuote } from "./host";
+import { providerFile } from "./store";
 import { DEFAULT_AGENT, type Harness } from "./types";
 
 const opusYolo = { harness: "claude", model: "opus", effort: "high", yolo: true, extra: "--add-dir '../my lib'" } as const;
@@ -422,5 +423,13 @@ describe("which harnesses the login shell has", () => {
     expect(await h.missing("codex")).toBe(false);
     expect(warned).toHaveLength(1);
     expect(warned[0]).toContain("no start is refused");
+  });
+});
+
+describe("a Claude provider on the opener's line", () => {
+  test("rides as this machine's settings file, and not over ssh, where it does not exist", () => {
+    const local = { ...DEFAULT_AGENT, provider: "local" };
+    expect(agentLine(local)).toBe(`claude --settings ${providerFile("local")} --dangerously-skip-permissions`);
+    expect(sshSessionArgs("wsl", "/home/me/x", "agent", local).at(-1)).toBe("cd '/home/me/x' && claude --dangerously-skip-permissions");
   });
 });

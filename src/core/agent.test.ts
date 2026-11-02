@@ -45,12 +45,13 @@ describe("agent settings", () => {
     expect(normalizeAgent({ harness: "codex", model: "gpt-6-astra", effort: "max" })).toEqual(codex({ model: "gpt-6-astra", effort: "max" }));
   });
 
-  test("a configured Codex provider is a plain ID; default and invalid or Claude values leave the old shape", () => {
+  test("a configured provider is a plain ID on either harness; default and invalid values leave the old shape", () => {
     expect(normalizeAgent({ harness: "codex", provider: "  team_1 " })).toEqual(codex({ provider: "team_1" }));
     expect(normalizeAgent({ harness: "codex", provider: "default" })).toEqual(codex());
     expect(normalizeAgent({ harness: "codex", provider: "team one" })).toEqual(codex());
     expect(normalizeAgent({ harness: "codex", provider: "-team" })).toEqual(codex());
-    expect(normalizeAgent({ provider: "bedrock" })).toEqual(DEFAULT_AGENT);
+    expect(normalizeAgent({ provider: "local" })).toEqual({ ...DEFAULT_AGENT, provider: "local" });
+    expect(normalizeAgent({ provider: "bad provider" })).toEqual(DEFAULT_AGENT);
   });
 
   test("a stale value never reaches a command line: flags, spaces and claude's aliases are not codex models", () => {
@@ -94,6 +95,7 @@ describe("agent settings", () => {
   test("one line for the menu, the harness named only when it is not claude", () => {
     expect(describeAgent(DEFAULT_AGENT)).toBe("yolo");
     expect(describeAgent({ ...DEFAULT_AGENT, model: "opus" })).toBe("opus · yolo");
+    expect(describeAgent({ ...DEFAULT_AGENT, provider: "local" })).toBe("provider local · yolo");
     expect(describeAgent({ ...DEFAULT_AGENT, effort: "max", yolo: false, extra: "--x" })).toBe("max · ask · --x");
     expect(describeAgent(codex({ model: "gpt-5.5", effort: "high", yolo: false }))).toBe("codex · gpt-5.5 · high · ask");
     expect(describeAgent(codex())).toBe("codex · yolo");

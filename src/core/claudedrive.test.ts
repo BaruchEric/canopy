@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk, toolPaths } from "./claudedrive";
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
+import { providerFile } from "./store";
 import { DEFAULT_AGENT } from "./types";
 import { RunCtx, type DriveRun } from "./driver";
 import { STAGE_AWAY } from "./stagewire";
@@ -752,4 +753,14 @@ test("wire includes non-JSON stdout and a final unterminated result", async () =
   expect(h.run.status).toBe("done");
   expect(h.run.session).toBe("tail-session");
   expect(h.run.result?.text).toBe("tail é");
+});
+
+test("cliArgs passes a Claude provider as this machine's settings file, except to a stage", () => {
+  const spec = { allowedTools: [], maxTurns: 5 };
+  const args = cliArgs(spec, { ...DEFAULT_AGENT, provider: "local" });
+  const at = args.indexOf("--settings");
+  expect(args.slice(at, at + 2)).toEqual(["--settings", providerFile("local")]);
+  expect(cliArgs(spec, DEFAULT_AGENT)).not.toContain("--settings");
+  // a stage runs in a container that has no canopy config dir
+  expect(cliArgs(spec, { ...DEFAULT_AGENT, provider: "local" }, true)).not.toContain("--settings");
 });

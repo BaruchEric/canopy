@@ -157,6 +157,13 @@ export function configDir(): string {
 
 const configPath = (): string => join(configDir(), "config.json");
 
+/** Where the Claude Code providers live: one settings file per id,
+ *  `providers/<id>.json` under the config dir, passed as `--settings`
+ *  wherever canopy starts Claude with that provider (`withProviderFile` in
+ *  core/harness). Written by hand; canopy's config keeps only the id. */
+export const providersDir = (): string => join(configDir(), "providers");
+export const providerFile = (id: string): string => join(providersDir(), `${id}.json`);
+
 /** Merge over defaults, repairing fields whose type is wrong — a hand-edited
  *  `"workspaces": null` survives a plain spread and throws on every read. */
 /** A list of repo paths as saved: strings only, none empty, each once. */

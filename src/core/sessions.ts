@@ -1,9 +1,10 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { resumeArgv, type AgentEnv } from "./harness";
+import { resumeArgv, withProviderFile, type AgentEnv } from "./harness";
 import { shellLine } from "./host";
 import { mapPool } from "./search";
+import { providersDir } from "./store";
 import { DEFAULT_AGENT, type AgentSession, type AgentSettings, type Harness } from "./types";
 
 /*
@@ -95,7 +96,7 @@ export function parseSessionHead(text: string): Pick<AgentSession, "prompt" | "s
 /** The settings' harness picking the conversation back up with the repo's
  *  flags: `claude … --resume <id>`, `codex resume … <id>`. */
 export const resumeLine = (session: string, agent: AgentSettings = DEFAULT_AGENT, env: AgentEnv = {}): string =>
-  shellLine(resumeArgv(agent, session, env));
+  shellLine(resumeArgv(withProviderFile(agent, providersDir()), session, env));
 
 async function head(file: string, bytes = HEAD_BYTES): Promise<string> {
   const fh = await open(file, "r");

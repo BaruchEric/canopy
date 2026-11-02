@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentArgs, agentArgv, continueArgv, HARNESS, presentHarnesses, resumeArgv, resumeKindArgv, takesEffort, takesModel, takesProvider } from "./harness";
+import { agentArgs, agentArgv, continueArgv, HARNESS, presentHarnesses, resumeArgv, resumeKindArgv, takesEffort, takesModel, takesProvider, withProviderFile } from "./harness";
 import { AGENT_EFFORTS, DEFAULT_AGENT, type AgentEffort, type AgentSettings } from "./types";
 
 const claude = (over: Partial<AgentSettings> = {}): AgentSettings => ({ ...DEFAULT_AGENT, ...over });
@@ -143,12 +143,32 @@ describe("the argv table", () => {
     expect(takesModel("codex", 5)).toBe(false);
   });
 
-  test("only Codex takes a valid configured provider ID", () => {
+  test("both harnesses take a valid configured provider ID", () => {
     expect(takesProvider("codex", "team_1")).toBe(true);
     expect(takesProvider("codex", "-team")).toBe(false);
     expect(takesProvider("codex", "default")).toBe(false);
-    expect(takesProvider("claude", "team_1")).toBe(false);
+    expect(takesProvider("claude", "local")).toBe(true);
+    expect(takesProvider("claude", "default")).toBe(false);
+    expect(takesProvider("claude", "bad provider")).toBe(false);
     expect(takesProvider("codex", null)).toBe(false);
+  });
+
+  test("a Claude provider is a settings file, passed as --settings once resolved to a machine's folder", () => {
+    const local = claude({ provider: "local", yolo: false });
+    // the pure table knows no folder: unresolved, the id is dropped
+    expect(agentArgs(local)).toEqual([]);
+    const resolved = withProviderFile(local, "/cfg/providers");
+    expect(resolved).toEqual({ ...local, providerFile: "/cfg/providers/local.json" });
+    expect(agentArgv(resolved)).toEqual(["claude", "--settings", "/cfg/providers/local.json"]);
+    expect(resumeArgv(resolved, U)).toEqual(["claude", "--settings", "/cfg/providers/local.json", "--resume", U]);
+    expect(continueArgv("claude", resolved)).toEqual(["claude", "--settings", "/cfg/providers/local.json", "--continue"]);
+    expect(resumeKindArgv("claude", U, resolved)).toEqual(["claude", "--settings", "/cfg/providers/local.json", "--resume", U]);
+    // another host starts the agent on its own login: no folder, no flag
+    expect(withProviderFile(local, null)).toEqual(local);
+    expect(withProviderFile(claude({ yolo: false }), "/cfg/providers")).toEqual(claude({ yolo: false }));
+    // codex's id stays its own config's, never a file
+    expect(withProviderFile(codex({ provider: "team_1" }), "/cfg/providers")).toEqual(codex({ provider: "team_1" }));
+    expect(agentArgs(withProviderFile(claude({ provider: "default", yolo: false }), "/cfg/providers"))).toEqual([]);
   });
 
   test("the harnesses a machine has, off a lookup by binary", () => {

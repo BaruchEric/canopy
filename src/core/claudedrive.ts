@@ -18,8 +18,9 @@ import { normalizeAgent } from "./agent";
 import { bunSpawn, LineSplitter, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { writtenPaths } from "./explain";
-import { agentArgs } from "./harness";
+import { agentArgs, withProviderFile } from "./harness";
 import { noteCliCommands } from "./mentions";
+import { providersDir } from "./store";
 import { relPath, toolTouch } from "./touch";
 import { DEFAULT_AGENT, type AgentSettings, type PermissionAsk, type RunQuestion, type RunStep, type RunTodo, type RunTokens, type RunTool } from "./types";
 import { TODO_TOOLS, todoCreated, todoUpdated, todoWritten } from "./todos";
@@ -197,7 +198,9 @@ export function claudeBinary(): string | null {
  *  bypass permission mode: the interactive flag and the prompt tool are two
  *  ways of answering the same question, and print mode takes the mode. */
 export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, stage = false): string[] {
-  const flags = agentArgs({ ...agent, yolo: false });
+  // a stage runs in a container without canopy's config dir, so a Claude
+  // provider's settings file stays here and the stage keeps its own login
+  const flags = agentArgs(withProviderFile({ ...agent, yolo: false }, stage ? null : providersDir()));
   return [
     "-p",
     "--output-format",

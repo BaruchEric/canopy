@@ -128,33 +128,29 @@ export function AgentSettingsForm({
       </section>
       <section className="settings-row">
         <h3 className="panel-label">provider</h3>
-        {value.harness === "codex" ? (
-          <>
-            <input
-              type="text"
-              className="agent-extra"
-              value={provider}
-              placeholder="default"
-              aria-label="Configured Codex provider ID"
-              aria-invalid={providerError}
-              onChange={(e) => {
-                setProviderDraft(e.target.value);
-                setProviderError(false);
-              }}
-              onBlur={saveProvider}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveProvider();
-              }}
-            />
-            <p className={providerError ? "settings-hint error" : "settings-hint"}>
-              {providerError
-                ? "Use a provider ID of up to 64 letters, numbers, underscores, or hyphens, starting with a letter."
-                : `Use an ID from ${machine}'s Codex config. Blank or default follows that config; Canopy stores only the ID, not credentials.`}
-            </p>
-          </>
-        ) : (
-          <p className="settings-hint">Claude Code uses the provider in its own CLI configuration.</p>
-        )}
+        <input
+          type="text"
+          className="agent-extra"
+          value={provider}
+          placeholder="default"
+          aria-label={value.harness === "codex" ? "Configured Codex provider ID" : "Claude Code provider ID"}
+          aria-invalid={providerError}
+          onChange={(e) => {
+            setProviderDraft(e.target.value);
+            setProviderError(false);
+          }}
+          onBlur={saveProvider}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") saveProvider();
+          }}
+        />
+        <p className={providerError ? "settings-hint error" : "settings-hint"}>
+          {providerError
+            ? "Use a provider ID of up to 64 letters, numbers, underscores, or hyphens, starting with a letter."
+            : value.harness === "codex"
+              ? `Use an ID from ${machine}'s Codex config. Blank or default follows that config; Canopy stores only the ID, not credentials.`
+              : `A settings file on ${machine}, ~/.config/canopy/providers/<ID>.json, passed as --settings wherever Claude starts for this route: its env block names the gateway (ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_MODEL), which puts the agent on a local or another model. Blank or default keeps the login; Canopy stores only the ID.`}
+        </p>
       </section>
       <section className="settings-row">
         <h3 className="panel-label">effort</h3>

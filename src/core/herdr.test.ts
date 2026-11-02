@@ -7,6 +7,7 @@ import {
   parseCreated,
   parsePanes,
 } from "./herdr";
+import { providerFile } from "./store";
 import { DEFAULT_AGENT } from "./types";
 
 describe("herdr names and argv", () => {
@@ -115,5 +116,13 @@ describe("herdr replies", () => {
       result: { agents: [{ agent: "claude", name: "reviewer" }, { agent: "claude" }] },
     });
     expect(parseAgentNames(json)).toEqual(["reviewer"]);
+  });
+});
+
+describe("a Claude provider in a herdr pane", () => {
+  test("rides as this machine's settings file, and not over ssh, where it does not exist", () => {
+    const local = { ...DEFAULT_AGENT, provider: "local", yolo: false };
+    expect(herdrStartArgs("canopy", "wF:p1", local)).toEqual(["agent", "start", "canopy", "--kind", "claude", "--pane", "wF:p1", "--", "--settings", providerFile("local")]);
+    expect(herdrRemoteLine("wsl", "/home/me/x", local)).not.toContain("--settings");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, type ExecOptions, type ExecResult } from "./exec";
@@ -88,6 +88,48 @@ describe("a seed's suggestion", () => {
         if (harness === "codex") expect(call?.argv[(call?.argv.indexOf("-C") ?? 0) + 1]).toBe(call?.opts.cwd);
       }
     } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a Claude provider on the suggestion", () => {
+  test("its settings share the one --settings with hooks off, which wins", () => {
+    const args = claudeSuggestArgs({ ...DEFAULT_AGENT, provider: "local" }, "P", { env: { ANTHROPIC_BASE_URL: "http://x" }, disableAllHooks: false });
+    expect(args.filter((a) => a === "--settings")).toHaveLength(1);
+    expect(args[args.indexOf("--settings") + 1]).toBe('{"env":{"ANTHROPIC_BASE_URL":"http://x"},"disableAllHooks":true}');
+  });
+
+  test("the file is read from this machine's providers folder; a missing or broken one leaves the login's line", async () => {
+    const cfg = await mkdtemp(join(tmpdir(), "canopy-suggest-prov-"));
+    const repo = await mkdtemp(join(tmpdir(), "canopy-suggest-repo-"));
+    const saved = process.env["CANOPY_CONFIG_DIR"];
+    process.env["CANOPY_CONFIG_DIR"] = cfg;
+    const seen: string[][] = [];
+    const run = async (argv: string[]): Promise<ExecResult> => {
+      seen.push(argv);
+      return { code: 0, stdout: "feat: x\n", stderr: "" };
+    };
+    const settingsOf = () => {
+      const argv = seen.find((a) => a[0] === "/bin/claude");
+      return argv?.[argv.indexOf("--settings") + 1];
+    };
+    try {
+      await exec(["git", "init", "-q"], { cwd: repo });
+      await mkdir(join(cfg, "providers"), { recursive: true });
+      await writeFile(join(cfg, "providers", "local.json"), JSON.stringify({ env: { ANTHROPIC_MODEL: "m" } }));
+      await writeFile(join(cfg, "providers", "bad.json"), "{");
+      await suggestMessage(repo, [], { ...DEFAULT_AGENT, provider: "local" }, { run, which: () => "/bin/claude" });
+      expect(settingsOf()).toBe('{"env":{"ANTHROPIC_MODEL":"m"},"disableAllHooks":true}');
+      for (const provider of ["bad", "gone"]) {
+        seen.length = 0;
+        await suggestMessage(repo, [], { ...DEFAULT_AGENT, provider }, { run, which: () => "/bin/claude" });
+        expect(settingsOf()).toBe('{"disableAllHooks":true}');
+      }
+    } finally {
+      if (saved === undefined) delete process.env["CANOPY_CONFIG_DIR"];
+      else process.env["CANOPY_CONFIG_DIR"] = saved;
+      await rm(cfg, { recursive: true, force: true });
       await rm(repo, { recursive: true, force: true });
     }
   });

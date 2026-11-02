@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { providerFile } from "./store";
 import {
   claudeSessions,
   codexDayDirs,
@@ -252,5 +253,11 @@ describe("codex sessions off disk", () => {
     // the meta alone: the target's resume would not find it among its sessions
     expect(await transcriptFile("codex", repo, "01a0939c-51bd-7522-9511-0346d9bb8e98", { codex: home }, now)).toBeNull();
     expect(await transcriptFile("codex", repo, SUB, { codex: home }, now)).toBeNull();
+  });
+});
+
+describe("a Claude provider on a resumed conversation's line", () => {
+  test("rides as this machine's settings file", () => {
+    expect(resumeLine(A, { ...DEFAULT_AGENT, provider: "local" })).toBe(`claude --settings ${providerFile("local")} --dangerously-skip-permissions --resume ${A}`);
   });
 });

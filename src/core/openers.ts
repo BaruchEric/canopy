@@ -2,11 +2,11 @@ import { existsSync } from "node:fs";
 import { lstat, mkdir, readdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { agentArgv, HARNESS, HARNESSES, presentHarnesses, type AgentEnv, type AgentLaunch } from "./harness";
+import { agentArgv, HARNESS, HARNESSES, presentHarnesses, withProviderFile, type AgentEnv, type AgentLaunch } from "./harness";
 import { exec } from "./exec";
 import { openHerdr } from "./herdr";
 import { parseLocator, shellLine, shellQuote } from "./host";
-import { configDir } from "./store";
+import { configDir, providersDir } from "./store";
 import { DEFAULT_AGENT, OPENER_IDS, type AgentSettings, type Backend, type Harness, type OpenerId } from "./types";
 
 export { OPENER_IDS, type OpenerId };
@@ -21,9 +21,10 @@ const defaultAgent: AgentLookup = () => DEFAULT_AGENT;
  *  first message after them when there is one (both harnesses take it as a
  *  positional argument). `env` is what the agent's own commands are to see
  *  (a canopy shell's TAILCHAN_AS), for a harness that does not pass the
- *  shell's environment on by itself. */
-export const agentLine = (agent: AgentLaunch = DEFAULT_AGENT, prompt?: string, env: AgentEnv = {}): string =>
-  shellLine([...agentArgv(agent, env), ...(prompt ? [prompt] : [])]);
+ *  shell's environment on by itself. `providers` is this machine's folder
+ *  of Claude provider files, null for a line another host runs. */
+export const agentLine = (agent: AgentLaunch = DEFAULT_AGENT, prompt?: string, env: AgentEnv = {}, providers: string | null = providersDir()): string =>
+  shellLine([...agentArgv(withProviderFile(agent, providers), env), ...(prompt ? [prompt] : [])]);
 
 /* ---------- repos on another host: an ssh session in place of a cd ---------- */
 
@@ -35,7 +36,7 @@ export function sshSessionArgs(
   what: "shell" | "agent",
   agent: AgentLaunch = DEFAULT_AGENT,
 ): string[] {
-  const cmd = what === "agent" ? agentLine(agent) : 'exec "$SHELL" -l';
+  const cmd = what === "agent" ? agentLine(agent, undefined, {}, null) : 'exec "$SHELL" -l';
   return ["ssh", "-t", "--", host, `cd ${shellQuote(path)} && ${cmd}`];
 }
 

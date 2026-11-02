@@ -8,7 +8,7 @@
  */
 
 import { CLOCK_RE, CRON_MAX, isCron, lastClock, nextFire, parseCron, parseWhen } from "./cron";
-import { agentArgs, splitArgs } from "./harness";
+import { agentArgs, splitArgs, withProviderFile } from "./harness";
 import { isProfileName } from "./route";
 import { HANDLE_RE } from "./tailchan";
 import type { AgentSettings, AgentState, RangerFresh, RangerHome, RangerSettings, RangerWake, RangerWakeBy } from "./types";
@@ -190,12 +190,15 @@ export function rangerHello(kind: "new" | "fresh" | "resume"): string {
 }
 
 /**
- * The argv the ranger runs: claude with the profile's model, effort and
- * extra flags but never yolo, then its name, the brief, Telegram when it
- * owns the bot, the conversation it is on, and the opening prompt.
+ * The argv the ranger runs: claude with the profile's model, provider and
+ * effort but never yolo nor its extra flags, then its name, the brief,
+ * Telegram when it owns the bot, the conversation it is on, and the
+ * opening prompt. `providers` is this machine's folder of Claude provider
+ * files (handed in: core/store imports this module), so the profile's
+ * provider rides as `--settings`.
  */
-export function rangerArgv(l: RangerLaunch): string[] {
-  const flags = agentArgs({ ...l.settings, harness: "claude", yolo: false, extra: "" });
+export function rangerArgv(l: RangerLaunch, providers: string | null = null): string[] {
+  const flags = agentArgs(withProviderFile({ ...l.settings, harness: "claude", yolo: false, extra: "" }, providers));
   return [
     "claude",
     ...flags,

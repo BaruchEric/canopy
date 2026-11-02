@@ -5,9 +5,12 @@ import { join } from "node:path";
 import {
   addSource,
   agentFor,
+  configDir,
   defaultLabel,
   loadConfig,
   normalizeWorkspace,
+  providerFile,
+  providersDir,
   rememberRoot,
   removeSource,
   removeWorkspace,
@@ -445,5 +448,12 @@ describe("workspace look updates", () => {
     const ws = await removeWorkspace("look", "/b");
     expect(ws.find((w) => w.name === "look")).toEqual({ name: "look", repos: ["/a"] });
     await removeWorkspace("look");
+  });
+});
+
+describe("the providers folder", () => {
+  test("is under the config dir, one settings file per Claude provider id", () => {
+    expect(providersDir()).toBe(join(configDir(), "providers"));
+    expect(providerFile("local")).toBe(join(configDir(), "providers", "local.json"));
   });
 });

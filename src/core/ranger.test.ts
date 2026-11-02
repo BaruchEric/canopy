@@ -171,3 +171,13 @@ describe("wakes", () => {
     expect(wakeLine({ id: "0000000c", by: "ranger", prompt: "read it", created: 0, run: "r1" }, null)).toContain("is gone");
   });
 });
+
+describe("a Claude provider on the ranger", () => {
+  test("rides as this machine's settings file", () => {
+    const base = { session: "35adf21d-777e-428a-aec9-639404e23258", briefFile: "/config/ranger/brief.md", telegram: false };
+    const argv = rangerArgv({ ...base, settings: { ...DEFAULT_AGENT, provider: "local" }, first: true }, "/cfg/providers");
+    expect(argv.slice(1, 3)).toEqual(["--settings", "/cfg/providers/local.json"]);
+    // the folder not handed in: the login's line
+    expect(rangerArgv({ ...base, settings: { ...DEFAULT_AGENT, provider: "local" }, first: true })).not.toContain("--settings");
+  });
+});
