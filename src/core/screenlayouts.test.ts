@@ -72,6 +72,11 @@ describe("parseProfile", () => {
   test("an absent layout is an empty one", () => {
     expect(parseLayout(undefined)).toEqual({ layout: {} });
   });
+  test("the cards' width is whole px from the cards' floor up", () => {
+    expect(parseLayout({ cardsWidth: 640.4 })).toEqual({ layout: { cardsWidth: 640 } });
+    expect(parseLayout({ cardsWidth: 200 })).toEqual({ error: "cardsWidth is a number from 320 to 4800" });
+    expect(parseLayout({ cardsWidth: "wide" })).toEqual({ error: "cardsWidth is a number from 320 to 4800" });
+  });
 });
 
 describe("matchProfile", () => {

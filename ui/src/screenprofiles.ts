@@ -52,6 +52,7 @@ export interface Draft {
   carousel: Tri;
   sidebarOpen: Tri;
   sidebarWidth: string;
+  cardsWidth: string;
   columnWidth: string;
   panelZoom: string;
   termFont: string;
@@ -80,6 +81,7 @@ export function draftOf(p: { name?: string; device?: string; model?: string; wid
     carousel: tri(l.carousel),
     sidebarOpen: tri(l.sidebarOpen),
     sidebarWidth: num(l.sidebarWidth),
+    cardsWidth: num(l.cardsWidth),
     columnWidth: num(l.columnWidth),
     panelZoom: num(l.panelZoom),
     termFont: num(l.termFont),
@@ -102,6 +104,7 @@ export function fieldsOf(d: Draft): { profile: ProfileFields } | { error: string
     carousel: b(d.carousel),
     sidebarOpen: b(d.sidebarOpen),
     sidebarWidth: n(d.sidebarWidth),
+    cardsWidth: n(d.cardsWidth),
     columnWidth: n(d.columnWidth),
     panelZoom: n(d.panelZoom),
     termFont: n(d.termFont),

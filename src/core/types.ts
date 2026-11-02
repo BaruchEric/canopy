@@ -580,6 +580,8 @@ export interface ScreenLayout {
   sidebarOpen?: boolean;
   /** its width, CSS px */
   sidebarWidth?: number;
+  /** the width the cards keep beside the dock, CSS px (FR-015) */
+  cardsWidth?: number;
   /** every dock column's width, CSS px */
   columnWidth?: number;
   /** the panels' zoom, 0.5 to 2 */

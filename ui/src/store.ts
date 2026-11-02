@@ -95,6 +95,7 @@ import {
 } from "./waiting";
 import { badRepoIds } from "./health";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
+import { CARDS } from "./cardswidth";
 import {
   DEFAULT_LAUNCH,
   effectivePrimary,
@@ -254,6 +255,7 @@ export const SCREEN_LAYOUT = [
   "sidebarOpen",
   "feedOpen",
   "sidebarWidth",
+  "cardsWidth",
   "panelWidths",
   "soloWidth",
   "dockWidth",
@@ -269,6 +271,9 @@ const HISTORY_REFRESH = 10 * 60_000;
 
 interface Layout {
   sidebarWidth: number;
+  /** px the cards keep beside the dock, set at their seam (cardswidth.ts);
+   *  null leaves them what the dock leaves */
+  cardsWidth: number | null;
   /** px width of a panel that closed while it was a column of its own,
    *  read when it opens as a column again; before phase B every panel's
    *  width, read once to build the first `dockLayout` */
@@ -324,6 +329,7 @@ const strings = (v: unknown): string[] =>
 export function loadLayout(): Layout {
   const fallback: Layout = {
     sidebarWidth: SIDEBAR.initial,
+    cardsWidth: null,
     panelWidths: {},
     soloWidth: SOLO.initial,
     dockWidth: PANEL.initial,
@@ -352,6 +358,7 @@ export function loadLayout(): Layout {
     if (!stored || typeof stored !== "object" || Array.isArray(stored)) return fallback;
     const saved = withScreen(stored as Record<string, unknown>, slotsNow(), SCREEN_LAYOUT) as {
       sidebarWidth?: unknown;
+      cardsWidth?: unknown;
       panelWidths?: Record<string, unknown>;
       soloWidth?: unknown;
       dockWidth?: unknown;
@@ -396,6 +403,7 @@ export function loadLayout(): Layout {
       }
     }
     const sw = saved.sidebarWidth;
+    const cw = saved.cardsWidth;
     const solo = saved.soloWidth;
     const dw = saved.dockWidth;
     const th = saved.termHeight;
@@ -410,6 +418,7 @@ export function loadLayout(): Layout {
         typeof sw === "number" && Number.isFinite(sw)
           ? clamp(sw, SIDEBAR.min, SIDEBAR.max)
           : SIDEBAR.initial,
+      cardsWidth: typeof cw === "number" && Number.isFinite(cw) ? clamp(cw, CARDS.min, CARDS.max) : null,
       panelWidths,
       soloWidth:
         typeof solo === "number" && Number.isFinite(solo)
@@ -536,6 +545,7 @@ function savedTerms(s: Pick<CanopyState, "terms" | "parkedTerms">): TermTab[] {
 /** the persisted part of the state, minus `knownSections`, which is a constant */
 export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   sidebarWidth: s.sidebarWidth,
+  cardsWidth: s.cardsWidth,
   panelWidths: s.panelWidths,
   soloWidth: s.soloWidth,
   dockWidth: s.dockWidth,
@@ -856,6 +866,9 @@ export interface CanopyState {
   updatedAt: Record<string, number>;
   /** px width of the repo tree, dragged by the sidebar resizer */
   sidebarWidth: number;
+  /** px the cards keep beside the dock, dragged at their seam (CardsSeam);
+   *  null, the default, leaves them what the dock leaves */
+  cardsWidth: number | null;
   sidebarOpen: boolean;
   /** the tree as a drawer over the page, below the width that has no room
    *  for it beside the cards; this window's alone, never saved */
@@ -1082,6 +1095,8 @@ export interface CanopyState {
   applyEvent: (ev: ServerEvent, from?: string) => void;
   setWorkspaces: (ws: Workspace[]) => void;
   setSidebarWidth: (px: number) => void;
+  /** null goes back to the cards taking what the dock leaves */
+  setCardsWidth: (px: number | null) => void;
   toggleSidebar: () => void;
   setDrawer: (open: boolean) => void;
   setCliOpen: (open: boolean) => void;
@@ -2033,13 +2048,16 @@ export function tabCards(s: Pick<CanopyState, "panels" | "repos" | "terms">): Ta
 }
 
 export function screenLayoutOf(
-  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "feedOpen" | "panels" | "repos" | "terms">,
+  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth" | "feedOpen" | "panels" | "repos" | "terms">,
 ): ScreenLayout {
   return {
     arrange: arrangementOf(s),
     carousel: s.settings.dockCarousel,
     sidebarOpen: s.sidebarOpen,
     sidebarWidth: Math.round(s.sidebarWidth),
+    // only a width set at the seam: the cards taking what the dock leaves
+    // is what a profile that leaves them alone gives too
+    ...(s.cardsWidth !== null ? { cardsWidth: Math.round(s.cardsWidth) } : {}),
     columnWidth: Math.round(s.dockLayout.columns[0]?.width ?? PANEL.initial),
     panelZoom: zoomOf(s.settings.zoom, "panel"),
     termFont: s.settings.termFont,
@@ -2184,6 +2202,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   recalled: [],
   updatedAt: {},
   sidebarWidth: layout.sidebarWidth,
+  cardsWidth: layout.cardsWidth,
   panelWidths: layout.panelWidths,
   soloWidth: layout.soloWidth,
   dockWidth: layout.dockWidth,
@@ -2821,6 +2840,7 @@ export const useStore = create<CanopyState>((set, get) => ({
         dockLayout: { columns: l.columns.map((c) => (w === undefined ? c : { ...c, width: w })) },
         ...(layout.sidebarOpen !== undefined ? { sidebarOpen: layout.sidebarOpen } : {}),
         ...(layout.sidebarWidth !== undefined ? { sidebarWidth: clamp(layout.sidebarWidth, SIDEBAR.min, SIDEBAR.max) } : {}),
+        ...(layout.cardsWidth !== undefined ? { cardsWidth: clamp(layout.cardsWidth, CARDS.min, CARDS.max) } : {}),
         ...(layout.feedOpen !== undefined ? { feedOpen: layout.feedOpen } : {}),
       };
     });
@@ -2831,6 +2851,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const named: Partial<Layout> = {
       ...(layout.sidebarOpen !== undefined ? { sidebarOpen: s.sidebarOpen } : {}),
       ...(layout.sidebarWidth !== undefined ? { sidebarWidth: s.sidebarWidth } : {}),
+      ...(layout.cardsWidth !== undefined ? { cardsWidth: s.cardsWidth } : {}),
       ...(layout.feedOpen !== undefined ? { feedOpen: s.feedOpen } : {}),
     };
     if (Object.keys(named).length > 0) saveLayout(named);
@@ -3355,6 +3376,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   setWorkspaces: (workspaces) => set({ workspaces }),
 
   setSidebarWidth: (px) => set({ sidebarWidth: clamp(px, SIDEBAR.min, SIDEBAR.max) }),
+  setCardsWidth: (px) => set({ cardsWidth: px === null || !Number.isFinite(px) ? null : Math.round(clamp(px, CARDS.min, CARDS.max)) }),
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setDrawer: (drawerOpen) => set({ drawerOpen }),
   setCliOpen: (cliOpen) => set({ cliOpen }),

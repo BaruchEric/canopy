@@ -9,11 +9,13 @@
 import { BOARD_LAYOUTS, type ScreenLayout, type ScreenProfile, type TabTemplate, type TabTree } from "./types";
 
 /** The bounds a layout's values are held to, the page's own (SIDEBAR and
- *  PANEL in ui/src/store.ts, ZOOM_MIN and ZOOM_MAX in ui/src/surface.ts,
- *  TERM_FONT_MIN and TERM_FONT_MAX in ui/src/touch.ts, which this file
- *  cannot import; ui/src/screenprofiles.test.ts holds them equal). */
+ *  PANEL in ui/src/store.ts, CARDS in ui/src/cardswidth.ts, ZOOM_MIN and
+ *  ZOOM_MAX in ui/src/surface.ts, TERM_FONT_MIN and TERM_FONT_MAX in
+ *  ui/src/touch.ts, which this file cannot import;
+ *  ui/src/screenprofiles.test.ts holds them equal). */
 export const LAYOUT_BOUNDS = {
   sidebarWidth: { min: 180, max: 560 },
+  cardsWidth: { min: 320, max: 4800 },
   columnWidth: { min: 240, max: 2400 },
   panelZoom: { min: 0.5, max: 2 },
   termFont: { min: 8, max: 24 },
@@ -190,11 +192,11 @@ export function parseLayout(raw: unknown): { layout: ScreenLayout } | { error: s
     if (typeof r[k] !== "boolean") return { error: `${k} is true or false` };
     out[k] = r[k];
   }
-  for (const k of ["sidebarWidth", "columnWidth", "panelZoom", "termFont"] as const) {
+  for (const k of ["sidebarWidth", "cardsWidth", "columnWidth", "panelZoom", "termFont"] as const) {
     if (r[k] === undefined) continue;
     const b = LAYOUT_BOUNDS[k];
     if (!inRange(r[k], b)) return { error: `${k} is a number from ${b.min} to ${b.max}` };
-    out[k] = k === "sidebarWidth" || k === "columnWidth" ? Math.round(r[k]) : r[k];
+    out[k] = k === "panelZoom" || k === "termFont" ? r[k] : Math.round(r[k]);
   }
   if (r["level"] !== undefined) {
     if (r["level"] !== "intermediate" && r["level"] !== "advanced") return { error: "level is intermediate or advanced" };

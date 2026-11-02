@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { LAYOUT_BOUNDS, PRESETS } from "../../src/core/screenlayouts";
 import { draftOf, fieldsOf, neverArranged } from "./screenprofiles";
+import { CARDS } from "./cardswidth";
 import { PANEL, SIDEBAR } from "./store";
 import { ZOOM_MAX, ZOOM_MIN } from "./surface";
 import { TERM_FONT_MAX, TERM_FONT_MIN } from "./touch";
@@ -10,6 +11,7 @@ describe("LAYOUT_BOUNDS", () => {
     const bounds: Record<keyof typeof LAYOUT_BOUNDS, { min: number; max: number }> = LAYOUT_BOUNDS;
     expect(bounds).toEqual({
       sidebarWidth: { min: SIDEBAR.min, max: SIDEBAR.max },
+      cardsWidth: { min: CARDS.min, max: CARDS.max },
       columnWidth: { min: PANEL.min, max: PANEL.max },
       panelZoom: { min: ZOOM_MIN, max: ZOOM_MAX },
       termFont: { min: TERM_FONT_MIN, max: TERM_FONT_MAX },

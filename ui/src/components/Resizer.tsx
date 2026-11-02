@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { CSSProperties, KeyboardEvent, PointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent, PointerEvent, Ref } from "react";
 import { clamp } from "../util";
 
 interface ResizerProps {
@@ -13,6 +13,11 @@ interface ResizerProps {
   max: number;
   /** width restored on double-click */
   initial: number;
+  /** what a double-click does instead of restoring `initial`: the cards'
+   *  seam goes back to no width of its own */
+  onReset?: () => void;
+  /** the handle's element, for a seam that reads the page around it */
+  ref?: Ref<HTMLDivElement>;
   /** 1 when the pane sits left of the handle, -1 when it sits right of it */
   dir: 1 | -1;
   /** px of width per px of pointer travel: 2 for a centered pane, whose far
@@ -129,6 +134,8 @@ export function Resizer({
   min,
   max,
   initial,
+  onReset,
+  ref,
   dir,
   factor = 1,
   cssVar,
@@ -257,6 +264,7 @@ export function Resizer({
 
   return (
     <div
+      ref={ref}
       className={`resizer${className ? ` ${className}` : ""}${dragging ? " dragging" : ""}`}
       style={style}
       role="separator"
@@ -268,7 +276,7 @@ export function Resizer({
       tabIndex={0}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
-      onDoubleClick={() => onCommit(initial)}
+      onDoubleClick={() => (onReset ? onReset() : onCommit(initial))}
     />
   );
 }

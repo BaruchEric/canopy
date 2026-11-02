@@ -315,6 +315,7 @@ function ProfileForm({
         {tri("carousel", "carousel")}
         {tri("sidebarOpen", "repo tree")}
         {text("sidebarWidth", "tree width")}
+        {text("cardsWidth", "cards width")}
         {text("columnWidth", "column width")}
         {text("panelZoom", "panel zoom")}
         {text("termFont", "shell font")}
@@ -382,6 +383,7 @@ const LAYOUT_FIELDS = [
   "carousel",
   "sidebarOpen",
   "sidebarWidth",
+  "cardsWidth",
   "columnWidth",
   "panelZoom",
   "termFont",

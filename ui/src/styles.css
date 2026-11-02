@@ -532,6 +532,33 @@ body.resizing-nwse iframe,
 body.resizing-nesw iframe {
   pointer-events: none;
 }
+/* the cards' own seam (FR-015, CardsSeam.tsx): a 6px track of its own
+   between the cards and the dock while both show, which the dock's room
+   gives up, so the cards keep --cards-min. A width set there is written
+   over --cards-min inline on .body; past it the dock scrolls. */
+.body.cards-seam {
+  grid-template-columns: var(--sidebar-w, 264px) 6px minmax(var(--cards-min), 1fr) 6px auto;
+}
+.body.cards-seam.no-side {
+  grid-template-columns: minmax(var(--cards-min), 1fr) 6px auto;
+}
+.body.cards-seam > .dock {
+  max-width: calc(100vw - var(--sidebar-w, 264px) - 6px - var(--cards-min, 320px) - 6px);
+}
+.body.cards-seam.no-side > .dock {
+  max-width: calc(100vw - var(--cards-min, 320px) - 6px);
+}
+/* the tree is a drawer below 1100px, so no track is kept for it */
+@media (max-width: 1100px) {
+  .body.cards-seam,
+  .body.cards-seam.no-side {
+    grid-template-columns: minmax(0, 1fr) 6px auto;
+  }
+  .body.cards-seam > .dock,
+  .body.cards-seam.no-side > .dock {
+    max-width: calc(100vw - var(--cards-min, 320px) - 6px);
+  }
+}
 .spacer {
   flex: 1;
 }

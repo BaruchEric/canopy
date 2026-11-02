@@ -43,6 +43,7 @@ import {
   flowFor,
   activeFlowFor,
   harnessNoticeOf,
+  screenLayoutOf,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -3210,6 +3211,62 @@ describe("the dock as columns of cells", () => {
   test("the layout is saved with the rest", () => {
     const s = useStore.getState();
     expect(layoutOf(s).dockLayout).toBe(s.dockLayout);
+  });
+
+  test("the cards' width is kept per kind of screen, and none chosen is none", () => {
+    const l = globalThis as unknown as { localStorage?: unknown };
+    const kept = new Map<string, string>();
+    l.localStorage = {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    };
+    const at = (width: number, height: number) => {
+      g.window = { screen: { width, height }, location: { href: "http://a.test/", search: "" } };
+    };
+    try {
+      // nothing stored: the cards take what the dock leaves
+      at(1440, 900);
+      expect(loadLayout().cardsWidth).toBeNull();
+      kept.set("canopy.layout", JSON.stringify({ cardsWidth: 600, screens: { laptop: { cardsWidth: 9000 }, desktop: { cardsWidth: null }, wide: { cardsWidth: "wide" } } }));
+      // held to the bounds, an automatic slot stays automatic, and a bad value is none
+      expect(loadLayout().cardsWidth).toBe(4800);
+      at(2560, 1440);
+      expect(loadLayout().cardsWidth).toBeNull();
+      at(3440, 1440);
+      expect(loadLayout().cardsWidth).toBeNull();
+      // a class never visited reads the last width set anywhere
+      at(1100, 800);
+      expect(loadLayout().cardsWidth).toBe(600);
+      // a drag at the seam writes this screen's slot; a double-click writes null there
+      at(2560, 1440);
+      kept.clear();
+      useStore.getState().setCardsWidth(700.4);
+      const stored = (): { cardsWidth?: unknown; screens?: Record<string, { cardsWidth?: unknown }> } => JSON.parse(kept.get("canopy.layout") ?? "{}");
+      expect(useStore.getState().cardsWidth).toBe(700);
+      expect(stored().screens?.desktop?.cardsWidth).toBe(700);
+      useStore.getState().setCardsWidth(100);
+      expect(useStore.getState().cardsWidth).toBe(320);
+      useStore.getState().setCardsWidth(null);
+      expect(useStore.getState().cardsWidth).toBeNull();
+      expect(stored().screens?.desktop).toHaveProperty("cardsWidth", null);
+    } finally {
+      delete l.localStorage;
+      useStore.setState({ cardsWidth: null });
+    }
+  });
+
+  test("a screen layout names the cards' width only once one is set, and applying one sets it", () => {
+    useStore.setState({ cardsWidth: null });
+    expect("cardsWidth" in screenLayoutOf(useStore.getState())).toBe(false);
+    useStore.getState().applyScreenLayout({ cardsWidth: 100 });
+    expect(useStore.getState().cardsWidth).toBe(320);
+    useStore.getState().applyScreenLayout({ cardsWidth: 900 });
+    expect(screenLayoutOf(useStore.getState()).cardsWidth).toBe(900);
+    // a layout that leaves it out leaves it as it is
+    useStore.getState().applyScreenLayout({ sidebarOpen: true });
+    expect(useStore.getState().cardsWidth).toBe(900);
+    useStore.setState({ cardsWidth: null, sidebarOpen: pristine.sidebarOpen });
   });
 });
 

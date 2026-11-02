@@ -10,6 +10,7 @@ import { SessionsView } from "./components/Sessions";
 import { IncubatorView } from "./components/Incubator";
 import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
+import { CardsSeam } from "./components/CardsSeam";
 import { FeedDock } from "./components/Feed";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
@@ -305,6 +306,8 @@ export function App() {
   // already and stays as it was
   const phone = useMedia(PHONE);
   const carousel = useStore((s) => s.settings.dockCarousel && s.panels.length > 0) && !phone;
+  // the cards' own seam, while the cards and the dock are side by side
+  const cardsSeam = useStore((s) => !s.settings.dockCarousel && s.panels.length > 0) && !phone;
   const openPanel = useStore((s) => s.openPanel);
   const [attempt, setAttempt] = useState(0);
   const pinned = useRef(false);
@@ -610,7 +613,7 @@ export function App() {
       </> : <>
       <TopBar nav={nav} />
       <div
-        className={`body${sidebarOpen ? "" : " no-side"}${carousel ? " carousel" : ""}`}
+        className={`body${sidebarOpen ? "" : " no-side"}${carousel ? " carousel" : ""}${cardsSeam ? " cards-seam" : ""}`}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
       >
         {narrow && drawerOpen && (
@@ -637,6 +640,7 @@ export function App() {
           </>
         )}
         <RepoGrid />
+        {cardsSeam && <CardsSeam />}
         <Dock />
       </div>
       <SelectBar />
