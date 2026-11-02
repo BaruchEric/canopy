@@ -149,7 +149,10 @@ export function TreeRows({ repo, selecting }: { repo: Repo; selecting: boolean }
 }
 
 /** A repo's kept worktrees (FR-051): one row per tree with where its branch
- *  stands, a shell and an agent shell into it, its merge into its base
+ *  stands, a shell and an agent shell into it, its sync from its base (a
+ *  rebase with the uncommitted work stashed over it, by hand when the tree
+ *  is behind and by itself whenever the base moves while auto is on), its
+ *  merge into its base
  *  (worktrunk's `wt merge`: commit, squash, rebase, the gates, fast-forward,
  *  remove) and its removal; under them a form for a new tree on a branch,
  *  new or existing, with the repo's setup run and its build caches cloned
@@ -162,6 +165,8 @@ export function TreesSection({ repo }: { repo: Repo }) {
   const removeTree = useStore((s) => s.removeTree);
   const mergeTree = useStore((s) => s.mergeTree);
   const cleanTrees = useStore((s) => s.cleanTrees);
+  const syncTree = useStore((s) => s.syncTree);
+  const setTreeAuto = useStore((s) => s.setTreeAuto);
   const loadTrees = useStore((s) => s.loadTrees);
   const showSection = useStore((s) => s.showSection);
   const openPanel = useStore((s) => s.openPanel);
@@ -176,6 +181,7 @@ export function TreesSection({ repo }: { repo: Repo }) {
   const [branch, setBranch] = useState("");
   const [base, setBase] = useState("");
   const [caches, setCaches] = useState(true);
+  const [follow, setFollow] = useState(true);
   const [withAgent, setWithAgent] = useState(true);
   // a fresh list whenever the panel shows the repo, since a commit made in
   // a tree from a shell moves counts the event may not carry yet
@@ -218,7 +224,7 @@ export function TreesSection({ repo }: { repo: Repo }) {
     const name = branch.trim();
     if (!name || busy !== null) return;
     act("add", async () => {
-      const slug = await addTree(repo.id, name, base.trim() || undefined, caches);
+      const slug = await addTree(repo.id, name, base.trim() || undefined, caches, follow);
       setBranch("");
       setBase("");
       setAdding(false);
@@ -231,6 +237,16 @@ export function TreesSection({ repo }: { repo: Repo }) {
     setRefused(null);
     act(`merge:${t.slug}`, () => mergeTree(repo.id, t.slug));
   };
+  // a sync that stopped is said under the row by the record, so it is not
+  // the section's error as well
+  const sync = (t: BranchTree) => {
+    setRefused(null);
+    act(`sync:${t.slug}`, () =>
+      syncTree(repo.id, t.slug).catch((err: unknown) => {
+        if (!errText(err).startsWith("sync stopped")) throw err;
+      }),
+    );
+  };
   const cleanCount = trees.filter(cleanable).length;
   const headTone = trees.some((t) => t.state === "failed" || t.stopped) ? "rust" : trees.some((t) => t.state === "preparing" || t.state === "merging") ? "lichen" : "";
   return (
@@ -240,7 +256,7 @@ export function TreesSection({ repo }: { repo: Repo }) {
       className="trees-section"
       label="Worktrees"
       head={<span className={headTone}>{treesHead(trees)}</span>}
-      title="Worktrees kept by hand, one per branch, each with the repo's setup run and its build caches cloned in. A shell or an agent opens inside one; merge folds a tree's branch into its base and removes it; clean up removes the trees already merged."
+      title="Worktrees kept by hand, one per branch, each with the repo's setup run and its build caches cloned in. A shell or an agent opens inside one; sync rebases a tree onto its base, by hand or by itself whenever the base moves; merge folds a tree's branch into its base and removes it; clean up removes the trees already merged."
       copy={() => treeLines(trees)}
       tools={
         <>
@@ -299,6 +315,31 @@ export function TreesSection({ repo }: { repo: Repo }) {
                         changes
                       </button>
                     )}
+                    {t.behind > 0 && (
+                      <button
+                        type="button"
+                        className="mini"
+                        disabled={busy !== null || t.state === "preparing" || t.state === "merging"}
+                        title={`Rebase the branch onto ${t.base || "its base"} now, with uncommitted work stashed and put back (git rebase --autostash)`}
+                        onClick={() => sync(t)}
+                      >
+                        {busy === `sync:${t.slug}` ? "syncing…" : "sync"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="mini trees-auto"
+                      aria-pressed={t.sync}
+                      disabled={busy !== null}
+                      title={
+                        t.sync
+                          ? `The tree follows ${t.base || "its base"} by itself, rebased whenever it moves; click to leave it where it is`
+                          : `The tree stays where it is while ${t.base || "its base"} moves; click to have it follow`
+                      }
+                      onClick={() => act(`auto:${t.slug}`, () => setTreeAuto(repo.id, t.slug, !t.sync))}
+                    >
+                      auto
+                    </button>
                     <button
                       type="button"
                       className="mini"
@@ -336,6 +377,9 @@ export function TreesSection({ repo }: { repo: Repo }) {
             <input type="text" value={base} placeholder={`from ${repo.status?.branch ?? "the default branch"}`} aria-label="Base" onChange={(e) => setBase(e.target.value)} />
             <label className="trees-check">
               <input type="checkbox" checked={caches} onChange={(e) => setCaches(e.target.checked)} /> clone build caches
+            </label>
+            <label className="trees-check">
+              <input type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} /> follow {base.trim() || repo.status?.branch || "the base"}
             </label>
             {agentHere && (
               <label className="trees-check">

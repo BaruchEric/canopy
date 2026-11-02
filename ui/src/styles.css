@@ -13887,8 +13887,10 @@ body.resizing-nesw {
 .trees-form input[type="text"] { flex: 1 1 150px; min-width: 110px; font-size: 12px; }
 .trees-check { display: inline-flex; gap: 4px; align-items: center; font-size: 11px; opacity: 0.8; }
 .trees-why { margin: 2px 0 0; white-space: pre-wrap; font-size: 11px; max-height: 8em; overflow: auto; flex-basis: 100%; }
-/* why a tree's merge stopped short, under its row until the next merge goes through */
+/* why a tree's merge or sync stopped short, under its row until the next one goes through */
 .trees-stopped { color: var(--rust); }
+/* the auto toggle, lit while the tree follows its base */
+.trees-auto[aria-pressed="true"] { color: var(--ink); background: var(--wash-strong); }
 .trees-refused { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 11px; }
 
 /* the kept worktrees on a card (FR-051): a row each at cozy density, where

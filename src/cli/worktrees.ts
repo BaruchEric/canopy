@@ -1,6 +1,6 @@
 /** `canopy worktrees`: show this backend's run, warm and kept trees, set a
- *  repo's warm count, prune its orphans and stale slots, and make, merge,
- *  clean up, remove and find the trees kept by hand (FR-051). */
+ *  repo's warm count, prune its orphans and stale slots, and make, sync,
+ *  merge, clean up, remove and find the trees kept by hand (FR-051). */
 
 import { treeWords } from "../core/treewords";
 import type { BranchTree, BranchTreesInfo, WorktreesInfo, WorktreeRepoInfo } from "../core/types";
@@ -11,7 +11,9 @@ export const WORKTREES_USAGE = [
   "usage: canopy worktrees [repo] [--json] [--backend URL]",
   "       canopy worktrees warm <repo> [N] [--backend URL]",
   "       canopy worktrees prune [repo] [--backend URL]",
-  "       canopy worktrees add <repo> <branch> [--base REF] [--no-caches] [--backend URL]",
+  "       canopy worktrees add <repo> <branch> [--base REF] [--no-caches] [--no-sync] [--backend URL]",
+  "       canopy worktrees sync <repo> <branch> [--backend URL]",
+  "       canopy worktrees auto <repo> <branch> on|off [--backend URL]",
   "       canopy worktrees merge <repo> <branch> [--no-squash] [--no-commit] [--keep] [--backend URL]",
   "       canopy worktrees clean [repo] [--backend URL]",
   "       canopy worktrees rm <repo> <branch> [--force] [--delete-branch] [--backend URL]",
@@ -184,6 +186,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     const base = take(args, "--base");
     if (baseFlag && (base === undefined || base.startsWith("--"))) return fail("--base needs a ref");
     const caches = !has(args, "--no-caches");
+    const sync = !has(args, "--no-sync");
     const repo = args.shift();
     const branch = args.shift();
     if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
@@ -193,9 +196,34 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
       branch,
       ...(base !== undefined ? { base } : {}),
       caches,
+      ...(sync ? {} : { sync }),
     }).catch(requestFailed);
     console.log(`${tree.branch}  ${tree.dir}${tree.port !== null ? `  :${tree.port}` : ""}`);
     if (tree.state === "preparing") console.log("preparing: the setup line runs and the caches clone in the background; canopy worktrees shows when it is ready");
+    return;
+  }
+
+  if (args[0] === "sync") {
+    args.shift();
+    const repo = args.shift();
+    const branch = args.shift();
+    if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
+    const id = repoId(await getInfo(), repo, fail);
+    // a sync that stopped answers 409 with why, which requestFailed prints
+    const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/sync", { repo: id, tree: branch }).catch(requestFailed);
+    console.log(`synced ${tree.branch} onto ${tree.base}  ${treeWords(tree)}`);
+    return;
+  }
+
+  if (args[0] === "auto") {
+    args.shift();
+    const repo = args.shift();
+    const branch = args.shift();
+    const on = args.shift();
+    if (!repo || !branch || branch.startsWith("--") || (on !== "on" && on !== "off") || args.length > 0) return fail(WORKTREES_USAGE);
+    const id = repoId(await getInfo(), repo, fail);
+    const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/auto", { repo: id, tree: branch, sync: on === "on" }).catch(requestFailed);
+    console.log(tree.sync ? `${tree.branch} follows ${tree.base}` : `${tree.branch} stays where it is while ${tree.base} moves`);
     return;
   }
 
@@ -226,7 +254,7 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
         return;
       }
       if (now.state === "merging") continue;
-      if (now.stopped) return fail(`the merge stopped: ${now.stopped}`);
+      if (now.stopped) return fail(now.stopped);
       console.log(`merged ${tree.branch} into ${tree.base}; the tree stays at ${now.dir}`);
       return;
     }

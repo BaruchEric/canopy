@@ -35,6 +35,7 @@ const tree = (over: Partial<BranchTree>): BranchTree => ({
   madeAt: 0,
   caches: true,
   state: "ready",
+  sync: true,
   head: "abc1234",
   ahead: 0,
   behind: 0,
@@ -137,7 +138,7 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
         if (!treesKnown) return Response.json({ error: "not found" }, { status: 404 });
         const repos = trees.repos.map((r) =>
           r.repoId === "dev-tools/canopy" && mergeOf.feat === "gone" ? { ...r, trees: [] }
-          : r.repoId === "quiet" && mergeOf.fix === "stopped" ? { ...r, trees: r.trees.map((t) => ({ ...t, state: "ready" as const, stopped: "gate test exited 1" })) }
+          : r.repoId === "quiet" && mergeOf.fix === "stopped" ? { ...r, trees: r.trees.map((t) => ({ ...t, state: "ready" as const, stopped: "merge stopped: gate test exited 1" })) }
           : r,
         );
         return Response.json({ ...trees, repos });
@@ -162,6 +163,15 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
       if (url.pathname === "/api/trees/clean") {
         const posted = body as { repo?: string };
         return Response.json({ removed: posted.repo ? [] : [{ repoId: "dev-tools/canopy", slug: "feat-x", branch: "feat/x" }] });
+      }
+      if (url.pathname === "/api/trees/sync") {
+        const posted = body as { tree: string };
+        if (posted.tree === "fix") return Response.json({ error: "sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree" }, { status: 409 });
+        return Response.json({ tree: tree({ ahead: 2, files: 1, shells: 1 }) });
+      }
+      if (url.pathname === "/api/trees/auto") {
+        const posted = body as { sync: boolean };
+        return Response.json({ tree: tree({ sync: posted.sync }) });
       }
       return Response.json({ error: "unexpected request" }, { status: 404 });
     },
@@ -211,7 +221,7 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
     expect(output).toEqual(["nothing to prune"]);
     output.length = 0;
 
-    await main(["worktrees", "add", "canopy", "feat/y", "--base", "v2", "--no-caches", "--token", "flag-token"]);
+    await main(["worktrees", "add", "canopy", "feat/y", "--base", "v2", "--no-caches", "--no-sync", "--token", "flag-token"]);
     expect(output).toEqual([
       "feat/y  /t/canopy-abc/new  :7903",
       "preparing: the setup line runs and the caches clone in the background; canopy worktrees shows when it is ready",
@@ -241,7 +251,7 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
     expect(output).toEqual(["merging feat/x into main, squashed…", "merged feat/x into main; the tree and its branch are gone"]);
     output.length = 0;
 
-    await expect(worktreesCommand(["merge", "quiet", "fix", "--no-commit", "--backend", base], { fail: throwing })).rejects.toThrow("the merge stopped: gate test exited 1");
+    await expect(worktreesCommand(["merge", "quiet", "fix", "--no-commit", "--backend", base], { fail: throwing })).rejects.toThrow("merge stopped: gate test exited 1");
     expect(output).toEqual(["merging fix into main, squashed…"]);
     output.length = 0;
 
@@ -251,6 +261,20 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
 
     await main(["worktrees", "clean", "canopy", "--token", "flag-token"]);
     expect(output).toEqual(["nothing to clean: no tree is merged into its base with nothing changed or open in it"]);
+    output.length = 0;
+
+    await main(["worktrees", "sync", "canopy", "feat/x", "--token", "flag-token"]);
+    expect(output).toEqual(["synced feat/x onto main  ↑2 ●1 :7912 1 shell"]);
+    output.length = 0;
+
+    await expect(worktreesCommand(["sync", "quiet", "fix", "--backend", base], { fail: throwing })).rejects.toThrow("sync stopped: the rebase onto main stopped on a.txt");
+
+    await main(["worktrees", "auto", "canopy", "feat/x", "off", "--token", "flag-token"]);
+    expect(output).toEqual(["feat/x stays where it is while main moves"]);
+    output.length = 0;
+
+    await main(["worktrees", "auto", "canopy", "feat/x", "on", "--token", "flag-token"]);
+    expect(output).toEqual(["feat/x follows main"]);
   } finally {
     setHomeBase(undefined);
     setTokenFlag(undefined);
@@ -279,7 +303,7 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
     { method: "GET", path: "/api/worktrees", token: "flag-token" },
     { method: "POST", path: "/api/worktrees/prune", body: { repo: "dev-tools/canopy" }, token: "flag-token" },
     { method: "GET", path: "/api/worktrees", token: "flag-token" },
-    { method: "POST", path: "/api/trees/add", body: { repo: "dev-tools/canopy", branch: "feat/y", base: "v2", caches: false }, token: "flag-token" },
+    { method: "POST", path: "/api/trees/add", body: { repo: "dev-tools/canopy", branch: "feat/y", base: "v2", caches: false, sync: false }, token: "flag-token" },
     { method: "GET", path: "/api/worktrees", token: "flag-token" },
     { method: "GET", path: "/api/trees", token: "flag-token" },
     { method: "GET", path: "/api/worktrees", token: "flag-token" },
@@ -302,6 +326,14 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
     { method: "POST", path: "/api/trees/clean", body: {}, token: "flag-token" },
     { method: "GET", path: "/api/worktrees", token: "flag-token" },
     { method: "POST", path: "/api/trees/clean", body: { repo: "dev-tools/canopy" }, token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/sync", body: { repo: "dev-tools/canopy", tree: "feat/x" }, token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/sync", body: { repo: "quiet", tree: "fix" }, token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/auto", body: { repo: "dev-tools/canopy", tree: "feat/x", sync: false }, token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/auto", body: { repo: "dev-tools/canopy", tree: "feat/x", sync: true }, token: "flag-token" },
   ]);
 });
 
@@ -322,6 +354,10 @@ test("invalid worktree arguments are refused before contacting the backend", asy
       ["rm", "canopy", "--backend", base],
       ["merge", "canopy", "--backend", base],
       ["merge", "canopy", "feat", "extra", "--backend", base],
+      ["sync", "canopy", "--backend", base],
+      ["sync", "canopy", "feat", "extra", "--backend", base],
+      ["auto", "canopy", "feat", "--backend", base],
+      ["auto", "canopy", "feat", "maybe", "--backend", base],
       ["clean", "canopy", "extra", "--backend", base],
       ["path", "canopy", "--backend", base],
       ["--backend"],

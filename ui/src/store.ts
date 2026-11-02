@@ -1186,13 +1186,17 @@ export interface CanopyState {
   loadTrees: (backend?: string) => Promise<void>;
   /** a new kept worktree on `branch`, from `base` or the default branch;
    *  the list arrives on the event, and the tree is handed back for a shell */
-  addTree: (repoId: string, branch: string, base?: string, caches?: boolean) => Promise<string>;
+  addTree: (repoId: string, branch: string, base?: string, caches?: boolean, sync?: boolean) => Promise<string>;
   /** removes a kept worktree by its slug; `force` loses its work and shells */
   removeTree: (repoId: string, slug: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
   /** starts the merge of a kept worktree into its base; the trees event carries the outcome */
   mergeTree: (repoId: string, slug: string, opts?: { squash?: boolean; commit?: boolean; keep?: boolean }) => Promise<void>;
   /** removes the repo's merged, empty worktrees; how many went */
   cleanTrees: (repoId: string) => Promise<number>;
+  /** rebases a kept worktree onto its base now; a sync that stopped throws with why */
+  syncTree: (repoId: string, slug: string) => Promise<void>;
+  /** whether a kept worktree follows its base by itself */
+  setTreeAuto: (repoId: string, slug: string, sync: boolean) => Promise<void>;
   /** opens the repo's panel with one of its sections unfolded */
   showSection: (repoId: string, key: SectionKey) => void;
   /** "land" on a ready branch run, by its run's or branch's id; `approve`
@@ -3611,8 +3615,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       // An older backend keeps no worktrees by hand; nothing shows for it.
     }
   },
-  addTree: async (repoId, branch, base, caches = true) => {
-    const tree = await api.addTree(repoId, branch, base, caches);
+  addTree: async (repoId, branch, base, caches = true, sync = true) => {
+    const tree = await api.addTree(repoId, branch, base, caches, sync);
     return tree.slug;
   },
   removeTree: async (repoId, slug, force = false, deleteBranch = false) => {
@@ -3622,6 +3626,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     await api.mergeTree(repoId, slug, opts);
   },
   cleanTrees: async (repoId) => (await api.cleanTrees(repoId)).length,
+  syncTree: async (repoId, slug) => {
+    await api.syncTree(repoId, slug);
+  },
+  setTreeAuto: async (repoId, slug, sync) => {
+    await api.setTreeAuto(repoId, slug, sync);
+  },
   landRun: async (id, approve, skipJudge) => {
     await api.land(id, approve, skipJudge);
   },

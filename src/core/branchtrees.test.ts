@@ -121,14 +121,14 @@ describe("the record", () => {
         trees: [
           { slug: "feat", branch: "feat", base: "main", port: 7912, madeAt: 5, caches: false, state: "failed", why: "bun install exited 1" },
           { slug: "x", branch: "x", why: "stale", state: "ready" },
-          { slug: "y", branch: "y", state: "bogus", port: "no" },
+          { slug: "y", branch: "y", state: "bogus", port: "no", sync: false },
         ],
       }),
     );
     expect(rec.trees).toEqual([
-      { slug: "feat", branch: "feat", base: "main", port: 7912, madeAt: 5, caches: false, state: "failed", why: "bun install exited 1" },
-      { slug: "x", branch: "x", base: "", port: null, madeAt: 0, caches: true, state: "ready" },
-      { slug: "y", branch: "y", base: "", port: null, madeAt: 0, caches: true, state: "ready" },
+      { slug: "feat", branch: "feat", base: "main", port: 7912, madeAt: 5, caches: false, state: "failed", why: "bun install exited 1", sync: true },
+      { slug: "x", branch: "x", base: "", port: null, madeAt: 0, caches: true, state: "ready", sync: true },
+      { slug: "y", branch: "y", base: "", port: null, madeAt: 0, caches: true, state: "ready", sync: false },
     ]);
   });
 });
@@ -233,7 +233,8 @@ describe("words", () => {
     expect(treeWords({ ahead: 0, behind: 0, files: 0, port: 7900, state: "preparing", shells: 0 })).toBe("preparing :7900");
     expect(treeWords({ ahead: 0, behind: 0, files: 0, port: 7900, state: "failed", why: "a\nbun install exited 1", shells: 0 })).toBe("setup failed: bun install exited 1 :7900");
     expect(treeWords({ ahead: 1, behind: 0, files: 0, port: 7900, state: "merging", shells: 0 })).toBe("merging ↑1 :7900");
-    expect(treeWords({ ahead: 1, behind: 0, files: 0, port: null, state: "ready", stopped: "gate test exited 1\nnope", shells: 0 })).toBe("merge stopped: gate test exited 1 ↑1");
+    expect(treeWords({ ahead: 1, behind: 0, files: 0, port: null, state: "ready", stopped: "merge stopped: gate test exited 1\nnope", shells: 0 })).toBe("merge stopped: gate test exited 1 ↑1");
+    expect(treeWords({ ahead: 0, behind: 2, files: 0, port: null, state: "ready", stopped: "sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree", sync: false, shells: 0 })).toBe("sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree ↓2 sync off");
   });
   test("clean-up takes a ready tree its base holds whole, with nothing changed or open", () => {
     expect(cleanable({ state: "ready", files: 0, ahead: 0, shells: 0 })).toBe(true);
@@ -255,7 +256,7 @@ test("dressTreeCards names a scanned tree after its checkout and branch and file
   const main = { id: "dev-tools/canopy", name: "canopy", path: "/dev/dev-tools/canopy", group: "dev-tools", source: "launch", status: null };
   const key = repoKey(main.path);
   const scanned = (slug: string) => ({ id: `trees:${key}/${slug}`, name: slug, path: `/t/${key}/${slug}`, group: `worktrees/${key}`, source: "trees", status: null });
-  const records = new Map([[main.path, { trees: [{ slug: "feat-x", branch: "feat/x", base: "main", port: 7912, madeAt: 0, caches: true, state: "ready" as const }] }]]);
+  const records = new Map([[main.path, { trees: [{ slug: "feat-x", branch: "feat/x", base: "main", port: 7912, madeAt: 0, caches: true, state: "ready" as const , sync: true }] }]]);
   const [known, stray] = dressTreeCards([scanned("feat-x"), scanned("stray")], [main], records, root);
   expect(known).toMatchObject({ name: "canopy ⑂ feat/x", group: "dev-tools", id: `trees:${key}/feat-x` });
   expect(stray).toMatchObject({ name: "stray", group: `worktrees/${key}` });

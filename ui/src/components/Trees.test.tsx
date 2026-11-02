@@ -17,6 +17,7 @@ const tree = (over: Partial<BranchTree> = {}): BranchTree => ({
   madeAt: 0,
   caches: true,
   state: "ready",
+  sync: true,
   head: "abc1234",
   ahead: 0,
   behind: 0,
@@ -105,16 +106,28 @@ test("a failed tree turns rust and keeps the reason as text; a preparing one lic
 });
 
 test("a row merges, says why its merge stopped, waits while merging, and the head cleans up the merged trees", () => {
-  const html = render([tree(), tree({ slug: "b", branch: "b", ahead: 2, stopped: "gate test exited 1\nnope" }), tree({ slug: "c", branch: "c", state: "merging", ahead: 1 })]);
+  const html = render([tree(), tree({ slug: "b", branch: "b", ahead: 2, stopped: "merge stopped: gate test exited 1\nnope" }), tree({ slug: "c", branch: "c", state: "merging", ahead: 1 })]);
   expect(html).toContain("3 trees, 1 merging, 1 merge stopped");
   expect(html).toMatch(/<button[^>]*title="Commit what is uncommitted, squash the commits into one, rebase onto main, run the gates in the tree, fast-forward main to it, then remove the tree and its branch"[^>]*>merge<\/button>/);
-  expect(html).toContain('<pre class="trees-why trees-stopped">gate test exited 1\nnope</pre>');
+  expect(html).toContain('<pre class="trees-why trees-stopped">merge stopped: gate test exited 1\nnope</pre>');
   expect(html).toContain("merge stopped: gate test exited 1 ↑2");
   expect(html).toMatch(/<button[^>]*disabled=""[^>]*>merging…<\/button>/);
   expect(html).toContain('class="landing-row trees-row lichen"');
   // one of the three is merged with nothing in it
   expect(html).toContain(">clean up 1</button>");
   expect(render([tree({ ahead: 1 })])).not.toMatch(/>clean up \d/);
+});
+
+test("a row behind its base gets sync, auto says whether the tree follows the base, and the head counts a stopped sync", () => {
+  const html = render([tree({ behind: 2 }), tree({ slug: "b", branch: "b", sync: false, behind: 1, stopped: "sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree" })]);
+  expect(html).toContain("2 trees, 1 sync stopped");
+  expect(html).toMatch(/<button[^>]*title="Rebase the branch onto main now, with uncommitted work stashed and put back \(git rebase --autostash\)"[^>]*>sync<\/button>/);
+  expect(html).toMatch(/<button[^>]*class="mini trees-auto" aria-pressed="true"[^>]*>auto<\/button>/);
+  expect(html).toMatch(/<button[^>]*class="mini trees-auto" aria-pressed="false"[^>]*>auto<\/button>/);
+  expect(html).toContain("↓1 :7912 sync off");
+  expect(html).toContain('<pre class="trees-why trees-stopped">sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree</pre>');
+  expect(html).toContain('class="landing-row trees-row rust"');
+  expect(render([tree()])).not.toContain(">sync<");
 });
 
 test("a repo with no tree still shows the section with its form button, and no chip", () => {

@@ -1784,9 +1784,15 @@ export interface BranchTree {
   state: BranchTreeState;
   /** the last lines of what failed, for a failed tree */
   why?: string;
-  /** why the last merge stopped short (a conflict, a gate, the base's
-   *  checkout holding changes); gone once a merge goes through */
+  /** why the last merge or sync stopped short ("merge stopped: …" or
+   *  "sync stopped: …": a conflict, a gate, the base's checkout holding
+   *  changes); gone once one goes through */
   stopped?: string;
+  /** whether the tree follows its base by itself: rebased onto it, with
+   *  uncommitted work stashed and put back, whenever the base moves */
+  sync: boolean;
+  /** the base's commit the last sync, by hand or by itself, was tried at */
+  syncedTo?: string;
   /** HEAD, short */
   head: string;
   /** commits the branch has that its base lacks, and the reverse */

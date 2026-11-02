@@ -897,9 +897,9 @@ export const api = {
   /** One backend's kept worktrees (FR-051); ids qualified as the event's are. */
   trees: async (b: string = homeName()): Promise<BranchTreesInfo> => from(b, await req<BranchTreesInfo>(b, "/api/trees"), qTrees),
   /** a new kept worktree on `branch`, from `base` (the default branch when unsaid) */
-  addTree: async (repoId: string, branch: string, base?: string, caches = true): Promise<BranchTree> => {
+  addTree: async (repoId: string, branch: string, base?: string, caches = true, sync = true): Promise<BranchTree> => {
     const [b, plain] = on(repoId);
-    const r = await req<{ tree: BranchTree }>(b, "/api/trees/add", { method: "POST", body: JSON.stringify({ repo: plain, branch, ...(base ? { base } : {}), caches }) });
+    const r = await req<{ tree: BranchTree }>(b, "/api/trees/add", { method: "POST", body: JSON.stringify({ repo: plain, branch, ...(base ? { base } : {}), caches, sync }) });
     return r.tree;
   },
   /** removes a kept worktree by its slug or branch; `force` loses its work */
@@ -919,6 +919,19 @@ export const api = {
     const [b, plain] = on(repoId);
     const r = await req<{ removed: { slug: string; branch: string }[] }>(b, "/api/trees/clean", { method: "POST", body: JSON.stringify({ repo: plain }) });
     return r.removed;
+  },
+  /** rebases a kept worktree's branch onto its base now, uncommitted work
+   *  stashed and put back; a sync that stopped throws with why */
+  syncTree: async (repoId: string, tree: string): Promise<BranchTree> => {
+    const [b, plain] = on(repoId);
+    const r = await req<{ tree: BranchTree }>(b, "/api/trees/sync", { method: "POST", body: JSON.stringify({ repo: plain, tree }) });
+    return r.tree;
+  },
+  /** whether a kept worktree follows its base by itself, rebased whenever the base moves */
+  setTreeAuto: async (repoId: string, tree: string, sync: boolean): Promise<BranchTree> => {
+    const [b, plain] = on(repoId);
+    const r = await req<{ tree: BranchTree }>(b, "/api/trees/auto", { method: "POST", body: JSON.stringify({ repo: plain, tree, sync }) });
+    return r.tree;
   },
   /** "land" on a ready branch run, by its run's or its branch's id;
    *  `approve` is the sensitive patch id the approve sheet showed */

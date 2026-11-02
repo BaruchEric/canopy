@@ -12,6 +12,7 @@ const tree = (over: Partial<BranchTree> = {}): BranchTree => ({
   madeAt: 0,
   caches: true,
   state: "ready",
+  sync: true,
   head: "abc1234",
   ahead: 0,
   behind: 0,
@@ -44,6 +45,7 @@ test("the head counts the trees and the ones not ready", () => {
   expect(treesHead([])).toBe("none kept");
   expect(treesHead([tree()])).toBe("1 tree");
   expect(treesHead([tree(), tree({ slug: "b", state: "preparing" }), tree({ slug: "c", state: "failed" })])).toBe("3 trees, 1 preparing, 1 failed");
+  expect(treesHead([tree({ stopped: "merge stopped: gate x exited 1" }), tree({ slug: "b", stopped: "sync stopped: the rebase onto main stopped on a.txt and was aborted" })])).toBe("2 trees, 1 merge stopped, 1 sync stopped");
 });
 
 test("the chip names each tree and turns rust on a failure", () => {

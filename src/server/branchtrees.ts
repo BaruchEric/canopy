@@ -22,6 +22,7 @@ import {
   mergeTree,
   parseTreesRecord,
   removeBranchTree,
+  syncTree,
   TREE_PORTS_DEFAULT,
   treeDir,
   treePort,
@@ -90,11 +91,14 @@ const json = (body: unknown, status = 200): Response => new Response(JSON.string
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 const tail = (text: string): string => (text.length > WHY_CAP ? `…${text.slice(-WHY_CAP)}` : text);
 const real = async (path: string): Promise<string> => realpath(path).catch(() => resolve(path));
-/** the record entry once its preparation ended: ready, or failed with why */
+/** the record entry once its preparation ended: ready, or failed with why;
+ *  what stopped a merge or sync is left behind */
 const settled = (t: BranchTreeRecord, why: string): BranchTreeRecord => {
-  const { slug, branch, base, port, madeAt, caches } = t;
-  return why ? { slug, branch, base, port, madeAt, caches, state: "failed", why: tail(why) } : { slug, branch, base, port, madeAt, caches, state: "ready" };
+  const { slug, branch, base, port, madeAt, caches, sync, syncedTo } = t;
+  const kept = { slug, branch, base, port, madeAt, caches, sync, ...(syncedTo ? { syncedTo } : {}) };
+  return why ? { ...kept, state: "failed", why: tail(why) } : { ...kept, state: "ready" };
 };
+const SYNC_NOTE = "sync stopped: ";
 
 export class BranchTrees {
   private readonly root: string;
@@ -176,7 +180,7 @@ export class BranchTrees {
           // the server went down mid-merge: a rebase left open is aborted,
           // and the tree says so until the merge is run again
           if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
-          kept.push({ ...settled(t, ""), stopped: "the server restarted during the merge; merge again" });
+          kept.push({ ...settled(t, ""), stopped: "merge stopped: the server restarted during the merge; merge again" });
           changed = true;
         } else kept.push(t);
       }
@@ -186,7 +190,7 @@ export class BranchTrees {
         const branch = listed.get(await real(dir));
         if (!branch) continue;
         this.records.set(repo.path, { trees: kept });
-        kept.push({ slug, branch, base: (await defaultBranch(repo.path)) ?? "", port: await this.allot(branch), madeAt: this.now(), caches: false, state: "ready" });
+        kept.push({ slug, branch, base: (await defaultBranch(repo.path)) ?? "", port: await this.allot(branch), madeAt: this.now(), caches: false, state: "ready", sync: true });
         changed = true;
       }
       if (changed) await this.save(repo.path, { trees: kept });
@@ -246,7 +250,7 @@ export class BranchTrees {
     return false;
   }
 
-  async add(repo: Repo, branch: string, base: string | undefined, caches: boolean): Promise<BranchTree> {
+  async add(repo: Repo, branch: string, base: string | undefined, caches: boolean, sync = true): Promise<BranchTree> {
     // a tree's own card keeps no trees: they belong to the checkout
     if (isTreeCard(repo)) throw new TreesError(400, `${repo.name} is a worktree; make trees from its repo's card`);
     return this.serial(repo.path, async () => {
@@ -267,7 +271,9 @@ export class BranchTrees {
       } catch (err) {
         throw new TreesError(409, message(err));
       }
-      const entry: BranchTreeRecord = { slug, branch, base: from, port, madeAt: this.now(), caches, state: "preparing" };
+      // a new branch starts at the base, so it is synced to it; an existing one is brought up on the next pass
+      const syncedTo = await revOf(repo.path, from);
+      const entry: BranchTreeRecord = { slug, branch, base: from, port, madeAt: this.now(), caches, state: "preparing", sync, ...(syncedTo && (await revOf(dir, "HEAD")) === syncedTo ? { syncedTo } : {}) };
       await this.save(repo.path, { trees: [...rec.trees, entry] });
       this.spawn(this.prepare(repo, entry, dir));
       void this.publish();
@@ -322,8 +328,7 @@ export class BranchTrees {
       if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
       if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait for it");
       if (t.state === "merging") throw new TreesError(409, "the tree is being merged already");
-      const { slug, branch, base, port, madeAt, caches } = t;
-      const entry: BranchTreeRecord = { slug, branch, base, port, madeAt, caches, state: "merging" };
+      const entry: BranchTreeRecord = { ...settled(t, ""), state: "merging" };
       await this.save(repo.path, { trees: rec.trees.map((x) => (x === t ? entry : x)) });
       this.spawn(this.runMerge(repo, entry, t, opts));
       void this.publish();
@@ -348,10 +353,77 @@ export class BranchTrees {
       const trees =
         "ok" in outcome && !opts.keep
           ? rec.trees.filter((x) => x.slug !== entry.slug)
-          : rec.trees.map((x) => (x.slug !== entry.slug ? x : "ok" in outcome ? back : { ...back, stopped: tail(outcome.stopped) }));
+          : rec.trees.map((x) => (x.slug !== entry.slug ? x : "ok" in outcome ? back : { ...back, stopped: tail(`merge stopped: ${outcome.stopped}`) }));
       await this.save(repo.path, { trees });
     });
     void this.publish();
+  }
+
+  /** The tree brought up to its base now (core `syncTree`: rebased, the
+   *  uncommitted work stashed and put back). The record notes the base's
+   *  commit tried and, when it stopped, why, until a sync or merge goes
+   *  through; a stopped sync answers 409 with that. */
+  async sync(repo: Repo, name: string): Promise<BranchTree> {
+    if (isTreeCard(repo)) throw new TreesError(400, `${repo.name} is a worktree; sync it from its repo's card`);
+    return this.serial(repo.path, async () => {
+      const rec = this.record(repo.path);
+      const t = rec.trees.find((x) => x.slug === name || x.branch === name);
+      if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
+      if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait for it");
+      if (t.state === "merging") throw new TreesError(409, "the tree is being merged, which rebases it");
+      const after = await this.syncOne(repo.path, t);
+      await this.save(repo.path, { trees: rec.trees.map((x) => (x === t ? after : x)) });
+      void this.publish();
+      if (after.stopped?.startsWith(SYNC_NOTE)) throw new TreesError(409, after.stopped);
+      return this.tree(repo.path, after);
+    });
+  }
+
+  /** one tree synced: its record entry after, the base's commit noted and
+   *  a note of what stopped it; a merge's note stays until a sync went */
+  private async syncOne(repoPath: string, t: BranchTreeRecord): Promise<BranchTreeRecord> {
+    const at = await revOf(repoPath, t.base);
+    const outcome = await syncTree(treeDir(repoPath, t.slug, this.root), t.base);
+    const { stopped, ...rest } = t;
+    const note = "stopped" in outcome ? { stopped: tail(`${SYNC_NOTE}${outcome.stopped}`) } : stopped && !stopped.startsWith(SYNC_NOTE) ? { stopped } : {};
+    return { ...rest, ...(at ? { syncedTo: at } : {}), ...note };
+  }
+
+  /** Whether the tree follows its base by itself. */
+  async setAuto(repo: Repo, name: string, sync: boolean): Promise<BranchTree> {
+    return this.serial(repo.path, async () => {
+      const rec = this.record(repo.path);
+      const t = rec.trees.find((x) => x.slug === name || x.branch === name);
+      if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
+      const after: BranchTreeRecord = { ...t, sync };
+      await this.save(repo.path, { trees: rec.trees.map((x) => (x === t ? after : x)) });
+      void this.publish();
+      return this.tree(repo.path, after);
+    });
+  }
+
+  /** The trees that follow their base, each rebased onto it when it has
+   *  moved since the tree's last sync: run when the main checkout changed
+   *  (`touched`) and each tick. A base that stopped a sync is not tried
+   *  again until it moves, so a conflict is reported once. */
+  async autoSync(repoPath: string): Promise<void> {
+    if (!this.record(repoPath).trees.some((t) => t.sync)) return;
+    await this.serial(repoPath, async () => {
+      const rec = this.record(repoPath);
+      let changed = false;
+      const trees: BranchTreeRecord[] = [];
+      for (const t of rec.trees) {
+        const follows = t.sync && (t.state === "ready" || t.state === "failed") && existsSync(treeDir(repoPath, t.slug, this.root));
+        const at = follows ? await revOf(repoPath, t.base) : null;
+        if (at === null || at === t.syncedTo) {
+          trees.push(t);
+          continue;
+        }
+        trees.push(await this.syncOne(repoPath, t));
+        changed = true;
+      }
+      if (changed) await this.save(repoPath, { trees });
+    });
   }
 
   /** The repo's gates run in the tree, one after another; null when each
@@ -410,7 +482,8 @@ export class BranchTrees {
     });
   }
 
-  /** the main checkout changed; its trees' counts may have too */
+  /** the main checkout changed: its trees' counts may have too, and the
+   *  ones that follow the base are brought up to it when it moved */
   touched(repoPath: string): void {
     if (this.record(repoPath).trees.length === 0) return;
     const held = this.touches.get(repoPath);
@@ -419,7 +492,7 @@ export class BranchTrees {
       repoPath,
       setTimeout(() => {
         this.touches.delete(repoPath);
-        void this.publish();
+        this.spawn(this.autoSync(repoPath).catch(() => {}).then(() => this.publish()));
       }, TOUCH_DELAY),
     );
   }
@@ -436,7 +509,8 @@ export class BranchTrees {
     const every = this.deps.every ?? TICK;
     if (every <= 0 || this.timer) return;
     this.timer = setInterval(() => {
-      if (this.any()) void this.publish();
+      if (!this.any()) return;
+      this.spawn(Promise.all(this.local().map((r) => this.autoSync(r.path).catch(() => {}))).then(() => this.publish()));
     }, every);
   }
 
@@ -457,9 +531,8 @@ export class BranchTrees {
     if (url.pathname !== "/api/trees" && !url.pathname.startsWith("/api/trees/")) return null;
     try {
       if (url.pathname === "/api/trees" && req.method === "GET") return json(await this.info());
-      if (req.method !== "POST" || !["/api/trees/add", "/api/trees/remove", "/api/trees/merge", "/api/trees/clean"].includes(url.pathname)) {
-        return json({ error: "not found" }, 404);
-      }
+      const posts = ["/api/trees/add", "/api/trees/remove", "/api/trees/merge", "/api/trees/clean", "/api/trees/sync", "/api/trees/auto"];
+      if (req.method !== "POST" || !posts.includes(url.pathname)) return json({ error: "not found" }, 404);
       const body: unknown = await req.json().catch(() => null);
       if (!isRecord(body)) return json({ error: "malformed body" }, 400);
       // a clean-up names a repo, or sweeps every one
@@ -473,11 +546,16 @@ export class BranchTrees {
         if (typeof branch !== "string" || !branch.trim()) return json({ error: "branch must be a name" }, 400);
         const base = body["base"];
         if (base !== undefined && (typeof base !== "string" || !base.trim())) return json({ error: "base must be a ref" }, 400);
-        const tree = await this.add(repo, branch.trim(), typeof base === "string" ? base.trim() : undefined, body["caches"] !== false);
+        const tree = await this.add(repo, branch.trim(), typeof base === "string" ? base.trim() : undefined, body["caches"] !== false, body["sync"] !== false);
         return json({ tree }, 201);
       }
       const name = body["tree"];
       if (typeof name !== "string" || !name.trim()) return json({ error: "tree must be a tree's slug or branch" }, 400);
+      if (url.pathname === "/api/trees/sync") return json({ tree: await this.sync(repo, name.trim()) });
+      if (url.pathname === "/api/trees/auto") {
+        if (typeof body["sync"] !== "boolean") return json({ error: "sync must be true or false" }, 400);
+        return json({ tree: await this.setAuto(repo, name.trim(), body["sync"]) });
+      }
       if (url.pathname === "/api/trees/merge") {
         const tree = await this.merge(repo, name.trim(), { commit: body["commit"] !== false, squash: body["squash"] !== false, keep: body["keep"] === true });
         return json({ tree }, 202);

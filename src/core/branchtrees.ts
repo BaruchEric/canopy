@@ -62,8 +62,12 @@ export interface BranchTreeRecord {
   caches: boolean;
   state: BranchTreeState;
   why?: string;
-  /** why the last merge stopped short, until one goes through */
+  /** why the last merge or sync stopped short, until one goes through */
   stopped?: string;
+  /** follows its base by itself (rebased onto it when it moves) */
+  sync: boolean;
+  /** the base's commit the last sync was tried at */
+  syncedTo?: string;
 }
 
 export interface TreesRecord {
@@ -99,6 +103,8 @@ export function parseTreesRecord(text: string): TreesRecord {
       state,
       ...(state === "failed" && typeof t["why"] === "string" ? { why: t["why"] } : {}),
       ...(typeof t["stopped"] === "string" && t["stopped"] ? { stopped: t["stopped"] } : {}),
+      sync: t["sync"] !== false,
+      ...(typeof t["syncedTo"] === "string" && t["syncedTo"] ? { syncedTo: t["syncedTo"] } : {}),
     });
   }
   return { trees };
@@ -321,6 +327,36 @@ export async function checkedOutAt(repo: string, branch: string): Promise<string
 }
 
 const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+export type SyncOutcome = { ok: true; replayed: number; behind: number } | { stopped: string };
+
+/** The tree brought up to its base: its branch rebased onto the base with
+ *  the uncommitted work stashed first and put back after (`--autostash`).
+ *  Nothing happens when the base has no commit the tree lacks. A conflict
+ *  aborts the rebase, the stash back in place, and names the files; work
+ *  the stash could not put back over the new base stays in the stash, and
+ *  the outcome says so. */
+export async function syncTree(dir: string, base: string): Promise<SyncOutcome> {
+  if (!base) return { stopped: "the tree has no base to sync from" };
+  if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
+  const counts = await git(dir, ["rev-list", "--left-right", "--count", `${base}...HEAD`]);
+  if (counts.code !== 0) return { stopped: why(counts, "git rev-list") };
+  const [behind = "0", ahead = "0"] = out(counts).split(/\s+/);
+  const n = Number(behind) || 0;
+  if (n === 0) return { ok: true, replayed: 0, behind: 0 };
+  const r = await git(dir, ["rebase", "--autostash", base], 120_000, { GIT_EDITOR: "true" });
+  if (r.code === 0) {
+    if (/autostash resulted in conflicts/i.test(r.stderr + r.stdout)) {
+      return { stopped: `rebased onto ${base}, but the uncommitted work did not go back over it; it is kept in the stash (git stash pop in the tree)` };
+    }
+    return { ok: true, replayed: Number(ahead) || 0, behind: n };
+  }
+  const u = await git(dir, ["diff", "--name-only", "--diff-filter=U"]);
+  const files = u.stdout.split("\n").filter(Boolean);
+  await git(dir, ["rebase", "--abort"]);
+  if (files.length > 0) return { stopped: `the rebase onto ${base} stopped on ${files.join(", ")} and was aborted; rebase by hand in the tree` };
+  return { stopped: why(r, "git rebase") };
+}
 
 /** worktrunk's `wt merge`, without its binary: the tree's uncommitted work
  *  committed, its commits squashed into one, the branch rebased onto its
