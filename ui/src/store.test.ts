@@ -4,6 +4,7 @@ import {
   agentFor,
   agentsOn,
   activeFilterCount,
+  headingAgentsOn,
   canAnswer,
   archivedCount,
   attentionItems,
@@ -1429,6 +1430,49 @@ describe("several backends", () => {
     useStore.setState((st) => ({ settings: { ...st.settings, hideArchived: false }, workspaces: [{ name: "w", repos: [] }], activeWs: "w" }));
     expect(agentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["claude:one"]);
     useStore.setState({ activeWs: null, workspaces: [] });
+  });
+
+  test("a section heading counts the runs no registry card names, and a scan of one only once", async () => {
+    const proj = repo("proj", { remotes: ["git@github.com:me/proj.git"], link: "https://github.com/me/proj" });
+    const scan: AgentCard = {
+      id: "scan:a:claude:7",
+      handle: "",
+      node: "a",
+      harness: "claude",
+      session: null,
+      origin: "scan",
+      cwd: "/dev/proj",
+      repo: "https://github.com/me/proj",
+      branch: "main",
+      model: null,
+      mode: null,
+      state: "working",
+      waiting: null,
+      caps: [],
+      offers: [],
+      notifyIdle: false,
+      where: { os: "linux", container: false, pid: 7, term: null, canopy: null },
+      transcript: null,
+      startedAt: 5,
+      seenAt: 6,
+      endedAt: null,
+    };
+    await start(
+      backendAnswers(scanOf("/a", [proj]), [], { "/api/backends": twoBackends, "/api/registry": { ready: true, cards: [scan] } }),
+      backendAnswers(scanOf("/b", [proj]), []),
+    );
+    await settle();
+    expect(headingAgentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["scan:a:claude:7"]);
+    // b's run on its own checkout of the card counts there; started after the
+    // scan's agent, it is not that agent
+    useStore.setState({ runs: { "b|r1": { ...activeReplayRun("b|r1"), repoId: "b|proj", startedAt: 10 } } });
+    expect(headingAgentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["scan:a:claude:7", "run:b|r1"]);
+    // home's run in the scan's folder, started before it, is the scan: counted once
+    useStore.setState({ runs: { r2: { ...activeReplayRun("r2"), startedAt: 1 } } });
+    expect(headingAgentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["run:r2"]);
+    // the registry's own list is untouched
+    expect(agentsOn(useStore.getState(), "proj").map((c) => c.id)).toEqual(["scan:a:claude:7"]);
+    useStore.setState({ runs: {} });
   });
 
   test("asks are home's alone, and an answer goes back the way its item came", async () => {

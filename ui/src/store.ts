@@ -68,6 +68,7 @@ import { mergePrs } from "./prs";
 import { HARNESS_SAID_KEY, harnessNotice, mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type HarnessNotice, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
+import { headingRuns, type Ids } from "./allagents";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
 import { flatAgent, hasRouting, NO_ROUTES } from "./agents";
@@ -5165,6 +5166,47 @@ export function agentsOn(s: CanopyState, repoId: string): AgentCard[] {
   everyCard(s);
   const card = everyIndex.get(repoId);
   return (card && agentsByCard(s).get(card.key)) || NO_AGENTS;
+}
+
+/** the page's own reading of a qualified id, for the made cards below */
+const storeIds: Ids = { split: (id) => [backendOf(id), plainOf(id)], qual };
+
+let headingIn: { by: Map<string, AgentCard[]>; runs: Record<string, Run> } | null = null;
+let headingOut = new Map<string, AgentCard[]>();
+
+/** Every repo card's agents as a section heading counts them: the
+ *  registry's (`agentsByCard`) less the scan cards that echo a run, and a
+ *  card for each live canopy run or chat no registry card names, on the
+ *  card its run's repo is on (`headingRuns`). Worked out once per registry,
+ *  repo or run change. */
+export function headingAgentsByCard(s: CanopyState): Map<string, AgentCard[]> {
+  const by = agentsByCard(s);
+  // `by` is new whenever the registry or the repos change
+  if (headingIn && headingIn.by === by && headingIn.runs === s.runs) return headingOut;
+  headingIn = { by, runs: s.runs };
+  const { runs, echoes } = headingRuns(Object.values(s.registry), Object.values(s.runs), s.repos, storeIds);
+  if (runs.length === 0 && echoes.size === 0) {
+    headingOut = by;
+    return by;
+  }
+  const out = new Map<string, AgentCard[]>();
+  for (const [key, cards] of by) {
+    const kept = echoes.size === 0 ? cards : cards.filter((c) => !echoes.has(c.id));
+    if (kept.length > 0) out.set(key, kept);
+  }
+  for (const { repoId, card } of runs) {
+    const rc = everyIndex.get(repoId);
+    if (rc) out.set(rc.key, [...(out.get(rc.key) ?? []), card]);
+  }
+  headingOut = out;
+  return out;
+}
+
+/** the agents a section heading counts on the card a checkout is on */
+export function headingAgentsOn(s: CanopyState, repoId: string): AgentCard[] {
+  const by = headingAgentsByCard(s);
+  const card = everyIndex.get(repoId);
+  return (card && by.get(card.key)) || NO_AGENTS;
 }
 
 /** what a write that needs an answer key says without one */

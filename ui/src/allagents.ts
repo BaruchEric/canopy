@@ -170,6 +170,39 @@ export function allAgents({ cards, runs, shells, shellAgents, repos, ids }: AllA
   return [...cards.filter((c) => !echoes(c)), ...made];
 }
 
+/** What a section heading counts beside the registry's cards. */
+export interface HeadingRuns {
+  /** a card for each live canopy run or chat no registry card names, with
+   *  the qualified id of the repo its run is on */
+  runs: { repoId: string; card: AgentCard }[];
+  /** live scan cards that are one of those runs seen from outside: the same
+   *  harness in the run's folder, started in its life */
+  echoes: Set<string>;
+}
+
+/**
+ * The runs and chats a section heading adds to the registry, so a backend
+ * with no broker, or a run without its hook, still counts as an agent at
+ * work. Shells are left out: a shell's card has no state but a guess, and
+ * its echo rule would drop the scan card that measured the agent's work.
+ * A finished run is no agent here.
+ */
+export function headingRuns(cards: readonly AgentCard[], runs: readonly Run[], repos: readonly Repo[], ids: Ids): HeadingRuns {
+  const named = new Set(cards.map((c) => claimedBy(c, ids, "run")));
+  const made: HeadingRuns["runs"] = [];
+  for (const r of runs) {
+    if (named.has(r.id)) continue;
+    const card = runCard(r, repos.find((x) => x.id === r.repoId), ids);
+    if (isLiveAgent(card)) made.push({ repoId: r.repoId, card });
+  }
+  const echoes = new Set<string>();
+  for (const c of cards) {
+    if (c.origin !== "scan" || !isLiveAgent(c)) continue;
+    if (made.some(({ card: m }) => m.harness === c.harness && m.cwd === c.cwd && c.startedAt >= m.startedAt)) echoes.add(c.id);
+  }
+  return { runs: made, echoes };
+}
+
 /** the shells worth asking what runs in them: not a task's, and not one a
  *  live registry card already names */
 export function shellsToProbe(cards: readonly AgentCard[], shells: readonly TermInfo[], ids: Ids): string[] {

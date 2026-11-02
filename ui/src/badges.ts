@@ -3,6 +3,9 @@
  *  attention pill, the registry, the health view, the incubator, the card. */
 
 import { isLiveAgent, type AgentCard, type HealthCheck, type Repo, type Sprout, type SproutStatus } from "../../src/core/types";
+import { AGENT_GLYPH } from "./agentpanel";
+import { tokenCount } from "./runs";
+import { WAITING_GLYPH } from "./waiting";
 
 export type BadgeTone = "rust" | "sky" | "lichen";
 
@@ -67,15 +70,19 @@ export interface GroupSum {
   deleted: number;
   ahead: number;
   worktrees: number;
-  agents: number;
+  /** agents with a turn in progress */
+  working: number;
+  /** agents stopped on you: a permission, a question, or their turn */
   waiting: number;
+  /** agents open between turns that ask nothing */
+  idle: number;
 }
 
 /** A group's sum: repos with changes, the lines their tracked changes come
  *  to (a backend that sends none adds none), commits not pushed, worktrees
- *  holding work, and the live agents on them, each counted once. */
+ *  holding work, and the live agents on them by state, each counted once. */
 export function groupSum(repos: readonly Pick<Repo, "status">[], agents: readonly (readonly Pick<AgentCard, "id" | "state">[])[]): GroupSum {
-  const out: GroupSum = { dirty: 0, added: 0, deleted: 0, ahead: 0, worktrees: 0, agents: 0, waiting: 0 };
+  const out: GroupSum = { dirty: 0, added: 0, deleted: 0, ahead: 0, worktrees: 0, working: 0, waiting: 0, idle: 0 };
   for (const r of repos) {
     const st = r.status;
     if (!st) continue;
@@ -89,40 +96,51 @@ export function groupSum(repos: readonly Pick<Repo, "status">[], agents: readonl
   for (const c of agents.flat()) {
     if (seen.has(c.id) || !isLiveAgent(c)) continue;
     seen.add(c.id);
-    out.agents++;
-    if (c.state === "waiting") out.waiting++;
+    if (c.state === "working") out.working++;
+    else if (c.state === "waiting") out.waiting++;
+    else out.idle++;
   }
   return out;
 }
 
-/** One piece of a group heading, tinted by `.t-*` or the line colours. */
+export type SumKind = "dirty" | "added" | "deleted" | "ahead" | "worktrees" | "working" | "waiting";
+
+/** One piece of a group heading, tinted by `.t-*` or the line colours;
+ *  `glyph` goes before the number in a span of its own. */
 export interface SumPart {
+  kind: SumKind;
+  glyph?: string;
   text: string;
   cls: string;
   title: string;
 }
 
 /** The grid heading's pieces, left to right; `compact` (the narrow tree)
- *  keeps the dirty count and the agents and leaves the rest to `sumTitle`. */
+ *  keeps the dirty count, the lines (shortened past 999) and the agents,
+ *  and leaves the rest to `sumTitle`. */
 export function sumParts(s: GroupSum, compact = false): SumPart[] {
   const out: SumPart[] = [];
-  if (s.dirty > 0) out.push({ text: `${s.dirty}●`, cls: "t-lichen", title: `${plural(s.dirty, "repo")} with uncommitted changes` });
+  const n = compact ? tokenCount : String;
+  if (s.dirty > 0) out.push({ kind: "dirty", text: `${s.dirty}●`, cls: "t-lichen", title: `${plural(s.dirty, "repo")} with uncommitted changes` });
+  const lines = "lines the tracked changes add and remove against HEAD";
+  if (s.added > 0) out.push({ kind: "added", text: `+${n(s.added)}`, cls: "n-add", title: lines });
+  if (s.deleted > 0) out.push({ kind: "deleted", text: `−${n(s.deleted)}`, cls: "n-del", title: lines });
   if (!compact) {
-    const lines = "lines the tracked changes add and remove against HEAD";
-    if (s.added > 0) out.push({ text: `+${s.added}`, cls: "n-add", title: lines });
-    if (s.deleted > 0) out.push({ text: `−${s.deleted}`, cls: "n-del", title: lines });
-    if (s.ahead > 0) out.push({ text: `↑${s.ahead}`, cls: "t-sky", title: `${plural(s.ahead, "commit")} not pushed` });
-    if (s.worktrees > 0) out.push({ text: `⧉ ${s.worktrees}`, cls: "t-lichen", title: `${plural(s.worktrees, "worktree")} holding work` });
+    if (s.ahead > 0) out.push({ kind: "ahead", text: `↑${s.ahead}`, cls: "t-sky", title: `${plural(s.ahead, "commit")} not pushed` });
+    if (s.worktrees > 0) out.push({ kind: "worktrees", text: `⧉ ${s.worktrees}`, cls: "t-lichen", title: `${plural(s.worktrees, "worktree")} holding work` });
   }
-  if (s.agents > 0) {
-    out.push({
-      text: `✦ ${s.agents}`,
-      cls: s.waiting > 0 ? "t-rust" : "t-sky",
-      title: `${plural(s.agents, "agent")} running${s.waiting > 0 ? `, ${s.waiting} waiting` : ""}`,
-    });
+  if (s.working > 0) {
+    const idle = s.idle > 0 ? `, ${s.idle} more open and idle` : "";
+    out.push({ kind: "working", glyph: AGENT_GLYPH, text: String(s.working), cls: "t-sky sum-live", title: `${plural(s.working, "agent")} working right now${idle}` });
+  }
+  if (s.waiting > 0) {
+    out.push({ kind: "waiting", glyph: WAITING_GLYPH, text: String(s.waiting), cls: "t-rust", title: `${plural(s.waiting, "agent")} waiting on you: a permission, a question or its turn` });
   }
   return out;
 }
 
-/** every piece in words, for the compact heading's tooltip */
-export const sumTitle = (s: GroupSum): string => sumParts(s).map((p) => `${p.text}: ${p.title}`).join("\n");
+/** a piece as it reads: its glyph, then its text */
+export const partText = (p: Pick<SumPart, "glyph" | "text">): string => (p.glyph ? `${p.glyph} ${p.text}` : p.text);
+
+/** every piece in words, at full numbers, for the compact heading's tooltip */
+export const sumTitle = (s: GroupSum): string => sumParts(s).map((p) => `${partText(p)}: ${p.title}`).join("\n");

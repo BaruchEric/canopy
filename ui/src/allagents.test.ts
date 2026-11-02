@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, CoordTask, Repo, Run, TermInfo } from "../../src/core/types";
-import { agentName, allAgents, chatOf, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
+import { agentName, allAgents, chatOf, headingRuns, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
 
 // home is "mac"; another backend's ids carry "mini|"
 const ids: Ids = {
@@ -122,6 +122,34 @@ describe("allAgents and scans", () => {
     expect(allAgents({ ...base, cards: [scan({ startedAt: 10 })] }).map((c) => c.id)).toEqual(["scan:n:h:9", "shell:t1"]);
     expect(allAgents({ ...base, cards: [scan({ cwd: "/elsewhere" })] }).map((c) => c.id)).toEqual(["scan:n:h:9", "shell:t1"]);
     expect(allAgents({ ...base, cards: [scan({ harness: "claude" })] }).map((c) => c.id)).toEqual(["scan:n:h:9", "shell:t1"]);
+  });
+});
+
+describe("headingRuns", () => {
+  const hookedOn = (runId: string) => card({ id: "claude:s2", origin: "canopy-run", where: { os: "", container: false, pid: 1, term: null, canopy: { backend: "mac", run: runId } } });
+
+  test("a live run no card names counts on its repo, on any backend; a hooked one and a finished one do not", () => {
+    const runs = [run(), run({ id: "r2", status: "done" }), run({ id: "mini|r3", repoId: "mini|app", status: "waiting" }), run({ id: "r4" })];
+    const got = headingRuns([hookedOn("r4")], runs, [repo], ids);
+    expect(got.runs.map(({ repoId, card: c }) => [repoId, c.id, c.state])).toEqual([
+      ["app", "run:r1", "working"],
+      ["mini|app", "run:mini|r3", "waiting"],
+    ]);
+    expect(got.echoes.size).toBe(0);
+  });
+
+  test("a chat between turns is waiting on you", () => {
+    expect(headingRuns([], [run({ chat: true, status: "idle" })], [repo], ids).runs.map(({ card: c }) => c.state)).toEqual(["waiting"]);
+  });
+
+  test("a live scan of the same harness in the run's folder, started since, is that run", () => {
+    const scan = (over: Partial<AgentCard>) => card({ id: "scan:n:h:9", origin: "scan", handle: "", cwd: "/dev/app", startedAt: 120, ...over });
+    expect([...headingRuns([scan({})], [run()], [repo], ids).echoes]).toEqual(["scan:n:h:9"]);
+    expect(headingRuns([scan({ startedAt: 10 })], [run()], [repo], ids).echoes.size).toBe(0);
+    expect(headingRuns([scan({ cwd: "/elsewhere" })], [run()], [repo], ids).echoes.size).toBe(0);
+    expect(headingRuns([scan({ state: "ended" })], [run()], [repo], ids).echoes.size).toBe(0);
+    // no made card, nothing to echo
+    expect(headingRuns([scan({})], [run({ status: "done" })], [repo], ids).echoes.size).toBe(0);
   });
 });
 

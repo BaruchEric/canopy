@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, RepoStatus } from "../../src/core/types";
-import { agentsBadge, gitBadge, groupSum, healthBadge, incubatorBadge, sumParts, sumTitle } from "./badges";
+import { agentsBadge, gitBadge, groupSum, healthBadge, incubatorBadge, partText, sumParts, sumTitle } from "./badges";
 
 const agent = (id: string, state: AgentCard["state"]) => ({ id, state });
 
@@ -47,20 +47,41 @@ describe("group sums", () => {
     { status: null },
   ];
 
-  test("sums the repos and counts each live agent once", () => {
+  test("sums the repos and counts each live agent once, by state", () => {
     const shared = agent("a", "waiting");
-    const s = groupSum(repos, [[shared, agent("b", "working")], [shared, agent("c", "ended")], []]);
-    expect(s).toEqual({ dirty: 2, added: 10, deleted: 2, ahead: 3, worktrees: 1, agents: 2, waiting: 1 });
-    expect(sumParts(s).map((p) => [p.text, p.cls])).toEqual([
-      ["2●", "t-lichen"],
-      ["+10", "n-add"],
-      ["−2", "n-del"],
-      ["↑3", "t-sky"],
-      ["⧉ 1", "t-lichen"],
-      ["✦ 2", "t-rust"],
+    const s = groupSum(repos, [[shared, agent("b", "working"), agent("d", "idle")], [shared, agent("c", "ended"), agent("e", "lost")], []]);
+    expect(s).toEqual({ dirty: 2, added: 10, deleted: 2, ahead: 3, worktrees: 1, working: 1, waiting: 1, idle: 1 });
+    expect(sumParts(s).map((p) => [p.kind, partText(p), p.cls])).toEqual([
+      ["dirty", "2●", "t-lichen"],
+      ["added", "+10", "n-add"],
+      ["deleted", "−2", "n-del"],
+      ["ahead", "↑3", "t-sky"],
+      ["worktrees", "⧉ 1", "t-lichen"],
+      ["working", "✦ 1", "t-sky sum-live"],
+      ["waiting", "⚑ 1", "t-rust"],
     ]);
-    expect(sumParts(s, true).map((p) => p.text)).toEqual(["2●", "✦ 2"]);
-    expect(sumTitle(s).split("\n")).toHaveLength(6);
+    expect(sumTitle(s).split("\n")).toEqual([
+      "2●: 2 repos with uncommitted changes",
+      "+10: lines the tracked changes add and remove against HEAD",
+      "−2: lines the tracked changes add and remove against HEAD",
+      "↑3: 3 commits not pushed",
+      "⧉ 1: 1 worktree holding work",
+      "✦ 1: 1 agent working right now, 1 more open and idle",
+      "⚑ 1: 1 agent waiting on you: a permission, a question or its turn",
+    ]);
+  });
+
+  test("the narrow tree keeps the dirty count, the lines and the agents, shortened", () => {
+    const s = { dirty: 3, added: 12_345, deleted: 1_200, ahead: 4, worktrees: 2, working: 2, waiting: 0, idle: 0 };
+    expect(sumParts(s, true).map(partText)).toEqual(["3●", "+12k", "−1.2k", "✦ 2"]);
+    // the tooltip says it whole
+    expect(sumTitle(s)).toContain("+12345: ");
+    expect(sumTitle(s)).toContain("↑4: 4 commits not pushed");
+  });
+
+  test("idle agents alone show nothing; waiting ones show without a working count", () => {
+    expect(sumParts(groupSum([{ status: status({}) }], [[agent("a", "idle")]]))).toEqual([]);
+    expect(sumParts(groupSum([{ status: status({}) }], [[agent("a", "waiting")]])).map(partText)).toEqual(["⚑ 1"]);
   });
 
   test("a quiet group says nothing", () => {
