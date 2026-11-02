@@ -3126,7 +3126,8 @@ describe("the ranger in waiting on you", () => {
     } as unknown as AgentCard;
     const other = { ...card, id: "claude:o", handle: "app-1234", session: "s-o" } as AgentCard;
     const ranger = { on: true, state: "gave-up", session: "s-r", handle: "ranger", why: "it exited 5 times", lastExit: { at: 5, code: 1 }, wakes: [] } as unknown as RangerInfo;
-    const s = { ...base, runs: {}, registry: { [card.id]: card, [other.id]: other }, asks: {}, rangers: { mini: ranger } };
+    // every input turnItems reads is set here, so rows an earlier test left in the store stay out
+    const s = { ...base, runs: {}, flowRuns: {}, repos: [], landing: {}, registry: { [card.id]: card, [other.id]: other }, asks: {}, rangers: { mini: ranger } };
     expect(turnItems(s).map((r) => r.id)).toEqual(["claude:o"]);
     expect(failedItems(s).map((r) => [r.kind, r.id])).toEqual([["ranger", "mini"]]);
   });
