@@ -388,21 +388,28 @@ export function loopbackAuthWanted(env: Record<string, string | undefined> = pro
 
 /** Whether to speak for this request as the built-in loopback caller. Every
  *  part is required: the switch is on, the server is not bound beyond
- *  loopback, this is not the coordinator's own listener, and it is no
- *  socket upgrade (a socket authenticates with a one-use ticket, never
- *  this, so a page on another origin cannot open a bare shell), the peer is
- *  loopback, and the Host asked for is a loopback name. The Host check is
- *  the guard against DNS rebinding, where a loopback peer arrives with an
- *  attacker's Host; do not drop it. */
+ *  loopback, this is not the coordinator's own listener, it is no socket
+ *  upgrade (a socket authenticates with a one-use ticket, never this, so a
+ *  page on another origin cannot open a bare shell), the browser does not
+ *  mark the request cross-site or same-site, the peer is loopback, and the
+ *  Host asked for is a loopback name. Two guards matter: the Host check
+ *  against DNS rebinding (a loopback peer with an attacker's Host), and the
+ *  Sec-Fetch-Site check against a page on another origin, or on another
+ *  localhost:<port> (same-site), reaching this loopback with a bare GET the
+ *  Library's own origin gate would let through when it carries no Origin.
+ *  An absent Sec-Fetch-Site reads as a non-browser local process and is the
+ *  one residual: an old browser that sends none is taken for local. */
 export function loopbackBypass(x: {
   wanted: boolean;
   beyondLoopback: boolean;
   onLane: boolean;
   upgrade: boolean;
+  secFetchSite: string | null;
   addr: string;
   hostname: string;
 }): boolean {
-  return x.wanted && !x.beyondLoopback && !x.onLane && !x.upgrade && isLoopback(x.addr) && isLoopbackHost(x.hostname);
+  const siteOk = x.secFetchSite !== "cross-site" && x.secFetchSite !== "same-site";
+  return x.wanted && !x.beyondLoopback && !x.onLane && !x.upgrade && siteOk && isLoopback(x.addr) && isLoopbackHost(x.hostname);
 }
 
 /** The two sockets a browser opens cannot carry a header, so each takes a

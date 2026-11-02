@@ -558,7 +558,7 @@ describe("loopbackAuthWanted", () => {
 });
 
 describe("loopbackBypass", () => {
-  const ok = { wanted: true, beyondLoopback: false, onLane: false, upgrade: false, addr: "127.0.0.1", hostname: "localhost" };
+  const ok = { wanted: true, beyondLoopback: false, onLane: false, upgrade: false, secFetchSite: "same-origin", addr: "127.0.0.1", hostname: "localhost" };
   test("passes only when every part holds", () => {
     expect(loopbackBypass(ok)).toBe(true);
     expect(loopbackBypass({ ...ok, wanted: false })).toBe(false);
@@ -570,6 +570,14 @@ describe("loopbackBypass", () => {
     expect(loopbackBypass({ ...ok, addr: "100.68.139.95" })).toBe(false);
     // a non-loopback Host is DNS rebinding: a loopback peer, an attacker's name
     expect(loopbackBypass({ ...ok, hostname: "evil.example" })).toBe(false);
+    // a browser marking the request cross-site or same-site is another origin
+    expect(loopbackBypass({ ...ok, secFetchSite: "cross-site" })).toBe(false);
+    expect(loopbackBypass({ ...ok, secFetchSite: "same-site" })).toBe(false);
+  });
+  test("same-origin, none, and an absent Sec-Fetch-Site pass", () => {
+    expect(loopbackBypass({ ...ok, secFetchSite: "same-origin" })).toBe(true);
+    expect(loopbackBypass({ ...ok, secFetchSite: "none" })).toBe(true);
+    expect(loopbackBypass({ ...ok, secFetchSite: null })).toBe(true);
   });
   test("ipv6 loopback and 127.x both count", () => {
     expect(loopbackBypass({ ...ok, addr: "::1", hostname: "[::1]" })).toBe(true);

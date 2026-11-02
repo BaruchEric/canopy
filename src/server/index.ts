@@ -6207,6 +6207,7 @@ export async function startServer(opts: {
         beyondLoopback,
         onLane: lane,
         upgrade: req.headers.get("upgrade") !== null,
+        secFetchSite: req.headers.get("sec-fetch-site"),
         addr: srv.requestIP(req)?.address ?? "",
         hostname: url.hostname,
       })
