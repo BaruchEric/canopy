@@ -595,4 +595,41 @@ describe("capacity (FR-036 plan 2)", () => {
     await settled(h);
     expect([card("t1")?.state, card("t1")?.outcome]).toEqual(["failed", "the plan's usage limit, twice in a row"]);
   });
+
+  /** a child that hit the limit, then the runner forgot (a restart) */
+  async function limitedThenGone(h: CoordinatorHub): Promise<string> {
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const first = child("t1");
+    first.status = "limited";
+    first.endedAt = clock;
+    first.error = LIMIT;
+    first.limited = { at: clock, text: LIMIT };
+    h.onRun(first);
+    await settled(h);
+    expect(h.heldStarts().map((x) => x.id)).toEqual(["card:co1:t1"]);
+    runs.delete(first.id);
+    return first.id;
+  }
+
+  test("a limited child the runner no longer has fails its card on a wake, so nothing waits on it for good", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    const resumed: string[] = [];
+    const h = hub({ resumeChild: async (_c, _t, old) => { resumed.push(old.id); throw new Error("not reached"); } });
+    const id = await limitedThenGone(h);
+    h.wake(() => true);
+    await settled(h);
+    expect([card("t1")?.state, card("t1")?.outcome]).toEqual(["failed", `its run ${id} is gone since it hit the limit (a restart), so nothing carries it on`]);
+    expect(h.heldStarts()).toEqual([]);
+    expect(resumed).toEqual([]);
+  });
+
+  test("'start anyway' on such a card says why nothing started", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    const h = hub({ resumeChild: async () => { throw new Error("not reached"); } });
+    const id = await limitedThenGone(h);
+    await expect(h.release("co1", "t1")).rejects.toThrow(`its run ${id} is gone`);
+    expect(card("t1")?.state).toBe("failed");
+  });
 });

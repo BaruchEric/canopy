@@ -9,8 +9,11 @@
  *    fix) follows the resumed run;
  *  - a second stall on the same branch, a run with no Claude session, or a
  *    resume that would not start is left for Eric (`stalledWhy`);
- *  - a flow's step, and a job in the checkout, are only stopped: a flow is
- *    picked up by hand, and a checkout job has no branch to carry on.
+ *  - a flow's step, a job in the checkout, a coordinator's child and a
+ *    best-of-N member are only stopped: a flow is picked up by hand, a
+ *    checkout job has no branch to carry on, and a child or a member has
+ *    an owner (the card, the group) that reads the stop itself and would
+ *    not see a run resumed here.
  *
  *  The count is the branch's landing record's `stalls`, so it holds across
  *  every run on the branch, its PR's fix runs included. */
@@ -109,8 +112,10 @@ export class StallHub {
   private plan(run: Run): Plan {
     const b = run.branch;
     // a flow's step stops its flow, which is picked up by hand; a job in
-    // the checkout has no branch to carry on
-    if (!b || run.flowStep || b.held) return { kind: "none" };
+    // the checkout has no branch to carry on; a coordinator's child and a
+    // best-of-N member belong to an owner that reads the stop itself, and
+    // a resume here would work their branch as an orphan it never sees
+    if (!b || run.flowStep || b.held || run.parent || run.group) return { kind: "none" };
     const rec = this.deps.record(b.origin);
     if (!rec) return { kind: "none" };
     const count = this.deps.countStall(b.origin);

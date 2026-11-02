@@ -13,7 +13,7 @@
  *  repo's minimum sets `approve` and leaves the merge to Eric. Nothing
  *  starts a fix: the agent cannot see what it would fix against. Bun-only. */
 
-import { failPass, PASS_FAILED, scenarioHold, settlePass } from "../core/prscenarios";
+import { failPass, holdPass, PASS_FAILED, scenarioHold, settlePass } from "../core/prscenarios";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import type { EvidenceFile, PrState, PrWatch } from "../core/types";
 import { readScenarioSet, readScenarioSettings, runScenarioSet, scenariosRoot, setDirOf, type ScenarioJudge, type ScenarioRunner } from "./scenarios";
@@ -74,10 +74,7 @@ export class PrScenarios {
       // a broken .canopy/scenarios.json is the repo's own file and may be named
       return failPass(base, head, `${PASS_FAILED}: ${errText(err)}`);
     }
-    if (base.scenarios?.head === head) {
-      const why = scenarioHold(base.scenarios, settings.minimum);
-      return why === null ? base : { ...base, approve: { head, why, by: "scenarios" } };
-    }
+    if (base.scenarios?.head === head) return holdPass(base, head, scenarioHold(base.scenarios, settings.minimum));
     const minimum = settings.minimum;
     const pass: Promise<void> = runScenarioSet({
       dir: w.dir,

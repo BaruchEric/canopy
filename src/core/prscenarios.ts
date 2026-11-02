@@ -28,19 +28,30 @@ export function scenarioHold(run: Pick<ScenarioRun, "results" | "score">, minimu
   return null;
 }
 
+/** The watch with what a pass over `head` says, `why` or null for "may
+ *  go", as its hold. A hold the review rules set (files for Eric's
+ *  approval) stands whatever the pass says, on this head or on the one the
+ *  PR moved to while the pass ran: it is not the pass's to lift or replace.
+ *  Otherwise the pass's own hold replaces the scenarios' last one, and a
+ *  green pass lifts it. A pass on a head the PR has moved past holds
+ *  nothing that matters, since `approve` counts only on its own head. */
+export function holdPass(w: PrWatch, head: string, why: string | null): PrWatch {
+  const { approve, ...rest } = w;
+  const files = approve && approve.by !== "scenarios" ? approve : undefined;
+  const hold = files ?? (why === null ? undefined : { head, why, by: "scenarios" as const });
+  return hold ? { ...rest, approve: hold } : rest;
+}
+
 /** The watch once a pass over `head` ended: the pass kept on it, the
- *  running mark gone, and the head held for Eric when the pass says so.
- *  A pass on a head the PR has moved past holds nothing that matters,
- *  since `approve` counts only on its own head. */
+ *  running mark gone, and the head held as `holdPass` says. */
 export function settlePass(w: PrWatch, head: string, run: ScenarioRun, minimum: number): PrWatch {
   const { checking: _c, ...rest } = w;
-  const why = scenarioHold(run, minimum);
-  return { ...rest, scenarios: run, ...(why === null ? {} : { approve: { head, why, by: "scenarios" as const } }) };
+  return holdPass({ ...rest, scenarios: run }, head, scenarioHold(run, minimum));
 }
 
 /** The watch once a pass over `head` could not run: held for Eric with
- *  `why`, the running mark gone and the last pass kept. */
+ *  `why` as `holdPass` says, the running mark gone and the last pass kept. */
 export function failPass(w: PrWatch, head: string, why: string = PASS_FAILED): PrWatch {
   const { checking: _c, ...rest } = w;
-  return { ...rest, approve: { head, why, by: "scenarios" } };
+  return holdPass(rest, head, why);
 }

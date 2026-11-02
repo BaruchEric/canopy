@@ -41,4 +41,20 @@ describe("a pass's end on the watch", () => {
     expect(failPass(watch({ scenarios: last, checking: { head: "h1", since: 5 } }), "h1")).toEqual(watch({ scenarios: last, approve: { head: "h1", why: PASS_FAILED, by: "scenarios" } }));
     expect(failPass(watch(), "h1", "x").approve).toEqual({ head: "h1", why: "x", by: "scenarios" });
   });
+  test("a files hold the review rules set stands through a pass, on this head or the one the PR moved to", () => {
+    const red = run([cmd("checkout", false)], 0);
+    const moved = { head: "h2", why: "src/auth.ts" };
+    expect(settlePass(watch({ approve: moved, checking: { head: "h1", since: 5 } }), "h1", red, 1)).toEqual(watch({ scenarios: red, approve: moved }));
+    expect(failPass(watch({ approve: moved, checking: { head: "h1", since: 5 } }), "h1").approve).toEqual(moved);
+    const same = { head: "h1", why: "src/auth.ts" };
+    expect(settlePass(watch({ approve: same }), "h1", red, 1).approve).toEqual(same);
+    expect(settlePass(watch({ approve: same }), "h1", run([cmd("checkout", true)]), 1).approve).toEqual(same);
+  });
+  test("the scenarios' own hold follows the pass: a red pass replaces an older one, a green pass lifts it", () => {
+    const red = run([cmd("checkout", false)], 0);
+    const stale = { head: "h0", why: "scenario a failed", by: "scenarios" as const };
+    expect(settlePass(watch({ approve: stale }), "h1", red, 1).approve).toEqual({ head: "h1", why: "scenario checkout failed", by: "scenarios" });
+    const own = { head: "h1", why: "scenario checkout failed", by: "scenarios" as const };
+    expect(settlePass(watch({ approve: own }), "h1", run([cmd("checkout", true)]), 1).approve).toBeUndefined();
+  });
 });

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CapacityHeldError } from "../core/capacity";
 import { exec } from "../core/exec";
 import { pickWinner } from "../core/group";
 import type { GroupDry, RunGroup } from "../core/group";
@@ -35,6 +36,10 @@ interface World {
   events: ServerEvent[];
   checks: [string, string][];
   fixes: [LandingRun, LandEntry][];
+  /** who each fix was started as: its priority, interactive when unsaid */
+  priorities: string[];
+  /** set, the governor holds every fix that is not interactive with these words */
+  hold: string | null;
   wts: string;
   dir: string;
   /** gate line → what it answers; a function may act first (move main) */
@@ -80,6 +85,8 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     events: [],
     checks: [],
     fixes: [],
+    priorities: [],
+    hold: null,
     wts: join(root, `wts${n}`),
     dir: join(root, `landing${n}`),
     answers: new Map(),
@@ -115,8 +122,11 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
       const a = w.answers.get(line);
       return a ? a(cwd) : { exit: 0, output: "" };
     },
-    startFix: (rec, entry) => {
+    startFix: (rec, entry, how) => {
+      const priority = how?.priority ?? "interactive";
+      if (w.hold !== null && priority !== "interactive") throw new CapacityHeldError({ hold: "window", until: null, why: w.hold });
       w.fixes.push([rec, entry]);
+      w.priorities.push(priority);
       const run = { ...fakeRun(rec.repoId, { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, origin: rec.id }, "working"), id: `fix${++fixN}` };
       // the runner reports a run the moment it starts
       w.hub.onRun(run);
@@ -430,6 +440,8 @@ describe("landing", () => {
     w.hub.wake(() => true);
     await w.hub.idle();
     expect(w.fixes).toHaveLength(2);
+    // the fix Eric asked for went as interactive; the one the wake started asks the governor
+    expect(w.priorities).toEqual(["interactive", "normal"]);
     e = entryOf(w, "lf02");
     expect([e?.waiting, e?.limitedFixes, typeof e?.fixing]).toEqual([undefined, 1, "string"]);
     const again = { ...fix, id: e!.fixing! };
@@ -438,6 +450,30 @@ describe("landing", () => {
     e = entryOf(w, "lf02");
     expect([e?.waiting, e?.limitedFixes]).toEqual([undefined, 2]);
     expect(w.hub.info().notices?.at(-1)).toMatchObject({ kind: "held", entry: "lf02", why: `the fix stopped at the plan's usage limit twice in a row: ${text}` });
+  });
+
+  test("a fix the governor holds on a wake keeps waiting with the governor's words, and starts anyway as interactive", async () => {
+    const w = await world();
+    await readyRun(w, "lh01", "a.txt", "one\nTWO first\nthree\n");
+    await readyRun(w, "lh02", "a.txt", "one\nTWO second\nthree\n");
+    await w.hub.land("lh01");
+    await w.hub.land("lh02");
+    await w.hub.idle();
+    const text = "You've hit your limit · resets 3pm";
+    const fix = await w.hub.fix("lh02");
+    w.hub.onRun({ ...fix, status: "limited", error: text, limited: { at: Date.now(), text }, endedAt: 5, branch: { ...fix.branch!, state: "uncommitted" } });
+    await w.hub.idle();
+    w.hold = "the 5-hour window is spent (resets 15:00)";
+    w.hub.wake(() => true);
+    await w.hub.idle();
+    let e = entryOf(w, "lh02");
+    expect(w.fixes).toHaveLength(1);
+    expect([e?.fixing, e?.waiting]).toEqual([undefined, "waiting for capacity: the 5-hour window is spent (resets 15:00)"]);
+    expect(w.hub.heldStarts().map((h) => h.why)).toEqual(["waiting for capacity: the 5-hour window is spent (resets 15:00)"]);
+    // "start anyway" is Eric's own fix: interactive, which no hold stops
+    await w.hub.fix("lh02");
+    e = entryOf(w, "lh02");
+    expect([w.priorities, e?.waiting, typeof e?.fixing]).toEqual([["interactive", "interactive"], undefined, "string"]);
     expect(w.hub.heldStarts()).toEqual([]);
   });
 

@@ -380,7 +380,8 @@ export class CoordinatorHub {
     const task = coord?.tasks?.find((t) => t.id === taskId);
     if (!coord || !task || !isCapacityWords(task.outcome)) throw new CoordError(`card ${taskId} is not waiting for capacity`, 404);
     if (task.state === "running") {
-      await this.resumeLimited(coordId, taskId, "interactive");
+      const why = await this.resumeLimited(coordId, taskId, "interactive");
+      if (why !== null) throw new CoordError(`card ${taskId} cannot resume: ${why}`);
       return;
     }
     this.released.add(`${coordId}:${taskId}`);
@@ -388,13 +389,40 @@ export class CoordinatorHub {
   }
 
   /** The child that hit the limit carries on on its branch: a new run, the
-   *  card following it, its count kept so a second limit fails the card. */
-  private resumeLimited(coordId: string, taskId: string, priority: Priority): Promise<void> {
-    return this.queue(async () => {
+   *  card following it, its count kept so a second limit fails the card.
+   *  Null once the card carries on (resumed, or held again); else why it
+   *  does not. A limited child the runner no longer has (the run memory
+   *  went with a restart) fails the card with that why, since nothing
+   *  would ever resume it and the chip would list it for good. */
+  private async resumeLimited(coordId: string, taskId: string, priority: Priority): Promise<string | null> {
+    // the queue keeps its errors; the answer comes out by the side
+    const answer = { why: null as string | null };
+    await this.queue(async () => {
       const coord = this.deps.run(coordId);
       const task = coord?.tasks?.find((t) => t.id === taskId);
-      const child = task?.run ? this.deps.run(task.run) : undefined;
-      if (!coord || !isRunActive(coord) || !task || task.state !== "running" || task.limited !== 0 || child?.status !== "limited" || !this.deps.resumeChild) return;
+      if (!coord || !isRunActive(coord) || !task) {
+        answer.why = "the coordinator has ended";
+        return;
+      }
+      if (task.state !== "running" || task.limited !== 0) {
+        answer.why = `it is ${task.state}, not waiting after a limit`;
+        return;
+      }
+      const child = task.run ? this.deps.run(task.run) : undefined;
+      if (!child) {
+        answer.why = `its run ${task.run ?? "?"} is gone since it hit the limit (a restart), so nothing carries it on`;
+        const why = answer.why;
+        this.update(coordId, taskId, (x) => withOutcome({ ...x, state: "failed" }, why));
+        return;
+      }
+      if (child.status !== "limited") {
+        answer.why = `its run ${child.id} is ${child.status}, not limited`;
+        return;
+      }
+      if (!this.deps.resumeChild) {
+        answer.why = "this backend cannot resume a child";
+        return;
+      }
       let out: ChildStart;
       try {
         out = await this.deps.resumeChild(coordId, task, child, priority);
@@ -411,6 +439,7 @@ export class CoordinatorHub {
       this.update(coordId, taskId, (x) => ({ ...withOutcome(x, undefined), run: next.id, limited: 1 }));
       this.follow(next);
     });
+    return answer.why;
   }
 
   /** Every card waiting on a child that ended is looked at again: the

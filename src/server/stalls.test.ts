@@ -148,4 +148,15 @@ describe("StallHub", () => {
     expect(w.left).toEqual([]);
     expect(w.records.get("b1")?.stalls).toBeUndefined();
   });
+
+  test("a coordinator's child and a group's member are only stopped: their owner reads the stop", async () => {
+    const w = world();
+    w.stall(run("c1", { parent: "co1" }));
+    w.stall(run("g1", { group: "g1" }));
+    expect([w.hub.starting("c1"), w.hub.starting("g1")]).toEqual([false, false]);
+    await w.hub.idle();
+    expect(w.resumed).toEqual([]);
+    expect(w.left).toEqual([]);
+    expect(w.records.get("b1")?.stalls).toBeUndefined();
+  });
 });

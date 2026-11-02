@@ -48,8 +48,8 @@ import type { Collision, Touched } from "../core/touch";
 import type { GroupDry } from "../core/group";
 import type { ScenarioSet, ScenarioSettings } from "../core/scenario";
 import { configDir } from "../core/store";
-import { limitedWords } from "../core/capacity";
-import type { EvidenceFile, HeldStart, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
+import { isCapacityWords, limitedWords } from "../core/capacity";
+import type { EvidenceFile, HeldStart, LandEntry, LandingInfo, LandingOrphan, LandingRun, LandNotice, Priority, Repo, Run, RunBranch, RunBranchState, RunReview, RunWhole, ScenarioRun, ServerEvent } from "../core/types";
 import type { WorkSink } from "../core/work";
 import { isRunActive } from "../core/types";
 import { git } from "../core/exec";
@@ -65,6 +65,13 @@ export interface CheckOutcome {
   output: string;
 }
 
+/** How a "fix it" run starts beyond its words: who may go first (FR-036).
+ *  Eric's own fix is interactive; one the governor's wake starts again
+ *  after a limit is normal work, held like any other. */
+export interface FixHow {
+  priority?: Priority;
+}
+
 export interface LandingDeps {
   broadcast: (ev: ServerEvent) => void;
   /** a run worktree was removed: a land, a drop, an orphan's remove; the warm pool refills */
@@ -75,8 +82,10 @@ export interface LandingDeps {
   repoByPath: (path: string) => Repo | undefined;
   /** runs one shell line in a folder (`runCheck`) */
   check: (cwd: string, line: string) => Promise<CheckOutcome>;
-  /** starts a "fix it" run on a sent-back branch */
-  startFix: (rec: LandingRun, entry: LandEntry) => Run | Promise<Run>;
+  /** starts a "fix it" run on a sent-back branch, at the priority `how`
+   *  says (interactive when it says none), and throws a capacity hold
+   *  (`CapacityHeldError`) when the governor holds a start at it */
+  startFix: (rec: LandingRun, entry: LandEntry, how?: FixHow) => Run | Promise<Run>;
   /** whether a run is still going, by id; a fix waits for it */
   runActive: (id: string) => boolean;
   /** sorts a branch run's diff; `sortRun` unless a test says otherwise */
@@ -869,14 +878,15 @@ export class LandingHub {
 
   /** "fix it" on a sent-back entry: a run on the same branch that resumes
    *  the last session with the reason. It rejoins the queue when it settles
-   *  ready. */
-  async fix(id: string): Promise<Run> {
+   *  ready. Eric's own fix, and "start anyway" on one that waits for
+   *  capacity, is interactive; `wake` passes normal. */
+  async fix(id: string, how: FixHow = {}): Promise<Run> {
     const rec = this.find(id);
     const entry = rec && this.entries.find((e) => e.id === rec.id);
     if (!rec || !entry) throw new LandError("no sent-back entry by that id", 404);
     if (!sentBack(entry)) throw new LandError(`it is ${entry.state}, not sent back`);
     if (entry.fixing && this.deps.runActive(entry.fixing)) throw new LandError("a fix is going already");
-    const run = await this.deps.startFix(rec, entry);
+    const run = await this.deps.startFix(rec, entry, how);
     this.entries = this.entries.map((e) => {
       if (e.id !== entry.id) return e;
       const { waiting: _w, ...rest } = e;
@@ -903,12 +913,22 @@ export class LandingHub {
   }
 
   /** The governor may have let go: each fix that stopped at the limit
-   *  starts again the same way when `go` says normal work may start. */
+   *  starts again as normal work when `go` says normal work may start. One
+   *  the governor still holds at the start (its own reading is the last
+   *  word) keeps waiting, with the hold's words. */
   wake(go: () => boolean): void {
     if (this.recovery.kind === "records" || this.stopped || !go()) return;
     for (const e of this.entries) {
       if (e.waiting === undefined || e.fixing) continue;
-      this.fix(e.id).catch((err: unknown) => console.error(`landing: fix ${e.id} again: ${errText(err)}`));
+      this.fix(e.id, { priority: "normal" }).catch((err: unknown) => {
+        const words = errText(err);
+        if (!isCapacityWords(words)) {
+          console.error(`landing: fix ${e.id} again: ${words}`);
+          return;
+        }
+        this.entries = this.entries.map((x) => (x.id === e.id && x.waiting !== undefined && !x.fixing ? { ...x, waiting: words } : x));
+        this.publish();
+      });
     }
   }
 

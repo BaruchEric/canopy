@@ -43,6 +43,11 @@
  *    hang  says one word and then nothing, as a stalled turn does; the
  *          next user message (the stall watchdog's wrap-up) ends the turn
  *          with the result "wrapped up"
+ *    latenudge says one word, then ends the turn on its own 150 ms later
+ *          with the result "on my own"; a user message meanwhile is taken
+ *          as the next turn once this one ends ("second"), as the CLI does
+ *          with a message it did not take into the turn. A SIGTERM is
+ *          logged as `{signal: "SIGTERM"}`.
  *    propose plan mode: makes a task, then calls ExitPlanMode. A deny of the
  *          first plan brings a second one, any other deny ends "declined".
  *          FAKE_CLAUDE_EMPTY_PLAN=1 sends a blank first plan, whose deny
@@ -78,10 +83,24 @@ const sys = (subtype: string, extra: Record<string, unknown>) => out({ type: "sy
 const tasks = (list: { task_id: string; task_type: string }[]) => sys("background_tasks_changed", { tasks: list });
 
 record({ argv: process.argv.slice(2) });
+// latenudge logs the stop it expects, then dies as a SIGTERM death would.
+// Only there: a handler runs on the event loop, after any stdin already
+// read, and the other modes count on the kill cutting them off at once.
+if (mode === "latenudge") {
+  process.once("SIGTERM", () => {
+    record({ signal: "SIGTERM" });
+    process.exit(143);
+  });
+}
 // the CLI's command list, less one built-in canopy offers (security-review)
 out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd(), slash_commands: ["compact", "clear", "init", "code-review", "simplify", "model", "rename"] });
 
 let turns = 0;
+/** latenudge: whether the first turn ended on its own, and whether a
+ *  message came in before it did */
+let ownTurnEnded = false;
+let queued = false;
+let secondTurn = false;
 /** the modes that start one background Agent and send a result while it runs */
 const ASYNC = new Set(["async", "quiet", "stray", "subtodo", "woke", "lost", "notifyonly", "crash"]);
 const bash = (id: string, command: string) =>
@@ -157,6 +176,30 @@ function onUser(): void {
       return;
     }
     out({ type: "result", subtype: "success", is_error: false, result: "wrapped up", num_turns: 1, total_cost_usd: 0, duration_ms: 1, session_id: "sess-1" });
+    return;
+  }
+  if (mode === "latenudge") {
+    // the next turn takes its time, as a turn that edits and commits does,
+    // and the process ends with it rather than at stdin's end
+    const second = () => {
+      secondTurn = true;
+      out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: "second" }] } });
+      setTimeout(() => {
+        result("second");
+        process.exit(0);
+      }, 1500);
+    };
+    if (turns === 1) {
+      out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: "looking" }] } });
+      setTimeout(() => {
+        ownTurnEnded = true;
+        result("on my own");
+        if (queued) second();
+      }, 150);
+      return;
+    }
+    if (ownTurnEnded) second();
+    else queued = true;
     return;
   }
   if (mode === "chat") {
@@ -311,4 +354,5 @@ for await (const chunk of Bun.stdin.stream()) {
   }
 }
 record({ eof: true });
-process.exit(0);
+// latenudge's next turn ends the process itself, as the CLI finishes a turn before it exits on stdin's end
+if (!secondTurn) process.exit(0);

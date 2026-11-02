@@ -13,24 +13,22 @@ import { ageWord, CAPACITY_GLYPH, capacityRows, capacityWord, heldRows, holdPerc
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-/** One row per backend and harness: the windows, the source, a standing hit. */
-function ReadingRows({ rows, now }: { rows: CapacityRow[]; now: number }) {
+/** One row per backend and harness: the windows, the source, a standing
+ *  hit. With no reading the source line says so on its own, and Claude's
+ *  row points at the observed dollar figure from wherever the reader is:
+ *  the chip sends them to the costs view, the costs view to its own form. */
+export function ReadingRows({ rows, now, where }: { rows: CapacityRow[]; now: number; where: "chip" | "costs" }) {
+  const hint = where === "chip" ? "set the observed dollar figure in the costs view to estimate from the ledger" : "set a 5-hour window in Claude $ below to estimate from the ledger";
   return (
     <div className="capacity-rows">
       {rows.map((row) => (
         <section className="capacity-row" key={`${row.backend}\u0000${row.cap.harness}`}>
           <h4>{row.backend} · {AGENT_NAME[row.cap.harness]}</h4>
-          {row.lines.length === 0 ? (
-            <>
-              <span className="capacity-reading">no reading</span>
-              {row.cap.harness === "claude" && (
-                <span className="capacity-hint">set the observed dollar figure in the costs view to estimate from the ledger</span>
-              )}
-            </>
-          ) : row.lines.map((line) => (
+          {row.lines.map((line) => (
             <span className={`capacity-reading ${row.tone}`} key={line}>{line}</span>
           ))}
           <span className="capacity-source">{row.source}</span>
+          {row.lines.length === 0 && row.cap.harness === "claude" && <span className="capacity-hint">{hint}</span>}
           {row.cap.hit !== null && hitStands(row.cap.hit, now) && (
             <span className="capacity-hit">limit hit {ageWord(now - row.cap.hit.at)}: {row.cap.hit.text}</span>
           )}
@@ -131,7 +129,7 @@ export function CapacityChip() {
       {open && (
         <div className="settings-pop capacity-pop" role="dialog" aria-label="Capacity">
           <h3 className="panel-label">capacity</h3>
-          <ReadingRows rows={rows} now={now} />
+          <ReadingRows rows={rows} now={now} where="chip" />
           <HeldList capacity={capacity} order={order} />
           {limited.length > 0 && (
             <section className="capacity-limited">
@@ -207,7 +205,7 @@ export function CapacityBlock() {
   return (
     <section className="cost-group capacity-block">
       <h3 className="panel-label">capacity</h3>
-      <ReadingRows rows={rows} now={now} />
+      <ReadingRows rows={rows} now={now} where="costs" />
       <HeldList capacity={capacity} order={order} />
       <details className="capacity-holds">
         <summary>the governor's holds</summary>

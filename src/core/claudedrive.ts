@@ -221,6 +221,8 @@ export class ClaudeDriver implements RunDriver {
   private followUps = new Set<Promise<void>>();
   /** the CLI's stdout has ended: a request now gets no reply */
   private closed = false;
+  /** a job's result ended its run: a turn the CLI starts now is not the run's */
+  private over = false;
 
   constructor(private opts: ClaudeOptions = {}) {}
 
@@ -247,7 +249,9 @@ export class ClaudeDriver implements RunDriver {
   /** The stall watchdog's one message into a job's turn: a plain user
    *  message down the same stdin, which stays open while the turn runs
    *  (for the control replies). The CLI takes it into the turn, or as the
-   *  next turn once this one ends. The turn's clock is left alone. */
+   *  next turn once this one ends; that next turn is not the run's, whose
+   *  result already ended it, so `drive` stops the CLI as it starts one.
+   *  The turn's clock is left alone. */
   nudge(text: string): boolean {
     const ctx = this.ctx;
     if (!this.proc || this.closed || !ctx || ctx.chat || ctx.status() !== "working") return false;
@@ -357,6 +361,14 @@ export class ClaudeDriver implements RunDriver {
             ?.settle(str(r, "subtype") === "success" ? { ok: true, response: isRecord(r["response"]) ? r["response"] : {} } : { ok: false, error: str(r, "error") || "refused" });
           continue;
         }
+        if (this.over && m["type"] !== "system") {
+          // A job's result ended its run, and stdin is closing. A turn
+          // after it is the CLI taking a nudge it did not fit into the
+          // turn (`nudge`) as the next one: not the run's, so the CLI is
+          // stopped here before that turn edits a worktree already read.
+          proc.kill();
+          break;
+        }
         if (m["type"] === "control_request") {
           void this.control(m);
         } else if (m["type"] === "control_cancel_request") {
@@ -381,7 +393,10 @@ export class ClaudeDriver implements RunDriver {
           // Stdin stays open while the turn runs, for the control replies.
           // The result ends the turn; closing stdin lets the CLI exit. A chat
           // keeps it open: the next message continues the same session.
-          if (m["type"] === "result" && !chat) this.endInput(proc);
+          if (m["type"] === "result" && !chat) {
+            this.endInput(proc);
+            this.over = ctx.status() !== "working";
+          }
           // subagents done, a result held: the CLI normally starts a turn
           // with their results; if none begins, the held result is the end
           if (this.held && this.agents.size === 0 && !this.woke && !this.grace) {
@@ -394,7 +409,10 @@ export class ClaudeDriver implements RunDriver {
               // a held result is timed from the start too, as one that outran it is
               this.fold.heldTurns ??= 0;
               this.apply(held);
-              if (!chat) this.endInput(running);
+              if (!chat) {
+                this.endInput(running);
+                this.over = ctx.status() !== "working";
+              }
             }, this.opts.heldGraceMs ?? HELD_GRACE_MS);
           }
         }

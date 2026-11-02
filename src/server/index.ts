@@ -1504,8 +1504,8 @@ async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, po
 /** A "fix it" run on a branch the landing queue sent back: Claude resumes
  *  the branch's last session with the reason; anything else starts fresh
  *  with the run's note and the reason. Same worktree, same branch. */
-async function startFixRun(state: ServerState, rec: LandingRun, entry: LandEntry): Promise<Run> {
-  return startBranchFix(state, rec, fixPrompt(entry), `fix it: ${landWord(entry, [entry])}`, true);
+async function startFixRun(state: ServerState, rec: LandingRun, entry: LandEntry, how: FixStart = {}): Promise<Run> {
+  return startBranchFix(state, rec, fixPrompt(entry), `fix it: ${landWord(entry, [entry])}`, true, how);
 }
 
 /** What a fix on a branch starts with beyond its words: who may go first
@@ -5940,7 +5940,7 @@ export async function startServer(opts: {
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
-      startFix: (rec, entry) => startFixRun(state, rec, entry),
+      startFix: (rec, entry, how) => startFixRun(state, rec, entry, how),
       work: {
         note: (id, text) => state.work.note(id, text),
         close: (id, end, text) => state.work.close(id, end, text),

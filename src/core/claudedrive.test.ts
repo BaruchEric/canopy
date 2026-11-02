@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang" | "latenudge",
   message = "do the thing",
   unattended?: string,
   opts: {
@@ -792,6 +792,24 @@ describe("the stall watchdog's message", () => {
     const users = (await d.sent()).filter((m) => m["type"] === "user");
     expect(users.map((m) => (m["message"] as { content: string }).content).at(-1)).toBe("wrap up now");
     expect(d.driver.nudge("again")).toBe(false);
+  });
+
+  test("a nudge the turn outran is not a second turn: the CLI is stopped the moment it starts one", async () => {
+    const d = await drive("latenudge");
+    await d.until((r) => r.steps.some((s) => s.kind === "text" && s.text === "looking"), "the first word");
+    expect(d.driver.nudge("wrap up now")).toBe(true);
+    const run = await d.until(d.done, "the end");
+    expect([run.status, run.result?.text]).toEqual(["done", "on my own"]);
+    // the fake takes the queued message as a new turn once its own ends;
+    // the driver kills it on that turn's first word
+    const deadline = Date.now() + 4_000;
+    while (!(await d.sent()).some((m) => m["signal"] === "SIGTERM")) {
+      if (Date.now() > deadline) throw new Error("the CLI was not stopped");
+      await Bun.sleep(10);
+    }
+    expect(run.result?.text).toBe("on my own");
+    expect(run.steps.some((s) => s.kind === "text" && s.text === "second")).toBe(false);
+    expect(d.ended).toEqual(["done"]);
   });
 
   test("a result held for a background subagent is holding, and a chat takes no nudge", async () => {
