@@ -22,6 +22,8 @@ import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { LandingNotices } from "./Landing";
 import { PermissionForm, plainWords, Questions, useCommandView, type RememberChoice } from "./Prompts";
 import { useZoom, zoomStyle } from "./Surface";
+import { kbKey } from "../kbfocus";
+import { useKb } from "../kbring";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -114,6 +116,25 @@ function AdviceFile() {
   );
 }
 
+/** Opens the sheet an inbox item is answered in, closing the inbox: a
+ *  comparison's, a run's, a workflow's, a sprout's, the landing queue's or a
+ *  PR's run. False for an item with none (an agent's ask), which is answered
+ *  in its row. Space on a ringed row opens it too (FR-023). */
+export function showInboxSheet(item: InboxItem): boolean {
+  const st = useStore.getState();
+  const pr = item.source === "pr" ? prsAll(st).find((p) => p.id === item.id) : undefined;
+  const has = item.source === "group" || item.source === "run" || item.source === "flow" || item.source === "sprout" || (item.source === "landing" && !!item.repoId) || !!pr;
+  if (!has) return false;
+  st.closeInbox();
+  if (item.source === "group") st.showGroup(item.id);
+  else if (item.source === "run") st.showRun(item.id);
+  else if (item.source === "flow") st.showFlow(item.id);
+  else if (item.source === "sprout") st.showSprout(item.id);
+  else if (item.source === "landing" && item.repoId) st.showLanding(item.repoId);
+  else if (pr) st.showRun(pr.runId);
+  return true;
+}
+
 /** One thing waiting: who, where and the countdown, then the form that
  *  answers it, folded until picked. An ask that cannot be answered here (no
  *  answer key on this device) shows what it asks and says so. */
@@ -133,6 +154,8 @@ export function InboxRow({
   onGit?: () => void;
 }) {
   const answerInbox = useStore((s) => s.answerInbox);
+  // the keyboard ring walks the rows of "waiting on you" (FR-023)
+  const kb = useKb(kbKey("inbox", item.key));
   const shown = useStore(useShallow((s) => s.backendOrder));
   const card = useStore((s) => (item.source === "ask" ? s.registry[s.asks[item.id]?.agent ?? ""] : undefined));
   // the agent's terminal shows the same prompt meanwhile
@@ -152,17 +175,7 @@ export function InboxRow({
   const target = card ? joinTarget(card, shown, qual) : null;
   const held = useStore((s) => (target ? s.shells.find((t) => t.id === target)?.place : undefined));
   const openSheet = () => {
-    const st = useStore.getState();
-    st.closeInbox();
-    if (item.source === "group") st.showGroup(item.id);
-    else if (item.source === "run") st.showRun(item.id);
-    else if (item.source === "flow") st.showFlow(item.id);
-    else if (item.source === "sprout") st.showSprout(item.id);
-    else if (item.source === "landing" && item.repoId) st.showLanding(item.repoId);
-    else if (item.source === "pr") {
-      const w = prsAll(st).find((p) => p.id === item.id);
-      if (w) st.showRun(w.runId);
-    }
+    if (!showInboxSheet(item)) useStore.getState().closeInbox();
   };
   const join = () => {
     if (!target) return;
@@ -195,7 +208,7 @@ export function InboxRow({
     : undefined;
 
   return (
-    <li className={`inbox-item${open ? " open" : ""}${left !== null && left <= 0 ? " late" : ""}`} data-key={item.key}>
+    <li className={`inbox-item${open ? " open" : ""}${left !== null && left <= 0 ? " late" : ""}`} data-key={item.key} {...kb}>
       <button type="button" className="inbox-head" aria-expanded={open} onClick={onToggle}>
         <span className={`inbox-glyph k-${item.kind}`} aria-hidden="true">
           {KIND_GLYPH[item.kind]}

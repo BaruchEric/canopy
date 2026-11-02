@@ -38,6 +38,8 @@ import { isTreeCard } from "../../../src/core/treewords";
 import { TreeRows, TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
 import { historyFor, type Repo } from "../../../src/core/types";
+import { kbKey } from "../kbfocus";
+import { useKb } from "../kbring";
 
 /** What a machine chip's tooltip says about its backend. */
 function machineTitle(backend: string, state: string, reason: string | undefined, repo: Repo): string {
@@ -136,6 +138,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const ws = useStore((s) =>
     s.activeWs && isHome(repo.id) ? wsOf(s.workspaces, repo.path).find((w) => w.name === s.activeWs) : undefined,
   );
+  // the keyboard ring's key, the one its tree row carries too (FR-023)
+  const kb = useKb(kbKey("repo", repo.id));
   const [pulse, setPulse] = useState(false);
   // what the ⋯ menu last failed at, shown on the card for a few seconds
   const [menuErr, setMenuErr] = useState<string | null>(null);
@@ -197,6 +201,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
         }
       }}
       data-ws-color={ws?.color}
+      {...kb}
       tabIndex={0}
       // its place in the group, which sets how late it rises in
       style={{ "--i": i } as CSSProperties}

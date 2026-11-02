@@ -28,6 +28,8 @@ import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { OVER_PAGE } from "./surface";
 import { CHORD_MS, chordView, pressOf, shortcutFor } from "./shortcuts";
+import { ringTakes, type RingPress } from "./kbfocus";
+import { KbWatch, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./components/KbFocus";
 import { runPanel } from "./itempanel";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
@@ -477,9 +479,9 @@ export function App() {
             st.openNewSprout();
           }
           return;
-        case "escape":
+        case "escape": {
           // the drawer is the top layer while it is out
-          if (st.drawerOpen && !over) {
+          if (view === "git" && st.drawerOpen && !over) {
             // taken, so a surface under the drawer stays: this listener may run
             // before the surface's, which then finds the drawer already gone
             e.preventDefault();
@@ -488,7 +490,25 @@ export function App() {
           }
           // A sheet, a menu or a popover owns Escape while it is up, and a
           // surface over the page or its panel takes it first
-          if (st.selecting && !st.sheet && !over && !document.querySelector(".surface-focus, .surface-full, .section-full")) st.setSelecting(false);
+          const free = !st.sheet && !over && !document.querySelector(".surface-focus, .surface-full, .section-full");
+          if (view === "git" && st.selecting && free) st.setSelecting(false);
+          // then the keyboard ring hides, its place kept (FR-023), unless
+          // a listener before this one took the Escape
+          else if (free && !e.defaultPrevented) kbHide();
+          return;
+        }
+        case "next":
+        case "prev":
+          // the ring's keys leave a text box, a shell and an arrow widget
+          // theirs; a window of one thing has no list to walk
+          if (!whole || st.sheet || over || !ringTakes(press as RingPress, t)) return;
+          if (kbMove(sc.action === "next" ? 1 : -1, view, t)) e.preventDefault();
+          return;
+        case "peek":
+        case "enter":
+          // only while the ring shows, and never from a focused button
+          if (!whole || !st.kbRing || st.sheet || over || !ringTakes(press as RingPress, t)) return;
+          if (sc.action === "peek" ? kbPeek() : kbEnter(showRepo)) e.preventDefault();
           return;
         case "select-all":
           // a select box owns ⌘A
@@ -512,8 +532,10 @@ export function App() {
           st.toggleFeed();
           return;
         case "waiting":
-          // opens "waiting on you", or brings it forward; never closes it
+          // opens "waiting on you", or brings it forward; never closes it.
+          // j and k walk its rows next.
           st.openPanel(WAITING_PANEL);
+          kbZone("dock");
           return;
         case "dirty":
           setDirtyOnly(!st.dirtyOnly);
@@ -534,7 +556,7 @@ export function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setDirtyOnly, setSetting, toggleSidebar, view, narrow, navigate]);
+  }, [setDirtyOnly, setSetting, toggleSidebar, view, narrow, navigate, showRepo]);
 
   // a window grown past the narrow width has the tree beside the cards again
   useEffect(() => {
@@ -650,6 +672,7 @@ export function App() {
       <RunSheet />
       <CommandPop />
       <DictationFloat />
+      <KbWatch view={view} />
     </div>
   );
 }

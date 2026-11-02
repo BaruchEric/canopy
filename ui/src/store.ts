@@ -1436,6 +1436,11 @@ export interface CanopyState {
   openSearch: () => void;
   /** opens the sheet of every keyboard shortcut on a view */
   openKeys: (view: string) => void;
+  /** the keyboard ring's place, a `<kind>:<id>` key (kbfocus.ts, FR-023);
+   *  `kbRing` while the ring shows on it. `ringOf` reads both. */
+  kbFocus: string | null;
+  kbRing: boolean;
+  setKbFocus: (key: string | null, ring: boolean) => void;
   setSearchQuery: (q: string) => void;
   /** closes the search sheet, opens the repo's panel with its search section
    *  unfolded, and hands that section the term */
@@ -2216,6 +2221,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   settings: loadSettings(),
   runs: {},
   sheet: null,
+  kbFocus: null,
+  kbRing: false,
   searchQuery: "",
   pendingSearch: null,
   reveal: null,
@@ -4597,6 +4604,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   openSearch: () => set({ sheet: { kind: "search" } }),
   openKeys: (view) => set({ sheet: { kind: "keys", view } }),
+  setKbFocus: (key, ring) => set((s) => (s.kbFocus === key && s.kbRing === ring ? {} : { kbFocus: key, kbRing: ring && key !== null })),
   setSearchQuery: (q) => set({ searchQuery: q }),
   searchIn: (repoId, q) =>
     set((s) => ({

@@ -11,6 +11,8 @@ import { GroupHead, GroupSummary } from "./GroupHead";
 import { WidgetGear, shareEntries, useGroupFolds, useZoom, zoomStyle } from "./Surface";
 import { Tick } from "./SelectBar";
 import type { Repo } from "../../../src/core/types";
+import { kbKey } from "../kbfocus";
+import { useKb } from "../kbring";
 
 /** One row of the tree. In select mode it picks the repo like the card
  *  does, shift included, instead of opening it. */
@@ -23,9 +25,12 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
   const favorite = useStore((s) => isFavorite(s, repo.id));
   const canPick = pickable(repo);
   const state = stateOf(repo);
+  // one key with its card, so the keyboard ring is on both (FR-023)
+  const kb = useKb(kbKey("repo", repo.id));
   return (
     <button
       type="button"
+      {...kb}
       className={`tree-item s-${state}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}`}
       role={selecting ? "checkbox" : undefined}
       aria-checked={selecting ? picked : undefined}

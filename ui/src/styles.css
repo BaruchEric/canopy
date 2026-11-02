@@ -424,6 +424,44 @@ a:focus-visible,
   outline: 2px solid var(--sky);
   outline-offset: 1px;
 }
+/* the keyboard ring (FR-023): j and k move it through the cards, the
+   tree's rows, the trigger rows and the inbox rows, and a pointer press
+   hides it. Sky like the focus outline, with a wash so it reads as the
+   place rather than as a focused control. */
+:root {
+  --kb-ring: var(--sky);
+  --kb-wash: light-dark(color-mix(in srgb, var(--sky) 9%, transparent), color-mix(in srgb, var(--sky) 16%, transparent));
+}
+[data-kb-on] {
+  outline: 2px solid var(--kb-ring);
+  outline-offset: 2px;
+  scroll-margin: 12px;
+}
+.card[data-kb-on] {
+  box-shadow: 0 0 0 5px var(--kb-wash);
+}
+.tree-item[data-kb-on],
+.inbox-item[data-kb-on],
+.trigger-row[data-kb-on] {
+  outline-offset: -2px;
+  background: var(--kb-wash);
+  color: var(--ink);
+}
+/* Space on something with nothing to open: one blink answers it */
+[data-kb-on][data-kb-blink] {
+  animation: kb-blink 0.45s ease-out;
+}
+@keyframes kb-blink {
+  50% {
+    outline-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-kb-on][data-kb-blink] {
+    animation: none;
+    outline-style: dashed;
+  }
+}
 input,
 textarea {
   font: inherit;

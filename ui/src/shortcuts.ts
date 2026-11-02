@@ -2,7 +2,8 @@
  * The page's keyboard shortcuts as one table. App.tsx's key handler reads a
  * press through `shortcutFor` and `chordView`, and the ? sheet lists
  * `shortcutsOn` and `GO`, so the sheet cannot drift from what the keys do
- * (FR-021, FR-022). Pure and tested (shortcuts.test.ts).
+ * (FR-021, FR-022; the ring's keys are FR-023's). Pure and tested
+ * (shortcuts.test.ts).
  */
 
 export type KeyAction =
@@ -21,6 +22,10 @@ export type KeyAction =
   | "select"
   | "select-all"
   | "sort"
+  | "next"
+  | "prev"
+  | "peek"
+  | "enter"
   | "escape";
 
 export interface Shortcut {
@@ -35,6 +40,8 @@ export interface Shortcut {
 }
 
 const GIT = ["git"];
+/** the views the keyboard ring walks (FR-023, kbfocus.ts) */
+const RING = ["git", "triggers"];
 
 /** Every shortcut, in the order the sheet lists them. */
 export const SHORTCUTS: readonly Shortcut[] = [
@@ -54,7 +61,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "sort", press: "s", what: "The next sort", views: GIT },
   { action: "select", press: "x", what: "Select mode, on or off", views: GIT },
   { action: "select-all", press: "mod+a", what: "In select mode, select every card shown", views: GIT },
-  { action: "escape", press: "Escape", what: "Close the drawer, or leave select mode", views: GIT },
+  { action: "next", press: "j", what: "Ring the next card or row", views: RING },
+  { action: "prev", press: "k", what: "Ring the one before", views: RING },
+  { action: "next", press: "ArrowDown", what: "The next one, as j", views: RING },
+  { action: "prev", press: "ArrowUp", what: "The one before, as k", views: RING },
+  { action: "peek", press: " ", what: "Peek at the ringed one's run in its sheet; Esc closes it and the ring stays", views: RING },
+  { action: "enter", press: "Enter", what: "Go into the ringed one: a card's repo, a trigger's repo, an inbox row's form", views: RING },
+  { action: "escape", press: "Escape", what: "Close the drawer, leave select mode, or hide the ring", views: RING },
 ];
 
 /** How long `g` waits for its letter. */
@@ -107,10 +120,14 @@ export const shortcutsOn = (view: string): Shortcut[] => SHORTCUTS.filter((s) =>
 /** The view `g` then `key` goes to, or null. */
 export const chordView = (key: string): string | null => GO.find((g) => g.key === key)?.view ?? null;
 
+/** the keys the sheet names rather than prints */
+const NAMED_CAPS: Readonly<Record<string, string>> = { Escape: "Esc", " ": "Space", Enter: "Enter", ArrowDown: "↓", ArrowUp: "↑" };
+
 /** A press as the sheet shows it, one string per key: `mod` is ⌘ on an
  *  Apple keyboard and Ctrl elsewhere. */
 export function keyCaps(press: string, apple: boolean): string[] {
-  if (press === "Escape") return ["Esc"];
+  const named = NAMED_CAPS[press];
+  if (named) return [named];
   if (!press.startsWith("mod+")) return [press];
   const parts = press.split("+");
   return parts.map((p) => (p === "mod" ? (apple ? "⌘" : "Ctrl") : p === "shift" ? (apple ? "⇧" : "Shift") : p.toUpperCase()));

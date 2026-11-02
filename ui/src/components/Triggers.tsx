@@ -7,6 +7,8 @@ import { copyText } from "../share";
 import { useStore } from "../store";
 import { STATUS_TONE, eventActs, nextFireWord, outcomeLine, ruleIntake, ruleWrites, scheduleWord, serviceOf, statusWord, triggerSections, type TriggerRow } from "../triggers";
 import { ago } from "../util";
+import { kbKey, triggerKbId } from "../kbfocus";
+import { useKb } from "../kbring";
 
 type Call = { kind: "idle" } | { kind: "busy" } | { kind: "failed"; error: string };
 
@@ -32,6 +34,7 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
   const [call, setCall] = useState<Call>({ kind: "idle" });
   const outcome = outcomeLine(e);
   const service = serviceOf(e);
+  const kb = useKb(kbKey("trigger", triggerKbId(backend, e.id)));
   const act = (a: "stop" | "resume" | "retry" | "dismiss") => {
     setCall({ kind: "busy" });
     (a === "dismiss" ? dismissTrigger(e.id) : triggerAct(e.id, a)).then(
@@ -40,7 +43,7 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
     );
   };
   return (
-    <li className={`trigger-row ${STATUS_TONE[e.status]}`}>
+    <li className={`trigger-row ${STATUS_TONE[e.status]}`} {...kb}>
       <div className="trigger-main">
         {e.runId ? (
           <button type="button" className="trigger-title" title="Open the run" onClick={() => showRun(e.runId ?? "")}>

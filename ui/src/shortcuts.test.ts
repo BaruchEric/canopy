@@ -51,9 +51,27 @@ test("chordView goes to the view a letter names, and nowhere for a letter it doe
   expect(chordView("z")).toBeNull();
 });
 
+test("the ring's keys work on git and triggers and nowhere else", () => {
+  expect(shortcutFor("j", "git")?.action).toBe("next");
+  expect(shortcutFor("ArrowDown", "triggers")?.action).toBe("next");
+  expect(shortcutFor("k", "triggers")?.action).toBe("prev");
+  expect(shortcutFor("ArrowUp", "git")?.action).toBe("prev");
+  expect(shortcutFor(" ", "git")?.action).toBe("peek");
+  expect(shortcutFor("Enter", "triggers")?.action).toBe("enter");
+  expect(shortcutFor("Escape", "triggers")?.action).toBe("escape");
+  expect(shortcutFor("j", "library")).toBeNull();
+  expect(shortcutFor(" ", "sessions")).toBeNull();
+  // J is not j, and g then k is still the kit's chord
+  expect(shortcutFor("J", "git")).toBeNull();
+  expect(chordView("k")).toBe("kit");
+});
+
 test("keyCaps shows mod as ⌘ on Apple and Ctrl elsewhere", () => {
   expect(keyCaps("mod+k", true)).toEqual(["⌘", "K"]);
   expect(keyCaps("mod+shift+f", false)).toEqual(["Ctrl", "Shift", "F"]);
   expect(keyCaps("Escape", true)).toEqual(["Esc"]);
   expect(keyCaps("?", false)).toEqual(["?"]);
+  expect(keyCaps(" ", true)).toEqual(["Space"]);
+  expect(keyCaps("ArrowDown", false)).toEqual(["↓"]);
+  expect(keyCaps("Enter", false)).toEqual(["Enter"]);
 });
