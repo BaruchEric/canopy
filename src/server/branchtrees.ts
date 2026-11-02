@@ -1,10 +1,12 @@
 /** The worktrees kept by hand (FR-051): the record per repo under
  *  `<configDir>/trees/<repo key>/trees.json`, making a tree and preparing it
  *  in the background (the main checkout's ignored entries cloned in, then
- *  the repo's setup line), removing one, and the list with each tree's
- *  live counts. `GET /api/trees` needs read, the two POSTs operate. Changes
- *  publish on the `trees` event; the main checkout's own event (a commit in
- *  a tree moves refs in the common git dir) brings a fresh list too. */
+ *  the repo's setup line), merging one into its base in the background
+ *  (worktrunk's `wt merge`), cleaning up the merged ones, removing one, and
+ *  the list with each tree's live counts. `GET /api/trees` needs read, the
+ *  POSTs operate. Changes publish on the `trees` event; the main checkout's
+ *  own event (a commit in a tree moves refs in the common git dir) brings a
+ *  fresh list too. */
 
 import { existsSync } from "node:fs";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
@@ -17,6 +19,7 @@ import {
   ignoredEntries,
   isBranchName,
   listTreeDirs,
+  mergeTree,
   parseTreesRecord,
   removeBranchTree,
   TREE_PORTS_DEFAULT,
@@ -28,21 +31,30 @@ import {
   treesRoot,
   TREES_RECORD,
   type BranchTreeRecord,
+  type MergeOptions,
+  type MergeOutcome,
   type TreesRecord,
 } from "../core/branchtrees";
 import { git } from "../core/exec";
-import { isTreeCard, removeRefusal } from "../core/treewords";
+import { cleanable, isTreeCard, removeRefusal } from "../core/treewords";
 import { parseWorktreeList } from "../core/git";
 import type { BranchTree, BranchTreeRepo, BranchTreesInfo, Repo, ServerEvent } from "../core/types";
-import { defaultBranch, repoKey, revOf } from "../core/worktree";
+import { defaultBranch, midRebase, repoKey, revOf } from "../core/worktree";
+
+/** a tree a clean-up removed */
+export interface CleanedTree {
+  repoId: string;
+  slug: string;
+  branch: string;
+}
 
 export interface TreesDeps {
   root?: string;
   /** the repos this backend scans; only local ones get trees */
   repos: () => Repo[];
-  /** the repo's gates file, for its setup line */
-  gates: (path: string) => Promise<{ setup?: string }>;
-  /** runs the setup line in the tree under the gate environment */
+  /** the repo's gates file: its setup line, and the gates a merge runs */
+  gates: (path: string) => Promise<{ setup?: string; gates?: { name: string; run: string }[] }>;
+  /** runs a setup line, or a gate, in the tree under the gate environment */
   setup: (dir: string, line: string) => Promise<{ exit: number | null; output: string }>;
   /** the ports something listens on now, so a tree's is not one of them */
   listening: () => Promise<number[]>;
@@ -89,7 +101,8 @@ export class BranchTrees {
   private readonly ports: number[];
   private readonly records = new Map<string, TreesRecord>();
   private readonly chains = new Map<string, Promise<unknown>>();
-  private readonly preparing = new Set<Promise<void>>();
+  /** the preparations and merges running in the background */
+  private readonly jobs = new Set<Promise<void>>();
   private readonly touches = new Map<string, ReturnType<typeof setTimeout>>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private publishing: Promise<void> = Promise.resolve();
@@ -152,11 +165,21 @@ export class BranchTrees {
         if (!w.bare && !w.prunable) listed.set(await real(w.path), w.branch);
       }
       const kept: BranchTreeRecord[] = [];
+      let changed = false;
       for (const t of rec.trees) {
         const dir = treeDir(repo.path, t.slug, this.root);
-        if (dirs.includes(dir) && listed.has(await real(dir))) kept.push(t);
+        if (!dirs.includes(dir) || !listed.has(await real(dir))) {
+          changed = true;
+          continue;
+        }
+        if (t.state === "merging") {
+          // the server went down mid-merge: a rebase left open is aborted,
+          // and the tree says so until the merge is run again
+          if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
+          kept.push({ ...settled(t, ""), stopped: "the server restarted during the merge; merge again" });
+          changed = true;
+        } else kept.push(t);
       }
-      let changed = kept.length !== rec.trees.length;
       for (const dir of dirs) {
         const slug = basename(dir);
         if (kept.some((t) => t.slug === slug)) continue;
@@ -246,12 +269,16 @@ export class BranchTrees {
       }
       const entry: BranchTreeRecord = { slug, branch, base: from, port, madeAt: this.now(), caches, state: "preparing" };
       await this.save(repo.path, { trees: [...rec.trees, entry] });
-      const job = this.prepare(repo, entry, dir);
-      this.preparing.add(job);
-      void job.finally(() => this.preparing.delete(job));
+      this.spawn(this.prepare(repo, entry, dir));
       void this.publish();
       return this.tree(repo.path, entry);
     });
+  }
+
+  /** a background job `idle` waits for */
+  private spawn(job: Promise<void>): void {
+    this.jobs.add(job);
+    void job.finally(() => this.jobs.delete(job));
   }
 
   /** The caches, then the setup line; what fails is kept on the tree, which
@@ -281,6 +308,89 @@ export class BranchTrees {
     void this.publish();
   }
 
+  /** Starts the merge of a tree's branch into its base (core/branchtrees.ts
+   *  `mergeTree`: commit, squash, rebase, the repo's gates, fast-forward,
+   *  remove) and answers with the tree in `merging`. The outcome lands in
+   *  the record and the `trees` event: the tree gone once the merge went
+   *  through (kept, with fresh counts, when asked), or back as it was with
+   *  `stopped` saying why. */
+  async merge(repo: Repo, name: string, opts: MergeOptions): Promise<BranchTree> {
+    if (isTreeCard(repo)) throw new TreesError(400, `${repo.name} is a worktree; merge it from its repo's card`);
+    return this.serial(repo.path, async () => {
+      const rec = this.record(repo.path);
+      const t = rec.trees.find((x) => x.slug === name || x.branch === name);
+      if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
+      if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait for it");
+      if (t.state === "merging") throw new TreesError(409, "the tree is being merged already");
+      const { slug, branch, base, port, madeAt, caches } = t;
+      const entry: BranchTreeRecord = { slug, branch, base, port, madeAt, caches, state: "merging" };
+      await this.save(repo.path, { trees: rec.trees.map((x) => (x === t ? entry : x)) });
+      this.spawn(this.runMerge(repo, entry, t, opts));
+      void this.publish();
+      return this.tree(repo.path, entry);
+    });
+  }
+
+  private async runMerge(repo: Repo, entry: BranchTreeRecord, prior: BranchTreeRecord, opts: MergeOptions): Promise<void> {
+    const dir = treeDir(repo.path, entry.slug, this.root);
+    let outcome: MergeOutcome;
+    try {
+      outcome = await mergeTree(repo.path, dir, entry.branch, entry.base, opts, (d) => this.check(repo.path, d));
+    } catch (err) {
+      outcome = { stopped: message(err) };
+    }
+    // as the tree stood before the merge: failed setup and all
+    const back = settled(prior, prior.state === "failed" ? (prior.why ?? "") : "");
+    await this.serial(repo.path, async () => {
+      const rec = this.record(repo.path);
+      // removed with force while the merge ran: nothing to settle
+      if (!rec.trees.some((x) => x.slug === entry.slug)) return;
+      const trees =
+        "ok" in outcome && !opts.keep
+          ? rec.trees.filter((x) => x.slug !== entry.slug)
+          : rec.trees.map((x) => (x.slug !== entry.slug ? x : "ok" in outcome ? back : { ...back, stopped: tail(outcome.stopped) }));
+      await this.save(repo.path, { trees });
+    });
+    void this.publish();
+  }
+
+  /** The repo's gates run in the tree, one after another; null when each
+   *  passes (or there is none), else the first failure with its output. */
+  private async check(repoPath: string, dir: string): Promise<string | null> {
+    const { gates = [] } = await this.deps.gates(repoPath);
+    for (const g of gates) {
+      const r = await this.deps.setup(dir, g.run);
+      if (r.exit !== 0) return `gate ${g.name} exited ${r.exit ?? "by signal"}\n${r.output}`.trim();
+    }
+    return null;
+  }
+
+  /** worktrunk's clean-up, for one repo or every one: each ready tree whose
+   *  base holds all its commits, with nothing changed or open in it, goes
+   *  with its branch. The trees removed. */
+  async clean(repo: Repo | null): Promise<CleanedTree[]> {
+    const removed: CleanedTree[] = [];
+    for (const r of repo ? [repo] : this.local()) {
+      if (this.record(r.path).trees.length === 0) continue;
+      await this.serial(r.path, async () => {
+        const rec = this.record(r.path);
+        const left: BranchTreeRecord[] = [];
+        for (const t of rec.trees) {
+          if (!cleanable(await this.tree(r.path, t))) {
+            left.push(t);
+            continue;
+          }
+          // its base holds every commit, so the branch goes with it
+          await removeBranchTree(r.path, treeDir(r.path, t.slug, this.root), t.branch, true).catch(() => {});
+          removed.push({ repoId: r.id, slug: t.slug, branch: t.branch });
+        }
+        if (left.length !== rec.trees.length) await this.save(r.path, { trees: left });
+      });
+    }
+    if (removed.length > 0) void this.publish();
+    return removed;
+  }
+
   async remove(repo: Repo, name: string, force: boolean, deleteBranch: boolean): Promise<string> {
     return this.serial(repo.path, async () => {
       const rec = this.record(repo.path);
@@ -288,6 +398,7 @@ export class BranchTrees {
       if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
       if (!force) {
         if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait, or remove it with force");
+        if (t.state === "merging") throw new TreesError(409, "the tree is being merged; wait, or remove it with force");
         const live = await this.tree(repo.path, t);
         const refusal = removeRefusal(live);
         if (refusal) throw new TreesError(409, refusal);
@@ -336,9 +447,9 @@ export class BranchTrees {
     this.touches.clear();
   }
 
-  /** every preparation and publish done, for a test */
+  /** every preparation, merge and publish done, for a test */
   async idle(): Promise<void> {
-    while (this.preparing.size > 0) await Promise.all(this.preparing);
+    while (this.jobs.size > 0) await Promise.all(this.jobs);
     await this.publishing;
   }
 
@@ -346,12 +457,17 @@ export class BranchTrees {
     if (url.pathname !== "/api/trees" && !url.pathname.startsWith("/api/trees/")) return null;
     try {
       if (url.pathname === "/api/trees" && req.method === "GET") return json(await this.info());
-      if (req.method !== "POST" || !["/api/trees/add", "/api/trees/remove"].includes(url.pathname)) return json({ error: "not found" }, 404);
+      if (req.method !== "POST" || !["/api/trees/add", "/api/trees/remove", "/api/trees/merge", "/api/trees/clean"].includes(url.pathname)) {
+        return json({ error: "not found" }, 404);
+      }
       const body: unknown = await req.json().catch(() => null);
       if (!isRecord(body)) return json({ error: "malformed body" }, 400);
+      // a clean-up names a repo, or sweeps every one
+      if (url.pathname === "/api/trees/clean" && body["repo"] === undefined) return json({ removed: await this.clean(null) });
       const repo = this.deps.repos().find((r) => r.id === body["repo"]);
       if (!repo) return json({ error: "no repo by that id" }, 404);
       if (repo.host || !isAbsolute(repo.path)) return json({ error: "a tree is kept only for a repo on this backend's own disk" }, 400);
+      if (url.pathname === "/api/trees/clean") return json({ removed: await this.clean(repo) });
       if (url.pathname === "/api/trees/add") {
         const branch = body["branch"];
         if (typeof branch !== "string" || !branch.trim()) return json({ error: "branch must be a name" }, 400);
@@ -362,6 +478,10 @@ export class BranchTrees {
       }
       const name = body["tree"];
       if (typeof name !== "string" || !name.trim()) return json({ error: "tree must be a tree's slug or branch" }, 400);
+      if (url.pathname === "/api/trees/merge") {
+        const tree = await this.merge(repo, name.trim(), { commit: body["commit"] !== false, squash: body["squash"] !== false, keep: body["keep"] === true });
+        return json({ tree }, 202);
+      }
       const removed = await this.remove(repo, name.trim(), body["force"] === true, body["deleteBranch"] === true);
       return json({ removed });
     } catch (err) {

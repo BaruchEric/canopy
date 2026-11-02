@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { HARNESS } from "../../../src/core/harness";
 import type { BranchTree, Repo } from "../../../src/core/types";
+import { cleanable } from "../../../src/core/treewords";
 import { startHarnesses } from "../agents";
 import { backendOf } from "../registry";
 import { agentFor, connOf, useStore } from "../store";
@@ -148,15 +149,19 @@ export function TreeRows({ repo, selecting }: { repo: Repo; selecting: boolean }
 }
 
 /** A repo's kept worktrees (FR-051): one row per tree with where its branch
- *  stands, a shell and an agent shell into it, and its removal; under them
- *  a form for a new tree on a branch, new or existing, with the repo's setup
- *  run and its build caches cloned in. Only a repo on its backend's own disk
- *  has the section. */
+ *  stands, a shell and an agent shell into it, its merge into its base
+ *  (worktrunk's `wt merge`: commit, squash, rebase, the gates, fast-forward,
+ *  remove) and its removal; under them a form for a new tree on a branch,
+ *  new or existing, with the repo's setup run and its build caches cloned
+ *  in. The head's clean-up removes the trees whose base holds everything
+ *  they have. Only a repo on its backend's own disk has the section. */
 export function TreesSection({ repo }: { repo: Repo }) {
   const entry = useStore((s) => repoTrees(s.trees, repo.id));
   const openTerm = useStore((s) => s.openTerm);
   const addTree = useStore((s) => s.addTree);
   const removeTree = useStore((s) => s.removeTree);
+  const mergeTree = useStore((s) => s.mergeTree);
+  const cleanTrees = useStore((s) => s.cleanTrees);
   const loadTrees = useStore((s) => s.loadTrees);
   const showSection = useStore((s) => s.showSection);
   const openPanel = useStore((s) => s.openPanel);
@@ -222,19 +227,38 @@ export function TreesSection({ repo }: { repo: Repo }) {
   };
   // where the shell lands is the shells setting, as for the card's own shell
   const shellIn = (t: BranchTree, start?: "agent") => openTerm(repo.id, undefined, start, undefined, undefined, t.branch, t.slug);
+  const merge = (t: BranchTree) => {
+    setRefused(null);
+    act(`merge:${t.slug}`, () => mergeTree(repo.id, t.slug));
+  };
+  const cleanCount = trees.filter(cleanable).length;
+  const headTone = trees.some((t) => t.state === "failed" || t.stopped) ? "rust" : trees.some((t) => t.state === "preparing" || t.state === "merging") ? "lichen" : "";
   return (
     <Section
       repo={repo}
       k="worktrees"
       className="trees-section"
       label="Worktrees"
-      head={<span className={trees.some((t) => t.state === "failed") ? "rust" : trees.some((t) => t.state === "preparing") ? "lichen" : ""}>{treesHead(trees)}</span>}
-      title="Worktrees kept by hand, one per branch, each with the repo's setup run and its build caches cloned in. A shell or an agent opens inside one; nothing lands them."
+      head={<span className={headTone}>{treesHead(trees)}</span>}
+      title="Worktrees kept by hand, one per branch, each with the repo's setup run and its build caches cloned in. A shell or an agent opens inside one; merge folds a tree's branch into its base and removes it; clean up removes the trees already merged."
       copy={() => treeLines(trees)}
       tools={
-        <button type="button" className="mini" disabled={adding} title="A new worktree on a branch, new or existing" onClick={() => setAdding(true)}>
-          + worktree
-        </button>
+        <>
+          {cleanCount > 0 && (
+            <button
+              type="button"
+              className="mini"
+              disabled={busy !== null}
+              title={`Remove the ${cleanCount === 1 ? "tree" : `${cleanCount} trees`} whose base holds every commit and that hold no change or shell, branch and all`}
+              onClick={() => act("clean", async () => void (await cleanTrees(repo.id)))}
+            >
+              {busy === "clean" ? "cleaning…" : `clean up ${cleanCount}`}
+            </button>
+          )}
+          <button type="button" className="mini" disabled={adding} title="A new worktree on a branch, new or existing" onClick={() => setAdding(true)}>
+            + worktree
+          </button>
+        </>
       }
     >
       <div className="landing-body">
@@ -275,11 +299,21 @@ export function TreesSection({ repo }: { repo: Repo }) {
                         changes
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="mini"
+                      disabled={busy !== null || t.state === "preparing" || t.state === "merging"}
+                      title={`Commit what is uncommitted, squash the commits into one, rebase onto ${t.base || "the base"}, run the gates in the tree, fast-forward ${t.base || "the base"} to it, then remove the tree and its branch`}
+                      onClick={() => merge(t)}
+                    >
+                      {t.state === "merging" ? "merging…" : "merge"}
+                    </button>
                     <button type="button" className="mini" disabled={busy !== null} title="Remove the worktree; its branch stays" onClick={() => remove(t, false, false)}>
                       remove
                     </button>
                   </span>
                   {t.state === "failed" && t.why && <pre className="trees-why">{t.why}</pre>}
+                  {t.stopped && <pre className="trees-why trees-stopped">{t.stopped}</pre>}
                   {refused?.slug === t.slug && (
                     <span className="trees-refused rust">
                       {refused.why}.

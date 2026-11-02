@@ -1763,7 +1763,10 @@ export interface WorktreesInfo {
 /** A worktree kept by hand on a branch of its own (FR-051): made from a
  *  card or `canopy worktrees add`, kept until removed, with the repo's setup
  *  run and its build caches cloned in. `preparing` while that runs. */
-export type BranchTreeState = "preparing" | "ready" | "failed";
+/** `merging` while the tree's branch is being merged into its base in the
+ *  background (FR-051): committed, squashed, rebased, checked, fast-
+ *  forwarded, then removed */
+export type BranchTreeState = "preparing" | "ready" | "failed" | "merging";
 
 export interface BranchTree {
   /** the folder's name under the repo's trees folder, from the branch */
@@ -1781,6 +1784,9 @@ export interface BranchTree {
   state: BranchTreeState;
   /** the last lines of what failed, for a failed tree */
   why?: string;
+  /** why the last merge stopped short (a conflict, a gate, the base's
+   *  checkout holding changes); gone once a merge goes through */
+  stopped?: string;
   /** HEAD, short */
   head: string;
   /** commits the branch has that its base lacks, and the reverse */

@@ -104,6 +104,19 @@ test("a failed tree turns rust and keeps the reason as text; a preparing one lic
   expect(html).toContain('class="trees-why">bun install &lt;exited&gt; 1<');
 });
 
+test("a row merges, says why its merge stopped, waits while merging, and the head cleans up the merged trees", () => {
+  const html = render([tree(), tree({ slug: "b", branch: "b", ahead: 2, stopped: "gate test exited 1\nnope" }), tree({ slug: "c", branch: "c", state: "merging", ahead: 1 })]);
+  expect(html).toContain("3 trees, 1 merging, 1 merge stopped");
+  expect(html).toMatch(/<button[^>]*title="Commit what is uncommitted, squash the commits into one, rebase onto main, run the gates in the tree, fast-forward main to it, then remove the tree and its branch"[^>]*>merge<\/button>/);
+  expect(html).toContain('<pre class="trees-why trees-stopped">gate test exited 1\nnope</pre>');
+  expect(html).toContain("merge stopped: gate test exited 1 ↑2");
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>merging…<\/button>/);
+  expect(html).toContain('class="landing-row trees-row lichen"');
+  // one of the three is merged with nothing in it
+  expect(html).toContain(">clean up 1</button>");
+  expect(render([tree({ ahead: 1 })])).not.toMatch(/>clean up \d/);
+});
+
 test("a repo with no tree still shows the section with its form button, and no chip", () => {
   const html = render([]);
   expect(html).toContain("none kept");

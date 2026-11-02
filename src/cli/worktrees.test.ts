@@ -115,6 +115,7 @@ test("shell-init prints a cw function that cds by branch, and needs no backend",
 test("the worktrees CLI uses the home backend, resolves repo names, and sends exact bodies", async () => {
   const seen: { method: string; path: string; body?: unknown; token: string | null }[] = [];
   let treesKnown = false;
+  const mergeOf: { feat: "kept" | "gone"; fix: "ready" | "stopped" } = { feat: "kept", fix: "ready" };
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -132,7 +133,15 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
         return Response.json({ removed: posted.repo ? [] : ["/w/orphan", "/w/stale-warm"] });
       }
       // a backend from before the kept trees has no /api/trees
-      if (url.pathname === "/api/trees" && request.method === "GET") return treesKnown ? Response.json(trees) : Response.json({ error: "not found" }, { status: 404 });
+      if (url.pathname === "/api/trees" && request.method === "GET") {
+        if (!treesKnown) return Response.json({ error: "not found" }, { status: 404 });
+        const repos = trees.repos.map((r) =>
+          r.repoId === "dev-tools/canopy" && mergeOf.feat === "gone" ? { ...r, trees: [] }
+          : r.repoId === "quiet" && mergeOf.fix === "stopped" ? { ...r, trees: r.trees.map((t) => ({ ...t, state: "ready" as const, stopped: "gate test exited 1" })) }
+          : r,
+        );
+        return Response.json({ ...trees, repos });
+      }
       if (url.pathname === "/api/trees/add") {
         const posted = body as { branch: string };
         return Response.json({ tree: tree({ branch: posted.branch, slug: "new", dir: "/t/canopy-abc/new", state: "preparing", port: 7903 }) }, { status: 201 });
@@ -141,6 +150,18 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
         const posted = body as { tree: string; force?: boolean };
         if (posted.tree === "feat/x" && !posted.force) return Response.json({ error: "the tree holds 1 changed file; remove it with force to lose that" }, { status: 409 });
         return Response.json({ removed: "feat-x" });
+      }
+      if (url.pathname === "/api/trees/merge") {
+        const posted = body as { repo: string; tree: string; keep?: boolean };
+        // the merge runs on; the next list says how it went
+        if (posted.tree === "fix") mergeOf.fix = "stopped";
+        else if (!posted.keep) mergeOf.feat = "gone";
+        const t = posted.tree === "fix" ? trees.repos[2]!.trees[0]! : trees.repos[0]!.trees[0]!;
+        return Response.json({ tree: { ...t, state: "merging" } }, { status: 202 });
+      }
+      if (url.pathname === "/api/trees/clean") {
+        const posted = body as { repo?: string };
+        return Response.json({ removed: posted.repo ? [] : [{ repoId: "dev-tools/canopy", slug: "feat-x", branch: "feat/x" }] });
       }
       return Response.json({ error: "unexpected request" }, { status: 404 });
     },
@@ -210,6 +231,26 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
 
     await main(["worktrees", "rm", "canopy", "feat/x", "--force", "--delete-branch", "--token", "flag-token"]);
     expect(output).toEqual(["removed feat-x and the branch feat/x"]);
+    output.length = 0;
+
+    await main(["worktrees", "merge", "canopy", "feat/x", "--keep", "--no-squash", "--token", "flag-token"]);
+    expect(output).toEqual(["merging feat/x into main…", "merged feat/x into main; the tree stays at /t/canopy-abc/feat-x"]);
+    output.length = 0;
+
+    await main(["worktrees", "merge", "canopy", "feat/x", "--token", "flag-token"]);
+    expect(output).toEqual(["merging feat/x into main, squashed…", "merged feat/x into main; the tree and its branch are gone"]);
+    output.length = 0;
+
+    await expect(worktreesCommand(["merge", "quiet", "fix", "--no-commit", "--backend", base], { fail: throwing })).rejects.toThrow("the merge stopped: gate test exited 1");
+    expect(output).toEqual(["merging fix into main, squashed…"]);
+    output.length = 0;
+
+    await main(["worktrees", "clean", "--token", "flag-token"]);
+    expect(output).toEqual(["removed dev-tools/canopy  feat/x  and its branch"]);
+    output.length = 0;
+
+    await main(["worktrees", "clean", "canopy", "--token", "flag-token"]);
+    expect(output).toEqual(["nothing to clean: no tree is merged into its base with nothing changed or open in it"]);
   } finally {
     setHomeBase(undefined);
     setTokenFlag(undefined);
@@ -249,6 +290,18 @@ test("the worktrees CLI uses the home backend, resolves repo names, and sends ex
     { method: "POST", path: "/api/trees/remove", body: { repo: "dev-tools/canopy", tree: "feat/x" }, token: "flag-token" },
     { method: "GET", path: "/api/worktrees", token: "flag-token" },
     { method: "POST", path: "/api/trees/remove", body: { repo: "dev-tools/canopy", tree: "feat/x", force: true, deleteBranch: true }, token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/merge", body: { repo: "dev-tools/canopy", tree: "feat/x", squash: false, keep: true }, token: "flag-token" },
+    { method: "GET", path: "/api/trees", token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/merge", body: { repo: "dev-tools/canopy", tree: "feat/x" }, token: "flag-token" },
+    { method: "GET", path: "/api/trees", token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/merge", body: { repo: "quiet", tree: "fix", commit: false }, token: "flag-token" },
+    { method: "GET", path: "/api/trees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/clean", body: {}, token: "flag-token" },
+    { method: "GET", path: "/api/worktrees", token: "flag-token" },
+    { method: "POST", path: "/api/trees/clean", body: { repo: "dev-tools/canopy" }, token: "flag-token" },
   ]);
 });
 
@@ -267,6 +320,9 @@ test("invalid worktree arguments are refused before contacting the backend", asy
       ["add", "canopy", "feat", "--base", "--backend", base],
       ["add", "canopy", "feat", "extra", "--backend", base],
       ["rm", "canopy", "--backend", base],
+      ["merge", "canopy", "--backend", base],
+      ["merge", "canopy", "feat", "extra", "--backend", base],
+      ["clean", "canopy", "extra", "--backend", base],
       ["path", "canopy", "--backend", base],
       ["--backend"],
       ["--backend", base, "--backend", base],

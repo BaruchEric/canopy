@@ -8,13 +8,13 @@
  *  through `exec`, so this needs Bun. */
 
 import { existsSync } from "node:fs";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { exec, git } from "./exec";
-import { countStatusEntries } from "./git";
+import { countStatusEntries, parseWorktreeList } from "./git";
 import { parsePortRange } from "./preview";
 import { configDir } from "./store";
-import { repoKey } from "./worktree";
+import { dirtyFiles, ffMain, midRebase, rebaseOnto, repoKey, revOf, subjectsSince } from "./worktree";
 import { TREES_SOURCE } from "./treewords";
 import type { Repo, Source } from "./types";
 
@@ -50,7 +50,7 @@ export const SLUG_MAX = 48;
  *  node_modules on ext4 is not */
 export const COPY_TIMEOUT = 10 * 60_000;
 
-export type BranchTreeState = "preparing" | "ready" | "failed";
+export type BranchTreeState = "preparing" | "ready" | "failed" | "merging";
 
 /** One tree as the record keeps it; the live counts come from git. */
 export interface BranchTreeRecord {
@@ -62,6 +62,8 @@ export interface BranchTreeRecord {
   caches: boolean;
   state: BranchTreeState;
   why?: string;
+  /** why the last merge stopped short, until one goes through */
+  stopped?: string;
 }
 
 export interface TreesRecord {
@@ -71,7 +73,7 @@ export interface TreesRecord {
 export const EMPTY_TREES: TreesRecord = { trees: [] };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
-const STATES: readonly BranchTreeState[] = ["preparing", "ready", "failed"];
+const STATES: readonly BranchTreeState[] = ["preparing", "ready", "failed", "merging"];
 
 /** `trees.json` read back: entries that lack a slug or a branch are dropped
  *  rather than failing the file, so one bad line never hides the rest. */
@@ -96,6 +98,7 @@ export function parseTreesRecord(text: string): TreesRecord {
       caches: t["caches"] !== false,
       state,
       ...(state === "failed" && typeof t["why"] === "string" ? { why: t["why"] } : {}),
+      ...(typeof t["stopped"] === "string" && t["stopped"] ? { stopped: t["stopped"] } : {}),
     });
   }
   return { trees };
@@ -266,6 +269,133 @@ export async function removeBranchTree(repo: string, dir: string, branch: string
     const d = await git(repo, ["branch", "-D", branch]);
     if (d.code !== 0) throw new Error(why(d, "git branch -D"));
   }
+}
+
+export interface MergeOptions {
+  /** commit what is uncommitted first, everything staged, as worktrunk does */
+  commit: boolean;
+  /** fold the branch's commits into one */
+  squash: boolean;
+  /** leave the tree and its branch in place after the fast-forward */
+  keep: boolean;
+}
+
+export type MergeOutcome = { ok: true; head: string; commits: number } | { stopped: string };
+
+/** The squash commit's message: the first subject as the title and the
+ *  rest as a list; the branch's name when there is no subject. */
+export function squashMessage(subjects: readonly string[], branch: string): string {
+  const [first, ...rest] = subjects;
+  if (first === undefined) return branch;
+  return rest.length === 0 ? first : `${first}\n\n${rest.map((s) => `- ${s}`).join("\n")}`;
+}
+
+/** Stages everything and commits it; false when there was nothing to. */
+export async function commitAll(dir: string, message: string): Promise<boolean> {
+  const add = await git(dir, ["add", "-A"], 60_000);
+  if (add.code !== 0) throw new Error(why(add, "git add"));
+  if ((await git(dir, ["diff", "--cached", "--quiet"])).code === 0) return false;
+  const c = await git(dir, ["commit", "-q", "-m", message], 60_000);
+  if (c.code !== 0) throw new Error(why(c, "git commit"));
+  return true;
+}
+
+/** Folds every commit since the merge base with `base` into one. */
+export async function squashSince(dir: string, base: string, message: string): Promise<void> {
+  const mb = await git(dir, ["merge-base", base, "HEAD"]);
+  if (mb.code !== 0) throw new Error(why(mb, "git merge-base"));
+  const reset = await git(dir, ["reset", "-q", "--soft", out(mb)]);
+  if (reset.code !== 0) throw new Error(why(reset, "git reset"));
+  const c = await git(dir, ["commit", "-q", "-m", message], 60_000);
+  if (c.code !== 0) throw new Error(why(c, "git commit"));
+}
+
+/** The worktree `branch` is checked out in, as a real path; null when none. */
+export async function checkedOutAt(repo: string, branch: string): Promise<string | null> {
+  const list = await git(repo, ["worktree", "list", "--porcelain"]);
+  if (list.code !== 0) return null;
+  for (const w of parseWorktreeList(list.stdout)) {
+    if (!w.bare && !w.prunable && w.branch === branch) return realpath(w.path).catch(() => w.path);
+  }
+  return null;
+}
+
+const errMessage = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** worktrunk's `wt merge`, without its binary: the tree's uncommitted work
+ *  committed, its commits squashed into one, the branch rebased onto its
+ *  base, `check` run in the tree (the repo's gates; null when they pass),
+ *  the base fast-forwarded to the branch, then the tree and branch removed.
+ *  A step that cannot go on says why in `stopped` and leaves the tree as
+ *  it stood before that step (a conflict aborts the rebase), so the merge
+ *  can run again once the reason is dealt with. The base is fast-forwarded
+ *  in the main checkout when it is checked out there (git refuses over the
+ *  checkout's own changes to the same files), by moving the ref when it is
+ *  checked out nowhere, and not at all while another worktree holds it. */
+export async function mergeTree(
+  repo: string,
+  dir: string,
+  branch: string,
+  base: string,
+  opts: MergeOptions,
+  check: (dir: string) => Promise<string | null>,
+): Promise<MergeOutcome> {
+  if (branch === base) return { stopped: `the tree is on ${base} itself` };
+  if (!base || (await revOf(repo, base)) === null) return { stopped: `${base || "its base"} is no longer a branch of the repo` };
+  if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
+  const subjects = await subjectsSince(dir, base);
+  let swept = false;
+  if (opts.commit) {
+    try {
+      swept = await commitAll(dir, subjects.length === 0 ? branch : `Uncommitted work on ${branch}`);
+    } catch (err) {
+      return { stopped: errMessage(err) };
+    }
+  } else if ((await dirtyFiles(dir)).length > 0) {
+    return { stopped: "the tree holds uncommitted changes; commit them, or merge with the commit step on" };
+  }
+  const count = subjects.length + (swept ? 1 : 0);
+  const squashed = opts.squash && count > 1;
+  if (squashed) {
+    try {
+      await squashSince(dir, base, squashMessage(subjects, branch));
+    } catch (err) {
+      return { stopped: errMessage(err) };
+    }
+  }
+  // a tree its base already holds has nothing to replay or check: merging it is removing it
+  if (count > 0) {
+    const rebased = await rebaseOnto(dir, base);
+    if ("conflict" in rebased) {
+      return { stopped: `the rebase onto ${base} stopped on ${rebased.conflict.join(", ")} and was aborted; rebase by hand in the tree, then merge again` };
+    }
+    if ("error" in rebased) return { stopped: rebased.error };
+    const failed = await check(dir);
+    if (failed !== null) return { stopped: failed };
+    const where = await checkedOutAt(repo, base);
+    const main = await realpath(repo).catch(() => repo);
+    if (where === main) {
+      const ff = await ffMain(repo, branch);
+      if ("busy" in ff) return { stopped: `${base} is checked out with changes to ${ff.busy.join(", ")}; commit or stash them, then merge again` };
+      if ("moved" in ff) return { stopped: `${base} moved while the merge ran; merge again` };
+      if ("error" in ff) return { stopped: ff.error };
+    } else if (where !== null) {
+      return { stopped: `${base} is checked out at ${where}; the fast-forward needs it in the main checkout or in no worktree` };
+    } else {
+      if ((await git(repo, ["merge-base", "--is-ancestor", base, branch])).code !== 0) return { stopped: `${base} cannot fast-forward to ${branch}` };
+      const moved = await git(repo, ["branch", "-f", base, branch]);
+      if (moved.code !== 0) return { stopped: why(moved, "git branch -f") };
+    }
+  }
+  const head = await git(repo, ["rev-parse", "--short", base]);
+  if (!opts.keep) {
+    try {
+      await removeBranchTree(repo, dir, branch, true);
+    } catch (err) {
+      return { stopped: errMessage(err) };
+    }
+  }
+  return { ok: true, head: head.code === 0 ? out(head) : "", commits: squashed ? 1 : count };
 }
 
 /** The folders under a repo's trees folder, record aside. */

@@ -230,3 +230,107 @@ test("a touch on the checkout publishes the list again once trees exist", async 
   expect(w.events.length).toBe(before + 1);
   w.trees.stop();
 });
+
+test("merge sweeps the uncommitted work in, squashes, fast-forwards the checkout's base and removes the tree and branch", async () => {
+  // a slow gate keeps the merge going long enough to be seen at it
+  const w = await world({ gates: async () => ({ gates: [{ name: "slow", run: "sleep 1" }] }) }, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  await w.trees.idle();
+  await commit(tree.dir, "a.txt", "a\n");
+  await commit(tree.dir, "b.txt", "b\n");
+  await writeFile(join(tree.dir, "c.txt"), "c\n");
+  const res = await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat" });
+  expect(res.status).toBe(202);
+  expect((await body<{ tree: BranchTree }>(res)).tree.state).toBe("merging");
+  expect((await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees[0]?.state).toBe("merging");
+  // a second merge, and a removal, wait for the first
+  expect((await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat" })).status).toBe(409);
+  expect((await body<{ error: string }>(await post(w.trees, "/api/trees/remove", { repo: w.repo.id, tree: "feat" }))).error).toMatch(/being merged/);
+  await w.trees.idle();
+  expect(lastTrees(w.events).repos).toEqual([]);
+  expect(existsSync(tree.dir)).toBe(false);
+  expect((await sh(w.repo.path, "branch", "--list", "feat")).trim()).toBe("");
+  // one commit on main holding all three files, titled by the first subject
+  expect(await sh(w.repo.path, "log", "--format=%s", "-3")).toBe("c a.txt\nc .canopy/gates.json\nc .gitignore");
+  expect(await sh(w.repo.path, "show", "--format=", "--name-only", "HEAD")).toBe("a.txt\nb.txt\nc.txt");
+  expect(await sh(w.repo.path, "status", "--porcelain")).toBe("");
+});
+
+test("merge stops on a conflict, a failing gate or the checkout's own changes, says why, and goes once that is fixed; kept, the tree stays", async () => {
+  const gates = { now: [] as { name: string; run: string }[] };
+  const w = await world({ gates: async () => ({ gates: gates.now }) }, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  await w.trees.idle();
+  await commit(tree.dir, "x.txt", "tree\n");
+  await commit(w.repo.path, "x.txt", "main\n");
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat" });
+  await w.trees.idle();
+  let t = lastTrees(w.events).repos[0]?.trees[0];
+  expect(t?.state).toBe("ready");
+  expect(t?.stopped).toBe("the rebase onto main stopped on x.txt and was aborted; rebase by hand in the tree, then merge again");
+  expect(await sh(tree.dir, "status", "--porcelain")).toBe("");
+  // the conflict resolved by hand: the tree takes main's x.txt and adds its own file
+  await sh(tree.dir, "reset", "-q", "--hard", "main");
+  await commit(tree.dir, "y.txt", "y\n");
+  gates.now = [{ name: "check", run: "exit 7" }];
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat" });
+  await w.trees.idle();
+  t = lastTrees(w.events).repos[0]?.trees[0];
+  expect(t?.stopped).toBe("gate check exited 7");
+  expect(await sh(w.repo.path, "log", "-1", "--format=%s")).toBe("c x.txt");
+  // the checkout holds its own change to a file the branch touches
+  gates.now = [{ name: "check", run: "test -f y.txt" }];
+  await writeFile(join(w.repo.path, "y.txt"), "mine\n");
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat" });
+  await w.trees.idle();
+  t = lastTrees(w.events).repos[0]?.trees[0];
+  expect(t?.stopped).toBe("main is checked out with changes to y.txt; commit or stash them, then merge again");
+  await rm(join(w.repo.path, "y.txt"));
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat", keep: true });
+  await w.trees.idle();
+  t = lastTrees(w.events).repos[0]?.trees[0];
+  expect(t).toMatchObject({ state: "ready", ahead: 0, behind: 0, files: 0 });
+  expect(t?.stopped).toBeUndefined();
+  expect(await sh(w.repo.path, "log", "-1", "--format=%s")).toBe("c y.txt");
+  expect(existsSync(tree.dir)).toBe(true);
+  // no squash keeps the commits as they are
+  await commit(tree.dir, "p.txt", "p\n");
+  await commit(tree.dir, "q.txt", "q\n");
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat", squash: false });
+  await w.trees.idle();
+  expect(lastTrees(w.events).repos).toEqual([]);
+  expect(await sh(w.repo.path, "log", "--format=%s", "-3")).toBe("c q.txt\nc p.txt\nc y.txt");
+});
+
+test("clean removes the trees merged into their base that hold nothing, branch and all, and leaves the rest", async () => {
+  const w = await world({}, "");
+  const done = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "done", caches: false }));
+  const busy = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "busy", caches: false }));
+  const ahead = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "ahead", caches: false }));
+  await w.trees.idle();
+  await writeFile(join(busy.tree.dir, "wip.txt"), "wip\n");
+  await commit(ahead.tree.dir, "more.txt", "m\n");
+  const res = await post(w.trees, "/api/trees/clean", { repo: w.repo.id });
+  expect(res.status).toBe(200);
+  expect(await body<{ removed: unknown }>(res)).toEqual({ removed: [{ repoId: w.repo.id, slug: "done", branch: "done" }] });
+  expect(existsSync(done.tree.dir)).toBe(false);
+  expect((await sh(w.repo.path, "branch", "--list", "done")).trim()).toBe("");
+  await w.trees.idle();
+  expect(lastTrees(w.events).repos[0]?.trees.map((t) => t.branch)).toEqual(["busy", "ahead"]);
+  // every repo, with nothing left to take
+  expect(await body<{ removed: unknown }>(await post(w.trees, "/api/trees/clean", {}))).toEqual({ removed: [] });
+  expect((await post(w.trees, "/api/trees/clean", { repo: "nope" })).status).toBe(404);
+});
+
+test("a record left merging by a crash comes back ready, saying so", async () => {
+  const w = await world({}, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  await w.trees.idle();
+  const file = join(w.root, tree.dir.split("/").slice(-2, -1)[0] ?? "", "trees.json");
+  const rec = parseTreesRecord(await readFile(file, "utf8"));
+  await writeFile(file, JSON.stringify({ trees: rec.trees.map((t) => ({ ...t, state: "merging" })) }));
+  const second = new BranchTrees(w.deps);
+  await second.adopt();
+  const info = await body<BranchTreesInfo>(await get(second));
+  expect(info.repos[0]?.trees[0]).toMatchObject({ state: "ready", stopped: "the server restarted during the merge; merge again" });
+});

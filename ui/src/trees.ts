@@ -24,9 +24,11 @@ export function treeAge(at: number | undefined, now: number): string {
 export type TreeTone = "" | "rust" | "lichen";
 
 /** one row: the tree's words, its age, and a tone for a tree that failed
- *  (rust) or is still being prepared (lichen) */
+ *  or whose merge stopped (rust), or that is being prepared or merged
+ *  (lichen) */
 export function treeRow(t: BranchTree, now: number): { words: string; age: string; tone: TreeTone } {
-  return { words: treeWords(t), age: treeAge(t.at, now), tone: t.state === "failed" ? "rust" : t.state === "preparing" ? "lichen" : "" };
+  const tone: TreeTone = t.state === "failed" || t.stopped ? "rust" : t.state === "preparing" || t.state === "merging" ? "lichen" : "";
+  return { words: treeWords(t), age: treeAge(t.at, now), tone };
 }
 
 /** the fold header's words: how many, and how many are not ready */
@@ -34,9 +36,13 @@ export function treesHead(trees: readonly BranchTree[]): string {
   if (trees.length === 0) return "none kept";
   const parts = [`${trees.length} tree${trees.length === 1 ? "" : "s"}`];
   const preparing = trees.filter((t) => t.state === "preparing").length;
+  const merging = trees.filter((t) => t.state === "merging").length;
   const failed = trees.filter((t) => t.state === "failed").length;
+  const stopped = trees.filter((t) => t.stopped).length;
   if (preparing > 0) parts.push(`${preparing} preparing`);
+  if (merging > 0) parts.push(`${merging} merging`);
   if (failed > 0) parts.push(`${failed} failed`);
+  if (stopped > 0) parts.push(`${stopped} merge${stopped === 1 ? "" : "s"} stopped`);
   return parts.join(", ");
 }
 
@@ -47,7 +53,7 @@ export function treesChip(trees: readonly BranchTree[] | undefined): { text: str
   return {
     text: `⑂ ${trees.length} tree${trees.length === 1 ? "" : "s"}`,
     title: trees.map((t) => `${t.branch}  ${treeWords(t)}`).join("\n"),
-    tone: trees.some((t) => t.state === "failed") ? "rust" : "",
+    tone: trees.some((t) => t.state === "failed" || t.stopped) ? "rust" : "",
   };
 }
 

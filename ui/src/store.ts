@@ -1189,6 +1189,10 @@ export interface CanopyState {
   addTree: (repoId: string, branch: string, base?: string, caches?: boolean) => Promise<string>;
   /** removes a kept worktree by its slug; `force` loses its work and shells */
   removeTree: (repoId: string, slug: string, force?: boolean, deleteBranch?: boolean) => Promise<void>;
+  /** starts the merge of a kept worktree into its base; the trees event carries the outcome */
+  mergeTree: (repoId: string, slug: string, opts?: { squash?: boolean; commit?: boolean; keep?: boolean }) => Promise<void>;
+  /** removes the repo's merged, empty worktrees; how many went */
+  cleanTrees: (repoId: string) => Promise<number>;
   /** opens the repo's panel with one of its sections unfolded */
   showSection: (repoId: string, key: SectionKey) => void;
   /** "land" on a ready branch run, by its run's or branch's id; `approve`
@@ -3614,6 +3618,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   removeTree: async (repoId, slug, force = false, deleteBranch = false) => {
     await api.removeTree(repoId, slug, force, deleteBranch);
   },
+  mergeTree: async (repoId, slug, opts = {}) => {
+    await api.mergeTree(repoId, slug, opts);
+  },
+  cleanTrees: async (repoId) => (await api.cleanTrees(repoId)).length,
   landRun: async (id, approve, skipJudge) => {
     await api.land(id, approve, skipJudge);
   },

@@ -13,16 +13,23 @@ export function removeRefusal(t: { files: number; ahead: number; shells: number 
   return parts.length === 0 ? null : `the tree holds ${parts.join(", ")}; remove it with force to lose that`;
 }
 
+/** A tree clean-up may take: ready, its base holds every commit it has,
+ *  and nothing changed or open in it. */
+export const cleanable = (t: { state: BranchTreeState; files: number; ahead: number; shells: number }): boolean =>
+  t.state === "ready" && removeRefusal(t) === null;
+
 /** The tree's row in words: its standing against the base, its changed
- *  files, its port, its state and its shells. */
-export function treeWords(t: { ahead: number; behind: number; files: number; port: number | null; state: BranchTreeState; why?: string; shells: number }): string {
+ *  files, its port, its state, why its merge stopped, and its shells. */
+export function treeWords(t: { ahead: number; behind: number; files: number; port: number | null; state: BranchTreeState; why?: string; stopped?: string; shells: number }): string {
   const parts: string[] = [];
   if (t.state === "preparing") parts.push("preparing");
+  if (t.state === "merging") parts.push("merging");
   if (t.state === "failed") parts.push(`setup failed${t.why ? `: ${t.why.split("\n").filter(Boolean).pop() ?? ""}` : ""}`);
+  if (t.stopped) parts.push(`merge stopped: ${t.stopped.split("\n").filter(Boolean)[0] ?? ""}`);
   if (t.ahead > 0) parts.push(`↑${t.ahead}`);
   if (t.behind > 0) parts.push(`↓${t.behind}`);
   if (t.files > 0) parts.push(`●${t.files}`);
-  if (t.ahead === 0 && t.behind === 0 && t.files === 0 && t.state === "ready") parts.push("clean");
+  if (t.ahead === 0 && t.behind === 0 && t.files === 0 && t.state === "ready" && !t.stopped) parts.push("clean");
   if (t.port !== null) parts.push(`:${t.port}`);
   if (t.shells > 0) parts.push(`${t.shells} shell${t.shells === 1 ? "" : "s"}`);
   return parts.join(" ");

@@ -20,6 +20,7 @@ import {
   removeBranchTree,
   removeRefusal,
   SLUG_MAX,
+  squashMessage,
   treeDir,
   treePort,
   treePorts,
@@ -29,6 +30,7 @@ import {
   treeStatus,
   treeWords,
 } from "./branchtrees";
+import { cleanable } from "./treewords";
 
 let root = "";
 let n = 0;
@@ -230,6 +232,21 @@ describe("words", () => {
     expect(treeWords({ ahead: 2, behind: 1, files: 3, port: null, state: "ready", shells: 2 })).toBe("↑2 ↓1 ●3 2 shells");
     expect(treeWords({ ahead: 0, behind: 0, files: 0, port: 7900, state: "preparing", shells: 0 })).toBe("preparing :7900");
     expect(treeWords({ ahead: 0, behind: 0, files: 0, port: 7900, state: "failed", why: "a\nbun install exited 1", shells: 0 })).toBe("setup failed: bun install exited 1 :7900");
+    expect(treeWords({ ahead: 1, behind: 0, files: 0, port: 7900, state: "merging", shells: 0 })).toBe("merging ↑1 :7900");
+    expect(treeWords({ ahead: 1, behind: 0, files: 0, port: null, state: "ready", stopped: "gate test exited 1\nnope", shells: 0 })).toBe("merge stopped: gate test exited 1 ↑1");
+  });
+  test("clean-up takes a ready tree its base holds whole, with nothing changed or open", () => {
+    expect(cleanable({ state: "ready", files: 0, ahead: 0, shells: 0 })).toBe(true);
+    expect(cleanable({ state: "ready", files: 0, ahead: 1, shells: 0 })).toBe(false);
+    expect(cleanable({ state: "ready", files: 1, ahead: 0, shells: 0 })).toBe(false);
+    expect(cleanable({ state: "ready", files: 0, ahead: 0, shells: 1 })).toBe(false);
+    expect(cleanable({ state: "failed", files: 0, ahead: 0, shells: 0 })).toBe(false);
+    expect(cleanable({ state: "merging", files: 0, ahead: 0, shells: 0 })).toBe(false);
+  });
+  test("the squash message is the first subject with the rest listed, or the branch", () => {
+    expect(squashMessage([], "feat/x")).toBe("feat/x");
+    expect(squashMessage(["add login"], "feat/x")).toBe("add login");
+    expect(squashMessage(["add login", "fix typo", "tests"], "feat/x")).toBe("add login\n\n- fix typo\n- tests");
   });
 });
 

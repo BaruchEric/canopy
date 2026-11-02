@@ -907,6 +907,19 @@ export const api = {
     const [b, plain] = on(repoId);
     await req<{ removed: string }>(b, "/api/trees/remove", { method: "POST", body: JSON.stringify({ repo: plain, tree, force, deleteBranch }) });
   },
+  /** starts merging a kept worktree's branch into its base (commit, squash,
+   *  rebase, gates, fast-forward, remove); the `trees` event says how it went */
+  mergeTree: async (repoId: string, tree: string, opts: { squash?: boolean; commit?: boolean; keep?: boolean } = {}): Promise<BranchTree> => {
+    const [b, plain] = on(repoId);
+    const r = await req<{ tree: BranchTree }>(b, "/api/trees/merge", { method: "POST", body: JSON.stringify({ repo: plain, tree, ...opts }) });
+    return r.tree;
+  },
+  /** removes the repo's kept worktrees whose base holds all their commits and that hold nothing, branch and all */
+  cleanTrees: async (repoId: string): Promise<{ slug: string; branch: string }[]> => {
+    const [b, plain] = on(repoId);
+    const r = await req<{ removed: { slug: string; branch: string }[] }>(b, "/api/trees/clean", { method: "POST", body: JSON.stringify({ repo: plain }) });
+    return r.removed;
+  },
   /** "land" on a ready branch run, by its run's or its branch's id;
    *  `approve` is the sensitive patch id the approve sheet showed */
   land: async (id: string, approve?: string, skipJudge?: boolean) => {

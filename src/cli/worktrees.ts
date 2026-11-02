@@ -1,6 +1,6 @@
 /** `canopy worktrees`: show this backend's run, warm and kept trees, set a
- *  repo's warm count, prune its orphans and stale slots, and make, remove
- *  and find the trees kept by hand (FR-051). */
+ *  repo's warm count, prune its orphans and stale slots, and make, merge,
+ *  clean up, remove and find the trees kept by hand (FR-051). */
 
 import { treeWords } from "../core/treewords";
 import type { BranchTree, BranchTreesInfo, WorktreesInfo, WorktreeRepoInfo } from "../core/types";
@@ -12,10 +12,17 @@ export const WORKTREES_USAGE = [
   "       canopy worktrees warm <repo> [N] [--backend URL]",
   "       canopy worktrees prune [repo] [--backend URL]",
   "       canopy worktrees add <repo> <branch> [--base REF] [--no-caches] [--backend URL]",
+  "       canopy worktrees merge <repo> <branch> [--no-squash] [--no-commit] [--keep] [--backend URL]",
+  "       canopy worktrees clean [repo] [--backend URL]",
   "       canopy worktrees rm <repo> <branch> [--force] [--delete-branch] [--backend URL]",
   "       canopy worktrees path <repo> <branch> [--backend URL]",
   "       canopy worktrees shell-init",
 ].join("\n");
+
+/** how often `merge` asks after the tree, and for how long at most (the
+ *  gates may take a while) */
+const MERGE_POLL = 1_000;
+const MERGE_WAIT = 30 * 60_000;
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -189,6 +196,51 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
     }).catch(requestFailed);
     console.log(`${tree.branch}  ${tree.dir}${tree.port !== null ? `  :${tree.port}` : ""}`);
     if (tree.state === "preparing") console.log("preparing: the setup line runs and the caches clone in the background; canopy worktrees shows when it is ready");
+    return;
+  }
+
+  if (args[0] === "merge") {
+    args.shift();
+    const squash = !has(args, "--no-squash");
+    const commit = !has(args, "--no-commit");
+    const keep = has(args, "--keep");
+    const repo = args.shift();
+    const branch = args.shift();
+    if (!repo || !branch || branch.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
+    const id = repoId(await getInfo(), repo, fail);
+    const { tree } = await ask<{ tree: BranchTree }>(target, "POST", "/api/trees/merge", {
+      repo: id,
+      tree: branch,
+      ...(squash ? {} : { squash }),
+      ...(commit ? {} : { commit }),
+      ...(keep ? { keep } : {}),
+    }).catch(requestFailed);
+    console.log(`merging ${tree.branch} into ${tree.base}${squash ? ", squashed" : ""}…`);
+    // the merge runs on the backend; the list says when the tree is gone, or why it stopped
+    const until = Date.now() + MERGE_WAIT;
+    while (Date.now() < until) {
+      await Bun.sleep(MERGE_POLL);
+      const now = keptTrees(await getTrees(), id).find((t) => t.slug === tree.slug);
+      if (!now) {
+        console.log(`merged ${tree.branch} into ${tree.base}; the tree and its branch are gone`);
+        return;
+      }
+      if (now.state === "merging") continue;
+      if (now.stopped) return fail(`the merge stopped: ${now.stopped}`);
+      console.log(`merged ${tree.branch} into ${tree.base}; the tree stays at ${now.dir}`);
+      return;
+    }
+    return fail(`still merging after ${MERGE_WAIT / 60_000} minutes; canopy worktrees shows how it ends`);
+  }
+
+  if (args[0] === "clean") {
+    args.shift();
+    const repo = args.shift();
+    if (repo?.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
+    const body = repo === undefined ? {} : { repo: repoId(await getInfo(), repo, fail) };
+    const result = await ask<{ removed: { repoId: string; slug: string; branch: string }[] }>(target, "POST", "/api/trees/clean", body).catch(requestFailed);
+    if (result.removed.length === 0) console.log("nothing to clean: no tree is merged into its base with nothing changed or open in it");
+    for (const t of result.removed) console.log(`removed ${t.repoId}  ${t.branch}  and its branch`);
     return;
   }
 
