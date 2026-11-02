@@ -115,6 +115,7 @@ import {
   type SpecState,
 } from "../../../src/core/types";
 import { SPEC_TONE, SPEC_WORDS } from "../../../src/core/treelines";
+import { isTreeCard } from "../../../src/core/treewords";
 
 /** The width of each column, in the order the settings put them. The
  *  checkbox is always the first track. */
@@ -3018,7 +3019,7 @@ export function RepoPanel({
           {GLYPH[stateOf(repo)]}
         </span>
         <span className="panel-name" title={repo.path} {...(movable && dragHandle(id, repo.name))}>
-          <IdLabel id={repo.id} />
+          <IdLabel id={repo.id} name={isTreeCard(repo) ? repo.name : undefined} />
         </span>
         <Star repoId={repo.id} name={repo.name} onError={showError} />
         {!guided && repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
@@ -3325,7 +3326,7 @@ function CellStrip({
                         : GLYPH[state]}
             </span>
             <span className="dock-tab-name">
-              {waiting ? name : <IdLabel id={id} />}
+              {waiting ? name : <IdLabel id={id} name={repo && isTreeCard(repo) ? repo.name : undefined} />}
             </span>
             {closable && (
               <button

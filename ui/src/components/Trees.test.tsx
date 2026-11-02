@@ -56,6 +56,18 @@ test("a card's rows name each tree with its words and age, a shell into it, and 
   expect(html).not.toContain("more");
 });
 
+test("a tree with a card of its own gets open in the section, and the card row's name opens that panel", () => {
+  const card: Repo = { id: "b|trees:a-abc/feat-x", name: "a ⑂ feat/x", path: "/t/a-abc/feat-x", group: "", source: "trees", status: null };
+  useStore.setState({ repos: [card] });
+  const section = render([tree()]);
+  expect(section).toContain(">open</button>");
+  const rows = render([tree()], "rows");
+  expect(rows).toContain("open its own panel");
+  useStore.setState({ repos: [] });
+  expect(render([tree()])).not.toContain(">open<");
+  expect(render([tree()], "rows")).toContain("the worktrees section");
+});
+
 test("a card's rows stop at the cap and count the rest; select mode makes them inert", () => {
   const many = Array.from({ length: CARD_TREES + 2 }, (_, i) => tree({ slug: `t${i}`, branch: `t${i}` }));
   const html = render(many, "rows");

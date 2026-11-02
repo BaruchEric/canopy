@@ -115,7 +115,8 @@ describe("two backends behind one page", () => {
     const b = await ui.api.tree("b");
     expect(a.repos.map((r) => r.id)).toEqual(["proj"]);
     expect(b.repos.map((r) => r.id).sort()).toEqual(["b|only-b", "b|proj"]);
-    expect(b.sources.map((s) => s.id)).toEqual(["b|launch"]);
+    // the worktrees folder is a source of its own on every backend
+    expect(b.sources.map((s) => s.id)).toEqual(["b|launch", "b|trees"]);
 
     const cards = ui.joinRepos([...a.repos, ...b.repos], ["a", "b"], (id) => ui.split(ui.registry(), id));
     const proj = cards.find((c) => c.checkouts.some((r) => r.id === "proj"));

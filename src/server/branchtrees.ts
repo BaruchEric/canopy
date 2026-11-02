@@ -12,6 +12,7 @@ import { basename, isAbsolute, join, resolve } from "node:path";
 import {
   addBranchTree,
   copyIgnored,
+  dressTreeCards,
   EMPTY_TREES,
   ignoredEntries,
   isBranchName,
@@ -30,7 +31,7 @@ import {
   type TreesRecord,
 } from "../core/branchtrees";
 import { git } from "../core/exec";
-import { removeRefusal } from "../core/treewords";
+import { isTreeCard, removeRefusal } from "../core/treewords";
 import { parseWorktreeList } from "../core/git";
 import type { BranchTree, BranchTreeRepo, BranchTreesInfo, Repo, ServerEvent } from "../core/types";
 import { defaultBranch, repoKey, revOf } from "../core/worktree";
@@ -204,6 +205,18 @@ export class BranchTrees {
     return null;
   }
 
+  /** The trees source's scanned cards named and filed from the records
+   *  (core/branchtrees.ts `dressTreeCards`); `others` are the board's
+   *  other repos, where each tree's checkout is found. */
+  dress(treeRepos: readonly Repo[], others: readonly Repo[]): Repo[] {
+    return dressTreeCards(treeRepos, others, this.records, this.root);
+  }
+
+  /** whether any repo keeps a tree, for the rescan after adoption */
+  anyKept(): boolean {
+    return this.any();
+  }
+
   /** whether any repo keeps a tree */
   private any(): boolean {
     for (const rec of this.records.values()) if (rec.trees.length > 0) return true;
@@ -211,6 +224,8 @@ export class BranchTrees {
   }
 
   async add(repo: Repo, branch: string, base: string | undefined, caches: boolean): Promise<BranchTree> {
+    // a tree's own card keeps no trees: they belong to the checkout
+    if (isTreeCard(repo)) throw new TreesError(400, `${repo.name} is a worktree; make trees from its repo's card`);
     return this.serial(repo.path, async () => {
       if (!isBranchName(branch)) throw new TreesError(400, `${branch} is not a branch name git accepts`);
       const slug = treeSlug(branch);

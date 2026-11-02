@@ -9,7 +9,7 @@ import { titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, repoOfCwd } from "../core/ports";
-import { existsSync, watch, type FSWatcher } from "node:fs";
+import { mkdirSync, existsSync, watch, type FSWatcher } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
 import { CANOPY_DIR, readBuild, readPkg } from "../core/build";
@@ -227,6 +227,8 @@ import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { WarmPool, type Take } from "./warm";
 import { BranchTrees } from "./branchtrees";
+import { treesRoot, treesSource } from "../core/branchtrees";
+import { TREES_SOURCE } from "../core/treewords";
 import { GroupHub } from "./groups";
 import { GROUP_MAX, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
@@ -2594,8 +2596,10 @@ function scanOne(state: ServerState, rt: SourceRuntime, opts: Required<ScanOptio
         return was ? { ...r, status: was.status, error: was.error } : r;
       });
       const kept = state.result.repos.filter((r) => r.source !== rt.src.id);
-      rt.src = { ...rt.src, repos: fresh.length, scannedAt: Date.now(), error: undefined };
-      rebuildResult(state, [...kept, ...fresh]);
+      // a kept worktree's card is named and filed after its checkout
+      const dressed = rt.src.id === TREES_SOURCE ? state.trees.dress(fresh, kept) : fresh;
+      rt.src = { ...rt.src, repos: dressed.length, scannedAt: Date.now(), error: undefined };
+      rebuildResult(state, [...kept, ...dressed]);
     } catch (err) {
       rt.src = { ...rt.src, error: String(err instanceof Error ? err.message : err) };
       rebuildResult(state, state.result.repos);
@@ -3556,6 +3560,7 @@ async function handleApi(
     const rt = state.sources.find((s) => s.src.id === id);
     if (!rt) throw new HttpError(404, `unknown source: ${id}`);
     if (rt.src.launch) throw new HttpError(400, "the launch folder stays; start canopy elsewhere to change it");
+    if (rt.src.id === TREES_SOURCE) throw new HttpError(400, "the worktrees folder is canopy's own; remove its trees instead");
     await removeSource(id);
     rt.watcher?.close();
     state.health.remove(watchCheckId(rt));
@@ -5085,6 +5090,8 @@ export async function startServer(opts: {
   // A stored source that is the launch root again would list every repo
   // twice; the launch root wins and keeps its bare ids.
   const extras = cfg.sources.filter((s) => s.kind !== "local" || s.path !== root);
+  // the trees source scans an existing folder, kept trees or none
+  mkdirSync(treesRoot(), { recursive: true });
   const fixed = opts.harnesses;
   // one broker address for tailchan and the registry both
   const chanCfg = opts.chan === undefined ? loadChanConfig() : opts.chan;
@@ -5479,7 +5486,8 @@ export async function startServer(opts: {
       },
     },
     coordRefusal,
-    sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false }))],
+    // the kept worktrees' folder scans as a source of its own (FR-051)
+    sources: [runtime(launchSource(root)), ...extras.map((s) => runtime({ ...s, launch: false })), runtime(treesSource())],
     result: { root, sources: [], repos: [], scannedAt: 0, backend: backendCaps(harnesses()) },
     ignore: [...DEFAULT_IGNORE, ...cfg.ignore],
     access: new Map(),
@@ -6256,7 +6264,8 @@ export async function startServer(opts: {
       const dev = url.searchParams.get("client") ?? "";
       const device = /^[0-9a-f]{16}$/.test(dev) ? dev : null;
       const label = attach ? "" : (cleanLabel(url.searchParams.get("label") ?? "") ?? "");
-      const data: Socket = { kind: "term", repo, path, tree: tree ? { slug: tree.slug, port: tree.port } : null, id, place, attach, start, refused, prompt, label, device, caller, ...size };
+      // a tree card's own shell carries the tree's name and port too
+      const data: Socket = { kind: "term", repo, path, tree: tree ? { slug: tree.slug, port: tree.port } : state.trees.treeAt(repo.path), id, place, attach, start, refused, prompt, label, device, caller, ...size };
       if (srv.upgrade(req, { data })) return undefined;
       return json({ error: "a websocket is expected here" }, 426);
     }
@@ -6527,6 +6536,9 @@ export async function startServer(opts: {
     await state.landing.adopt();
     await state.warm.adopt();
     await state.trees.adopt();
+    // the first scan ran before the records were read: name the tree cards now
+    const treesRt = state.sources.find((s) => s.src.id === TREES_SOURCE);
+    if (treesRt && state.trees.anyKept()) scheduleRescan(state, treesRt);
     // Preserve PR activation order; public retention waits for these protection facts.
     await state.prs.adopt();
     runlogFactsReady = true;

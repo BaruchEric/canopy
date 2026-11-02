@@ -4,12 +4,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
+import { repoKey } from "./worktree";
 import {
   addBranchTree,
   branchExists,
   branchHash,
   copyArgs,
   copyIgnored,
+  dressTreeCards,
   EMPTY_TREES,
   ignoredEntries,
   isBranchName,
@@ -21,10 +23,11 @@ import {
   treeDir,
   treePort,
   treePorts,
+  TREES_RECORD,
   treeSlug,
+  treesSource,
   treeStatus,
   treeWords,
-  TREES_RECORD,
 } from "./branchtrees";
 
 let root = "";
@@ -228,4 +231,18 @@ describe("words", () => {
     expect(treeWords({ ahead: 0, behind: 0, files: 0, port: 7900, state: "preparing", shells: 0 })).toBe("preparing :7900");
     expect(treeWords({ ahead: 0, behind: 0, files: 0, port: 7900, state: "failed", why: "a\nbun install exited 1", shells: 0 })).toBe("setup failed: bun install exited 1 :7900");
   });
+});
+
+test("dressTreeCards names a scanned tree after its checkout and branch and files it beside it", () => {
+  const root = "/t";
+  const main = { id: "dev-tools/canopy", name: "canopy", path: "/dev/dev-tools/canopy", group: "dev-tools", source: "launch", status: null };
+  const key = repoKey(main.path);
+  const scanned = (slug: string) => ({ id: `trees:${key}/${slug}`, name: slug, path: `/t/${key}/${slug}`, group: `worktrees/${key}`, source: "trees", status: null });
+  const records = new Map([[main.path, { trees: [{ slug: "feat-x", branch: "feat/x", base: "main", port: 7912, madeAt: 0, caches: true, state: "ready" as const }] }]]);
+  const [known, stray] = dressTreeCards([scanned("feat-x"), scanned("stray")], [main], records, root);
+  expect(known).toMatchObject({ name: "canopy ⑂ feat/x", group: "dev-tools", id: `trees:${key}/feat-x` });
+  expect(stray).toMatchObject({ name: "stray", group: `worktrees/${key}` });
+  // the checkout gone from the board: the tree still names it by its folder
+  expect(dressTreeCards([scanned("feat-x")], [], records, root)[0]?.name).toBe("canopy ⑂ feat/x");
+  expect(treesSource("/t")).toEqual({ id: "trees", kind: "local", path: "/t", label: "worktrees", launch: false });
 });

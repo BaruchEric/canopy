@@ -1,3 +1,4 @@
+import { TREES_SOURCE } from "../../../src/core/treewords";
 import { useEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import type { FormEvent } from "react";
@@ -71,6 +72,7 @@ function SourceRow({ src }: { src: SourceState }) {
         <span className="src-label">
           {src.label}
           {src.launch && <em className="src-launch">launch folder</em>}
+          {src.id === TREES_SOURCE && <em className="src-launch">kept worktrees</em>}
         </span>
         <span className="src-path" title={at}>
           {at}
@@ -91,7 +93,7 @@ function SourceRow({ src }: { src: SourceState }) {
         >
           {busy === "rescan" ? "scanning…" : "rescan"}
         </button>
-        {!src.launch && (
+        {!src.launch && src.id !== TREES_SOURCE && (
           <button
             type="button"
             className="mini"

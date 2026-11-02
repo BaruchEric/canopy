@@ -19,7 +19,7 @@ import {
 } from "./sectiontabs";
 import { pruneGroups, splitIn } from "./splitpanes";
 
-const repo = { id: "mac/canopy", forge: undefined, spec: undefined, host: undefined };
+const repo = { id: "mac/canopy", forge: undefined, spec: undefined, host: undefined, source: "launch" };
 
 describe("section tabs", () => {
   test("an id no shell has, made from its parts", () => {
@@ -57,6 +57,9 @@ describe("section tabs", () => {
     expect(sectionApplies("files", { forge: { kind: "forgejo" } } as never)).toBe(false);
     expect(sectionApplies("spec", repo)).toBe(false);
     expect(sectionApplies("preview", { ...repo, host: "mini" })).toBe(false);
+    expect(sectionApplies("worktrees", repo)).toBe(true);
+    expect(sectionApplies("worktrees", { ...repo, host: "mini" })).toBe(false);
+    expect(sectionApplies("worktrees", { ...repo, source: "trees" })).toBe(false);
     const tabs = addSectionTab([], "panel", "mac/canopy", "history");
     const keys = tabbableKeys(tabs, repo);
     expect(keys).not.toContain("history");

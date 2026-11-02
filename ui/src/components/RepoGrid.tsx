@@ -34,6 +34,7 @@ import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
 import { RepoHealthChip } from "./Health";
 import { LandingChip, PrChip } from "./Landing";
+import { isTreeCard } from "../../../src/core/treewords";
 import { TreeRows, TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
 import { historyFor, type Repo } from "../../../src/core/types";
@@ -237,6 +238,11 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
             title={`${forge.slug} on the forge${forge.private ? ", private" : ""}`}
           >
             forgejo
+          </span>
+        )}
+        {isTreeCard(repo) && (
+          <span className="host-tag" title="A worktree canopy keeps for the repo it is named after, with a card of its own">
+            worktree
           </span>
         )}
         {repo.archived && (

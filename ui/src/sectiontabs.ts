@@ -16,6 +16,7 @@
  * browser-safe, tested in sectiontabs.test.ts.
  */
 
+import { isTreeCard } from "../../src/core/treewords";
 import type { Repo } from "../../src/core/types";
 import { SECTION_KEYS, SECTION_WORD, isSectionKey, type SectionKey } from "./surface";
 
@@ -140,7 +141,7 @@ export const pageTabLabel = (t: PageTab, repoName?: string): string => (isItemTa
  *  decides: a branch run, the files, the tasks and the agents work on the
  *  backend's own disk, the spec only once scanned, the preview only on the
  *  checkout's own backend. */
-export function sectionApplies(k: SectionKey, repo: Pick<Repo, "forge" | "spec" | "host">): boolean {
+export function sectionApplies(k: SectionKey, repo: Pick<Repo, "forge" | "spec" | "host"> & { source?: string }): boolean {
   switch (k) {
     case "landing":
     case "files":
@@ -149,9 +150,10 @@ export function sectionApplies(k: SectionKey, repo: Pick<Repo, "forge" | "spec" 
       return !repo.forge;
     case "spec":
       return repo.spec !== undefined;
-    // a kept worktree is made on the backend's own disk (FR-051)
+    // a kept worktree is made on the backend's own disk (FR-051), and a
+    // tree's own card keeps none
     case "worktrees":
-      return !repo.forge && !repo.host;
+      return !repo.forge && !repo.host && !isTreeCard(repo);
     case "preview":
       return !repo.host;
     default:

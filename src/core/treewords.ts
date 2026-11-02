@@ -27,3 +27,12 @@ export function treeWords(t: { ahead: number; behind: number; files: number; por
   if (t.shells > 0) parts.push(`${t.shells} shell${t.shells === 1 ? "" : "s"}`);
   return parts.join(" ");
 }
+
+/** The source id of canopy's own worktrees folder: every kept tree is
+ *  scanned there as a card of its own, named `<repo> ⑂ <branch>` and filed
+ *  under its repo's group, so it has the whole panel: changes, files,
+ *  tasks, preview, shells. */
+export const TREES_SOURCE = "trees";
+
+/** a card that is a kept worktree, not a checkout of its own */
+export const isTreeCard = (r: { source?: string }): boolean => r.source === TREES_SOURCE;

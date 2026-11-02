@@ -3,12 +3,13 @@ import { homeName } from "../registry";
 import { Crowns } from "./TopBar";
 
 /** A repo's id as its own backend knows it, then that backend's name when it
- *  is not the page's own. */
-export function IdLabel({ id }: { id: string }) {
+ *  is not the page's own. `name` stands in for the id where the id says less
+ *  than the card does, as a worktree card's `trees:<dir>` id does. */
+export function IdLabel({ id, name }: { id: string; name?: string }) {
   const { plain, backend } = idLabel(id);
   return (
     <>
-      {plain}
+      {name ?? plain}
       {backend && <span className="backend-word">{backend}</span>}
     </>
   );

@@ -40,6 +40,13 @@ export const CARD_TREES = 6;
 
 const stop = (e: { stopPropagation(): void }) => e.stopPropagation();
 
+/** the tree's own card on the repo's backend (the trees source scans the
+ *  folder), when the scan has found it */
+const cardOf = (repos: readonly Repo[], repoId: string, t: BranchTree): Repo | undefined => {
+  const b = backendOf(repoId);
+  return repos.find((r) => r.path === t.dir && backendOf(r.id) === b);
+};
+
 /** The kept trees on the card itself, at cozy density (compact keeps the
  *  chip): a row per tree with its branch, words and age, a shell and the
  *  agent into it, and the count past CARD_TREES. The branch opens the
@@ -49,6 +56,8 @@ export function TreeRows({ repo, selecting }: { repo: Repo; selecting: boolean }
   const trees = useStore((s) => repoTrees(s.trees, repo.id)?.trees);
   const openTerm = useStore((s) => s.openTerm);
   const showSection = useStore((s) => s.showSection);
+  const openPanel = useStore((s) => s.openPanel);
+  const repos = useStore((s) => s.repos);
   const agent = useStore((s) => agentFor(s, repo, "shell"));
   const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
   if (!trees || trees.length === 0) return null;
@@ -67,12 +76,26 @@ export function TreeRows({ repo, selecting }: { repo: Repo; selecting: boolean }
         const row = treeRow(t, now);
         const words = `${row.words}${row.age ? ` · ${row.age}` : ""}`;
         const title = `${t.dir}${t.state === "failed" && t.why ? `\n${t.why}` : ""}`;
+        // the tree's own card has the whole panel; until the scan finds it,
+        // the section
+        const card = cardOf(repos, repo.id, t);
         return (
           <div key={t.slug} className={`card-tree${row.tone ? ` ${row.tone}` : ""}`} title={title}>
             {selecting ? (
               <span className="card-tree-name">⑂ {t.branch}</span>
             ) : (
-              <button type="button" className="card-tree-name" title={`${t.dir}: the worktrees section`} onClick={section} onPointerDown={stop} onKeyDown={keepKeys}>
+              <button
+                type="button"
+                className="card-tree-name"
+                title={card ? `${t.dir}: open its own panel` : `${t.dir}: the worktrees section`}
+                onClick={(e) => {
+                  stop(e);
+                  if (card) openPanel(card.id);
+                  else showSection(repo.id, "worktrees");
+                }}
+                onPointerDown={stop}
+                onKeyDown={keepKeys}
+              >
                 ⑂ {t.branch}
               </button>
             )}
@@ -136,6 +159,8 @@ export function TreesSection({ repo }: { repo: Repo }) {
   const removeTree = useStore((s) => s.removeTree);
   const loadTrees = useStore((s) => s.loadTrees);
   const showSection = useStore((s) => s.showSection);
+  const openPanel = useStore((s) => s.openPanel);
+  const repos = useStore((s) => s.repos);
   // the shell route's agent, the one "new shell" starts at the checkout
   const agent = useStore((s) => agentFor(s, repo, "shell"));
   const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
@@ -217,6 +242,7 @@ export function TreesSection({ repo }: { repo: Repo }) {
           <ul className="landing-list">
             {trees.map((t) => {
               const row = treeRow(t, now);
+              const card = cardOf(repos, repo.id, t);
               return (
                 <li key={t.slug} className={`landing-row trees-row${row.tone ? ` ${row.tone}` : ""}`}>
                   <span className="landing-branch" title={t.dir}>
@@ -227,6 +253,11 @@ export function TreesSection({ repo }: { repo: Repo }) {
                     {row.age ? ` · ${row.age}` : ""}
                   </span>
                   <span className="trees-tools">
+                    {card && (
+                      <button type="button" className="mini" title="The tree's own panel: its changes, files, tasks, preview and shells" onClick={() => openPanel(card.id)}>
+                        open
+                      </button>
+                    )}
                     <button type="button" className="mini" title={`A shell in ${t.dir}`} onClick={() => shellIn(t)}>
                       shell
                     </button>

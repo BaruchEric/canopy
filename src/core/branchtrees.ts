@@ -9,14 +9,37 @@
 
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { exec, git } from "./exec";
 import { countStatusEntries } from "./git";
 import { parsePortRange } from "./preview";
 import { configDir } from "./store";
 import { repoKey } from "./worktree";
+import { TREES_SOURCE } from "./treewords";
+import type { Repo, Source } from "./types";
 
 export const treesRoot = (): string => join(configDir(), "trees");
+
+/** The trees folder as a source the server scans beside the launch root
+ *  and the extra folders, so each kept tree is a card of its own. */
+export const treesSource = (root = treesRoot()): Source => ({ id: TREES_SOURCE, kind: "local", path: root, label: "worktrees", launch: false });
+
+/** The scanned cards of the trees source, dressed from the records: a
+ *  tree the records know is named `<repo> ⑂ <branch>` after the checkout
+ *  it was made from and filed under that checkout's group, so it sits
+ *  beside its repo on the board; a folder no record claims keeps the
+ *  scanner's name. `others` are the rest of the board's repos. */
+export function dressTreeCards(treeRepos: readonly Repo[], others: readonly Repo[], records: ReadonlyMap<string, TreesRecord>, root = treesRoot()): Repo[] {
+  return treeRepos.map((r) => {
+    for (const [repoPath, rec] of records) {
+      const t = rec.trees.find((x) => treeDir(repoPath, x.slug, root) === r.path);
+      if (!t) continue;
+      const parent = others.find((o) => o.path === repoPath);
+      return { ...r, name: `${parent?.name ?? basename(repoPath)} ⑂ ${t.branch}`, ...(parent ? { group: parent.group } : {}) };
+    }
+    return r;
+  });
+}
 /** the record beside a repo's trees, which no slug may take */
 export const TREES_RECORD = "trees.json";
 /** the ports a tree's shells get as PORT when `CANOPY_TREE_PORTS` is unset:
