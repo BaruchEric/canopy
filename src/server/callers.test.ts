@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CallerBook, CallerGate, coordinatorRefusal, coordPort, laneAllows, laneVerdict } from "./callers";
+import { CallerBook, CallerGate, coordinatorRefusal, coordPort, laneAllows, laneVerdict, loopbackAuthWanted, loopbackBypass } from "./callers";
 
 const DAY = 24 * 60 * 60 * 1000;
 const MIN = 60 * 1000;
@@ -542,5 +542,65 @@ describe("the coordinator's lane", () => {
     expect(lines.filter((l) => l.includes("GET /api/repos/diff"))).toHaveLength(1);
     expect(lines.filter((l) => l.includes("GET /api/about"))).toHaveLength(1);
     expect(ask("/api/repos/diff", false)).toBeNull();
+  });
+});
+
+describe("loopbackAuthWanted", () => {
+  test("off unless the switch is clearly on", () => {
+    expect(loopbackAuthWanted({})).toBe(false);
+    expect(loopbackAuthWanted({ CANOPY_LOOPBACK_AUTH: "" })).toBe(false);
+    expect(loopbackAuthWanted({ CANOPY_LOOPBACK_AUTH: "0" })).toBe(false);
+    expect(loopbackAuthWanted({ CANOPY_LOOPBACK_AUTH: "off" })).toBe(false);
+    for (const v of ["1", "on", "true", "yes", "YES", " On "]) {
+      expect(loopbackAuthWanted({ CANOPY_LOOPBACK_AUTH: v }), v).toBe(true);
+    }
+  });
+});
+
+describe("loopbackBypass", () => {
+  const ok = { wanted: true, beyondLoopback: false, onLane: false, upgrade: false, addr: "127.0.0.1", hostname: "localhost" };
+  test("passes only when every part holds", () => {
+    expect(loopbackBypass(ok)).toBe(true);
+    expect(loopbackBypass({ ...ok, wanted: false })).toBe(false);
+    expect(loopbackBypass({ ...ok, beyondLoopback: true })).toBe(false);
+    expect(loopbackBypass({ ...ok, onLane: true })).toBe(false);
+    // a socket upgrade is left out: a socket authenticates with a one-use ticket
+    expect(loopbackBypass({ ...ok, upgrade: true })).toBe(false);
+    // a non-loopback peer, for example the preview on a tailnet-bound server
+    expect(loopbackBypass({ ...ok, addr: "100.68.139.95" })).toBe(false);
+    // a non-loopback Host is DNS rebinding: a loopback peer, an attacker's name
+    expect(loopbackBypass({ ...ok, hostname: "evil.example" })).toBe(false);
+  });
+  test("ipv6 loopback and 127.x both count", () => {
+    expect(loopbackBypass({ ...ok, addr: "::1", hostname: "[::1]" })).toBe(true);
+    expect(loopbackBypass({ ...ok, addr: "127.0.0.5", hostname: "127.0.0.9" })).toBe(true);
+  });
+});
+
+describe("the loopback caller", () => {
+  test("is a page caller, ticketable, and matches no token", () => {
+    const book = open();
+    const c = book.localCaller();
+    expect(c.kind).toBe("page");
+    expect(c.id).toBe("loopback");
+    expect(book.localCaller().id).toBe(c.id);
+    const tk = book.ticket(c.id, "shell");
+    expect(book.redeem(tk, "shell")?.id).toBe(c.id);
+    expect(book.check("anything")).toBeNull();
+  });
+  test("does not suppress the first sign-in code", () => {
+    const book = open();
+    book.localCaller();
+    // a non-loopback Host (the tailnet, Erics-MacBook-Pro.local) still needs the code
+    expect(book.firstCode()).not.toBeNull();
+  });
+  test("is never written to callers.json", async () => {
+    const book = open();
+    book.localCaller();
+    book.mint("cli", { label: "cli x" });
+    await book.flush();
+    const onDisk = JSON.parse(readFileSync(file, "utf8")) as { id: string; label: string }[];
+    expect(onDisk.some((c) => c.id === "loopback")).toBe(false);
+    expect(onDisk.some((c) => c.label === "cli x")).toBe(true);
   });
 });

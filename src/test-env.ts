@@ -19,6 +19,7 @@ for (const k of ["CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_SSH_HOST", "CANO
 // token to every CLI call and shell a test starts.
 for (const k of [
   "CANOPY_CALLERS",
+  "CANOPY_LOOPBACK_AUTH",
   "CANOPY_ORIGINS",
   "CANOPY_PREVIEW_PUBLIC",
   "CANOPY_TERM",

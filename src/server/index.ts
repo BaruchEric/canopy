@@ -243,7 +243,7 @@ import { PRIVATE_ENV, TRIGGER_ENV_PREFIX, takeTriggerSecrets } from "../core/env
 import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
-import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, type Caller } from "./callers";
+import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, loopbackAuthWanted, loopbackBypass, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
@@ -6163,6 +6163,10 @@ export async function startServer(opts: {
     }
   }
   const beyondLoopback = openBind();
+  // CANOPY_LOOPBACK_AUTH: speak for a loopback request as a built-in page
+  // caller, so a dev instance bound to loopback needs no sign-in (read at
+  // start; honoured per request only when not bound beyond loopback).
+  const loopbackWanted = loopbackAuthWanted();
   // the coordinator's address on its bridge's gateway is neither local nor a
   // tailnet name, so the gate lets that exact host through as well, on the
   // coordinator's own listener alone
@@ -6195,7 +6199,23 @@ export async function startServer(opts: {
     // Who is calling comes first, so the Library is checked like the rest.
     // The pairing routes wait until after the origin gate: a rebound or
     // foreign page must not read the callers or fill the pair slots.
-    const caller = callerOf(state.callers, req, url);
+    let caller = callerOf(state.callers, req, url);
+    if (
+      !caller &&
+      loopbackBypass({
+        wanted: loopbackWanted,
+        beyondLoopback,
+        onLane: lane,
+        upgrade: req.headers.get("upgrade") !== null,
+        addr: srv.requestIP(req)?.address ?? "",
+        hostname: url.hostname,
+      })
+    ) {
+      // a socket upgrade is left out on purpose: it carries a one-use
+      // ticket minted through the origin-checked /api/auth/ticket, so a
+      // page on another origin cannot open a bare shell on this loopback.
+      caller = state.callers.localCaller();
+    }
     // the coordinator's lane goes first, in every mode
     const laned = state.gate.lane(req, url, caller, srv.requestIP(req)?.address ?? "", lane);
     if (laned) return laned;

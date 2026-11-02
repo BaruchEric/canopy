@@ -13,11 +13,17 @@ import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
 import { allows, kindOfLabel, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
 import { configDir } from "../core/store";
+import { isLoopback, isLoopbackHost } from "../core/client";
 import type { PendingPair } from "../core/types";
 
 export type Caller = { id: string; kind: CallerKind; label: string; term?: string; run?: string; created: number; used: number };
 
 type Kept = Caller & { hash: string };
+
+/** The id of the built-in caller the loopback-auth bypass speaks as. It
+ *  lives in memory only (kept out of callers.json) and matches no token,
+ *  so it is reachable only through that bypass. */
+const LOOPBACK_ID = "loopback";
 type Ticketed = "shell" | "helper";
 type Pair = { id: string; label: string; addr: string; kind: PairKind; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied" };
 
@@ -134,7 +140,7 @@ export class CallerBook {
       const dir = dirname(this.file);
       await mkdir(dir, { recursive: true, mode: 0o700 });
       const tmp = join(dir, `.${basename(this.file)}.${process.pid}.${Date.now()}.${randomBytes(4).toString("hex")}.tmp`);
-      await writeFile(tmp, `${JSON.stringify(this.callers, null, 2)}\n`, { mode: 0o600 });
+      await writeFile(tmp, `${JSON.stringify(this.callers.filter((c) => c.id !== LOOPBACK_ID), null, 2)}\n`, { mode: 0o600 });
       await rename(tmp, this.file);
     });
     this.chain = run.catch(() => {});
@@ -164,6 +170,20 @@ export class CallerBook {
     this.callers.push(kept);
     this.save().catch(() => {});
     return { token, caller: this.strip(kept) };
+  }
+
+  /** The caller the loopback-auth bypass speaks as: a page-rights caller
+   *  kept in memory only, never written and matching no token, so it is
+   *  reached only through that bypass. The same one each call, re-made if
+   *  a revoke or an idle sweep dropped it, so a ticket minted for it still
+   *  resolves. */
+  localCaller(): Caller {
+    const have = this.callers.find((c) => c.id === LOOPBACK_ID);
+    if (have) return this.strip(have);
+    const at = this.now();
+    const kept: Kept = { hash: `${LOOPBACK_ID}:no-token`, id: LOOPBACK_ID, kind: "page", label: "loopback", created: at, used: at };
+    this.callers.push(kept);
+    return this.strip(kept);
   }
 
   /** The caller a token belongs to, or null. A use counts as the session's
@@ -328,7 +348,7 @@ export class CallerBook {
    *  unused for 30 days counts for nothing, since its token no longer works. */
   firstCode(): string | null {
     const at = this.now();
-    if (this.callers.some((c) => isSession(c.kind) && at - c.used <= SESSION_IDLE)) return null;
+    if (this.callers.some((c) => c.id !== LOOPBACK_ID && isSession(c.kind) && at - c.used <= SESSION_IDLE)) return null;
     this.first ??= code();
     return this.first;
   }
@@ -352,6 +372,37 @@ export function callersMode(env: Record<string, string | undefined> = process.en
   if (raw === "off" || raw === "log" || raw === "enforce") return raw;
   if (raw) console.warn(`callers: CANOPY_CALLERS=${raw} is not off, log or enforce; checking in log mode`);
   return "log";
+}
+
+/** `CANOPY_LOOPBACK_AUTH`: a dev-only switch. When set, a request from the
+ *  machine's own loopback that also asks for a loopback host is spoken for
+ *  by the built-in page caller, so a dev instance bound to loopback needs
+ *  no sign-in locally, nor through the always-on server's own preview
+ *  (which dials this loopback and rewrites the Host to localhost). Off
+ *  unless set to 1/on/true/yes; honoured only when the server is not bound
+ *  beyond loopback (`loopbackBypass`). */
+export function loopbackAuthWanted(env: Record<string, string | undefined> = process.env): boolean {
+  const raw = env["CANOPY_LOOPBACK_AUTH"]?.trim().toLowerCase() ?? "";
+  return raw === "1" || raw === "on" || raw === "true" || raw === "yes";
+}
+
+/** Whether to speak for this request as the built-in loopback caller. Every
+ *  part is required: the switch is on, the server is not bound beyond
+ *  loopback, this is not the coordinator's own listener, and it is no
+ *  socket upgrade (a socket authenticates with a one-use ticket, never
+ *  this, so a page on another origin cannot open a bare shell), the peer is
+ *  loopback, and the Host asked for is a loopback name. The Host check is
+ *  the guard against DNS rebinding, where a loopback peer arrives with an
+ *  attacker's Host; do not drop it. */
+export function loopbackBypass(x: {
+  wanted: boolean;
+  beyondLoopback: boolean;
+  onLane: boolean;
+  upgrade: boolean;
+  addr: string;
+  hostname: string;
+}): boolean {
+  return x.wanted && !x.beyondLoopback && !x.onLane && !x.upgrade && isLoopback(x.addr) && isLoopbackHost(x.hostname);
 }
 
 /** The two sockets a browser opens cannot carry a header, so each takes a

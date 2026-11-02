@@ -344,7 +344,13 @@ export function TermView({
       const b = backendOf(tab.id);
       let ticket: string | null = null;
       let refused = false;
-      if (readToken(originOf(baseOf(b)))) {
+      // A stored token mints a ticket as usual; with none, a backend that
+      // already speaks for this page (the loopback-auth bypass answers its
+      // /api/auth as a page caller) mints one too, so its shell opens with
+      // no sign-in. On an enforcing backend with no such caller, you stays
+      // "none" and the tab still says to sign in.
+      const you = useStore.getState().authByBackend[b]?.you;
+      if (readToken(originOf(baseOf(b))) || (you !== undefined && you !== "none")) {
         try {
           ticket = await api.ticket(b, "term");
         } catch (err) {
