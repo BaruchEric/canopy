@@ -19,7 +19,6 @@ import { useShallow } from "zustand/react/shallow";
 import {
   PANEL,
   activeFlowFor,
-  arrangementOf,
   capsFor,
   cardOf,
   connOf,
@@ -33,6 +32,7 @@ import {
   tasksOf,
   useStore,
   dockless,
+  dockShapeOf,
   waitingCount,
 } from "../store";
 import { WAITING_GLYPH, WAITING_GROUPS, WAITING_PANEL, isWaitingPanel } from "../waiting";
@@ -57,7 +57,7 @@ import { devState } from "../guided";
 import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
 import { PHONE, useMedia } from "../media";
 import { stableOrder } from "../dock";
-import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
+import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Arrangement, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
@@ -233,6 +233,28 @@ function FileRow({
 
 /** the title on the gear's two dock arrangements: each regroups the dock */
 const ARRANGE_TITLE = "puts every open panel in this arrangement";
+/** the same from a split grid, which neither arrangement keeps */
+const UNSPLIT_TITLE = "puts every open panel in this arrangement; the split cells and stacked tabs do not come back";
+/** the title on the third entry, lit while the dock is a split grid */
+const GRID_TITLE = "split by hand, a panel dragged onto another's edge or middle; picking this keeps every split";
+
+/** The gear's layout radio (FR-007): side by side or as tabs, lit by the
+ *  shape the dock has (`dockShapeOf`), and while the dock is a grid split
+ *  by hand a third entry, lit, that keeps it. From the grid either of the
+ *  other two regroups every panel, and its title says the splits go. */
+function useArrangeEntries(): GearEntry[] {
+  const flat = useMedia(PHONE);
+  const shape = useStore((s) => dockShapeOf(s, flat));
+  const arrangeDock = useStore((s) => s.arrangeDock);
+  const grid = shape === "grid";
+  const title = grid ? UNSPLIT_TITLE : ARRANGE_TITLE;
+  const pick = (into: Arrangement) => () => arrangeDock(into, { byShape: !flat });
+  return [
+    { type: "item", label: "panels side by side", on: shape === "columns", run: pick("columns"), title },
+    { type: "item", label: "panels as tabs", on: shape === "tabs", run: pick("tabs"), title },
+    ...(grid ? [{ type: "item", label: "panels in a split grid", on: true, run: () => undefined, title: GRID_TITLE } satisfies GearEntry] : []),
+  ];
+}
 
 const VIEWS: readonly { value: FileView; label: string }[] = [
   { value: "list", label: "every file in one list" },
@@ -1381,8 +1403,7 @@ function PanelGear({
 }) {
   // the bench applies no zoom of its own: the line is always the one in place
   const { entry: zoom } = useZoom("panel");
-  // the dock, a tab and a window all lay the dock out in columns
-  const arranged = useStore(arrangementOf);
+  const arrange = useArrangeEntries();
   const order = useStore((s) => s.settings.sectionOrder);
   const hidden = useStore((s) => s.settings.sectionsHidden);
   const setSetting = useStore((s) => s.setSetting);
@@ -1391,7 +1412,6 @@ function PanelGear({
   const movePanel = useStore((s) => s.movePanel);
   const dockLayout = useStore((s) => s.dockLayout);
   const dropPanel = useStore((s) => s.dropPanel);
-  const arrangeDock = useStore((s) => s.arrangeDock);
   const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const panelClose = useStore((s) => s.settings.panelClose);
@@ -1432,8 +1452,7 @@ function PanelGear({
     : [
         ...modeEntries(mode, setMode, "window"),
         ...(canFull ? [full] : []),
-        { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
-        { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+        ...arrange,
         ...moves,
         { type: "item", label: "open in a new tab", run: () => openElsewhere(repo.id, "tab") },
         ...moreWindows,
@@ -2073,8 +2092,7 @@ function agentPanelName(id: string): string {
  *  moves, the close setting, folding its groups, and sharing it. No pop
  *  out, new tab or bench: those are a repo's. */
 function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
-  const arranged = useStore(arrangementOf);
-  const arrangeDock = useStore((s) => s.arrangeDock);
+  const arrange = useArrangeEntries();
   const setSetting = useStore((s) => s.setSetting);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const panelClose = useStore((s) => s.settings.panelClose);
@@ -2085,8 +2103,7 @@ function WaitingGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement 
   const foldSections = useStore((s) => s.foldSections);
   const phone = useMedia(PHONE);
   const layout: GearEntry[] = [
-    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
-    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...arrange,
     ...(phone
       ? []
       : ([
@@ -2208,8 +2225,7 @@ function WaitingPanel({
 /** The health panel's gear: its zoom, the dock's layout and moves, the
  *  close setting, and sharing it. */
 function HealthGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
-  const arranged = useStore(arrangementOf);
-  const arrangeDock = useStore((s) => s.arrangeDock);
+  const arrange = useArrangeEntries();
   const setSetting = useStore((s) => s.setSetting);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const panelClose = useStore((s) => s.settings.panelClose);
@@ -2218,8 +2234,7 @@ function HealthGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement |
   const movePanel = useStore((s) => s.movePanel);
   const phone = useMedia(PHONE);
   const layout: GearEntry[] = [
-    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
-    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...arrange,
     ...(phone
       ? []
       : ([
@@ -2326,8 +2341,7 @@ function ItemGear({
   zoom: GearEntry;
   body: () => HTMLElement | null;
 }) {
-  const arranged = useStore(arrangementOf);
-  const arrangeDock = useStore((s) => s.arrangeDock);
+  const arrange = useArrangeEntries();
   const setSetting = useStore((s) => s.setSetting);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const panelClose = useStore((s) => s.settings.panelClose);
@@ -2340,8 +2354,7 @@ function ItemGear({
   // slot, as a repo's can (not on a phone, for the same reason)
   const windows: GearEntry[] = !phone && isRunPanel(id) ? [{ type: "item", label: "pop out", run: () => popOut(id) }] : [];
   const layout: GearEntry[] = [
-    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
-    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...arrange,
     ...(phone
       ? []
       : ([
@@ -2609,8 +2622,7 @@ function PopupPanel({
 /** The command line's gear: its zoom, the dock's layout and moves, the
  *  close setting, emptying the transcript, and sharing it. */
 function CliGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | null }) {
-  const arranged = useStore(arrangementOf);
-  const arrangeDock = useStore((s) => s.arrangeDock);
+  const arrange = useArrangeEntries();
   const setSetting = useStore((s) => s.setSetting);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const panelClose = useStore((s) => s.settings.panelClose);
@@ -2621,8 +2633,7 @@ function CliGear({ zoom, body }: { zoom: GearEntry; body: () => HTMLElement | nu
   const empty = useStore((s) => s.cliLog.length === 0);
   const phone = useMedia(PHONE);
   const layout: GearEntry[] = [
-    { type: "item", label: "panels side by side", on: arranged === "columns", run: () => arrangeDock("columns"), title: ARRANGE_TITLE },
-    { type: "item", label: "panels as tabs", on: arranged === "tabs", run: () => arrangeDock("tabs"), title: ARRANGE_TITLE },
+    ...arrange,
     ...(phone
       ? []
       : ([

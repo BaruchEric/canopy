@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { activate, cellOf, clipBox, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeColumns, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect } from "./grid";
+import { activate, cellOf, clipBox, columnOf, cssId, dropTarget, dropZone, fromLegacy, gearDrops, gridOf, gridTemplate, isArranged, moveCell, moveColumn, moveTo, moveWithin, normalizeLayout, panelsOf, placements, place, regroup, rename, resizeColumn, resizeColumns, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, shapeOf, stepPanel, stripDrop, zoneRect } from "./grid";
 import type { DockLayout } from "./grid";
 
 const W = 440;
@@ -105,6 +105,47 @@ describe("moving a panel", () => {
     expect(moveWithin(l, "c", cell, 99)).toBe(l);
     // the same place but not showing yet still changes: it shows
     expect(moveWithin(l, "a", cell, 0)).not.toBe(l);
+  });
+});
+
+describe("the dock's shape, for the gear's layout radio (FR-007)", () => {
+  test("a column each is side by side, one cell of tabs is tabs", () => {
+    const side = place(empty, ["a", "b"], "a", "columns", W);
+    expect(isArranged(side, "columns")).toBe(true);
+    expect(isArranged(side, "tabs")).toBe(false);
+    expect(shapeOf(side, "columns")).toBe("columns");
+    // panels dragged into columns while openIn says tabs are side by side
+    expect(shapeOf(side, "tabs")).toBe("columns");
+    const tabs = regroup(side, "tabs", W);
+    expect(isArranged(tabs, "tabs")).toBe(true);
+    expect(isArranged(tabs, "columns")).toBe(false);
+    expect(shapeOf(tabs, "tabs")).toBe("tabs");
+    expect(shapeOf(tabs, "columns")).toBe("tabs");
+  });
+  test("one panel, or none, is both, so the preferred arrangement shows", () => {
+    const one = place(empty, ["a"], "a", "columns", W);
+    expect(shapeOf(one, "columns")).toBe("columns");
+    expect(shapeOf(one, "tabs")).toBe("tabs");
+    expect(shapeOf(empty, "tabs")).toBe("tabs");
+    expect(shapeOf(empty, "columns")).toBe("columns");
+  });
+  test("a split column, or tabs beside another column, is a grid", () => {
+    const side = place(empty, ["a", "b", "c"], "a", "columns", W);
+    const split = moveTo(side, "b", { cell: cellOf(side, "a")?.id ?? "", zone: "below" }, W);
+    expect(cols(split)).toEqual([[["a"], ["b"]], [["c"]]]);
+    expect(shapeOf(split, "columns")).toBe("grid");
+    expect(shapeOf(split, "tabs")).toBe("grid");
+    // a lone column split in two is no cell of tabs either
+    const pair = place(empty, ["a", "b"], "a", "columns", W);
+    const stacked = moveTo(pair, "b", { cell: cellOf(pair, "a")?.id ?? "", zone: "above" }, W);
+    expect(cols(stacked)).toEqual([[["b"], ["a"]]]);
+    expect(shapeOf(stacked, "tabs")).toBe("grid");
+    const tabbed = moveTo(side, "c", { cell: cellOf(side, "a")?.id ?? "", zone: "center" }, W);
+    expect(cols(tabbed)).toEqual([[["a", "c"]], [["b"]]]);
+    expect(shapeOf(tabbed, "columns")).toBe("grid");
+    // regrouping either way takes the grid out
+    expect(shapeOf(regroup(split, "columns", W), "tabs")).toBe("columns");
+    expect(shapeOf(regroup(tabbed, "tabs", W), "columns")).toBe("tabs");
   });
 });
 

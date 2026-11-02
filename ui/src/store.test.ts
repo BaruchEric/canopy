@@ -35,6 +35,7 @@ import {
   visibleCards,
   visibleRepos,
   arrangementOf,
+  dockShapeOf,
   failedItems,
   turnItems,
   waitingCount,
@@ -2979,6 +2980,65 @@ describe("the dock as columns of cells", () => {
       expect(useStore.getState().settings.openIn).toBe("tabs");
       expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c", "b"]]]);
     }
+  });
+
+  test("the gear marks the dock's shape, a grid once it is split by hand (FR-007)", () => {
+    useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+    expect(dockShapeOf(useStore.getState(), false)).toBe("columns");
+    useStore.getState().dropPanel("b", cell("a"), "below");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a"], ["b"]], [["c"]]]);
+    expect(useStore.getState().settings.openIn).toBe("dock");
+    expect(arrangementOf(useStore.getState())).toBe("columns");
+    expect(dockShapeOf(useStore.getState(), false)).toBe("grid");
+    // a phone shows the dock flat by openIn whatever the layout holds
+    expect(dockShapeOf(useStore.getState(), true)).toBe("columns");
+    // every panel dragged into one cell is tabs, though openIn says the dock
+    useStore.getState().dropPanel("b", cell("a"), "center");
+    useStore.getState().dropPanel("c", cell("a"), "center");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "b", "c"]]]);
+    expect(dockShapeOf(useStore.getState(), false)).toBe("tabs");
+    expect(dockShapeOf(useStore.getState(), true)).toBe("columns");
+  });
+
+  test("from the gear, side by side or tabs regroups a split grid; the Settings picker keeps it", () => {
+    const split = () => {
+      useStore.setState({ panels: ["a", "b", "c"], activePanel: "a" });
+      useStore.getState().setSetting("openIn", "dock");
+      useStore.getState().dropPanel("b", cell("a"), "below");
+      useStore.getState().dropPanel("c", cell("a"), "center");
+      expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c"], ["b"]]]);
+    };
+    split();
+    // the Settings picker's dock, openIn already the dock: the splits stay
+    const layout = useStore.getState().dockLayout;
+    useStore.getState().arrangeDock("columns");
+    expect(useStore.getState().dockLayout).toBe(layout);
+    // the gear's side by side: a column each, openIn unchanged
+    useStore.getState().arrangeDock("columns", { byShape: true });
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a"]], [["c"]], [["b"]]]);
+    expect(useStore.getState().settings.openIn).toBe("dock");
+    mirrored();
+    // picking it again, now lit, is no change
+    const side = useStore.getState();
+    useStore.getState().arrangeDock("columns", { byShape: true });
+    expect(useStore.getState()).toBe(side);
+    // the gear's tabs from a grid: one cell, openIn tabs
+    split();
+    useStore.getState().arrangeDock("tabs", { byShape: true });
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c", "b"]]]);
+    expect(useStore.getState().settings.openIn).toBe("tabs");
+    // and the lit tabs again changes nothing
+    const tabbed = useStore.getState();
+    useStore.getState().arrangeDock("tabs", { byShape: true });
+    expect(useStore.getState()).toBe(tabbed);
+    // a grid made while openIn is tabs: the gear's tabs puts it back in one cell
+    useStore.getState().dropPanel("b", cell("a"), "right");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c"]], [["b"]]]);
+    useStore.getState().arrangeDock("tabs");
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c"]], [["b"]]]);
+    useStore.getState().arrangeDock("tabs", { byShape: true });
+    expect(cols(useStore.getState().dockLayout)).toEqual([[["a", "c", "b"]]]);
+    mirrored();
   });
 
   test("a tab dropped on a strip joins that cell at an index; back at its own place nothing changes", () => {

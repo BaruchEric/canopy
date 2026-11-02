@@ -274,6 +274,25 @@ export function regroup(l: DockLayout, into: Arrangement, width: number): DockLa
   };
 }
 
+/** Whether every panel already sits as `regroup` would put it: a column of
+ *  its own each, or all in one cell. One panel, or none, is both. */
+export function isArranged(l: DockLayout, into: Arrangement): boolean {
+  if (into === "tabs") return l.columns.length <= 1 && l.columns.every((c) => c.cells.length === 1);
+  return l.columns.every((c) => c.cells.length === 1 && c.cells[0]?.panels.length === 1);
+}
+
+/** An arrangement, or a grid split by hand that is neither. */
+export type DockShape = Arrangement | "grid";
+
+/** The arrangement `l` has, `preferred` when it has both (one panel), and
+ *  "grid" when it has neither: a column split into cells, or a cell of
+ *  tabs beside another column. */
+export function shapeOf(l: DockLayout, preferred: Arrangement): DockShape {
+  if (isArranged(l, preferred)) return preferred;
+  const other: Arrangement = preferred === "tabs" ? "columns" : "tabs";
+  return isArranged(l, other) ? other : "grid";
+}
+
 /** A column's width to `px`, clamped to [min, max]. A width that stays
  *  what it was (held at its limit, say) gives back `l` itself. */
 export function resizeColumn(l: DockLayout, column: string, px: number, min: number, max: number): DockLayout {

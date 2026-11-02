@@ -22,6 +22,7 @@ import {
   columnOf,
   COLUMN_WIDTH,
   fromLegacy,
+  isArranged,
   moveTo,
   moveWithin,
   normalizeLayout,
@@ -32,9 +33,11 @@ import {
   resizeColumn as sizeColumn,
   resizeColumns as sizeColumns,
   resizeSeam as moveSeam,
+  shapeOf,
   stepPanel,
   type Arrangement,
   type DockLayout,
+  type DockShape,
   type Zone,
 } from "./grid";
 import { heldShellUrl, openElsewhere, openShellElsewhere, parseRoute, popOutRun, popOutWindow, soloUrl } from "./routes";
@@ -1056,8 +1059,11 @@ export interface CanopyState {
   /** the boundary under cell `index` of a column, to `at` of its height */
   resizeSeam: (column: string, index: number, at: number) => void;
   /** the gear's "side by side" or "as tabs": the open target, and every
-   *  open panel put in that arrangement */
-  arrangeDock: (into: Arrangement) => void;
+   *  open panel put in that arrangement. A change of `openIn`'s
+   *  arrangement regroups, and with `byShape` (the gear off a phone, which
+   *  marks the dock's own shape) so does a dock not in that arrangement
+   *  yet, a split grid */
+  arrangeDock: (into: Arrangement, opts?: { byShape?: boolean }) => void;
   /** opens the panel in a window of its own and, once that window is open,
    *  takes it out of the dock, keeping its slot */
   popOut: (id: string) => void;
@@ -2004,6 +2010,13 @@ type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "pa
 
 /** how a panel opened now joins the dock: a column of its own, or a tab */
 export const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
+
+/** What the gear's layout radio marks (FR-007): the shape the dock has, a
+ *  grid when it was split by hand, and `openIn`'s arrangement when one
+ *  panel is both. On a phone (`flat`) the dock shows flat or as tabs by
+ *  `openIn` whatever the layout holds, so the mark is `openIn`'s. */
+export const dockShapeOf = (s: Pick<CanopyState, "settings" | "dockLayout">, flat: boolean): DockShape =>
+  flat ? arrangementOf(s) : shapeOf(s.dockLayout, arrangementOf(s));
 
 /** this window's layout as a screen layout profile keeps one: what Settings
  *  offers to take into a profile. The column width is the dock's first
@@ -2956,14 +2969,18 @@ export const useStore = create<CanopyState>((set, get) => ({
       const dockLayout = moveSeam(l, column, index, at);
       return dockLayout === l ? s : { dockLayout };
     }),
-  arrangeDock: (into) => {
+  arrangeDock: (into, opts) => {
     // Only a change of arrangement regroups. The dock, a tab and a window
     // all arrange the dock in columns, so picking the dock from either of
     // the other two, or the entry already lit, keeps every split and tab.
+    // The gear marks the dock's shape instead (FR-007), so a pick there
+    // also regroups a dock not in that arrangement yet: a split grid,
+    // which lights neither entry, goes into the one picked.
     const openIn = into === "tabs" ? "tabs" : "dock";
     const from = arrangementOf(get());
     if (get().settings.openIn !== openIn) get().setSetting("openIn", openIn);
-    if (from === into) return;
+    const unsplit = opts?.byShape === true && !isArranged(laidOut(get()), into);
+    if (from === into && !unsplit) return;
     set((s) => {
       const l = laidOut(s);
       // Widths go by panel, not by place (regroup's own reuse is by
