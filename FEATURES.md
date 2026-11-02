@@ -2,10 +2,6 @@
 
 ## Open
 
-### FR-048 · A rejected push names an upstream amend and offers to drop the stale copy
-P2 · added 2026-10-30 · source: Eric (atlas push, 2026-10-30)
-When a push is rejected as non-fast-forward and upstream holds an amended copy of the local commit (same message and author time, upstream tree a superset), the push card says so and offers to move the branch onto upstream with rebase --onto, instead of a rebase that stops on conflicts. Seen in web-apps/atlas: main had pulled 9944ed5 from the mac peer, then the Mac pushed its amend b254442.
-
 ### FR-046 · Paseo interop study
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo)
 Paseo (getpaseo/paseo, Apache-2.0) has canopy's daemon-plus-clients shape, multi-host model, voice and worktrees, and the native phone apps canopy lacks. A two-half-day study with written thresholds decides between an adapter that speaks its protocol, a landing-queue plugin contributed upstream, or no, which is the default while FR-042 covers the phone.
@@ -18,19 +14,11 @@ Spec: docs/superpowers/specs/2026-10-25-landing-package-design.md (2026-10-25).
 
 ### FR-025 · Copy the branch, PR link or run id from the keyboard
 P3 · added 2026-10-23 · source: Eric (Linear UX study)
-With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch.
+With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch. FR-023 (built 2026-11-02) supplies the focused item through `ringOf` in ui/src/kbfocus.ts.
 
 ### FR-024 · ⌘K acts on the focused card
 P2 · added 2026-10-23 · source: Eric (Linear UX study)
-With a repo card focused or a set selected, ⌘K opens the command line with that repo already in the repo slot and offers the verbs that apply to it first. Today the command line wants the repo's name typed, where Linear's menu acts on whatever is selected.
-
-### FR-023 · j/k through cards and rows, Space to peek
-P2 · added 2026-10-23 · source: Eric (Linear UX study)
-j and k (and the arrows) move a focus ring through the repo cards, trigger rows and inbox rows; Space opens the focused run's sheet over the list and Escape closes it without losing the place; Enter goes in. The most work of the Linear borrowings: it needs one focus model across the tree, the grid and the dock.
-
-### FR-017 · Section headings show what changed and who is working
-P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-21)
-A topic section's heading in the tree and the grid carries more than the dirty count: lines added and removed across its repos, and how many agents are working in them right now. The note reads "show info in section headers, like changes (+/-), agents working".
+With a repo card focused or a set selected, ⌘K opens the command line with that repo already in the repo slot and offers the verbs that apply to it first. Today the command line wants the repo's name typed, where Linear's menu acts on whatever is selected. FR-023 (built 2026-11-02) supplies the focused card through `ringOf` in ui/src/kbfocus.ts.
 
 ### FR-019 · Drill from a card into a branch and its worktree
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14)
@@ -39,10 +27,6 @@ From a repo card, open one branch and see the changes in its worktree, not only 
 ### FR-020 · Quick notes and reminders
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
 Jot a note or set a reminder without leaving canopy, on a repo or on its own, and a reminder lands in the inbox when it comes due.
-
-### FR-015 · A cards width that holds
-P3 · added 2026-10-15 · source: FR-003 fix
-The cards area only gets what the dock leaves over: at least `--cards-min` (320px), and more only while the dock's columns fit inside its widest. Widening a column takes room from the cards until they reach the minimum, and nothing remembers a width Eric chose for them. A resizer between the cards and the dock, saved per screen layout profile like the sidebar's width, would let the cards keep a set width while the dock scrolls.
 
 ### FR-014 · A standing watcher agent per component
 P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
@@ -56,21 +40,17 @@ At 3440 wide the dock stays near 1300px and leaves about 1000px of cards. New co
 P3 · added 2026-10-07 · source: dock pass
 At 412 wide, "side by side" is a snap-scrolled row with no strip or dots, so nothing says other panels are open. "Panels as tabs" already shows them.
 
-### FR-007 · The gear's layout radio reflects a split grid
-P3 · added 2026-10-07 · source: dock pass
-The gear still marks "panels side by side" once the dock is a grid of split cells.
-
 ## In Progress
 
 ### FR-035 · Work until merged: issue intake from GitHub and Forgejo, and the conflict loop
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
-Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 shipped on main 2026-10-26; its live GitHub and Forgejo check is recorded in plan 1 (2026-10-27). The October 26 batch implementation was independently reviewed locally on `main` 2026-10-27. Plan 2 shipped 2026-10-27 (the rebase step with lease push, conflict fix runs, rebasing and conflict states, `needsYou` on the page and inbox, `canopy issues --needs-you`, `canopy pr rebase` and `POST /api/prs/rebase`, plus one health check per rule). Plan 3 (the stall watchdog and digest) remains open.
+Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 shipped on main 2026-10-26; its live GitHub and Forgejo check is recorded in plan 1 (2026-10-27). The October 26 batch implementation was independently reviewed locally on `main` 2026-10-27. Plan 2 shipped 2026-10-27 (the rebase step with lease push, conflict fix runs, rebasing and conflict states, `needsYou` on the page and inbox, `canopy issues --needs-you`, `canopy pr rebase` and `POST /api/prs/rebase`, plus one health check per rule). Plan 3 implemented locally 2026-11-02 (596685c): a job quiet for 20 minutes with no tool open is told once to wrap up (`RunDriver.nudge`; Codex gets a timeline note and is stopped on the next quiet spell), stopped if it goes quiet again, and a branch run is resumed once on its Claude session; a second stall on the branch reads `stalled` under Needs you. Once a day at the sweep's default hour (04:00) the triggers write one line to the inbox's foot and DM it to the ranger while it runs. A live check with a real quiet Claude run and the ranger's DM remains.
 
 ### FR-043 · Run transcripts, replay and fork
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
 Canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacts sensitive values and keeps transcripts for 30 days by default, so finished runs open read-only after a restart. Plan 2 will replay the wire in the sheet. Plan 3 adds “Fork from here” as a new branch run from the original's base with `--fork-session`; a fork onto the other harness will use a fenced summary handoff. `canopy run export` writes a Markdown report.
-Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main` (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction). Plans 2 (replay from the wire) and 3 (fork) remain open.
+Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main` (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction). Plan 2 implemented locally 2026-11-02 (53aad8a): the drivers' folds are pure and shared (src/core/claudefold.ts, codexfold.ts), the run log writes a `tick` line after a quiet spell so folded steps get times, `GET /api/runs/<id>/replay` and the replay bar in the run sheet play a finished run back, and `canopy run show --wire` prints the same. A record a restart left empty gets its steps back out of the wire. Plan 3 (fork) remains open.
 
 ### FR-033 · Best-of-N branch runs
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
@@ -96,7 +76,7 @@ Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Im
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)
 Three optional step keys in the markdown format that exists: `after:` (ready steps run side by side, with at most one writer), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
 Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
-Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: parser keys, graph engine, HEAD modes and unattended refusal. Live API checks with real Claude jobs passed for parallel steps, manual release, repo overrides, stop and malformed modes. Plan 2 (graph view, graph API and workflow CLI) and plan 3 (bundled workflows) remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: parser keys, graph engine, HEAD modes and unattended refusal. Live API checks with real Claude jobs passed for parallel steps, manual release, repo overrides, stop and malformed modes. Plan 2 implemented locally 2026-11-02 (7f0d1a1): a workflow that is not a chain draws as an inline SVG graph on the flow sheet (layout in src/core/flowgraph.ts, shared with the CLI), folded under "graph" on a phone; the pre-flight lists after, when and the repo's modes; the workflows list carries `graph`; `canopy workflow show|check|list` prints it, `show --dot` too. Plan 3 (bundled workflows) remains open.
 
 ### FR-040 · Pre-edit collision warnings
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)
@@ -119,13 +99,13 @@ Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: mani
 ### FR-032 · Holdout scenario gates in the landing queue
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
 End-to-end scenarios the agent never sees, kept under `<configDir>/scenarios/<repo key>/` outside every checkout, run in the queue after the repo's gates and before auto-merge; a red one sends the branch back with the scenario's name and the observed output, never its text; fuzzy scenarios are judged by Jev and the branch gets a satisfaction figure. `.canopy/scenarios.json` in the main checkout sets the run line and the judge mode.
-Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26. Plan 2 implemented and independently reviewed locally 2026-10-27 on `main`: judge scoring, durable judge holds, explicit bypass and results in the CLI, sheet, landing row and waiting panel. Plan 3 (PR watch pass and repo scenarios list) remains open.
+Spec: docs/superpowers/specs/2026-10-25-scenario-gates-design.md (2026-10-25). Plan 1 shipped 2026-10-26. Plan 2 implemented and independently reviewed locally 2026-10-27 on `main`: judge scoring, durable judge holds, explicit bypass and results in the CLI, sheet, landing row and waiting panel. Plan 3 implemented locally 2026-11-02 (26c889f): auto-merge runs the holdout set on the PR's head off the watch's queue, once per pushed head, and a red, unjudged or under-minimum pass holds the merge for Eric with no fix run; the landing section's `scenarios n` chip lists the set by name and kind only, kept current by a names-only `scenarios` event. A real PR through auto-merge with a red scenario remains to be checked.
 
 ### FR-036 · Capacity governor: subscription-limit-aware dispatch
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Gas Town's max_polecats, Optio's usage view; absorbs FR-028)
 Every start carries a priority (interactive, normal, low); a pure governor holds `low` work past 70% of the five-hour window and `normal` past 90%, never a chat or an ask, and a limit hit makes a run `limited` and retried after the reset rather than failed. A top-bar chip shows each login's windows and their resets (FR-028). The credits lane (an API key funded by the plan's monthly credits for the ranger and low work) is written out and held for Eric, since it reverses the 2026-08-24 decision.
 Spec: docs/superpowers/specs/2026-10-25-capacity-governor-design.md (2026-10-25).
-Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded. A real spent five-hour window (2026-10-10, found in a transcript) was recorded 2026-11-02 and showed the CLI's wording had moved: `5-hour limit` was not recognized, and the zone and dated reset were ignored. Both were fixed that day. A spent weekly window and credential refresh remain unobserved, and reading stream-json's `rate_limit_event` for an exact reset is left to plan 2. Plan 2 dispatch holds/retries and plan 3 credits lane remain open and unwired.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: model, limited status in both harnesses, persisted capacity hub and top-bar chip. Public and local protocol probes are recorded. A real spent five-hour window (2026-10-10, found in a transcript) was recorded 2026-11-02 and showed the CLI's wording had moved: `5-hour limit` was not recognized, and the zone and dated reset were ignored. Both were fixed that day. A spent weekly window and credential refresh remain unobserved, and reading stream-json's `rate_limit_event` for an exact reset is left to plan 2. Plan 2 implemented locally 2026-11-02 (4f40f24): every start carries a priority, the Runner and each pump ask the governor before starting, and held work waits in its owner's record (trigger event, coordinator card, parked flow, PR or landing fix) and starts by itself after the reset. A limited run carries on after the reset and fails on a second limit in a row, and the CLI's `rate_limit_event` gives the exact reset. `canopy capacity` (read, release, set), `--priority` on `canopy run`, start anyway and a capacity block in the costs view are in. The pre-flight priority chip and usage endpoint reads remain, and plan 3 (credits lane) waits on Eric.
 
 ### FR-038 · The agent surface: `canopy mcp` and run tokens
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca's CLI, Paseo's MCP, Gas Town's gt nudge)
@@ -140,6 +120,31 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. librarySync is off on the Mac until the mini runs the fix, then both go back on.
 
 ## Shipped
+
+### FR-048 · A rejected push names an upstream amend and offers to drop the stale copy
+P2 · added 2026-10-30 · source: Eric (atlas push, 2026-10-30) · shipped 2026-11-02
+When a push is rejected as non-fast-forward and upstream holds an amended copy of the local commit (same message and author time, upstream tree a superset), the push card says so and offers to move the branch onto upstream with rebase --onto, instead of a rebase that stops on conflicts. Seen in web-apps/atlas: main had pulled 9944ed5 from the mac peer, then the Mac pushed its amend b254442.
+Built 2026-11-02 (8af71b3; design note docs/superpowers/specs/2026-11-02-push-amend-design.md): when the push's own rebase stops on a local commit that upstream holds an amend of (same message, author time and email; the amend removes no line from any file the stale commit changed), the push answers 409 with the offer, and the card, the waiting row and the agent hand-off show "drop the stale copy and push". `POST /api/repos/dropstale` moves the branch with `rebase --onto`, keeps the commits after the stale ones (a run of several stale copies is supported) and pushes; it refuses a dirty tree, an ambiguous match and a branch that moved. `canopy push <repo> --drop-stale` does the same. Amends the plain rebase gets past still push without asking. Checked on a scratch server against a reproduction of the atlas case.
+
+### FR-023 · j/k through cards and rows, Space to peek
+P2 · added 2026-10-23 · source: Eric (Linear UX study) · shipped 2026-11-02
+j and k (and the arrows) move a focus ring through the repo cards, trigger rows and inbox rows; Space opens the focused run's sheet over the list and Escape closes it without losing the place; Enter goes in. The most work of the Linear borrowings: it needs one focus model across the tree, the grid and the dock.
+Built 2026-11-02 (efff05e; design note docs/superpowers/specs/2026-11-02-keyboard-focus-design.md): j/k and ↓/↑ ring a card and its tree row together, the trigger rows, and the inbox rows of "waiting on you" (`w` then j); Space peeks at the run's sheet (a card with no run blinks), Enter goes in, Escape closes the sheet with the ring kept and a second Escape hides it. The model is ui/src/kbfocus.ts (pure, tested) with `ringOf` for FR-024 and FR-025, and the keys sit in `SHORTCUTS`, so the ? sheet lists them. Checked headless: j ringed alpha's card and tree row, a second j moved to beta.
+
+### FR-017 · Section headings show what changed and who is working
+P2 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-21) · shipped 2026-11-02
+A topic section's heading in the tree and the grid carries more than the dirty count: lines added and removed across its repos, and how many agents are working in them right now. The note reads "show info in section headers, like changes (+/-), agents working".
+Built 2026-11-02 (688a383): the grid heading already showed `+N −N` and live agents; the tree heading now does too (shortened past 999), a breathing `✦ n` counts agents with a turn in progress and a rust `⚑ n` those waiting on you, each spelled out in the title, nothing at zero. canopy's own runs and chats count even where no broker card covers them. Idle agents show only in the title, since a session at its prompt reads as waiting after about a minute. Checked headless: both headings read `2● +4 −2` over two dirty repos.
+
+### FR-015 · A cards width that holds
+P3 · added 2026-10-15 · source: FR-003 fix · shipped 2026-11-02
+The cards area only gets what the dock leaves over: at least `--cards-min` (320px), and more only while the dock's columns fit inside its widest. Widening a column takes room from the cards until they reach the minimum, and nothing remembers a width Eric chose for them. A resizer between the cards and the dock, saved per screen layout profile like the sidebar's width, would let the cards keep a set width while the dock scrolls.
+Built 2026-11-02 (6ace014): a seam between the cards and the dock (drag, touch, arrows with Shift for big steps, Home and End) sets a width the cards keep, saved per kind of screen and window and settable in a screen layout profile (`cardsWidth`). Columns take room from the cards only down to it, then the dock scrolls; a double-click goes back to automatic, and a narrow window lowers it, never below 320px. The maths is ui/src/cardswidth.ts (pure, tested). Checked headless: the seam shows at 1440 wide, and nothing scrolls sideways at 1000 or 390.
+
+### FR-007 · The gear's layout radio reflects a split grid
+P3 · added 2026-10-07 · source: dock pass · shipped 2026-11-02
+The gear still marks "panels side by side" once the dock is a grid of split cells.
+Fixed 2026-11-02 (4f2501d): the mark follows the dock's real shape, derived by a pure, tested helper in ui/src/grid.ts. A dock split by hand lights a third entry, "panels in a split grid"; picking side by side or tabs from there regroups every panel, and the title says the split cells and stacked tabs do not come back. On a phone the mark follows `openIn`, since the phone dock ignores the layout.
 
 ### FR-028 · What is left on each subscription, in the status line
 P3 · added 2026-10-24 · source: Eric (Orca video, 08:20) · shipped 2026-10-27
