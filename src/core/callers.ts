@@ -78,6 +78,13 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["trees/add", "trees/remove", "trees/merge", "trees/clean", "trees/sync", "trees/auto"], right: "operate" },
   { methods: POST, paths: ["tailchan/send", "tailchan/put", "tailchan/notify"], right: "operate" },
   { methods: POST, paths: ["asks/answer", "presence", "presence/beat", "layouts/reset", "rescan", "preview"], right: "operate" },
+  // a browser subscribes itself to push (FR-042) with its own page token; the
+  // handler also wants the token's kind to be page, since shells and the
+  // ranger hold operate too. The list and a test push are the admin's;
+  // push/key stays a plain read, the public key being public.
+  { methods: POST_DEL, paths: ["push/subscribe"], right: "operate" },
+  { methods: POST, paths: ["push/test"], right: "admin" },
+  { methods: ["GET"], paths: ["push"], right: "admin" },
   // a voice session is billed by the minute on the backend's key, and a
   // dictated clip goes to the backend's speech model; a call's end writes
   // its minutes to the cost ledger

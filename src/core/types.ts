@@ -736,6 +736,21 @@ export interface CanopyConfig {
   /** whether canopy keeps this machine from idle sleep: never, always, or
    *  while an agent here works (core/awake); off by default */
   awake: AwakeMode;
+  /** web push (FR-042): the `mailto:` the push services are given as this
+   *  backend's contact on every push */
+  push: PushSettings;
+}
+
+export interface PushSettings {
+  subject: string;
+}
+
+export const PUSH_SUBJECT = "mailto:canopy@localhost";
+
+/** a `mailto:` or https URL, as RFC 8292 wants the subject */
+export function normalizePush(v: unknown): PushSettings {
+  const subject = v !== null && typeof v === "object" && "subject" in v && typeof v.subject === "string" ? v.subject.trim() : "";
+  return { subject: /^(mailto:\S+@\S+|https:\/\/\S+)$/.test(subject) ? subject : PUSH_SUBJECT };
 }
 
 /** When canopy holds the machine awake: never, always, or while an agent on

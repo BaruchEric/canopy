@@ -78,6 +78,8 @@ usage:
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy awake [off|always|working]  keep the backend's machine from idle sleep: never, always, or while an agent there works
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy push test | ls              one web push to every subscribed browser | the browsers subscribed on the backend
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy costs [--days 1|7|30] [--share]
                                      what the paid services spent across every backend the home one lists, by service and by repo;
                                      --share adds the harness share, dollars and Claude sessions, and eight weeks of it

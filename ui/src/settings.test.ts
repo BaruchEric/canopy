@@ -239,6 +239,11 @@ describe("palettes", () => {
     expect(loadSettings().notify).toBe(true);
     store.set("canopy.settings", JSON.stringify({ notify: 1 }));
     expect(loadSettings().notify).toBe(false);
+    expect(loadSettings().push).toBe(false);
+    saveSettings({ ...loadSettings(), push: true });
+    expect(loadSettings().push).toBe(true);
+    store.set("canopy.settings", JSON.stringify({ push: "on" }));
+    expect(loadSettings().push).toBe(false);
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
   test("every palette in the stylesheet sets forest's colors, each a light and a dark one", () => {

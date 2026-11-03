@@ -67,6 +67,7 @@ import { workflowCommand } from "./workflow";
 import { prCommand } from "./pr";
 import { workCommand } from "./work";
 import { awakeCommand } from "./awake";
+import { PUSH_WORDS, pushCommand } from "./push";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
 import { secretsCommand } from "./secrets";
@@ -327,6 +328,8 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     case "push": {
+      // web push's test and list (FR-042); a repo folder by either name is ./test or ./ls
+      if (args[0] !== undefined && PUSH_WORDS.has(args[0])) return pushCommand(args, { fail });
       // --drop-stale: when upstream holds an amend of a local commit
       // (FR-048), drop the stale copy and push what is left
       const dropStale = flag(args, "--drop-stale");

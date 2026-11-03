@@ -17,6 +17,18 @@ describe("needs", () => {
     expect(allows("shell", needs("POST", "/api/capacity"))).toBe(false);
   });
 
+  test("the push routes (FR-042): a browser subscribes with operate, the list and a test push are the admin's, the key is a read", () => {
+    expect(needs("POST", "/api/push/subscribe")).toBe("operate");
+    expect(needs("DELETE", "/api/push/subscribe")).toBe("operate");
+    expect(needs("POST", "/api/push/test")).toBe("admin");
+    expect(needs("GET", "/api/push")).toBe("admin");
+    expect(needs("GET", "/api/push/key")).toBe("read");
+    // the table lets a shell's operate through; the handler then wants the
+    // token's kind to be page, the first route to look at the kind
+    expect(allows("shell", needs("POST", "/api/push/subscribe"))).toBe(true);
+    expect(allows("shell", needs("POST", "/api/push/test"))).toBe(false);
+  });
+
   test("each read-only Library path is read", () => {
     for (const p of [
       "/api/library",

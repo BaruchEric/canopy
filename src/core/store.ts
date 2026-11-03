@@ -25,6 +25,7 @@ import { normalizeCapacity, type CapacitySettings } from "./capacity";
 import { WARM_MAX } from "./warm";
 import {
   AWAKE_MODES,
+  normalizePush,
   DEFAULT_LAUNCH,
   LAUNCH_SOURCE,
   type AgentPick,
@@ -84,6 +85,7 @@ const defaults = (): CanopyConfig => ({
   ranger: normalizeRanger(undefined),
   sweep: normalizeSweep(undefined),
   awake: "off",
+  push: normalizePush(undefined),
 });
 
 /** The launch settings the same way: only repos that differ from the defaults. */
@@ -228,6 +230,7 @@ function normalize(parsed: Partial<CanopyConfig>): CanopyConfig {
     ranger: normalizeRanger(cfg.ranger),
     sweep: normalizeSweep(cfg.sweep),
     awake: AWAKE_MODES.includes(cfg.awake) ? cfg.awake : base.awake,
+    push: normalizePush(cfg.push),
   };
 }
 

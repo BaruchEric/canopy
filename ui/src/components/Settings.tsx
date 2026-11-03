@@ -483,7 +483,7 @@ export function SettingsMenu() {
         {
           tab: "device",
           key: "notify",
-          words: "notifications notify alert system desktop title count waiting hidden tab permission",
+          words: "notifications notify alert system desktop title count waiting hidden tab permission push closed subscribe badge",
           node: <NotifyRow />,
         },
         {

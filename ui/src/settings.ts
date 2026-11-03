@@ -205,6 +205,9 @@ export interface Settings {
   /** system notifications while the tab is hidden, and the "(n)" count of
    *  what waits on you in the tab's title; off unless asked for */
   notify: boolean;
+  /** web push from the home backend when no page is open (FR-042): this
+   *  browser subscribed itself; off unless asked for */
+  push: boolean;
   /** the costs view's harness line threshold, percent; 0 turns it off */
   harnessShareMax: number;
 }
@@ -274,6 +277,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sectionTabs: [],
   itemTabs: [],
   notify: false,
+  push: false,
   harnessShareMax: HARNESS_SHARE_MAX,
 };
 
@@ -459,6 +463,7 @@ export function loadSettings(): Settings {
       sectionTabs: sectionTabsOf(saved.sectionTabs),
       itemTabs: itemTabsOf(saved.itemTabs),
       notify: typeof saved.notify === "boolean" ? saved.notify : DEFAULT_SETTINGS.notify,
+      push: typeof saved.push === "boolean" ? saved.push : DEFAULT_SETTINGS.push,
       harnessShareMax: harnessShareMaxOf(saved.harnessShareMax),
       ...levelOf(saved),
     };

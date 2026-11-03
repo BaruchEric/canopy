@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+import { pushWhyNot, PUSH_WORDS } from "../push";
+import { disablePush, enablePush, pushPlace, pushState, subscribePush, testPush } from "../pushclient";
 import { useStore } from "../store";
 
 type Permission = NotificationPermission | "none";
@@ -21,13 +23,19 @@ function whyNot(on: boolean, permission: Permission): string | null {
   return null;
 }
 
-/** The device tab's notifications row. Turning it on asks the browser for
- *  permission, since a page may only ask in answer to a click. */
+/** The device tab's notifications row. Turning either switch on asks the
+ *  browser for permission, since a page may only ask in answer to a click.
+ *  The second switch is web push (FR-042): the home backend pushes what
+ *  waits on you to this browser when no page of yours is open. */
 export function NotifyRow() {
   const on = useStore((s) => s.settings.notify);
+  const pushOn = useStore((s) => s.settings.push);
   const setSetting = useStore((s) => s.setSetting);
   const [permission, setPermission] = useState<Permission>(permissionNow);
   const why = whyNot(on, permission);
+  const push = useSyncExternalStore(subscribePush, pushState);
+  const pushWhy = pushWhyNot(pushPlace(pushOn, push));
+  const subscribed = pushOn && push.mine !== null && pushWhy === null;
 
   const toggle = (next: boolean) => {
     setSetting("notify", next);
@@ -38,6 +46,11 @@ export function NotifyRow() {
     void Notification.requestPermission()
       .then(setPermission)
       .catch(() => setPermission(permissionNow()));
+  };
+
+  const togglePush = (next: boolean) => {
+    setSetting("push", next);
+    void (next ? enablePush() : disablePush()).then(() => setPermission(permissionNow()));
   };
 
   return (
@@ -51,6 +64,27 @@ export function NotifyRow() {
         A chat whose turn it is, an ask, a run that finished or failed. Only the main window notifies, so a pop-out never doubles one.
       </p>
       {why && <p className="settings-hint">{why}</p>}
+      <label className="settings-line">
+        <input type="checkbox" checked={pushOn} disabled={push.busy} onChange={(e) => togglePush(e.target.checked)} />
+        push when the page is closed
+      </label>
+      <p className="settings-hint">
+        A new ask, a run that failed, a branch sent back, a check that gave up, a trigger that needs you: the home backend pushes it to this browser when no page of yours is open. A push carries a title and a link, never a token.
+      </p>
+      {pushWhy && (
+        <p className="settings-hint">
+          {pushWhy}
+          {pushWhy === PUSH_WORDS.stale && <> <button type="button" className="mini" disabled={push.busy} onClick={() => { void enablePush(true); }}>resubscribe</button></>}
+        </p>
+      )}
+      {subscribed && push.mine && (
+        <p className="settings-hint">
+          Subscribed as {push.mine.device || "this browser"} on {push.mine.backend}.{" "}
+          <button type="button" className="mini" disabled={push.busy} onClick={() => { void testPush(); }}>send a test</button>
+          {push.tested && <> {push.tested}.</>}
+        </p>
+      )}
+      {push.error && <p className="settings-hint error">{push.error}</p>}
     </section>
   );
 }

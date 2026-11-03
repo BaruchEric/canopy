@@ -222,6 +222,7 @@ import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
 import { RegistryHub } from "./registry";
 import { AskHub } from "./asks";
+import { PushHub } from "./push";
 import { BODY_MAX as INTAKE_BODY_MAX, IncubatorHub, canopyRepoOf } from "./incubator";
 import { ScreenLayouts } from "./layouts";
 import { SCAN_EVERY, type AgentProc } from "../core/agentscan";
@@ -485,6 +486,8 @@ interface ServerState {
   /** asks for a human: the broker's open asks followed for the inbox,
    *  answers, presence and guards through the answer token */
   asks: AskHub;
+  /** web push to Eric's browsers when no page is open (server/push, FR-042) */
+  push: PushHub;
   /** new projects carried from an idea through clarify and on (core/incubator.ts) */
   incubator: IncubatorHub;
   /** the screen layout profiles the pages keep here (`/api/layouts`) */
@@ -2621,10 +2624,14 @@ async function finding<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** the events after which the push hub reads its "needs you" list again */
+const PUSH_EVENTS: ReadonlySet<ServerEvent["type"]> = new Set(["run", "run-gone", "flow", "flow-gone", "asks", "landing", "prs", "triggers", "ranger"]);
+
 function broadcast(state: ServerState, event: ServerEvent): void {
   // a commit in a kept worktree moves refs in the common git dir, which the
   // main checkout's watcher reports: its trees' counts are read again
   if (event.type === "repo") state.trees.touched(event.repo.path);
+  if (PUSH_EVENTS.has(event.type)) state.push.poke();
   const data = enc.encode(`data: ${JSON.stringify(event)}\n\n`);
   for (const c of state.clients) {
     try {
@@ -3086,6 +3093,9 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
   // reported by the PR loop after each read; ok until it reads one
   state.health.add({ id: PRS_CHECK, label: "PR watch (gh)", scope: canopy, heal: "self" });
   state.health.report(PRS_CHECK, { state: "ok" });
+  // fed by the push hub: down without a key or with every browser stale,
+  // off while no browser has turned push on
+  state.health.add({ id: PUSH_CHECK, label: "web push", scope: canopy, heal: "none" });
   // one check per trigger rule, added and removed as triggers.json changes
   // (the hub's rulesChanged dep); this first load makes them before any
   // poll, each ok until its rule polls
@@ -3134,6 +3144,8 @@ function addCanopyChecks(state: ServerState, broker: boolean): void {
 }
 
 const PRS_CHECK = "canopy:prs";
+/** fed by the push hub after its start and every pass (FR-042) */
+const PUSH_CHECK = "canopy:push";
 /** the prefix of the per-rule issue-poll checks, `canopy:triggers:<rule>` */
 const TRIGGERS_CHECK = "canopy:triggers:";
 const triggerCheckId = (rule: string): string => `${TRIGGERS_CHECK}${rule}`;
@@ -3756,6 +3768,8 @@ async function handleApi(
   if (repoHealthRes) return repoHealthRes;
   const askRes = await state.asks.handle(req, url);
   if (askRes) return askRes;
+  const pushRes = await state.push.handle(req, url, caller);
+  if (pushRes) return pushRes;
   const incubatorRes = await state.incubator.handle(req, url);
   if (incubatorRes) return incubatorRes;
   const layoutsRes = await state.layouts.handle(req, url);
@@ -5990,10 +6004,36 @@ export async function startServer(opts: {
     }),
     asks: new AskHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
-      onStream: (up) => state.health.report("canopy:asks", streamResult(up)),
+      onStream: (up) => {
+        state.health.report("canopy:asks", streamResult(up));
+        // the open list is read again on a reconnect: that is no news
+        if (up) state.push.reseed();
+      },
       deviceName: (client) => deviceNameOf(state, client),
       remember: (ask, rule) => rememberForAsk(state, ask, rule),
       ...opts.asks,
+    }),
+    push: new PushHub({
+      dir: join(configDir(), "push"),
+      subject: cfg.push.subject,
+      backend: selfName(cfg.self, hostname()),
+      snapshot: () => {
+        const landing = state.landing.info();
+        return {
+          asks: state.asks.list(),
+          runs: state.runner.list(),
+          flows: state.flows.list(),
+          landing: landing.entries,
+          notices: landing.notices ?? [],
+          prs: state.prs.info(),
+          triggers: state.triggers.list(),
+          ranger: state.ranger.info(),
+          nameOf: (id) => state.result.repos.find((r) => r.id === id)?.name ?? "",
+        };
+      },
+      streams: () => state.streams.size,
+      onHealth: (r) => state.health.report(PUSH_CHECK, r),
+      log: (line) => console.error(`canopy: ${line}`),
     }),
     incubator: new IncubatorHub(
       new Incubator({
@@ -6628,6 +6668,8 @@ export async function startServer(opts: {
       // page on another origin cannot open a bare shell on this loopback.
       caller = state.callers.localCaller();
     }
+    // a page's request is presence, which holds a push (FR-042)
+    if (caller?.kind === "page") state.push.sawPage();
     // the coordinator's lane goes first, in every mode
     const laned = state.gate.lane(req, url, caller, srv.requestIP(req)?.address ?? "", lane);
     if (laned) return laned;
@@ -6947,6 +6989,8 @@ export async function startServer(opts: {
    *  holding the lock: at start, and from health's button once the server
    *  that held it is gone */
   const adoptFlows = async (): Promise<void> => {
+    // what the adopted records bring is not news to push
+    state.push.reseed();
     flowFiles = new FlowFiles(root);
     // A restored flow can start a branch run synchronously. Adopt its work
     // item first so the runner's onRun event is recorded instead of dropped.
@@ -7100,6 +7144,8 @@ export async function startServer(opts: {
   // What the shells have on their screens, written out while `keepShells`
   // is on, so a machine going down does not take them with the tmux server.
   addCanopyChecks(state, chanCfg !== null);
+  // the key pair and the subscriptions, then the first read of what waits
+  void state.push.start().then(() => state.push.poke()).catch((err) => console.error("canopy: push", err));
   // while no page or CLI is signed in, the way in is a code only this log shows
   state.gate.announce();
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
@@ -7199,6 +7245,7 @@ export async function startServer(opts: {
       state.chan.close();
       state.registry.close();
       state.asks.close();
+      state.push.stop();
       // the ptys go with the server; a shell on tmux stays for the next one
       for (const t of state.terms.values()) {
         t.pty?.session.detach();

@@ -2,6 +2,7 @@ import type { RunGroup } from "../../src/core/group";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { CapacitySettings } from "../../src/core/capacity";
+import type { PushEntryView, PushKeyInfo, PushListInfo, PushTestResult } from "../../src/core/push";
 import type { VoiceEngine } from "./voicelive";
 import type {
   AwakeInfo,
@@ -1375,6 +1376,15 @@ export const api = {
     }),
   layoutDelete: (id: string) => req<{ profiles: ScreenProfile[] }>(homeName(), `/api/layouts?id=${encodeURIComponent(id)}`, { method: "DELETE" }),
   layoutReset: (id: string) => req<{ profiles: ScreenProfile[] }>(homeName(), `/api/layouts/reset?id=${encodeURIComponent(id)}`, { method: "POST" }),
+  /** the home backend's push key, and this browser's own entry when `client` is given (FR-042) */
+  pushKey: (client?: string) => req<PushKeyInfo>(homeName(), `/api/push/key${client ? `?client=${encodeURIComponent(client)}` : ""}`),
+  /** this browser's subscription, kept on the home backend; `replace` takes an older endpoint's place */
+  pushSubscribe: (body: { subscription: { endpoint: string; keys: { p256dh: string; auth: string } }; client: string; device: string; replace: boolean }) =>
+    req<{ ok: true; entry: PushEntryView }>(homeName(), "/api/push/subscribe", { method: "POST", body: JSON.stringify(body) }),
+  pushUnsubscribe: (client: string) => req<{ ok: true; removed: boolean }>(homeName(), `/api/push/subscribe?client=${encodeURIComponent(client)}`, { method: "DELETE" }),
+  /** one push to every browser subscribed on the home backend */
+  pushTest: () => req<PushTestResult>(homeName(), "/api/push/test", { method: "POST" }),
+  pushList: () => req<PushListInfo>(homeName(), "/api/push"),
 };
 
 /** Which base URL a backend is reached at from this page: its first pick,

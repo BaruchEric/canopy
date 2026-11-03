@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { installSoftKeys } from "./softkeys";
 import { registerWorker } from "./install";
+import { startPush } from "./pushclient";
 import "./styles.css";
 
 installSoftKeys();
@@ -16,3 +17,4 @@ if (el) {
   );
 }
 registerWorker();
+startPush();

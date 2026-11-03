@@ -80,6 +80,74 @@ device the same page. Ranked 11th in
 - **P4. Badging.** `navigator.setAppBadge` on the installed page on iOS and
   on Android Chrome; which one clears it on open.
 
+## Probe results (2026-11-02)
+
+Plan 2 was built on this Mac, in a worktree, without the phone or the
+mini at hand.
+
+- **P1, open for Eric.** Not run: it needs the iPhone. Built to the
+  assumption above (the installed page gets `pushManager`, a Safari tab
+  does not); the device tab says "Push needs the page installed to the
+  home screen on an iPhone" when `platformOf` says iOS and the page is not
+  standalone.
+- **P2, open for Eric.** Not run: it needs canopy.beric.ca behind Access.
+  Built to the assumption that `/sw.js` comes back as JavaScript with the
+  Access cookie, as plan 1 assumed for the manifest.
+- **P3, done in Bun 1.4.4.** Web Crypto signs ES256 and encrypts
+  `aes128gcm` as the RFCs say: `core/webpush.test.ts` reproduces RFC 8291
+  appendix A's ciphertext byte for byte from its keys and salt. One
+  correction to the wording above: Web Crypto's ECDSA signature is already
+  the raw 64-byte `r || s` form a JWT wants, so there is no DER-to-raw step.
+  Hand-rolled it is; `web-push` was not taken. The end-to-end half of P3
+  (one push through a real push service) is recorded under "Checked on
+  2026-11-02" below.
+- **P4, plan 3.** Not run. The worker sets the badge from the payload's
+  `count` and clears it on a click; the page clears it on focus with
+  nothing waiting. Which one wins on iOS is for the phone to say.
+
+### Checked on 2026-11-02
+
+On a scratch server from the worktree (`bun bin/canopy.ts ui <scratch root>
+--port 7912 --no-open`, `CANOPY_CONFIG_DIR` a folder of its own, `CANOPY_TMUX=0`
+because the scratch path is too long for a unix socket on macOS):
+
+- `push/vapid.json` appeared 0600 in a 0700 `push/` on the first start, and
+  `GET /api/push/key` answered the public key with no token. `GET /api/push`
+  refused a bare curl with 401 and, signed in as the CLI, listed the entries.
+- `canopy push ls` and `canopy push test` against an empty book said "no
+  browser has turned push on"; the `web push` health row read `off` with
+  those words.
+- A subscribe with the CLI's token was refused 403 ("only canopy's page
+  subscribes itself to push").
+- Google Chrome on this Mac, launched through playwright-cli (`--browser=chrome
+  --headed`, a profile of its own under the scratch folder with notifications
+  allowed in its Preferences, since Chrome's push service ignores the
+  permission Playwright grants over CDP and answers "Registration failed -
+  permission denied"), loaded the built page over `127.0.0.1:7912`, registered
+  the worker, signed in by a pair request the CLI approved, and turned the
+  switch on in the device tab. The row read "Subscribed as Mac, Chrome on
+  erics-macbook-pro" with "send a test"; `canopy push ls` listed the browser;
+  `subscriptions.json` held its FCM endpoint, 0600; the health row read `ok`,
+  "1 browser".
+- `canopy push test` sent one push through `fcm.googleapis.com` (201) with
+  the page on a blank tab, and the page, opened again, read the shown
+  notification back from the worker (`getNotifications`: the test title, body,
+  tag `test`, data `{url: "/"}`). A push with the page open was shown too
+  (a newer timestamp under the same tag), and so was the device tab's own
+  "send a test" ("sent to 1 browser"). Payloads decrypted in Chrome, so the
+  hand-rolled `aes128gcm` and VAPID hold against a real push service.
+- A reload with the switch on kept the row at "Subscribed as", so the
+  load-time sync found the browser's subscription and the backend's entry.
+- Turning the switch off dropped the browser's subscription
+  (`getSubscription` null), emptied `subscriptions.json`, put `canopy push
+  ls` back to "no browser has turned push on" and the health row to `off`;
+  turning it on again subscribed afresh.
+
+Not checked here: a notification click landing on an ask (nothing fakes a
+click on a shown notification from Playwright), a push for a real ask (the
+scratch server had no agent to ask), the badge, the 429 path against a real
+service, the iPhone (P1) and Access (P2).
+
 ## The installable page
 
 ### Manifest
@@ -341,6 +409,25 @@ Made on 2026-10-25:
    use.
 6. **Push holds while a page is present** (90 s), so the tab's notification
    and the phone's do not both fire for one thing.
+
+Made on 2026-11-02, building plan 2:
+
+10. **Hand-rolled stays.** P3 cost under a day, so call 5's fallback was
+    not needed; `core/webpush.ts` has no dependency.
+11. **`canopy push test` and `canopy push ls` share the verb with the git
+    push.** `test` and `ls` are taken as push's own words; a repo folder by
+    that name is pushed as `./test`.
+12. **Presence without the broker.** A page is "present" when it holds an
+    event stream open or made any page-kind request within 2 minutes;
+    `route()` reports the latter. The broker's presence list was not
+    needed for this.
+13. **An unenforced backend's null caller may subscribe.** The page-kind
+    rule applies when a caller is known; a backend with no callers at all
+    (loopback, auth off) has no stranger to refuse.
+14. **A page that lost its subscription turns its own switch off.** The
+    worker holds no token, so it cannot tell the backend after a
+    `pushsubscriptionchange`; the page checks on load instead, deletes the
+    backend's entry and says so in the row.
 
 For Eric:
 
