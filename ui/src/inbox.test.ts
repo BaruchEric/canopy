@@ -108,7 +108,7 @@ describe("the harness's weekly line", () => {
   test("the newest full week at or over the line, once per week key", () => {
     expect(harnessNotice(weeks, ["canopy", "devhub"], 25, null)).toEqual({
       key: "2026-W43",
-      text: "last week 34% of Claude spend went into the harness (canopy, devhub)",
+      text: "last week 34% of Claude spend went into tooling (canopy, devhub)",
     });
     expect(harnessNotice(weeks, ["canopy", "devhub"], 34, null)?.key).toBe("2026-W43");
     expect(harnessNotice(weeks, ["canopy", "devhub"], 25, "2026-W43")).toBeNull();

@@ -732,13 +732,13 @@ export function RepoMenu({
               className="menu-item"
               title={
                 harness
-                  ? "Stop counting this repo as the harness"
-                  : "Count this repo as the harness, canopy itself: the costs view then says what share of the spend and the sessions went into it"
+                  ? "Stop counting this repo as tooling"
+                  : "Count this repo as tooling, work on canopy itself rather than on your projects: the costs view then says what share of the spend and the sessions went into it"
               }
               onClick={() => void markHarness()}
             >
-              <span className="menu-text">{harness ? "not the harness" : "counts as the harness"}</span>
-              {harness && <span className="menu-fact">harness</span>}
+              <span className="menu-text">{harness ? "not tooling" : "counts as tooling"}</span>
+              {harness && <span className="menu-fact">tooling</span>}
             </button>
             <button
               type="button"

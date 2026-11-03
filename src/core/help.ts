@@ -87,7 +87,7 @@ usage:
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy costs [--days 1|7|30] [--share]
                                      what the paid services spent across every backend the home one lists, by service and by repo;
-                                     --share adds the harness share, dollars and Claude sessions, and eight weeks of it
+                                     --share adds the tooling share, dollars and Claude sessions, and eight weeks of it
     --on NAME / --backend URL        as canopy health
   canopy capacity [--json]           each backend's usage windows, the limit hit that holds work, and the starts held for capacity
   canopy capacity read               read the windows now

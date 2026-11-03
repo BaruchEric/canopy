@@ -75,23 +75,23 @@ function paintShare(value: string, share: number | null, max: number): string {
 function shareLineAt(share: HarnessShare, max: number): string {
   const dollars = share.usd.harness + share.usd.rest;
   const sessions = share.sessions.harness + share.sessions.rest;
-  return `harness ${paintShare(pct(share.share), share.share, max)} of ${usdWord(dollars)} · ${paintShare(pct(share.sessionShare), share.sessionShare, max)} of ${sessions} sessions`;
+  return `tooling ${paintShare(pct(share.share), share.share, max)} of ${usdWord(dollars)} · ${paintShare(pct(share.sessionShare), share.sessionShare, max)} of ${sessions} sessions`;
 }
 
-/** "harness 23% of $41.20 · 31% of 48 sessions" */
+/** "tooling 23% of $41.20 · 31% of 48 sessions" */
 export function shareLine(share: HarnessShare): string {
   return shareLineAt(share, HARNESS_SHARE_MAX);
 }
 
-/** the figure naming the harness repos, then the weeks table */
+/** the figure naming the tooling repos, then the weeks table */
 export function shareLines(share: HarnessShare, weeks: readonly HarnessWeek[], names: readonly string[], max: number): string[] {
-  const label = names.length > 0 ? `(${names.join(", ")})` : "(no repo is marked as the harness)";
+  const label = names.length > 0 ? `(${names.join(", ")})` : "(no repo is marked as tooling)";
   if (weeks.length === 0) {
     return [`${shareLineAt(share, max)}  ${label}`, "  no week to show: claude-history has no spend in these repos"];
   }
   const lines = [
     `${shareLineAt(share, max)}  ${label}`,
-    `${"week".padEnd(10)}  ${"harness".padStart(9)}  ${"rest".padStart(8)}  ${"share".padStart(5)}`,
+    `${"week".padEnd(10)}  ${"tooling".padStart(9)}  ${"rest".padStart(8)}  ${"share".padStart(5)}`,
   ];
   weeks.forEach((week, index) => {
     const isLast = index === weeks.length - 1;

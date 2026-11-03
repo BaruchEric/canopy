@@ -699,7 +699,7 @@ export function HarnessNoticeLine() {
   if (!notice) return null;
   return (
     <section className="settings-row">
-      <h3 className="panel-label">harness</h3>
+      <h3 className="panel-label">tooling</h3>
       <p className="settings-hint">{notice.text}</p>
       <button type="button" className="mini" onClick={() => sayHarness(notice.key)}>
         noted

@@ -37,10 +37,10 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coa
 Plan 1 adds a per-machine pool of prepared worktrees. `warm: N` in `.canopy/gates.json` supplies the default count for `canopy worktrees warm <repo> [N]`; a warm branch run reuses prepared setup when its lockfile is unchanged, while a cold start says `no warm worktree; setup will run` and runs setup. Per-worktree dev tasks and ports are plan 2; per-worktree compose stacks are plan 3.
 Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`. Plans 2 and 3 remain open.
 
-### FR-044 · Harness share in the costs view
+### FR-044 · Harness share in the costs view (the tooling share)
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Yegge's "20-25% of all my work")
 Repos marked as the harness contribute their dollars and Claude sessions to a share line in the costs view, with eight weeks of bars, a per-browser warning line (25% by default), one quiet inbox notice per week at most and `canopy costs --share`.
-Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Implemented and independently reviewed locally 2026-10-27 on `main`.
+Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Implemented and independently reviewed locally 2026-10-27 on `main`. Renamed to the tooling share in the UI, CLI and ranger brief on 2026-11-03; the code and config keep harness.
 
 ### FR-040 · Pre-edit collision warnings
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)

@@ -69,18 +69,18 @@ describe("weekly harness line surfaces", () => {
     setupNotice();
     expect(harnessNoticeOf(useStore.getState())).toMatchObject({ key: "2026-W43" });
     const html = renderCurrent(<InboxPopBody />);
-    expect(html).toContain("last week 34% of Claude spend went into the harness (canopy)");
+    expect(html).toContain("last week 34% of Claude spend went into tooling (canopy)");
     expect(html).toContain("The inbox is empty");
   });
 
   test("the waiting panel shows it in its empty and regular branches", () => {
     setupNotice();
     expect(harnessNoticeOf(useStore.getState())).toMatchObject({ key: "2026-W43" });
-    expect(renderCurrent(<WaitingBody />)).toContain("last week 34% of Claude spend went into the harness (canopy)");
+    expect(renderCurrent(<WaitingBody />)).toContain("last week 34% of Claude spend went into tooling (canopy)");
 
     useStore.setState({ asks: { a1: ask }, asksReady: true });
     const html = renderCurrent(<WaitingBody />);
-    expect(html).toContain("last week 34% of Claude spend went into the harness (canopy)");
+    expect(html).toContain("last week 34% of Claude spend went into tooling (canopy)");
     expect(html).toContain("asks and prompts");
   });
 });

@@ -3632,7 +3632,7 @@ describe("the harness weekly inbox selector", () => {
     const before = useStore.getState();
     const notice = harnessNoticeOf(before);
     if (!notice) throw new Error("the harness notice fixture should cross the line");
-    expect(notice).toEqual({ key: "2026-W43", text: "last week 34% of Claude spend went into the harness (canopy)" });
+    expect(notice).toEqual({ key: "2026-W43", text: "last week 34% of Claude spend went into tooling (canopy)" });
     expect(harnessNoticeOf(before)).toBe(notice);
     const inbox = inboxItems(before);
     const count = waitingCount(before);

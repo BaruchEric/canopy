@@ -178,7 +178,7 @@ function HarnessShareRow() {
 
   return (
     <section className="settings-row">
-      <h3 className="panel-label">harness share</h3>
+      <h3 className="panel-label">tooling share</h3>
       <label className="layout-field">
         warning at
         <span className="sweep-span">
@@ -188,7 +188,7 @@ function HarnessShareRow() {
             min={HARNESS_SHARE.off}
             max={HARNESS_SHARE.max}
             value={text ?? String(value)}
-            aria-label="Harness share warning line"
+            aria-label="Tooling share warning line"
             onChange={(e) => setText(e.target.value)}
             onBlur={commit}
             onKeyDown={(e) => {
@@ -202,7 +202,7 @@ function HarnessShareRow() {
         </span>
       </label>
       <p className="settings-hint">
-        The costs view's harness line turns rust at this share of the window's dollars, and the inbox gets one quiet line a week when last week crossed it. 0 turns both off.
+        The costs view's tooling line turns rust at this share of the window's dollars, and the inbox gets one quiet line a week when last week crossed it. 0 turns both off.
       </p>
     </section>
   );
@@ -489,7 +489,7 @@ export function SettingsMenu() {
         {
           tab: "device",
           key: "harness",
-          words: "harness share warning line percent costs canopy itself inbox",
+          words: "tooling share harness warning line percent costs canopy itself inbox",
           node: <HarnessShareRow />,
         },
         {

@@ -140,8 +140,8 @@ function HarnessLine({ sheet, history, days, cards }: { sheet: CostSheet; histor
   const tone = shareTone(share.share, max);
   return (
     <details className="cost-share" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-      <summary title={names.length ? `The harness: ${names.join(", ")}` : "No repo counts as the harness: mark one from its card's menu"}>
-        harness <b className={tone ?? undefined}>{pct(share.share)}</b> of {usd(share.usd.harness + share.usd.rest)} · <b className={tone ?? undefined}>{pct(share.sessionShare)}</b> of {share.sessions.harness + share.sessions.rest} sessions
+      <summary title={names.length ? `Tooling: ${names.join(", ")}` : "No repo counts as tooling: mark one from its card's menu"}>
+        tooling <b className={tone ?? undefined}>{pct(share.share)}</b> of {usd(share.usd.harness + share.usd.rest)} · <b className={tone ?? undefined}>{pct(share.sessionShare)}</b> of {share.sessions.harness + share.sessions.rest} sessions
       </summary>
       {weeks.length === 0 ? (
         <p className="cost-note">{open && wide === null ? "reading 90 days…" : "No week to show: claude-history has no spend in these repos."}</p>
@@ -150,7 +150,7 @@ function HarnessLine({ sheet, history, days, cards }: { sheet: CostSheet; histor
           <thead>
             <tr>
               <th>week</th>
-              <th>harness</th>
+              <th>tooling</th>
               <th>rest</th>
               <th>share</th>
               <th aria-label="share bar" />

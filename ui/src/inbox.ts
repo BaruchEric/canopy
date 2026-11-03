@@ -57,7 +57,7 @@ export function harnessNotice(weeks: readonly HarnessWeek[], names: readonly str
   if (!week || week.share === null || shareTone(week.share, max) !== "rust") return null;
   const key = weekKey(week.from);
   if (said === key) return null;
-  return { key, text: `last week ${pct(week.share)} of Claude spend went into the harness (${names.join(", ")})` };
+  return { key, text: `last week ${pct(week.share)} of Claude spend went into tooling (${names.join(", ")})` };
 }
 
 export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "group" | "trigger" | "note";

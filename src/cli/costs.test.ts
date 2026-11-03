@@ -51,20 +51,20 @@ describe("the share", () => {
     { from: "2026-10-26", harness: 2, rest: 2, share: 0.5 },
   ];
   test("shareLine", () => {
-    expect(plain(shareLine(share))).toBe("harness 23% of $41.20 · 31% of 48 sessions");
-    expect(plain(shareLine({ usd: { harness: 0, rest: 0 }, sessions: { harness: 0, rest: 0 }, share: null, sessionShare: null }))).toBe("harness — of $0.00 · — of 0 sessions");
+    expect(plain(shareLine(share))).toBe("tooling 23% of $41.20 · 31% of 48 sessions");
+    expect(plain(shareLine({ usd: { harness: 0, rest: 0 }, sessions: { harness: 0, rest: 0 }, share: null, sessionShare: null }))).toBe("tooling — of $0.00 · — of 0 sessions");
   });
   test("shareLines: the figure with the names, then the weeks", () => {
     expect(shareLines(share, weeks, ["canopy", "devhub"], 25).map(plain)).toEqual([
-      "harness 23% of $41.20 · 31% of 48 sessions  (canopy, devhub)",
-      "week          harness      rest  share",
+      "tooling 23% of $41.20 · 31% of 48 sessions  (canopy, devhub)",
+      "week          tooling      rest  share",
       "2026-10-05      $0.00     $0.00      —",
       "2026-10-12      $7.00     $7.00    50%",
       "2026-10-19     $21.00     $7.00    75%",
       "2026-10-26      $2.00     $2.00    50%  so far",
     ]);
     expect(shareLines(share, [], [], 25).map(plain)).toEqual([
-      "harness 23% of $41.20 · 31% of 48 sessions  (no repo is marked as the harness)",
+      "tooling 23% of $41.20 · 31% of 48 sessions  (no repo is marked as tooling)",
       "  no week to show: claude-history has no spend in these repos",
     ]);
   });
@@ -233,7 +233,7 @@ test("main dispatches costs across listed backends and merges qualified repos", 
   expect(devhubRequests).toContain("GET /api/costs?days=30");
   const printed = output.map(plain);
   expect(printed.join("\n")).toContain("30 days: $23.00");
-  expect(printed.join("\n")).toContain("harness 74% of $23.00 · 80% of 5 sessions  (canopy, runner, devhub)");
+  expect(printed.join("\n")).toContain("tooling 74% of $23.00 · 80% of 5 sessions  (canopy, runner, devhub)");
   expect(printed.join("\n")).toContain("  canopy                         $11.00");
   expect(printed.filter((line) => line.includes("  canopy "))).toHaveLength(1);
 });
