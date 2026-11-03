@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { BRANCH_RUNS_PER_REPO } from "./runner";
 import { parseCostLine } from "./costs";
-import { GROUP_MAX, LOSER_KEEP, comparePrompt, groupWord, parseCompare, pickWinner, settleGroup, type GroupDry, type MemberScore, type RunGroup } from "./group";
+import { GROUP_MAX, LOSER_KEEP, agree, comparePrompt, fileSpread, groupWord, memberProfiles, parseCompare, pickWinner, settleGroup, type GroupDry, type MemberScore, type RunGroup } from "./group";
 
 const group: RunGroup = {
   id: "g-a1b2c3d4",
@@ -146,4 +146,93 @@ test("cost ledger rows preserve the optional group id and old rows remain valid"
   const row = { at: 1, service: "claude", provider: "anthropic", model: null, repo: "/work/apps/orchard", repoName: "orchard", run: "r1", label: "ask", session: "s1", usd: 0.1, tokens: null, seconds: null };
   expect(parseCostLine(JSON.stringify({ ...row, group: "g-a1b2c3d4" }))?.group).toBe("g-a1b2c3d4");
   expect(parseCostLine(JSON.stringify(row))?.group).toBeUndefined();
+});
+
+describe("profiles per member", () => {
+  test("absent means every member takes the job route", () => {
+    expect(memberProfiles(undefined, 3)).toEqual([null, null, null]);
+    expect(memberProfiles([], 2)).toEqual([null, null]);
+  });
+  test("a short list repeats its last name and an exact one stays", () => {
+    expect(memberProfiles(["fast"], 3)).toEqual(["fast", "fast", "fast"]);
+    expect(memberProfiles(["a", "b"], 3)).toEqual(["a", "b", "b"]);
+    expect(memberProfiles(["a", "b", "c"], GROUP_MAX)).toEqual(["a", "b", "c"]);
+  });
+  test("null keeps a member on the job route, and repeats like a name", () => {
+    expect(memberProfiles([null, "fast"], 3)).toEqual([null, "fast", "fast"]);
+    expect(memberProfiles(["fast", null], 3)).toEqual(["fast", null, null]);
+  });
+});
+
+describe("two reviewers", () => {
+  const red = group.scores?.["origin-red"]?.branch ?? "";
+  const green = group.scores?.["origin-green"]?.branch ?? "";
+  const twoGreen: RunGroup = {
+    ...group,
+    scores: {
+      "origin-red": { branch: "run/red", base: "base-sha", state: "ready", gates: { ok: true } },
+      "origin-green": { branch: "run/green", base: "base-sha", state: "ready", gates: { ok: true } },
+    },
+  };
+  test("rankings that differ below the top still agree on the winner", () => {
+    const three: RunGroup = {
+      ...twoGreen,
+      members: [...twoGreen.members, { run: "third", origin: "origin-third", profile: null }],
+      scores: { ...twoGreen.scores, "origin-third": { branch: "run/third", base: "base-sha", state: "ready", gates: { ok: true } } },
+    };
+    expect(agree(three, ["run/green", "run/red", "run/third"], ["run/green", "run/third", "run/red"], 1)).toEqual({ winner: "origin-green" });
+  });
+  test("a red first rank on one side is not a disagreement", () => {
+    expect(agree(group, [red, green], [green, red], 1)).toEqual({ winner: "origin-green" });
+  });
+  test("two different winners split", () => {
+    expect(agree(twoGreen, ["run/red", "run/green"], ["run/green", "run/red"], 1)).toEqual({ reason: "the reviewers disagree: run/red or run/green" });
+  });
+  test("no eligible member on either side says so", () => {
+    expect(agree(group, [red], [red], 1)).toEqual({ reason: "no member passed the gates" });
+  });
+});
+
+describe("file spread", () => {
+  test("splits what every member touched from what only one did", () => {
+    expect(fileSpread({ a: ["x.ts", "y.ts", "a.ts"], b: ["y.ts", "x.ts", "b.ts"] })).toEqual({ every: ["x.ts", "y.ts"], only: { a: ["a.ts"], b: ["b.ts"] } });
+  });
+  test("a file two of three touched is in neither list", () => {
+    expect(fileSpread({ a: ["two.ts"], b: ["two.ts"], c: ["c.ts"] })).toEqual({ every: [], only: { c: ["c.ts"] } });
+  });
+  test("one member shares nothing", () => {
+    expect(fileSpread({ a: ["x.ts"] })).toEqual({ every: [], only: { a: ["x.ts"] } });
+  });
+  test("a repeated path counts once", () => {
+    expect(fileSpread({ a: ["x.ts", "x.ts"], b: [] })).toEqual({ every: [], only: { a: ["x.ts"] } });
+  });
+});
+
+describe("the compare prompt's order and files", () => {
+  const dry: Record<string, GroupDry> = {
+    "origin-red": { branch: "run/red", base: "base-sha", head: "h1", gates: { ok: true }, minimum: 1 },
+    "origin-green": { branch: "run/green", base: "base-sha", head: "h2", gates: { ok: true }, minimum: 1 },
+  };
+  test("reversed lists the members last to first and changes nothing else", () => {
+    const forward = comparePrompt(group, dry);
+    const backward = comparePrompt(group, dry, { reversed: true });
+    expect(forward.indexOf("## run/red")).toBeLessThan(forward.indexOf("## run/green"));
+    expect(backward.indexOf("## run/green")).toBeLessThan(backward.indexOf("## run/red"));
+    expect(backward.split("\n").sort()).toEqual(forward.split("\n").sort());
+  });
+  test("names the shared files and each branch's own", () => {
+    const text = comparePrompt(group, dry, { files: { "origin-red": ["x.ts", "r.ts"], "origin-green": ["x.ts"] } });
+    expect(text).toContain("Files every branch touched: x.ts");
+    expect(text).toContain("Files only run/red touched: r.ts");
+    expect(text).not.toContain("Files only run/green touched");
+  });
+  test("a long list is cut and says how many more", () => {
+    const many = Array.from({ length: 45 }, (_, i) => `f${i}.ts`);
+    const text = comparePrompt(group, dry, { files: { "origin-red": many, "origin-green": [] } });
+    expect(text).toContain("and 5 more");
+    expect(text).not.toContain("f9.ts");
+  });
+  test("no files, no lines", () => {
+    expect(comparePrompt(group, dry)).not.toContain("Files ");
+  });
 });
