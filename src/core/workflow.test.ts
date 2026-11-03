@@ -166,6 +166,29 @@ describe("a check line", () => {
     expect(e.workflow.steps[0]?.tools.some((t) => t.includes("push"))).toBe(false);
     expect(e.workflow.steps[0]?.body).toContain("do not push");
   });
+
+  test("the bundled spec-converge file is a listed read-only Check and a gated Fix that commits and never pushes (FR-041)", async () => {
+    const file = join(import.meta.dir, "../../lib/workflows/spec-converge.md");
+    const e = parseWorkflow(await readFile(file, "utf8"), { name: "spec-converge", source: "bundled", file });
+    expect(e.ok).toBe(true);
+    if (!e.ok) return;
+    expect(e.workflow.listed).toBeUndefined();
+    expect(e.workflow.expectsChange).toBe(true);
+    expect(e.workflow.when).toBe("any");
+    const [check, fix] = e.workflow.steps;
+    expect(e.workflow.steps.map((s) => s.name)).toEqual(["Check", "Fix"]);
+    expect(check?.tools.some((t) => t === "Edit" || t === "Write" || t.includes("git commit"))).toBe(false);
+    expect(check?.tools).toContain("Bash(git log:*)");
+    expect(check?.check).toBeNull();
+    expect(check?.body).toContain("drift: none");
+    expect(fix?.tools).toContain("Bash(git commit:*)");
+    expect(fix?.tools).toContain("Edit");
+    expect(fix?.tools.some((t) => t.includes("push"))).toBe(false);
+    expect(fix?.check).toBe("@gates");
+    expect(fix?.retries).toBe(1);
+    expect(fix?.body).toContain("do not push");
+    expect(fix?.body).toContain("spec:begin");
+  });
 });
 
 describe("retries, back, evidence and budget", () => {

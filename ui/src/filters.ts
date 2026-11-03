@@ -11,6 +11,7 @@ export const REPO_FILTERS = [
   "off-main",
   "no-upstream",
   "spec-drift",
+  "spec-stale",
   "no-spec",
   "health",
   "unreadable",
@@ -46,6 +47,10 @@ export const FILTER_INFO: Record<RepoFilter, { label: string; title: string }> =
     label: "spec drift",
     title: "Behind the shared repo spec, or its blocks edited by hand",
   },
+  "spec-stale": {
+    label: "spec drift found",
+    title: "The newest spec-converge check found SPEC.md out of step with the code, and its fix has not landed",
+  },
   "no-spec": {
     label: "no spec",
     title: "A local checkout that has not adopted the shared repo spec",
@@ -62,9 +67,12 @@ export const FILTER_INFO: Record<RepoFilter, { label: string; title: string }> =
 
 const DEFAULT_BRANCHES = new Set(["main", "master"]);
 
-/** what a facet needs beyond the repo: the ids of the repos with a check down */
+/** what a facet needs beyond the repo: the ids of the repos with a check
+ *  down, and of those whose newest spec-converge report found drift that
+ *  no fix has landed for (`staleRepos` in triggers.ts) */
 export interface FilterContext {
   healthBad?: ReadonlySet<string>;
+  specStale?: ReadonlySet<string>;
 }
 
 export function matchesFilter(r: Repo, f: RepoFilter, ctx: FilterContext = {}): boolean {
@@ -84,6 +92,8 @@ export function matchesFilter(r: Repo, f: RepoFilter, ctx: FilterContext = {}): 
       return st !== null && st.upstream === null;
     case "spec-drift":
       return r.spec === "behind" || r.spec === "drifted";
+    case "spec-stale":
+      return ctx.specStale?.has(r.id) ?? false;
     case "no-spec":
       return r.spec === "not-adopted";
     case "health":
@@ -110,6 +120,8 @@ export interface RepoQuery {
   text: string;
   /** the repos with a health check down, for the health facet */
   healthBad?: ReadonlySet<string>;
+  /** the repos whose newest spec-converge report found drift, for the spec drift found facet */
+  specStale?: ReadonlySet<string>;
 }
 
 /** Filters within one dimension add up; the dimensions all have to agree.

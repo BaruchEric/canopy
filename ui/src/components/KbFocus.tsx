@@ -85,6 +85,21 @@ function blink(key: string): void {
 }
 
 /**
+ * Puts the ring on `key` in `z` and scrolls it into view: a link from one
+ * view to a row of another, called once that view is on the page (after
+ * the view switch has rendered, so `KbWatch`'s hide on the switch has
+ * run). False when the zone or the row is not there.
+ */
+export function kbRingTo(z: KbZone, key: string): boolean {
+  const keys = keysIn(z);
+  if (!keys?.includes(key)) return false;
+  zone = z;
+  ring(z, key, keys);
+  for (const el of elsOf(z, key)) el.scrollIntoView({ block: "nearest", inline: "nearest" });
+  return true;
+}
+
+/**
  * j, k and the arrows: the ring `delta` items on in the zone pressed in
  * last, else the view's own. A press on an item (a card reached with Tab
  * or clicked) starts from that item. The move takes DOM focus off what held

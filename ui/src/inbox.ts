@@ -38,7 +38,7 @@ import { SCORE_GATE, sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 import { askTitle } from "./sweep";
 import type { TriggerEvent } from "../../src/core/trigger";
-import { serviceOf } from "./triggers";
+import { branchReportLine, reportLine, serviceOf } from "./triggers";
 
 /** The browser's quiet harness line, kept to one notice per ISO week. */
 export const HARNESS_SAID_KEY = "canopy.harnessSaid";
@@ -357,6 +357,8 @@ function landingItem(e: LandEntry, ctx: InboxContext): InboxItem | null {
   const repo = ctx.repos.find((r) => r.id === e.repoId);
   const backend = ctx.backendOf?.(e.id) ?? "";
   const why = e.state === "conflict" ? `conflicts with ${e.target}` : e.state === "red" ? e.gate?.startsWith(SCORE_GATE) ? e.gate : `${e.gate ?? "a gate"} failed` : `${e.target} kept moving`;
+  // a spec-converge branch says what its check found before why it came back
+  const drift = branchReportLine(ctx.triggers, e.id);
   return {
     key: `landing:${e.id}`,
     source: "landing",
@@ -366,7 +368,7 @@ function landingItem(e: LandEntry, ctx: InboxContext): InboxItem | null {
     repo: repo?.name ?? e.repoPath.split("/").pop() ?? "",
     who: "landing",
     where: `landing queue${backend ? ` on ${backend}` : ""}`,
-    title: e.state === "judge" ? `held ${e.branch}: needs a judge` : `sent ${e.branch} back: ${why}`,
+    title: `${drift ? `${drift}, ` : ""}${e.state === "judge" ? `held ${e.branch}: needs a judge` : `sent ${e.branch} back: ${why}`}`,
     detail: e.reason ?? "",
     at: e.updatedAt,
     left: null,
@@ -410,6 +412,8 @@ function triggerItem(e: TriggerEvent, ctx: InboxContext): InboxItem | null {
   const repo = ctx.repos.find((r) => r.id === e.repoId);
   const backend = ctx.backendOf?.(e.id) ?? "";
   const name = e.short ?? e.key;
+  // a spec-converge event's row leads with what its check found
+  const drift = reportLine(e);
   return {
     key: `trigger:${e.id}`,
     source: "trigger",
@@ -419,7 +423,7 @@ function triggerItem(e: TriggerEvent, ctx: InboxContext): InboxItem | null {
     repo: repo?.name ?? e.repoId.split("/").pop() ?? "",
     who: serviceOf(e),
     where: `${name}${backend ? ` via ${backend}` : ""}`,
-    title: `${name}: ${e.needsYou}`,
+    title: `${name}: ${drift ? `${drift}, ` : ""}${e.needsYou}`,
     detail: e.title,
     at: e.lastAt,
     left: null,

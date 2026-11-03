@@ -61,6 +61,7 @@ import { landCommand } from "./land";
 import { worktreesCommand } from "./worktrees";
 import { peersRoot, type PeersAnswer } from "./peersroot";
 import { issuesCommand } from "./issues";
+import { driftCommand } from "./drift";
 import { scenariosCommand } from "./scenarios";
 import { workflowCommand } from "./workflow";
 import { prCommand } from "./pr";
@@ -749,7 +750,8 @@ export async function main(argv: string[]): Promise<void> {
         }
         return fail(state === undefined ? "could not read the repo's spec record" : SPEC_WORDS[state]);
       }
-      return fail("usage: canopy spec status [dir] | sync <repo> [--visual | --doc] | check [repo]");
+      if (sub === "drift") return driftCommand(args, { fail });
+      return fail("usage: canopy spec status [dir] | sync <repo> [--visual | --doc] | check [repo] | drift [repo] [--all]");
     }
     case "help":
     case "--help":

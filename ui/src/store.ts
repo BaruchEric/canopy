@@ -94,6 +94,7 @@ import {
   type TurnRow,
 } from "./waiting";
 import { badRepoIds } from "./health";
+import { staleRepos } from "./triggers";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import { CARDS, SEAM } from "./cardswidth";
 import { newColumnWidth, type ColumnRoom } from "./columnwidth";
@@ -4812,7 +4813,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   pickNone: () => set({ selected: [] }),
   pickInvert: () => set((s) => ({ selected: invertPick(pickedIds(s), pickableIds(s)) })),
   pickGroup: (ids) => set((s) => ({ selected: togglePick(s.selected, ids) })),
-  pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet, { healthBad: healthBad(s) }) })),
+  pickFacet: (facet) => set((s) => ({ selected: pickWhere(visibleRepos(s), facet, { healthBad: healthBad(s), specStale: specStale(s) }) })),
   planFleet: (workflow) => set({ sheet: { kind: "fleet-plan", workflow } }),
   startFleet: async (workflow, note, request) => {
     // one fleet per backend the picked repos are on; the sheet shows the
@@ -5488,7 +5489,20 @@ export function healthBad(s: Pick<CanopyState, "health">): ReadonlySet<string> {
   return badOut;
 }
 
-let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; favorites: boolean; text: string; bad: ReadonlySet<string> } | null =
+let staleIn: CanopyState["triggers"] | null = null;
+let staleOut: ReadonlySet<string> = new Set();
+
+/** the qualified ids of the repos whose newest spec-converge report found
+ *  drift that no fix has landed for (FR-041), for the spec drift found facet */
+export function specStale(s: Pick<CanopyState, "triggers">): ReadonlySet<string> {
+  if (staleIn !== s.triggers) {
+    staleIn = s.triggers;
+    staleOut = staleRepos(s.triggers);
+  }
+  return staleOut;
+}
+
+let viewIn: { cards: RepoCard[]; filters: unknown; users: unknown; attention: boolean; favorites: boolean; text: string; bad: ReadonlySet<string>; stale: ReadonlySet<string> } | null =
   null;
 let viewOut: RepoCard[] = [];
 
@@ -5506,12 +5520,15 @@ export function visibleCards(s: CanopyState): RepoCard[] {
     v.favorites === s.favoritesOnly &&
     v.text === s.filter &&
     // the health facet alone reads it: a check's tick does not rebuild the view
-    (v.bad === healthBad(s) || !s.filters.includes("health"))
+    (v.bad === healthBad(s) || !s.filters.includes("health")) &&
+    // likewise the spec drift found facet and a trigger event's move
+    (v.stale === specStale(s) || !s.filters.includes("spec-stale"))
   )
     return viewOut;
   const bad = healthBad(s);
-  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, healthBad: bad };
-  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, bad };
+  const stale = specStale(s);
+  const q = { filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, healthBad: bad, specStale: stale };
+  viewIn = { cards, filters: s.filters, users: s.users, attention: s.dirtyOnly, favorites: s.favoritesOnly, text: s.filter, bad, stale };
   viewOut = same(viewOut, cards.filter((card) => applyQuery(card.checkouts, q, plainOf).length > 0));
   return viewOut;
 }

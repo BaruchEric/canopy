@@ -29,6 +29,7 @@ import {
   sampleIncoming,
   SERVICE_NAME,
   dueRules, fireMinute, lastFire, nextFireOf, scheduleBusy, scheduleEvent, scheduleKey, scheduleRepos,
+  SPEC_CONVERGE, driftOf, driftReports, driftStale, driftWords, fixWord,
   type ScheduleClock,
   KEEP_EVENTS,
   MAX_DESCRIPTION,
@@ -1297,4 +1298,86 @@ test("explicit landing selection survives combined hook and schedule sources", (
   const got = parseRules(JSON.stringify({ rules: [{ name: "forge", source: "forgejo", repo: "r", api: "https://forge.invalid" }] }));
   expect(got.problems).toEqual([]);
   expect(got.rules[0]?.land).toBe("queue");
+});
+
+describe("the spec-converge report (FR-041 plan 2)", () => {
+  const converge = (over: Partial<TriggerEvent> = {}): TriggerEvent =>
+    event({ id: "c1", rule: "spec-weekly", source: "schedule", service: "schedule", workflow: SPEC_CONVERGE, land: "queue", repoId: "web/shop", status: "ready", firstAt: 100, lastAt: 200, ...over });
+  const flowOf = (first: string | undefined, over: Partial<Flow> = {}): Flow =>
+    ({
+      id: "f1",
+      repoId: "web/shop",
+      workflow: SPEC_CONVERGE,
+      verb: "converge",
+      note: "n",
+      status: "working",
+      steps: [
+        { name: "Check", status: "passed", runId: "r1", ...(first === undefined ? {} : { summary: first }) },
+        { name: "Fix", status: "running", runId: "r2" },
+      ],
+      current: 1,
+      startedAt: 1,
+      branch: { name: "run/x", target: "main", base: "b", dir: "/d", origin: "br1", state: "working" },
+      ...over,
+    }) as Flow;
+
+  test("driftOf reads both shapes, skips a preamble, and refuses anything else", () => {
+    expect(driftOf("drift: none")).toEqual({ drift: 0, lines: [] });
+    expect(driftOf("drift: 3\n- stack: SPEC.md says Vite 8.3.2, bun.lock has 8.4.0\n- commands: no lint:fix\n\n- decisions: no dated line\n")).toEqual({
+      drift: 3,
+      lines: ["- stack: SPEC.md says Vite 8.3.2, bun.lock has 8.4.0", "- commands: no lint:fix", "- decisions: no dated line"],
+    });
+    expect(driftOf("Here is the report.\n\nDrift: 1\n- scope: a telemetry folder")).toEqual({ drift: 1, lines: ["- scope: a telemetry folder"] });
+    expect(driftOf(undefined)).toBeNull();
+    expect(driftOf("")).toBeNull();
+    expect(driftOf("not adopted: no SPEC.md")).toBeNull();
+    expect(driftOf("drift: some")).toBeNull();
+  });
+
+  test("fromFlow keeps the Check step's closing text as the event's report, for this workflow only", () => {
+    const e = converge({ flowId: "f1", status: "working" });
+    const report = "drift: 2\n- stack: x\n- commands: y";
+    expect(fromFlow(e, flowOf(report), 5).summary).toBe(report);
+    expect(fromFlow(e, flowOf("  drift: none  "), 5).summary).toBe("drift: none");
+    // the Check step still running leaves whatever the event had
+    expect(fromFlow(e, flowOf(undefined), 5).summary).toBeUndefined();
+    expect(fromFlow(converge({ flowId: "f1", status: "working", summary: "drift: 1" }), flowOf(undefined), 5).summary).toBe("drift: 1");
+    // the report survives the flow's later moves: the Fix step, the worktree read
+    const after = fromFlow(fromFlow(e, flowOf(report), 5), flowOf(report, { status: "done", branch: { name: "run/x", target: "main", base: "b", dir: "/d", origin: "br1", state: "ready" } }), 9);
+    expect(after).toMatchObject({ status: "ready", summary: report });
+    expect(fromFlow(e, flowOf("x".repeat(3000)), 5).summary).toHaveLength(2000);
+    // any other workflow's first step is not a report
+    const other = event({ flowId: "f1", status: "working", workflow: "sentry-triage-fix" });
+    expect(fromFlow(other, flowOf("ours", { workflow: "sentry-triage-fix" }), 5).summary).toBeUndefined();
+  });
+
+  test("driftReports keeps the newest report per repo, past a check still running", () => {
+    const events = [
+      converge({ id: "old", summary: "drift: 1\n- stack: old", firstAt: 10 }),
+      converge({ id: "new", summary: "drift: none", status: "no-fix", firstAt: 50 }),
+      converge({ id: "running", status: "working", firstAt: 90 }),
+      converge({ id: "api", repoId: "web/api", summary: "drift: 2\n- a\n- b", firstAt: 20 }),
+      event({ id: "sentry", summary: "drift: 9" }),
+    ];
+    const got = driftReports(events);
+    expect([...got.keys()].sort()).toEqual(["web/api", "web/shop"]);
+    expect(got.get("web/shop")?.event.id).toBe("new");
+    expect(got.get("web/api")?.report).toEqual({ drift: 2, lines: ["- a", "- b"] });
+    expect(driftReports([converge({ summary: undefined })]).size).toBe(0);
+  });
+
+  test("where the fix stands, whether the drift is stale, and the words after drift", () => {
+    expect(fixWord({ status: "ready" })).toBe("fix waiting to land");
+    expect(fixWord({ status: "merged" })).toBe("fix landed");
+    expect(fixWord({ status: "review", pr: { number: 7, url: "u" } })).toBe("fix in PR #7");
+    expect(fixWord({ status: "working" })).toBe("fix in progress");
+    expect(fixWord({ status: "failed" })).toBe("fix failed");
+    expect(fixWord({ status: "no-fix" })).toBe("no fix made");
+    const row = { event: converge(), report: { drift: 2, lines: [] } };
+    expect(driftStale(row)).toBe(true);
+    expect(driftStale({ ...row, event: converge({ status: "merged" }) })).toBe(false);
+    expect(driftStale({ ...row, report: { drift: 0, lines: [] } })).toBe(false);
+    expect(driftWords(row)).toBe("2, fix waiting to land");
+    expect(driftWords({ ...row, report: { drift: 0, lines: [] } })).toBe("none");
+  });
 });

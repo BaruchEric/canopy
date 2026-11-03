@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { SAMPLE_TITLE, type TriggerRuleInfo, type TriggersInfo } from "../../../src/core/trigger";
+import { SAMPLE_TITLE, SPEC_CONVERGE, driftOf, type TriggerRuleInfo, type TriggersInfo } from "../../../src/core/trigger";
 import { isSeedRepoId } from "../../../src/core/sprout";
 import { backendOf, baseOf, plainOf, qual } from "../registry";
 import { copyText } from "../share";
@@ -34,6 +34,8 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
   const [call, setCall] = useState<Call>({ kind: "idle" });
   const outcome = outcomeLine(e);
   const service = serviceOf(e);
+  // a converge event's Check step report, folded under the row
+  const report = e.workflow === SPEC_CONVERGE ? driftOf(e.summary) : null;
   const kb = useKb(kbKey("trigger", triggerKbId(backend, e.id)));
   const act = (a: "stop" | "resume" | "retry" | "dismiss") => {
     setCall({ kind: "busy" });
@@ -81,6 +83,14 @@ function EventRow({ row, many }: { row: TriggerRow; many: boolean }) {
           ))}
         </span>
       </div>
+      {report && (
+        <details className="trigger-report">
+          <summary className={report.drift === 0 ? "moss" : "rust"} title="What the Check step found SPEC.md saying that the code does not; the Fix step's commit is the diff">
+            drift: {report.drift === 0 ? "none" : report.drift}
+          </summary>
+          {report.lines.length > 0 && <pre>{report.lines.join("\n")}</pre>}
+        </details>
+      )}
       {outcome && <div className={`trigger-outcome${e.status === "merged" && e.resolved && "at" in e.resolved ? " moss" : ""}`}>{outcome}</div>}
       {call.kind === "failed" && (
         <div className="trigger-err" role="alert">
@@ -285,7 +295,8 @@ export function TriggersView() {
             No trigger rules yet. Add one to <code>triggers.json</code> in canopy's config folder, naming the source (<code>sentry</code>, <code>linear</code>, <code>github</code> or{" "}
             <code>forgejo</code>), the repo and the environment variable holding the hook's secret. canopy ships <code>sentry-fix</code>, <code>linear-issue</code> and <code>issue-fix</code> as
             their workflows. Then point a Sentry internal integration's webhook, a Linear webhook for issues, or a GitHub or Forgejo webhook for issues, at the address this page shows. A
-            GitHub or Forgejo rule with no secret polls the repo's labelled issues instead. A <code>schedule</code> rule takes a cron line and a repo, or <code>*</code> for every local one, with no hook or secret.
+            GitHub or Forgejo rule with no secret polls the repo's labelled issues instead. A <code>schedule</code> rule takes a cron line and a repo, or <code>*</code> for every local one, with no hook or secret;
+            its default workflow, <code>spec-converge</code>, reads each repo's SPEC.md against the code and commits the fix for a look.
           </p>
         </section>
       )}

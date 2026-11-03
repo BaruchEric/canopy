@@ -138,6 +138,7 @@ describe("countFacets", () => {
       "off-main": 2,
       "no-upstream": 1,
       "spec-drift": 0,
+      "spec-stale": 0,
       "no-spec": 0,
       health: 0,
       unreadable: 1,
@@ -157,4 +158,12 @@ describe("countFacets", () => {
     const all = countFacets([repo("g/a", { user: eric })]);
     expect(all.users.map((u) => u.label)).toEqual(["Eric"]);
   });
+});
+
+test("the spec drift found facet keeps the repos the newest converge report names, and counts them", () => {
+  const stale = new Set([grove[1]!.id]);
+  expect(names(grove.filter((r) => matchesFilter(r, "spec-stale", { specStale: stale })))).toEqual(["ahead"]);
+  expect(grove.filter((r) => matchesFilter(r, "spec-stale")).length).toBe(0);
+  expect(countFacets(grove, { specStale: stale }).filters["spec-stale"]).toBe(1);
+  expect(names(applyQuery(grove, { ...none, filters: ["spec-stale"], specStale: stale }))).toEqual(["ahead"]);
 });

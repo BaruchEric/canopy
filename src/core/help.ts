@@ -146,6 +146,8 @@ usage:
   canopy spec sync <repo> [--visual | --doc]   write the spec's blocks into a repo
                                      --visual adds DESIGN.md, --doc keeps only SPEC.md
   canopy spec check [repo]           exit 1 unless the repo's spec text is in sync
+  canopy spec drift [repo] [--all]   the newest spec-converge report per repo and where its fix stands
+                                     --all keeps the repos whose check found nothing
   canopy version                     the version and the commit this canopy was built from
 
 every command except source also takes:

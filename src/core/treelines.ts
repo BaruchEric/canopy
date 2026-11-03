@@ -8,6 +8,7 @@
 
 import type { Repo, SpecState } from "./types";
 import { dirtyCount } from "./types";
+import { driftStale, driftWords, type DriftRow } from "./trigger";
 
 /** the canopy palette's roles, as the CLI uses them */
 export type Tone = "moss" | "lichen" | "rust" | "sky" | "dim" | "bold";
@@ -115,14 +116,19 @@ export function treeLines(root: string, all: Repo[], opts: { dirtyOnly?: boolean
   return lines;
 }
 
-export const SPEC_WORDS: Record<SpecState, string> = {
+/** The scan's four spec states, and `stale`: the newest spec-converge check
+ *  found SPEC.md out of step with the code and no fix has landed (FR-041). */
+export type SpecWord = SpecState | "stale";
+
+export const SPEC_WORDS: Record<SpecWord, string> = {
   "in-sync": "spec text in sync",
   behind: "behind",
   drifted: "drifted",
   "not-adopted": "not adopted",
+  stale: "stale",
 };
 
-export const SPEC_TONE: Record<SpecState, Tone> = { "in-sync": "moss", behind: "lichen", drifted: "rust", "not-adopted": "dim" };
+export const SPEC_TONE: Record<SpecWord, Tone> = { "in-sync": "moss", behind: "lichen", drifted: "rust", "not-adopted": "dim", stale: "rust" };
 
 /** `canopy spec status`: one line per local checkout the scan read the spec of */
 export function specLines(version: string | number | null, repos: Repo[]): Line[] {
@@ -130,6 +136,31 @@ export function specLines(version: string | number | null, repos: Repo[]): Line[
   for (const r of repos) {
     if (r.spec === undefined) continue;
     lines.push([seg(SPEC_WORDS[r.spec].padEnd(18), SPEC_TONE[r.spec]), seg(" "), { text: r.id, repo: r.id }]);
+  }
+  return lines;
+}
+
+/** `canopy spec drift`: one line per repo with a converge report, stale
+ *  first, then the report's items indented under it. The word is `stale`
+ *  while drift waits for its fix, `fixed` once the fix landed, and `no
+ *  drift` for a clean check. `all` keeps the clean ones too. */
+export function driftLines(rows: readonly DriftRow[], now: number, all = false, backend = ""): Line[] {
+  const kept = rows.filter((row) => all || row.report.drift > 0).sort((a, b) => Number(driftStale(b)) - Number(driftStale(a)) || a.event.repoId.localeCompare(b.event.repoId));
+  const lines: Line[] = [];
+  for (const row of kept) {
+    const stale = driftStale(row);
+    const word = stale ? SPEC_WORDS.stale : row.report.drift > 0 ? "fixed" : "no drift";
+    const tone: Tone = stale ? SPEC_TONE.stale : row.report.drift > 0 ? "moss" : "dim";
+    const id = row.event.repoId;
+    lines.push([
+      seg(word.padEnd(18), tone),
+      seg(" "),
+      { text: id, repo: id },
+      seg(backend ? ` on ${backend}` : ""),
+      seg(`  drift: ${driftWords(row)}`),
+      seg(`  checked ${ago(row.event.firstAt / 1000, now)} ago`, "dim"),
+    ]);
+    for (const item of row.report.lines) lines.push([seg(`    ${item}`, "dim")]);
   }
   return lines;
 }

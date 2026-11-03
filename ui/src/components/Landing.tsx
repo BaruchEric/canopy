@@ -5,6 +5,7 @@ import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, 
 import { repoWorktrees, warmRows, warmWords } from "../landing";
 import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, runFor, useStore } from "../store";
+import { branchReportLine } from "../triggers";
 import { repoPrChip } from "../prs";
 import { keepKeys } from "../surface";
 import { ago } from "../util";
@@ -84,6 +85,9 @@ export function PrChip({ repoId }: { repoId: string }) {
  *  Shows only when there is something. */
 export function LandingSection({ repo }: { repo: Repo }) {
   const info = useStore((s) => landingAll(s));
+  // a spec-converge branch's row carries its report's first line (FR-041)
+  const events = useStore((s) => s.triggers[backendOf(repo.id)]?.events);
+  const drift = (r: Pick<LandingRun, "id">) => branchReportLine(events, r.id);
   const pool = useStore((s) => repoWorktrees(s.worktrees, repo.id));
   const warm = warmWords(pool);
   const showGroup = useStore(s => s.showGroup);
@@ -278,6 +282,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
                 <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
                   {verdictWord(r)}
                 </span>
+                {drift(r) && <span className="landing-state landing-drift" title="What the spec-converge check found; this branch is its fix">{drift(r)}</span>}
                 <span className="landing-tools">
                   {needsApproval(r) ? (
                     <button type="button" className="mini strong" disabled={busy !== null} title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(r.id)}>

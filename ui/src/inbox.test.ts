@@ -646,3 +646,39 @@ test("a group needing a pick owns its sent-back members' inbox attention", () =>
   expect(items.map(i => [i.source, i.title])).toEqual([["group", "best of 2 ready: pick"]]);
   expect(mergeInbox([], {}, {}, 5, { repos: [], cards: {}, landing: { ...landing, groups: [{ ...group, state: "picked", winner: "b1" }] } })).toEqual([]);
 });
+
+describe("a spec-converge branch's rows lead with its report (FR-041 plan 2)", () => {
+  const converge = (over: Partial<TriggerEvent> = {}): TriggerEvent => ({
+    id: "mac|c1",
+    rule: "spec-weekly",
+    source: "schedule",
+    service: "schedule",
+    key: "app@2026-11-02T05:00:00.000Z",
+    short: "2026-11-02",
+    title: "spec-converge on app, 2026-11-02",
+    note: "",
+    repoId: "app",
+    workflow: "spec-converge",
+    land: "queue",
+    status: "ready",
+    branch: "mac|b1",
+    count: 1,
+    firstAt: 1,
+    lastAt: 7,
+    summary: "drift: 3\n- stack: x",
+    ...over,
+  });
+
+  test("a converge event that needs you says what the check found before what it needs", () => {
+    const items = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, backendOf: () => "mac", triggers: [converge({ status: "stalled", needsYou: "went quiet for 20 min" })] });
+    expect(items.map((i) => i.title)).toEqual(["2026-11-02: drift: 3, went quiet for 20 min"]);
+  });
+
+  test("a converge branch the queue sent back says so too, by its branch", () => {
+    const entry = { id: "mac|b1", runId: "mac|r1", repoId: "app", repoPath: "/x/app", branch: "run/spec-converge-x", target: "main", state: "red", gate: "typecheck", reason: "tsc: 1 error", updatedAt: 9 } as unknown as LandEntry;
+    const [sentBackItem] = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, backendOf: () => "mac", landing: { runs: [], entries: [entry], orphans: [], notices: [], collisions: [] }, triggers: [converge()] });
+    expect(sentBackItem?.title).toBe("drift: 3, sent run/spec-converge-x back: typecheck failed");
+    const [plain] = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, backendOf: () => "mac", landing: { runs: [], entries: [entry], orphans: [], notices: [], collisions: [] } });
+    expect(plain?.title).toBe("sent run/spec-converge-x back: typecheck failed");
+  });
+});

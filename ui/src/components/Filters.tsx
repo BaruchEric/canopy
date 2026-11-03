@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { countFacets, FILTER_INFO, REPO_FILTERS } from "../filters";
-import { activeFilterCount, archivedCount, favoriteCount, healthBad, scopedRepos, useStore } from "../store";
+import { activeFilterCount, archivedCount, favoriteCount, healthBad, scopedRepos, specStale, useStore } from "../store";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 
@@ -26,7 +26,8 @@ export function FilterMenu() {
   const ref = useRef<HTMLDivElement>(null);
   useFitPop(ref, open);
   const bad = useStore(healthBad);
-  const facets = useMemo(() => countFacets(repos, { healthBad: bad }), [repos, bad]);
+  const stale = useStore(specStale);
+  const facets = useMemo(() => countFacets(repos, { healthBad: bad, specStale: stale }), [repos, bad, stale]);
 
   useEffect(() => {
     if (!open) return;

@@ -1,7 +1,7 @@
 /** The triggers view's model: every shown backend's events in sections, the
  *  words for each state, and the tab's count. Pure; Triggers.tsx draws it. */
 
-import { SERVICE_NAME, eventLive, resumable, retryable, type TriggerEvent, type TriggerRuleInfo, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
+import { SERVICE_NAME, SPEC_CONVERGE, driftOf, driftReports, driftStale, driftWords, eventLive, resumable, retryable, type DriftRow, type TriggerEvent, type TriggerRuleInfo, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
 import { digestShown, type TriggerDigest } from "../../src/core/digest";
 import type { Badge } from "./badges";
 
@@ -220,4 +220,42 @@ export function digestRows(triggers: Readonly<Record<string, Pick<TriggersInfo, 
       return seen.includes(key) ? [] : [{ backend, digest, key }];
     })
     .sort((a, b) => b.digest.at - a.digest.at);
+}
+
+/* ---------- the spec-converge report (FR-041 plan 2) ---------- */
+
+/** The first line of a converge event's report, "drift: 3" or "drift:
+ *  none", for a row; null for an event with no report. */
+export function reportLine(e: Pick<TriggerEvent, "workflow" | "summary">): string | null {
+  if (e.workflow !== SPEC_CONVERGE) return null;
+  const report = driftOf(e.summary);
+  return report ? `drift: ${report.drift === 0 ? "none" : report.drift}` : null;
+}
+
+/** The report's first line for a branch the landing section or the inbox
+ *  shows: the converge event whose branch it is. */
+export function branchReportLine(events: readonly TriggerEvent[] | undefined, branch: string): string | null {
+  const e = events?.find((x) => x.workflow === SPEC_CONVERGE && x.branch === branch);
+  return e ? reportLine(e) : null;
+}
+
+/** One backend's newest report for a repo, by the backend's own repo id. */
+export const driftReport = (events: readonly TriggerEvent[] | undefined, repoId: string): DriftRow | null => (events ? (driftReports(events).get(repoId) ?? null) : null);
+
+/** The spec section's line under the sync state: when the check ran and
+ *  what it found, with where the fix stands. `checked` is the relative
+ *  time's words. */
+export function driftLine(row: DriftRow, checked: string): string {
+  return row.report.drift === 0 ? `drift checked ${checked}: none` : `drift: ${driftWords(row)}, checked ${checked}`;
+}
+
+/** The page ids of the repos whose newest report found drift with no fix
+ *  landed, across every backend: the **spec drift found** chip. The store
+ *  keeps each event's repo id under its backend's name already. */
+export function staleRepos(triggers: Readonly<Record<string, Pick<TriggersInfo, "events">>>): ReadonlySet<string> {
+  const out = new Set<string>();
+  for (const info of Object.values(triggers)) {
+    for (const [repoId, row] of driftReports(info.events)) if (driftStale(row)) out.add(repoId);
+  }
+  return out;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TriggerEvent, TriggerRuleInfo, TriggersInfo } from "../../src/core/trigger";
-import { eventActs, hookAddress, nextFireWord, outcomeLine, pollWords, ruleIntake, ruleWrites, scheduleWord, statusWord, STATUS_WORD, triggerSections, triggersBadge } from "./triggers";
+import { branchReportLine, driftLine, driftReport, eventActs, hookAddress, nextFireWord, outcomeLine, pollWords, reportLine, ruleIntake, ruleWrites, scheduleWord, staleRepos, statusWord, STATUS_WORD, triggerSections, triggersBadge } from "./triggers";
 
 const ev = (over: Partial<TriggerEvent>): TriggerEvent => ({
   id: "e1",
@@ -187,5 +187,45 @@ describe("ruleWrites", () => {
     expect(ruleWrites(rule({ source: "sentry" }))).toMatchObject({ on: false, words: "leaves issues open in Sentry" });
     expect(ruleWrites(rule({ source: "sentry", tokenSet: true }))).toMatchObject({ on: true, words: "resolves in Sentry" });
     expect(ruleWrites(rule({ source: "linear", agentSet: true }))).toMatchObject({ on: true, words: "writes back to Linear" });
+  });
+});
+
+describe("the spec-converge report (FR-041 plan 2)", () => {
+  const converge = (over: Partial<TriggerEvent> = {}): TriggerEvent =>
+    ev({ id: "c1", rule: "spec-weekly", source: "schedule", service: "schedule", workflow: "spec-converge", land: "queue", repoId: "mini|web/shop", branch: "mini|br1", status: "ready", firstAt: 100, lastAt: 200, summary: "drift: 2\n- stack: x\n- commands: y", ...over });
+
+  test("a row's first line reads the report, and only a converge event's", () => {
+    expect(reportLine(converge())).toBe("drift: 2");
+    expect(reportLine(converge({ summary: "drift: none" }))).toBe("drift: none");
+    expect(reportLine(converge({ summary: undefined }))).toBeNull();
+    expect(reportLine(ev({ summary: "drift: 2" }))).toBeNull();
+  });
+
+  test("a landing row or an inbox item finds the report by its branch", () => {
+    const events = [ev({ branch: "mini|br0", summary: "drift: 9" }), converge()];
+    expect(branchReportLine(events, "mini|br1")).toBe("drift: 2");
+    expect(branchReportLine(events, "mini|br0")).toBeNull();
+    expect(branchReportLine(events, "mini|br2")).toBeNull();
+    expect(branchReportLine(undefined, "mini|br1")).toBeNull();
+  });
+
+  test("the spec section's line: when the check ran, what it found and where the fix stands", () => {
+    const events = [converge({ id: "old", summary: "drift: 1\n- a", firstAt: 10 }), converge({ id: "new", firstAt: 50 }), converge({ id: "running", status: "working", summary: undefined, firstAt: 90 })];
+    const row = driftReport(events, "mini|web/shop");
+    expect(row?.event.id).toBe("new");
+    expect(driftLine(row!, "2 h ago")).toBe("drift: 2, fix waiting to land, checked 2 h ago");
+    const clean = driftReport([converge({ summary: "drift: none", status: "no-fix" })], "mini|web/shop");
+    expect(driftLine(clean!, "3 days ago")).toBe("drift checked 3 days ago: none");
+    expect(driftReport(events, "mini|web/api")).toBeNull();
+    expect(driftReport(undefined, "mini|web/shop")).toBeNull();
+  });
+
+  test("the chip keeps the repos whose newest report found drift that has not landed", () => {
+    const triggers = {
+      home: info([converge({ id: "a", repoId: "web/shop" }), converge({ id: "b", repoId: "web/api", status: "merged" }), converge({ id: "c", repoId: "web/docs", summary: "drift: none", status: "no-fix" })]),
+      mini: info([converge({ id: "d", repoId: "mini|ai/bot", status: "failed" }), converge({ id: "e", repoId: "mini|ai/old", summary: "drift: 1", firstAt: 1 }), converge({ id: "f", repoId: "mini|ai/old", summary: "drift: none", status: "no-fix", firstAt: 2 })]),
+    };
+    expect([...staleRepos(triggers)].sort()).toEqual(["mini|ai/bot", "web/shop"]);
+    expect(staleRepos({}).size).toBe(0);
   });
 });

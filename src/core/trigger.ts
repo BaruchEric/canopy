@@ -188,7 +188,8 @@ export interface TriggerEvent {
   /** Linear: the agent session the event reports to, when the issue was
    *  delegated to canopy or canopy was mentioned on it */
   session?: string;
-  /** the run's closing message, which a Linear agent session is shown */
+  /** the run's closing message, which a Linear agent session is shown; on a
+   *  `spec-converge` flow, the Check step's drift report (`driftOf`) */
   summary?: string;
   /** the event's runs that ended `limited` in a row (FR-036): the last such
    *  run and the count; the event waits for the reset after the first and
@@ -857,6 +858,10 @@ export function fromFlow(e: TriggerEvent, flow: Flow, now: number): TriggerEvent
   const runId = [...flow.steps].reverse().find((s) => s.runId)?.runId;
   if (runId) next.runId = runId;
   if (flow.branch) next.branch = flow.branch.origin;
+  // a converge flow's report is its Check step's closing text, kept from the
+  // moment that step ends, so the row reads "drift: 3" while the Fix step goes
+  const report = e.workflow === SPEC_CONVERGE ? flow.steps[0]?.summary?.trim() : undefined;
+  if (report) next.summary = report.slice(0, 2000);
   delete next.reason;
   const going = flow.status === "working" || flow.status === "waiting" || flow.status === "gated";
   const step = flow.steps[flow.current]?.name;
@@ -1077,6 +1082,91 @@ export function sampleIncoming(title: string, now: number, service: TriggerSourc
   };
 }
 
+
+/* ---------- the spec-converge report (FR-041 plan 2) ---------- */
+
+/** The bundled workflow whose Check step reads SPEC.md against the code. */
+export const SPEC_CONVERGE = "spec-converge";
+
+/** A Check step's report read back: how many lines drifted (0 for `drift:
+ *  none`) and the item lines under the first one. */
+export interface DriftReport {
+  drift: number;
+  lines: string[];
+}
+
+const DRIFT_LINE = /^drift:\s*(none|\d+)\s*$/i;
+
+/** The report in a converge event's summary, or null when the summary is
+ *  absent or no line of it reads `drift: none` or `drift: <n>`. The report
+ *  starts at the first such line, so a sentence the agent put before it is
+ *  dropped; the lines after it are kept as the items. */
+export function driftOf(summary: string | undefined): DriftReport | null {
+  if (!summary) return null;
+  const lines = summary.split("\n").map((l) => l.trim());
+  const at = lines.findIndex((l) => DRIFT_LINE.test(l));
+  if (at < 0) return null;
+  const word = DRIFT_LINE.exec(lines[at] ?? "")?.[1]?.toLowerCase() ?? "none";
+  return { drift: word === "none" ? 0 : Number(word), lines: lines.slice(at + 1).filter(Boolean) };
+}
+
+/** A repo's newest converge event that carries a report, with the report. */
+export interface DriftRow {
+  event: TriggerEvent;
+  report: DriftReport;
+}
+
+/** The newest report per repo, by `repoId`: the newest `spec-converge`
+ *  event (by `firstAt`) whose summary reads as a report. An event still
+ *  checking has no summary yet, so the one before it stands until then. */
+export function driftReports(events: readonly TriggerEvent[]): Map<string, DriftRow> {
+  const out = new Map<string, DriftRow>();
+  const sorted = events.filter((e) => e.workflow === SPEC_CONVERGE).sort((a, b) => b.firstAt - a.firstAt || b.lastAt - a.lastAt);
+  for (const event of sorted) {
+    if (out.has(event.repoId)) continue;
+    const report = driftOf(event.summary);
+    if (report) out.set(event.repoId, { event, report });
+  }
+  return out;
+}
+
+/** Where a converge event's fix stands, from its state, for the line after
+ *  "drift: n". A clean report has no fix, so this is for drift only. */
+export function fixWord(e: Pick<TriggerEvent, "status" | "pr">): string {
+  switch (e.status) {
+    case "merged":
+      return "fix landed";
+    case "ready":
+      return "fix waiting to land";
+    case "review":
+      return e.pr ? `fix in PR #${e.pr.number}` : "fix in review";
+    case "rebasing":
+    case "conflict":
+      return "fix rebasing";
+    case "queued":
+    case "working":
+    case "waiting":
+      return "fix in progress";
+    case "stopped":
+    case "stalled":
+      return "fix stopped";
+    case "failed":
+      return "fix failed";
+    case "no-fix":
+      return "no fix made";
+    case "closed":
+      return "fix's PR closed";
+    case "ignored":
+      return "ignored";
+  }
+}
+
+/** Whether the report found drift that no fix has landed for yet: the
+ *  **spec drift found** chip and the `stale` word. */
+export const driftStale = (row: DriftRow): boolean => row.report.drift > 0 && row.event.status !== "merged";
+
+/** The words after "drift": "none", or the count and where the fix stands. */
+export const driftWords = (row: DriftRow): string => (row.report.drift === 0 ? "none" : `${row.report.drift}, ${fixWord(row.event)}`);
 
 /* ---------- the schedule source (FR-041) ---------- */
 

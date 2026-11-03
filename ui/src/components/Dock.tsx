@@ -61,6 +61,10 @@ import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placem
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
 import { backendOf, homeName, isHome } from "../registry";
+import { driftLine, driftReport } from "../triggers";
+import { openView } from "../clirun";
+import { kbKey, triggerKbId } from "../kbfocus";
+import { kbRingTo } from "./KbFocus";
 import { signinUrl } from "../backends";
 import { IdLabel } from "./IdLabel";
 import { AgentFix } from "./AgentFix";
@@ -1279,6 +1283,12 @@ const SPEC_SAYS: Record<SpecState, string> = {
  */
 function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
   const applyEvent = useStore((s) => s.applyEvent);
+  // the newest spec-converge report for this checkout (FR-041 plan 2),
+  // from its backend's trigger events; the events array only changes on
+  // a triggers event, so the join is cheap
+  const backend = backendOf(repo.id);
+  const events = useStore((s) => s.triggers[backend]?.events);
+  const drift = useMemo(() => driftReport(events, repo.id), [events, repo.id]);
   const [busy, setBusy] = useState<string | null>(null);
   const [note, setNote] = useState<Note | null>(null);
   const sync = (key: string, halves: SpecHalf[] | null) => {
@@ -1307,6 +1317,24 @@ function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
     >
       <div className="spec-body">
         <p className="spec-says">{SPEC_SAYS[state]}</p>
+        {drift && (
+          <p className={`spec-drift${drift.report.drift > 0 && drift.event.status !== "merged" ? " rust" : ""}`} title={drift.report.lines.join("\n") || "The check found every section true"}>
+            <span>{driftLine(drift, ago(drift.event.firstAt / 1000))}</span>
+            <button
+              type="button"
+              className="mini"
+              title="The triggers view, where the check's run, its report and its fix are"
+              onClick={() => {
+                openView("triggers");
+                // the ring lands once the view has rendered its rows
+                const key = kbKey("trigger", triggerKbId(backend, drift.event.id));
+                setTimeout(() => kbRingTo("triggers", key), 0);
+              }}
+            >
+              see the run
+            </button>
+          </p>
+        )}
         <div className="spec-acts">
           {adopted && (
             <button type="button" className="mini strong" disabled={busy !== null} onClick={() => sync("sync", null)} title="canopy spec sync, keeping the halves this repo took">
