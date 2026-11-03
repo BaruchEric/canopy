@@ -357,7 +357,7 @@ export class GroupHub {
       | "autoLand"
       | "startedAt"
       | "expectedMembers"
-    > & { pr?: true },
+    > & { pr?: true; reviewers?: 2 },
   ): Promise<RunGroup> {
     const epoch = this.owned();
     if (

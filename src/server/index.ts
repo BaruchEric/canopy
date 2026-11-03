@@ -242,7 +242,7 @@ import { BranchTrees } from "./branchtrees";
 import { treesRoot, treesSource } from "../core/branchtrees";
 import { TREES_SOURCE } from "../core/treewords";
 import { GroupHub } from "./groups";
-import { GROUP_MAX, type RunGroup } from "../core/group";
+import { GROUP_MAX, memberProfiles, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
@@ -1259,7 +1259,17 @@ async function withBranchStart<T>(state: ServerState, repoId: string, start: () 
   finally { release(); if (state.branchStarts.get(repoId) === pending) state.branchStarts.delete(repoId); }
 }
 
-async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: string[] | undefined, autoLand: boolean, pr: boolean, priority: Priority = "low"): Promise<RunGroup> {
+/** What a group's start says beyond the pre-flight's fields. A coordinator's
+ *  card names itself as `by`, `parent` and `work`, and its note goes in as
+ *  written, as a plain child's does. */
+interface GroupStart {
+  reviewers?: 2;
+  by?: string;
+  parent?: string;
+  work?: WorkStart;
+}
+
+async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: (string | null)[] | undefined, autoLand: boolean, pr: boolean, priority: Priority = "low", extra: GroupStart = {}): Promise<RunGroup> {
   return withBranchStart(state, repo.id, async () => {
     if (action === "compare" || action === "coordinate") throw new HttpError(400, "that action does not start a branch group");
     if (repo.host || repo.forge) throw new HttpError(400, "branch groups run only in local checkouts");
@@ -1268,19 +1278,25 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
     const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going + times > BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${BRANCH_RUNS_PER_REPO - going} free branch slots; this group needs ${times}`);
     const cfg = await loadConfig();
-    const profile = profiles?.[0];
-    if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new HttpError(400, `unknown agent profile ${profile}`);
-    const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action });
-    if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
-    await needHarness(state, agent.harness, repo.path);
-    // a fan-out is low work unless its start says otherwise (FR-036)
-    needCapacity(state, agent.harness, priority);
-    const resolved = await issueNoteFor(repo, note);
-    const group = await state.groups.create({ repoId: repo.id, repoPath: repo.path, action, note: resolved.note, autoLand, expectedMembers: times, startedAt: Date.now(), ...(pr ? { pr: true } : {}) });
+    // every member is checked before anything is cut, so one that cannot run
+    // refuses the whole start
+    const lineup = memberProfiles(profiles, times).map((profile, i) => {
+      if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new HttpError(400, `unknown agent profile ${profile}`);
+      const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action });
+      if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, `plan, then build needs Claude Code; member ${i + 1} runs ${agent.harness}`);
+      return { profile, agent };
+    });
+    for (const harness of new Set(lineup.map((member) => member.agent.harness))) {
+      await needHarness(state, harness, repo.path);
+      // a fan-out is low work unless its start says otherwise (FR-036)
+      needCapacity(state, harness, priority);
+    }
+    const resolved = extra.work ? { note, work: extra.work } : await issueNoteFor(repo, note);
+    const group = await state.groups.create({ repoId: repo.id, repoPath: repo.path, action, note: resolved.note, autoLand, expectedMembers: times, startedAt: Date.now(), ...(pr ? { pr: true } : {}), ...(extra.reviewers ? { reviewers: extra.reviewers } : {}) });
     const cuts: BranchStart[] = [];
     const items: string[] = [];
     const runs: Run[] = [];
-    const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    const by = extra.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
     try {
       for (let i = 0; i < times; i++) {
         const item = state.work.mint({ ...(resolved.work ?? { title: titleOf(resolved.note), from: { kind: "note" } }), repos: [repo.id] });
@@ -1289,10 +1305,12 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
         cut.branch.group = group.id;
         cuts.push(cut);
       }
-      for (const cut of cuts) {
-        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, agent, by, undefined, cut, { group: group.id, priority });
+      for (const [i, cut] of cuts.entries()) {
+        const member = lineup[i];
+        if (!member) throw new Error("a group member has no agent");
+        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, member.agent, by, undefined, cut, { group: group.id, priority, ...(extra.parent ? { parent: extra.parent } : {}) });
         runs.push(run);
-        await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: profile ?? null });
+        await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: member.profile });
       }
       return state.groups.info().find(g => g.id === group.id) ?? group;
     } catch (error: unknown) {
@@ -1682,7 +1700,11 @@ interface FixStart {
 async function startBranchFix(state: ServerState, rec: LandingRun, reason: string, note: string, queueLine: boolean, how: FixStart = {}): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === rec.repoId);
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
-  const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: "ask" });
+  const cfg = await loadConfig();
+  // a group's member stays on its own profile, so a fix does not blur the compare
+  const memberProfile = state.groups.info().find((g) => g.id === rec.group)?.members.find((m) => m.origin === rec.id)?.profile;
+  const profile = memberProfile && hasProfile(agentRoutes(cfg).profiles, memberProfile) ? memberProfile : undefined;
+  const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: "ask" });
   await needHarness(state, agent.harness, repo.path);
   const priority: Priority = how.priority ?? (rec.group ? "low" : "interactive");
   needCapacity(state, agent.harness, priority);
@@ -5176,19 +5198,21 @@ async function handleApi(
       const note = typeof b.note === "string" ? b.note : "";
       if (b.branch !== undefined && typeof b.branch !== "boolean") return json({ error: "branch must be true or false" }, 400);
       if (b.pr !== undefined && typeof b.pr !== "boolean") return json({ error: "pr must be true or false" }, 400);
-      const groupFields = b.times !== undefined || b.profiles !== undefined || b.autoLand !== undefined;
+      const groupFields = b.times !== undefined || b.profiles !== undefined || b.autoLand !== undefined || b.reviewers !== undefined;
       if (groupFields && b.branch !== true) return json({ error: "group settings require branch: true" }, 400);
       const times = b.times ?? 1;
       if (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX) return json({ error: `times must be 1 to ${GROUP_MAX}` }, 400);
       if (b.autoLand !== undefined && typeof b.autoLand !== "boolean") return json({ error: "autoLand must be true or false" }, 400);
       const rawProfiles = b.profiles;
-      if (rawProfiles !== undefined && (!Array.isArray(rawProfiles) || rawProfiles.length > 1 || !rawProfiles.every(isProfileName))) return json({ error: "profiles must contain at most one valid shared profile" }, 400);
-      const profiles = Array.isArray(rawProfiles) ? rawProfiles.filter(isProfileName) : undefined;
+      if (rawProfiles !== undefined && (!Array.isArray(rawProfiles) || rawProfiles.length > times || !rawProfiles.every((p) => p === null || isProfileName(p)))) return json({ error: `profiles must list at most ${times} valid names, null for the repo's job route` }, 400);
+      const profiles = Array.isArray(rawProfiles) ? rawProfiles.map((p) => (isProfileName(p) ? p : null)) : undefined;
+      if (b.reviewers !== undefined && b.reviewers !== 1 && b.reviewers !== 2) return json({ error: "reviewers must be 1 or 2" }, 400);
+      if (b.reviewers === 2 && times === 1) return json({ error: "a second reviewer needs times 2 or 3" }, 400);
       // who may go first when the window runs low (FR-036): the CLI's
       // --priority and the pre-flight's raise; absent, by who starts it
       const priority = b.priority === undefined ? undefined : parsePriority(b.priority);
       if (priority === null) return json({ error: "priority must be interactive, normal or low" }, 400);
-      if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority), 201);
+      if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority, b.reviewers === 2 ? { reviewers: 2 } : {}), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);

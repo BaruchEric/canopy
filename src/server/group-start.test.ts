@@ -398,7 +398,7 @@ for (const times of [2, 3])
     );
   });
 
-test("validation refuses malformed times, non-branch groups, multiple profiles and direct compare before cuts", async () => {
+test("validation refuses malformed times, non-branch groups, too many profiles and direct compare before cuts", async () => {
   const w = await world();
   for (const over of [
     { times: 0 },
@@ -407,11 +407,16 @@ test("validation refuses malformed times, non-branch groups, multiple profiles a
     { times: "2" },
     { branch: false },
     { branch: undefined },
-    { profiles: ["default", "default"] },
+    { profiles: [null, null, null] },
     { profiles: "default" },
     { profiles: ["__proto__"] },
+    { profiles: [""] },
     { action: "compare" },
     { autoLand: "true" },
+    { reviewers: 3 },
+    { reviewers: "2" },
+    { reviewers: 2, times: 1 },
+    { reviewers: 2, branch: undefined },
   ]) {
     const response = await w.start(over);
     expect(response.status).toBe(400);
@@ -472,6 +477,70 @@ test("one shared profile reaches every member; unusable propose profile refuses 
     ["codex", "group-model"],
     ["codex", "group-model"],
   ]);
+});
+
+async function twoProfiles(w: Awaited<ReturnType<typeof world>>) {
+  for (const [name, harness, model] of [["fast", "codex", "fast-model"], ["deep", "claude", "opus"]] as const) {
+    const response = await w.post("/api/agents/profile", { name, settings: { ...DEFAULT_AGENT, harness, model } });
+    expect(response.status).toBe(200);
+  }
+}
+
+test("each member starts on its own profile, in the order named", async () => {
+  const w = await world();
+  await twoProfiles(w);
+  const group = groupBody(await (await w.start({ times: 3, profiles: ["fast", null, "deep"] })).json());
+  expect(group.members.map((m) => m.profile)).toEqual(["fast", null, "deep"]);
+  await until(() => w.starts.length === 3, "three starts");
+  const byRun = new Map(w.starts.map((s) => [s.ctx.env["CANOPY_RUN"], s]));
+  expect(group.members.map((m) => byRun.get(m.run)?.ctx.agent.model)).toEqual(["fast-model", DEFAULT_AGENT.model, "opus"]);
+  expect(group.members.map((m) => byRun.get(m.run)?.harness)).toEqual(["codex", DEFAULT_AGENT.harness, "claude"]);
+});
+
+test("a short profile list repeats its last name", async () => {
+  const w = await world();
+  await twoProfiles(w);
+  const group = groupBody(await (await w.start({ times: 3, profiles: ["deep", "fast"] })).json());
+  expect(group.members.map((m) => m.profile)).toEqual(["deep", "fast", "fast"]);
+});
+
+test("a Codex member anywhere refuses a propose group, and an unknown name anywhere refuses, before any cut", async () => {
+  const w = await world();
+  await twoProfiles(w);
+  const codex = await w.start({ action: "propose", times: 3, profiles: ["deep", "deep", "fast"] });
+  expect(codex.status).toBe(400);
+  expect(await codex.text()).toContain("member 3");
+  const unknown = await w.start({ times: 2, profiles: ["deep", "nobody"] });
+  expect(unknown.status).toBe(400);
+  expect(await unknown.text()).toContain("nobody");
+  expect(w.cutCounts).toEqual([]);
+  expect(await w.diskGroups()).toEqual([]);
+});
+
+test("a member's fix runs on that member's profile", async () => {
+  const w = await world({ autoSort: true });
+  await twoProfiles(w);
+  const group = groupBody(await (await w.start({ profiles: ["fast", "deep"] })).json());
+  await until(() => w.starts.length === 2, "members");
+  await w.finish(0);
+  await w.finish(1);
+  await until(() => w.starts.length === 3, "reviewer");
+  const gateFile = join(w.repo, ".canopy", "gates.json");
+  const branches = (await w.landing()).runs.map((r) => r.branch);
+  await w.finish(2, `<<<compare\n${JSON.stringify({ ranking: branches, why: Object.fromEntries(branches.map((branch) => [branch, "Good work."])) })}\n>>>`);
+  await until(async () => (await w.groups()).find((g) => g.id === group.id)?.state === "picked", "pick");
+  const listed: unknown = await (await fetch(w.url("/api/groups"))).json();
+  const record = Array.isArray(listed) ? listed.find((g: unknown) => isRecord(g) && g["id"] === group.id) : undefined;
+  const winner: unknown = isRecord(record) ? record["winner"] : undefined;
+  if (typeof winner !== "string") throw new Error("missing winner");
+  await writeFile(gateFile, JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+  await git(w.repo, "add", "-A");
+  await git(w.repo, "commit", "-qm", "red gate");
+  expect((await w.post("/api/landing/land", { run: winner })).status).toBe(200);
+  await until(async () => (await w.landing()).entries.some((e: unknown) => isRecord(e) && e["state"] === "red"), "sent back");
+  expect((await w.post("/api/landing/fix", { id: winner })).status).toBe(201);
+  await until(() => w.starts.length === 4, "fix");
+  expect(w.starts[3]?.ctx.agent.model).toBe(group.members.find((m) => m.origin === winner)?.profile === "fast" ? "fast-model" : "opus");
 });
 
 for (const failure of ["third start", "third cut"] as const)
