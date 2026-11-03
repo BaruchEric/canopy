@@ -12,6 +12,7 @@ import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
 import { CardsSeam } from "./components/CardsSeam";
 import { FeedDock } from "./components/Feed";
+import { feedOnSide, feedPlaceShown } from "./feed";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
@@ -311,6 +312,10 @@ export function App() {
   const drawerOpen = useStore((s) => s.drawerOpen);
   const setDrawer = useStore((s) => s.setDrawer);
   const narrow = useMedia(NARROW);
+  // the feed beside the view takes a column of the row the view is in
+  const feedAt = useStore((s) => feedPlaceShown(s.feedPlace, narrow));
+  const feedBeside = useStore((s) => s.feedOpen) && feedOnSide(feedAt);
+  const feedWidth = useStore((s) => s.feedWidth);
   // the carousel gives the dock the cards' room; a phone's dock covers them
   // already and stays as it was
   const phone = useMedia(PHONE);
@@ -626,13 +631,23 @@ export function App() {
       </>
     );
   const nav = <ViewSwitch view={view} navigate={navigate} />;
+  const other = OTHER_VIEWS.includes(view);
   return (
     <div className="app">
-      {OTHER_VIEWS.includes(view) ? <>
-      <header className="app-nav">
-        <Wordmark />
-        {nav}
-      </header>
+      {other ? (
+        <header className="app-nav">
+          <Wordmark />
+          {nav}
+        </header>
+      ) : (
+        <TopBar nav={nav} />
+      )}
+      <div
+        className={`app-mid feed-${feedAt}${feedBeside ? " feed-beside" : ""}`}
+        style={{ "--feed-w": `${feedWidth}px` } as CSSProperties}
+      >
+      <div className="app-view">
+      {other ? <>
       {view === "sessions" ? (
         <SessionsView onView={navigate} />
       ) : view === "agents" ? (
@@ -655,7 +670,6 @@ export function App() {
         <Library ports={view === "ports"} project={project} onRepo={showRepo} onPorts={() => navigate("ports")} />
       )}
       </> : <>
-      <TopBar nav={nav} />
       <div
         className={`body${sidebarOpen ? "" : " no-side"}${carousel ? " carousel" : ""}${cardsSeam ? " cards-seam" : ""}`}
         style={{ "--sidebar-w": `${sidebarWidth}px` } as CSSProperties}
@@ -689,7 +703,9 @@ export function App() {
       </div>
       <SelectBar />
       </>}
-      <FeedDock />
+      </div>
+      <FeedDock place={feedAt} />
+      </div>
       {view !== "sessions" && <TermDock />}
       <RunSheet />
       <CommandPop />

@@ -551,6 +551,28 @@ kbd {
 .app > .topbar {
   flex: none;
 }
+/* The view and the event feed, between the top bar and the shell strip: a
+   column while the feed is a band along the top or the bottom, a row while
+   it sits on a side. The view keeps a column of its own, so every view lays
+   out as it would straight under .app. --feed-side is the room a side feed
+   takes from the row, which the dock's max-width leaves it. */
+.app-mid {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.app-mid.feed-beside {
+  flex-direction: row;
+  --feed-side: var(--feed-w, 420px);
+}
+.app-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
 .body {
   /* the narrowest the cards get, however wide the dock is dragged */
   --cards-min: 320px;
@@ -619,10 +641,10 @@ body.resizing-nesw iframe {
   grid-template-columns: minmax(var(--cards-min), 1fr) 6px auto;
 }
 .body.cards-seam > .dock {
-  max-width: calc(100vw - var(--sidebar-w, 264px) - 6px - var(--cards-min, 320px) - 6px);
+  max-width: calc(100vw - var(--feed-side, 0px) - var(--sidebar-w, 264px) - 6px - var(--cards-min, 320px) - 6px);
 }
 .body.cards-seam.no-side > .dock {
-  max-width: calc(100vw - var(--cards-min, 320px) - 6px);
+  max-width: calc(100vw - var(--feed-side, 0px) - var(--cards-min, 320px) - 6px);
 }
 /* the tree is a drawer below 1100px, so no track is kept for it */
 @media (max-width: 1100px) {
@@ -3203,12 +3225,12 @@ p.elsewhere-drilled {
   overflow-x: auto;
   /* the room the tree and the cards leave; past it the panels scroll inside
      the dock rather than push the grid off the window */
-  max-width: calc(100vw - var(--sidebar-w, 264px) - 6px - var(--cards-min, 320px));
+  max-width: calc(100vw - var(--feed-side, 0px) - var(--sidebar-w, 264px) - 6px - var(--cards-min, 320px));
   border-left: 1px solid var(--hair);
   background: var(--bark0);
 }
 .body.no-side > .dock {
-  max-width: calc(100vw - var(--cards-min, 320px));
+  max-width: calc(100vw - var(--feed-side, 0px) - var(--cards-min, 320px));
 }
 /* the carousel: the dock takes the cards' room and scrolls sideways, one
    panel's edge at a time. The cards' track goes to 0 and the dock is placed
@@ -8590,9 +8612,12 @@ body:has(.focus-grip.se.dragging) {
 .fleet-word { color: var(--ink-dim); font-size: 13px; }
 .fleet-summary { grid-column: 2; font-size: 13px; }
 
-/* ---------- the event feed along the bottom ---------- */
-/* One line per server event, every source in one stream. It sits above the
-   shell strip and takes the same grip, so the two read as one dock. */
+/* ---------- the event feed ---------- */
+/* One line per server event, every source in one stream. Along the bottom it
+   sits above the shell strip and takes the same grip, so the two read as one
+   dock; along the top it hangs under the top bar with the grip below it. On
+   a side it is a column beside the view, sized at its inner seam. Its rows
+   fold to two lines by its own width, not the window's. */
 .feed {
   position: relative;
   flex: none;
@@ -8602,6 +8627,37 @@ body:has(.focus-grip.se.dragging) {
   max-height: 80vh;
   border-top: 1px solid var(--hair2);
   background: var(--bark0);
+  container: feed / inline-size;
+}
+.feed.at-top {
+  order: -1;
+  border-top: 0;
+  border-bottom: 1px solid var(--hair2);
+}
+.feed.at-left,
+.feed.at-right {
+  width: var(--feed-w, 420px);
+  height: auto;
+  max-height: none;
+  border-top: 0;
+}
+.feed.at-left {
+  order: -1;
+  border-right: 1px solid var(--hair2);
+}
+.feed.at-right {
+  border-left: 1px solid var(--hair2);
+}
+.feed > .feed-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.feed.at-right > .feed-seam {
+  left: -4px;
+}
+.feed.at-left > .feed-seam {
+  right: -4px;
 }
 .feed-head {
   flex: none;
@@ -8755,7 +8811,7 @@ body:has(.focus-grip.se.dragging) {
 .feed-jump:hover {
   background: color-mix(in srgb, var(--moss) 22%, var(--bark1));
 }
-@media (max-width: 720px) {
+@container feed (max-width: 720px) {
   .feed-row {
     grid-template-columns: 8ch 1fr;
   }
@@ -14101,19 +14157,19 @@ button.trigger-title:hover {
   margin: 0;
   color: var(--rust);
 }
-/* twice an icon-btn, the icon with it */
+/* larger than an icon-btn, the icon with it */
 .voice-btn {
-  width: 56px;
-  height: 56px;
+  width: 39px;
+  height: 39px;
 }
 .voice-btn > svg {
-  width: 2.9em;
-  height: 2.9em;
+  width: 2.03em;
+  height: 2.03em;
 }
 @media (pointer: coarse) {
   .voice-btn {
-    width: 68px;
-    height: 68px;
+    width: 48px;
+    height: 48px;
   }
 }
 .voice-btn.on {

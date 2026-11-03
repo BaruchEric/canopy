@@ -3411,12 +3411,14 @@ function CellStrip({
 }
 
 /** what one panel may take: the dock's own max-width (the window less the
- *  tree and the cards' floor, styles.css) less its 6px handle; Infinity where
- *  nothing caps it. The carousel lifts the cap: there a panel may be as wide
- *  as the window less its handle. */
+ *  tree, a feed on a side and the cards' floor, styles.css) less its 6px
+ *  handle; Infinity where nothing caps it. The carousel lifts the cap: there
+ *  a panel may be as wide as the body (the window less a feed on a side)
+ *  less its handle. */
 function dockRoom(dock: HTMLElement | null): number {
   if (!dock) return Infinity;
-  if (dock.parentElement?.classList.contains("carousel")) return window.innerWidth - 6;
+  const body = dock.parentElement;
+  if (body?.classList.contains("carousel")) return body.clientWidth - 6;
   const cap = Number.parseFloat(getComputedStyle(dock).maxWidth);
   return Number.isFinite(cap) ? cap - 6 : Infinity;
 }

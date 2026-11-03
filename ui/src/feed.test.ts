@@ -6,6 +6,8 @@ import {
   clip,
   clock,
   describeEvent,
+  feedPlaceOf,
+  feedPlaceShown,
   filterFeed,
   listNames,
   statusLines,
@@ -543,5 +545,28 @@ describe("the sweep", () => {
   test("no close is no line, and neither is the event, which carries no plan", () => {
     expect(sweepLine(null, 20)).toEqual([]);
     expect(describeEvent({ type: "sweep" }, snap({}), 20)).toEqual([]);
+  });
+});
+
+describe("feedPlaceOf", () => {
+  test("a saved place is taken as it is", () => {
+    for (const p of ["right", "left", "bottom", "top"] as const) expect(feedPlaceOf(p)).toBe(p);
+  });
+  test("nothing saved, or anything else, is the side", () => {
+    expect(feedPlaceOf(undefined)).toBe("right");
+    expect(feedPlaceOf("middle")).toBe("right");
+    expect(feedPlaceOf(3)).toBe("right");
+  });
+});
+
+describe("feedPlaceShown", () => {
+  test("a wide window shows the place chosen", () => {
+    expect(feedPlaceShown("left", false)).toBe("left");
+    expect(feedPlaceShown("top", false)).toBe("top");
+  });
+  test("a narrow window moves a side to the bottom and leaves the bands alone", () => {
+    expect(feedPlaceShown("right", true)).toBe("bottom");
+    expect(feedPlaceShown("left", true)).toBe("bottom");
+    expect(feedPlaceShown("top", true)).toBe("top");
   });
 });

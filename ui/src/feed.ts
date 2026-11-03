@@ -689,3 +689,23 @@ export function clock(at: number): string {
   const d = new Date(at);
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
+
+/** The window edge the feed sits on. A side is a column beside the view,
+ *  the top and the bottom a band across it. */
+export type FeedPlace = "right" | "left" | "bottom" | "top";
+export const FEED_PLACES: readonly FeedPlace[] = ["right", "left", "bottom", "top"];
+/** a new window, or a layout saved before the feed could move, has it beside the view */
+export const DEFAULT_FEED_PLACE: FeedPlace = "right";
+
+/** a saved place, or the default when it is missing or not one of the four */
+export function feedPlaceOf(v: unknown): FeedPlace {
+  return FEED_PLACES.find((p) => p === v) ?? DEFAULT_FEED_PLACE;
+}
+
+export const feedOnSide = (place: FeedPlace): boolean => place === "left" || place === "right";
+
+/** Where the feed shows: the place chosen, except that a narrow window has
+ *  no room beside the cards, so a side becomes the bottom there. */
+export function feedPlaceShown(place: FeedPlace, narrow: boolean): FeedPlace {
+  return narrow && feedOnSide(place) ? "bottom" : place;
+}

@@ -54,7 +54,7 @@ import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
-import { appendFeed, describeEvent, sweepLine, type FeedEntry, type FeedSnapshot } from "./feed";
+import { appendFeed, describeEvent, feedOnSide, feedPlaceOf, feedPlaceShown, sweepLine, DEFAULT_FEED_PLACE, type FeedEntry, type FeedPlace, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
@@ -99,6 +99,7 @@ import { badRepoIds } from "./health";
 import { staleRepos } from "./triggers";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import { CARDS, SEAM } from "./cardswidth";
+import { NARROW } from "./media";
 import { newColumnWidth, type ColumnRoom } from "./columnwidth";
 import {
   DEFAULT_LAUNCH,
@@ -160,8 +161,10 @@ export const TERM = { min: 120, max: 1200, initial: 300 };
 /** a shell living in a repo's panel: the bounds of its body's height, and the
  *  default, which is PANEL_TERM_ROWS lines of the terminal's font */
 export const PANEL_TERM = { min: 60, max: 2400, initial: rowsPx(PANEL_TERM_ROWS) };
-/** the event feed along the bottom, in px of height */
+/** the event feed as a band along the top or the bottom, in px of height */
 export const FEED = { min: 100, max: 900, initial: 220 };
+/** the event feed as a column on a side, in px of width */
+export const FEED_W = { min: 240, max: 1200, initial: 420 };
 /** sections that start folded, matching how the panel read before they could fold */
 const DEFAULT_CLOSED = ["search", "history", "claude", "launch", "peers", "spec", "preview", "agents", "files", "health"];
 /** the folded-by-default set a layout saved before `knownSections` existed
@@ -268,6 +271,8 @@ export const SCREEN_LAYOUT = [
   "panelTermHeights",
   "focusSize",
   "feedHeight",
+  "feedPlace",
+  "feedWidth",
 ] as const satisfies readonly (keyof Layout)[];
 
 /** how often a window re-reads the archive overview on its own */
@@ -314,8 +319,12 @@ interface Layout {
   focusSize: FocusSize | null;
   /** whether the event feed is showing along the bottom */
   feedOpen: boolean;
-  /** px height of the event feed */
+  /** px height of the event feed as a band */
   feedHeight: number;
+  /** the window edge the event feed sits on */
+  feedPlace: FeedPlace;
+  /** px width of the event feed on a side */
+  feedWidth: number;
   /** the repos open in the dock, in order, so a reload shows the same ones */
   panels: string[];
   /** the dock's showing tab */
@@ -346,6 +355,8 @@ export function loadLayout(): Layout {
     focusSize: null,
     feedOpen: false,
     feedHeight: FEED.initial,
+    feedPlace: DEFAULT_FEED_PLACE,
+    feedWidth: FEED_W.initial,
     panels: [],
     activePanel: null,
     popped: {},
@@ -375,6 +386,8 @@ export function loadLayout(): Layout {
       focusSize?: unknown;
       feedOpen?: unknown;
       feedHeight?: unknown;
+      feedPlace?: unknown;
+      feedWidth?: unknown;
       panels?: unknown;
       activePanel?: unknown;
       popped?: unknown;
@@ -412,6 +425,7 @@ export function loadLayout(): Layout {
     const dw = saved.dockWidth;
     const th = saved.termHeight;
     const fh = saved.feedHeight;
+    const fw = saved.feedWidth;
     const dockWidth = typeof dw === "number" && Number.isFinite(dw) ? clamp(dw, PANEL.min, PANEL.max) : PANEL.initial;
     const activePanel = typeof saved.activePanel === "string" ? saved.activePanel : null;
     const into: Arrangement = loadSettings().openIn === "tabs" ? "tabs" : "columns";
@@ -444,6 +458,8 @@ export function loadLayout(): Layout {
         typeof fh === "number" && Number.isFinite(fh)
           ? clamp(fh, FEED.min, FEED.max)
           : FEED.initial,
+      feedPlace: feedPlaceOf(saved.feedPlace),
+      feedWidth: typeof fw === "number" && Number.isFinite(fw) ? clamp(fw, FEED_W.min, FEED_W.max) : FEED_W.initial,
       // the open set is the window's, the layout the screen's: a layout
       // saved on another kind of screen is placed over this window's panels
       panels: panelsOf(dockLayout),
@@ -561,6 +577,8 @@ export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   focusSize: s.focusSize,
   feedOpen: s.feedOpen,
   feedHeight: s.feedHeight,
+  feedPlace: s.feedPlace,
+  feedWidth: s.feedWidth,
   panels: s.panels,
   activePanel: s.activePanel,
   popped: s.popped,
@@ -991,10 +1009,14 @@ export interface CanopyState {
   feed: FeedEntry[];
   /** the next feed entry's id */
   feedSeq: number;
-  /** whether the feed is showing along the bottom */
+  /** whether the feed is showing */
   feedOpen: boolean;
-  /** px height of the feed, dragged by its top edge */
+  /** px height of the feed as a band, dragged by its inner edge */
   feedHeight: number;
+  /** the window edge the feed sits on; a narrow window shows a side at the bottom */
+  feedPlace: FeedPlace;
+  /** px width of the feed on a side, dragged by its inner edge */
+  feedWidth: number;
   /** the source the feed is narrowed to; null is every source */
   feedSource: string | null;
   /** whether the feed shows lines that only say nothing changed */
@@ -1003,6 +1025,8 @@ export interface CanopyState {
   toggleFeed: () => void;
   clearFeed: () => void;
   setFeedHeight: (px: number) => void;
+  setFeedPlace: (place: FeedPlace) => void;
+  setFeedWidth: (px: number) => void;
   setFeedSource: (id: string | null) => void;
   setFeedQuiet: (on: boolean) => void;
 
@@ -2069,7 +2093,7 @@ function recall(s: Pick<CanopyState, "popped" | "recalled">, id: string): Pick<C
   return { popped: without(s.popped, id), recalled: s.recalled.includes(id) ? s.recalled : [...s.recalled, id] };
 }
 
-type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "panelWidths" | "settings" | "sidebarOpen" | "sidebarWidth" | "cardsWidth">;
+type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "panelWidths" | "settings" | "sidebarOpen" | "sidebarWidth" | "cardsWidth" | FeedRoom>;
 
 /** how a panel opened now joins the dock: a column of its own, or a tab */
 export const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
@@ -2116,6 +2140,16 @@ export function screenLayoutOf(
   };
 }
 
+type FeedRoom = "feedOpen" | "feedPlace" | "feedWidth";
+
+/** the px a feed open on a side takes from the row the dock is in; none
+ *  under the narrow width, where a side feed shows at the bottom */
+function feedBeside(s: Pick<CanopyState, FeedRoom>): number {
+  if (!s.feedOpen || !feedOnSide(s.feedPlace)) return 0;
+  const narrow = typeof matchMedia === "function" && matchMedia(NARROW).matches;
+  return feedOnSide(feedPlaceShown(s.feedPlace, narrow)) ? s.feedWidth : 0;
+}
+
 /** the window's width in CSS px, as the dock's max-width reads it (100vw);
  *  0 where there is no window (under test) */
 function windowWidth(): number {
@@ -2129,10 +2163,10 @@ function windowWidth(): number {
  *  width chosen at the cards' seam and the open columns. A column keeps
  *  the width it opened at, so a later resize of the window is the seams'
  *  business, not this reading's. */
-function columnRoom(s: Pick<CanopyState, "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth">): ColumnRoom {
+function columnRoom(s: Pick<CanopyState, "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth" | FeedRoom>): ColumnRoom {
   return {
     window: windowWidth(),
-    before: s.sidebarOpen ? s.sidebarWidth + SEAM : 0,
+    before: (s.sidebarOpen ? s.sidebarWidth + SEAM : 0) + feedBeside(s),
     cards: s.cardsWidth,
     columns: s.dockLayout.columns.map((c) => c.width),
   };
@@ -2143,7 +2177,7 @@ function columnRoom(s: Pick<CanopyState, "dockLayout" | "sidebarOpen" | "sidebar
  *  PANEL.initial under a wide window, wider from there while the room is
  *  there). A width handed out counts as used for the next, so panels
  *  opening together share the room rather than each taking all of it. */
-const widthOf = (s: Pick<CanopyState, "panelWidths" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth">): ((id: string) => number) => {
+const widthOf = (s: Pick<CanopyState, "panelWidths" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth" | FeedRoom>): ((id: string) => number) => {
   const room = columnRoom(s);
   const columns = [...room.columns];
   return (id: string): number => {
@@ -2335,12 +2369,16 @@ export const useStore = create<CanopyState>((set, get) => ({
   feedSeq: 1,
   feedOpen: layout.feedOpen,
   feedHeight: layout.feedHeight,
+  feedPlace: layout.feedPlace,
+  feedWidth: layout.feedWidth,
   feedSource: null,
   feedQuiet: false,
 
   toggleFeed: () => set((s) => ({ feedOpen: !s.feedOpen })),
   clearFeed: () => set({ feed: [] }),
   setFeedHeight: (px) => set({ feedHeight: clamp(px, FEED.min, FEED.max) }),
+  setFeedPlace: (feedPlace) => set({ feedPlace }),
+  setFeedWidth: (px) => set({ feedWidth: clamp(px, FEED_W.min, FEED_W.max) }),
   setFeedSource: (feedSource) => set({ feedSource }),
   setFeedQuiet: (feedQuiet) => set({ feedQuiet }),
 
@@ -2604,7 +2642,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       const { closedSections, popped } = opened;
       const activePanel = t.activePanel ?? opened.panels[0] ?? null;
       // the backend's own panels and widths, in this window's room
-      const here = { ...t, settings: s.settings, sidebarOpen: s.sidebarOpen, sidebarWidth: s.sidebarWidth, cardsWidth: s.cardsWidth };
+      const here = { ...t, settings: s.settings, sidebarOpen: s.sidebarOpen, sidebarWidth: s.sidebarWidth, cardsWidth: s.cardsWidth, feedOpen: s.feedOpen, feedPlace: s.feedPlace, feedWidth: s.feedWidth };
       const dockLayout = placeAll(laidOut(here), opened.panels, activePanel, arrangementOf(s), widthOf(here));
       const panels = panelsOf(dockLayout);
       const strip = back.filter((x) => x.place === "strip");

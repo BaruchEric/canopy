@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, UIEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { clock, filterFeed, type FeedEntry, type FeedKind } from "../feed";
-import { FEED, idLabel, idText, useStore } from "../store";
+import { clock, FEED_PLACES, filterFeed, type FeedEntry, type FeedKind, type FeedPlace } from "../feed";
+import { FEED, FEED_W, idLabel, idText, useStore } from "../store";
 import { TermGrip } from "./TermDock";
-import { Gear } from "./Gear";
+import { Gear, type GearEntry } from "./Gear";
+import { Resizer } from "./Resizer";
 import {
   FocusBackdrop,
   FocusGrips,
@@ -39,15 +40,29 @@ const KIND_WORD: Record<FeedKind, string> = {
   sweep: "sweep",
 };
 
+const PLACE_WORD: Record<FeedPlace, string> = {
+  right: "on the right",
+  left: "on the left",
+  bottom: "along the bottom",
+  top: "along the top",
+};
+
+/** the least the view keeps beside a feed on a side, as its seam is dragged */
+const VIEW_KEEPS = 360;
+
 /**
- * The event feed along the bottom: one line per thing the server said since
- * the page loaded, every source in one stream, newest at the bottom. The
- * chips narrow it to one source; "quiet" shows the lines that only say a
- * repo was re-read with no change. The list follows the newest line until
- * the reader scrolls up, then holds still and counts what arrived.
+ * The event feed, on whichever edge the gear puts it (beside the view on the
+ * right unless moved): one line per thing the server said since the page
+ * loaded, every source in one stream, newest at the bottom. The chips narrow
+ * it to one source; "quiet" shows the lines that only say a repo was re-read
+ * with no change. The list follows the newest line until the reader scrolls
+ * up, then holds still and counts what arrived. `place` is where it shows
+ * now, which a narrow window makes the bottom for a side.
  */
-export function FeedDock() {
+export function FeedDock({ place }: { place: FeedPlace }) {
   const open = useStore((s) => s.feedOpen);
+  const chosen = useStore((s) => s.feedPlace);
+  const width = useStore((s) => s.feedWidth);
   const feed = useStore((s) => s.feed);
   const sources = useStore((s) => s.sources);
   const feedSource = useStore((s) => s.feedSource);
@@ -57,6 +72,8 @@ export function FeedDock() {
     toggleFeed,
     clearFeed,
     setFeedHeight,
+    setFeedPlace,
+    setFeedWidth,
     setFeedSource,
     setFeedQuiet,
     openPanel,
@@ -65,6 +82,8 @@ export function FeedDock() {
       toggleFeed: s.toggleFeed,
       clearFeed: s.clearFeed,
       setFeedHeight: s.setFeedHeight,
+      setFeedPlace: s.setFeedPlace,
+      setFeedWidth: s.setFeedWidth,
       setFeedSource: s.setFeedSource,
       setFeedQuiet: s.setFeedQuiet,
       openPanel: s.openPanel,
@@ -122,7 +141,18 @@ export function FeedDock() {
     return backend ? `${src.label} · ${backend}` : src.label;
   };
 
-  const modeClass = mode === "full" ? " surface-full" : mode === "focus" ? " surface-focus" : "";
+  const modeClass = mode === "full" ? " surface-full" : mode === "focus" ? " surface-focus" : ` at-${place}`;
+  // the chosen edge is marked, which a narrow window may be showing elsewhere
+  const placeEntries: GearEntry[] = FEED_PLACES.map((p) => ({
+    type: "item",
+    label: PLACE_WORD[p],
+    on: chosen === p,
+    run: () => {
+      setFeedPlace(p);
+      setMode("normal");
+    },
+  }));
+  const side = place === "left" || place === "right";
   return (
     <>
     {mode === "focus" && <FocusBackdrop onLeave={() => setMode("normal")} />}
@@ -132,7 +162,22 @@ export function FeedDock() {
       aria-label="Event feed"
       style={{ "--feed-h": `${height}px`, ...(mode === "focus" ? focusVars(focusSize) : {}) } as CSSProperties}
     >
-      {mode === "normal" && (
+      {mode === "normal" && side && (
+        <Resizer
+          className="feed-seam"
+          label="Event feed width"
+          value={width}
+          min={FEED_W.min}
+          max={FEED_W.max}
+          initial={FEED_W.initial}
+          dir={place === "left" ? 1 : -1}
+          cssVar="--feed-w"
+          target={(h) => h.closest<HTMLElement>(".app-mid")}
+          fit={(h) => (h.closest(".app-mid")?.clientWidth ?? Infinity) - VIEW_KEEPS}
+          onCommit={setFeedWidth}
+        />
+      )}
+      {mode === "normal" && !side && (
         <TermGrip
           box={box}
           cssVar="--feed-h"
@@ -140,6 +185,7 @@ export function FeedDock() {
           height={height}
           setHeight={setFeedHeight}
           bounds={FEED}
+          edge={place === "top" ? "bottom" : "top"}
         />
       )}
       <div className="feed-head">
@@ -181,6 +227,7 @@ export function FeedDock() {
           label="the event feed"
           groups={[
             { label: "feed", entries: [zoomEntry] },
+            { label: "place", entries: placeEntries },
             { label: "layout", entries: modeEntries(mode, setMode, "window") },
             {
               label: "share",
