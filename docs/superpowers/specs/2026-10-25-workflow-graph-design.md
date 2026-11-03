@@ -339,3 +339,21 @@ For Eric:
 3. **Bundled workflows** (optional, after both): rewrite
    `sentry-triage-fix` with `when`, and give `ship` a `Docs` reader beside
    `Gates` as the first parallel pair.
+
+## Amendments
+
+1. (2026-11-02, plan 3) `after: none` makes a later heading a root. A
+   missing `after` is the step above, and `after` may only name earlier
+   headings, so until now the first heading was the only root and two steps
+   could never start together; the first bundled parallel pair, ship's
+   Gates and Docs, needed it. `none` mixed with step names is a parse error,
+   so is `after: none` in a file with a heading called `none`, and `when` on
+   such a step is still refused as having nothing to wait on.
+2. (2026-11-02, plan 3) sentry-triage-fix uses `changed`, `check fail` and
+   `check pass`, not the `verdict` conditions the Components section
+   floated: a partial or blocked verdict parks the flow, and a park needs a
+   person and the gateway key, neither of which a trigger's flow has. The
+   one park left is Mend's check failing after its one retry, as Fix's did
+   after its two before. Fix
+   no longer commits; Gates (check-only) runs only when Fix changed the
+   tree, Mend only when Gates failed, Commit only when a gate passed.

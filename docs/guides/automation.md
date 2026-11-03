@@ -14,7 +14,7 @@ The workflow sheet shows a step list and run timeline. Start workflows from the 
 | --- | --- |
 | commit | Stages the intended changes and creates a commit without pushing. |
 | push | Pushes the branch, rebasing only when safe. |
-| ship | Runs gates, commits, then pushes. A failed gate stops it before committing. |
+| ship | Runs gates while a second step reports which docs the change makes wrong, then commits and pushes. A failed gate stops it before committing. |
 | review | Reads changes and reports problems without editing files. |
 | deploy | Checks the project and uses its deployment procedure. This can change the deployed app. |
 
@@ -58,7 +58,7 @@ While a flow is active, `hide` closes the sheet and leaves the work running. Use
 4. Add one `##` heading per step. Put step options directly below the heading, before a blank line and the prompt. Common options include `tools`, `turns`, `check`, `gate`, `after`, `when`, and `mode`.
 5. Save the file and reopen the repo menu. Choose the new workflow and review its step list before starting it.
 
-Steps run in heading order by default. Use `after` and `when` for dependencies and conditions. A step with an empty body runs only its `check` command. The `tools` option controls which agent tools are preapproved for that step; other requests can still ask for permission.
+Steps run in heading order by default. Use `after` and `when` for dependencies and conditions; `after: none` lets a later step start alongside the first. A step with an empty body runs only its `check` command. The `tools` option controls which agent tools are preapproved for that step; other requests can still ask for permission.
 
 Workflow files load from three places: Canopy's bundled workflows, your config directory, and a local repo's `.canopy/workflows/`. When names match, the later source wins, so a repo workflow overrides a user workflow and a user workflow overrides a bundled one. Repo-specific files are for local repos. Fleet selection supports bundled and user workflows.
 

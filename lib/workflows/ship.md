@@ -2,7 +2,7 @@
 name: ship
 label: ship
 verb: ship
-blurb: The agent runs the project's gates, commits the changes the way the commit workflow does, then pushes the branch the way push does. A failing gate stops it before anything is committed.
+blurb: The agent runs the project's gates, commits the changes the way the commit workflow does, then pushes the branch the way push does. Beside the gates, a second agent reads the diff and reports which docs it makes wrong, changing nothing. A failing gate stops it before anything is committed.
 when: dirty-or-unpushed
 expects-change: true
 ---
@@ -14,7 +14,19 @@ check: @gates
 
 Task: run this project's own gates. When .canopy/gates.json exists, run each gate's run line in its order; otherwise run the typecheck, lint, test and build scripts package.json defines, with bun run. A project with neither may still define gates in a Makefile or CLAUDE.md, so run those. If a gate fails and the fix is obvious and inside this repo, fix it and run the gates again. Otherwise stop and say exactly what failed. Do not commit anything in this step, and do not edit .canopy/gates.json. The check that runs after you runs the same list: .canopy/gates.json as the last commit holds it, else those package.json scripts.
 
+## Docs
+after: none
+tools: git-read, read
+turns: 20
+
+Task: read the changes about to ship and say which docs they make wrong. This step runs beside Gates and only reports: change nothing, commit nothing.
+1. Look at git status and the full diff, including untracked files, to see what changed.
+2. Find the docs that describe that code, where the project has them: README.md, SPEC.md, and the section of the architecture doc (docs/architecture.md, or the project's own) for the area that changed. In a long doc, list its headings first and read only the section that applies, never the whole file.
+3. For each, say what the change makes wrong: a command, flag or route the doc names that moved or is gone, a default that changed, a file or state the doc lists that no longer exists, or something the change adds that the doc should name.
+Finish with one line per doc: the file, the heading or line, and what is now wrong; or "docs: nothing to update" when the change touches nothing the docs describe.
+
 ## Commit
+after: Gates, Docs
 tools: git-read, git-commit
 gate: verdict
 

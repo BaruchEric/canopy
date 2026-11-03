@@ -89,12 +89,21 @@ describe("graphOf", () => {
 });
 
 describe("isChain", () => {
-  test("every bundled workflow is a chain, and the fan is not", async () => {
+  /** the bundled files that draw as graphs (FR-034 plan 3), with their columns */
+  const GRAPHS: Record<string, string[][]> = {
+    ship: [["Gates", "Docs"], ["Commit"], ["Push"]],
+    "sentry-triage-fix": [["Triage"], ["Fix"], ["Gates"], ["Mend"], ["Commit"]],
+  };
+
+  test("every bundled workflow is a chain but ship and sentry-triage-fix, and the fan is not", async () => {
     const dir = join(import.meta.dir, "../../lib/workflows");
     for (const n of (await readdir(dir)).filter((f) => f.endsWith(".md"))) {
-      const e = parseWorkflow(await readFile(join(dir, n), "utf8"), { name: n.slice(0, -3), source: "bundled", file: n });
+      const name = n.slice(0, -3);
+      const e = parseWorkflow(await readFile(join(dir, n), "utf8"), { name, source: "bundled", file: n });
       if (!e.ok) throw new Error(`${n}: ${e.error}`);
-      expect(isChain(e.workflow.steps)).toBe(true);
+      const columns = GRAPHS[name];
+      expect(isChain(e.workflow.steps)).toBe(columns === undefined);
+      if (columns) expect(graphOf(e.workflow.steps).columns).toEqual(columns);
     }
     expect(isChain(FAN.steps)).toBe(false);
   });

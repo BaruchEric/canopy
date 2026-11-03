@@ -217,9 +217,19 @@ function step(name: string, lines: string[], agent: string | undefined): ParsedS
   };
 }
 
+/** The one `after` value that is not a heading: the step waits for nothing
+ *  and starts with the first step. It is the only way a later heading
+ *  becomes a second root, since a missing `after` is the step above. */
+export const AFTER_NONE = "none";
+
 function afterSteps(parsed: ParsedStep, index: number, steps: ParsedStep[], positions: ReadonlyMap<string, number>): string[] {
   const raw = parsed.after;
   const names = raw === undefined || raw.trim() === "" ? [] : commaWords(raw);
+  if (names.includes(AFTER_NONE)) {
+    if (names.length > 1) throw new Bad(`step ${parsed.step.name}: after none waits for nothing, so it names no other step`);
+    if (positions.has(AFTER_NONE)) throw new Bad(`step ${parsed.step.name}: after none is reserved, so rename the step called none`);
+    return [];
+  }
   if (names.length === 0) {
     const previous = steps[index - 1];
     return previous ? [previous.step.name] : [];

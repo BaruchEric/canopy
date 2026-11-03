@@ -276,7 +276,7 @@ A chat is a run whose process outlives its first reply: stdin stays open after e
 
 A workflow is a markdown file. Frontmatter names it and sets its precondition; each `##` heading names a step run through the same Runner a plain job uses. Steps form a graph through `after`, with a check and gate after each step's run. Files without the new keys keep their original chain order.
 
-FR-034 plan 1 is implemented locally as of 2026-10-27, and plan 2 (the graph on the flow sheet and `canopy workflow`) as of 2026-11-02; neither has been deployed. Plan 3 updates the bundled workflows.
+FR-034 plan 1 is implemented locally as of 2026-10-27, plan 2 (the graph on the flow sheet and `canopy workflow`) as of 2026-11-02, and plan 3 (the bundled ship and sentry-triage-fix as graphs) the same day; none has been deployed.
 
 Frontmatter keys:
 
@@ -298,11 +298,11 @@ A `##` heading is a step's name. The `key: value` lines right under it, up to th
 | `turns` | max turns for this step's run | 30 |
 | `check` | a shell command run in the repo after the run ends; exit 0 passes | none |
 | `gate` | `continue`, `ask`, `verdict`, or `judge` | `continue` |
-| `after` | comma-separated earlier step headings to wait for; all predecessors must settle before this step is ready | the step above, none for the first |
+| `after` | comma-separated earlier step headings to wait for; all predecessors must settle before this step is ready; `none` waits for nothing, so a later step starts with the first | the step above, none for the first |
 | `when` | comma-separated conditions on predecessors; any one holding runs the step, none skips it: `always`, `verdict done`, `verdict partial`, `verdict blocked`, `judge meets`, `judge partly`, `judge misses`, `check pass`, `check fail`, `changed`, `unchanged`, `skipped` | `always` |
 | `mode` | `manual` holds the step before it starts until you continue; `auto` starts it when ready | `auto` |
 
-A step whose body is empty is check-only: no Claude run, just the command. Workflows come from three folders, later ones winning by `name`: `lib/workflows/*.md` (bundled with canopy), `$CANOPY_CONFIG_DIR/workflows/*.md` (yours, `~/.config/canopy/workflows` by default), and `<repo>/.canopy/workflows/*.md` (that repo only, local repos only). The bundled five: **commit** (stages what belongs, writes the message, does not push), **push** (pushes the branch, rebasing only when safe), **ship** (gates, then commit, then push, stopping before committing if a gate fails), **deploy** (works out how the project deploys and runs it after its own gates), **review** (reads the diff and recent commits and reports what looks wrong, changing nothing).
+A step whose body is empty is check-only: no Claude run, just the command. Workflows come from three folders, later ones winning by `name`: `lib/workflows/*.md` (bundled with canopy), `$CANOPY_CONFIG_DIR/workflows/*.md` (yours, `~/.config/canopy/workflows` by default), and `<repo>/.canopy/workflows/*.md` (that repo only, local repos only). The bundled five: **commit** (stages what belongs, writes the message, does not push), **push** (pushes the branch, rebasing only when safe), **ship** (gates, with a Docs reader beside them that reports which docs the change makes wrong, then commit, then push, stopping before committing if a gate fails), **deploy** (works out how the project deploys and runs it after its own gates), **review** (reads the diff and recent commits and reports what looks wrong, changing nothing).
 
 Every step's `check`, when present, runs after the agent ends and before the gate. A nonzero exit normally fails the flow, or retries the step when configured. The `continue` gate releases its dependants, `ask` parks for you to continue, retry, or stop, and `verdict` asks Jev to evaluate the step's summary. The `judge` gate evaluates the work against the step's task and evidence. Evaluation needs `AI_GATEWAY_API_KEY` in the server's environment; without it, a `verdict` or `judge` gate parks for your decision.
 

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { GATES_CHECK } from "./gates";
 import type { Workflow } from "./types";
 import { chained, parseWorkflow, readOnlyStep, readOnlyTools, unattendedRefusal, type RecordedWorkflow } from "./workflow";
@@ -298,6 +298,12 @@ describe("after, when and mode", () => {
     expect(e.workflow.steps[2]?.after).toEqual(["A", "B"]);
   });
 
+  test("after: none makes a later step a second root, starting with the first", () => {
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## Gates\ntools: bun\n\ngates\n\n## Docs\nafter: none\ntools: read\n\ndocs\n\n## Commit\nafter: Gates, Docs\n\ncommit\n`, meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps.map((s) => s.after)).toEqual([[], [], ["Gates", "Docs"]]);
+  });
+
   test("an empty when list defaults to always", () => {
     const e = parseWorkflow(`---\nblurb: b\n---\n\n## A\nwhen: , ,\n\na\n`, meta);
     if (!e.ok) throw new Error(e.error);
@@ -314,6 +320,9 @@ describe("after, when and mode", () => {
     [graph("", "when: check fail"), "step Fix: when check fail needs a step before it with a check"],
     [graph("", "mode: sometimes"), "step Fix: mode must be one of auto, manual, not sometimes"],
     [`---\nblurb: b\n---\n\n## A\nwhen: always\n\na\n`, "step A: when needs a step before it to wait on"],
+    [`---\nblurb: b\n---\n\n## A\n\na\n\n## B\nafter: none, A\n\nb\n`, "step B: after none waits for nothing, so it names no other step"],
+    [`---\nblurb: b\n---\n\n## A\n\na\n\n## B\nafter: none\nwhen: changed\n\nb\n`, "step B: when needs a step before it to wait on"],
+    [`---\nblurb: b\n---\n\n## none\n\na\n\n## B\nafter: none\n\nb\n`, "step B: after none is reserved, so rename the step called none"],
   ])("refuses %s", (text, error) => {
     const e = parseWorkflow(text, meta);
     expect(e.ok).toBe(false);
@@ -325,7 +334,10 @@ describe("after, when and mode", () => {
     expect(e.ok).toBe(true);
   });
 
-  test("every bundled workflow and the example are chains", async () => {
+  /** the bundled files that use the graph keys (FR-034 plan 3); workflows.test.ts pins their shape */
+  const GRAPHS = new Set(["ship", "sentry-triage-fix"]);
+
+  test("every bundled workflow and the example are chains, but for ship and sentry-triage-fix", async () => {
     const dir = join(import.meta.dir, "../../lib/workflows");
     const files = (await readdir(dir)).filter((n) => n.endsWith(".md")).map((n) => join(dir, n));
     files.push(join(import.meta.dir, "../../docs/workflows/example-update-deps.md"));
@@ -337,8 +349,9 @@ describe("after, when and mode", () => {
         const previous = names[i - 1];
         return previous === undefined ? [] : [previous];
       });
-      expect(e.workflow.steps.map((s) => s.after)).toEqual(chain);
-      expect(e.workflow.steps.every((s) => s.when.length === 1 && s.when[0] === "always" && s.mode === "auto")).toBe(true);
+      const plain = JSON.stringify(e.workflow.steps.map((s) => s.after)) === JSON.stringify(chain) &&
+        e.workflow.steps.every((s) => s.when.length === 1 && s.when[0] === "always" && s.mode === "auto");
+      expect(plain).toBe(!GRAPHS.has(basename(file, ".md")));
     }
   });
 });

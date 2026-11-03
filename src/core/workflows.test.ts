@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { builtinCheck } from "./builtincheck";
 import { exec } from "./exec";
+import { graphOf, isChain } from "./flowgraph";
 import { findWorkflow, loadWorkflows, readFlowModes } from "./workflows";
-import { parseWorkflow } from "./workflow";
+import { parseWorkflow, readOnlyStep, unattendedRefusal } from "./workflow";
 
 let cfg = "";
 let repo = "";
@@ -87,7 +88,7 @@ describe("loadWorkflows", () => {
   test("every bundled workflow parses and has the expected shape", async () => {
     const list = await loadWorkflows({ path: "/nonexistent" });
     const ship = findWorkflow(list, "ship");
-    expect(ship?.steps.map((s) => s.name)).toEqual(["Gates", "Commit", "Push"]);
+    expect(ship?.steps.map((s) => s.name)).toEqual(["Gates", "Docs", "Commit", "Push"]);
     expect(ship?.steps[0]?.check).toBe("@gates");
     expect(ship?.when).toBe("dirty-or-unpushed");
     expect(findWorkflow(list, "commit")?.when).toBe("dirty");
@@ -95,6 +96,71 @@ describe("loadWorkflows", () => {
     expect(findWorkflow(list, "push")?.when).toBe("unpushed");
     expect(findWorkflow(list, "deploy")?.when).toBe("any");
     expect(findWorkflow(list, "review")?.steps[0]?.tools).not.toContain("Bash(git commit:*)");
+  });
+});
+
+describe("the bundled graphs (FR-034 plan 3)", () => {
+  test("ship reads the docs beside the gates, one reader and one writer, and commits after both", async () => {
+    const ship = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "ship");
+    if (!ship) throw new Error("no bundled ship");
+    expect(ship.steps.map((s) => s.name)).toEqual(["Gates", "Docs", "Commit", "Push"]);
+    expect(ship.steps.map((s) => s.after)).toEqual([[], [], ["Gates", "Docs"], ["Commit"]]);
+    expect(ship.steps.every((s) => s.when.length === 1 && s.when[0] === "always" && s.mode === "auto")).toBe(true);
+    const [gates, docs, commit] = ship.steps;
+    if (!gates || !docs || !commit) throw new Error("ship lost a step");
+    // bun may write, so Gates is the pair's one writer; Docs only reads and has no check of its own
+    expect(readOnlyStep(gates)).toBe(false);
+    expect(readOnlyStep(docs)).toBe(true);
+    expect(docs.check).toBeNull();
+    expect(docs.tools).not.toContain("Edit");
+    expect(commit.gate).toBe("verdict");
+    expect(isChain(ship.steps)).toBe(false);
+    const g = graphOf(ship.steps);
+    expect(g.columns).toEqual([["Gates", "Docs"], ["Commit"], ["Push"]]);
+    expect(g.edges).toEqual([
+      { from: "Gates", to: "Commit", kind: "after" },
+      { from: "Docs", to: "Commit", kind: "after" },
+      { from: "Commit", to: "Push", kind: "after" },
+    ]);
+  });
+
+  test("sentry-triage-fix gates only a change, mends only a failed gate, and commits only a passed one", async () => {
+    const wf = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "sentry-triage-fix");
+    if (!wf) throw new Error("no bundled sentry-triage-fix");
+    expect(wf.listed).toBe(false);
+    expect(wf.expectsChange).toBe(true);
+    expect(wf.steps.map((s) => s.name)).toEqual(["Triage", "Fix", "Gates", "Mend", "Commit"]);
+    expect(wf.steps.map((s) => s.after)).toEqual([[], ["Triage"], ["Fix"], ["Gates"], ["Gates", "Mend"]]);
+    expect(wf.steps.map((s) => s.when)).toEqual([["always"], ["always"], ["changed"], ["check fail"], ["check pass"]]);
+    // no verdict, ask or manual: a trigger's flow has nobody to answer a park
+    expect(wf.steps.every((s) => s.gate === "continue" && s.mode === "auto")).toBe(true);
+    expect(unattendedRefusal(wf, "a trigger's run")).toBeNull();
+    const [triage, fix, gates, mend, commit] = wf.steps;
+    if (!triage || !fix || !gates || !mend || !commit) throw new Error("sentry-triage-fix lost a step");
+    expect(triage.tools).not.toContain("Edit");
+    expect(fix.tools).toContain("Edit");
+    expect(fix.tools).not.toContain("Bash(git commit:*)");
+    expect(fix.check).toBeNull();
+    expect(fix.retries).toBe(0);
+    // Gates is check-only, and Mend is sent back to itself once before the flow parks
+    expect(gates.body).toBe("");
+    expect(gates.check).toBe("@gates");
+    expect(mend.check).toBe("@gates");
+    expect(mend.retries).toBe(1);
+    expect(mend.back).toBe("Mend");
+    expect(mend.tools).toEqual(fix.tools);
+    expect(commit.tools).toContain("Bash(git commit:*)");
+    expect(commit.tools).not.toContain("Bash(git push:*)");
+    expect(isChain(wf.steps)).toBe(false);
+    const g = graphOf(wf.steps);
+    expect(g.columns).toEqual([["Triage"], ["Fix"], ["Gates"], ["Mend"], ["Commit"]]);
+    expect(g.edges).toEqual([
+      { from: "Triage", to: "Fix", kind: "after" },
+      { from: "Fix", to: "Gates", kind: "after", when: ["changed"] },
+      { from: "Gates", to: "Mend", kind: "after", when: ["check fail"] },
+      { from: "Gates", to: "Commit", kind: "after", when: ["check pass"] },
+      { from: "Mend", to: "Commit", kind: "after", when: ["check pass"] },
+    ]);
   });
 });
 
