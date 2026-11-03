@@ -60,6 +60,7 @@ import { stableOrder } from "../dock";
 import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Arrangement, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
 import { dragStep, TOUCH_HOLD, type DragInput, type DragPhase } from "../drag";
+import { showingAt } from "../swiperow";
 import { backendOf, homeName, isHome } from "../registry";
 import { driftLine, driftReport } from "../triggers";
 import { openView } from "../clirun";
@@ -3433,15 +3434,71 @@ function scrollsX(el: Element, dock: HTMLElement): boolean {
 }
 
 /** each column's left edge along the row, in the dock's scroll px: its
- *  seam's, since the seam is the column's left edge; in visual order */
-function panelEdges(dock: HTMLElement): number[] {
+ *  seam's, since the seam is the column's left edge; in visual order. A
+ *  phone's row has no seams, so its dots read the panels' own edges (`of`). */
+function panelEdges(dock: HTMLElement, of = ":scope > .seam-col"): number[] {
   const base = dock.getBoundingClientRect().left + dock.clientLeft - dock.scrollLeft;
   const edges = new Set<number>();
-  for (const el of dock.querySelectorAll(":scope > .seam-col")) {
+  for (const el of dock.querySelectorAll(of)) {
     if (el instanceof HTMLElement && el.offsetParent !== null) edges.add(Math.round(el.getBoundingClientRect().left - base));
   }
   return [...edges].sort((a, b) => a - b);
 }
+
+/** The dots over a phone's swipe row (FR-008): one per panel in the row's
+ *  order, the one showing filled, so the row says what else is open as the
+ *  strip does in tabs mode. Each is named in its title, and a tap scrolls
+ *  its panel in and shows it. The showing one follows the row's scroll,
+ *  read again on every scroll and resize rather than once, so it moves
+ *  mid-swipe once the next panel is more than half in (`showingAt`). */
+function RowDots({ row, ids }: { row: RefObject<HTMLDivElement | null>; ids: string[] }) {
+  const repos = useStore((s) => s.repos);
+  const showPanel = useStore((s) => s.showPanel);
+  const [at, setAt] = useState(0);
+  useEffect(() => {
+    const dock = row.current;
+    if (!dock) return;
+    const read = () => setAt(showingAt(panelEdges(dock, ROW_PANELS), dock.scrollLeft));
+    read();
+    dock.addEventListener("scroll", read, { passive: true });
+    window.addEventListener("resize", read);
+    return () => {
+      dock.removeEventListener("scroll", read);
+      window.removeEventListener("resize", read);
+    };
+  }, [row, ids]);
+  const go = (i: number, id: string) => {
+    const dock = row.current;
+    const left = dock ? panelEdges(dock, ROW_PANELS)[i] : undefined;
+    if (dock && left !== undefined) {
+      const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+      dock.scrollTo({ left, behavior: still ? "auto" : "smooth" });
+    }
+    showPanel(id);
+  };
+  return (
+    <nav className="dock-dots" aria-label="Open panels">
+      {ids.map((id, i) => {
+        const repo = repos.find((r) => r.id === id);
+        const name = isReservedPanel(id) ? panelText(id) : (repo?.name ?? idText(id));
+        return (
+          <button
+            key={id}
+            type="button"
+            className="dock-dot"
+            title={name}
+            aria-label={name}
+            aria-current={i === at ? "true" : undefined}
+            onClick={() => go(i, id)}
+          />
+        );
+      })}
+    </nav>
+  );
+}
+
+/** the swipe row's panels, whose own left edges the dots go by */
+const ROW_PANELS = ":scope > .panel";
 
 /** a panel over the window (full screen, filling it, or the bench): a
  *  fixed box that is still the dock's child, so the row behind it must
@@ -3725,6 +3782,9 @@ export function Dock() {
   const tabbed = useStore((s) => s.settings.openIn === "tabs");
   const active = useStore((s) => s.activePanel);
   const phoneTabs = !movable && tabbed;
+  // side by side on a phone with more than one panel: the swipe row, with
+  // a band of dots over it saying what else is open (FR-008)
+  const phoneRow = !movable && !tabbed && panels.length > 1;
   const showing = phoneTabs ? (active !== null && panels.includes(active) ? active : panels[0]) : undefined;
   const g = useMemo(() => gridOf(layout), [layout]);
   const t = useMemo(() => gridTemplate(layout, g, fill), [layout, g, fill]);
@@ -3732,16 +3792,19 @@ export function Dock() {
     () => placements(layout, panels, gridded ? g : null, showing),
     [layout, panels, gridded, g, showing],
   );
+  // the phone's panels in the order they show in, for its strip or its dots
+  const rowIds = useMemo(
+    () => (movable ? [] : [...panels].sort((a, b) => (placed[a]?.order ?? 0) - (placed[b]?.order ?? 0))),
+    [movable, panels, placed],
+  );
   const ref = useRef<HTMLDivElement>(null);
   // one column has no row to pan
   useCarousel(ref, carousel && movable && layout.columns.length > 1);
   if (panels.length === 0) return null;
-  // the phone's strip lists the panels in the order they show in
-  const phoneStrip = phoneTabs ? [...panels].sort((a, b) => (placed[a]?.order ?? 0) - (placed[b]?.order ?? 0)) : [];
   return (
     <div
       ref={ref}
-      className={gridded ? "dock grid" : phoneTabs ? "dock phone-tabs" : "dock"}
+      className={gridded ? "dock grid" : phoneTabs ? "dock phone-tabs" : phoneRow ? "dock phone-row" : "dock"}
       style={
         gridded ? ({ gridTemplateColumns: t.columns, gridTemplateRows: t.rows, ...t.vars } as CSSProperties) : undefined
       }
@@ -3792,7 +3855,8 @@ export function Dock() {
             label={`Tabs with ${panelText(on)} showing`}
           />
         ))}
-      {phoneTabs && <CellStrip panels={phoneStrip} active={showing ?? null} movable={false} label="Open repos" />}
+      {phoneTabs && <CellStrip panels={rowIds} active={showing ?? null} movable={false} label="Open repos" />}
+      {phoneRow && <RowDots row={ref} ids={rowIds} />}
       {gridded &&
         !fill &&
         g.colSeams.map(({ column, area }) => {

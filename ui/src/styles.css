@@ -4527,6 +4527,58 @@ button.dl-gut.has {
     width: 100%;
     scroll-snap-align: start;
   }
+  /* side by side with more than one panel: a band of dots over the row
+     (FR-008), one per panel, the showing one filled, where the strip sits
+     in tabs mode. The band is a flex item of no footprint (a screen wide,
+     pulled back by its margin) stuck to the row's left edge, so it stays
+     put as the row scrolls under it, and the panels leave its height
+     above them. */
+  .dock.phone-row {
+    --dots-h: 20px;
+  }
+  .dock.phone-row > .panel {
+    margin-top: var(--dots-h);
+  }
+  .dock-dots {
+    order: -1;
+    flex: none;
+    width: 100%;
+    height: var(--dots-h);
+    margin-right: -100%;
+    align-self: flex-start;
+    position: sticky;
+    left: 0;
+    z-index: 3;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-bottom: 1px solid var(--hair);
+    background: var(--bark1);
+  }
+  /* each dot is a 28px tap target around a 6px mark */
+  .dock-dot {
+    width: 28px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+  .dock-dot::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--hair2);
+  }
+  .dock-dot:hover::before {
+    background: var(--ink-faint);
+  }
+  .dock-dot[aria-current="true"]::before {
+    background: var(--ink);
+  }
   /* tabs on a phone: the strip across the top, the one panel showing
      below it, the others hidden in the same cell */
   .dock.phone-tabs {
