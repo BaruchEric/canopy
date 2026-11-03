@@ -224,3 +224,42 @@ test("a run line names its run and backend so the page can open its kept record"
   expect(sheet.services[0]).not.toHaveProperty("run");
   expect(sheet.repos[0]).not.toHaveProperty("run");
 });
+
+const member = (run: string, over: Partial<ServedRow> = {}): ServedRow => row({ service: "claude", provider: "anthropic", run, group: "g-1", label: "plan", action: "propose", repoName: "web", at: 5, usd: 1, tokens: { input: 0, cachedInput: 0, output: 0, reasoning: 0, total: 100 }, ...over });
+
+test("a group's members and reviewer fold into one by-run line with their sum", () => {
+  const sheet = costSheet([member("r1"), member("r2", { usd: 2 }), member("c1", { label: "compare", action: "compare", usd: 0.5, at: 9 }), row({ run: "solo", label: "ask", usd: 4, service: "claude", provider: "anthropic" })], null, 7, [], new Map([["mac:g-1", 2]]));
+  const fold = sheet.runs.find((l) => l.group);
+  expect(fold).toMatchObject({ label: "best of 2 · plan", usd: 3.5, tokens: 300, at: 9, group: { backend: "mac", id: "g-1" } });
+  expect(fold?.run).toBeUndefined();
+  expect(sheet.runs.map((l) => l.key).sort()).toEqual(["mac:group:g-1", "mac:solo"]);
+  // the fold moves lines, not dollars
+  expect(sheet.usd).toBe(7.5);
+});
+
+test("a reviewer's row first never gives the fold its verb, and a fix row does not change its size", () => {
+  const sheet = costSheet([member("c1", { label: "compare", action: "compare" }), member("r1"), member("fix", { label: "ask", action: "ask" })], null, 7, [], new Map([["mac:g-1", 3]]));
+  expect(sheet.runs).toHaveLength(1);
+  expect(sheet.runs[0]?.label).toBe("best of 3 · plan");
+});
+
+test("a group the page does not hold still folds, without a count", () => {
+  const sheet = costSheet([member("r1"), member("r2")], null, 7, []);
+  expect(sheet.runs).toHaveLength(1);
+  expect(sheet.runs[0]?.label).toBe("best-of group · plan");
+});
+
+test("a window holding only the reviewer's rows folds without a verb", () => {
+  const sheet = costSheet([member("c1", { label: "compare", action: "compare" })], null, 7, [], new Map([["mac:g-1", 2]]));
+  expect(sheet.runs[0]?.label).toBe("best of 2");
+});
+
+test("one group id on two backends stays two lines", () => {
+  const sheet = costSheet([member("r1"), member("r2", { backend: "mini" })], null, 7, []);
+  expect(sheet.runs.map((l) => l.group?.backend).sort()).toEqual(["mac", "mini"]);
+});
+
+test("the fold's detail names every member's service and model", () => {
+  const sheet = costSheet([member("r1", { model: "opus" }), member("r2", { service: "codex", provider: "openai", model: "fast", usd: null })], null, 7, []);
+  expect(sheet.runs[0]?.detail).toBe("web · Claude Code + Codex · opus · fast");
+});
