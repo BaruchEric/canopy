@@ -251,6 +251,9 @@ import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept
 import { exportRun } from "../core/export";
 import { redactLine } from "../core/redact";
 import { redactReplay, replayWire } from "../core/wirereplay";
+import { cutTranscript, placeCut, readTranscript, removeCut, transcriptPaths } from "../core/forkcut";
+import { handoffBrief, stepWords } from "../core/handoff";
+import type { ForkHow, RunFork, RunStep } from "../core/types";
 import { sentBack } from "../core/landing";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX, takeTriggerSecrets } from "../core/envnames";
 import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
@@ -1459,18 +1462,23 @@ async function dropCoordFolder(id: string): Promise<void> {
 
 /** A new branch off the default branch, its worktree made, and the setup
  *  line to run there before the first agent: what a branch run, or a flow
- *  on a branch, starts with. It uses a warm worktree when the pool has one. */
-async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, pool: WarmPool): Promise<BranchStart> {
+ *  on a branch, starts with. It uses a warm worktree when the pool has one.
+ *  `from` cuts the branch at that commit instead of the default branch's
+ *  tip (a fork starts where its original did, FR-043 plan 3); a warm
+ *  worktree sits at the tip, so none is taken then. */
+async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, pool: WarmPool, from?: string): Promise<BranchStart> {
   const target = await defaultBranch(repo.path);
-  const base = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
-  if (!target || !base) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
+  const tip = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
+  if (!target || !tip) throw new HttpError(400, `${repo.name} has no main or master branch to cut a run's branch from`);
+  const base = from === undefined || from === tip ? tip : await revOf(repo.path, from);
+  if (!base) throw new HttpError(400, `the commit the original run started from, ${from}, is gone from ${repo.name}`);
   const id = crypto.randomUUID().slice(0, 8);
   const name = workBranchName(work, note);
   const dir = runTreeDir(repo.path, id);
   if (existsSync(dir) || await revOf(repo.path, `refs/heads/${name}`)) throw new HttpError(409, "the run's branch or worktree exists already");
   // Check readiness before take: an unowned backend can still start cold.
   // A rejected take may have moved its destination, so it must never fall back.
-  const take: Take = pool.ready
+  const take: Take = pool.ready && base === tip
     ? await pool.take(repo.path, dir, name, base)
     : { took: false, wanted: warmFor(await loadConfig(), repo.path) > 0 };
   try {
@@ -1501,6 +1509,147 @@ async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, po
     branch: { name, target, base, dir, state: "working", origin: id, work, ...(pr ? { openPr: true as const } : {}) },
     prepare,
   };
+}
+
+/** The fork of a finished run (FR-043 plan 3): a new branch run on the same
+ *  repo, cut from the commit the original started at, that goes on from
+ *  one of the original's steps, or from its end, with the original's
+ *  context. How it gets that context is decided here and kept on the run
+ *  as `forkOf.how`. A Claude run forked onto Claude resumes a copy of its
+ *  transcript cut after the step, placed where the CLI looks for the
+ *  fork's worktree and removed when the run ends (`cut`; probes P2 and P3
+ *  of the spec); from its end, or when the step is not in the transcript,
+ *  the whole session is resumed under a new id and the cut is said in
+ *  words (`whole`, probe P1). A Codex run forked onto Codex has its thread
+ *  forked (`whole`, probe P4). Anything else (the other harness, no session
+ *  or transcript left) starts fresh from a fenced brief of the steps to
+ *  there (`brief`, `core/handoff.ts`). Under every other rule a fork is a
+ *  new run: the branch slots, the governor (interactive), the landing
+ *  queue's review when it lands. The body: `run`, the original's id;
+ *  `step`, a step's id or its number from 1, absent for the end; `profile`,
+ *  an agent profile for the fork; `note`, words for it; `client`. */
+async function startForkRun(state: ServerState, b: Record<string, unknown>, client: unknown): Promise<Run> {
+  const id = typeof b["run"] === "string" ? b["run"] : "";
+  if (!RUN_ID.test(id)) throw new HttpError(400, "run must be a run id");
+  const live = state.runner.get(id);
+  if (live && isRunActive(live)) throw new HttpError(409, "the run is still going; fork it once it has ended");
+  let found: Run | null = live ?? null;
+  if (!found) { await state.readyRunlog(); found = await readKeptRun(runsDir(), id); }
+  if (!found) throw new HttpError(404, "no run by that id");
+  const original: Run = found;
+  if (original.action === "coordinate") throw new HttpError(400, "a coordinator is not forked; one of its cards' runs is");
+  const repo = state.result.repos.find((r) => r.id === original.repoId);
+  if (!repo) throw new HttpError(404, `${original.repoId} is not in the last scan`);
+  if (repo.host) throw new HttpError(400, `agent runs only work on this machine; ${repo.name} is on ${repo.host}`);
+  if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; an agent runs in a folder on this machine`);
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
+  const userNote = typeof b["note"] === "string" ? b["note"].trim() : "";
+  // where the original worked: its worktree, spelled from its origin rather
+  // than read off the record, whose paths a kept run has redacted
+  const originalCwd = original.branch ? runTreeDir(repo.path, original.branch.origin) : repo.path;
+  // the steps as the replay bar numbers them: the record's with the asks
+  // placed among them, or folded out of the wire for a record a restart
+  // left empty; the record alone when no wire is kept
+  let steps: readonly RunStep[] = original.steps;
+  const wire = await readWire(runsDir(), id).catch(() => null);
+  if (wire) steps = replayWire(wire, original, { cwd: originalCwd, home: homedir() }).steps;
+  const stepRaw = b["step"];
+  let step: RunStep | null = null;
+  if (typeof stepRaw === "number") {
+    if (!Number.isInteger(stepRaw) || stepRaw < 1 || stepRaw > steps.length) throw new HttpError(400, steps.length ? `step must be 1 to ${steps.length}` : "the run has no steps to fork at");
+    step = steps[stepRaw - 1] ?? null;
+  } else if (typeof stepRaw === "string" && stepRaw) {
+    step = steps.find((s) => s.id === stepRaw) ?? null;
+    if (!step) throw new HttpError(400, `no step ${stepRaw} in run ${id}`);
+  } else if (stepRaw !== undefined && stepRaw !== null) {
+    throw new HttpError(400, "step must be a step's id or its number");
+  }
+  const index = step ? steps.indexOf(step) : steps.length;
+  const at = step ? index + 1 : steps.length;
+  const cfg = await loadConfig();
+  const profile = b["profile"];
+  if (profile !== undefined && profile !== null && (typeof profile !== "string" || !hasProfile(agentRoutes(cfg).profiles, profile))) throw new HttpError(400, `unknown agent profile ${String(profile)}`);
+  const action: RunAction = original.action === "propose" ? "propose" : "ask";
+  const agent = agentFor(cfg, repo.path, "job", typeof profile === "string" ? { profile } : undefined, { kind: "task", name: action });
+  if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
+  await needHarness(state, agent.harness, repo.path);
+  const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  // how the fork gets its context
+  const isWork = (s: RunStep): boolean => s.kind === "text" || s.kind === "tool";
+  let how: ForkHow = "brief";
+  let resume: string | undefined;
+  let cut: { id: string; lines: string[] } | null = null;
+  const session = original.session;
+  if (session !== undefined && isSessionId(session) && original.harness === agent.harness) {
+    if (agent.harness === "codex") {
+      how = "whole";
+      resume = session;
+    } else {
+      let lines: string[] | null = null;
+      for (const file of await transcriptPaths(originalCwd, session)) lines ??= await readTranscript(file);
+      if (lines) {
+        how = "whole";
+        resume = session;
+        // the step's line, or the nearest work step before a note's
+        const target = step ? steps.slice(0, index + 1).reverse().find(isWork) : undefined;
+        if (target) {
+          const forkId = crypto.randomUUID();
+          const kept = cutTranscript(lines, target, originalCwd, forkId, steps.slice(0, steps.indexOf(target)));
+          if (kept) {
+            how = "cut";
+            resume = forkId;
+            cut = { id: forkId, lines: kept };
+          }
+        }
+      }
+    }
+  }
+  const slug = userNote || original.note;
+  return withBranchStart(state, repo.id, async () => {
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
+    if (going >= BRANCH_RUNS_PER_REPO) throw new SlotsFullError(`${repo.name} has ${going} branch runs going; wait for one to end`);
+    needCapacity(state, agent.harness, "interactive");
+    const item = state.work.mint({ title: `fork of ${id}: ${titleOf(original.note) || original.verb}`, from: { kind: "note" }, repos: [repo.id] });
+    let start: BranchStart | undefined;
+    let copy: string | null = null;
+    try {
+      start = await cutBranch(repo, slug, false, item.id, state.warm, original.branch?.base);
+      const branch = start.branch;
+      const where = step ? `step ${at} of ${steps.length} ("${stepWords(step)}")` : "its end";
+      let note = userNote;
+      let message: string | undefined;
+      if (how === "brief") {
+        // a fresh run: the brief rides in the note, which the usual framing wraps
+        note = `${handoffBrief({ ...original, steps: [...steps] }, step, { repoName: repo.name })}\n\n${userNote || "Go on from where that run was forked, in this worktree."}`;
+      } else {
+        const head = how === "cut"
+          ? `This run is a fork of the session so far, taken at ${where}: the record ends there, and nothing after it happened in this run.`
+          : step
+            ? `This run is a fork of the session so far, taken at ${where}: go on from that point and disregard everything after it, which belongs to the original run.`
+            : "This run is a fork of the session so far, taken at its end.";
+        const tree = "It works in a fresh worktree now, cut from the commit the original run started at: none of the files the original changed are changed here, so redo what still matters before building on it.";
+        message = [head, tree, branchLine(branch), userNote ? `Note from the user:\n${userNote}` : "Go on from there."].join("\n\n");
+      }
+      if (cut) copy = await placeCut(branch.dir, cut.id, cut.lines);
+      const forkOf: RunFork = { run: id, ...(step ? { step: step.id } : {}), at, how };
+      const file = copy;
+      return state.runner.start(repo, action, ACTIONS[action], note, agent, by, undefined, {
+        ...start,
+        ...(message !== undefined ? { message } : {}),
+        ...(resume !== undefined ? { resume, fork: true as const } : {}),
+      }, { forkOf, ...(file ? { cleanup: () => removeCut(file) } : {}) });
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err);
+      state.work.close(item.id, "dropped", `the fork did not start: ${text}`);
+      if (copy) await removeCut(copy).catch(() => {});
+      if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name).catch(() => {});
+      if (err instanceof Error && err.name === "StageAwayError") throw err;
+      if (isCapacityHeld(err)) throw err;
+      if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
+      if (!start && err instanceof HttpError) throw err;
+      throw new HttpError(400, text);
+    }
+  });
 }
 
 /** A "fix it" run on a branch the landing queue sent back: Claude resumes
@@ -4186,6 +4335,10 @@ async function handleApi(
     const b = (await req.json()) as { id?: unknown };
     if (typeof b.id !== "string") return json({ error: "missing run id" }, 400);
     return json(state.runner.stop(b.id));
+  }
+  if (path === "/api/runs/fork" && method === "POST") {
+    const b = await objectBody(req);
+    return json(await startForkRun(state, b, b["client"]), 201);
   }
   if (path === "/api/runs/say" && method === "POST") {
     const b = (await req.json()) as { id?: unknown; text?: unknown };

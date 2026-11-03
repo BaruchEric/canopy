@@ -812,6 +812,20 @@ export const api = {
     const [b, plain] = on(id);
     return req<RunReplay>(b, `/api/runs/${encodeURIComponent(plain)}/replay`);
   },
+  /** A fork of a finished run (FR-043 plan 3): at a step of its replay by
+   *  the step's id, or from its end without one; `profile` picks the fork's
+   *  agent, `note` gives it words. Answers the new run. */
+  forkRun: async (id: string, opts: { step?: string; profile?: string; note?: string } = {}): Promise<Run> => {
+    const [b, plain] = on(id);
+    return from(
+      b,
+      await req<Run>(b, "/api/runs/fork", {
+        method: "POST",
+        body: JSON.stringify({ run: plain, ...(opts.step ? { step: opts.step } : {}), ...(opts.profile ? { profile: opts.profile } : {}), ...(opts.note ? { note: opts.note } : {}), client: clientId() }),
+      }),
+      qRun,
+    );
+  },
   /** `client` is this browser's id, so the run says which device started it */
   run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean) => {
     const [b, plain] = on(id);

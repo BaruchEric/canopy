@@ -89,6 +89,7 @@ describe("shapes", () => {
       ["t2", "mac|c", undefined],
     ]);
     expect(qRun(q, { ...run, parent: "r0" } as Run).parent).toBe("mac|r0");
+    expect(qRun(q, { ...run, forkOf: { run: "r0", step: "s3", at: 3, how: "cut" } } as Run).forkOf).toEqual({ run: "mac|r0", step: "s3", at: 3, how: "cut" });
     const f = qFlow(q, flow);
     expect(f).toMatchObject({ id: "mac|f1", repoId: "mac|a/b", fleetId: "mac|fl1" });
     expect(f.steps[0]?.runId).toBe("mac|r1");

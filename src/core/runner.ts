@@ -38,6 +38,7 @@ import {
   type RunAnswer,
   type RunBranch,
   type RunBranchState,
+  type RunFork,
   type WorkspaceScope,
 } from "./types";
 
@@ -62,6 +63,9 @@ export interface BranchStart {
   prepare?: (say: (text: string) => void) => Promise<void>;
   /** a Claude session to resume: a "fix it" run on a sent-back branch */
   resume?: string;
+  /** the session in `resume` is forked under a new id rather than continued
+   *  (FR-043 plan 3): Claude's `--fork-session`, Codex's `thread/fork` */
+  fork?: true;
   /** the whole first message, in place of the built prompt ("fix it") */
   message?: string;
 }
@@ -91,6 +95,13 @@ export interface StartExtras {
   /** a Claude session to resume, for a chat the sweep stopped; a branch's own
    *  `resume` wins when both are set */
   resume?: string;
+  /** the run this one is a fork of, and the step it was cut at (FR-043
+   *  plan 3); kept on the run so the sheet can say so */
+  forkOf?: RunFork;
+  /** Runs once the run has ended, before its branch state is read and its
+   *  transcript settles: a fork removes the transcript copy it resumed
+   *  from. A throw is swallowed; the run has ended either way. */
+  cleanup?: () => Promise<void>;
 }
 
 export { claudeBinary, cliArgs } from "./claudedrive";
@@ -219,6 +230,8 @@ interface Live {
   releases: Promise<unknown>[];
   /** a branch run's start: its prepare runs before the first message */
   branch?: BranchStart;
+  /** runs once the run has ended, before it settles (`StartExtras.cleanup`) */
+  cleanup?: () => Promise<void>;
   /** a branch run's prepare is going and the driver has not started */
   preparing?: boolean;
   preparation?: Promise<void>;
@@ -410,6 +423,7 @@ export class Runner {
     const group = extras.group ?? branch?.branch.group;
     if (group) run.group = group;
     if (extras.priority) run.priority = extras.priority;
+    if (extras.forkOf) run.forkOf = { ...extras.forkOf };
     if (scope) run.workspace = scope.workspace;
     if (spec.flowStep) run.flowStep = { ...spec.flowStep };
     if (branch) run.branch = { ...branch.branch, state: "working", ...(group ? { group } : {}) };
@@ -421,7 +435,7 @@ export class Runner {
     // a folder no rule was kept for
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
-    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume } : {}) };
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;
@@ -468,6 +482,7 @@ export class Runner {
       ctx,
       log,
       ...(extras.flowOwner ? { flowOwner: extras.flowOwner } : {}),
+      ...(extras.cleanup ? { cleanup: extras.cleanup } : {}),
       driver,
       started: false,
       ended,
@@ -831,11 +846,11 @@ export class Runner {
   /** A result can end a job before stdout closes; a stop can end setup early.
    *  Keep the transcript open through preparation, driver exit and seed release,
    *  then store the final state.
-   *  Without a log, retain the existing result-time status read. */
+   *  Without a log, retain the existing result-time status read. A fork's
+   *  cleanup waits for the same release, then runs before the settle. */
   private async finish(live: Live): Promise<void> {
-    if (live.log) {
-      await this.release(live);
-    }
+    if (live.log || live.cleanup) await this.release(live);
+    if (live.cleanup) await live.cleanup().catch(() => {});
     try { await this.settle(live); }
     finally { await live.log?.settle(live.ctx.run).catch(() => {}); }
   }

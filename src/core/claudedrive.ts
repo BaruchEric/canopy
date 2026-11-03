@@ -160,6 +160,9 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
     ...(spec.addDirs ?? []).flatMap((d) => ["--add-dir", d]),
     ...(spec.resume ? ["--resume", spec.resume] : []),
+    // a fork (FR-043 plan 3): the resumed session goes on under a new id,
+    // with the old transcript as its context (probe P1, 2026-11-02)
+    ...(spec.resume && spec.fork ? ["--fork-session"] : []),
     // spec P8: a switch to bypass after the plan is refused without it; a
     // run that starts in bypass needs no switch
     ...(spec.permissionMode === "plan" && agent.yolo ? ["--allow-dangerously-skip-permissions"] : []),

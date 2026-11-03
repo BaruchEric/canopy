@@ -1,6 +1,7 @@
-/** Read, export, or prune the run transcripts kept by a canopy backend. */
+/** Read, export, fork, or prune the run transcripts kept by a canopy backend. */
 
 import { writeFile } from "node:fs/promises";
+import { forkLine } from "../core/handoff";
 import { RUN_ID } from "../core/runlog";
 import { ago } from "../core/treelines";
 import type { KeptRunHead, Run, RunReplay, RunStep } from "../core/types";
@@ -13,6 +14,7 @@ export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1
        canopy run [--backend URL]
        canopy run show <id> [--wire] [--backend URL]
        canopy run export <id> [--out file.md] [--backend URL]
+       canopy run fork <id> [--at N] [--profile NAME] [-m note] [--backend URL]
        canopy run prune [--backend URL]`;
 
 /** One line per kept run, newest first. `now` is unix milliseconds. */
@@ -145,6 +147,27 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
     }
     await writeFile(out, text, "utf8").catch((error: unknown) => fail(errText(error)));
     console.log(`wrote ${out}`);
+    return;
+  }
+
+  if (sub === "fork") {
+    const id = args.shift();
+    if (!id || outFlag) return fail(RUN_USAGE);
+    if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
+    const atFlag = args.includes("--at");
+    const at = take(args, "--at");
+    if (atFlag && (at === undefined || !/^[1-9]\d*$/.test(at))) return fail("--at needs a step's number, from 1, as canopy run show --wire counts them");
+    const profileFlag = args.includes("--profile");
+    const profile = take(args, "--profile");
+    if (profileFlag && !profile) return fail("--profile needs a profile's name");
+    const noteFlag = args.includes("-m");
+    const note = take(args, "-m");
+    if (noteFlag && note === undefined) return fail("-m needs a note");
+    if (args.length > 0) return fail(RUN_USAGE);
+    const body = { run: id, ...(at !== undefined ? { step: Number(at) } : {}), ...(profile ? { profile } : {}), ...(note ? { note } : {}) };
+    const run = await ask<Run>(target, "POST", "/api/runs/fork", body).catch(requestFailure(target, fail));
+    console.log(`${run.id} ${run.status}`);
+    if (run.forkOf) console.log(forkLine(run.forkOf));
     return;
   }
 

@@ -43,6 +43,7 @@ import {
   type RunReplay,
   type RunStep,
 } from "../../../src/core/types";
+import { forkLine, stepWords } from "../../../src/core/handoff";
 import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
@@ -570,6 +571,10 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const replay = useReplay(run);
   const [view, setView] = useState<CoordView>(() => coordView(run));
   const [folded, setFolded] = useState(false);
+  // "fork from here" (FR-043 plan 3): the step the replay bar stands at,
+  // or the end from the footer; the fork sheet takes the timeline's place
+  const [forkAt, setForkAt] = useState<ForkAt | null>(null);
+  const forkable = !active && !isCoordinator(run) && repo !== undefined && !repo.host && !repo.forge;
   const cards = isCoordinator(run) && ((run.tasks?.length ?? 0) > 0 || active);
   const cardsOnly = cards && phone && view === "cards";
 
@@ -604,13 +609,15 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
       </header>
 
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
+      {run.forkOf && <ForkLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
       {/* gone rather than hidden in the cards view, so it comes back
           following the newest step */}
-      {!cardsOnly && replay.timeline && <ReplayBar replay={replay} timeline={replay.timeline} />}
-      {!cardsOnly && (
+      {!cardsOnly && replay.timeline && <ReplayBar replay={replay} timeline={replay.timeline} {...(forkable ? { onFork: setForkAt } : {})} />}
+      {forkAt && repo && <ForkSheet run={run} repo={repo} at={forkAt} onClose={() => setForkAt(null)} />}
+      {!cardsOnly && !forkAt && (
         <Timeline
           run={replay.view}
           repo={repo}
@@ -653,6 +660,11 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         {!active && !replay.wanted && (
           <button type="button" className="mini" title="Play the run back from its kept wire, step by step" onClick={replay.load}>
             replay
+          </button>
+        )}
+        {forkable && !forkAt && (
+          <button type="button" className="mini" title="Start a new run on a branch of its own, cut from the commit this one started at, that goes on from this run's end with its context" onClick={() => { const n = replay.timeline?.steps.length ?? run.steps.length; setForkAt({ step: null, at: n, of: n }); }}>
+            fork
           </button>
         )}
         {active ? (
@@ -774,10 +786,25 @@ function useReplay(run: Run): Replay {
 
 const JUMP_WORD: Record<ReplayJumpKind, string> = { prompt: "prompt", message: "message", subagent: "subagent", result: "" };
 
+/** Where a fork is taken (FR-043 plan 3): a step of the replay and its
+ *  number from 1, or null and the step count for the run's end; `of` is
+ *  the count of the replay's steps, which the server numbers by too. */
+interface ForkAt {
+  step: RunStep | null;
+  at: number;
+  of: number;
+}
+
 /** Play at 1× or 4×, a scrubber over the steps and "jump to" the prompts,
- *  the messages, each subagent's start and the result. */
-function ReplayBar({ replay, timeline }: { replay: Replay; timeline: ReplayTimeline }) {
+ *  the messages, each subagent's start and the result; with `onFork`,
+ *  "fork from here" at the step the cursor stands on. */
+function ReplayBar({ replay, timeline, onFork }: { replay: Replay; timeline: ReplayTimeline; onFork?: (at: ForkAt) => void }) {
   const source = replay.data?.source;
+  const here = Math.min(replay.cursor, timeline.steps.length);
+  const fork = () => {
+    const step = here >= timeline.steps.length ? null : (timeline.steps[here - 1] ?? null);
+    onFork?.({ step, at: here, of: timeline.steps.length });
+  };
   return (
     <div className="replay-bar" role="group" aria-label="Replay">
       <button
@@ -830,6 +857,121 @@ function ReplayBar({ replay, timeline }: { replay: Replay; timeline: ReplayTimel
         </span>
       )}
       {replay.data?.cut && <span className="replay-note" title="The wire reached its size limit and was cut, so the replay stops short.">cut short</span>}
+      {onFork && (
+        <button
+          type="button"
+          className="mini"
+          disabled={here === 0}
+          title={here === 0 ? "Scrub to a step first" : here >= timeline.steps.length ? "A new run that goes on from this run's end, with its context, on a branch of its own" : `A new run that goes on from step ${here} of ${timeline.steps.length}, knowing nothing past it, on a branch of its own`}
+          onClick={fork}
+        >
+          fork from here
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Where a fork came from: "forked from run 3f2a at step 41, the
+ *  transcript cut there and resumed", with the original's sheet a click
+ *  away. */
+function ForkLine({ run }: { run: Run }) {
+  const showRun = useStore((s) => s.showRun);
+  const f = run.forkOf;
+  if (!f) return null;
+  const words = forkLine({ ...f, run: idText(f.run) });
+  return (
+    <div className="run-fork">
+      <span className="run-parent-text" title={HOW_TITLE[f.how]}>{words}</span>
+      <span className="spacer" />
+      <button type="button" className="mini" title="Open the run it was forked from" onClick={() => showRun(f.run)}>
+        open the original
+      </button>
+    </div>
+  );
+}
+
+const HOW_TITLE: Record<NonNullable<Run["forkOf"]>["how"], string> = {
+  cut: "The fork resumed a copy of the original's transcript cut after that step, so it knows nothing past it.",
+  whole: "The fork resumed the whole session under a new id; its first message says where the cut is and to disregard what came after.",
+  brief: "The fork started fresh from a brief of the original's steps up to there: the other harness, or no session left to resume.",
+};
+
+/** The fork sheet (FR-043 plan 3): the step it forks at, the agent it will
+ *  run on (a profile of this backend's, else the repo's own job route) and
+ *  how the fork will get the original's context, a note for it, and the
+ *  fork itself, which opens the new run's sheet. */
+function ForkSheet({ run, repo, at, onClose }: { run: Run; repo: Repo; at: ForkAt; onClose: () => void }) {
+  const showRun = useStore((s) => s.showRun);
+  const routes = useStore((s) => routesOf(s, backendOf(repo.id)));
+  const profiles = profileNames(routes);
+  const [profile, setProfile] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const action: RunAction = run.action === "propose" ? "propose" : "ask";
+  const agent = resolveAgent(routes, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action }).settings;
+  const sameHarness = agent.harness === run.harness && run.session !== undefined;
+  const where = at.step ? `step ${at.at} of ${at.of}: ${stepWords(at.step)}` : `its end (${at.of} step${at.of === 1 ? "" : "s"})`;
+  const how = sameHarness
+    ? run.harness === "claude"
+      ? at.step
+        ? "Claude resumes a copy of the session's transcript cut after that step, so the fork knows nothing past it."
+        : "Claude resumes the whole session under a new id."
+      : "Codex forks the thread, whole; the first message says where the cut is."
+    : `${AGENT_NAME[agent.harness]} starts fresh from a brief of the steps up to there, as data in its note.`;
+  const go = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const fork = await api.forkRun(run.id, { ...(at.step ? { step: at.step.id } : {}), ...(profile ? { profile } : {}), ...(note.trim() ? { note: note.trim() } : {}) });
+      onClose();
+      showRun(fork.id);
+    } catch (err) {
+      setError(errText(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="fork-sheet" role="group" aria-label="Fork from here">
+      <p className="fork-where">
+        Fork run <b>{idText(run.id)}</b> at {where}
+      </p>
+      <p className="settings-hint">
+        A new run on a branch of its own, cut from the commit this run started at: none of this run's changes are in it. {how}
+      </p>
+      <label className="fork-row">
+        <span>agent</span>
+        <select value={profile} onChange={(e) => setProfile(e.target.value)} aria-label="Agent profile">
+          <option value="">the repo's own ({describeAgent(agent)})</option>
+          {profiles.map((p) => (
+            <option key={p} value={p}>
+              {p}
+            </option>
+          ))}
+        </select>
+      </label>
+      <textarea
+        className="plan-note"
+        rows={3}
+        placeholder="what the fork should do from here (optional)"
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void go();
+        }}
+        aria-label="Note for the fork"
+      />
+      {error && <p className="note err">{error}</p>}
+      <div className="fork-actions">
+        <span className="spacer" />
+        <button type="button" className="mini" onClick={onClose} disabled={busy}>
+          cancel
+        </button>
+        <button type="button" className="mini strong" onClick={() => void go()} disabled={busy}>
+          {busy ? "forking…" : "fork"}
+        </button>
+      </div>
     </div>
   );
 }

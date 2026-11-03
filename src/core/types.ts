@@ -1368,12 +1368,35 @@ export interface Run {
    *  the quiet run to wrap up, and when it stopped the run for going quiet
    *  again */
   stall?: RunStall;
+  /** the run this one was forked from, and at which step (FR-043 plan 3) */
+  forkOf?: RunFork;
 }
 
 /** When the stall watchdog spoke to a run and when it stopped it, unix ms. */
 export interface RunStall {
   warned: number;
   stopped?: number;
+}
+
+/** How a fork got the original run's context (FR-043 plan 3): `cut`, Claude
+ *  resumed a copy of the original's transcript cut after the step; `whole`,
+ *  the whole session was resumed (Codex's thread forked, or a Claude
+ *  transcript canopy could not cut) and the first message says where the
+ *  cut is; `brief`, a fresh run started from a fenced brief of the steps
+ *  to the cut (another harness, or no session left to resume). */
+export type ForkHow = "cut" | "whole" | "brief";
+
+/** Where a run was forked from. */
+export interface RunFork {
+  /** the run it was forked from */
+  run: string;
+  /** the id of the step it was forked at, the last one the fork knows of;
+   *  absent for a fork from the run's end */
+  step?: string;
+  /** that step's number in the original's timeline, from 1; the count of
+   *  its steps for a fork from the end */
+  at: number;
+  how: ForkHow;
 }
 
 /** One finished run in the local transcript index. */

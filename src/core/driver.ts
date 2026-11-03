@@ -67,6 +67,9 @@ export interface DriveSpec {
   permissionMode?: "plan";
   /** a Claude session to resume rather than start: a landing "fix it" run */
   resume?: string;
+  /** with `resume`: fork the session under a new id rather than continue it
+   *  (FR-043 plan 3): Claude's `--fork-session`, Codex's `thread/fork` */
+  fork?: true;
 }
 
 /** A prompt before the Runner numbers it. */

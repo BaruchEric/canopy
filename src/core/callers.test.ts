@@ -63,6 +63,10 @@ describe("needs", () => {
     expect(needs("POST", "/api/runs/answer/")).toBe("operate");
   });
 
+  test("a fork of a run starts one, so it operates (FR-043 plan 3)", () => {
+    expect(needs("POST", "/api/runs/fork")).toBe("operate");
+  });
+
   test("repos actions key on the action", () => {
     for (const a of ["run", "pull", "commit", "dropstale", "flow", "refresh", "harness"]) {
       expect(needs("POST", `/api/repos/${a}`)).toBe("operate");
@@ -194,6 +198,7 @@ describe("the coordinator's routes", () => {
       ["POST", "/api/runs/say"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
+      ["POST", "/api/runs/fork"],
       ["POST", "/api/asks/answer"],
       ["POST", "/api/landing/land"],
       ["POST", "/api/landing/fix"],

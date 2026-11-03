@@ -144,12 +144,16 @@ function handle(m: Record<string, unknown>): void {
       return;
     case "initialized":
       return;
-    case "thread/start": {
+    case "thread/start":
+    case "thread/fork": {
       if (scenario.threadStartError) {
         out({ id, error: scenario.threadStartError });
         return;
       }
-      const thread = { id: THREAD, sessionId: THREAD, preview: "", ephemeral: false, turns: [] };
+      // a fork answers like a start, with the thread it came from named
+      const params: unknown = m["params"];
+      const forkedFrom = method === "thread/fork" && typeof params === "object" && params !== null && "threadId" in params ? params.threadId : null;
+      const thread = { id: THREAD, sessionId: THREAD, preview: "", ephemeral: false, turns: [], ...(method === "thread/fork" ? { forkedFromId: forkedFrom } : {}) };
       out({ id, result: { thread, model: "fake-model", modelProvider: "openai", cwd: "/", approvalPolicy: "on-request" } });
       out({ method: "thread/started", params: { thread }, emittedAtMs: Date.now() });
       return;

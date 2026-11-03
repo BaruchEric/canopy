@@ -54,7 +54,7 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["triggers/*"], right: "operate" },
   { methods: DEL, paths: ["triggers/events"], right: "operate" },
   { methods: POST, paths: ["grep", "remembered/check", "repos/movecheck"], right: "read" },
-  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/say"], right: "operate" },
+  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/say", "runs/fork"], right: "operate" },
   // a coordinator's token holds plan alone: it proposes cards, and editing
   // them or starting them is the user's
   { methods: POST, paths: ["coordinator/plan"], right: "plan" },

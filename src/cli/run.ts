@@ -95,7 +95,7 @@ export interface RunCommandDeps {
 export async function dispatchRunCommand(argv: string[], deps: RunCommandDeps): Promise<void> {
   const args = [...argv];
   const first = firstWord(args);
-  if (first === undefined || first === "show" || first === "export" || first === "prune") {
+  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune") {
     if (deps.transcripts) return deps.transcripts(args, { fail: deps.fail });
     return deps.fail(RUN_USAGE);
   }
@@ -111,7 +111,7 @@ export function runCommand(argv: string[], deps: RunCommandDeps): Promise<void> 
 function firstWord(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     const value = args[i];
-    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority") {
+    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority" || value === "--at" || value === "--profile") {
       i += 1;
       continue;
     }

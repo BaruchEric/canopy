@@ -301,7 +301,7 @@ class WireFold {
         }
         if (id !== undefined) sent.set(String(id), method);
         const params = rec(m["params"]);
-        if (method === "thread/start" && str(params, "cwd")) state.cwd = str(params, "cwd");
+        if ((method === "thread/start" || method === "thread/fork") && str(params, "cwd")) state.cwd = str(params, "cwd");
         if (method === "turn/start") {
           codexTurn(state, this.now);
           const input = Array.isArray(params["input"]) ? params["input"] : [];
@@ -314,7 +314,8 @@ class WireFold {
         const params = rec(m["params"]);
         if (!method) {
           // the answer to canopy's own request
-          if (id !== undefined && sent.get(String(id)) === "thread/start") codexThread(state, rec(m["result"]));
+          const asked = id !== undefined ? sent.get(String(id)) : undefined;
+          if (asked === "thread/start" || asked === "thread/fork") codexThread(state, rec(m["result"]));
           return;
         }
         if (id !== undefined) {

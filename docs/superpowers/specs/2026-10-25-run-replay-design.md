@@ -61,6 +61,31 @@ overview is `2026-10-25-software-factory-borrowings-design.md`.
 - **P5.** Gzip in Bun: `Bun.gzipSync` on a 50 MB file's memory, or a
   streaming `CompressionStream`, for the settle-time compression.
 
+## Probe results (2026-11-02)
+
+Run against Claude Code 2.1.316 and Codex 0.166.0 on the Mac, from a
+scratch folder, with the real binaries.
+
+- **P1, yes.** `claude -p --resume <id> --fork-session` answers with a new
+  session id in its `init`, the resumed context carried (the fork recalled
+  a word the original was told), and `--model` on the fork's command line
+  switched the model, so a fork may run on another profile.
+- **P2, no copy needed for a whole session.** A fork started from another
+  folder found the session the CLI had filed under the original folder's
+  slug and resumed it, so canopy copies nothing for a whole-session fork.
+- **P3, a prefix resumes.** A copy of the transcript cut at a step, filed
+  under the fork's folder slug as `<new id>.jsonl` with every `sessionId`
+  rewritten to the new id, resumed cleanly under that id; a copy cut after
+  a tool call and before its result resumed too, the CLI reading the
+  dangling call as interrupted. The CLI files its own transcripts mode
+  0600, so a copy is written the same.
+- **P4, Codex forks a thread.** The app-server has `thread/fork`
+  (`ThreadForkParams`: `threadId` plus `thread/start`'s parameters), which
+  answered in `thread/start`'s shape with a new thread id and
+  `forkedFromId` set, the forked thread recalling the original's turn. So a
+  Codex run forked onto Codex forks its thread whole; only a fork onto the
+  other harness, or of a run with no session left, is the summary handoff.
+
 ## Design
 
 ### The wire on disk
@@ -287,4 +312,20 @@ For Eric:
    bar from a "replay" button, and `canopy run show <id> --wire` prints the
    replay. `docs/architecture.md` "Run transcripts" has the detail.
 3. **Fork**: P1–P4, `--fork-session`, the transcript copy and cut, the
-   summary handoff, `POST /api/runs/fork`, the fork sheet.
+   summary handoff, `POST /api/runs/fork`, the fork sheet. As built
+   (2026-11-02): `Run.forkOf` is `{run, step?, at, how}`, `how` being
+   `cut` (a Claude transcript copy cut after the step, `core/forkcut.ts`,
+   placed for the fork's worktree and removed by the runner's `cleanup`
+   hook once the fork ends), `whole` (the session resumed under a new id,
+   or Codex's thread forked, the cut said in the first message) or `brief`
+   (`handoffBrief` in `core/handoff.ts` as the note of a fresh run). The
+   server decides `how` in `startForkRun`; the fork's branch is cut from
+   the original branch's `base` through `cutBranch`'s new `from`, skipping
+   the warm pool. The step is one of the replay's (`replayWire`'s steps,
+   notes counted), by id from the page or by number from the CLI
+   (`canopy run fork <id> [--at N] [--profile p] [-m note]`). The sheet has
+   "fork" in a finished run's footer and "fork from here" on the replay bar,
+   the fork sheet picks a profile and takes a note, and a fork's sheet shows
+   "forked from run 3f2a at step 41, the transcript cut there and resumed"
+   with the original a click away. `docs/architecture.md` "Run
+   transcripts" has the detail.

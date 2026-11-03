@@ -587,6 +587,8 @@ interface DriveOpts {
   message?: string;
   graceMs?: number;
   maxTurns?: number;
+  resume?: string;
+  fork?: true;
 }
 
 /** A run on a CodexDriver whose "codex" is the stand-in, with the Runner's
@@ -624,7 +626,7 @@ async function drive(scenario: (repo: string) => Scenario, opts: DriveOpts = {})
     {
       cwd: repo,
       agent: { ...AGENT, ...opts.agent },
-      spec: { allowedTools: opts.allowedTools ?? [], maxTurns: opts.maxTurns ?? 10 },
+      spec: { allowedTools: opts.allowedTools ?? [], maxTurns: opts.maxTurns ?? 10, ...(opts.resume ? { resume: opts.resume } : {}), ...(opts.fork ? { fork: true as const } : {}) },
       env: { FAKE_CODEX_SCENARIO: scenarioPath, FAKE_CODEX_LOG: logPath },
       label: "Codex",
       wire: (d, l) => { wire.push([d, l]); stamps.push(Date.now()); },
@@ -1324,6 +1326,19 @@ test("wire hands the Codex protocol both ways to the ctx", async () => {
   expect(ins).toEqual((await h.sent()).filter((m) => !("argv" in m) && !("eof" in m)));
   expect(h.wire.filter(([d]) => d === "out").length).toBeGreaterThan(0);
   expect(h.run.result?.text).toBe("done");
+});
+
+test("a fork sends thread/fork with the thread to fork in thread/start's place, and the new thread is the session (FR-043 plan 3)", async () => {
+  const h = await drive(() => ({ turns: [[agentMessage("answer", "forked"), { complete: "completed" }]] }), { resume: "thr_original", fork: true });
+  await h.until(h.ended, "end");
+  const sent = await h.sent();
+  expect(requests(sent, "thread/start")).toHaveLength(0);
+  const fork = requests(sent, "thread/fork");
+  expect(fork).toHaveLength(1);
+  expect(fork[0]?.["params"]).toMatchObject({ threadId: "thr_original", cwd: h.repo });
+  expect(h.run.result?.text).toBe("forked");
+  expect(h.run.session).toBeTruthy();
+  expect(h.run.session).not.toBe("thr_original");
 });
 
 /* ---------- plan 2's reducer, on the wire a live run recorded ---------- */

@@ -637,3 +637,51 @@ test("FR-043 startArgv follows each harness and stage settings", () => {
   expect(staged.slice(staged.indexOf("--setting-sources"), staged.indexOf("--setting-sources") + 2)).toEqual(["--setting-sources", "user"]);
   expect(startArgv("codex", ACTIONS.ask, { ...DEFAULT_AGENT, harness: "codex", extra: "--enable fixture" }, false)).toEqual(["codex", "app-server", "--listen", "stdio://", "--enable", "fixture"]);
 });
+
+describe("a fork's start (FR-043 plan 3)", () => {
+  const repo: Repo = { id: "fork-repo", name: "f", path: "/owned/fork-repo", group: "", source: "root", status: null };
+  class SpecDriver implements RunDriver {
+    readonly label = "Inert driver";
+    readonly harness: Harness = "claude";
+    specs: { resume?: string; fork?: true }[] = [];
+    check() { return null; }
+    start(ctx: DriveCtx) {
+      this.specs.push({ ...(ctx.spec.resume ? { resume: ctx.spec.resume } : {}), ...(ctx.spec.fork ? { fork: true as const } : {}) });
+      ctx.session("session-2");
+      ctx.result({ text: "ok", durationMs: 1, turns: 1 }, null);
+      ctx.exited({ code: 0, stderr: "" });
+    }
+    say() {}
+    stop() {}
+  }
+  const branch = { name: "run/fork", target: "main", base: "base", dir: "/owned/fork-work", origin: "origin", state: "working" as const };
+
+  test("startArgv puts --fork-session after --resume for a fork", () => {
+    const argv = startArgv("claude", { allowedTools: [], maxTurns: 5, resume: "sess-1", fork: true }, DEFAULT_AGENT, false);
+    const at = argv.indexOf("--resume");
+    expect(argv.slice(at, at + 3)).toEqual(["--resume", "sess-1", "--fork-session"]);
+  });
+
+  test("a branch start's fork reaches the driver's spec with its resume, and the run carries forkOf", () => {
+    const driver = new SpecDriver();
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined,
+      { branch, resume: "sess-1", fork: true, message: "go on" },
+      { forkOf: { run: "ab12cd34", step: "s2", at: 2, how: "cut" } });
+    expect(driver.specs).toEqual([{ resume: "sess-1", fork: true }]);
+    expect(run.forkOf).toEqual({ run: "ab12cd34", step: "s2", at: 2, how: "cut" });
+    // a resume without the flag is a plain resume
+    const plain = new SpecDriver();
+    const other = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => plain });
+    other.start(repo, "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined, { branch, resume: "sess-1", message: "go on" });
+    expect(plain.specs).toEqual([{ resume: "sess-1" }]);
+  });
+
+  test("the cleanup hook runs once the run has ended, and a throw in it is swallowed", async () => {
+    const order: string[] = [];
+    const runner = new Runner({ onChange: (run) => { if (run.status === "done" && !order.includes("done")) order.push("done"); }, onGone: () => {}, branchState: async () => { order.push("settle"); return "nothing"; } }, { driver: () => new SpecDriver() });
+    runner.start(repo, "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined, { branch, message: "go on" }, { cleanup: async () => { order.push("cleanup"); throw new Error("gone already"); } });
+    for (let n = 0; n < 100 && !order.includes("settle"); n++) await Bun.sleep(5);
+    expect(order).toEqual(["done", "cleanup", "settle"]);
+  });
+});

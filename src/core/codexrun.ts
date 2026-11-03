@@ -15,7 +15,9 @@
  *    version> (...)`, which is where the version check reads the version.
  *  - `thread/start {cwd, model?, modelProvider?, approvalPolicy, sandbox, config?,
  *    developerInstructions?}`. The thread's id is the run's session: what
- *    `codex resume <id>` takes later.
+ *    `codex resume <id>` takes later. A fork (FR-043 plan 3) sends
+ *    `thread/fork {threadId, ...the same}` instead, which answers in the
+ *    same shape with a new thread id and the old thread's context.
  *  - `turn/start {threadId, input: [{type: "text", text, text_elements}],
  *    effort?}`, one per message. A chat's next message is another turn on
  *    the same thread.
@@ -759,15 +761,22 @@ export class CodexDriver implements RunDriver {
       rpc.notify("initialized");
       const warn = versionNote(codexVersion(str(init, "userAgent")));
       if (warn) ctx.note(warn);
+      // a fork (FR-043 plan 3): thread/fork takes thread/start's params and
+      // the thread to fork, and answers in the same shape with a new thread
+      // whose context is the old one's (probe P4, 2026-11-02)
+      const fork = ctx.spec.fork && ctx.spec.resume ? ctx.spec.resume : null;
       const started = rec(
         await rpc.request(
-          "thread/start",
-          threadParams(ctx.cwd, ctx.agent, {
-            askQuestions: this.opts.askQuestions ?? true,
-            rules: ctx.spec.allowedTools,
-            ...(this.opts.policy ? { policy: this.opts.policy } : {}),
-            env: ctx.env,
-          }),
+          fork ? "thread/fork" : "thread/start",
+          {
+            ...(fork ? { threadId: fork } : {}),
+            ...threadParams(ctx.cwd, ctx.agent, {
+              askQuestions: this.opts.askQuestions ?? true,
+              rules: ctx.spec.allowedTools,
+              ...(this.opts.policy ? { policy: this.opts.policy } : {}),
+              env: ctx.env,
+            }),
+          },
         ),
       );
       const id = codexThread(this.fold, started);

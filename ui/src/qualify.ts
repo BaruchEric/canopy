@@ -67,6 +67,8 @@ export const qRun = (q: Q, r: Run): Run => ({
   ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin), ...(r.branch.group ? { group: q(r.branch.group) } : {}) } } : {}),
   // a coordinator's child names it, and its cards name their repos and runs
   ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
+  // a fork names the run it was forked from (FR-043 plan 3)
+  ...(r.forkOf ? { forkOf: { ...r.forkOf, run: q(r.forkOf.run) } } : {}),
   ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}) })) } : {}),
 });
 

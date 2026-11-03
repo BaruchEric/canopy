@@ -191,6 +191,45 @@ test("runCommand lists, shows, exports verbatim, writes an export, and prunes", 
   }
 });
 
+test("runCommand forks a run at a step, with a profile and a note, and says how it forked (FR-043 plan 3)", async () => {
+  const bodies: unknown[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (request.method !== "POST" || url.pathname !== "/api/runs/fork") return Response.json({ error: "unexpected route" }, { status: 404 });
+      const body: unknown = await request.json();
+      bodies.push(body);
+      const at = typeof body === "object" && body !== null && "step" in body && typeof body.step === "number" ? body.step : 3;
+      return Response.json({ ...run, id: "ef56ab78", status: "working", kept: undefined, forkOf: { run: "ab12cd34", ...(at < 3 ? { step: String(at) } : {}), at, how: at < 3 ? "cut" : "whole" } }, { status: 201 });
+    },
+  });
+  const logs: string[] = [];
+  const oldLog = console.log;
+  console.log = (line: string) => { logs.push(line); };
+  try {
+    const backend = ["--backend", `http://127.0.0.1:${server.port}`];
+    await runCommand(["fork", "ab12cd34", "--at", "2", "--profile", "deep", "-m", "try grep", ...backend], { fail });
+    await runCommand(["fork", "ab12cd34", ...backend], { fail });
+    expect(bodies).toEqual([{ run: "ab12cd34", step: 2, profile: "deep", note: "try grep" }, { run: "ab12cd34" }]);
+    expect(logs).toEqual([
+      "ef56ab78 working",
+      "forked from run ab12cd34 at step 2, the transcript cut there and resumed",
+      "ef56ab78 working",
+      "forked from run ab12cd34 at its end (3 steps), the whole session resumed, the cut said in words",
+    ]);
+    await expect(runCommand(["fork", "ab12cd34", "--at", "zero", ...backend], { fail })).rejects.toThrow("--at needs a step's number");
+    await expect(runCommand(["fork", "ab12cd34", "--profile", ...backend], { fail })).rejects.toThrow("--profile needs");
+    await expect(runCommand(["fork", "ab12cd34", "extra", ...backend], { fail })).rejects.toThrow(RUN_USAGE);
+    await expect(runCommand(["fork", "x/y", ...backend], { fail })).rejects.toThrow("invalid run id");
+    await expect(runCommand(["fork"], { fail })).rejects.toThrow(RUN_USAGE);
+    expect(bodies).toHaveLength(2);
+  } finally {
+    console.log = oldLog;
+    server.stop(true);
+  }
+});
+
 test("runCommand says when there are no kept runs", async () => {
   const server = Bun.serve({ port: 0, fetch: () => Response.json([]) });
   const logs: string[] = [];

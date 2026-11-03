@@ -159,6 +159,14 @@ test("cliArgs adds one --add-dir per extra folder", () => {
   expect(cliArgs({ allowedTools: [], maxTurns: 5 })).not.toContain("--add-dir");
 });
 
+test("cliArgs: a fork adds --fork-session after --resume, and nothing without a session to resume (FR-043 plan 3)", () => {
+  const args = cliArgs({ allowedTools: [], maxTurns: 5, resume: "sess-1", fork: true });
+  const at = args.indexOf("--resume");
+  expect(args.slice(at, at + 3)).toEqual(["--resume", "sess-1", "--fork-session"]);
+  expect(cliArgs({ allowedTools: [], maxTurns: 5, resume: "sess-1" })).not.toContain("--fork-session");
+  expect(cliArgs({ allowedTools: [], maxTurns: 5, fork: true })).not.toContain("--fork-session");
+});
+
 test("cliArgs starts in plan mode when the spec says, whatever yolo says", () => {
   const args = cliArgs({ allowedTools: [], maxTurns: 5, permissionMode: "plan" }, { ...DEFAULT_AGENT, yolo: true });
   expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");

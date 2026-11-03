@@ -5683,6 +5683,47 @@ a.sweep-title:hover {
   color: var(--ink-faint);
 }
 
+/* a fork's line and the fork sheet (FR-043 plan 3) */
+.run-fork {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.fork-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-bottom: 1px solid var(--hair);
+}
+.fork-where {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.fork-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.fork-row select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 12px;
+}
+.fork-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* the console: one trunk, a node per step, the same 3px as the leaf edge */
 .console {
   padding: 12px 16px 16px;
