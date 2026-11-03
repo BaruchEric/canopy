@@ -30,7 +30,7 @@ export const PUSH_WORDS = {
   ios: "Push needs the page installed to the home screen on an iPhone: share → Add to Home Screen, then turn this on from there",
   none: "This browser has no push",
   denied: "The browser blocks notifications for this site. Allow them in its site settings, then turn this off and on again.",
-  asked: "The browser has not been asked yet: turn this off and on again to ask.",
+  asked: "The browser has no answer for this site yet: turn this off and on again and answer its prompt, which Chrome on a phone hides after a few seconds. If no prompt shows, allow notifications in the site's settings.",
   noKey: "The backend has no push key (its config dir is read-only)",
   stale: "stale: the last 3 pushes failed",
 } as const;

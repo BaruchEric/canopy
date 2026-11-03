@@ -19,7 +19,7 @@ function whyNot(on: boolean, permission: Permission): string | null {
       : "This browser has no system notifications. The tab title still counts what waits.";
   }
   if (permission === "denied") return "The browser blocks notifications for this site. Allow them in its site settings; the tab title still counts what waits.";
-  if (permission === "default") return "The browser has not been asked yet: turn this off and on again to ask.";
+  if (permission === "default") return PUSH_WORDS.asked;
   return null;
 }
 
