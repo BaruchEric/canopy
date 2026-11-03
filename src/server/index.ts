@@ -246,7 +246,7 @@ import { GROUP_MAX, memberProfiles, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
-import { CoordinatorHub, type ChildStart } from "./coordinator";
+import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
@@ -1879,13 +1879,26 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
   // the runner's own count takes held branch runs too, so both are asked
   const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
-  if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+  const times = task.times ?? 1;
+  if (going + times > BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+  const work: WorkStart = { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } };
+  if (times > 1) {
+    // a group's members are low unless "start anyway" let the card go, and it
+    // lands by Eric's hand: a fan-out is a choice to compare (the spec's call 4)
+    try {
+      return { group: await startGroup(state, repo, task.action, task.note, null, times, undefined, false, false, priority === "interactive" ? "interactive" : "low", { by: "coordinator", parent: coordId, work }) };
+    } catch (err) {
+      if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
+      if (err instanceof HttpError && err.status === 409) return { busy: err.message };
+      throw err;
+    }
+  }
   const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
   if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
   try {
     return {
-      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) }, { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } }),
+      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) }, work),
     };
   } catch (err) {
     // another branch run took the last slot while this one got ready, or
@@ -1897,7 +1910,7 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
 
 /** A coordinator's child that hit the plan's usage limit carries on on its
  *  branch, its session resumed, as a new child of the same coordinator. */
-async function resumeCoordChild(state: ServerState, coordId: string, child: Run, priority: Priority): Promise<ChildStart> {
+async function resumeCoordChild(state: ServerState, coordId: string, child: Run, priority: Priority): Promise<ChildResume> {
   const rec = child.branch ? state.landing.record(child.branch.origin) : undefined;
   if (!rec) throw new Error("its branch is gone, so the card cannot carry on");
   try {
@@ -6139,7 +6152,11 @@ export async function startServer(opts: {
     branchStarts: new Map(),
     groups: new GroupHub({
       broadcast: ev => broadcast(state, ev),
-      publish: ev => broadcast(state, ev),
+      publish: ev => {
+        broadcast(state, ev);
+        // a group's change never passes the landing hub's broadcast, and a card waits on it
+        state.coordinator.recheck();
+      },
       repo: id => state.result.repos.find(repo => repo.id === id),
       run: id => state.runner.get(id),
       activeFor: id => state.runner.activeFor(id),
@@ -6478,7 +6495,8 @@ export async function startServer(opts: {
       startChild: (coordId, task, priority) => startCoordChild(state, coordId, task, priority),
       resumeChild: (coordId, _task, child, priority) => resumeCoordChild(state, coordId, child, priority),
       say: (id, text) => void state.runner.say(id, text),
-      repoFull: (repo) => branchSlotsTaken(state, repo) >= BRANCH_RUNS_PER_REPO,
+      repoFull: (repo, need = 1) => branchSlotsTaken(state, repo) + need > BRANCH_RUNS_PER_REPO,
+      group: (id) => state.groups.info().find((g) => g.id === id),
       known: (repo) => {
         const r = state.result.repos.find((x) => x.id === repo);
         return !r ? null : r.host || r.forge ? "remote" : "local";

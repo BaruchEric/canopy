@@ -21,6 +21,7 @@ import { addRunTree, repoKey } from "../core/worktree";
 import { DEFAULT_AGENT, type Harness } from "../core/types";
 import { startServer } from "./index";
 import { CallerBook } from "./callers";
+import type { StageClient } from "../core/stageclient";
 
 const worlds: {
   stop: () => Promise<void>;
@@ -93,6 +94,22 @@ function groupBody(value: unknown) {
   };
 }
 
+/** a coordinator's runner that answers and is fenced; the agent is the fake driver */
+function coordRunner(): StageClient {
+  const client = {
+    harnessesNow: () => ["claude"],
+    fenceNow: () => ({ fenced: true, reason: null }),
+    watch: () => () => {},
+    hello: async () => ["claude"],
+    busy: async () => false,
+    fenceRefusal: () => null,
+    spawn: () => {
+      throw new Error("the fake driver never spawns");
+    },
+  };
+  return client as unknown as StageClient;
+}
+
 async function world(
   opts: {
     failCheck?: number;
@@ -106,6 +123,7 @@ async function world(
     heldBranchFlow?: boolean;
     prs?: boolean;
     enforce?: boolean;
+    coordinator?: boolean;
   } = {},
 ) {
   const dir = await realpath(
@@ -240,6 +258,7 @@ async function world(
       ? { groups: { reviewerPreflight: opts.reviewerPreflight } }
       : {}),
     runner: { driver: (harness) => new FakeDriver(harness) },
+    ...(opts.coordinator ? { coordinator: { client: coordRunner(), port: 0 } } : {}),
     ...(opts.prs
       ? {
           prs: {
@@ -541,6 +560,51 @@ test("a member's fix runs on that member's profile", async () => {
   expect((await w.post("/api/landing/fix", { id: winner })).status).toBe(201);
   await until(() => w.starts.length === 4, "fix");
   expect(w.starts[3]?.ctx.agent.model).toBe(group.members.find((m) => m.origin === winner)?.profile === "fast" ? "fast-model" : "opus");
+});
+
+test("a coordinator's card with times starts one group through the real start and settles on its word", async () => {
+  const seeds = await realpath(await mkdtemp(join(tmpdir(), "canopy-group-coord-")));
+  const env = { CANOPY_COORD_SOCKET: "/nonexistent/runner.sock", CANOPY_COORD_API: "http://10.250.14.1:7850", CANOPY_COORD_ROOT: seeds };
+  const before = Object.keys(env).map((k) => [k, process.env[k]] as const);
+  Object.assign(process.env, env);
+  try {
+    const w = await world({ enforce: true, coordinator: true });
+    const started = await w.post("/api/repos/run?id=app", { action: "coordinate", note: "try it two ways" });
+    expect(started.status).toBe(201);
+    const coordinator: unknown = await started.json();
+    if (!isRecord(coordinator) || typeof coordinator["id"] !== "string") throw new Error("no coordinator");
+    const run = coordinator["id"];
+    const plan = await w.post("/api/coordinator/plan", { run, tasks: [{ title: "two ways", repo: "app", note: "same task", action: "ask", times: 2 }] });
+    expect(plan.status).toBe(200);
+    expect((await w.post("/api/coordinator/start", { run })).status).toBe(200);
+    await until(() => w.starts.length === 3, "two members beside the coordinator");
+    const [group] = await w.groups();
+    if (!group) throw new Error("no group");
+    expect(group.expectedMembers).toBe(2);
+    const members = (await w.readRuns()).filter((r) => r.group === group.id);
+    expect(members.map((r) => r.priority)).toEqual(["low", "low"]);
+    const raw: unknown = await (await fetch(w.url("/api/runs"))).json();
+    const list = Array.isArray(raw) ? raw.filter(isRecord) : [];
+    expect(list.filter((r) => r["group"] === group.id).map((r) => [r["parent"], r["by"]])).toEqual([[run, "coordinator"], [run, "coordinator"]]);
+    await w.finish(1);
+    await w.finish(2);
+    await until(() => w.starts.length === 4, "reviewer");
+    const branches = (await w.landing()).runs.map((r) => r.branch);
+    await w.finish(3, `<<<compare\n${JSON.stringify({ ranking: branches, why: Object.fromEntries(branches.map((branch) => [branch, "Good work."])) })}\n>>>`);
+    await until(async () => {
+      const now: unknown = await (await fetch(w.url("/api/runs"))).json();
+      const mine = Array.isArray(now) ? now.filter(isRecord).find((r) => r["id"] === run) : undefined;
+      const tasks = mine?.["tasks"];
+      const first: unknown = Array.isArray(tasks) ? tasks[0] : undefined;
+      return isRecord(first) && first["state"] === "done" && first["outcome"] === "winner picked" && first["group"] === group.id;
+    }, "the card settling on the group's word");
+  } finally {
+    for (const [k, v] of before) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    await rm(seeds, { recursive: true, force: true });
+  }
 });
 
 for (const failure of ["third start", "third cut"] as const)

@@ -9,7 +9,8 @@
  *  like the rest of it. The notes waiting for an idle turn live here. */
 
 import { isCapacityWords, limitedWords } from "../core/capacity";
-import { childSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import { childSettled, groupNote, groupSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import type { RunGroup } from "../core/group";
 import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type Priority, type Run } from "../core/types";
 import type { WorkSink } from "../core/work";
 import type { Caller } from "./callers";
@@ -29,8 +30,11 @@ export class CoordError extends Error {
   }
 }
 
-/** What starting a card came to: its child run, or the repo's branch slots are full. */
-export type ChildStart = { run: Run } | { busy: string };
+/** What starting a card came to: its child run, the group a card with
+ *  `times` started, or the repo's branch slots are full. */
+export type ChildStart = { run: Run } | { group: RunGroup } | { busy: string };
+/** What resuming a child came to: a child resumes alone. */
+export type ChildResume = Exclude<ChildStart, { group: RunGroup }>;
 
 export interface CoordinatorDeps {
   run: (id: string) => Run | undefined;
@@ -42,11 +46,13 @@ export interface CoordinatorDeps {
   startChild: (coordId: string, task: CoordTask, priority?: Priority) => Promise<ChildStart>;
   /** resumes a child that ended `limited` on its own branch, its session
    *  carried on, as a new run with the same parent (FR-036) */
-  resumeChild?: (coordId: string, task: CoordTask, child: Run, priority: Priority) => Promise<ChildStart>;
+  resumeChild?: (coordId: string, task: CoordTask, child: Run, priority: Priority) => Promise<ChildResume>;
   /** the next user message into a chat (`Runner.say`); throws when it is not idle */
   say: (runId: string, text: string) => void;
-  /** whether the repo has no branch slot free */
-  repoFull: (repo: string) => boolean;
+  /** whether the repo has fewer than `need` branch slots free, one when absent */
+  repoFull: (repo: string, need?: number) => boolean;
+  /** the group a card started; absent on a backend with no groups */
+  group?: (id: string) => RunGroup | undefined;
   /** where a repo id is: on this machine, elsewhere, or not known */
   known: (repo: string) => "local" | "remote" | null;
   /** what the landing queue and the PR watch know of a child's branch */
@@ -185,12 +191,13 @@ export class CoordinatorHub {
       );
       return { ok: true, removed: id };
     }
-    const merged = { title: b["title"] ?? t.title, note: b["note"] ?? t.note, repo: b["repo"] ?? t.repo, action: b["action"] ?? t.action };
+    const merged = { title: b["title"] ?? t.title, note: b["note"] ?? t.note, repo: b["repo"] ?? t.repo, action: b["action"] ?? t.action, times: b["times"] ?? t.times };
     const got = validatePlan([merged], { known: this.deps.known, have: 0 });
     if ("error" in got) throw new CoordError(got.error.replace(/^tasks\[0\]/, id), 400);
     const [fields] = got.tasks;
     if (!fields) throw new CoordError("the card did not check out", 400);
-    const task: CoordTask = { ...t, ...fields };
+    const { times: _times, ...kept } = t;
+    const task: CoordTask = { ...kept, ...fields };
     this.setTasks(
       coord,
       tasks.map((x) => (x.id === id ? task : x)),
@@ -216,13 +223,18 @@ export class CoordinatorHub {
   /* ---------- the queue ---------- */
 
   /** children still working: a card whose child ended but waits on the
-   *  landing queue holds no slot */
+   *  landing queue holds no slot, and a group card holds one for each member
+   *  still going */
   private working(coord: Run): number {
-    return (coord.tasks ?? []).filter((t) => {
-      if (t.state !== "running" || !t.run) return false;
-      const r = this.deps.run(t.run);
+    const going = (id: string | undefined): boolean => {
+      const r = id ? this.deps.run(id) : undefined;
       return r !== undefined && isRunActive(r);
-    }).length;
+    };
+    return (coord.tasks ?? []).reduce((n, t) => {
+      if (t.state !== "running") return n;
+      if (!t.group) return n + (going(t.run) ? 1 : 0);
+      return n + (this.deps.group?.(t.group)?.members.filter((m) => going(m.run)).length ?? 0);
+    }, 0);
   }
 
   /** Starts the coordinator's queued cards, one at a time, while fewer than
@@ -238,7 +250,7 @@ export class CoordinatorHub {
         if (!coord || !isRunActive(coord)) return;
         const tasks = coord.tasks ?? [];
         for (const t of tasks) {
-          if (t.state === "queued") this.update(coordId, t.id, (x) => withOutcome(x, passed.get(x.id) ?? (this.deps.repoFull(x.repo) ? slotWord(x.repo) : isCapacityWords(x.outcome) ? x.outcome : undefined)));
+          if (t.state === "queued") this.update(coordId, t.id, (x) => withOutcome(x, passed.get(x.id) ?? (this.deps.repoFull(x.repo, x.times ?? 1) ? slotWord(x.repo) : isCapacityWords(x.outcome) ? x.outcome : undefined)));
         }
         const [next] = nextToStart(
           tasks.filter((t) => !passed.has(t.id)),
@@ -265,6 +277,14 @@ export class CoordinatorHub {
           }
           passed.set(next.id, slotWord(next.repo));
           this.update(coordId, next.id, (x) => withOutcome(x, slotWord(x.repo)));
+          continue;
+        }
+        if ("group" in out) {
+          const group = out.group;
+          this.update(coordId, next.id, (x) => withOutcome({ ...x, state: "running", group: group.id }, undefined));
+          // a group can settle inside its own start, as a child can
+          const started = this.deps.run(coordId)?.tasks?.find((t) => t.id === next.id);
+          if (started) this.settleGroup(coord, started);
           continue;
         }
         const child = out.run;
@@ -340,6 +360,20 @@ export class CoordinatorHub {
     this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
     if (task.work) this.deps.work?.note(task.work, `card ${task.id} settled: ${got.outcome}`);
     this.queueNote(coord.id, settleNote(task, child, branch));
+  }
+
+  /** A group card settles on the group's word (`groupSettled`). A group's
+   *  changes reach here through `recheck`. */
+  private settleGroup(coord: Run, task: CoordTask): void {
+    const group = task.group ? this.deps.group?.(task.group) : undefined;
+    if (!group) {
+      this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: "failed" }, "its group is no longer kept"));
+      return;
+    }
+    const got = groupSettled(group);
+    if (!got) return;
+    this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
+    this.queueNote(coord.id, groupNote(task, group, got.outcome));
   }
 
   /* ---------- capacity (FR-036) ---------- */
@@ -423,7 +457,7 @@ export class CoordinatorHub {
         answer.why = "this backend cannot resume a child";
         return;
       }
-      let out: ChildStart;
+      let out: ChildResume;
       try {
         out = await this.deps.resumeChild(coordId, task, child, priority);
       } catch (err) {
@@ -448,6 +482,7 @@ export class CoordinatorHub {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       for (const t of coord.tasks ?? []) {
+        if (t.state === "running" && t.group) this.settleGroup(coord, t);
         if (t.state !== "running" || !t.run) continue;
         const child = this.deps.run(t.run);
         if (child) this.settle(coord, t, child);

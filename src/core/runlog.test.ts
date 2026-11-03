@@ -542,3 +542,11 @@ test("retained credential collisions still fail closed on trusted routing metada
   expect(errors).toHaveLength(1);
   expect(await listKept(join(root, "retained-collision"))).toEqual([]);
 });
+
+test("a kept coordinator keeps its cards' times and group", async () => {
+  const dir = join(root, "cards");
+  const value = run({ id: "coordcards", action: "coordinate", tasks: [{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 3, group: "g-a1b2c3d4" }] });
+  const log = open(dir, value);
+  await log.settle(value);
+  expect((await readKeptRun(dir, value.id))?.tasks).toEqual([{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 3, group: "g-a1b2c3d4" }]);
+});

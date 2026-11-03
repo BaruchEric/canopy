@@ -3,6 +3,7 @@
  *  chat. Browser-safe: the hub in `server/coordinator.ts` keeps the state
  *  and calls these, and the UI may name a card's outcome with them. */
 
+import { GROUP_MAX, type RunGroup } from "./group";
 import { inQueue, landWord, sentBack } from "./landing";
 import { isRunActive, type CoordTask, type LandEntry, type ReviewVerdict, type Run, type RunBranchState } from "./types";
 
@@ -35,8 +36,9 @@ function text(t: Record<string, unknown>, at: string, field: "title" | "note", m
 /** A plan's tasks off the wire, checked against the limits: at most 8 in a
  *  call and 20 in all (`have` is how many the coordinator holds already), a
  *  title of at most 120 characters, a note of at most 4000, `propose` or
- *  `ask`, and a repo this backend knows on this machine. An error names the
- *  task's index and the field, so the coordinator can fix its plan. */
+ *  `ask`, a repo this backend knows on this machine, and a `times` of 1 to
+ *  `GROUP_MAX`. An error names the task's index and the field, so the
+ *  coordinator can fix its plan. */
 export function validatePlan(
   input: unknown,
   ctx: { known: (repo: string) => "local" | "remote" | null; have: number },
@@ -62,22 +64,31 @@ export function validatePlan(
     if (where === "remote") return { error: `${at}.repo: ${repo} is on another host; a task runs in a local repo` };
     const action = t["action"];
     if (action !== "propose" && action !== "ask") return { error: `${at}.action must be propose or ask` };
-    tasks.push({ title, repo, note, action });
+    const times = t["times"];
+    if (times !== undefined && (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX)) {
+      return { error: `${at}.times must be 1 to ${GROUP_MAX}` };
+    }
+    tasks.push({ title, repo, note, action, ...(typeof times === "number" && times > 1 ? { times } : {}) });
   }
   return { tasks };
 }
 
 /** The queued cards to start now, in order, without passing 3 working. A
- *  card whose repo has no branch slot free waits for this pass, and a later
- *  card in another repo may go ahead of it. `repoFull` is read once per
- *  card, so two cards in a repo with one slot left both come back: the
- *  caller starts them one at a time and leaves a card queued when its start
- *  finds the repo full after all. */
-export function nextToStart(tasks: readonly CoordTask[], ctx: { working: number; repoFull: (repo: string) => boolean }): CoordTask[] {
+ *  card with `times` counts as that many children and needs that many branch
+ *  slots. A card that does not fit, whether its repo is short of slots or the
+ *  3 are short of room, waits for this pass, and a later card may go ahead of
+ *  it. `repoFull` is read once per card, so two cards in a repo with one slot
+ *  left both come back: the caller starts them one at a time and leaves a
+ *  card queued when its start finds the repo full after all. */
+export function nextToStart(tasks: readonly CoordTask[], ctx: { working: number; repoFull: (repo: string, need?: number) => boolean }): CoordTask[] {
   const out: CoordTask[] = [];
+  let going = ctx.working;
   for (const t of tasks) {
-    if (ctx.working + out.length >= COORD_AT_ONCE) break;
-    if (t.state === "queued" && !ctx.repoFull(t.repo)) out.push(t);
+    if (going >= COORD_AT_ONCE) break;
+    const need = t.times ?? 1;
+    if (t.state !== "queued" || going + need > COORD_AT_ONCE || ctx.repoFull(t.repo, need)) continue;
+    out.push(t);
+    going += need;
   }
   return out;
 }
@@ -94,7 +105,7 @@ export interface ChildLanding {
 }
 
 /** How a child settled, in the words a card and its note use. */
-export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change" | "waiting for capacity";
+export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change" | "waiting for capacity" | "winner picked" | "needs you" | "dropped";
 
 /** A settled child as its card's state and outcome word. Null while the
  *  child is going, or ended with its branch still being read (its first
@@ -150,6 +161,20 @@ export function childSettled(run: Run, b: ChildBranch, overdue: boolean): { stat
   return out;
 }
 
+/** Whether a group card has settled, on the group's word. Null while the
+ *  group works, scores or reviews. A picked winner waiting for Eric counts as
+ *  done, as a ready child left to Eric does, and a group that needs him
+ *  counts as failed, as a sent-back child does. */
+export function groupSettled(group: Pick<RunGroup, "state">): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
+  switch (group.state) {
+    case "landed": return { state: "done", outcome: "landed" };
+    case "picked": return { state: "done", outcome: "winner picked" };
+    case "needs-you": return { state: "failed", outcome: "needs you" };
+    case "dropped": return { state: "failed", outcome: "dropped" };
+    default: return null;
+  }
+}
+
 /** The note a card that could not start sends into the chat. */
 export function startNote(task: CoordTask, error: string): string {
   return [
@@ -173,6 +198,22 @@ const BRANCH_WORD: Record<RunBranchState, string> = {
 function oneLine(s: string): string {
   const flat = s.replace(/\s+/g, " ").trim();
   return flat.length > RESULT_CHARS ? `${flat.slice(0, RESULT_CHARS - 1)}…` : flat;
+}
+
+/** The user message a settled group card sends into its coordinator's chat:
+ *  the card, how it went, why, and the winner's branch once there is one. */
+export function groupNote(task: CoordTask, group: RunGroup, outcome: ChildOutcomeWord): string {
+  const winner = group.winner ? group.scores?.[group.winner]?.branch : undefined;
+  const why = winner && group.review && "why" in group.review ? group.review.why[winner] : undefined;
+  const result = group.reason ?? why ?? "";
+  const lines = [
+    "canopy: a task you started has settled",
+    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `outcome: ${outcome}`,
+    `result: best of ${group.expectedMembers}${result ? `, ${oneLine(result)}` : ""}`,
+  ];
+  if (winner) lines.push(`branch: ${winner}, ${outcome === "landed" ? "landed" : "the winner, waiting for Eric to land it"}`);
+  return lines.join("\n");
 }
 
 /** The user message a settled child sends into its coordinator's chat: the

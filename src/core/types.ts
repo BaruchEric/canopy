@@ -1097,6 +1097,10 @@ export interface CoordTask {
   run?: string;
   /** the child's work item, once it started (FR-037) */
   work?: string;
+  /** 2 or 3 starts a best-of-N group in place of one child (FR-033); absent is one */
+  times?: number;
+  /** the group this card started, in place of `run` */
+  group?: string;
   /** how it settled, in a word or two: "landed", "sent back", or a start's
    *  error; while it waits for capacity, the governor's words */
   outcome?: string;

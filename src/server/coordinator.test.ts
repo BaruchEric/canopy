@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { validatePlan, type ChildBranch } from "../core/coordinator";
+import type { RunGroup } from "../core/group";
 import type { CoordTask, LandEntry, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
@@ -631,5 +632,122 @@ describe("capacity (FR-036 plan 2)", () => {
     const id = await limitedThenGone(h);
     await expect(h.release("co1", "t1")).rejects.toThrow(`its run ${id} is gone`);
     expect(card("t1")?.state).toBe("failed");
+  });
+});
+
+describe("a card with times", () => {
+  const members = (ids: string[]) => ids.map((id) => ({ run: id, origin: `br-${id}`, profile: null }));
+  const group = (over: Partial<RunGroup> = {}): RunGroup => ({ id: "g-a1b2c3d4", repoId: "web", repoPath: "/w", action: "ask", note: "n", expectedMembers: 3, members: members(["m1", "m2", "m3"]), state: "working", autoLand: false, startedAt: 1, ...over });
+  let live: RunGroup | undefined;
+  const memberRun = (id: string): Run => { const r = { id, repoId: "web", action: "ask", status: "working", startedAt: 1, steps: [], note: "n", parent: "co1" } as unknown as Run; runs.set(id, r); return r; };
+  const groupHub = (over: Partial<CoordinatorDeps> = {}) => hub({
+    group: (id) => (live?.id === id ? live : undefined),
+    startChild: async (coordId, task) => {
+      started.push({ coord: coordId, task: task.id });
+      if (!task.times) return { run: memberRun(`solo-${task.id}`) };
+      for (const m of ["m1", "m2", "m3"].slice(0, task.times)) memberRun(m);
+      live = group({ expectedMembers: task.times, members: members(["m1", "m2", "m3"].slice(0, task.times)) });
+      return { group: live };
+    },
+    ...over,
+  });
+  beforeEach(() => { live = undefined; });
+
+  test("an edit sets times and an edit to 1 takes it off", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask" })] });
+    expect((await post(h, "tasks", { run: "co1", id: "t1", times: 3 })).status).toBe(200);
+    expect(card("t1")?.times).toBe(3);
+    expect((await post(h, "tasks", { run: "co1", id: "t1", title: "kept" })).status).toBe(200);
+    expect(card("t1")?.times).toBe(3);
+    expect((await post(h, "tasks", { run: "co1", id: "t1", times: 1 })).status).toBe(200);
+    expect(card("t1")?.times).toBeUndefined();
+    expect((await post(h, "tasks", { run: "co1", id: "t1", times: 4 })).status).toBe(400);
+  });
+
+  test("a card with times starts one group and holds its members' places", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 3 }), task({ action: "ask" })] });
+    await post(h, "start", { run: "co1" });
+    await h.idle();
+    expect(started).toEqual([{ coord: "co1", task: "t1" }]);
+    expect(card("t1")).toMatchObject({ state: "running", group: "g-a1b2c3d4" });
+    expect(card("t1")?.run).toBeUndefined();
+    expect(card("t2")?.state).toBe("queued");
+  });
+
+  test("the next card goes once the members end", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 3 }), task({ action: "ask" })] });
+    await post(h, "start", { run: "co1" });
+    for (const id of ["m1", "m2", "m3"]) {
+      const m = runs.get(id);
+      if (!m) throw new Error("no member");
+      m.status = "done";
+      h.onRun(m);
+    }
+    await h.idle();
+    expect(card("t2")?.state).toBe("running");
+  });
+
+  test("a repo short of slots keeps the card queued and asks for all of them", async () => {
+    const asked: (number | undefined)[] = [];
+    const h = groupHub({ repoFull: (_repo, need) => { asked.push(need); return (need ?? 1) > 1; } });
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 })] });
+    await post(h, "start", { run: "co1" });
+    await h.idle();
+    expect(started).toEqual([]);
+    expect(card("t1")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in web" });
+    expect(asked).toContain(2);
+  });
+
+  test("a busy start keeps the card queued", async () => {
+    const h = groupHub({ startChild: async () => ({ busy: "web has 2 branch runs going" }) });
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 })] });
+    await post(h, "start", { run: "co1" });
+    await h.idle();
+    expect(card("t1")?.state).toBe("queued");
+  });
+
+  for (const [state, cardState, outcome] of [["picked", "done", "winner picked"], ["landed", "done", "landed"], ["needs-you", "failed", "needs you"], ["dropped", "failed", "dropped"]] as const) {
+    test(`a group that reads ${state} settles its card on recheck and says so once`, async () => {
+      const h = groupHub();
+      const co = coordinator({ status: "idle" });
+      await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 })] });
+      await post(h, "start", { run: "co1" });
+      h.recheck();
+      expect(card("t1")?.state).toBe("running");
+      live = group({ state, expectedMembers: 2 });
+      h.recheck();
+      h.recheck();
+      await h.idle();
+      expect(card("t1")).toMatchObject({ state: cardState, outcome });
+      expect(said.filter((n) => n.text.includes(`outcome: ${outcome}`))).toHaveLength(1);
+      expect(co.id).toBe("co1");
+    });
+  }
+
+  test("a group that settled inside its start settles the card at once", async () => {
+    const h = groupHub({ startChild: async () => { live = group({ state: "needs-you", reason: "nothing to pick from" }); return { group: live }; } });
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 })] });
+    await post(h, "start", { run: "co1" });
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "needs you" });
+  });
+
+  test("a group the backend no longer keeps fails its card", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 })] });
+    await post(h, "start", { run: "co1" });
+    live = undefined;
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "its group is no longer kept" });
   });
 });
