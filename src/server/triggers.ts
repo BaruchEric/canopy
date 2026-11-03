@@ -17,7 +17,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextFire, parseCron } from "../core/cron";
-import { DIGEST_CRON, digestLine, rangerDigest, type TriggerDigest } from "../core/digest";
+import { DIGEST_CRON, digestIds, digestLine, rangerDigest, type TriggerDigest } from "../core/digest";
 import { fixedComment, landedComment, openedComment } from "../core/forgejoissues";
 import { fail, pass, type ProbeResult } from "../core/health";
 import { configDir } from "../core/store";
@@ -525,9 +525,10 @@ export class TriggerHub {
     const next = nextFire(cron, this.digested ?? this.started);
     if (next === null || next > now) return;
     this.digested = now;
-    const text = digestLine(this.list(), now);
+    const events = this.list();
+    const text = digestLine(events, now);
     if (text !== null) {
-      this.digest = { at: now, text };
+      this.digest = { at: now, text, ids: digestIds(events) };
       this.publish();
     }
     await this.saveDigest();
@@ -546,7 +547,11 @@ export class TriggerHub {
       if (!isRecord(v)) return;
       if (typeof v["digested"] === "number") this.digested = v["digested"];
       const d = v["digest"];
-      if (isRecord(d) && typeof d["at"] === "number" && typeof d["text"] === "string") this.digest = { at: d["at"], text: d["text"] };
+      if (isRecord(d) && typeof d["at"] === "number" && typeof d["text"] === "string") {
+        const ids = d["ids"];
+        const kept = Array.isArray(ids) && ids.every((id) => typeof id === "string") ? { ids: ids as string[] } : {};
+        this.digest = { at: d["at"], text: d["text"], ...kept };
+      }
     } catch {
       // no line written yet
     }

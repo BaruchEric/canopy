@@ -125,7 +125,7 @@ describe("the daily line", () => {
     expect((await h.info()).digest).toBeUndefined();
     now = NOV2_0400;
     await h.tick();
-    expect((await h.info()).digest).toEqual({ at: NOV2_0400, text: LINE });
+    expect((await h.info()).digest).toEqual({ at: NOV2_0400, text: LINE, ids: ["e2", "e1"] });
     expect(dms).toEqual([rangerDigest(LINE)]);
     expect(sent.some((ev) => (ev as { digest?: { text: string } }).digest?.text === LINE)).toBe(true);
     now += HOUR;
@@ -146,13 +146,13 @@ describe("the daily line", () => {
     await first.tick();
     first.detach();
     const saved = JSON.parse(await readFile(join(dir, "triggers", "digest.json"), "utf8"));
-    expect(saved).toEqual({ digested: NOV2_0400, digest: { at: NOV2_0400, text: LINE } });
+    expect(saved).toEqual({ digested: NOV2_0400, digest: { at: NOV2_0400, text: LINE, ids: ["e2", "e1"] } });
     const dms: string[] = [];
     now = NOV2_0400 + 2 * HOUR;
     const second = hub({ tellRanger: async (t) => (dms.push(t), true) });
     await second.adopt();
     await second.tick();
-    expect((await second.info()).digest?.text).toBe(LINE);
+    expect((await second.info()).digest).toEqual({ at: NOV2_0400, text: LINE, ids: ["e2", "e1"] });
     expect(dms).toEqual([]);
   });
 

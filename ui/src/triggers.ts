@@ -2,7 +2,7 @@
  *  words for each state, and the tab's count. Pure; Triggers.tsx draws it. */
 
 import { SERVICE_NAME, SPEC_CONVERGE, driftOf, driftReports, driftStale, driftWords, eventLive, resumable, retryable, type DriftRow, type TriggerEvent, type TriggerRuleInfo, type TriggerStatus, type TriggersInfo } from "../../src/core/trigger";
-import { digestShown, type TriggerDigest } from "../../src/core/digest";
+import { digestShown, digestStands, type TriggerDigest } from "../../src/core/digest";
 import type { Badge } from "./badges";
 
 export interface TriggerRow {
@@ -210,12 +210,14 @@ export interface DigestRow {
 }
 
 /** The daily lines the inbox shows: each shown backend's last one, while it
- *  is under a day old and this browser has not marked it seen; newest first. */
-export function digestRows(triggers: Readonly<Record<string, Pick<TriggersInfo, "digest">>>, order: readonly string[], now: number, seen: readonly string[]): DigestRow[] {
+ *  is under a day old, one of the events it counted still waits on Eric
+ *  (`digestStands`), and this browser has not marked it seen; newest first. */
+export function digestRows(triggers: Readonly<Record<string, Pick<TriggersInfo, "digest" | "events">>>, order: readonly string[], now: number, seen: readonly string[]): DigestRow[] {
   return order
     .flatMap((backend) => {
-      const digest = triggers[backend]?.digest;
-      if (!digest || !digestShown(digest, now)) return [];
+      const t = triggers[backend];
+      const digest = t?.digest;
+      if (!digest || !digestShown(digest, now) || !digestStands(digest, t?.events ?? [])) return [];
       const key = `${backend}@${digest.at}`;
       return seen.includes(key) ? [] : [{ backend, digest, key }];
     })

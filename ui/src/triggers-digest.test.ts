@@ -54,4 +54,13 @@ describe("digestRows", () => {
     expect(rows.map((r) => [r.backend, r.digest.text])).toEqual([["mini", "mini line"], ["mac", "mac line"]]);
     expect(digestRows(triggers, ["mac", "mini"], NOW, [rows[0]?.key ?? ""]).map((r) => r.backend)).toEqual(["mac"]);
   });
+
+  test("a line goes once none of the events it counted still waits on Eric", () => {
+    const digest = { at: NOW - 60_000, text: "1 issue needs you: MANUAL stopped; none merged yesterday", ids: ["e1"] };
+    const shown = (events: TriggerEvent[]) => digestRows({ mini: info({ digest, events }) }, ["mini"], NOW, []).length;
+    expect(shown([event({ status: "stopped" })])).toBe(1);
+    expect(shown([event({ status: "working" })])).toBe(0);
+    expect(shown([])).toBe(0);
+    expect(digestRows({ mini: info({ digest: { at: NOW, text: "nothing needs you; 2 merged yesterday", ids: [] } }) }, ["mini"], NOW, []).length).toBe(1);
+  });
 });

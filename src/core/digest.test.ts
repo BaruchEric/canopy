@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DIGEST_CRON, DIGEST_LIST, digestLine, digestShown, needWord, rangerDigest, yesterday } from "./digest";
+import { DIGEST_CRON, DIGEST_LIST, digestIds, digestLine, digestShown, digestStands, needWord, rangerDigest, yesterday } from "./digest";
 import { DEFAULT_SWEEP } from "./sweep";
 import type { TriggerEvent } from "./trigger";
 
@@ -80,4 +80,27 @@ test("the hour is the sweep's, the day is local, the DM is tagged and the line s
   expect(rangerDigest("x")).toBe("[digest] canopy's daily line on trigger issues: x");
   expect(digestShown({ at: NOV2_0400 }, NOV2_0400 + 23 * 3_600_000)).toBe(true);
   expect(digestShown({ at: NOV2_0400 }, NOV2_0400 + 24 * 3_600_000)).toBe(false);
+});
+
+describe("digestIds and digestStands", () => {
+  test("the ids are the events the line counts, in its order", () => {
+    const a = event({ id: "a", status: "stopped", lastAt: 1 });
+    const b = event({ id: "b", status: "failed", lastAt: 2 });
+    const c = event({ id: "c", status: "merged", endedAt: NOV2_0400 - 3_600_000 });
+    expect(digestIds([a, b, c])).toEqual(["b", "a"]);
+    expect(digestIds([c])).toEqual([]);
+  });
+
+  test("a line stands while one of its events still waits, and always when it counted none", () => {
+    const stopped = event({ id: "a", status: "stopped" });
+    expect(digestStands({ ids: ["a", "b"] }, [stopped])).toBe(true);
+    // resumed, so working: it waits on no one
+    expect(digestStands({ ids: ["a"] }, [{ ...stopped, status: "working" }])).toBe(false);
+    // dismissed, so gone from the list
+    expect(digestStands({ ids: ["a"] }, [])).toBe(false);
+    // "nothing needs you; 2 merged yesterday" names nothing waiting
+    expect(digestStands({ ids: [] }, [])).toBe(true);
+    // a line kept before the ids were
+    expect(digestStands({}, [])).toBe(true);
+  });
 });

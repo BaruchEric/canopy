@@ -21,6 +21,9 @@ export interface TriggerDigest {
   /** unix ms */
   at: number;
   text: string;
+  /** the events the line counted as needing Eric, newest first; absent on
+   *  a line written before canopy kept them */
+  ids?: string[];
 }
 
 /** What an event waits on Eric for, in a word or two, or null when it waits
@@ -64,15 +67,24 @@ export function yesterday(now: number): { from: number; to: number } {
   return { from: d.getTime(), to };
 }
 
+/** the events that need Eric, with the word for each, newest first */
+function needing(events: readonly TriggerEvent[]): { e: TriggerEvent; word: string }[] {
+  return events.flatMap((e) => {
+    const word = needWord(e);
+    return word === null ? [] : [{ e, word }];
+  }).sort((a, b) => b.e.lastAt - a.e.lastAt);
+}
+
+/** The ids of the events the day's line counts as needing Eric, in its
+ *  order, kept with the line so the inbox knows when they stop waiting. */
+export const digestIds = (events: readonly TriggerEvent[]): string[] => needing(events).map(({ e }) => e.id);
+
 /** The day's line over every event kept, or null when nothing needs Eric
  *  and nothing merged yesterday: the newest that need him first, named by
  *  the issue's id and what it needs, and how many merged on the local day
  *  before `now`. */
 export function digestLine(events: readonly TriggerEvent[], now: number): string | null {
-  const needs = events.flatMap((e) => {
-    const word = needWord(e);
-    return word === null ? [] : [{ e, word }];
-  }).sort((a, b) => b.e.lastAt - a.e.lastAt);
+  const needs = needing(events);
   const day = yesterday(now);
   const merged = events.filter((e) => e.status === "merged" && e.endedAt !== undefined && e.endedAt >= day.from && e.endedAt < day.to).length;
   if (needs.length === 0 && merged === 0) return null;
@@ -87,3 +99,13 @@ export const rangerDigest = (text: string): string => `[digest] canopy's daily l
 
 /** Whether the inbox still shows a line: under a day old. */
 export const digestShown = (d: Pick<TriggerDigest, "at">, now: number): boolean => now - d.at < DIGEST_SHOWN;
+
+/** Whether a line still says something true: it counted nothing waiting
+ *  (its news is what merged), or one of the events it counted still waits
+ *  on Eric. A line whose events were all resumed, fixed or dismissed would
+ *  only send him to an empty Needs you. A line kept without ids stands. */
+export function digestStands(d: Pick<TriggerDigest, "ids">, events: readonly TriggerEvent[]): boolean {
+  if (d.ids === undefined || d.ids.length === 0) return true;
+  const named = new Set(d.ids);
+  return events.some((e) => named.has(e.id) && needWord(e) !== null);
+}
