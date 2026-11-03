@@ -2699,6 +2699,42 @@ describe("the dock as columns of cells", () => {
     useStore.setState({ sidebarOpen: pristine.sidebarOpen, sidebarWidth: pristine.sidebarWidth, feedOpen: pristine.feedOpen });
   });
 
+
+  test("on an ultrawide a new column opens as wide as the room allows, and a narrower window opens it at 440 (FR-009)", () => {
+    const st = () => useStore.getState();
+    const at = (innerWidth: number) => {
+      g.window = { innerWidth, location: { href: "http://a.test/", search: "" }, open: () => ({ focus: () => {} }) };
+    };
+    const widths = () => st().dockLayout.columns.map((c) => c.width);
+    useStore.setState({ panels: [], dockLayout: { columns: [] }, sidebarOpen: true, sidebarWidth: 264, cardsWidth: null, panelWidths: {} });
+    at(3440);
+    st().openPanel("a");
+    st().openPanel("b");
+    st().openPanel("c");
+    mirrored();
+    // the room is 3440 less the tree and two seams; the cards keep a third
+    expect(widths()).toEqual([1200, 898, 440]);
+    // a column already open keeps its width when another closes
+    st().closePanel("b");
+    expect(widths()).toEqual([1200, 440]);
+    // a width chosen at the cards' seam is what the cards keep
+    useStore.setState({ panels: [], dockLayout: { columns: [] }, cardsWidth: 2800, panelWidths: {} });
+    st().openPanel("a");
+    expect(widths()).toEqual([440]);
+    // a laptop opens every column at 440, as before
+    useStore.setState({ panels: [], dockLayout: { columns: [] }, cardsWidth: null, panelWidths: {} });
+    at(1920);
+    st().openPanel("a");
+    st().openPanel("b");
+    expect(widths()).toEqual([440, 440]);
+    // a panel's own width from when it last closed alone still comes first
+    useStore.setState({ panels: [], dockLayout: { columns: [] }, panelWidths: { a: 700 } });
+    at(3440);
+    st().openPanel("a");
+    st().openPanel("b");
+    expect(widths()).toEqual([700, 1200]);
+    useStore.setState({ sidebarOpen: pristine.sidebarOpen, sidebarWidth: pristine.sidebarWidth, cardsWidth: pristine.cardsWidth });
+  });
   test("panels always mirror the layout", () => {
     const st = useStore.getState();
     useStore.setState({ panels: [], dockLayout: { columns: [] } });

@@ -95,7 +95,8 @@ import {
 } from "./waiting";
 import { badRepoIds } from "./health";
 import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
-import { CARDS } from "./cardswidth";
+import { CARDS, SEAM } from "./cardswidth";
+import { newColumnWidth, type ColumnRoom } from "./columnwidth";
 import {
   DEFAULT_LAUNCH,
   effectivePrimary,
@@ -2032,7 +2033,7 @@ function recall(s: Pick<CanopyState, "popped" | "recalled">, id: string): Pick<C
   return { popped: without(s.popped, id), recalled: s.recalled.includes(id) ? s.recalled : [...s.recalled, id] };
 }
 
-type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "panelWidths" | "settings">;
+type DockState = Pick<CanopyState, "panels" | "dockLayout" | "activePanel" | "panelWidths" | "settings" | "sidebarOpen" | "sidebarWidth" | "cardsWidth">;
 
 /** how a panel opened now joins the dock: a column of its own, or a tab */
 export const arrangementOf = (s: Pick<CanopyState, "settings">): Arrangement => (s.settings.openIn === "tabs" ? "tabs" : "columns");
@@ -2079,11 +2080,42 @@ export function screenLayoutOf(
   };
 }
 
-/** a new column's width: the one its panel had when it last closed alone */
-const widthOf =
-  (s: Pick<CanopyState, "panelWidths">) =>
-  (id: string): number =>
-    s.panelWidths[id] ?? PANEL.initial;
+/** the window's width in CSS px, as the dock's max-width reads it (100vw);
+ *  0 where there is no window (under test) */
+function windowWidth(): number {
+  if (typeof window === "undefined") return 0;
+  const w = window.innerWidth;
+  return typeof w === "number" && Number.isFinite(w) ? w : 0;
+}
+
+/** The room a new column opens into (columnwidth.ts), read as it opens:
+ *  the window as it is then, the tree beside the cards with its seam, the
+ *  width chosen at the cards' seam and the open columns. A column keeps
+ *  the width it opened at, so a later resize of the window is the seams'
+ *  business, not this reading's. */
+function columnRoom(s: Pick<CanopyState, "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth">): ColumnRoom {
+  return {
+    window: windowWidth(),
+    before: s.sidebarOpen ? s.sidebarWidth + SEAM : 0,
+    cards: s.cardsWidth,
+    columns: s.dockLayout.columns.map((c) => c.width),
+  };
+}
+
+/** A new column's width: the one its panel had when it last closed alone,
+ *  else what the window leaves a column now (`newColumnWidth`, FR-009:
+ *  PANEL.initial under a wide window, wider from there while the room is
+ *  there). A width handed out counts as used for the next, so panels
+ *  opening together share the room rather than each taking all of it. */
+const widthOf = (s: Pick<CanopyState, "panelWidths" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth">): ((id: string) => number) => {
+  const room = columnRoom(s);
+  const columns = [...room.columns];
+  return (id: string): number => {
+    const width = s.panelWidths[id] ?? newColumnWidth({ ...room, columns });
+    columns.push(width);
+    return width;
+  };
+};
 
 const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 
@@ -2530,7 +2562,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       const opened = openSavedPanels(t.panels, t.closedSections, t.popped, dockless() ? [] : back);
       const { closedSections, popped } = opened;
       const activePanel = t.activePanel ?? opened.panels[0] ?? null;
-      const dockLayout = placeAll(laidOut({ ...t, settings: s.settings }), opened.panels, activePanel, arrangementOf(s), widthOf(t));
+      // the backend's own panels and widths, in this window's room
+      const here = { ...t, settings: s.settings, sidebarOpen: s.sidebarOpen, sidebarWidth: s.sidebarWidth, cardsWidth: s.cardsWidth };
+      const dockLayout = placeAll(laidOut(here), opened.panels, activePanel, arrangementOf(s), widthOf(here));
       const panels = panelsOf(dockLayout);
       const strip = back.filter((x) => x.place === "strip");
       const want = loadedTabs.activeTerm;
