@@ -2,14 +2,17 @@
  * The command line: canopy's CLI words, typed in the page. This is the pure
  * half (tested in cli.test.ts): splitting a line into words, reading the
  * CLI's own help text for verbs and usage, parsing words into a command,
- * finding the repo a word names, and completing the word being typed.
- * `clirun.ts` carries a command out against the store and the API.
+ * finding the repo a word names, completing the word being typed, and the
+ * subject ⌘K opens on (the ringed card or the picked set, FR-024), which
+ * fills a line's repo slot unasked. `clirun.ts` carries a command out
+ * against the store and the API.
  */
 
 import { HELP_TEXT } from "../../src/core/help";
 import { AWAKE_MODES, OPENER_IDS, type AwakeMode, type OpenerId, type Repo, type SpecHalf } from "../../src/core/types";
 import type { Line } from "../../src/core/treelines";
 import type { FixMove } from "./fixit";
+import { ringOf } from "./kbfocus";
 
 /** The transcript's id in the dock. Like "waiting on you" it is no repo's:
  *  a leading slash never starts a repo id, and with no `|` it reads as
@@ -473,12 +476,30 @@ const SLOTS: Record<string, readonly Slot[]> = {
   help: ["verb"],
 };
 
+/** the verbs with a repo or dir slot in one of their forms: what a subject is for */
+const REPO_VERBS: ReadonlySet<string> = new Set(
+  Object.entries(SLOTS)
+    .filter(([, slots]) => slots.some((s) => s === "repo" || s === "dir"))
+    .map(([key]) => key.split(" ")[0] ?? ""),
+);
+
+/** the flags that take the word after them, which is then no positional */
+const VALUED: readonly string[] = ["-m", "--app", "--host", "--label", "--forgejo", "--pr", "--rm", "--build", "--run", "--asset", "--open"];
+
+/** whether the word at `i` fills a slot: not a flag, and not a flag's value */
+const isPositional = (words: readonly string[], i: number): boolean => !(words[i] ?? "").startsWith("-") && !VALUED.includes(words[i - 1] ?? "");
+
+/** the words after the verb (and its sub) that fill slots, in order */
+const positionals = (words: readonly string[]): string[] => words.filter((_, i) => isPositional(words, i));
+
 /** what the completer can offer, from the store */
 export interface CompleteCtx {
   repos: readonly Repo[];
   workspaces: readonly string[];
   sources: readonly string[];
   peers: readonly string[];
+  /** the subject's repo ids (FR-024): first in a repo slot, and the verbs that take one first */
+  subject?: readonly string[];
 }
 
 export interface Suggestion {
@@ -512,6 +533,8 @@ export function complete(line: string, ctx: CompleteCtx): { word: string; option
     const words = (e: HelpEntry) => e.about || (e.more.find((m) => !m.startsWith("-")) ?? "");
     const about = (v: string) => SUBS[v]?.join(", ") ?? ENTRIES.filter((e) => e.verb === v).map(words).find((w) => w !== "") ?? "";
     options = VERBS.filter(starts).map((v) => ({ value: v, hint: about(v) }));
+    // with a subject, the verbs that act on a repo come first, each group in the help's order
+    if (ctx.subject?.length) options = [...options.filter((o) => REPO_VERBS.has(o.value)), ...options.filter((o) => !REPO_VERBS.has(o.value))];
   } else {
     const verb = head[0]!;
     const subs = SUBS[verb];
@@ -525,13 +548,12 @@ export function complete(line: string, ctx: CompleteCtx): { word: string; option
       const prev = rest.at(-1);
       if (prev === "--app") {
         options = OPENER_IDS.filter(starts).map((a) => ({ value: a, hint: "" }));
-      } else if (prev === "-m" || prev === "--host" || prev === "--label" || prev === "--forgejo") {
+      } else if (prev !== undefined && VALUED.includes(prev)) {
         options = [];
       } else if (word.startsWith("-")) {
         options = (FLAGS[key] ?? []).filter((f) => starts(f) && !rest.includes(f)).map((f) => ({ value: f, hint: "" }));
       } else {
-        const positional = rest.filter((w, i) => !w.startsWith("-") && !["-m", "--app", "--host", "--label", "--forgejo"].includes(rest[i - 1] ?? ""));
-        const slot = SLOTS[key]?.[positional.length] ?? "none";
+        const slot = SLOTS[key]?.[positionals(rest).length] ?? "none";
         options = fill(slot, word, ctx);
       }
     }
@@ -547,6 +569,11 @@ export function complete(line: string, ctx: CompleteCtx): { word: string; option
 function fill(slot: Slot, word: string, ctx: CompleteCtx): Suggestion[] {
   const lower = word.toLowerCase();
   const starts = (v: string) => v.toLowerCase().startsWith(lower);
+  // the subject's repos that fit the word lead a repo or dir slot, so Tab names the one already in it
+  const lead = (): Suggestion[] => {
+    const byId = new Map(ctx.repos.map((r) => [r.id, r]));
+    return (ctx.subject ?? []).filter(starts).map((id) => ({ value: id, hint: byId.get(id)?.status?.branch ?? "", repo: id }));
+  };
   switch (slot) {
     case "repo": {
       // the id's start first, then the name's, then the name anywhere
@@ -555,8 +582,8 @@ function fill(slot: Slot, word: string, ctx: CompleteCtx): Suggestion[] {
         (r: Repo) => starts(r.name),
         (r: Repo) => lower !== "" && r.name.toLowerCase().includes(lower),
       ];
-      const seen = new Set<string>();
-      const out: Suggestion[] = [];
+      const out = lead();
+      const seen = new Set(out.map((o) => o.value));
       for (const pick of by) {
         for (const r of ctx.repos) {
           if (out.length >= LIMIT || seen.has(r.id) || !pick(r)) continue;
@@ -567,8 +594,10 @@ function fill(slot: Slot, word: string, ctx: CompleteCtx): Suggestion[] {
       return out;
     }
     case "dir": {
+      const out = lead();
+      const seen = new Set(out.map((o) => o.value));
       const groups = [...new Set(ctx.repos.map((r) => r.group).filter((g): g is string => !!g))].sort();
-      return groups.filter(starts).map((g) => ({ value: g, hint: `${ctx.repos.filter((r) => r.group === g).length} repos` }));
+      return [...out, ...groups.filter((g) => starts(g) && !seen.has(g)).map((g) => ({ value: g, hint: `${ctx.repos.filter((r) => r.group === g).length} repos` }))];
     }
     case "ws":
       return ctx.workspaces.filter(starts).map((w) => ({ value: w, hint: "workspace" }));
@@ -591,6 +620,67 @@ export function accept(line: string, value: string): string {
   // the last word as typed may be quoted; cut back to the blank before it
   const cut = Math.max(line.lastIndexOf(" "), line.lastIndexOf("\t")) + 1;
   return `${line.slice(0, cut)}${quoteWord(value)} `;
+}
+
+/* ---------- the subject (FR-024) ---------- */
+
+/** what ⌘K opened on: the repos a line acts on without naming them */
+export interface Subject {
+  /** repo ids, a set's in its order, once each */
+  repos: string[];
+  from: "ring" | "set";
+}
+
+/**
+ * The command line's subject as it opens: the picked set when one is
+ * picked, since picking is a choice made on purpose, else the repo card
+ * the keyboard ring is on (`ringOf`), else none. Ids the page has no repo
+ * for are dropped, so a card gone since it was picked names nothing. The
+ * ring on a trigger or an inbox row is no subject: those are not repos.
+ */
+export function subjectOf(s: { kbFocus: string | null; kbRing: boolean; selected: readonly string[] }, repos: readonly Pick<Repo, "id">[]): Subject | null {
+  const known = new Set(repos.map((r) => r.id));
+  const set = [...new Set(s.selected)].filter((id) => known.has(id));
+  if (set.length > 0) return { repos: set, from: "set" };
+  const ring = ringOf(s);
+  return ring?.kind === "repo" && known.has(ring.id) ? { repos: [ring.id], from: "ring" } : null;
+}
+
+/**
+ * The lines to run for `line` with `repos` as its subject. A verb whose
+ * repo (or dir) slot is empty gets a repo put there, after the verb and
+ * its sub and before any flag, so `commit --ai` on a ringed card runs
+ * `commit <card> --ai`. A set runs a one-repo verb once per repo, and
+ * fills a slot that takes several (`ws add`) with them all at once. A line
+ * that names its repo, has no such slot, or has an earlier slot still
+ * empty (`ws add` with no name) runs as typed.
+ */
+export function withSubject(line: string, repos: readonly string[]): string[] {
+  if (repos.length === 0) return [line];
+  const { words, open } = tokenize(line);
+  if (open) return [line];
+  const skip = words[0] === "canopy" ? 1 : 0;
+  const head = words.slice(skip);
+  const verb = head[0] ?? "";
+  const hasSub = SUBS[verb] !== undefined;
+  if (hasSub && head.length < 2) return [line];
+  const slots = SLOTS[hasSub ? `${verb} ${head[1]}` : verb];
+  const at = slots?.findIndex((s) => s === "repo" || s === "dir") ?? -1;
+  if (slots === undefined || at === -1) return [line];
+  const from = skip + (hasSub ? 2 : 1);
+  const rest = words.slice(from);
+  // fewer positionals than the slot's place leaves an earlier slot empty; more, and the slot is filled
+  if (positionals(rest).length !== at) return [line];
+  // the slot opens just past the positional before it, flags typed so far staying where they were
+  let cut = 0;
+  for (let i = 0, seen = 0; seen < at; i++) {
+    if (isPositional(rest, i)) {
+      seen++;
+      cut = i + 1;
+    }
+  }
+  const put = (ids: readonly string[]): string => [...words.slice(0, from + cut), ...ids, ...words.slice(from + cut)].map(quoteWord).join(" ");
+  return slots[at + 1] === "repo" ? [put(repos)] : repos.map((id) => put([id]));
 }
 
 /* ---------- the transcript ---------- */

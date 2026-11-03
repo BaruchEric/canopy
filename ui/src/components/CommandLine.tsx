@@ -2,12 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
-import { CLI_GLYPH, CLI_NAME, accept, complete, recall, type CliEntry, type Suggestion } from "../cli";
+import { CLI_GLYPH, CLI_NAME, accept, complete, recall, subjectOf, withSubject, type CliEntry, type Subject, type Suggestion } from "../cli";
 import { runLine } from "../clirun";
 import { AgentFix } from "./AgentFix";
-import { useStore } from "../store";
+import { pickedIds, useStore } from "../store";
 import { stateOf } from "../util";
 import type { Line } from "../../../src/core/treelines";
+import type { Repo } from "../../../src/core/types";
 
 /** the status marks the CLI draws, by a repo's state */
 const MARK: Record<string, string> = { conflict: "◆", error: "✗", dirty: "●", ahead: "◐", clean: "○" };
@@ -21,18 +22,29 @@ const loadPeers = (): Promise<string[]> =>
     .then((p) => p.peers.map((x) => x.name))
     .catch(() => []));
 
+/** the chip's word for the subject: the one repo's name, or how many */
+function heldLabel(held: Subject, byId: Map<string, Repo>): string {
+  const [one] = held.repos;
+  if (one !== undefined && held.repos.length === 1) return byId.get(one)?.name ?? one;
+  return `${held.repos.length} repos`;
+}
+
 /**
  * The prompt: `canopy ▸`, the line, the rest of the first completion as
  * ghost text after it, and the words that could come next. Tab or → at the
  * end takes the completion, ↑ and ↓ walk the list (or, on an empty line,
- * the commands run before), Enter runs the line as typed.
+ * the commands run before), Enter runs the line as typed. With a `subject`
+ * (the ringed card or the picked set the pop opened on, FR-024) a chip
+ * wears it, the verbs that take a repo come first, and a line whose repo
+ * slot is empty runs on it; ⌫ on an empty line or the chip's × drops it.
  */
-export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onRan?: () => void; compact?: boolean }) {
+export function Prompt({ autoFocus, onRan, compact, subject }: { autoFocus?: boolean; onRan?: () => void; compact?: boolean; subject?: Subject | null }) {
   const [value, setValue] = useState("");
   const [pick, setPick] = useState(0);
   const [hist, setHist] = useState(-1);
   const [peers, setPeers] = useState<string[]>([]);
   const [focused, setFocused] = useState(false);
+  const [held, setHeld] = useState<Subject | null>(subject ?? null);
   const input = useRef<HTMLInputElement>(null);
   const { repos, workspaces, sources, log } = useStore(
     useShallow((s) => ({ repos: s.repos, workspaces: s.workspaces, sources: s.sources, log: s.cliLog })),
@@ -46,8 +58,8 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
   }, [autoFocus]);
 
   const ctx = useMemo(
-    () => ({ repos, workspaces: workspaces.map((w) => w.name), sources: sources.filter((s) => !s.launch).map((s) => s.id), peers }),
-    [repos, workspaces, sources, peers],
+    () => ({ repos, workspaces: workspaces.map((w) => w.name), sources: sources.filter((s) => !s.launch).map((s) => s.id), peers, subject: held?.repos }),
+    [repos, workspaces, sources, peers, held],
   );
   const done = useMemo(() => complete(value, ctx), [value, ctx]);
   const past = useMemo(() => recall(log), [log]);
@@ -61,6 +73,7 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
     document.getElementById(`${listId}-${at}`)?.scrollIntoView({ block: "nearest" });
   }, [listId, at]);
   const byId = useMemo(() => new Map(repos.map((r) => [r.id, r])), [repos]);
+  const onName = held ? heldLabel(held, byId) : null;
 
   const set = (v: string) => {
     setValue(v);
@@ -70,13 +83,17 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
     set(accept(value, o.value));
     input.current?.focus();
   };
+  const drop = () => {
+    setHeld(null);
+    input.current?.focus();
+  };
   const run = () => {
     const line = value.trim();
     if (line === "") return;
     set("");
     setHist(-1);
     onRan?.();
-    void runLine(line);
+    for (const l of held ? withSubject(line, held.repos) : [line]) void runLine(l);
   };
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -84,6 +101,9 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
     if (e.key === "Enter") {
       e.preventDefault();
       run();
+    } else if (e.key === "Backspace" && value === "" && held) {
+      e.preventDefault();
+      drop();
     } else if (e.key === "Tab" && chosen) {
       e.preventDefault();
       take(chosen);
@@ -118,6 +138,15 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
             {CLI_GLYPH}
           </span>
         </label>
+        {held && onName && (
+          <span className="cli-on" title={held.repos.join("\n")}>
+            <span className="cli-on-word">on</span>
+            <span className="cli-on-name">{onName}</span>
+            <button type="button" className="cli-on-drop" aria-label={`Drop ${onName}, to name the repo in the line`} title="Drop it (⌫ on an empty line)" onClick={drop}>
+              ×
+            </button>
+          </span>
+        )}
         <div className="cli-field">
           <span className="cli-ghost" aria-hidden="true">
             <span className="cli-typed">{value}</span>
@@ -143,7 +172,7 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
             aria-controls={listId}
             aria-activedescendant={chosen ? `${listId}-${at}` : undefined}
             aria-label="canopy command"
-            placeholder={compact ? "a command, or help" : "status, push <repo>, spec status, help…"}
+            placeholder={compact ? "a command, or help" : onName ? `status, push, commit --ai… on ${onName}` : "status, push <repo>, spec status, help…"}
           />
         </div>
         <button type="button" className="mini cli-go" onClick={run} disabled={value.trim() === ""} aria-label="Run the command">
@@ -178,7 +207,13 @@ export function Prompt({ autoFocus, onRan, compact }: { autoFocus?: boolean; onR
       {!compact && (
         <p className="cli-keys">
           <kbd>⇥</kbd> complete <kbd>↑</kbd>
-          <kbd>↓</kbd> choose <kbd>↵</kbd> run <kbd>esc</kbd> close
+          <kbd>↓</kbd> choose <kbd>↵</kbd> run{" "}
+          {held && (
+            <>
+              <kbd>⌫</kbd> drop the repo{" "}
+            </>
+          )}
+          <kbd>esc</kbd> close
         </p>
       )}
     </div>
@@ -209,10 +244,21 @@ export function CommandPop() {
   return (
     <div className="cli-veil" onPointerDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div className="cli-pop" role="dialog" aria-modal="true" aria-label="canopy command line">
-        <Prompt autoFocus onRan={() => setOpen(false)} />
+        <PopPrompt onRan={() => setOpen(false)} />
       </div>
     </div>
   );
+}
+
+/** The pop's prompt, mounted as it opens: its subject is what the page had
+ *  picked or ringed at that moment (FR-024), read once, since neither can
+ *  move while the veil is up. The transcript panel's prompt takes none. */
+function PopPrompt({ onRan }: { onRan: () => void }) {
+  const [subject] = useState(() => {
+    const s = useStore.getState();
+    return subjectOf({ kbFocus: s.kbFocus, kbRing: s.kbRing, selected: pickedIds(s) }, s.repos);
+  });
+  return <Prompt autoFocus subject={subject} onRan={onRan} />;
 }
 
 /* ---------- the transcript ---------- */

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Repo } from "../../src/core/types";
-import { accept, complete, findRepo, helpEntries, parseCommand, recall, tokenize, underDir, VERBS, type CliEntry } from "./cli";
+import { accept, complete, findRepo, helpEntries, parseCommand, recall, subjectOf, tokenize, underDir, VERBS, withSubject, type CliEntry } from "./cli";
 
 const repo = (id: string, branch = "main"): Repo =>
   ({ id, name: id.split(/[/:]/).pop() ?? id, group: id.includes("/") ? id.split("/")[0] : id, path: `/r/${id}`, status: { branch, files: [], ahead: 0, behind: 0 } }) as unknown as Repo;
@@ -173,4 +173,81 @@ describe("complete", () => {
 test("recall keeps each line once, newest first", () => {
   const e = (id: number, line: string): CliEntry => ({ id, line, at: 0, status: "ok", out: [] });
   expect(recall([e(1, "status"), e(2, "push a"), e(3, "status")])).toEqual(["status", "push a"]);
+});
+
+describe("the subject (FR-024)", () => {
+  const ring = (id: string) => ({ kbFocus: `repo:${id}`, kbRing: true, selected: [] as string[] });
+  const one = ["web/ripe"];
+
+  test("the picked set, else the ringed card, else nothing", () => {
+    expect(subjectOf(ring("web/ripe"), REPOS)).toEqual({ repos: ["web/ripe"], from: "ring" });
+    expect(subjectOf({ ...ring("web/ripe"), selected: ["web/tally", "notes"] }, REPOS)).toEqual({ repos: ["web/tally", "notes"], from: "set" });
+    expect(subjectOf({ kbFocus: "repo:web/ripe", kbRing: false, selected: [] }, REPOS)).toBeNull();
+    expect(subjectOf({ kbFocus: "trigger:mini:ab12", kbRing: true, selected: [] }, REPOS)).toBeNull();
+    expect(subjectOf({ kbFocus: null, kbRing: false, selected: [] }, REPOS)).toBeNull();
+  });
+
+  test("a repo the page no longer has names nothing", () => {
+    expect(subjectOf(ring("gone"), REPOS)).toBeNull();
+    expect(subjectOf({ kbFocus: null, kbRing: false, selected: ["gone", "notes", "notes"] }, REPOS)).toEqual({ repos: ["notes"], from: "set" });
+  });
+
+  test("the repo goes into an empty repo slot, after the verb and before its flags", () => {
+    expect(withSubject("push", one)).toEqual(["push web/ripe"]);
+    expect(withSubject("commit --ai --push", one)).toEqual(["commit web/ripe --ai --push"]);
+    expect(withSubject(`commit -m "fix it"`, one)).toEqual([`commit web/ripe -m "fix it"`]);
+    expect(withSubject("launch --pr 3", one)).toEqual(["launch web/ripe --pr 3"]);
+    expect(withSubject("open --app code", one)).toEqual(["open web/ripe --app code"]);
+    expect(withSubject("peers take", one)).toEqual(["peers take web/ripe"]);
+    expect(withSubject("spec sync --visual", one)).toEqual(["spec sync web/ripe --visual"]);
+    expect(withSubject("canopy push", one)).toEqual(["canopy push web/ripe"]);
+  });
+
+  test("a dir slot takes it too: status on the card is its tree", () => {
+    expect(withSubject("status", one)).toEqual(["status web/ripe"]);
+    expect(withSubject("spec status", one)).toEqual(["spec status web/ripe"]);
+  });
+
+  test("a slot already filled, a verb with none, or a sub still to come runs as typed", () => {
+    expect(withSubject("push web/tally", one)).toEqual(["push web/tally"]);
+    expect(withSubject("help push", one)).toEqual(["help push"]);
+    expect(withSubject("version", one)).toEqual(["version"]);
+    expect(withSubject("peers", one)).toEqual(["peers"]);
+    expect(withSubject("ws", one)).toEqual(["ws"]);
+    expect(withSubject("ws add", one)).toEqual(["ws add"]);
+    expect(withSubject(`commit -m "half`, one)).toEqual([`commit -m "half`]);
+    expect(withSubject("push", [])).toEqual(["push"]);
+  });
+
+  test("a set runs a one-repo verb once per repo, and fills a many-repo slot at once", () => {
+    const set = ["web/ripe", "notes"];
+    expect(withSubject("push", set)).toEqual(["push web/ripe", "push notes"]);
+    expect(withSubject("commit --ai", set)).toEqual(["commit web/ripe --ai", "commit notes --ai"]);
+    expect(withSubject("ws add daily", set)).toEqual(["ws add daily web/ripe notes"]);
+    expect(withSubject("ws create fresh", set)).toEqual(["ws create fresh web/ripe notes"]);
+  });
+
+  test("the menu puts the verbs that take a repo first, in the help's order", () => {
+    const sub = { ...ctx, subject: one };
+    const c = complete("", sub);
+    const values = c.options.map((o) => o.value);
+    expect(values.slice(0, 10)).toEqual(["status", "commit", "suggest", "push", "pull", "open", "ws", "launch", "peers", "spec"]);
+    expect([...values].sort()).toEqual([...VERBS].sort());
+    expect(c.ghost).toBe("");
+    expect(complete("pu", sub).options.map((o) => o.value)).toEqual(["push", "pull"]);
+    expect(complete("s", sub).options.slice(0, 3).map((o) => o.value)).toEqual(["status", "suggest", "spec"]);
+    // without one, the help's order as before
+    expect(complete("", ctx).options.map((o) => o.value)).toEqual([...VERBS]);
+  });
+
+  test("the repo slot offers the subject first, and the dir slot too", () => {
+    const sub = { ...ctx, subject: ["notes"] };
+    expect(complete("push ", sub).options[0]).toEqual({ value: "notes", hint: "main", repo: "notes" });
+    expect(complete("push ", sub).ghost).toBe("notes");
+    expect(complete("push w", sub).options.map((o) => o.value)).toEqual(["web/ripe", "web/tally"]);
+    expect(complete("status ", sub).options.map((o) => o.value)).toEqual(["notes", "dev-tools", "mini:web", "web"]);
+    const two = { ...ctx, subject: ["web/tally", "notes"] };
+    expect(complete("ws add daily ", two).options.slice(0, 2).map((o) => o.value)).toEqual(["web/tally", "notes"]);
+    expect(complete("ws add daily ", two).options.filter((o) => o.value === "notes")).toHaveLength(1);
+  });
 });
