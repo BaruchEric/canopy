@@ -1,5 +1,5 @@
 import { myPlatform } from "../client";
-import { GO, keyCaps, shortcutsOn } from "../shortcuts";
+import { GO, YANK, keyCaps, shortcutsOn } from "../shortcuts";
 import { useStore } from "../store";
 import { PopGear } from "./PopGrip";
 
@@ -15,7 +15,8 @@ function Caps({ press, apple }: { press: string; apple: boolean }) {
 }
 
 /** The ? sheet: every shortcut on the view it was opened from, then the
- *  views g goes to, both read from the table the key handler reads. */
+ *  views g goes to and what y copies, all read from the table the key
+ *  handler reads. */
 export function KeysSheet({ view }: { view: string }) {
   const close = useStore((s) => s.closeSheet);
   const apple = ["mac", "ios"].includes(myPlatform());
@@ -54,6 +55,20 @@ export function KeysSheet({ view }: { view: string }) {
                 </span>
               </dt>
               <dd>{g.what}</dd>
+            </div>
+          ))}
+        </dl>
+        <h3 className="keys-head">y then</h3>
+        <dl className="keys-list">
+          {YANK.map((y) => (
+            <div key={y.key} className="keys-row">
+              <dt>
+                <span className="keys-caps">
+                  <kbd>y</kbd>
+                  <kbd>{y.key}</kbd>
+                </span>
+              </dt>
+              <dd>{y.what}</dd>
             </div>
           ))}
         </dl>

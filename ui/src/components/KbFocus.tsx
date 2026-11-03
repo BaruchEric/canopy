@@ -3,13 +3,20 @@
  * page (`[data-kb]` under the zone's roots, in document order), moves the
  * ring, peeks and goes in, and keeps the place while the list changes under
  * it. The model is pure in kbfocus.ts; items spread `useKb` (kbring.ts).
- * App.tsx's key handler calls `kbMove`, `kbPeek` and `kbEnter` through the
- * shortcut table and mounts `KbWatch`.
+ * App.tsx's key handler calls `kbMove`, `kbPeek`, `kbEnter` and `kbCopy`
+ * (the copy keys, FR-025, their model in kbcopy.ts) through the shortcut
+ * table and mounts `KbWatch`.
  */
 import { useEffect } from "react";
-import { KB_ZONES, homeZone, keepKb, ringOf, stepKb, triggerOf, uniqueKeys, type KbZone } from "../kbfocus";
+import type { PrWatch } from "../../../src/core/types";
+import type { InboxItem } from "../inbox";
+import { copyOf, copyableOfOrigin, copyableOfRepo, copyableOfRun, type Copyable } from "../kbcopy";
+import { KB_ZONES, homeZone, keepKb, ringOf, stepKb, triggerOf, uniqueKeys, type KbTarget, type KbZone } from "../kbfocus";
 import { backendOf, qual } from "../registry";
-import { activeFlowFor, flowFor, inboxItems, landingAll, runFor, useStore, type CanopyState } from "../store";
+import { say } from "../said";
+import { copyText } from "../share";
+import type { CopyKey } from "../shortcuts";
+import { activeFlowFor, flowFor, idLabel, inboxItems, landingAll, prsAll, runFor, useStore, type CanopyState } from "../store";
 import { OVER_PAGE } from "../surface";
 import { showInboxSheet } from "./Inbox";
 
@@ -208,6 +215,130 @@ export function kbEnter(showRepo: (id: string) => void): boolean {
       if (!unfold(key, true)) blink(key);
       return true;
   }
+}
+
+/** the branch a repo's checkout is on, for a run that worked in it */
+const checkoutOf = (s: CanopyState, repoId: string): string | null => s.repos.find((r) => r.id === repoId)?.status?.branch ?? null;
+
+/** a trigger's event, by its id alone, on whichever backend has it */
+function eventById(s: CanopyState, id: string) {
+  for (const [backend, info] of Object.entries(s.triggers)) {
+    const event = info?.events.find((x) => x.id === id);
+    if (event) return { backend, event };
+  }
+  return undefined;
+}
+
+/** What a trigger's event has to copy: through its latest run, else
+ *  through its branch id. The event holds the run's id as its backend
+ *  minted it, so it is qualified before the store is asked. */
+function eventCopyable(s: CanopyState, backend: string, e: { runId?: string; branch?: string }, prs: readonly PrWatch[]): Copyable {
+  const runId = e.runId ? qual(backend, e.runId) : null;
+  const run = runId ? s.runs[runId] : undefined;
+  if (run) return copyableOfRun(run, prs, checkoutOf(s, run.repoId));
+  if (e.branch) return copyableOfOrigin(e.branch, prs, landingAll(s).entries, Object.values(s.runs));
+  return { branch: null, pr: null, run: runId };
+}
+
+/** What an inbox row has to copy: a run's through the run, a PR's or a
+ *  sent-back branch's through its branch id, a workflow's through its
+ *  branch (else its checkout and its latest step), a trigger's as a
+ *  trigger row's; any other row (an ask, a sprout, the sweep, a group)
+ *  through its repo's card, when it has one. */
+function inboxCopyable(s: CanopyState, item: InboxItem, prs: readonly PrWatch[]): Copyable | null {
+  const origin = (id: string) => copyableOfOrigin(id, prs, landingAll(s).entries, Object.values(s.runs));
+  switch (item.source) {
+    case "run": {
+      const run = s.runs[item.id];
+      return run ? copyableOfRun(run, prs, checkoutOf(s, run.repoId)) : null;
+    }
+    case "pr":
+    case "landing":
+      return origin(item.id);
+    case "flow": {
+      const f = s.flows[item.id];
+      if (!f) return null;
+      if (f.branch) return origin(f.branch.origin);
+      const last = [...f.steps].reverse().find((st) => st.runId)?.runId ?? null;
+      return { branch: checkoutOf(s, f.repoId), pr: null, run: last };
+    }
+    case "trigger": {
+      const found = eventById(s, item.id);
+      return found ? eventCopyable(s, found.backend, found.event, prs) : null;
+    }
+    default: {
+      const repo = item.repoId ? s.repos.find((r) => r.id === item.repoId) : undefined;
+      return repo ? copyableOfRepo(repo, runFor(s, repo.id), prs) : null;
+    }
+  }
+}
+
+/** What the ringed item has to copy. */
+function ringCopyable(s: CanopyState, t: KbTarget, prs: readonly PrWatch[]): Copyable | null {
+  switch (t.kind) {
+    case "repo": {
+      const repo = s.repos.find((r) => r.id === t.id);
+      return repo ? copyableOfRepo(repo, runFor(s, t.id), prs) : null;
+    }
+    case "trigger": {
+      const found = eventOf(s, t.id);
+      return found?.event ? eventCopyable(s, found.backend, found.event, prs) : null;
+    }
+    case "inbox": {
+      const item = inboxItems(s).find((i) => i.key === t.id);
+      return item ? inboxCopyable(s, item, prs) : null;
+    }
+  }
+}
+
+/** What the copy keys read, in order: the run sheet's run, else the ringed
+ *  card or row while nothing else is up, else the run a window of one run
+ *  shows (`solo`, App's `route.run`). `key` is the ringed item's, for a
+ *  blink; `from` names it for the quiet line. */
+function copySource(s: CanopyState, solo: string | null): { parts: Copyable; from: string; key: string | null } | null {
+  const prs = prsAll(s);
+  const sheet = s.sheet;
+  if (sheet?.kind === "run") {
+    const run = s.runs[sheet.runId];
+    return run ? { parts: copyableOfRun(run, prs, checkoutOf(s, run.repoId)), from: "the run", key: null } : null;
+  }
+  if (sheet) return null;
+  const t = ringOf(s);
+  const key = shown(s);
+  if (t && key) {
+    const parts = ringCopyable(s, t, prs);
+    return parts ? { parts, from: t.kind === "repo" ? "the card" : "the row", key } : null;
+  }
+  const run = solo ? s.runs[solo] : undefined;
+  return run ? { parts: copyableOfRun(run, prs, checkoutOf(s, run.repoId)), from: "the run", key: null } : null;
+}
+
+/**
+ * y then b, p or r (FR-025): copies the branch, the PR's link or the run's
+ * id of the run sheet's run, else of the ringed card or row, and says so in
+ * the page's quiet line (said.ts). An item with none of that part is said
+ * the same way, and the ring blinks as on Space with nothing to open; a
+ * clipboard the browser refused is said in rust. The run id copied is the
+ * one its backend knows, the line naming the backend when it is not home.
+ */
+export function kbCopy(key: CopyKey, solo: string | null = null): void {
+  const s = useStore.getState();
+  const found = copySource(s, solo);
+  if (!found) {
+    say(`nothing to copy from: ring a card or a row, or open a run`);
+    return;
+  }
+  const { name, text } = copyOf(found.parts, key);
+  if (text === null) {
+    if (found.key) blink(found.key);
+    say(`${found.from} has no ${name}`);
+    return;
+  }
+  const { plain, backend } = key === "r" ? idLabel(text) : { plain: text, backend: null };
+  copyText(plain).then(
+    () => say(`copied ${name}: ${plain}${backend ? ` on ${backend}` : ""}`),
+    (e: unknown) => say(`could not copy: ${e instanceof Error ? e.message : String(e)}`, true),
+  );
 }
 
 /** Hides the ring and keeps the place, for Escape with nothing else to close. */

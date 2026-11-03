@@ -462,6 +462,44 @@ a:focus-visible,
     outline-style: dashed;
   }
 }
+/* the page's quiet line (said.ts, FR-025's copy keys): what a key just
+   did, or why it could not, at the foot of the window for a moment. Over a
+   sheet, since the copy keys work from the run sheet too. */
+.said {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 50;
+  transform: translateX(-50%);
+  max-width: min(36rem, calc(100vw - 32px));
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--float-edge);
+  border-radius: 6px;
+  background: var(--float);
+  box-shadow: 0 6px 20px var(--float-shadow);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  animation: said-in 0.15s ease-out;
+}
+.said.bad {
+  color: var(--rust);
+}
+@keyframes said-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .said {
+    animation: none;
+  }
+}
 input,
 textarea {
   font: inherit;

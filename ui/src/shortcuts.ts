@@ -1,9 +1,9 @@
 /**
  * The page's keyboard shortcuts as one table. App.tsx's key handler reads a
- * press through `shortcutFor` and `chordView`, and the ? sheet lists
- * `shortcutsOn` and `GO`, so the sheet cannot drift from what the keys do
- * (FR-021, FR-022; the ring's keys are FR-023's). Pure and tested
- * (shortcuts.test.ts).
+ * press through `shortcutFor`, `chordView` and `copyKeyOf`, and the ? sheet
+ * lists `shortcutsOn`, `GO` and `YANK`, so the sheet cannot drift from what
+ * the keys do (FR-021, FR-022; the ring's keys are FR-023's, the copy keys
+ * FR-025's). Pure and tested (shortcuts.test.ts).
  */
 
 export type KeyAction =
@@ -11,6 +11,7 @@ export type KeyAction =
   | "command"
   | "find"
   | "go"
+  | "yank"
   | "new"
   | "filter"
   | "filters"
@@ -49,6 +50,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "command", press: "mod+k", what: "The command line, from a box or a shell too", anywhere: true },
   { action: "command", press: ":", what: "The command line" },
   { action: "go", press: "g", what: "Then a letter, go to a view (below)" },
+  { action: "yank", press: "y", what: "Then a letter, copy from the ringed card or row, or the open run sheet (below)" },
   { action: "find", press: "mod+shift+f", what: "Search the files of every repo in view", views: GIT, anywhere: true },
   { action: "new", press: "n", what: "A new project", views: ["git", "incubator"] },
   { action: "filter", press: "/", what: "Filter the repos", views: GIT },
@@ -70,7 +72,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "escape", press: "Escape", what: "Close the drawer, leave select mode, or hide the ring", views: RING },
 ];
 
-/** How long `g` waits for its letter. */
+/** How long `g` and `y` wait for their letter. */
 export const CHORD_MS = 1500;
 
 /** g then a letter, and the view it goes to: the agents view opens on its board. */
@@ -85,6 +87,16 @@ export const GO: readonly { key: string; view: string; what: string }[] = [
   { key: "h", view: "health", what: "health" },
   { key: "c", view: "costs", what: "costs" },
   { key: "k", view: "kit", what: "the kit" },
+];
+
+/** what y then a letter copies (FR-025, kbcopy.ts): the branch, the PR's link, the run's id */
+export type CopyKey = "b" | "p" | "r";
+
+/** y then a letter, and what it copies off the ringed card or row, or the run sheet's run. */
+export const YANK: readonly { key: CopyKey; what: string }[] = [
+  { key: "b", what: "its branch" },
+  { key: "p", what: "its PR's link" },
+  { key: "r", what: "its run's id" },
 ];
 
 /** the parts of a KeyboardEvent a press is read from */
@@ -119,6 +131,9 @@ export const shortcutsOn = (view: string): Shortcut[] => SHORTCUTS.filter((s) =>
 
 /** The view `g` then `key` goes to, or null. */
 export const chordView = (key: string): string | null => GO.find((g) => g.key === key)?.view ?? null;
+
+/** What `y` then `key` copies, or null. */
+export const copyKeyOf = (key: string): CopyKey | null => YANK.find((y) => y.key === key)?.key ?? null;
 
 /** the keys the sheet names rather than prints */
 const NAMED_CAPS: Readonly<Record<string, string>> = { Escape: "Esc", " ": "Space", Enter: "Enter", ArrowDown: "↓", ArrowUp: "↑" };

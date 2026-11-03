@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { GO, SHORTCUTS, chordView, keyCaps, pressOf, shortcutFor, shortcutsOn } from "./shortcuts";
+import { GO, SHORTCUTS, YANK, chordView, copyKeyOf, keyCaps, pressOf, shortcutFor, shortcutsOn } from "./shortcuts";
 
 const press = (key: string, mods: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean; shiftKey: boolean }> = {}) =>
   pressOf({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods });
@@ -28,8 +28,8 @@ test("shortcutFor finds a press on the views it works on and nowhere else", () =
 
 test("shortcutsOn lists every shortcut on git and only the everywhere ones and the view's own elsewhere", () => {
   expect(shortcutsOn("git")).toHaveLength(SHORTCUTS.length);
-  expect(shortcutsOn("library").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g"]);
-  expect(shortcutsOn("incubator").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "n"]);
+  expect(shortcutsOn("library").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y"]);
+  expect(shortcutsOn("incubator").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "n"]);
 });
 
 test("no press means two things on one view", () => {
@@ -74,4 +74,16 @@ test("keyCaps shows mod as ⌘ on Apple and Ctrl elsewhere", () => {
   expect(keyCaps(" ", true)).toEqual(["Space"]);
   expect(keyCaps("ArrowDown", false)).toEqual(["↓"]);
   expect(keyCaps("Enter", false)).toEqual(["Enter"]);
+});
+
+test("y arms the copy chord on every view, and copyKeyOf names the part a letter copies", () => {
+  expect(shortcutFor("y", "git")?.action).toBe("yank");
+  expect(shortcutFor("y", "sessions")?.action).toBe("yank");
+  expect(YANK.map((y) => y.key)).toEqual(["b", "p", "r"]);
+  expect(copyKeyOf("b")).toBe("b");
+  expect(copyKeyOf("p")).toBe("p");
+  expect(copyKeyOf("r")).toBe("r");
+  expect(copyKeyOf("x")).toBeNull();
+  // g then b and y then b are each their own chord's
+  expect(chordView("b")).toBe("agents");
 });

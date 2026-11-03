@@ -27,9 +27,10 @@ import { Crowns, TopBar } from "./components/TopBar";
 import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { OVER_PAGE } from "./surface";
-import { CHORD_MS, chordView, pressOf, shortcutFor } from "./shortcuts";
-import { ringTakes, type RingPress } from "./kbfocus";
-import { KbWatch, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./components/KbFocus";
+import { CHORD_MS, chordView, copyKeyOf, pressOf, shortcutFor } from "./shortcuts";
+import { TYPES_INTO, ringTakes, type RingPress } from "./kbfocus";
+import { KbWatch, kbCopy, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./components/KbFocus";
+import { Said } from "./components/Said";
 import { runPanel } from "./itempanel";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
@@ -420,8 +421,9 @@ export function App() {
     }
   }, [loaded, openPanel]);
 
-  // when `g` was pressed, while it waits for the letter of its view
-  const goAt = useRef(0);
+  // the chord waiting for its letter, and when it was pressed: g for a view
+  // (FR-022), y for a copy (FR-025)
+  const chord = useRef<{ key: "go" | "yank"; at: number } | null>(null);
   useEffect(() => {
     // Every key reads the one table the ? sheet lists (shortcuts.ts), so
     // the sheet cannot drift from what the keys do.
@@ -429,14 +431,19 @@ export function App() {
       const t = e.target as HTMLElement;
       const box = t.tagName === "INPUT" || t.tagName === "TEXTAREA";
       const press = pressOf(e);
-      // g then a letter: the letter is the chord's, whatever it does alone
-      if (goAt.current) {
-        const armed = Date.now() - goAt.current < CHORD_MS;
-        goAt.current = 0;
-        if (armed && !box && press) {
+      // g or y then a letter: the letter is the chord's, whatever it does alone
+      if (chord.current) {
+        const { key, at } = chord.current;
+        chord.current = null;
+        if (Date.now() - at < CHORD_MS && !box && press) {
           e.preventDefault();
-          const next = chordView(press);
-          if (next) navigate(next);
+          if (key === "go") {
+            const next = chordView(press);
+            if (next) navigate(next);
+          } else {
+            const part = copyKeyOf(press);
+            if (part) kbCopy(part, route.run);
+          }
           return;
         }
       }
@@ -470,7 +477,14 @@ export function App() {
         case "go":
           if (st.sheet || over) return;
           e.preventDefault();
-          goAt.current = Date.now();
+          chord.current = { key: "go", at: Date.now() };
+          return;
+        case "yank":
+          // y waits for its letter with the run sheet up, or with nothing
+          // over the page at all; never from what types (a shell's y is its own)
+          if ((st.sheet ? st.sheet.kind !== "run" : over) || !(t instanceof Element) || t.closest(TYPES_INTO)) return;
+          e.preventDefault();
+          chord.current = { key: "yank", at: Date.now() };
           return;
         case "new":
           // ⌘N is the browser's new window, which a page cannot take
@@ -673,6 +687,7 @@ export function App() {
       <CommandPop />
       <DictationFloat />
       <KbWatch view={view} />
+      <Said />
     </div>
   );
 }
