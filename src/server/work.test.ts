@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Run, ServerEvent } from "../core/types";
-import { NOTE_CHARS, NOTES_MAX, type WorkFacts } from "../core/work";
+import { exportMarkdown, NOTE_CHARS, NOTES_MAX, type WorkFacts } from "../core/work";
 import { readWorkItems, writeWorkItem } from "../core/workstore";
 import type { Caller } from "./callers";
 import { WorkHub, type WorkDeps } from "./work";
@@ -112,6 +112,25 @@ describe("the ledger", () => {
     facts.set(id, { active: false, branches: [] });
     h.recheck();
     expect(h.get(id)?.state).toBe("landed");
+    await h.idle();
+  });
+
+  test("a finished run's ## Handoff becomes an agent note, once per run, and nothing while it runs", async () => {
+    const { h } = hub();
+    await h.adopt();
+    const { id } = h.mint({ title: "t", from: { kind: "note" }, repos: ["r"] });
+    const text = "All green.\n\n## Handoff\n\nThe lockfile moved; run install before the gates.";
+    h.onRun({ ...run("r1", id, "b1"), result: { text, durationMs: 1, turns: 1 } });
+    expect(h.get(id)?.notes).toEqual([]);
+    const done = { ...run("r1", id, "b1", "done"), result: { text, durationMs: 1, turns: 1 } };
+    h.onRun(done);
+    h.onRun(done);
+    expect(h.get(id)?.notes).toEqual([{ at: expect.any(Number), by: "agent", text: "The lockfile moved; run install before the gates." }]);
+    h.onRun({ ...run("r2", id, "b1", "failed"), result: { text: "It broke; no heading here.", durationMs: 1, turns: 1 } });
+    expect(h.get(id)?.notes).toHaveLength(1);
+    h.onRun({ ...run("r3", id, "b1", "done"), result: { text: "## Handoff\nsecond run's line", durationMs: 1, turns: 1 } });
+    expect(h.get(id)?.notes.at(-1)).toMatchObject({ by: "agent", text: "second run's line" });
+    expect(h.get(id)?.runs).toEqual(["r1", "r2", "r3"]);
     await h.idle();
   });
 
@@ -251,6 +270,25 @@ describe("the routes", () => {
     expect(h.get(a.id)?.notes.at(-1)).toMatchObject({ by: "page mac", text: "closed by hand as dropped: not worth it" });
     expect(await call("GET", "/api/other")).toBeNull();
     expect((await call("GET", "/api/work/nope"))?.status).toBe(404);
+    await h.idle();
+  });
+
+  test("export answers the item as markdown", async () => {
+    const { h, call } = hub();
+    await h.adopt();
+    const a = h.mint({ title: "A", from: { kind: "note" }, repos: ["r1"] });
+    h.note(a.id, "branch ready");
+    const res = await call("GET", `/api/work/export?id=${a.id}`);
+    expect(res?.status).toBe(200);
+    expect(res?.headers.get("content-type")).toBe("text/markdown; charset=utf-8");
+    const text = await res?.text();
+    const kept = h.get(a.id);
+    expect(kept?.notes).toHaveLength(1);
+    expect(text).toBe(exportMarkdown(kept ?? a));
+    expect(text).toContain("# A\n");
+    expect(text).toContain("canopy: branch ready\n");
+    expect((await call("GET", "/api/work/export"))?.status).toBe(400);
+    expect((await call("GET", "/api/work/export?id=w-nope2345"))?.status).toBe(404);
     await h.idle();
   });
 });

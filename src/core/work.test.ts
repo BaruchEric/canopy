@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addNote, branchSlug, fromWord, isWorkId, mintId, NOTE_CHARS, NOTES_MAX, stateOf, titleOf, trailerLine, trailerOf, WORK_ID, WORK_TRAILER, workBranchName, workIdOf, type WorkNote } from "./work";
+import { addNote, branchSlug, exportMarkdown, fromWord, HANDOFF_CHARS, HANDOFF_LEAD, handoffFence, handoffOf, isWorkId, mintId, NOTE_CHARS, NOTES_MAX, noteStamp, stateOf, titleOf, trailerLine, trailerOf, WORK_ID, WORK_TRAILER, workBranchName, workIdOf, type WorkItem, type WorkNote } from "./work";
 
 describe("ids", () => {
   test("mintId is w- and eight base32 characters from 40 random bits", () => {
@@ -74,6 +74,104 @@ describe("addNote", () => {
     for (let i = 1; i <= NOTES_MAX + 1; i++) notes = addNote(notes, note(i, "y".repeat(NOTE_CHARS)));
     expect(notes[0]?.text.length).toBeLessThanOrEqual(NOTE_CHARS);
     expect(notes[0]?.text.startsWith("earlier: ")).toBe(true);
+  });
+});
+
+describe("handoffOf", () => {
+  test("the text under the closing message's ## Handoff heading, trimmed and cut to NOTE_CHARS", () => {
+    expect(handoffOf("Done. The tests pass.\n\n## Handoff\n\nThe types test is flaky on Linux; rerun it once before blaming the change.\n")).toBe("The types test is flaky on Linux; rerun it once before blaming the change.");
+    expect(handoffOf("## Handoff\nline one\nline two")).toBe("line one\nline two");
+    expect(handoffOf("## Handoff\n" + "x".repeat(700))).toHaveLength(NOTE_CHARS);
+  });
+  test("the heading's level and case do not matter, and the last one wins", () => {
+    expect(handoffOf("### handoff\nlower and deeper")).toBe("lower and deeper");
+    expect(handoffOf("Handoff\nno heading mark")).toBeNull();
+    expect(handoffOf("## Handoff\nfirst\n\n## Handoff\nsecond")).toBe("second");
+  });
+  test("text after it under a heading of its own level or above is not the handoff", () => {
+    expect(handoffOf("## Handoff\nleave this\n\n## Next steps\nnot this")).toBe("leave this");
+    expect(handoffOf("## Handoff\nleave this\n\n### Detail\nand this too")).toBe("leave this\n\n### Detail\nand this too");
+  });
+  test("nothing without the heading, or with nothing under it", () => {
+    expect(handoffOf("Done. The tests pass.")).toBeNull();
+    expect(handoffOf("## Handoff\n\n   \n")).toBeNull();
+    expect(handoffOf("")).toBeNull();
+  });
+});
+
+describe("handoffFence", () => {
+  const note = (i: number, text: string, by = "canopy"): WorkNote => ({ at: Date.UTC(2026, 9, 26, 10, i), by, text });
+  test("the lead, the notes as data between <<< and >>>, newest last", () => {
+    const fence = handoffFence([note(0, "branch ready, sorted logic"), note(5, "sent back: conflict in 2 files"), note(9, "rebased it; the conflict was in the lockfile", "agent")]);
+    expect(fence).toBe(`${HANDOFF_LEAD}\n<<<\n2026-10-26 10:00 canopy: branch ready, sorted logic\n2026-10-26 10:05 canopy: sent back: conflict in 2 files\n2026-10-26 10:09 agent: rebased it; the conflict was in the lockfile\n>>>`);
+    expect(handoffFence([])).toBe("");
+  });
+  test("cut to HANDOFF_CHARS from the end, so the newest notes survive", () => {
+    const notes = Array.from({ length: 12 }, (_, i) => note(i, `${i}:${"x".repeat(NOTE_CHARS - 3)}`));
+    const fence = handoffFence(notes);
+    const body = fence.slice(`${HANDOFF_LEAD}\n<<<\n`.length, -">>>".length);
+    expect(body.length).toBeLessThanOrEqual(HANDOFF_CHARS + 2);
+    expect(body.startsWith("…")).toBe(true);
+    expect(body).toContain("canopy: 11:xxx");
+    expect(body).not.toContain("canopy: 0:xxx");
+    expect(fence.endsWith(">>>")).toBe(true);
+  });
+  test("a line break inside a note stays inside its line", () => {
+    expect(handoffFence([note(1, "two\nlines")])).toContain("canopy: two lines\n>>>");
+  });
+});
+
+describe("exportMarkdown", () => {
+  const item: WorkItem = {
+    id: "w-test2345",
+    title: "Add a test",
+    repos: ["dev-tools/canopy"],
+    state: "review",
+    from: { kind: "issue", service: "github", key: "o/r#12", link: "https://github.com/o/r/issues/12" },
+    runs: ["r1", "fix1"],
+    branches: ["b1"],
+    prs: [{ number: 7, url: "https://github.com/o/r/pull/7" }],
+    events: ["e1"],
+    notes: [
+      { at: Date.UTC(2026, 9, 26, 10, 0), by: "canopy", text: "branch ready, lands on its own" },
+      { at: Date.UTC(2026, 9, 26, 10, 5), by: "agent", text: "the lockfile moved; rerun install" },
+    ],
+    createdAt: Date.UTC(2026, 9, 26, 9, 0),
+    updatedAt: Date.UTC(2026, 9, 26, 10, 5),
+  };
+  test("title, state, links and the notes as a dated list, with the trailer last", () => {
+    expect(exportMarkdown(item)).toBe([
+      "# Add a test",
+      "",
+      "- id: w-test2345",
+      "- state: review",
+      "- repos: dev-tools/canopy",
+      "- from: [github issue o/r#12](https://github.com/o/r/issues/12)",
+      "- opened: 2026-10-26 09:00",
+      "- branches: b1",
+      "- runs: r1, fix1",
+      "- PRs: [#7](https://github.com/o/r/pull/7)",
+      "- events: e1",
+      "",
+      "## Notes",
+      "",
+      "- 2026-10-26 10:00 canopy: branch ready, lands on its own",
+      "- 2026-10-26 10:05 agent: the lockfile moved; rerun install",
+      "",
+      "Canopy-Work: w-test2345",
+      "",
+    ].join("\n"));
+  });
+  test("a closed item says when and why; an empty item says so", () => {
+    const dropped = exportMarkdown({ ...item, state: "dropped", closedAt: Date.UTC(2026, 9, 27, 8, 0), reason: "not worth it", from: { kind: "note" }, runs: [], branches: [], prs: [], events: [], notes: [] });
+    expect(dropped).toContain("- state: dropped (not worth it)\n");
+    expect(dropped).toContain("- closed: 2026-10-27 08:00\n");
+    expect(dropped).toContain("- from: a note\n");
+    expect(dropped).not.toContain("- branches:");
+    expect(dropped).toContain("## Notes\n\n(none yet)\n");
+  });
+  test("noteStamp is the minute in UTC", () => {
+    expect(noteStamp(Date.UTC(2026, 9, 26, 10, 5, 59))).toBe("2026-10-26 10:05");
   });
 });
 

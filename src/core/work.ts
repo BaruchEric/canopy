@@ -9,6 +9,12 @@ export const NOTE_CHARS = 600;
 export const NOTES_MAX = 40;
 export const TITLE_CHARS = 120;
 export const WORK_TRAILER = "Canopy-Work";
+/** how much of an item's notes a later run on its branch is handed, from the newest back */
+export const HANDOFF_CHARS = 3000;
+/** the line that opens the fenced notes in a later run's message */
+export const HANDOFF_LEAD = "What the last hands left on this work:";
+/** the heading an agent leaves its handoff under, at the end of its closing message */
+export const HANDOFF_HEADING = "## Handoff";
 export const WORK_STATES = ["open", "working", "review", "landed", "dropped"] as const;
 export type WorkState = (typeof WORK_STATES)[number];
 
@@ -176,6 +182,69 @@ export function addNote(notes: readonly WorkNote[], note: WorkNote): WorkNote[] 
     text: `earlier: ${earlier}`.slice(0, NOTE_CHARS),
   };
   return [foldedNote, ...retained];
+}
+
+/** A note's minute in UTC, as the lists and the export stamp it. */
+export const noteStamp = (at: number): string => new Date(at).toISOString().slice(0, 16).replace("T", " ");
+
+/** a note's text on one line, for a list or the fence */
+const oneLine = (text: string): string => text.replace(/\s*\n\s*/g, " ").trim();
+
+/** The text under the last `## Handoff` heading of a run's closing message,
+ *  at any heading level and in any case, up to the next heading at its level
+ *  or above, cut to NOTE_CHARS. Null without the heading or with nothing
+ *  under it. */
+export function handoffOf(text: string): string | null {
+  const lines = text.split(/\r?\n/);
+  let start = -1;
+  let level = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^(#{1,6})\s*handoff\s*$/i.exec(lines[i] ?? "");
+    if (match) {
+      start = i;
+      level = match[1]?.length ?? 0;
+    }
+  }
+  if (start < 0) return null;
+  const under: string[] = [];
+  for (const line of lines.slice(start + 1)) {
+    const heading = /^(#{1,6})\s+\S/.exec(line);
+    if (heading && (heading[1]?.length ?? 0) <= level) break;
+    under.push(line);
+  }
+  const out = under.join("\n").trim().slice(0, NOTE_CHARS);
+  return out || null;
+}
+
+/** An item's notes as data for a later run on its branch: the lead, then
+ *  one line per note between `<<<` and `>>>`, oldest first so the newest
+ *  reads last, cut to HANDOFF_CHARS from the end. Empty with no notes. */
+export function handoffFence(notes: readonly WorkNote[]): string {
+  if (notes.length === 0) return "";
+  let body = notes.map((note) => `${noteStamp(note.at)} ${note.by}: ${oneLine(note.text)}`).join("\n");
+  if (body.length > HANDOFF_CHARS) body = `…${body.slice(-HANDOFF_CHARS)}`;
+  return `${HANDOFF_LEAD}\n<<<\n${body}\n>>>`;
+}
+
+/** The item as markdown for pasting into FEATURES.md or an issue: the title,
+ *  its facts and links as a list, the notes dated, and the trailer last so a
+ *  rebuild can find the text again. */
+export function exportMarkdown(item: WorkItem): string {
+  const from = item.from.kind === "issue" && item.from.link ? `[${fromWord(item.from)}](${item.from.link})` : fromWord(item.from);
+  const facts = [
+    `id: ${item.id}`,
+    `state: ${item.state}${item.state === "dropped" && item.reason ? ` (${oneLine(item.reason)})` : ""}`,
+    `repos: ${item.repos.join(", ") || "none"}`,
+    `from: ${from}`,
+    `opened: ${noteStamp(item.createdAt)}`,
+    ...(item.closedAt !== undefined ? [`closed: ${noteStamp(item.closedAt)}`] : []),
+    ...(item.branches.length ? [`branches: ${item.branches.join(", ")}`] : []),
+    ...(item.runs.length ? [`runs: ${item.runs.join(", ")}`] : []),
+    ...(item.prs.length ? [`PRs: ${item.prs.map((pr) => `[#${pr.number}](${pr.url})`).join(", ")}`] : []),
+    ...(item.events.length ? [`events: ${item.events.join(", ")}`] : []),
+  ];
+  const notes = item.notes.length ? item.notes.map((note) => `- ${noteStamp(note.at)} ${note.by}: ${oneLine(note.text)}`) : ["(none yet)"];
+  return [`# ${item.title}`, "", ...facts.map((fact) => `- ${fact}`), "", "## Notes", "", ...notes, "", trailerLine(item.id), ""].join("\n");
 }
 
 /** Derives the current state from the item's open/closed marker and server facts. */

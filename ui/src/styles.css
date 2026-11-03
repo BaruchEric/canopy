@@ -14381,3 +14381,265 @@ button.card-tree-more:hover {
 :root:not([data-density="compact"]) .card-state .trees-card {
   display: none;
 }
+
+/* the work view (FR-037): items by state, the ones that need you first,
+   with a search and a repo filter; the sheet's notes; the run sheet's block */
+.work-view {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+.work-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.work-search {
+  flex: 1 1 200px;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+}
+.work-repo {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+  padding: 4px 6px;
+  max-width: 240px;
+}
+.work-count {
+  color: var(--ink-faint);
+  font-weight: 400;
+  font-size: 12px;
+}
+.work-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.work-group .panel-label {
+  margin: 0 0 2px;
+  padding: 0;
+}
+details.work-group > summary {
+  cursor: pointer;
+  list-style: none;
+  justify-content: flex-start;
+  gap: 6px;
+}
+details.work-group > summary .work-count {
+  margin-left: auto;
+}
+details.work-group > summary::before {
+  content: "▸ ";
+  color: var(--ink-faint);
+}
+details.work-group[open] > summary::before {
+  content: "▾ ";
+}
+.work-row {
+  display: grid;
+  gap: 3px;
+  padding: 8px 0 8px 10px;
+  border-left: 2px solid var(--tone, var(--hair));
+  font-size: 12px;
+}
+.work-row + .work-row {
+  border-top: 1px solid var(--hair);
+}
+.work-row.moss {
+  --tone: var(--moss);
+}
+.work-row.sky {
+  --tone: var(--sky);
+}
+.work-row.lichen {
+  --tone: var(--lichen);
+}
+.work-row.rust {
+  --tone: var(--rust);
+}
+.work-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.work-title {
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  cursor: pointer;
+}
+.work-title:hover {
+  text-decoration: underline;
+}
+.work-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  font-size: 11px;
+  color: var(--ink-faint);
+  margin: 0;
+}
+.work-facts a {
+  color: var(--sky);
+}
+.work-state {
+  font-weight: 700;
+}
+.work-state.moss {
+  color: var(--moss);
+}
+.work-state.sky {
+  color: var(--sky);
+}
+.work-state.lichen {
+  color: var(--lichen);
+}
+.work-state.rust {
+  color: var(--rust);
+}
+.work-id {
+  font-family: var(--mono);
+}
+.work-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+.work-link,
+button.work-link {
+  font: inherit;
+  color: var(--sky);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+.work-link:hover {
+  text-decoration: underline;
+}
+.work-needs {
+  margin: 0;
+  color: var(--rust);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.work-last {
+  margin: 0;
+  color: var(--ink-dim);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.work-empty {
+  margin: 0;
+  color: var(--ink-faint);
+  font-size: 12px;
+}
+.work-err {
+  margin: 0;
+  color: var(--rust);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.work-notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.work-note {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0 8px;
+  align-items: baseline;
+  font-size: 12px;
+  padding-left: 8px;
+  border-left: 2px solid var(--hair);
+}
+.work-note.by-agent {
+  border-left-color: var(--lichen);
+}
+.work-note.by-person {
+  border-left-color: var(--sky);
+}
+.work-note-by {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+.work-note-text {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.work-note-when {
+  color: var(--ink-faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.work-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+.work-box input {
+  flex: 1 1 200px;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--hair);
+  border-radius: 4px;
+}
+.work-box.compact {
+  margin-top: 4px;
+}
+.work-sheet {
+  display: grid;
+  gap: 10px;
+}
+.work-sheet .panel-label {
+  margin: 4px 0 0;
+  padding: 0;
+}
+/* the run sheet's block, under the branch line */
+.run-work {
+  display: grid;
+  gap: 4px;
+  padding: 6px 16px;
+  border-bottom: 1px solid var(--hair);
+  font-size: 12px;
+}
+.run-work-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.run-work-word {
+  color: var(--ink-dim);
+}

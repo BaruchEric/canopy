@@ -17,6 +17,9 @@ import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
 import { TriggersView } from "./components/Triggers";
 import { triggersBadge } from "./triggers";
+import { WorkView } from "./components/Work";
+import { workBadge, workRows } from "./work";
+import { qual } from "./registry";
 import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
 import { AgentSolo } from "./components/AgentSolo";
@@ -72,6 +75,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
       { key: "agents", label: "agents", what: "Which harness starts for what, per repo and role" },
       { key: "incubator", label: "incubator", what: "New projects from an idea, clarified and researched before anything is built" },
       { key: "triggers", label: "triggers", what: "Sentry issues and labeled Linear issues that start work on a branch with nobody typing, and what became of each" },
+      { key: "work", label: "work", what: "Every piece of branch work: where it stands, what served it, and the lines the hubs and agents left for the next hand" },
       { key: "kit", label: "kit", what: "The skills every agent has on every machine" },
     ],
   },
@@ -88,7 +92,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "kit", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "work", "kit", "secrets"];
 
 /** A view tab's live count, or null where its view has nothing waiting. */
 function badgeOf(s: CanopyState, key: string): Badge | null {
@@ -103,6 +107,8 @@ function badgeOf(s: CanopyState, key: string): Badge | null {
       return incubatorBadge(Object.values(s.sprouts));
     case "triggers":
       return triggersBadge(s.triggers);
+    case "work":
+      return workBadge(workRows(s.work, s.backendOrder, { landing: s.landing, triggers: s.triggers, qual }));
     default:
       return null;
   }
@@ -639,6 +645,8 @@ export function App() {
         <CostsView />
       ) : view === "triggers" ? (
         <TriggersView />
+      ) : view === "work" ? (
+        <WorkView />
       ) : view === "kit" ? (
         <KitView />
       ) : view === "secrets" ? (

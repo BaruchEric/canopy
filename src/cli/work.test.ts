@@ -121,6 +121,30 @@ test("workCommand lists every backend with its filters", async () => {
   }
 });
 
+test("export prints the backend's markdown as it came", async () => {
+  const markdown = "# Add a test\n\n- id: w-test2345\n\n## Notes\n\n(none yet)\n\nCanopy-Work: w-test2345\n";
+  const paths: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(req) {
+      paths.push(new URL(req.url).pathname + new URL(req.url).search);
+      return new Response(markdown, { headers: { "content-type": "text/markdown; charset=utf-8" } });
+    },
+  });
+  const out: string[] = [];
+  const write = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((chunk: string | Uint8Array) => { out.push(String(chunk)); return true; }) as typeof process.stdout.write;
+  try {
+    await workCommand(["export", "w-test2345", "--backend", `http://127.0.0.1:${server.port}`], { fail: (message) => { throw new Error(message); } });
+    expect(paths).toEqual(["/api/work/export?id=w-test2345"]);
+    expect(out.join("")).toBe(markdown);
+    await expect(workCommand(["export", "nope", "--backend", `http://127.0.0.1:${server.port}`], { fail: (message) => { throw new Error(message); } })).rejects.toThrow("usage:");
+  } finally {
+    process.stdout.write = write;
+    server.stop(true);
+  }
+});
+
 test("note reads the work id from the current run branch", async () => {
   const dir = await mkdtemp(join(tmpdir(), "canopy-work-cli-"));
   const previous = process.cwd();

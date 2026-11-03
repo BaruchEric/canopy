@@ -120,6 +120,7 @@ import type {
 import type { SecretAct } from "../../src/core/secretwire";
 import { isStaleOffer, newestStale, type StaleOffer } from "../../src/core/stalecopy";
 import type { Delivery, TriggerEvent, TriggersInfo } from "../../src/core/trigger";
+import type { WorkInfo, WorkItem } from "../../src/core/work";
 import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
@@ -868,6 +869,22 @@ export const api = {
   prs: async (b: string = homeName()) => {
     const r = await req<PrWatch[] | null>(b, "/api/prs");
     return from(b, Array.isArray(r) ? r : [], qPrs);
+  },
+  /** one backend's work ledger (FR-037), ids as the backend knows them;
+   *  empty from a backend from before the ledger */
+  work: async (b: string = homeName()): Promise<WorkInfo> => {
+    const r = await req<Partial<WorkInfo> | null>(b, "/api/work");
+    return { items: Array.isArray(r?.items) ? r.items : [], archived: typeof r?.archived === "number" ? r.archived : 0 };
+  },
+  /** a line on a work item, by its qualified id; the backend labels it with this page */
+  noteWork: async (id: string, text: string): Promise<WorkItem> => {
+    const [b, plain] = on(id);
+    return req<WorkItem>(b, "/api/work/note", { method: "POST", body: JSON.stringify({ id: plain, text }) });
+  },
+  /** ends a work item by hand; refused while a run on it is going */
+  closeWork: async (id: string, state: "landed" | "dropped", reason?: string): Promise<WorkItem> => {
+    const [b, plain] = on(id);
+    return req<WorkItem>(b, "/api/work/close", { method: "POST", body: JSON.stringify({ id: plain, state, ...(reason ? { reason } : {}) }) });
   },
   /** one backend's trigger rules and events; null from a backend from before triggers */
   triggers: async (b: string = homeName()): Promise<TriggersInfo | null> => {

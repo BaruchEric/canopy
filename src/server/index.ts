@@ -5,7 +5,7 @@ import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateD
 import { LibrarySync } from "./libsync";
 import { Awake, workingCount } from "../core/awake";
 import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, trustedComments, type GhRun } from "../core/issue";
-import { titleOf, workBranchName, type WorkStart } from "../core/work";
+import { handoffFence, titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, mayServeHttp, repoOfCwd } from "../core/ports";
@@ -1670,7 +1670,9 @@ interface FixStart {
 /** A fix on a branch: Claude resumes the branch's last session with
  *  `reason`; anything else starts fresh with the run's note and it. Same
  *  worktree, same branch. A PR's fix (FR-011) says canopy pushes, so the
- *  landing queue's branch paragraph stays off its resumed message. */
+ *  landing queue's branch paragraph stays off its resumed message. Every
+ *  run through here is a later run on its work item's branch, so the
+ *  item's notes go ahead of the message as fenced data (FR-037). */
 async function startBranchFix(state: ServerState, rec: LandingRun, reason: string, note: string, queueLine: boolean, how: FixStart = {}): Promise<Run> {
   const repo = state.result.repos.find((r) => r.id === rec.repoId);
   if (!repo) throw new HttpError(404, `${rec.repoId} is not in the tree`);
@@ -1680,7 +1682,10 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   needCapacity(state, agent.harness, priority);
   const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
   const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
-  const message = resume ? (queueLine ? `${reason}\n\n${branchLine(b)}` : reason) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b);
+  const notes = rec.work ? state.work.get(rec.work)?.notes ?? [] : [];
+  const fence = handoffFence(notes);
+  const resumed = queueLine ? `${reason}\n\n${branchLine(b)}` : reason;
+  const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b, notes);
   try {
     return state.runner.start(repo, "ask", ACTIONS.ask, note, agent, undefined, undefined, {
       branch: b,

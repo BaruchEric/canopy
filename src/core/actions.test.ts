@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ACTIONS, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
 import { isRunAction, RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
+import { HANDOFF_HEADING, handoffFence, type WorkNote } from "./work";
 
 function repo(over: Partial<Repo["status"] & { error: string }> = {}): Repo {
   const { error, ...status } = over;
@@ -32,13 +33,36 @@ const SCOPE = {
 };
 
 describe("branchLine", () => {
-  test("asks for the work trailer on every commit, and nothing of it without an item", () => {
+  test("asks for the work trailer on every commit and the handoff heading, and nothing of either without an item", () => {
     const b = { name: "run/w-test2345-add-a-test", dir: "/w/x", target: "main", work: "w-test2345" };
     const line = branchLine(b);
     expect(line.startsWith("You work on the branch run/w-test2345-add-a-test, in a worktree of its own at /w/x, cut from main.")).toBe(true);
-    expect(line.endsWith('End every commit message with the line "Canopy-Work: w-test2345" after a blank line: the trailer that ties the commit to this work.')).toBe(true);
-    expect(branchLine({ name: "run/x", dir: "/w/x", target: "main" })).not.toContain("Canopy-Work");
+    expect(line).toContain('End every commit message with the line "Canopy-Work: w-test2345" after a blank line: the trailer that ties the commit to this work.');
+    expect(line.endsWith(`Before you end, leave one or two lines for whoever picks this up next, under a ${HANDOFF_HEADING} heading at the end of your closing message.`)).toBe(true);
+    const bare = branchLine({ name: "run/x", dir: "/w/x", target: "main" });
+    expect(bare).not.toContain("Canopy-Work");
+    expect(bare).not.toContain("Handoff");
     expect(branchPrompt(repo(), ACTIONS.ask, "add a test", b)).toContain('"Canopy-Work: w-test2345"');
+  });
+});
+
+describe("branchPrompt", () => {
+  const b = { name: "run/w-test2345-add-a-test", dir: "/w/x", target: "main", work: "w-test2345" };
+  const notes: WorkNote[] = [
+    { at: Date.UTC(2026, 9, 26, 10, 0), by: "canopy", text: "sent back: conflict in 2 files" },
+    { at: Date.UTC(2026, 9, 26, 10, 5), by: "agent", text: "the conflict is in the lockfile; rerun install after the rebase" },
+  ];
+  test("a later run on the branch gets the item's notes fenced ahead of its message", () => {
+    const prompt = branchPrompt(repo(), ACTIONS.ask, "add a test", b, notes);
+    expect(prompt.startsWith(`${handoffFence(notes)}\n\n`)).toBe(true);
+    expect(prompt).toContain("2026-10-26 10:05 agent: the conflict is in the lockfile; rerun install after the rebase\n>>>");
+    expect(prompt.endsWith(branchLine(b))).toBe(true);
+    expect(prompt.indexOf(">>>")).toBeLessThan(prompt.indexOf("add a test"));
+  });
+  test("a first run, or one with no notes yet, gets no fence", () => {
+    const first = branchPrompt(repo(), ACTIONS.ask, "add a test", b);
+    expect(first).not.toContain("<<<");
+    expect(branchPrompt(repo(), ACTIONS.ask, "add a test", b, [])).toBe(first);
   });
 });
 

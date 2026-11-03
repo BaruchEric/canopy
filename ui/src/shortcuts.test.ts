@@ -48,6 +48,7 @@ test("chordView goes to the view a letter names, and nowhere for a letter it doe
   expect(chordView("s")).toBe("sessions");
   expect(chordView("b")).toBe("agents");
   expect(chordView("g")).toBe("git");
+  expect(chordView("w")).toBe("work");
   expect(chordView("z")).toBeNull();
 });
 

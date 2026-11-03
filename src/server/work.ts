@@ -4,8 +4,8 @@
  *  `core/workstore.ts`. Only the server holding the flows lock writes them
  *  (`adopt`), as with the landing records. */
 
-import type { Run, ServerEvent } from "../core/types";
-import { addNote, isWorkId, mintId, stateOf, WORK_STATES, type WorkFacts, type WorkInfo, type WorkItem, type WorkSink, type WorkStart, type WorkState } from "../core/work";
+import { isRunActive, type Run, type ServerEvent } from "../core/types";
+import { addNote, exportMarkdown, handoffOf, isWorkId, mintId, stateOf, WORK_STATES, type WorkFacts, type WorkInfo, type WorkItem, type WorkSink, type WorkStart, type WorkState } from "../core/work";
 import { readWorkItems, workDir, writeWorkItem } from "../core/workstore";
 import type { Caller } from "./callers";
 
@@ -36,6 +36,8 @@ export class WorkHub implements WorkSink {
   private pendingNew = new Map<string, WorkItem>();
   private keeping = false;
   private ownership = 0;
+  /** the runs whose closing handoff is already on their item, so repeated changes after the end write it once */
+  private handed = new Set<string>();
 
   constructor(private deps: WorkDeps) {}
 
@@ -159,6 +161,9 @@ export class WorkHub implements WorkSink {
     this.set({ ...item, events: [...item.events, ref.event] });
   }
 
+  /** A run on an item's branch is written on the item, and once it has
+   *  ended, the text under its closing message's `## Handoff` heading
+   *  becomes a `by: agent` note (FR-037), once per run. */
   onRun(run: Run): void {
     const branch = run.branch;
     const id = branch?.work;
@@ -168,11 +173,15 @@ export class WorkHub implements WorkSink {
       this.missing(id, `run ${run.id}`);
       return;
     }
+    const handoff = !this.handed.has(run.id) && !isRunActive(run) && run.result ? handoffOf(run.result.text) : null;
+    if (handoff !== null) this.handed.add(run.id);
+    const at = this.now();
     this.set({
       ...item,
       runs: item.runs.includes(run.id) ? item.runs : [...item.runs, run.id],
       branches: item.branches.includes(branch.origin) ? item.branches : [...item.branches, branch.origin],
-    });
+      ...(handoff !== null ? { notes: addNote(item.notes, { at, by: "agent", text: handoff }) } : {}),
+    }, at);
   }
 
   recheck(): void {
@@ -236,6 +245,14 @@ export class WorkHub implements WorkSink {
       if (!id) return json({ error: "id is required" }, 400);
       const item = this.get(id);
       return item ? json(item) : json({ error: "no work item by that id" }, 404);
+    }
+
+    if (req.method === "GET" && path === "/api/work/export") {
+      const id = url.searchParams.get("id");
+      if (!id) return json({ error: "id is required" }, 400);
+      const item = this.get(id);
+      if (!item) return json({ error: "no work item by that id" }, 404);
+      return new Response(exportMarkdown(item), { headers: { "content-type": "text/markdown; charset=utf-8" } });
     }
 
     if (req.method === "POST" && path === "/api/work/note") {

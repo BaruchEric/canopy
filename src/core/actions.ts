@@ -5,7 +5,7 @@
  *  preconditions, the runner for prompts and titles. */
 
 import type { FlowStepName, Repo, RunAction, WorkflowWhen, Workspace, WorkspaceScope } from "./types";
-import { trailerLine } from "./work";
+import { HANDOFF_HEADING, handoffFence, trailerLine, type WorkNote } from "./work";
 
 export interface ActionSpec {
   /** menu label */
@@ -248,18 +248,25 @@ export function repoFacts(repo: Repo): string[] {
   return facts;
 }
 
-/** The paragraph a branch run's prompt ends with: where it works, and how
- *  its work reaches the branch it was cut from. */
+/** The paragraph a branch run's prompt ends with: where it works, how its
+ *  work reaches the branch it was cut from, and, on a branch with a work
+ *  item (FR-037), the commit trailer and the handoff heading its closing
+ *  message ends with. */
 export function branchLine(b: { name: string; dir: string; target: string; work?: string }): string {
   const line = `You work on the branch ${b.name}, in a worktree of its own at ${b.dir}, cut from ${b.target}. Commit your work on this branch with a message that says what changed, and do not push. Being ahead of ${b.target} here is expected: canopy's landing queue rebases the branch and lands it on ${b.target} once the user says so.`;
-  return b.work ? `${line} End every commit message with the line "${trailerLine(b.work)}" after a blank line: the trailer that ties the commit to this work.` : line;
+  if (!b.work) return line;
+  return `${line} End every commit message with the line "${trailerLine(b.work)}" after a blank line: the trailer that ties the commit to this work. Before you end, leave one or two lines for whoever picks this up next, under a ${HANDOFF_HEADING} heading at the end of your closing message.`;
 }
 
 /** A branch run's first message: the usual prompt, framed by the worktree
  *  rather than the main checkout (whose state is not the run's), with the
- *  branch paragraph last. */
-export function branchPrompt(repo: Repo, spec: ActionSpec, note: string, b: { name: string; dir: string; target: string; work?: string }): string {
-  return `${buildPrompt({ ...repo, path: b.dir, status: null }, spec, note)}\n\n${branchLine(b)}`;
+ *  branch paragraph last. A later run on the branch passes the item's
+ *  notes, which go ahead of the message as fenced data (FR-037); a first
+ *  run passes none, its note being its brief. */
+export function branchPrompt(repo: Repo, spec: ActionSpec, note: string, b: { name: string; dir: string; target: string; work?: string }, notes: readonly WorkNote[] = []): string {
+  const prompt = `${buildPrompt({ ...repo, path: b.dir, status: null }, spec, note)}\n\n${branchLine(b)}`;
+  const fence = handoffFence(notes);
+  return fence ? `${fence}\n\n${prompt}` : prompt;
 }
 
 /** What a start refused for a run already going on the repo says. The kind

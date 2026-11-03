@@ -18,6 +18,8 @@ import { ScenarioPass } from "./Scenarios";
 import { SweepSheet } from "./Sweep";
 import { SearchSheet } from "./Search";
 import { KeysSheet } from "./Keys";
+import { WorkSheet } from "./Work";
+import { WorkBlock } from "./WorkBlock";
 import { NewSproutSheet, SproutSheet } from "./Incubator";
 import { RunPromptForm } from "./Prompts";
 import { DictateButton } from "./Dictate";
@@ -186,6 +188,7 @@ function Body({ sheet }: { sheet: Sheet }) {
   if (sheet.kind === "flow") return <FlowConsole flowId={sheet.flowId} />;
   if (sheet.kind === "fleet-plan") return <FleetPlan key={sheet.workflow} workflow={sheet.workflow} />;
   if (sheet.kind === "fleet") return <FleetSheet fleetId={sheet.fleetId} />;
+  if (sheet.kind === "work") return <WorkSheet key={sheet.id} id={sheet.id} />;
   if (sheet.kind === "approve") return <ApproveSheet key={sheet.id} id={sheet.id} />;
   // keyed by the pick that opened it, so every "pick" from the inbox starts
   // the sheet afresh, hand edits and all, and is never taken for the broom's
@@ -611,6 +614,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.forkOf && <ForkLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}
+      {run.branch?.work && <WorkBlock run={run} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
       {/* gone rather than hidden in the cards view, so it comes back

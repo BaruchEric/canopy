@@ -1,13 +1,13 @@
-/** `canopy work`: list the backend's branch work items and read, annotate or
- *  close one through the HTTP API. */
+/** `canopy work`: list the backend's branch work items and read, annotate,
+ *  close or export one through the HTTP API. */
 
-import { fromWord, isWorkId, WORK_STATES, workIdOf, type WorkInfo, type WorkItem, type WorkState } from "../core/work";
+import { fromWord, isWorkId, noteStamp, WORK_STATES, workIdOf, type WorkInfo, type WorkItem, type WorkState } from "../core/work";
 import { currentBranch } from "../core/worktree";
 import { apiBase } from "./api";
-import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
+import { ask, askText, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
 
 export const WORK_USAGE =
-  'usage: canopy work [list] [--repo R] [--state S] [--backend URL]\n       canopy work show <id> [--backend URL]\n       canopy work note [<id>] "<text>" [--backend URL]\n       canopy work close <id> --landed | --dropped [-m why] [--backend URL]';
+  'usage: canopy work [list] [--repo R] [--state S] [--backend URL]\n       canopy work show <id> [--backend URL]\n       canopy work note [<id>] "<text>" [--backend URL]\n       canopy work close <id> --landed | --dropped [-m why] [--backend URL]\n       canopy work export <id> [--backend URL]';
 
 const isWorkState = (value: string): value is WorkState => WORK_STATES.some((state) => state === value);
 const words = (values: readonly string[]): string => values.length ? values.join(", ") : "none";
@@ -32,10 +32,7 @@ export function showLines(item: WorkItem): string[] {
   ];
   if (item.notes.length === 0) out.push("  (none yet)");
   else {
-    for (const note of item.notes) {
-      const at = new Date(note.at).toISOString().slice(0, 16).replace("T", " ");
-      out.push(`  ${at}  ${note.by}  ${note.text}`);
-    }
+    for (const note of item.notes) out.push(`  ${noteStamp(note.at)}  ${note.by}  ${note.text}`);
   }
   return out;
 }
@@ -51,7 +48,7 @@ export async function workCommand(argv: string[], { fail }: { fail: (msg: string
   const askHome = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
     ask<T>(homeTarget, method, path, body).catch((err: unknown) => fail(homeError(err)));
 
-  const sub = args[0] === "list" || args[0] === "show" || args[0] === "note" || args[0] === "close" ? args.shift()! : "list";
+  const sub = args[0] === "list" || args[0] === "show" || args[0] === "note" || args[0] === "close" || args[0] === "export" ? args.shift()! : "list";
   if (sub === "list") {
     const repo = take(args, "--repo");
     const state = take(args, "--state");
@@ -109,6 +106,15 @@ export async function workCommand(argv: string[], { fail }: { fail: (msg: string
     const state = landed ? "landed" : "dropped";
     await askHome<WorkItem>("POST", "/api/work/close", { id, state, ...(reason !== undefined ? { reason } : {}) });
     console.log(`${id} closed as ${state}`);
+    return;
+  }
+
+  if (sub === "export") {
+    const id = args.shift();
+    if (!id || !isWorkId(id) || args.length > 0) return fail(WORK_USAGE);
+    // the markdown as the backend wrote it, with its own final newline
+    const markdown = await askText(homeTarget, `/api/work/export?id=${encodeURIComponent(id)}`).catch((err: unknown) => fail(homeError(err)));
+    process.stdout.write(markdown);
     return;
   }
 

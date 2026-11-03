@@ -62,6 +62,7 @@ import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
 import type { Delivery, TriggersInfo } from "../../src/core/trigger";
+import type { WorkInfo } from "../../src/core/work";
 import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
@@ -811,6 +812,9 @@ export interface CanopyState {
   /** each backend's trigger rules and events (server/triggers); an older
    *  backend that has none is missing */
   triggers: Record<string, TriggersInfo>;
+  /** each backend's work ledger (server/work, FR-037), ids as that backend
+   *  knows them; an older backend that has none is missing */
+  work: Record<string, WorkInfo>;
   /** each backend's caller check as this page last read it (server/callers),
    *  with whether this page holds a token for it; an older backend that has
    *  none is missing */
@@ -1251,6 +1255,14 @@ export interface CanopyState {
   loadPrs: (backend?: string) => Promise<void>;
   /** reads one backend's trigger rules and events, home by default */
   loadTriggers: (backend?: string) => Promise<void>;
+  /** reads one backend's work ledger, home by default */
+  loadWork: (backend?: string) => Promise<void>;
+  /** a line on a work item, by its qualified id */
+  noteWork: (id: string, text: string) => Promise<void>;
+  /** ends a work item by hand, by its qualified id */
+  closeWork: (id: string, state: "landed" | "dropped", reason?: string) => Promise<void>;
+  /** opens a work item's sheet, by its qualified id */
+  showWork: (id: string) => void;
   /** fires a made-up issue through one backend's rule */
   fireTrigger: (backend: string, rule: string, title: string, repo?: string) => Promise<Delivery>;
   /** runs one backend's rule's poll now */
@@ -1529,6 +1541,8 @@ export type Sheet =
    *  keys it starts ticked, the sweep's ask's when the inbox opened it, and
    *  `pick` numbers that opening, so each one starts the sheet afresh */
   | { kind: "sweep"; picks?: string[]; pick?: number }
+  /** a work item with every note and the box, by its qualified id (FR-037) */
+  | { kind: "work"; id: string }
   /** every keyboard shortcut on `view`, from the ? key (FR-021) */
   | { kind: "keys"; view: string };
 
@@ -1802,6 +1816,8 @@ const worktreeLoads = new Map<string, number>();
 const prsEvents = new Map<string, number>();
 /* and each backend's trigger events */
 const triggersEvents = new Map<string, number>();
+/* and each backend's work events */
+const workEvents = new Map<string, number>();
 /* and each backend's pair events */
 const authEvents = new Map<string, number>();
 /* each sign-in's poll, by backend, so one in flight is not started twice
@@ -1980,6 +1996,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadTrees(b);
   void get().loadPrs(b);
   void get().loadTriggers(b);
+  void get().loadWork(b);
   void get().loadAuth(b);
   // a sign-in this tab left waiting before a reload picks up where it was
   void get().signIn(b, true);
@@ -2219,6 +2236,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   trees: {},
   prs: {},
   triggers: {},
+  work: {},
   authByBackend: {},
   signIns: {},
   secrets: {},
@@ -2442,6 +2460,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadTrees();
     void get().loadPrs();
     void get().loadTriggers();
+    void get().loadWork();
     void get().loadAuth();
     void get().signIn(get().home, true);
     void get().loadSecrets();
@@ -2610,6 +2629,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadTrees(name);
     void get().loadPrs(name);
     void get().loadTriggers(name);
+    void get().loadWork(name);
     void get().loadAuth(name);
     void get().signIn(name, true);
     void get().loadSecrets(name);
@@ -2674,6 +2694,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     treeEvents.set(name, (treeEvents.get(name) ?? 0) + 1);
     const { [name]: _prs, ...prs } = s.prs;
     const { [name]: _triggers, ...triggers } = s.triggers;
+    const { [name]: _work, ...work } = s.work;
+    workEvents.set(name, (workEvents.get(name) ?? 0) + 1);
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
     const { [name]: _signIn, ...signIns } = s.signIns;
     signingIn.delete(name);
@@ -2708,6 +2730,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       trees,
       prs,
       triggers,
+      work,
       authByBackend,
       signIns,
       secrets,
@@ -3233,6 +3256,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "triggers") {
       triggersEvents.set(b, (triggersEvents.get(b) ?? 0) + 1);
       set((st) => ({ triggers: { ...st.triggers, [b]: { ...(st.triggers[b] ?? { rules: [], problems: [], keeping: true }), events: ev.events, ...(ev.digest ? { digest: ev.digest } : {}) } } }));
+    }
+    if (ev.type === "work") {
+      workEvents.set(b, (workEvents.get(b) ?? 0) + 1);
+      set((st) => ({ work: { ...st.work, [b]: { ...(st.work[b] ?? { archived: 0 }), items: ev.items } } }));
+      return;
     }
     if (ev.type === "prs") {
       prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);
@@ -3769,6 +3797,36 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no triggers; nothing shows for it
     }
   },
+  loadWork: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = workEvents.get(b) ?? 0;
+    try {
+      const info = await api.work(b);
+      if (!isShown(get(), b)) return;
+      // an event that came while the read was out is newer than its list
+      set((s) => ({ work: { ...s.work, [b]: (workEvents.get(b) ?? 0) === mark ? info : { ...info, items: s.work[b]?.items ?? info.items } } }));
+    } catch {
+      // an older backend has no ledger; nothing shows for it
+    }
+  },
+  noteWork: async (id, text) => {
+    const item = await api.noteWork(id, text);
+    const b = backendOf(id);
+    // the work event carries the list too; this keeps a page with no stream current
+    set((s) => {
+      const info = s.work[b];
+      return info ? { work: { ...s.work, [b]: { ...info, items: info.items.map((i) => (i.id === item.id ? item : i)) } } } : {};
+    });
+  },
+  closeWork: async (id, state, reason) => {
+    const item = await api.closeWork(id, state, reason);
+    const b = backendOf(id);
+    set((s) => {
+      const info = s.work[b];
+      return info ? { work: { ...s.work, [b]: { ...info, items: info.items.map((i) => (i.id === item.id ? item : i)) } } } : {};
+    });
+  },
+  showWork: (id) => set({ sheet: { kind: "work", id } }),
   fireTrigger: async (backend, rule, title, repo) => {
     const d = await api.fireTrigger(backend, rule, title, repo);
     void get().loadTriggers(backend);
