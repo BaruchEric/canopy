@@ -12,33 +12,13 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25)
 The queue's pure model (states, review sorting, gates reading) and its git half (worktree add, rebase, fast-forward) become a Bun workspace package with no canopy types and a small `land` CLI, so Paseo, Orca or anyone with a CI can run the sort and the gates. No-go by default: go when a second consumer is real. Needs a licence and a name without "canopy" in it (github.com/juliensimon/canopy exists).
 Spec: docs/superpowers/specs/2026-10-25-landing-package-design.md (2026-10-25).
 
-### FR-025 · Copy the branch, PR link or run id from the keyboard
-P3 · added 2026-10-23 · source: Eric (Linear UX study)
-With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch. FR-023 (built 2026-11-02) supplies the focused item through `ringOf` in ui/src/kbfocus.ts.
-
-### FR-024 · ⌘K acts on the focused card
-P2 · added 2026-10-23 · source: Eric (Linear UX study)
-With a repo card focused or a set selected, ⌘K opens the command line with that repo already in the repo slot and offers the verbs that apply to it first. Today the command line wants the repo's name typed, where Linear's menu acts on whatever is selected. FR-023 (built 2026-11-02) supplies the focused card through `ringOf` in ui/src/kbfocus.ts.
-
 ### FR-019 · Drill from a card into a branch and its worktree
 P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14)
 From a repo card, open one branch and see the changes in its worktree, not only the main checkout's. The note reads "drill to branch; work tree on changes", so confirm the intent before writing a spec. FR-051 (shipped 2026-11-01) covers the worktree half: a card keeps trees by hand and drills into each one's changes.
 
-### FR-020 · Quick notes and reminders
-P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21)
-Jot a note or set a reminder without leaving canopy, on a repo or on its own, and a reminder lands in the inbox when it comes due.
-
 ### FR-014 · A standing watcher agent per component
 P3 · added 2026-10-14 · source: Eric (Anthropic "Redesigning source control" post)
 One long-lived agent per component (the mini's compose stack, peer sync, tailchan) reads that component's logs and health on a schedule and posts to the inbox when something looks off, catching the slow, odd drift a fixed alert misses. Reference: the "superfans" in https://www.anthropic.com/engineering/redesigning-source-control.
-
-### FR-009 · Wider first columns on an ultrawide
-P3 · added 2026-10-07 · source: dock pass
-At 3440 wide the dock stays near 1300px and leaves about 1000px of cards. New columns could start wider when the room is there.
-
-### FR-008 · Phone side by side shows that other panels are open
-P3 · added 2026-10-07 · source: dock pass
-At 412 wide, "side by side" is a snap-scrolled row with no strip or dots, so nothing says other panels are open. "Panels as tabs" already shows them.
 
 ## In Progress
 
@@ -46,11 +26,6 @@ At 412 wide, "side by side" is a snap-scrolled row with no strip or dots, so not
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Optio, Symphony, ccpm)
 Two new trigger sources, `github` and `forgejo`: a labelled issue, by webhook or by polling where no public hook address exists, starts a branch run on the bundled `issue-fix` workflow; GitHub issues go to a PR, Forgejo issues land through the queue; canopy comments the PR link and closes the issue on merge. The PR watch rebases a branch read `BEHIND` or `DIRTY` and pushes it with `--force-with-lease` to the sha it last pushed, starts a fix run on a conflict, and a stall watchdog warns, stops and resumes once.
 Spec: docs/superpowers/specs/2026-10-25-work-until-merged-design.md (2026-10-25). Plan 1 shipped on main 2026-10-26; its live GitHub and Forgejo check is recorded in plan 1 (2026-10-27). The October 26 batch implementation was independently reviewed locally on `main` 2026-10-27. Plan 2 shipped 2026-10-27 (the rebase step with lease push, conflict fix runs, rebasing and conflict states, `needsYou` on the page and inbox, `canopy issues --needs-you`, `canopy pr rebase` and `POST /api/prs/rebase`, plus one health check per rule). Plan 3 implemented locally 2026-11-02 (596685c): a job quiet for 20 minutes with no tool open is told once to wrap up (`RunDriver.nudge`; Codex gets a timeline note and is stopped on the next quiet spell), stopped if it goes quiet again, and a branch run is resumed once on its Claude session; a second stall on the branch reads `stalled` under Needs you. Once a day at the sweep's default hour (04:00) the triggers write one line to the inbox's foot and DM it to the ranger while it runs. A live check with a real quiet Claude run and the ranger's DM remains.
-
-### FR-043 · Run transcripts, replay and fork
-P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay)
-Canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacts sensitive values and keeps transcripts for 30 days by default, so finished runs open read-only after a restart. Plan 2 will replay the wire in the sheet. Plan 3 adds “Fork from here” as a new branch run from the original's base with `--fork-session`; a fork onto the other harness will use a fenced summary handoff. `canopy run export` writes a Markdown report.
-Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main` (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction). Plan 2 implemented locally 2026-11-02 (53aad8a): the drivers' folds are pure and shared (src/core/claudefold.ts, codexfold.ts), the run log writes a `tick` line after a quiet spell so folded steps get times, `GET /api/runs/<id>/replay` and the replay bar in the run sheet play a finished run back, and `canopy run show --wire` prints the same. A record a restart left empty gets its steps back out of the wire. Plan 3 (fork) remains open.
 
 ### FR-033 · Best-of-N branch runs
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Orca, Claudexor, Anneal)
@@ -62,21 +37,10 @@ P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Coa
 Plan 1 adds a per-machine pool of prepared worktrees. `warm: N` in `.canopy/gates.json` supplies the default count for `canopy worktrees warm <repo> [N]`; a warm branch run reuses prepared setup when its lockfile is unchanged, while a cold start says `no warm worktree; setup will run` and runs setup. Per-worktree dev tasks and ports are plan 2; per-worktree compose stacks are plan 3.
 Spec: docs/superpowers/specs/2026-10-25-worktree-stacks-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`. Plans 2 and 3 remain open.
 
-### FR-041 · Spec drift and convergence, on a schedule
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode)
-Plan 1 adds schedule rules with a cron line, one event per matching local repo, `repo` and `only` filters, and `land` through the PR or landing queue path. Plan 2 adds the `spec-converge` workflow, its report, spec-drift check and chip.
-Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`. Plan 2 remains open.
-
 ### FR-044 · Harness share in the costs view
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Yegge's "20-25% of all my work")
 Repos marked as the harness contribute their dollars and Claude sessions to a share line in the costs view, with eight weeks of bars, a per-browser warning line (25% by default), one quiet inbox notice per week at most and `canopy costs --share`.
 Spec: docs/superpowers/specs/2026-10-25-harness-share-design.md (2026-10-25). Implemented and independently reviewed locally 2026-10-27 on `main`.
-
-### FR-034 · Workflow graph: parallel, conditional and manual steps
-P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes)
-Three optional step keys in the markdown format that exists: `after:` (ready steps run side by side, with at most one writer), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
-Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
-Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: parser keys, graph engine, HEAD modes and unattended refusal. Live API checks with real Claude jobs passed for parallel steps, manual release, repo overrides, stop and malformed modes. Plan 2 implemented locally 2026-11-02 (7f0d1a1): a workflow that is not a chain draws as an inline SVG graph on the flow sheet (layout in src/core/flowgraph.ts, shared with the CLI), folded under "graph" on a phone; the pre-flight lists after, when and the repo's modes; the workflows list carries `graph`; `canopy workflow show|check|list` prints it, `show --dot` too. Plan 3 (bundled workflows) remains open.
 
 ### FR-040 · Pre-edit collision warnings
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy)
@@ -88,13 +52,13 @@ Implemented and independently reviewed locally 2026-10-27 on `main`: touched set
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
 A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
 Spec: docs/superpowers/specs/2026-10-25-work-ledger-design.md (2026-10-25).
-Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: durable ledger, branch-start minting, hub notes, branch names/trailers and canopy work. Startup/handoff regressions and focused API/CLI suites passed. Plans 2 (handoff, work view and export) and 3 (rebuild and compaction) remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: durable ledger, branch-start minting, hub notes, branch names/trailers and canopy work. Startup/handoff regressions and focused API/CLI suites passed. Plan 2 built 2026-11-02 (3fd7e640): agents end a branch run with a Handoff heading that becomes a note on the item; fixes, resumes, PR fixes, stall resumes, follow-ups and a coordinator child's carry-on get the item's notes fenced ahead of their message (a flow's later steps do not); the work view (`g w`), the item sheet, the run sheet's block, and `canopy work export`. Linking row titles in the landing section and triggers view is left out. Plan 3 (rebuild and compaction) remains open.
 
 ### FR-042 · A PWA with web push for asks and "needs you"
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo, Happy, Orca mobile)
 A manifest and a hand-written service worker that caches the shell only make canopy installable on a phone; web push (VAPID keys under the config dir, subscriptions per browser) tells the phone about a new ask, a sent-back branch, a check that gave up or a trigger event that needs Eric while the page is closed. A push carries the item's key and a title, never a token. Telegram stays for the ranger.
 Spec: docs/superpowers/specs/2026-10-25-pwa-push-design.md (2026-10-25).
-Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: manifest and icons, shell-only worker, registration and the device settings row. Browser activation, cache boundaries and offline loading were verified; deployed to the Mac and mini 2026-10-27; physical phone installation and authenticated public-origin checks remain pending. Plan 2 (push keys, subscriptions, routes, setting and CLI) and plan 3 (badge and polish) remain open.
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: manifest and icons, shell-only worker, registration and the device settings row. Browser activation, cache boundaries and offline loading were verified; deployed to the Mac and mini 2026-10-27; physical phone installation and authenticated public-origin checks remain pending. Plan 2 built 2026-11-02 (e0c90c47): VAPID keys and subscriptions under `push/`, the push routes, the device tab's switch, the worker's push and click handling, `canopy push test|ls` and the `canopy:push` health check; a live push went through FCM to Chrome. A push never carries a command or path. The app badge and one capped retry after a 429 from plan 3 came along. Not checked by hand: the iPhone, a tap landing on an ask, the worker behind Cloudflare Access. A failed run's push still carries its error text unchanged. The rest of plan 3 remains open.
 
 ### FR-032 · Holdout scenario gates in the landing queue
 P1 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; StrongDM, dark-factory)
@@ -120,6 +84,50 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. librarySync is off on the Mac until the mini runs the fix, then both go back on.
 
 ## Shipped
+
+### FR-020 · Quick notes and reminders
+P3 · added 2026-10-22 · source: Eric (inq pen notes, 2026-10-14 and 2026-10-21) · shipped 2026-11-02
+Jot a note or set a reminder without leaving canopy, on a repo or on its own, and a reminder lands in the inbox when it comes due.
+Built 2026-11-02 (1b674ea4; design note docs/superpowers/specs/2026-11-02-notes-design.md): notes live in `notes.json` under the config dir and are served at /api/notes; a reminder comes due on the triggers' 30-second tick and lands in the inbox with "done", "an hour later" and "notes". The page has a ✎ chip and popup in the top bar, a count chip on repo cards and panel heads, and `canopy note add|list|done|delete`. The type is `QuickNote` so it never meets the review notes' `Note`.
+
+### FR-024 · ⌘K acts on the focused card
+P2 · added 2026-10-23 · source: Eric (Linear UX study) · shipped 2026-11-02
+With a repo card focused or a set selected, ⌘K opens the command line with that repo already in the repo slot and offers the verbs that apply to it first. Today the command line wants the repo's name typed, where Linear's menu acts on whatever is selected. FR-023 (built 2026-11-02) supplies the focused card through `ringOf` in ui/src/kbfocus.ts.
+Built 2026-11-02 (fd7f0b43): ⌘K opens on the ringed card or the picked set, named by a chip on the prompt; repo verbs come first, a line with no repo runs on it, a set runs a one-repo verb per repo, and ⌫ on an empty line or the chip's × drops it.
+
+### FR-025 · Copy the branch, PR link or run id from the keyboard
+P3 · added 2026-10-23 · source: Eric (Linear UX study) · shipped 2026-11-02
+With a card or run focused, one shortcut copies its branch name, another its PR link, another its run id, as Linear's copy actions do for an issue's id, link and branch. FR-023 (built 2026-11-02) supplies the focused item through `ringOf` in ui/src/kbfocus.ts.
+Built 2026-11-02 (60713670): y then b, p or r copies the branch, PR link or run id of the run sheet's run, the ringed card or row, or a window showing one run, and a line at the foot of the window says what was copied or what the item lacks. Inside a text box y stays a letter.
+
+### FR-008 · Phone side by side shows that other panels are open
+P3 · added 2026-10-07 · source: dock pass · shipped 2026-11-02
+At 412 wide, "side by side" is a snap-scrolled row with no strip or dots, so nothing says other panels are open. "Panels as tabs" already shows them.
+Built 2026-11-02 (6e132308): on a phone in "side by side", a row of dots over the swipe row marks each open panel and which one shows, and a tap on a dot scrolls to it.
+
+### FR-009 · Wider first columns on an ultrawide
+P3 · added 2026-10-07 · source: dock pass · shipped 2026-11-02
+At 3440 wide the dock stays near 1300px and leaves about 1000px of cards. New columns could start wider when the room is there.
+Built 2026-11-02 (c5f0ab41): from a 3200 px window up, a new column opens at what is left after the cards keep their width (the seam's, else a third of the room) and the open columns keep theirs, between 440 and 1200 px; below 3200 every column opens at 440. A remembered panel width still wins. The helper is ui/src/columnwidth.ts.
+
+### FR-041 · Spec drift and convergence, on a schedule
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Spec Kit's converge, Spexcode) · shipped 2026-11-02
+Plan 1 adds schedule rules with a cron line, one event per matching local repo, `repo` and `only` filters, and `land` through the PR or landing queue path. Plan 2 adds the `spec-converge` workflow, its report, spec-drift check and chip.
+Spec: docs/superpowers/specs/2026-10-25-spec-converge-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`.
+Plan 2 built 2026-11-02 (97b70810): the bundled `spec-converge` workflow (a read-only Check that ends with a drift report, then a gated Fix that commits and never pushes), the report under its triggers row and on the landing and inbox rows, a line in the dock's spec section, the "spec drift found" chip and `canopy spec drift [repo] [--all]`. The weekly rule `spec-weekly` (`0 5 * * 1`, `repo: "*"`, `only: ["spec-adopted"]`) went into the mini's triggers.json on 2026-11-02.
+
+### FR-043 · Run transcripts, replay and fork
+P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; OrcaReplay) · shipped 2026-11-02
+Canopy writes both directions of a run's wire to `<configDir>/runs/<id>/`, redacts sensitive values and keeps transcripts for 30 days by default, so finished runs open read-only after a restart. Plan 2 will replay the wire in the sheet. Plan 3 adds “Fork from here” as a new branch run from the original's base with `--fork-session`; a fork onto the other harness will use a fenced summary handoff. `canopy run export` writes a Markdown report.
+Spec: docs/superpowers/specs/2026-10-25-run-replay-design.md (2026-10-25). Plan 1 implemented and independently reviewed locally 2026-10-27 on `main` (wire on disk, kept runs after a restart, transcript sweep kind, `canopy run`, redaction). Plan 2 implemented locally 2026-11-02 (53aad8a): the drivers' folds are pure and shared (src/core/claudefold.ts, codexfold.ts), the run log writes a `tick` line after a quiet spell so folded steps get times, `GET /api/runs/<id>/replay` and the replay bar in the run sheet play a finished run back, and `canopy run show --wire` prints the same. A record a restart left empty gets its steps back out of the wire.
+Plan 3 built 2026-11-02 (8174813c): "fork" on a finished run's footer and "fork from here" on the replay bar start a new branch run from the original's base; Claude forks a cut copy of the transcript with `--fork-session`, Codex uses `thread/fork`, and another harness gets a fenced handoff brief. `POST /api/runs/fork` (operate) and `canopy run fork <id> [--at N]`. A cut copy left by a restart mid-fork is not swept yet.
+
+### FR-034 · Workflow graph: parallel, conditional and manual steps
+P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Fabro, Symphony's WORKFLOW.md, Mastra's stage modes) · shipped 2026-11-02
+Three optional step keys in the markdown format that exists: `after:` (ready steps run side by side, with at most one writer), `when:` (verdict, check, changed or unchanged conditions that skip a step) and `mode: manual|auto` with a per-repo override in `.canopy/workflows.json`. An inline-SVG graph on the flow sheet and `canopy workflow show`. A file that uses none runs as today.
+Spec: docs/superpowers/specs/2026-10-25-workflow-graph-design.md (2026-10-25).
+Plan 1 implemented and independently reviewed locally 2026-10-27 on `main`: parser keys, graph engine, HEAD modes and unattended refusal. Live API checks with real Claude jobs passed for parallel steps, manual release, repo overrides, stop and malformed modes. Plan 2 implemented locally 2026-11-02 (7f0d1a1): a workflow that is not a chain draws as an inline SVG graph on the flow sheet (layout in src/core/flowgraph.ts, shared with the CLI), folded under "graph" on a phone; the pre-flight lists after, when and the repo's modes; the workflows list carries `graph`; `canopy workflow show|check|list` prints it, `show --dot` too.
+Plan 3 built 2026-11-02 (98eedb57): `ship` runs a read-only Docs step beside Gates, and `sentry-triage-fix` is Triage, Fix, Gates (when changed), Mend (when check fail, one retry) and Commit (when check pass). `after: none` makes a later step a root, and a file that also has a step called none is refused.
 
 ### FR-048 · A rejected push names an upstream amend and offers to drop the stale copy
 P2 · added 2026-10-30 · source: Eric (atlas push, 2026-10-30) · shipped 2026-11-02
