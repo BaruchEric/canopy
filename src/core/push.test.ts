@@ -72,7 +72,8 @@ describe("pushSnapshot", () => {
     expect(Object.keys(snap).sort()).toEqual(["failed:run:run2", "inbox:ask:a1", "inbox:flow:f1", "inbox:run:run1", "landing:b1", "landing:held:b2", "pr:b3", "ranger:mini", "trigger:t1"]);
     expect(snap["inbox:ask:a1"]).toEqual({ key: "inbox:ask:a1", title: "Waiting on you · claude", body: "run bun test", url: "/?view=agents&ask=a1", urgency: "high", until: 10_000_000 });
     expect(snap["inbox:run:run1"]).toMatchObject({ title: "Waiting on you · ripe", body: "clear the build output", url: "/?repo=r1", urgency: "normal" });
-    expect(snap["failed:run:run2"]).toMatchObject({ title: "Failed · ripe", body: "exit 1" });
+    expect(snap["failed:run:run2"]).toMatchObject({ title: "Failed · ripe", body: "build failed" });
+    expect(JSON.stringify(snap)).not.toContain("exit 1");
     expect(snap["inbox:flow:f1"]).toMatchObject({ title: "Waiting on you · tally", body: 'ship waits at a gate after "build"', url: "/?repo=r2" });
     expect(snap["landing:b1"]).toMatchObject({ title: "Sent back · ripe", body: "canopy/x: typecheck" });
     expect(snap["landing:held:b2"]).toMatchObject({ title: "Held · ripe", body: "canopy/y: review.json holds src/server" });
@@ -100,6 +101,15 @@ describe("pushSnapshot", () => {
     expect(mcp["inbox:run:run1"]?.body).toBe("permission to use mcp__github__create_issue");
     const odd = pushSnapshot({ ...empty, runs: [run({ status: "waiting", prompt: { id: "p", kind: "permission", tool: "rm -rf /tmp/x", title: "rm -rf /tmp/x", detail: "" } })] });
     expect(odd["inbox:run:run1"]?.body).toBe("a permission");
+  });
+
+  test("a failed run's error is never pushed, only its action", () => {
+    const err = "git push failed: token ghp_abc123 rejected for /Users/x/dev/secret-repo";
+    const failed = pushSnapshot({ ...empty, runs: [run({ status: "failed", action: "ship", error: err })] });
+    expect(failed["failed:run:run1"]?.body).toBe("ship failed");
+    expect(JSON.stringify(failed)).not.toContain("ghp_");
+    const odd = pushSnapshot({ ...empty, runs: [run({ status: "failed", action: "rm -rf /tmp/x", error: err })] });
+    expect(odd["failed:run:run1"]?.body).toBe("the run failed");
   });
 
   test("the body is one line of at most 160 characters", () => {

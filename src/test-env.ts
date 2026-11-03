@@ -4,6 +4,7 @@
  *  `CANOPY_SSH_HOST`, which change what the server under test does. Bun sets
  *  `NODE_ENV=test` only when it is unset, so the suite resets them itself;
  *  a test that wants one sets it. */
+import { setDefaultTimeout } from "bun:test";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
@@ -68,3 +69,11 @@ delete process.env["TMUX"];
 // under $TMPDIR (context-mode's sandbox, at 65) does not, and every test
 // that starts a server then fails with "File name too long". /tmp fits.
 if (tmpdir().length > 56) process.env["TMPDIR"] = "/tmp";
+
+// Bun's 5 s default is too tight for the tests that start a server, a tmux
+// session or a git clone while the rest of the suite runs: under load (a
+// merge running the gates in several trees at once) one such test or its
+// beforeEach hook went over on five tries in a row, a different one each
+// time, and each passed alone. 20 s is the default for every test and hook;
+// a file or a test that sets its own keeps it.
+setDefaultTimeout(20_000);

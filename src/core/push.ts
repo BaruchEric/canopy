@@ -117,6 +117,12 @@ function promptLine(run: Run): string {
   return `question: ${p.questions[0]?.question ?? "a question"}`;
 }
 
+/** A failed run's line. The run's error can quote a command, a path or a
+ *  tool's output, which a push never carries, so only the action is named. */
+function failedLine(action: string): string {
+  return /^[A-Za-z][\w-]{0,63}$/.test(action) ? `${action} failed` : "the run failed";
+}
+
 /** Everything that waits on Eric or failed, by key. Only what is live: a
  *  kept run (a snapshot shown after its run) never counts. */
 export function pushSnapshot(input: PushInput): PushSnapshot {
@@ -134,7 +140,7 @@ export function pushSnapshot(input: PushInput): PushSnapshot {
       out[key] = { key, title: `Waiting on you · ${named(r.repoId, "a run")}`, body: line(promptLine(r)), url: repoUrl(r.repoId), urgency: "normal" };
     } else if (r.status === "failed") {
       const key = `failed:run:${r.id}`;
-      out[key] = { key, title: `Failed · ${named(r.repoId, "a run")}`, body: line(r.error || r.action), url: repoUrl(r.repoId), urgency: "normal" };
+      out[key] = { key, title: `Failed · ${named(r.repoId, "a run")}`, body: failedLine(r.action), url: repoUrl(r.repoId), urgency: "normal" };
     }
   }
   for (const f of input.flows) {
