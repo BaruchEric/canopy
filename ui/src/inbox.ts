@@ -38,6 +38,7 @@ import { SCORE_GATE, sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
 import { askTitle } from "./sweep";
 import type { TriggerEvent } from "../../src/core/trigger";
+import type { QuickNote } from "../../src/core/notes";
 import { branchReportLine, reportLine, serviceOf } from "./triggers";
 
 /** The browser's quiet harness line, kept to one notice per ISO week. */
@@ -59,7 +60,7 @@ export function harnessNotice(weeks: readonly HarnessWeek[], names: readonly str
   return { key, text: `last week ${pct(week.share)} of Claude spend went into the harness (${names.join(", ")})` };
 }
 
-export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "group" | "trigger";
+export type InboxSource = "ask" | "run" | "flow" | "sprout" | "advice" | "landing" | "pr" | "auth" | "sweep" | "group" | "trigger" | "note";
 
 export interface InboxItem {
   /** `${source}:${id}`, unique across the five */
@@ -68,7 +69,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep" | "group" | "trigger";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep" | "group" | "trigger" | "reminder";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -114,6 +115,8 @@ export interface InboxItem {
   pair?: PendingPair;
   /** the sweep's ask: what the scheduled fire held back, as the plan has it now */
   sweep?: SweepItem[];
+  /** a reminder's note, by the page's qualified ids (FR-020) */
+  note?: QuickNote;
 }
 
 export interface InboxContext {
@@ -143,6 +146,9 @@ export interface InboxContext {
   /** every backend's trigger events: one whose PR waits on Eric
    *  (`needsYou`) is an item, unless the PR's own item is already here */
   triggers?: readonly TriggerEvent[];
+  /** every backend's notes, by the page's ids: a reminder delivered and
+   *  not yet done is an item (FR-020) */
+  notes?: readonly QuickNote[];
 }
 
 /** "asks to use Bash", "has a question", "hit a guard on Bash" */
@@ -480,6 +486,31 @@ function sweepItem(info: Pick<SweepInfo, "ask" | "settings" | "lastRun">): Inbox
   };
 }
 
+/** A reminder that reached the inbox and is not done: its text as the
+ *  title, its repo when it has one, waiting since the time it was set for.
+ *  It stays until done, so a reload or another device shows the same row. */
+function noteItem(n: QuickNote, ctx: InboxContext): InboxItem | null {
+  if (n.remindedAt === undefined || n.doneAt !== undefined) return null;
+  const repo = n.repoId ? ctx.repos.find((r) => r.id === n.repoId) : undefined;
+  const backend = ctx.backendOf?.(n.id) ?? "";
+  return {
+    key: `note:${n.id}`,
+    source: "note",
+    id: n.id,
+    kind: "reminder",
+    repoId: repo?.id ?? null,
+    repo: repo?.name ?? "",
+    who: "reminder",
+    where: backend ? `notes on ${backend}` : "notes",
+    title: n.text,
+    detail: "",
+    at: n.due ?? n.remindedAt,
+    left: null,
+    until: null,
+    note: n,
+  };
+}
+
 /** Everything waiting on the human, oldest first: open asks, waiting runs
  *  (a flow's step run named by its flow), gated flows. */
 export function mergeInbox(
@@ -529,6 +560,10 @@ export function mergeInbox(
   for (const [backend, pending] of Object.entries(ctx.pairs ?? {})) for (const p of pending) items.push(pairItem(backend, p));
   const swept = ctx.sweep ? sweepItem(ctx.sweep) : null;
   if (swept) items.push(swept);
+  for (const n of ctx.notes ?? []) {
+    const it = noteItem(n, ctx);
+    if (it) items.push(it);
+  }
   return items.sort((a, b) => a.at - b.at || a.key.localeCompare(b.key));
 }
 
@@ -563,12 +598,14 @@ export type InboxAnswer =
   /** a pair request: let it in, or turn it away */
   | { pair: "allow" | "deny" }
   /** the sweep's ask: close its ticked items, or drop it closing nothing */
-  | { sweep: "close" | "dismiss" };
+  | { sweep: "close" | "dismiss" }
+  /** a reminder: mark its note done, or move it an hour on (FR-020) */
+  | { note: "done" | "later" };
 
 /** a run's answer: "allow always" is "allow all" for the rest of the run;
  *  a run's deny carries no message */
 export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a || "sweep" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a || "sweep" in a || "note" in a) return null;
   if ("answers" in a) return { kind: "answers", answers: a.answers };
   if (a.behavior === "deny") return { kind: "deny" };
   if (a.always) return { kind: "allow-all" };
@@ -578,7 +615,7 @@ export function toRunAnswer(a: InboxAnswer): RunAnswer | null {
 /** the broker's answer: a question's answers go as an allow; a remember's
  *  rule rides along for the home backend to keep (the broker never sees it) */
 export function toAskAnswer(a: InboxAnswer): (AskAnswer & { remember?: string }) | null {
-  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a || "sweep" in a) return null;
+  if ("choice" in a || "skip" in a || "advice" in a || "handOff" in a || "landing" in a || "pr" in a || "pair" in a || "sweep" in a || "note" in a) return null;
   if ("answers" in a) return { behavior: "allow", answers: a.answers };
   if (a.behavior === "deny") return { behavior: "deny", ...(a.message?.trim() ? { message: a.message.trim() } : {}) };
   return { behavior: "allow", ...(a.always ? { always: true } : {}), ...(a.remember ? { remember: a.remember.rule } : {}) };

@@ -196,6 +196,10 @@ export interface TriggerDeps {
   tellRanger?: (text: string) => Promise<boolean>;
   /** when the daily line is written, a cron line; `DIGEST_CRON` by default */
   digestCron?: string;
+  /** the notes' reminders that have come due, delivered once per tick by
+   *  the server holding the flows lock (server/notes.ts, FR-020): this tick
+   *  is the clock the schedule rules and the daily line already run on */
+  remind?: (now: number) => Promise<unknown>;
   file?: string;
   dir?: string;
   now?: () => number;
@@ -503,6 +507,8 @@ export class TriggerHub {
     });
     await Promise.all(due.map((r) => this.poll(r.name)));
     await this.digestIfDue();
+    // the notes' reminders ride the same clock; a failed write is logged and tried next tick
+    if (this.deps.remind) await this.deps.remind(now).catch((err) => console.error(`triggers: the notes' reminders: ${errText(err)}`));
   }
 
   /* ---------- the daily line ---------- */

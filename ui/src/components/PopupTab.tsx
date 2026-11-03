@@ -5,6 +5,7 @@ import { ChanPopBody } from "./Chan";
 import { HealthPopBody } from "./Health";
 import { InboxPopBody } from "./Inbox";
 import { KeptPopBody } from "./KeptShells";
+import { NotesPopBody } from "./Notes";
 import { RangerPopBody } from "./Ranger";
 import { ShellsPopBody } from "./Shells";
 import { TasksPopBody } from "./Tasks";
@@ -40,6 +41,8 @@ function PopupBody({ name }: { name: PopupName }) {
       );
     case "tasks":
       return <TasksPopBody />;
+    case "notes":
+      return <NotesPopBody />;
     case "health":
       return <HealthPopBody />;
     case "shells":

@@ -1,4 +1,5 @@
 import type { RunGroup } from "../../src/core/group";
+import type { QuickNote, QuickNotesInfo } from "../../src/core/notes";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { CapacitySettings } from "../../src/core/capacity";
@@ -144,6 +145,7 @@ import {
   qGroup,
   qPrs,
   qTriggers,
+  qNotes,
   qRun,
   qScan,
   qSource,
@@ -153,7 +155,7 @@ import {
   qTerm,
   type Q,
 } from "./qualify";
-import { baseOf, homeName, plainOf, qual, registry } from "./registry";
+import { backendOf, baseOf, homeName, plainOf, qual, registry } from "./registry";
 import { clientId } from "./client";
 import type { CoordEdit } from "./coord";
 
@@ -767,6 +769,31 @@ export const api = {
   setSweepSettings: (patch: Record<string, unknown>) => req<SweepSettings>(homeName(), "/api/sweep/settings", { method: "POST", body: JSON.stringify(patch) }),
   /** starts a chat on a swept chat's session; it waits idle for a message */
   resumeSwept: (runId: string) => req<Run>(homeName(), "/api/sweep/resume", { method: "POST", body: JSON.stringify({ runId }) }),
+  /** one backend's notes and reminders (FR-020), by the page's ids; null
+   *  for an older backend that has none */
+  quickNotes: async (b: string = homeName()): Promise<QuickNote[] | null> => {
+    const r = await req<QuickNotesInfo | null>(b, "/api/notes");
+    if (!r || !Array.isArray(r.notes)) return null;
+    return from(b, r.notes, qNotes);
+  },
+  /** a note on one backend: its repo by the page's id, its time as typed */
+  addQuickNote: async (b: string, body: { text: string; repo?: string; at?: string }): Promise<QuickNote> => {
+    const n = await req<QuickNote>(b, "/api/notes", { method: "POST", body: JSON.stringify({ ...body, ...(body.repo ? { repo: plainOf(body.repo) } : {}) }) });
+    return from(b, [n], qNotes)[0] ?? n;
+  },
+  /** text, repo (null clears) or time (null clears, a string moves it) of a note, by the page's id */
+  editQuickNote: async (id: string, patch: { text?: string; repo?: string | null; at?: string | null }): Promise<QuickNote> => {
+    const b = backendOf(id);
+    const repo = patch.repo === undefined ? {} : { repo: patch.repo === null ? null : plainOf(patch.repo) };
+    const n = await req<QuickNote>(b, "/api/notes/edit", { method: "POST", body: JSON.stringify({ ...patch, ...repo, id: plainOf(id) }) });
+    return from(b, [n], qNotes)[0] ?? n;
+  },
+  doneQuickNote: async (id: string): Promise<QuickNote> => {
+    const b = backendOf(id);
+    const n = await req<QuickNote>(b, "/api/notes/done", { method: "POST", body: JSON.stringify({ id: plainOf(id) }) });
+    return from(b, [n], qNotes)[0] ?? n;
+  },
+  deleteQuickNote: (id: string) => req<{ ok: true }>(backendOf(id), `/api/notes?id=${encodeURIComponent(plainOf(id))}`, { method: "DELETE" }),
   /** the retro lessons on offer */
   advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
   /** accepts or dismisses one; a chat it opened is named by the page's ids */

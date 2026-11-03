@@ -70,6 +70,11 @@ usage:
   canopy sweep                       idle shells, chats, runs and PRs a backend offers for closing
   canopy sweep --yes [--kind shell,chat,run,transcript,pr]   close the ticked ones; a kind named closes all it may (pr only when named, never a draft)
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy note add "<text>"           jot a note on the backend; --repo <id or path> puts it on a repo
+    --at <time>                      and remind: in 30m, 14:00, an ISO time; it lands in the inbox then
+  canopy note list [--all]           the open notes, reminders first; --all shows the done ones too
+  canopy note done <id>              mark a note done; canopy note delete <id> removes it
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy run                         the runs kept on disk, newest first: id, when, repo, what, status, cost
   canopy run show <id>               a kept run's head and timeline (a live run's too)
   canopy run show <id> --wire        a finished run's steps as its kept wire replays them, with the prompts it asked

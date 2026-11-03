@@ -1076,6 +1076,7 @@ describe("several backends", () => {
         "/api/landing",
         "/api/worktrees",
         "/api/secrets",
+        "/api/notes",
       ].sort(),
     );
     const s = useStore.getState();

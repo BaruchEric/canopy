@@ -93,6 +93,7 @@ import { RepoMenu } from "./RepoMenu";
 import { Resizer } from "./Resizer";
 import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
+import { NoteChip } from "./Notes";
 import { SearchSection } from "./Search";
 import { PanelShells } from "./TermDock";
 import { Gear, type GearEntry } from "./Gear";
@@ -3171,6 +3172,7 @@ export function RepoPanel({
             </div>
           )}
           <TaskChip repoId={repo.id} />
+          <NoteChip repoId={repo.id} />
 
           <div className="panel-actions">
             {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (

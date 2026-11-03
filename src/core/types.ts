@@ -3,6 +3,7 @@ import type { TriggerEvent } from "./trigger";
 import type { TriggerDigest } from "./digest";
 import type { Capacity, CapacitySettings, CapacityWindow } from "./capacity";
 import type { WorkItem } from "./work";
+import type { QuickNote } from "./notes";
 import type { Collision } from "./touch";
 import type { RunGroup } from "./group";
 
@@ -1991,6 +1992,8 @@ export type ServerEvent =
   | ({ type: "scenarios"; repoId: string } & ScenarioNames)
   /** every work item, whole, whenever one changes (FR-037) */
   | { type: "work"; items: WorkItem[] }
+  /** every note the backend keeps, whole, whenever one changes or a reminder is delivered (FR-020) */
+  | { type: "notes"; notes: QuickNote[] }
   /** every trigger event kept, whole, whenever one changes */
   | { type: "triggers"; events: TriggerEvent[]; digest?: TriggerDigest }
   /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */

@@ -10,6 +10,7 @@ import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { durationWord } from "../agentcards";
 import { askCloses, pickKeys } from "../sweep";
+import { dueWord } from "../../../src/core/notes";
 import { openView } from "../clirun";
 import { pairAsk } from "../callerToken";
 import { HANGS_RIGHT, useFitPop } from "../pop";
@@ -49,8 +50,8 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!" };
-const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", group: "comparison", trigger: "trigger" };
+const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!", reminder: "◷" };
+const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", group: "comparison", trigger: "trigger", note: "note" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
  *  Accepting never edits anything itself: it opens a chat on canopy's own
@@ -348,6 +349,8 @@ export function InboxRow({
             </div>
           ) : item.kind === "sweep" ? (
             <SweepAsk items={item.sweep ?? []} busy={busy} now={now} onAnswer={answer} />
+          ) : item.kind === "reminder" ? (
+            <NoteAsk item={item} busy={busy} now={now} onAnswer={answer} />
           ) : item.kind === "gate" || item.kind === "park" ? (
             <div className="ask">
               <div className="eyebrow">{item.who} {item.title}</div>
@@ -429,7 +432,7 @@ export function InboxRow({
             />
           )}
           <div className="kept-acts">
-            {item.source !== "ask" && item.source !== "advice" && item.source !== "auth" && item.source !== "sweep" && (
+            {item.source !== "ask" && item.source !== "advice" && item.source !== "auth" && item.source !== "sweep" && item.source !== "note" && (
               <button type="button" className="mini" onClick={openSheet}>
                 open the {item.source === "group" ? "group" : item.source === "run" ? "run" : item.source === "sprout" ? "project" : item.source === "landing" ? "landing section" : item.source === "pr" ? "run" : "workflow"}
               </button>
@@ -496,6 +499,39 @@ function SweepAsk({ items, busy, now, onAnswer }: { items: readonly SweepItem[];
         <span className="spacer" />
         <button type="button" className="mini" disabled={busy} title="Drops the ask and closes nothing; they stay in the sweep sheet" onClick={() => onAnswer({ sweep: "dismiss" })}>
           dismiss
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** A reminder that came due (FR-020): the note's text and when it was set
+ *  for; "done" marks the note done, "an hour later" moves its time and
+ *  brings it back once more, and "notes" opens the popup with every note. */
+function NoteAsk({ item, busy, now, onAnswer }: { item: InboxItem; busy: boolean; now: number; onAnswer: (a: InboxAnswer) => void }) {
+  const note = item.note;
+  const openNotes = () => {
+    const st = useStore.getState();
+    st.closeInbox();
+    st.openQuickNotes();
+  };
+  return (
+    <div className="ask">
+      <div className="eyebrow">
+        reminder{item.repo ? ` in ${item.repo}` : ""}
+        {note?.due !== undefined && <span className="dim"> · set for {dueWord(note.due, now)}</span>}
+      </div>
+      <p className="note-text">{item.title}</p>
+      <div className="ask-row">
+        <button type="button" className="mini strong" disabled={busy} title="Marks the note done; it leaves the inbox and the open notes" onClick={() => onAnswer({ note: "done" })}>
+          done
+        </button>
+        <button type="button" className="mini" disabled={busy} title="Moves the reminder an hour on; it comes back then" onClick={() => onAnswer({ note: "later" })}>
+          an hour later
+        </button>
+        <span className="spacer" />
+        <button type="button" className="mini" disabled={busy} title="The notes popup, with every note and reminder" onClick={openNotes}>
+          notes
         </button>
       </div>
     </div>

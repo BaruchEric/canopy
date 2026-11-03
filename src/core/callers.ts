@@ -67,6 +67,8 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: REPO_OPERATE.map((a) => `repos/${a}`), right: "operate" },
   { methods: POST, paths: ["repos/tasks", "repos/tasks/def"], right: "operate" },
   { methods: POST, paths: ["work/*"], right: "operate" },
+  // a note is a hand's jot: a shell's or the CLI's token may add one, mark it done or drop it (FR-020)
+  { methods: POST_DEL, paths: ["notes", "notes/*"], right: "operate" },
   { methods: POST, paths: ["landing/*", "groups/*", "prs/*", "incubator/*"], right: "operate" },
   // reading the windows now and starting a held start as interactive are a
   // hand's; the thresholds are the admin's (POST capacity, below)

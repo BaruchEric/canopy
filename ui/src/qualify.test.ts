@@ -151,6 +151,7 @@ describe("qEvent", () => {
       [{ type: "terms", terms: [term] }, (e) => (e.type === "terms" ? e.terms.flatMap((t) => [t.id, t.repoId]) : [])],
       [{ type: "devices", devices: [device] }, (e) => (e.type === "devices" ? e.devices.map((d) => d.id) : [])],
       [{ type: "kept", kept: [kept] }, (e) => (e.type === "kept" ? e.kept.flatMap((k) => [k.id, k.repoId]) : [])],
+      [{ type: "notes", notes: [{ id: "n-aaaaaaaa", text: "t", createdAt: 1, repoId: "a/b" }] }, (e) => (e.type === "notes" ? e.notes.flatMap((n) => [n.id, n.repoId ?? "x"]) : [])],
       [{ type: "incubator", sprout }, (e) => (e.type === "incubator" ? [e.sprout.id, e.sprout.repoId, ...e.sprout.flows.map((f) => f.flowId)] : [])],
       [{ type: "incubator-gone", id: "sp_000000000001" }, (e) => (e.type === "incubator-gone" ? [e.id] : [])],
       [

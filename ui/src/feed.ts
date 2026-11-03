@@ -560,6 +560,8 @@ export function describeEvent(
     case "scenarios":
     // the triggers view lists every event and what became of it
     case "triggers":
+    // a reminder that came due is an inbox row, not a feed line
+    case "notes":
     // a pair request is answered where callers are listed, not in the feed
     case "auth":
       return [];

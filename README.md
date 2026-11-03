@@ -145,6 +145,9 @@ canopy work export <id>            # the item as markdown (title, state, links, 
 canopy issues [repo] [--needs-you] # every GitHub or Forgejo issue a trigger rule took: its state, branch id, PR and what it needs of you, else why it waits; --needs-you keeps the ones waiting on you; --backend URL asks one address
 canopy sweep                       # what went idle on a backend: shells, chats, finished runs, your PRs, and agents canopy did not start
 canopy sweep --yes [--kind shell,chat,run,pr]   # close the ones the plan ticks, or all a named kind may close (--kind pr: the PRs, never a draft)
+canopy note add "<text>" [--repo R] [--at <time>]   # jot a note on the backend, on a repo with --repo; --at (in 30m, 14:00, an ISO time) makes it a reminder that lands in the inbox then
+canopy note list [--all]           # the open notes, reminders first; --all shows the done ones too
+canopy note done <id>              # mark a note done; canopy note delete <id> removes it
 canopy run                         # the runs kept on disk under <configDir>/runs/, newest first
 canopy run show <id>               # a kept run's head and timeline; a live run's too
 canopy run show <id> --wire        # a finished run's steps as its kept wire replays them, with the prompts it asked

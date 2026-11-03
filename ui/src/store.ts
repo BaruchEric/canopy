@@ -1,4 +1,5 @@
 import type { RunGroup } from "../../src/core/group";
+import type { QuickNote } from "../../src/core/notes";
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
@@ -815,6 +816,11 @@ export interface CanopyState {
   /** each backend's work ledger (server/work, FR-037), ids as that backend
    *  knows them; an older backend that has none is missing */
   work: Record<string, WorkInfo>;
+  /** each backend's quick notes and reminders by the page's ids (server/notes,
+   *  FR-020); an older backend that has none is missing */
+  quickNotes: Record<string, QuickNote[]>;
+  /** whether the notes popup is up, so a card's chip can open it */
+  quickNotesOpen: boolean;
   /** each backend's caller check as this page last read it (server/callers),
    *  with whether this page holds a token for it; an older backend that has
    *  none is missing */
@@ -1263,6 +1269,15 @@ export interface CanopyState {
   closeWork: (id: string, state: "landed" | "dropped", reason?: string) => Promise<void>;
   /** opens a work item's sheet, by its qualified id */
   showWork: (id: string) => void;
+  /** reads one backend's notes, home by default (FR-020) */
+  loadQuickNotes: (backend?: string) => Promise<void>;
+  openQuickNotes: () => void;
+  closeQuickNotes: () => void;
+  /** adds a note on the picked repo's backend, else home; the time as typed */
+  addQuickNote: (body: { text: string; repo?: string; at?: string }) => Promise<QuickNote>;
+  editQuickNote: (id: string, patch: { text?: string; repo?: string | null; at?: string | null }) => Promise<QuickNote>;
+  doneQuickNote: (id: string) => Promise<void>;
+  deleteQuickNote: (id: string) => Promise<void>;
   /** fires a made-up issue through one backend's rule */
   fireTrigger: (backend: string, rule: string, title: string, repo?: string) => Promise<Delivery>;
   /** runs one backend's rule's poll now */
@@ -1818,6 +1833,8 @@ const prsEvents = new Map<string, number>();
 const triggersEvents = new Map<string, number>();
 /* and each backend's work events */
 const workEvents = new Map<string, number>();
+/* and the notes', so a read that lands after an event never puts an older list back */
+const quickNotesEvents = new Map<string, number>();
 /* and each backend's pair events */
 const authEvents = new Map<string, number>();
 /* each sign-in's poll, by backend, so one in flight is not started twice
@@ -1997,6 +2014,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadPrs(b);
   void get().loadTriggers(b);
   void get().loadWork(b);
+  void get().loadQuickNotes(b);
   void get().loadAuth(b);
   // a sign-in this tab left waiting before a reload picks up where it was
   void get().signIn(b, true);
@@ -2237,6 +2255,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   prs: {},
   triggers: {},
   work: {},
+  quickNotes: {},
+  quickNotesOpen: false,
   authByBackend: {},
   signIns: {},
   secrets: {},
@@ -2461,6 +2481,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadPrs();
     void get().loadTriggers();
     void get().loadWork();
+    void get().loadQuickNotes();
     void get().loadAuth();
     void get().signIn(get().home, true);
     void get().loadSecrets();
@@ -2630,6 +2651,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadPrs(name);
     void get().loadTriggers(name);
     void get().loadWork(name);
+    void get().loadQuickNotes(name);
     void get().loadAuth(name);
     void get().signIn(name, true);
     void get().loadSecrets(name);
@@ -2696,6 +2718,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _triggers, ...triggers } = s.triggers;
     const { [name]: _work, ...work } = s.work;
     workEvents.set(name, (workEvents.get(name) ?? 0) + 1);
+    const { [name]: _quickNotes, ...quickNotes } = s.quickNotes;
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
     const { [name]: _signIn, ...signIns } = s.signIns;
     signingIn.delete(name);
@@ -2731,6 +2754,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       prs,
       triggers,
       work,
+      quickNotes,
       authByBackend,
       signIns,
       secrets,
@@ -3261,6 +3285,10 @@ export const useStore = create<CanopyState>((set, get) => ({
       workEvents.set(b, (workEvents.get(b) ?? 0) + 1);
       set((st) => ({ work: { ...st.work, [b]: { ...(st.work[b] ?? { archived: 0 }), items: ev.items } } }));
       return;
+    }
+    if (ev.type === "notes") {
+      quickNotesEvents.set(b, (quickNotesEvents.get(b) ?? 0) + 1);
+      set((st) => ({ quickNotes: { ...st.quickNotes, [b]: ev.notes } }));
     }
     if (ev.type === "prs") {
       prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);
@@ -3827,6 +3855,43 @@ export const useStore = create<CanopyState>((set, get) => ({
     });
   },
   showWork: (id) => set({ sheet: { kind: "work", id } }),
+  loadQuickNotes: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = quickNotesEvents.get(b) ?? 0;
+    try {
+      const notes = await api.quickNotes(b);
+      if (!notes || !isShown(get(), b)) return;
+      // an event that came while the read was out is newer than its list
+      if ((quickNotesEvents.get(b) ?? 0) === mark) set((s) => ({ quickNotes: { ...s.quickNotes, [b]: notes } }));
+    } catch {
+      // an older backend has no notes; nothing shows for it
+    }
+  },
+  openQuickNotes: () => set({ quickNotesOpen: true }),
+  closeQuickNotes: () => set({ quickNotesOpen: false }),
+  addQuickNote: async (body) => {
+    // a note on a repo lives on that repo's backend; one on its own on home
+    const b = body.repo ? backendOf(body.repo) : get().home;
+    const n = await api.addQuickNote(b, body);
+    set((s) => ({ quickNotes: { ...s.quickNotes, [b]: [...(s.quickNotes[b] ?? []).filter((x) => x.id !== n.id), n] } }));
+    return n;
+  },
+  editQuickNote: async (id, patch) => {
+    const n = await api.editQuickNote(id, patch);
+    const b = backendOf(id);
+    set((s) => ({ quickNotes: { ...s.quickNotes, [b]: (s.quickNotes[b] ?? []).map((x) => (x.id === id ? n : x)) } }));
+    return n;
+  },
+  doneQuickNote: async (id) => {
+    const n = await api.doneQuickNote(id);
+    const b = backendOf(id);
+    set((s) => ({ quickNotes: { ...s.quickNotes, [b]: (s.quickNotes[b] ?? []).map((x) => (x.id === id ? n : x)) } }));
+  },
+  deleteQuickNote: async (id) => {
+    await api.deleteQuickNote(id);
+    const b = backendOf(id);
+    set((s) => ({ quickNotes: { ...s.quickNotes, [b]: (s.quickNotes[b] ?? []).filter((x) => x.id !== id) } }));
+  },
   fireTrigger: async (backend, rule, title, repo) => {
     const d = await api.fireTrigger(backend, rule, title, repo);
     void get().loadTriggers(backend);
@@ -4117,6 +4182,13 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (item.source === "pr") {
       if (!("pr" in answer)) throw new Error("a PR's red check takes auto-fix");
       return get().setPr(item.id, { autoFix: true });
+    }
+    if (item.source === "note") {
+      if (!("note" in answer)) throw new Error("a reminder takes done or later");
+      if (answer.note === "done") return get().doneQuickNote(item.id);
+      // an hour on: the time moves and the delivery mark clears, so it comes back once more
+      await get().editQuickNote(item.id, { at: "in 1h" });
+      return;
     }
     if (item.source === "auth") {
       if (!("pair" in answer) || item.backend === undefined) throw new Error("a pair request takes allow or deny");
@@ -5368,6 +5440,7 @@ let inboxIn: {
   auth: Record<string, BackendAuth>;
   sweep: SweepInfo | null;
   triggers: Record<string, TriggersInfo>;
+  quickNotes: Record<string, QuickNote[]>;
 } | null = null;
 let inboxOut: InboxItem[] = [];
 
@@ -5376,10 +5449,10 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep && inboxIn.triggers === s.triggers) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep && inboxIn.triggers === s.triggers && inboxIn.quickNotes === s.quickNotes) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep, triggers: s.triggers };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep, triggers: s.triggers, quickNotes: s.quickNotes };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
@@ -5392,6 +5465,7 @@ export function inboxItems(s: CanopyState): InboxItem[] {
     pairs: pairsOf(s.authByBackend),
     sweep: s.sweep,
     triggers: Object.values(s.triggers).flatMap((t) => t.events),
+    notes: Object.values(s.quickNotes).flat(),
   });
   return inboxOut;
 }

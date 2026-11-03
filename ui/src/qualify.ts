@@ -23,6 +23,7 @@ import type {
   BranchTreesInfo,
 } from "../../src/core/types";
 import type { TriggerEvent } from "../../src/core/trigger";
+import type { QuickNote } from "../../src/core/notes";
 import type { Collision } from "../../src/core/touch";
 export { mergeHistory } from "../../src/core/historymerge";
 
@@ -116,6 +117,10 @@ export const qWorktrees = (q: Q, info: WorktreesInfo): WorktreesInfo => ({
  *  backend's name, and the fix run going. Folders stay the backend's own. */
 export const qPrs = (q: Q, prs: readonly PrWatch[]): PrWatch[] =>
   prs.map((w) => ({ ...w, id: q(w.id), runId: q(w.runId), repoId: q(w.repoId), ...(w.fixing ? { fixing: { ...w.fixing, run: q(w.fixing.run) } } : {}) }));
+
+/** a note's own id and its repo's, by the page's ids (FR-020) */
+export const qNotes = (q: Q, notes: readonly QuickNote[]): QuickNote[] =>
+  notes.map((n) => ({ ...n, id: q(n.id), ...(n.repoId !== undefined ? { repoId: q(n.repoId) } : {}) }));
 
 /** Trigger events: the event's id, its repo's, its run's and its branch's
  *  under the backend's name. */
@@ -253,6 +258,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return { ...ev, prs: qPrs(q, ev.prs) };
     case "triggers":
       return { ...ev, events: qTriggers(q, ev.events) };
+    case "notes":
+      return { ...ev, notes: qNotes(q, ev.notes) };
     // the kit names machines, not repos: nothing to qualify
     case "kit":
     case "secrets":

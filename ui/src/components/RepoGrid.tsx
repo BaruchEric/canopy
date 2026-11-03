@@ -32,6 +32,7 @@ import { RepoMenu } from "./RepoMenu";
 import { Rings } from "./Rings";
 import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
+import { NoteChip } from "./Notes";
 import { RepoHealthChip } from "./Health";
 import { LandingChip, PrChip } from "./Landing";
 import { isTreeCard } from "../../../src/core/treewords";
@@ -295,6 +296,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
         <span className="card-state">
           {activeFlow ? <FlowChip flow={activeFlow} /> : run ? <RunChip run={run} /> : flow && <FlowChip flow={flow} />}
           <TaskChip repoId={repo.id} />
+          <NoteChip repoId={repo.id} />
           <RepoHealthChip repoId={repo.id} />
           <LandingChip repoId={repo.id} />
           <TreesChip repoId={repo.id} />

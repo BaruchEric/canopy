@@ -231,6 +231,19 @@ describe("the work ledger's routes", () => {
   });
 });
 
+describe("the notes' routes (FR-020)", () => {
+  test("the list is read; adding, editing, done and delete operate", () => {
+    expect(needs("GET", "/api/notes")).toBe("read");
+    expect(needs("POST", "/api/notes")).toBe("operate");
+    expect(needs("POST", "/api/notes/edit")).toBe("operate");
+    expect(needs("POST", "/api/notes/done")).toBe("operate");
+    expect(needs("DELETE", "/api/notes")).toBe("operate");
+    expect(allows("cli", needs("POST", "/api/notes"))).toBe(true);
+    expect(allows("shell", needs("DELETE", "/api/notes"))).toBe(true);
+    expect(allows("coordinator", needs("POST", "/api/notes"))).toBe(false);
+  });
+});
+
 describe("allows", () => {
   test("each kind holds what the table gives it", () => {
     expect(allows("page", "shell")).toBe(true);

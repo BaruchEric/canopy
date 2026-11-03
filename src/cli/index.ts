@@ -70,6 +70,7 @@ import { awakeCommand } from "./awake";
 import { PUSH_WORDS, pushCommand } from "./push";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
+import { noteCommand } from "./notes";
 import { secretsCommand } from "./secrets";
 import { groupsCommand } from "./groups";
 import { runCommand } from "./run";
@@ -117,6 +118,8 @@ const COMMANDS = new Set([
   "incubator",
   "ranger",
   "sweep",
+  "note",
+  "notes",
   "awake",
   "run",
   "groups",
@@ -941,6 +944,9 @@ export async function main(argv: string[]): Promise<void> {
       return issuesCommand(args, { fail });
     case "sweep":
       return sweepCommand(args, { fail });
+    case "note":
+    case "notes":
+      return noteCommand(args, { fail });
     case "awake":
       return awakeCommand(args, { fail });
     case "secrets":

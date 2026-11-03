@@ -248,6 +248,7 @@ import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
+import { NotesHub } from "./notes";
 import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
 import { exportRun } from "../core/export";
 import { redactLine } from "../core/redact";
@@ -404,6 +405,8 @@ interface ServerState {
   coordinator: CoordinatorHub;
   /** the branch runs' ledger: an item per branch and the lines on it (server/work) */
   work: WorkHub;
+  /** quick notes and reminders, and the delivery of a reminder that came due (server/notes, FR-020) */
+  notes: NotesHub;
   /** the tokens this backend knows and the pairing that hands them out (server/callers) */
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
@@ -3758,6 +3761,8 @@ async function handleApi(
   if (coordRes) return coordRes;
   const workRes = await state.work.handle(req, url, caller);
   if (workRes) return workRes;
+  const notesRes = await state.notes.handle(req, url);
+  if (notesRes) return notesRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const capacityRes = await state.capacity.handle(req, url);
@@ -6418,6 +6423,8 @@ export async function startServer(opts: {
         await state.chan.dm(r.handle, text);
         return true;
       },
+      // the notes' reminders come due on this clock too (FR-020)
+      remind: (now) => state.notes.remind(now),
     }),
     stalls: new StallHub({
       watchdog: (now, after) => state.runner.watchdog(now, after),
@@ -6484,6 +6491,10 @@ export async function startServer(opts: {
           return [{ state: rec.state, ...(entry ? { land: entry.state } : {}), ...(pr?.state ? { pr: pr.state.status } : {}) }];
         }),
       }),
+    }),
+    notes: new NotesHub({
+      broadcast: (ev) => broadcast(state, ev),
+      repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),

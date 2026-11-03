@@ -1076,6 +1076,24 @@ describe("polling", () => {
     expect(reports).toEqual([["tracker", { state: "down", why: "cannot read issue #2 in full: gh answered 500" }]]);
   });
 
+  test("the tick delivers the notes' reminders, on the lock holder alone (FR-020)", async () => {
+    const reminded: number[] = [];
+    let t = 5000;
+    const h = hub({ now: () => t, remind: async (now) => { reminded.push(now); } });
+    // not keeping: the pump runs, the clock's work does not
+    await h.tick();
+    expect(reminded).toEqual([]);
+    await h.adopt();
+    await h.tick();
+    t = 6000;
+    await h.tick();
+    expect(reminded).toEqual([5000, 6000]);
+    // a failed delivery is logged, never the tick's end
+    const loud = hub({ now: () => t, remind: async () => { throw new Error("disk full"); } });
+    await loud.adopt();
+    await expect(loud.tick()).resolves.toBeUndefined();
+  });
+
   test("the tick polls a rule when its cron comes due, and info says when next", async () => {
     let t = Date.UTC(2026, 9, 26, 10, 3);
     const h = pollHub({ now: () => t });

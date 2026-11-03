@@ -53,13 +53,14 @@ export const ITEM_KINDS = ["run", "agent", "popup"] as const;
 export type ItemKind = (typeof ITEM_KINDS)[number];
 
 /** the popups that can sit as a tab */
-export const POPUP_NAMES = ["inbox", "waiting", "tasks", "health", "shells", "kept", "ranger", "chan"] as const;
+export const POPUP_NAMES = ["inbox", "waiting", "tasks", "notes", "health", "shells", "kept", "ranger", "chan"] as const;
 export type PopupName = (typeof POPUP_NAMES)[number];
 
 export const POPUP_WORD: Record<PopupName, string> = {
   inbox: "inbox",
   waiting: "waiting on you",
   tasks: "tasks",
+  notes: "notes",
   health: "health",
   shells: "shells",
   kept: "shells from before",

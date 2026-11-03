@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import type { TriggerEvent } from "../../src/core/trigger";
+import type { QuickNote } from "../../src/core/notes";
 import type { HarnessWeek } from "../../src/core/harnessshare";
 import {
   askPermission,
@@ -680,5 +681,27 @@ describe("a spec-converge branch's rows lead with its report (FR-041 plan 2)", (
     expect(sentBackItem?.title).toBe("drift: 3, sent run/spec-converge-x back: typecheck failed");
     const [plain] = mergeInbox([], {}, {}, 0, { repos: [repo("app")], cards: {}, backendOf: () => "mac", landing: { runs: [], entries: [entry], orphans: [], notices: [], collisions: [] } });
     expect(plain?.title).toBe("sent run/spec-converge-x back: typecheck failed");
+  });
+});
+
+describe("reminders (FR-020)", () => {
+  const note = (id: string, over: Partial<QuickNote> = {}): QuickNote => ({ id, text: `note ${id}`, createdAt: 1, ...over });
+  test("a delivered reminder is one item with the note's text, its repo and the time it was set for", () => {
+    const notes = [
+      note("n-delivere", { repoId: "app", due: 500, remindedAt: 520 }),
+      note("n-notyet11", { due: 900 }),
+      note("n-doneone1", { due: 300, remindedAt: 310, doneAt: 400 }),
+      note("n-plainone"),
+    ];
+    const items = mergeInbox([], {}, {}, 1000, { repos: [repo("app")], cards: {}, notes });
+    expect(items.map((i) => [i.key, i.source, i.kind, i.repo, i.who, i.where, i.title, i.at])).toEqual([["note:n-delivere", "note", "reminder", "app", "reminder", "notes", "note n-delivere", 500]]);
+    expect(items[0]?.note?.id).toBe("n-delivere");
+    expect(toRunAnswer({ note: "done" })).toBeNull();
+    expect(toAskAnswer({ note: "later" })).toBeNull();
+  });
+  test("on a page with several backends the row says which one holds the note", () => {
+    const notes = [note("mini|n-delivere", { due: 500, remindedAt: 520 })];
+    const items = mergeInbox([], {}, {}, 1000, { repos: [], cards: {}, notes, backendOf: (id) => id.split("|")[0] ?? "" });
+    expect(items.map((i) => [i.repo, i.where])).toEqual([["", "notes on mini"]]);
   });
 });

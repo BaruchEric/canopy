@@ -1922,6 +1922,96 @@ div.waiting-row {
 .inbox-sweep .dim {
   color: var(--ink-faint);
 }
+/* quick notes and reminders (FR-020): the top bar's popup, its form and
+   rows, a reminder's row in the inbox, and a card's chip */
+.inbox-glyph.k-reminder {
+  color: var(--lichen);
+}
+.notes-pop {
+  width: 420px;
+  max-height: min(80vh, 640px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.note-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+.note-form .note-form-text,
+.note-form .settings-hint {
+  grid-column: 1 / -1;
+}
+.note-form select.settings-input {
+  min-width: 0;
+}
+.note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  align-self: stretch;
+}
+.note-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  align-items: center;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+.note-row:hover {
+  background: var(--bark2);
+}
+.note-text {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.note-row.done .note-text {
+  color: var(--ink-dim);
+  text-decoration: line-through;
+}
+.note-meta {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.note-meta .note-repo {
+  font-family: var(--mono);
+}
+.note-due {
+  font-variant-numeric: tabular-nums;
+}
+.note-due.late {
+  color: var(--rust);
+}
+.note-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  gap: 2px;
+}
+.note-done > summary {
+  cursor: pointer;
+}
+.note-done[open] > summary {
+  margin-bottom: 6px;
+}
+.popup-tab[data-popup="notes"] .note-form {
+  padding-top: 0;
+}
+@media (min-width: 761px) {
+  .notes-pop {
+    min-width: 20rem;
+  }
+}
 .inbox-recent li {
   display: flex;
   align-items: baseline;
