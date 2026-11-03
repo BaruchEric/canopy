@@ -100,6 +100,7 @@ async function world(overrides: Partial<GroupDeps> = {}) {
   const events: ServerEvent[] = [];
   const dry: string[] = [];
   const reviewers: string[] = [];
+  const prompts: string[] = [];
   const dropped: string[] = [];
   const opened: string[] = [];
   const landed: string[] = [];
@@ -124,9 +125,10 @@ async function world(overrides: Partial<GroupDeps> = {}) {
         minimum: 0.8,
       };
     },
-    startReviewer: async (group) => {
+    startReviewer: async (group, prompt) => {
       const run = runOf(`review-${reviewers.length}`, "working");
       reviewers.push(group.id);
+      prompts.push(prompt);
       runs.set(run.id, run);
       return run;
     },
@@ -150,7 +152,7 @@ async function world(overrides: Partial<GroupDeps> = {}) {
   await hub.adopt();
   async function create(
     ids = ["a", "b"],
-    opts: Partial<Pick<RunGroup, "autoLand" | "pr">> = {},
+    opts: Partial<Pick<RunGroup, "autoLand" | "pr">> & { reviewers?: 2 } = {},
   ) {
     const group = await hub.create({
       repoId: "repo",
@@ -192,6 +194,7 @@ async function world(overrides: Partial<GroupDeps> = {}) {
     events,
     dry,
     reviewers,
+    prompts,
     dropped,
     opened,
     landed,
@@ -213,6 +216,19 @@ async function finish(
 ) {
   const reviewId = w.current(id).review?.run;
   if (!reviewId) throw new Error("review absent");
+  const run = { ...runOf(reviewId), result: { text, durationMs: 1, turns: 1 } };
+  w.runs.set(run.id, run);
+  w.hub.onRun(run);
+  await w.hub.idle();
+}
+/** ends the run in a group's second reviewer slot */
+async function finishSecond(
+  w: Awaited<ReturnType<typeof world>>,
+  id: string,
+  text: string,
+) {
+  const reviewId = w.current(id).secondReview?.run;
+  if (!reviewId) throw new Error("second review absent");
   const run = { ...runOf(reviewId), result: { text, durationMs: 1, turns: 1 } };
   w.runs.set(run.id, run);
   w.hub.onRun(run);
@@ -1495,4 +1511,177 @@ test("bulk landing eligibility is owned, picked, non-PR and bound to the member 
   const pr = await world();
   const prId = await pr.create(["a"], { pr: true });
   expect(pr.hub.canBulkLand({ group: prId, id: "a", repoId: "repo" })).toBe(false);
+});
+
+test("two reviewers run in turn, the second on the members in reverse, and an agreed winner is picked", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("reviewing");
+  expect(w.reviewers).toHaveLength(1);
+  expect(w.current(id).secondReview).toBeUndefined();
+  expect(w.prompts[0]?.indexOf("## run/a")).toBeLessThan(w.prompts[0]?.indexOf("## run/b") ?? 0);
+
+  await finish(w, id, comparison(["run/b", "run/a"]));
+  expect(w.current(id).state).toBe("reviewing");
+  expect(w.reviewers).toHaveLength(2);
+  expect(w.current(id).secondReview?.run).toBe("review-1");
+  expect(w.current(id).review?.run).toBe("review-0");
+  expect(w.prompts[1]?.indexOf("## run/b")).toBeLessThan(w.prompts[1]?.indexOf("## run/a") ?? 0);
+
+  await finishSecond(w, id, comparison(["run/b", "run/a"]));
+  expect(w.current(id)).toMatchObject({ state: "picked", winner: "b", pickedBy: "reviewer" });
+  expect(w.reviewers).toHaveLength(2);
+});
+
+test("two reviewers who name different winners leave both rankings for Eric", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  await finishSecond(w, id, comparison(["run/b", "run/a"]));
+  const group = w.current(id);
+  expect(group).toMatchObject({ state: "needs-you", reason: "the reviewers disagree: run/a or run/b" });
+  expect(group.winner).toBeUndefined();
+  expect(group.review).toMatchObject({ ranking: ["run/a", "run/b"] });
+  expect(group.secondReview).toMatchObject({ ranking: ["run/b", "run/a"] });
+});
+
+test("a first reviewer that fails to parse starts no second", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  await finish(w, id, "no block at all");
+  expect(w.current(id).state).toBe("needs-you");
+  expect(w.current(id).review).toMatchObject({ error: "the compare block is missing" });
+  expect(w.reviewers).toHaveLength(1);
+});
+
+test("a second reviewer that fails to parse needs Eric and keeps the first's ranking", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  await finish(w, id, comparison());
+  await finishSecond(w, id, "no block at all");
+  expect(w.current(id)).toMatchObject({ state: "needs-you", review: { ranking: ["run/b", "run/a"] }, secondReview: { error: "the compare block is missing" } });
+});
+
+test("one green member needs neither reviewer, with two asked for", async () => {
+  const w = await world();
+  const id = await w.create(["a"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id)).toMatchObject({ state: "picked", winner: "a" });
+  expect(w.reviewers).toHaveLength(0);
+});
+
+test("a record with no reviewers field still uses one reviewer", async () => {
+  const w = await world();
+  const id = await w.create();
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id).reviewers).toBeUndefined();
+  await finish(w, id, comparison());
+  expect(w.current(id)).toMatchObject({ state: "picked", winner: "b" });
+  expect(w.reviewers).toHaveLength(1);
+});
+
+test("a restart with the first review done starts only the second", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  await finish(w, id, comparison());
+  expect(w.reviewers).toHaveLength(2);
+  // the second run dies with the restart, the first's answer is on the record
+  w.hub.detach();
+  w.runs.delete("review-1");
+  await w.hub.adopt();
+  await w.hub.idle();
+  expect(w.reviewers).toHaveLength(3);
+  expect(w.current(id).review).toMatchObject({ run: "review-0", ranking: ["run/b", "run/a"] });
+  expect(w.current(id).secondReview?.run).toBe("review-2");
+  await finishSecond(w, id, comparison());
+  expect(w.current(id)).toMatchObject({ state: "picked", winner: "b" });
+});
+
+test("the second reviewer waits for a checkout run like the first", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  w.setActive(runOf("someone", "working"));
+  await finish(w, id, comparison());
+  expect(w.reviewers).toHaveLength(1);
+  w.setActive();
+  w.hub.onRun(runOf("someone"));
+  await w.hub.idle();
+  expect(w.reviewers).toHaveLength(2);
+});
+
+test("running the review again clears both answers and asks both reviewers afresh", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  await finishSecond(w, id, comparison(["run/b", "run/a"]));
+  expect((await w.post("review", { group: id })).status).toBe(200);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("reviewing");
+  expect(w.current(id).review).toMatchObject({ run: "review-2", ranking: [] });
+  expect(w.current(id).secondReview).toBeUndefined();
+  await finish(w, id, comparison());
+  expect(w.current(id).secondReview?.run).toBe("review-3");
+  await finishSecond(w, id, comparison());
+  expect(w.current(id)).toMatchObject({ state: "picked", winner: "b" });
+});
+
+test("a member's fix clears both answers", async () => {
+  const w = await world();
+  const id = await w.create(["a", "b"], { reviewers: 2 });
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  await finish(w, id, comparison(["run/a", "run/b"]));
+  await finishSecond(w, id, comparison(["run/b", "run/a"]));
+  const fix: Run = { ...runOf("fix", "working"), branch: { name: "run/a", target: "main", base: "base", dir: "/no-tree", state: "working", origin: "a" } };
+  w.runs.set(fix.id, fix);
+  w.hub.onRun(fix);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("working");
+  expect(w.current(id).review).toBeUndefined();
+  expect(w.current(id).secondReview).toBeUndefined();
+});
+
+test("the reviewer's brief names each member's own files and what they share", async () => {
+  const w = await world();
+  w.setActive(runOf("someone", "working"));
+  const id = await w.create();
+  for (const rec of w.landing.runs) {
+    if (rec.review) rec.review.files = [{ path: "shared.ts", cls: "logic" }, { path: `${rec.id}.ts`, cls: "logic" }];
+  }
+  w.setActive();
+  w.hub.onLanding(w.landing);
+  await w.hub.idle();
+  expect(w.current(id).state).toBe("reviewing");
+  expect(w.prompts[0]).toContain("Files every branch touched: shared.ts");
+  expect(w.prompts[0]).toContain("Files only run/a touched: a.ts");
+});
+
+test("a damaged reviewers or second review field refuses the record", async () => {
+  const first = await world();
+  const id = await first.create(["a", "b"], { reviewers: 2 });
+  first.hub.detach();
+  const path = join(first.dir, `${id}.json`);
+  const record = JSON.parse(await readFile(path, "utf8"));
+  for (const bad of [{ reviewers: 3 }, { secondReview: { run: 1 } }]) {
+    await writeFile(path, JSON.stringify({ ...record, ...bad }));
+    await first.hub.adopt();
+    expect(first.hub.info()).toEqual([]);
+    first.hub.detach();
+  }
 });
