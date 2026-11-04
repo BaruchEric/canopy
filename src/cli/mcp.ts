@@ -10,9 +10,13 @@ export const MCP_USAGE = "usage: canopy mcp [--backend URL]\n       canopy mcp t
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const isKind = (value: unknown): value is CallerKind => typeof value === "string" && Object.hasOwn(KIND_RIGHTS, value);
 
-/** The session's token wins over a CLI token saved on the same machine. */
+/** The session's token wins over a CLI token saved on the same machine. A
+ *  run's server takes no other: on the Mac the file holds an admin token, and
+ *  a run whose own went missing must get nothing rather than that. */
 export function mcpToken(base: string, env: Record<string, string | undefined> = process.env): string | null {
-  return env["CANOPY_TOKEN"]?.trim() || callerToken(base);
+  const own = env["CANOPY_TOKEN"]?.trim();
+  if (own) return own;
+  return env["CANOPY_RUN"]?.trim() ? null : callerToken(base);
 }
 
 /** One HTTP request per call. A refusal or redirect is never retried. */

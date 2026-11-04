@@ -73,7 +73,7 @@ import { sweepCommand } from "./sweep";
 import { noteCommand } from "./notes";
 import { secretsCommand } from "./secrets";
 import { groupsCommand } from "./groups";
-import { runCommand } from "./run";
+import { runCommand, runsCommand } from "./run";
 import { SPEC_WORDS, specLines } from "../core/treelines";
 
 const HELP = `${bold("canopy")}${HELP_TEXT.slice("canopy".length)}`;
@@ -936,6 +936,8 @@ export async function main(argv: string[]): Promise<void> {
       return prCommand(cmd, args, { fail });
     case "run":
       return runCommand(args, { fail });
+    case "runs":
+      return runsCommand(args, { fail });
     case "groups":
       return groupsCommand(args, { fail });
     case "work":

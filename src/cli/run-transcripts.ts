@@ -10,7 +10,7 @@ import { ask, askText, errText, has, take, Unreachable, type Target } from "./he
 
 type Fail = (message: string) => never;
 
-export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr] [--priority interactive|normal|low] [--backend URL] [--on NAME]
+export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr] [--priority interactive|normal|low] [--tools|--no-tools] [--backend URL] [--on NAME]
        canopy run [--backend URL]
        canopy run show <id> [--wire] [--backend URL]
        canopy run export <id> [--out file.md] [--backend URL]

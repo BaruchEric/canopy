@@ -52,6 +52,9 @@ test("the session token wins over the CLI token file", () => {
   expect(mcpToken(base, { CANOPY_TOKEN: "env-token" })).toBe("env-token");
   expect(mcpToken(base, {})).toBe("file-token");
   expect(mcpToken("http://127.0.0.1:1", {})).toBeNull();
+  // a run's server never falls back to the CLI's admin token
+  expect(mcpToken(base, { CANOPY_RUN: "abcd1234" })).toBeNull();
+  expect(mcpToken(base, { CANOPY_RUN: "abcd1234", CANOPY_TOKEN: "run-token" })).toBe("run-token");
 });
 
 test("a read token's tool listing excludes writes", () => {
@@ -76,7 +79,7 @@ test("stdio replies preserve order and the session's token, including an API ref
   const replies: unknown[] = new LineSplitter().push(text).map((line): unknown => JSON.parse(line));
   expect(replies).toHaveLength(4);
   expect(replies[0]).toMatchObject({ id: 1, result: { protocolVersion: "2025-06-18", serverInfo: { name: "canopy" }, capabilities: { tools: {} } } });
-  expect(replies[1]).toMatchObject({ id: 2, result: { tools: [{ name: "canopy_status" }, { name: "canopy_runs" }, { name: "canopy_queue" }, { name: "canopy_health" }, { name: "canopy_say" }, { name: "canopy_wake" }, { name: "canopy_land" }, { name: "canopy_pr" }] } });
+  expect(replies[1]).toMatchObject({ id: 2, result: { tools: [{ name: "canopy_status" }, { name: "canopy_runs" }, { name: "canopy_queue" }, { name: "canopy_health" }, { name: "canopy_work_note" }, { name: "canopy_run_start" }, { name: "canopy_say" }, { name: "canopy_wake" }, { name: "canopy_land" }, { name: "canopy_pr" }] } });
   expect(replies[2]).toMatchObject({ id: 3, result: { content: [{ type: "text", text: "a  main" }] } });
   expect(replies[3]).toMatchObject({ id: 4, result: { content: [{ type: "text", text: "no run nope" }], isError: true } });
   expect(code).toBe(0);
@@ -87,7 +90,7 @@ test("stdio replies preserve order and the session's token, including an API ref
 test("tools prints only the listing; an unavailable backend fails on stderr", async () => {
   const ok = await command(["tools"]);
   expect(ok.code).toBe(0);
-  expect(ok.stdout.trim().split("\n")).toHaveLength(9);
+  expect(ok.stdout.trim().split("\n")).toHaveLength(11);
   expect(ok.stdout.split("\n")[0]).toBe(`tools for a shell token on ${base}`);
   expect(ok.stderr).toBe("");
   const down = await command(["tools"], { CANOPY_API: "http://127.0.0.1:1" });

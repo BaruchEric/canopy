@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { setHomeBase, setTokenFlag } from "./api";
 import { main } from "./index";
-import { dispatchRunCommand, parseRunArgs } from "./run";
+import { dispatchRunCommand, parseChildArgs, parseRunArgs, RUNS_USAGE } from "./run";
 
 function resetCliApiState(): void {
   setHomeBase(undefined);
@@ -128,4 +128,19 @@ test("canopy run without --times keeps the single branch-run request", async () 
     body: { action: "ask", note: "", branch: true },
   }]);
   expect(lines).toEqual(["run-1 working"]);
+});
+
+test("parseRunArgs reads --tools and --no-tools, and leaves the settings alone without either (FR-038)", () => {
+  expect(parseRunArgs(["app", "ask", "--tools"])).toMatchObject({ canopyTools: true });
+  expect(parseRunArgs(["app", "ask", "--no-tools"])).toMatchObject({ canopyTools: false });
+  expect("canopyTools" in (parseRunArgs(["app", "ask"]) as object)).toBe(false);
+  expect(parseRunArgs(["app", "ask", "--tools", "--no-tools"])).toBe("use either --tools or --no-tools");
+});
+
+test("parseChildArgs wants a repo, a note and a parent", () => {
+  expect(parseChildArgs(["child", "app", "--note", "a part", "--parent", "abcd1234"])).toEqual({ repo: "app", note: "a part", parent: "abcd1234" });
+  expect(parseChildArgs(["child", "app", "--note", "x", "--parent", "p", "--action", "propose", "--on", "mini"])).toMatchObject({ action: "propose", on: "mini" });
+  for (const bad of [[], ["child"], ["child", "app"], ["child", "app", "--note", "x"], ["child", "app", "--note", " ", "--parent", "p"], ["other", "app", "--note", "x", "--parent", "p"]]) {
+    expect(parseChildArgs(bad)).toBe(RUNS_USAGE);
+  }
 });
