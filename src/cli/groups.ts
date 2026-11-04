@@ -58,7 +58,7 @@ export function groupLines(info: Pick<LandingInfo, "groups" | "runs">, repo?: st
       const score = group.scores?.[member.origin];
       const branch = run?.branch ?? score?.branch ?? member.origin;
       const state = run?.state ?? score?.state ?? "unknown";
-      out.push(`  ${branch}  ${state}`);
+      out.push(`  ${branch}  ${state}${member.profile ? `  ${member.profile}` : ""}`);
     }
   }
   return out;

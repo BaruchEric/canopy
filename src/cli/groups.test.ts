@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { LandingInfo } from "../core/types";
 import type { RunGroup } from "../core/group";
 import { setHomeBase, setTokenFlag } from "./api";
+import { groupLines } from "./groups";
 import { main } from "./index";
 
 function resetCliApiState(): void {
@@ -120,4 +121,11 @@ test("canopy groups pick routes a foreign group ID to the backend that owns it",
     { path: "/api/groups/pick", body: { group: group.id, run: "run-1" } },
   ]);
   expect(lines).toEqual(["picked run-1 in g-1234abcd on mini"]);
+});
+
+test("a member's line names its profile when it has one", () => {
+  const group = { id: "g-1", repoId: "app", repoPath: "/r/app", action: "ask", note: "n", expectedMembers: 2, state: "working", autoLand: false, startedAt: 1, members: [{ run: "r1", origin: "o1", profile: "codex-fast" }, { run: "r2", origin: "o2", profile: null }] } as const;
+  const lines = groupLines({ groups: [{ ...group, members: [...group.members] }], runs: [] });
+  expect(lines[1]).toBe("  o1  unknown  codex-fast");
+  expect(lines[2]).toBe("  o2  unknown");
 });
