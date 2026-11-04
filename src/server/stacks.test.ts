@@ -130,6 +130,12 @@ describe("canopy's own stack", () => {
     expect(await isCanopyStack({ name: "bare", path: join(scratch, "bare") }, self)).toBe(false);
   });
 
+  test("a repo beside the checkout is not canopy, whatever folder they share", async () => {
+    const self = join(scratch, "mine");
+    expect(await isCanopyStack({ name: "other", path: join(scratch, "other") }, self)).toBe(false);
+    expect(await isCanopyStack({ name: "bare", path: join(scratch, "bare") }, join(scratch, "dev-tools", "canopy"))).toBe(false);
+  });
+
   test("the refusal says redeploy is the way", () => {
     expect(OWN_STACK).toBe("canopy's own stack is deployed by redeploy, not run as a task");
   });

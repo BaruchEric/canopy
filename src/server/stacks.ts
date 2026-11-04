@@ -7,7 +7,7 @@
  * the real one is built only in server/index.ts, and tests use a fake.
  */
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { COMPOSE_DOWN_MS, composeDownArgs, composeLsArgs, configInside, foreignVolumes, parseComposeLs, projectName, volumeLsArgs, type ComposeRoots } from "../core/compose";
 import { exec } from "../core/exec";
 import { repoKey } from "../core/worktree";
@@ -61,8 +61,7 @@ export async function tearDown(c: ComposeExec, dir: string, roots: ComposeRoots,
  *  this server's own checkout. Its stack belongs to redeploy, on any machine
  *  and in any worktree of it. */
 export async function isCanopyStack(repo: { name: string; path: string }, self: string): Promise<boolean> {
-  const keys = [repoKey(self), basename(dirname(self))];
-  if (repo.name.toLowerCase() === "canopy" || keys.includes(repoKey(repo.path)) || keys.includes(basename(dirname(repo.path)))) return true;
+  if (repo.name.toLowerCase() === "canopy" || repoKey(repo.path) === repoKey(self)) return true;
   try {
     return (JSON.parse(await readFile(join(repo.path, "package.json"), "utf8")) as { name?: unknown }).name === "canopy";
   } catch {

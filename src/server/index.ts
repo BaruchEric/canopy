@@ -6354,7 +6354,7 @@ export async function startServer(opts: {
       endRunTasks: async (id) => {
         const branch = state.runner.get(id)?.branch;
         if (!branch || state.landing.info().runs.some((r) => r.id === branch.origin) || state.prs.holds(branch.origin)) return;
-        await state.tasks.endTree(branch.dir);
+        for (const line of await state.tasks.endTree(branch.dir)) if (branch.work) state.work.note(branch.work, line);
       },
       dropKept: async (id) => { await state.readyRunlog(); return dropKept(runsDir(), id); },
       startChat: (c) => startSweptChat(state, c),
