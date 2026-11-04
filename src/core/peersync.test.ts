@@ -105,6 +105,26 @@ afterAll(async () => {
 });
 
 describe("snapshotWip", () => {
+  test("sees a same-size edit made in the second the index last saw the file", async () => {
+    const repo = join(root, "racy");
+    await exec(["git", "init", "-q", "-b", "main", repo]);
+    await sh(repo, "config", "user.email", "t@t");
+    await sh(repo, "config", "user.name", "t");
+    await sh(repo, "config", "core.trustctime", "false");
+    const file = join(repo, "a.txt");
+    await writeFile(file, "one\n");
+    const when = new Date(1_700_000_000_000);
+    await utimes(file, when, when);
+    await sh(repo, "add", "a.txt");
+    await sh(repo, "commit", "-q", "-m", "one");
+    // the size and the mtime both match what the index holds, so only git's
+    // racy check, an entry as new as the index itself, can catch this edit
+    await writeFile(file, "two\n");
+    await utimes(file, when, when);
+    await utimes(join(repo, ".git", "index"), when, when);
+    expect(await snapshotWip(repo, "mac", false)).toMatchObject({ branch: "main", wrote: true });
+  });
+
   test("a clean tree writes nothing", async () => {
     const r = await repo("clean");
     expect(await snapshotWip(r, "mac", false)).toBeNull();

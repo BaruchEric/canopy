@@ -1,6 +1,6 @@
 /** Peer sync, the Bun half: snapshots, fetches, fast-forwards, clones and
  *  seeds, every git call through `git()`. The decisions are in peers.ts. */
-import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -68,7 +68,14 @@ async function worktreeTree(repo: string, dry: boolean): Promise<string | null> 
   const index = join(dir, "index");
   try {
     const real = await gitPath(repo, "index");
-    if (existsSync(real)) await copyFile(real, index);
+    if (existsSync(real)) {
+      await copyFile(real, index);
+      // The copy keeps the real index's time, rounded down. git rereads an
+      // entry as new as its index, and a copy stamped now would pass off a
+      // same-size edit made in the entry's own second as unchanged.
+      const at = Math.floor(statSync(real).mtimeMs / 1000);
+      await utimes(index, at, at);
+    }
     const env: Record<string, string> = { GIT_INDEX_FILE: index };
     if (dry) {
       const scratchObjects = join(dir, "objects");
