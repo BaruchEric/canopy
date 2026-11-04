@@ -125,12 +125,14 @@ export function previewUrl(
   return null;
 }
 
-/** a repo's own ports first (the ones whose process runs in it), then the
- *  ones no repo claims; another repo's are left out */
-export function portsFor(ports: ListeningPort[], repoId: string): { mine: ListeningPort[]; loose: ListeningPort[] } {
+/** a repo's own ports first (the ones whose process runs in it), then its
+ *  branches' (their worktrees', never the default), then the ones no repo
+ *  claims; another repo's are left out */
+export function portsFor(ports: ListeningPort[], repoId: string): { mine: ListeningPort[]; branches: ListeningPort[]; loose: ListeningPort[] } {
   return {
     mine: ports.filter((p) => p.repo === repoId),
-    loose: ports.filter((p) => p.repo === undefined),
+    branches: ports.filter((p) => p.tree?.repo === repoId),
+    loose: ports.filter((p) => p.repo === undefined && !p.tree),
   };
 }
 

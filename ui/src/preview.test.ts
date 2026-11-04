@@ -33,7 +33,18 @@ test("portsFor", () => {
     { port: 5173, repo: "b" },
     { port: 8080 },
   ];
-  expect(portsFor(ports, "b")).toEqual({ mine: [{ port: 5173, repo: "b" }], loose: [{ port: 8080 }] });
+  expect(portsFor(ports, "b")).toEqual({ mine: [{ port: 5173, repo: "b" }], branches: [], loose: [{ port: 8080 }] });
+});
+
+test("a worktree's port is its repo's branch, never the repo's own or anyone's spare", () => {
+  const tree = { port: 7901, tree: { repo: "b", name: "dev · run/x" } };
+  const ports = [tree, { port: 8080 }];
+  const { mine, branches, loose } = portsFor(ports, "b");
+  expect(branches).toEqual([tree]);
+  expect(loose).toEqual([{ port: 8080 }]);
+  expect(defaultPort(mine)).toBeNull();
+  expect(portsFor(ports, "a").branches).toEqual([]);
+  expect(portsFor(ports, "a").loose).toEqual([{ port: 8080 }]);
 });
 
 test("readChoices", () => {

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** in progress on branch `fr-039-plans-2-3`.
+**Status:** implemented on branch `fr-039-plans-2-3`, not yet merged.
 
 **Goal:** a branch run can run the repo's `dev` task in its own worktree on a port of its own, so Eric previews the branch running beside the main checkout. The task is started from the run sheet, the pre-flight toggle or `canopy worktrees start`, is listed under the run and never under the repo, shows up by branch in the preview's port list, and ends before its worktree goes at land, drop, a merged PR, a kept tree's removal and the sweep.
 
@@ -131,7 +131,7 @@ class TaskHub {
   /** whether anything still runs in a folder */
   busy(dir: string): boolean;
   /** starts a task in a worktree, the dev task when none is named */
-  startTree(repo: Repo, tree: TaskTree, name?: string): Promise<TasksResult>;
+  actIn(repo: Repo, tree: TaskTree, action: TaskAction, name?: string): Promise<TasksResult>;
   /** the running tasks in worktrees and what they hold, for the port list */
   treeHolds(): TreeHold[];
 }

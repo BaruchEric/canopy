@@ -180,7 +180,7 @@ function EmulatorMenu({ repoId, port, path, form, turned, say }: { repoId: strin
  *  nothing showing, so a dev server started in a shell turns up on its own */
 const PORTS_EVERY = 4000;
 
-const portLabel = (p: ListeningPort) => (p.command ? `${p.port} · ${p.command}` : String(p.port));
+const portLabel = (p: ListeningPort) => (p.tree ? `${p.port} · ${p.tree.name}` : p.command ? `${p.port} · ${p.command}` : String(p.port));
 
 /** The head's switches, the same pair a shell row has: bring the project to
  *  the front with the preview as its main pane, and have the preview fill
@@ -375,6 +375,13 @@ export function PreviewSection({ repo }: { repo: Repo }) {
     // pick closes over nothing but repo.id, which is a dependency here
   }, [choice, ports, repo.id]);
 
+  // a run's sheet asked for a branch's port: "preview this branch"
+  const asked = useStore((s) => (s.previewAsk?.repoId === repo.id ? s.previewAsk : null));
+  useEffect(() => {
+    if (asked) pick({ port: asked.port, path: "/" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked?.at]);
+
   // a preview port for the chosen one, asked for whenever it changes
   const port = choice?.port;
   useEffect(() => {
@@ -400,7 +407,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
 
   const url = slot !== null && choice ? previewUrl(window.location, slot, choice.path, pub, home, host) : null;
   const off = slots !== null && slots.length === 0;
-  const { mine, loose } = ports ? portsFor(ports, repo.id) : { mine: [], loose: [] };
+  const { mine, branches, loose } = ports ? portsFor(ports, repo.id) : { mine: [], branches: [], loose: [] };
   const quiet = quietPreview(dev);
   const summary = choice ? `:${choice.port}` : mine.length ? String(mine.length) : "";
 
@@ -699,13 +706,13 @@ export function PreviewSection({ repo }: { repo: Repo }) {
         ) : (
           <>
             <div className="preview-ports">
-              {mine.map((p) => (
+              {[...mine, ...branches].map((p) => (
                 <button
                   key={p.port}
                   type="button"
                   className={`mini${choice?.port === p.port ? " on" : ""}`}
                   onClick={() => pick({ port: p.port, path: choice?.port === p.port ? choice.path : "/" })}
-                  title={`Listening in ${repo.name}`}
+                  title={p.tree ? `Listening in a worktree of ${repo.name}` : `Listening in ${repo.name}`}
                 >
                   {portLabel(p)}
                 </button>
@@ -714,7 +721,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                 <select
                   className="preview-select"
                   aria-label="Another port on the backend"
-                  value={choice && !mine.some((p) => p.port === choice.port) ? String(choice.port) : ""}
+                  value={choice && ![...mine, ...branches].some((p) => p.port === choice.port) ? String(choice.port) : ""}
                   onChange={(e) => {
                     const n = Number(e.target.value);
                     if (n) pick({ port: n, path: "/" });
@@ -994,7 +1001,7 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                       </button>
                       <ModeButtons mode={mode} disabled={shooting} toggle={toggleMode} />
                       <DeviceSwitch view={view} setView={setView} scale={scale} />
-                      {[...mine, ...loose].length > 1 && (
+                      {[...mine, ...branches, ...loose].length > 1 && (
                         <select
                           className="preview-select"
                           aria-label="Port to preview"
@@ -1004,10 +1011,10 @@ export function PreviewSection({ repo }: { repo: Repo }) {
                             if (n) pick({ port: n, path: "/" });
                           }}
                         >
-                          {!mine.some((p) => p.port === choice.port) && !loose.some((p) => p.port === choice.port) && (
+                          {![...mine, ...branches, ...loose].some((p) => p.port === choice.port) && (
                             <option value={choice.port}>{choice.port}</option>
                           )}
-                          {[...mine, ...loose].map((p) => (
+                          {[...mine, ...branches, ...loose].map((p) => (
                             <option key={p.port} value={p.port}>
                               {portLabel(p)}
                             </option>

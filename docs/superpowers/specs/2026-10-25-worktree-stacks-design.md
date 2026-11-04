@@ -242,6 +242,17 @@ For Eric:
 8. **Whether `propose` runs should start the dev task on their own** when
    the repo has one, or only on the toggle.
 
+Made on 2026-11-03, taking the defaults for 7 and 8:
+
+9. **The range is `7900-7949`, read from `CANOPY_TREE_PORTS`,** the one kept
+   worktrees already use, so tasks and kept trees share one allotter. The
+   mini's compose does not publish it; its `ports` stop at 7850 and
+   7860-7869, and the preview reaches loopback.
+10. **`propose` runs start the dev task only on the toggle,** never on
+    their own.
+11. **Kept worktrees moved plan 2's design.** See "What changed from the
+    spec" in `2026-11-03-worktree-stacks-2.md`.
+
 ## Out of scope
 
 - A warm pool for the launcher's PR builds (they have their own folder and

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskInfo } from "../../src/core/types";
-import { devTask, frontTask, quietPreview, startsDev, otherTasks, renameOld, taskChip, taskDraftCwd, taskDraftPatch, taskLines, taskWhen, withChange } from "./tasks";
+import { branchTask, branchTaskWords, devTask, frontTask, quietPreview, startsDev, otherTasks, renameOld, taskChip, taskDraftCwd, taskDraftPatch, taskLines, taskWhen, withChange } from "./tasks";
 
 const t = (over: Partial<TaskInfo>): TaskInfo => ({ name: "dev", cmd: "x", repoId: "r", source: "detected", termId: "0".repeat(32), status: "idle", live: false, restarts: 0, viewers: [], ...over });
 
@@ -117,4 +117,20 @@ describe("starting the dev task", () => {
     expect(startsDev("start", undefined, tasks)).toBe(false);
     expect(startsDev("start", "dev", [t({ dev: true, hidden: true })])).toBe(false);
   });
+});
+
+test("a branch's task is its running one, else the last it had, and never another branch's", () => {
+  const tree = (id: string) => ({ id, dir: `/w/${id}`, branch: `run/${id}` });
+  const stopped = { name: "dev", status: "stopped", tree: tree("a") } as TaskInfo;
+  const up = { name: "api", status: "running", tree: tree("a"), port: 7901 } as TaskInfo;
+  const other = { name: "dev", status: "running", tree: tree("b") } as TaskInfo;
+  expect(branchTask([stopped, other], "a")).toBe(stopped);
+  expect(branchTask([stopped, up, other], "a")).toBe(up);
+  expect(branchTask([other], "a")).toBeUndefined();
+});
+
+test("a branch's task reads with its port while up and how it ended after", () => {
+  expect(branchTaskWords({ name: "dev", status: "running", port: 7901 } as TaskInfo, 0)).toBe("dev :7901 running");
+  expect(branchTaskWords({ name: "dev", status: "running" } as TaskInfo, 0)).toBe("dev running");
+  expect(branchTaskWords({ name: "dev", status: "failed", exitCode: 1, exitedAt: 0, port: 7901 } as TaskInfo, 1000)).toBe("dev exit 1 · now");
 });

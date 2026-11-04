@@ -210,7 +210,7 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "kept":
       return { ...ev, kept: ev.kept.map((k) => qKept(q, k)) };
     case "tasks":
-      return { ...ev, repoId: q(ev.repoId), tasks: ev.tasks.map((t) => qTask(q, t)) };
+      return { ...ev, repoId: q(ev.repoId), tasks: ev.tasks.map((t) => qTask(q, t)), ...(ev.trees ? { trees: ev.trees.map((t) => qTask(q, t)) } : {}) };
     case "incubator":
       return { ...ev, sprout: qSprout(q, ev.sprout) };
     case "incubator-gone":

@@ -4,7 +4,7 @@ import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { describeLaunch, isDefaultLaunch } from "../../../src/core/launch";
 import { parseIssueRef } from "../../../src/core/issue";
-import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, useStore, type Sheet } from "../store";
+import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, tasksOf, treeTasksOf, useStore, type Sheet } from "../store";
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
@@ -46,7 +46,7 @@ import {
   type RunStep,
 } from "../../../src/core/types";
 import { forkLine, stepWords } from "../../../src/core/handoff";
-import { renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
+import { branchTask, branchTaskWords, devTask as devTaskOf, renameOld, taskDraftCwd, taskDraftPatch, withChange } from "../tasks";
 import { AGENT_NAME, harnessOf, hideTodoSteps, nestSteps, resultLine, settledProposal, tokenTitle, type SettledProposal } from "../runs";
 import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
@@ -270,6 +270,15 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   // FR-011: a PR in place of the landing queue, so only on a branch
   const [asPr, setAsPr] = useState(false);
   const pr = branchable && onBranch && asPr;
+  // FR-039: the app beside the branch, only when asked for here; best-of-N
+  // has no one worktree to mean
+  const hasDev = useStore((s) => devTaskOf(tasksOf(s, repo.id)) !== undefined);
+  const loadTasks = useStore((s) => s.loadTasks);
+  useEffect(() => {
+    if (branchable) loadTasks(repo.id).catch(() => {});
+  }, [branchable, repo.id, loadTasks]);
+  const [devTask, setDevTask] = useState(false);
+  const startDev = branchable && onBranch && times === 1 && hasDev && devTask;
   const ready = noteReady && (!branchable || !onBranch || times <= free);
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
@@ -282,7 +291,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
       if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, profile || undefined, autoLand, pr);
-      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined));
+      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -358,6 +367,12 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           <label className="plan-branch" title="Once the run is ready, canopy pushes its branch and opens a PR on GitHub instead of landing it here, then watches its checks and reviews">
             <input type="checkbox" checked={asPr} onChange={(e) => setAsPr(e.target.checked)} />
             open a PR when done
+          </label>
+        )}
+        {branchable && onBranch && times === 1 && hasDev && (
+          <label className="plan-branch" title="Once the worktree is set up, canopy runs the repo's dev task in it, on a port of its own, so you can preview the branch while the agent works">
+            <input type="checkbox" checked={devTask} onChange={(e) => setDevTask(e.target.checked)} />
+            start the dev task in the worktree
           </label>
         )}
         {error && <p className="note err">{error}</p>}
@@ -614,6 +629,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
       {(run.parent || run.group || run.branch?.group) && <ParentLine run={run} />}
       {run.forkOf && <ForkLine run={run} />}
       {run.branch && <BranchBlock run={run} act={act} />}
+      {run.branch && !run.kept && <BranchApp run={run} act={act} />}
       {run.branch?.work && <WorkBlock run={run} />}
       {run.branch && <PrBlock run={run} act={act} />}
 
@@ -1035,6 +1051,61 @@ function BranchBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) =>
         </button>
       )}
     </div>
+  );
+}
+
+/** The repo's app on this run's branch (FR-039): "run the app here" starts
+ *  the dev task in the worktree on a port of its own, and "preview this
+ *  branch" shows that port in the repo's preview. Only while the worktree
+ *  stands, and only when the repo has something to run. */
+function BranchApp({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Promise<void> }) {
+  const b = run.branch;
+  const repoId = run.repoId;
+  const hasDev = useStore((s) => devTaskOf(tasksOf(s, repoId)) !== undefined);
+  const task = useStore((s) => (b ? branchTask(treeTasksOf(s, repoId), b.origin) : undefined));
+  const standing = useStore((s) => (b ? isRunActive(run) || landingAll(s).runs.some((r) => r.id === b.origin) : false));
+  const loadTasks = useStore((s) => s.loadTasks);
+  const treeTaskAct = useStore((s) => s.treeTaskAct);
+  const previewBranch = useStore((s) => s.previewBranch);
+  const [log, setLog] = useState<string | null>(null);
+  useEffect(() => {
+    loadTasks(repoId).catch(() => {});
+  }, [repoId, loadTasks]);
+  if (!b || !standing || (!hasDev && !task)) return null;
+  const up = task?.status === "running" || task?.status === "backoff";
+  const down = task?.status === "failed" || task?.status === "gave-up";
+  const showLog = async (name: string) => {
+    const page = await api.taskLog(repoId, name, "", undefined, b.origin);
+    setLog(page.lines.slice(-20).map((l) => l.text).join("\n"));
+  };
+  return (
+    <>
+      <div className="run-branch">
+        {task && <span className="run-branch-word">{branchTaskWords(task, Date.now())}</span>}
+        <span className="spacer" />
+        {!up && (
+          <button type="button" className="mini" title="Run the repo's dev task in this branch's worktree, beside the main checkout" onClick={() => void act(() => treeTaskAct(repoId, b.origin, "start", task?.name))}>
+            run the app here
+          </button>
+        )}
+        {up && task.port !== undefined && (
+          <button type="button" className="mini strong" title={`Show :${task.port} in the repo's preview`} onClick={() => task.port !== undefined && previewBranch(repoId, task.port)}>
+            preview this branch
+          </button>
+        )}
+        {up && (
+          <button type="button" className="mini" title="Stop the task; the worktree stays" onClick={() => void act(() => treeTaskAct(repoId, b.origin, "stop", task.name))}>
+            stop
+          </button>
+        )}
+        {down && (
+          <button type="button" className="mini" title="The last lines the task printed" onClick={() => void act(() => showLog(task.name))}>
+            log
+          </button>
+        )}
+      </div>
+      {down && log !== null && <pre className="run-branch-why">{log}</pre>}
+    </>
   );
 }
 

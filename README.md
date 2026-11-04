@@ -109,6 +109,8 @@ canopy worktrees merge <repo> <branch> [--no-squash] [--no-commit] [--keep]   # 
 canopy worktrees clean [repo]      # remove the kept worktrees already merged into their base that hold nothing, branch and all
 canopy worktrees rm <repo> <branch> [--force] [--delete-branch]   # remove a kept worktree; refused while it holds work unless forced
 canopy worktrees path <repo> <branch>   # print a kept worktree's folder
+canopy worktrees start <repo> <run branch> [task]   # run a task, the dev task unless named, in a run's worktree on a port of its own
+canopy worktrees stop <repo> <run branch> [task]    # stop it; the worktree stays
 eval "$(canopy worktrees shell-init)"  # then cw <branch> changes into the kept worktree for the repo the shell sits in
 canopy collisions [repo]           # runs on one repo editing the same files right now, and what they share; a word, never a hold
 canopy scenarios <repo>                     # the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
