@@ -8,7 +8,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 | --- | --- | --- | --- |
 | [Agent defaults](2026-10-26-agent-defaults.md) | implemented and verified on `main`; deployed to the Mac and mini 2026-10-27 | | [agent defaults](../specs/2026-10-26-agent-defaults-design.md) |
 | [Best-of-N, plan 1: groups of one profile, a compare run and the winner lands](2026-10-26-best-of-n-1.md) | implemented and independently reviewed locally 2026-10-27 on `main` | | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
-| [Best-of-N, plan 2: profiles per member, two reviewers, card times and the costs fold](2026-11-03-best-of-n-2.md) | implemented and merged to `main` 2026-11-03; live check still to run | | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
+| [Best-of-N, plan 2: profiles per member, two reviewers, card times and the costs fold](2026-11-03-best-of-n-2.md) | implemented and merged to `main` 2026-11-03; live check passed the same day | | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
 | [Spec converge, plan 1: the schedule trigger source](2026-10-26-spec-converge-1.md) | implemented and independently reviewed locally 2026-10-27 on `main`; plan 2 remains open | | [spec converge](../specs/2026-10-25-spec-converge-design.md) |
 | [Harness share: how much of the spend goes into canopy itself](2026-10-26-harness-share.md) | implemented and independently reviewed locally 2026-10-27 on `main` | | [harness share](../specs/2026-10-25-harness-share-design.md) |
 | [Worktree stacks, plan 1: a warm worktree pool per repo](2026-10-26-worktree-stacks-1.md) | implemented and independently reviewed locally 2026-10-27 on `main`; plans 2 and 3 follow | | [worktree stacks](../specs/2026-10-25-worktree-stacks-design.md) |
