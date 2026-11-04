@@ -1156,7 +1156,8 @@ export interface CanopyState {
   /** opens a new shell at a repo where the settings say: its panel, the
    *  strip, or a tab or window of its own; `place` overrides the setting */
   openTerm: (repoId: string, place?: ShellPlace, start?: "agent", prompt?: string, pick?: LaunchPick, label?: string, tree?: string) => void;
-  closeTerm: (id: string) => void;
+  /** force ends the shell even with an agent running in it; a tab's × never passes it */
+  closeTerm: (id: string, force?: boolean) => void;
   /** puts a shell's tab down here and leaves the shell running for the
    *  other devices, and for picking back up from the shells list */
   hideTerm: (id: string) => void;
@@ -4343,12 +4344,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { notify } = await api.chanNotify(on);
     set((s) => ({ chan: s.chan?.ready ? { ...s.chan, notify } : s.chan }));
   },
-  closeTerm: (id) => {
+  closeTerm: (id, force = false) => {
     const s = get();
     const tab = s.terms.find((t) => t.id === id);
     if (!tab) return;
     // a task's and the ranger's sessions belong to their hubs: closing the tab only leaves
-    if (!tab.task && !tab.ranger) endShells([tab]);
+    if (!tab.task && !tab.ranger) endShells([tab], force);
     const terms = s.terms.filter((t) => t.id !== id);
     const { [id]: _pending, ...pendingTermLabels } = s.pendingTermLabels;
     set({ terms, pendingTermLabels, activeTerm: nextStripTab(s.terms, id, s.activeTerm), front: keepFront(s.front, terms, s.panels) });
@@ -5025,12 +5026,22 @@ export const useStore = create<CanopyState>((set, get) => ({
 
 /** Ends the shells behind some tabs on the server. Closing a socket only
  *  detaches, so this is the one way a tab's × hangs a shell up. One that
- *  already exited needs nothing. */
-function endShells(tabs: TermTab[]) {
+ *  already exited needs nothing. Without force the server keeps a shell with
+ *  an agent running in it, and the answer to the question here decides:
+ *  anything but a yes leaves it running, hidden from this window. */
+function endShells(tabs: TermTab[], force = false) {
   for (const t of tabs) {
     if (t.exit !== undefined) continue;
     endedShells.add(t.id);
-    void api.endTerm(t.id).catch(() => {});
+    void api.endTerm(t.id, force).catch((err: unknown) => {
+      if ((err as { status?: number }).status !== 409) return;
+      if (window.confirm(`An agent is running in the shell at ${t.label ?? t.name}. End it and stop the agent? Cancel keeps it running, hidden here.`)) {
+        void api.endTerm(t.id, true).catch(() => {});
+        return;
+      }
+      endedShells.delete(t.id);
+      useStore.setState((s) => (s.hiddenTerms.includes(t.id) ? s : { hiddenTerms: [...s.hiddenTerms, t.id] }));
+    });
   }
 }
 

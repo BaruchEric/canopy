@@ -152,6 +152,16 @@ describe("start=agent", () => {
     await plain.closed;
   });
 
+  test("ending a shell an agent runs in takes force, and a plain shell does not", async () => {
+    const end = (term: string, force = "") =>
+      fetch(`http://127.0.0.1:${server.port}/api/terms?term=${term}${force}`, { method: "DELETE" });
+    const refused = await end(A);
+    expect(refused.status).toBe(409);
+    expect((await agentOf(A)).body.agent).toBe("claude");
+    expect((await end(A, "&force=1")).status).toBe(200);
+    expect((await end(B)).status).toBe(200);
+  });
+
   test("a prompt rides in as the agent line's argument, quoted", async () => {
     const c = connect({ term: "d0000000000000000000000000000004", place: "panel", start: "agent", prompt: "it's here" });
     await c.opened;

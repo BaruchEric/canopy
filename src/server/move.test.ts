@@ -124,7 +124,7 @@ describe("the source half of a move", () => {
   // since a move refuses while another agent works in the same tree
   afterEach(async () => {
     const terms = (await (await fetch(url("/api/terms"))).json()) as { id: string }[];
-    for (const t of terms) await fetch(url(`/api/terms?term=${t.id}`), { method: "DELETE" });
+    for (const t of terms) await fetch(url(`/api/terms?term=${t.id}&force=1`), { method: "DELETE" });
   });
 
   test.if(tmux)("plan, out, transcript, finish", async () => {
@@ -380,7 +380,7 @@ describe("the source half of a move", () => {
     await shellWithAgent(term);
     const m = mid();
     expect((await moveOut(term, m)).status).toBe(200);
-    expect((await fetch(url(`/api/terms?term=${term}`), { method: "DELETE" })).status).toBe(200);
+    expect((await fetch(url(`/api/terms?term=${term}&force=1`), { method: "DELETE" })).status).toBe(200);
     // a record left behind would look the gone shell up, a 404
     const r = await undo(term, m);
     expect(r.status).toBe(200);
@@ -393,7 +393,7 @@ describe("the source half of a move", () => {
     const pending = moveOut(term, mid());
     // inside the stop's first beat, before the agent has been asked to quit
     await Bun.sleep(100);
-    expect((await fetch(url(`/api/terms?term=${term}`), { method: "DELETE" })).status).toBe(200);
+    expect((await fetch(url(`/api/terms?term=${term}&force=1`), { method: "DELETE" })).status).toBe(200);
     const r = await pending;
     expect(r.status).toBe(409);
     expect(((await r.json()) as { error: string }).error).toMatch(/called off/);

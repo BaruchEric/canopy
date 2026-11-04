@@ -208,8 +208,9 @@ export function ShellsPopBody({ onDone }: { onDone?: () => void }) {
     if (!failed && close) onDone?.();
   };
   const endOne = async (id: string) => {
-    if (here.has(id)) closeTerm(id);
-    else await api.endTerm(id);
+    // both ways in have asked first, so an agent running there goes too
+    if (here.has(id)) closeTerm(id, true);
+    else await api.endTerm(id, true);
   };
   const toggle = (id: string) => {
     setAsking(false);

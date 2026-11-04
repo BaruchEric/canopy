@@ -4283,6 +4283,13 @@ async function handleApi(
     // a task's session, held or only on record, is stopped by the task routes alone
     if (state.terms.get(term)?.info.task || state.tasks.knows(term)) return json({ error: "that is a task; stop it from its repo's tasks" }, 400);
     if (state.ranger.knows(term)) return json({ error: "that is the ranger; turn it off in settings" }, 400);
+    // A tab's × asks without force, and an agent in the shell keeps it: the
+    // agent's background work dies with its process, and a card reading idle
+    // says nothing about that work, so the process is what counts here.
+    if (url.searchParams.get("force") !== "1" && state.tmux) {
+      const pane = await paneInfo(state.tmux, term).catch(() => null);
+      if (pane && (await paneAgent(pane))) return json({ error: "an agent is running in that shell" }, 409);
+    }
     if (!(await endTerm(state, term))) return json({ error: "no such shell" }, 404);
     return json({ ok: true });
   }

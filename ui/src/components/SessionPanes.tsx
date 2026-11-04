@@ -731,7 +731,7 @@ export function TabMenu({
       <button type="button" role="menuitem" title="Takes the tab away here and leaves the shell running" onClick={act(() => hideTerm(id))}>
         hide, keep running
       </button>
-      <button type="button" role="menuitem" className="t-rust" title="Ends the shell on every device" onClick={act(() => closeTerm(id))}>
+      <button type="button" role="menuitem" className="t-rust" title="Ends the shell on every device" onClick={act(() => { if (window.confirm("End this shell on every device, and anything running in it?")) closeTerm(id, true); })}>
         close and end the shell
       </button>
     </div>

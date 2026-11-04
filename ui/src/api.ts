@@ -559,8 +559,9 @@ export const api = {
   placeTerm: (id: string, place: ShellPlace) =>
     repoReq<{ ok: true; place: ShellPlace }>(id, () => "/api/terms/place", { method: "POST", body: JSON.stringify({ term: plainOf(id), place }) }),
   /** ends one shell; closing its socket alone leaves it running */
-  endTerm: (id: string) =>
-    repoReq<{ ok: true }>(id, (p) => `/api/terms?term=${encodeURIComponent(p)}`, { method: "DELETE" }),
+  /** without force, a shell with an agent running in it answers 409 and stays */
+  endTerm: (id: string, force = false) =>
+    repoReq<{ ok: true }>(id, (p) => `/api/terms?term=${encodeURIComponent(p)}${force ? "&force=1" : ""}`, { method: "DELETE" }),
   /** the shells a machine going down left behind, and whether the backend
    *  is recording them at all */
   kept: async (b: string = homeName()) => {

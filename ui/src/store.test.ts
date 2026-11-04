@@ -235,6 +235,45 @@ describe("shells this window ends or restores", () => {
     expect(useStore.getState().terms.map((t) => t.id)).toEqual([other]);
   });
 
+  describe("a × on a shell with an agent in it", () => {
+    const g = globalThis as unknown as { window?: unknown };
+    const closing = "e".repeat(32);
+    const refuseThenEnd = () => {
+      const real = globalThis.fetch;
+      globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+        String(input).includes("force=1")
+          ? real(input, init)
+          : Promise.resolve(new Response(JSON.stringify({ error: "an agent is running in that shell" }), { status: 409 }))) as typeof fetch;
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+    afterEach(() => {
+      delete g.window;
+    });
+
+    test("a no keeps the shell running, hidden here", async () => {
+      globalThis.fetch = answer({ ok: true });
+      refuseThenEnd();
+      g.window = { confirm: () => false, location: { search: "" } };
+      useStore.setState({ repos: [app], panels: [], terms: [tab(closing)], activeTerm: closing, hiddenTerms: [] });
+      useStore.getState().closeTerm(closing);
+      await settle();
+      expect(useStore.getState().hiddenTerms).toEqual([closing]);
+      expect(calls.filter((c) => c.includes("force=1"))).toEqual([]);
+    });
+
+    test("a yes ends it with force", async () => {
+      globalThis.fetch = answer({ ok: true });
+      refuseThenEnd();
+      g.window = { confirm: () => true, location: { search: "" } };
+      useStore.setState({ repos: [app], panels: [], terms: [tab(closing)], activeTerm: closing, hiddenTerms: [] });
+      useStore.getState().closeTerm(closing);
+      await settle();
+      await settle();
+      expect(useStore.getState().hiddenTerms).toEqual([]);
+      expect(calls).toContain(`DELETE /api/terms?term=${closing}&force=1`);
+    });
+  });
+
   test("a rename after the socket URL was sent survives the first shell list", async () => {
     const id = "b".repeat(32);
     globalThis.fetch = answer({ ok: true, label: "after" });
