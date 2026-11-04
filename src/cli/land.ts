@@ -46,8 +46,10 @@ export function queueLines(info: LandingInfo, repo: string | null, backend = "")
       if (e.overlap) out.push(`    overlaps with ${e.overlap.with}: ${e.overlap.paths.join(", ")}`);
     }
     for (const e of back) out.push(`  ${landWord(e, info.entries).padEnd(16)} ${e.branch}  ${backWords(e).split("\n").pop() ?? ""}`);
-    for (const r of ready) out.push(`  ${"ready".padEnd(16)} ${r.branch}  ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
-    for (const r of stopped) out.push(`  ${"stopped".padEnd(16)} ${r.branch}  can land: ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`);
+    // a ready or stopped run's row carries the same overlap the page's chip shows
+    const overlap = (r: LandingRun): string[] => (r.overlap ? [`    overlaps with ${r.overlap.with}: ${r.overlap.paths.join(", ")}`] : []);
+    for (const r of ready) out.push(`  ${"ready".padEnd(16)} ${r.branch}  ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`, ...overlap(r));
+    for (const r of stopped) out.push(`  ${"stopped".padEnd(16)} ${r.branch}  can land: ${r.review ? reviewWord(r.review) : "sorting"}  canopy land ${r.runId}`, ...overlap(r));
   }
   return out;
 }

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { advance, enqueue, entryFor } from "../../src/core/landing";
 import { touchedOf, type Collision } from "../../src/core/touch";
 import type { LandEntry, LandingInfo, LandingRun, LandNotice, PrWatch, Run, RunReview, WorktreeRepoInfo, WorktreesInfo } from "../../src/core/types";
-import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, runOverlaps, type OpenedRun, resultWord, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
+import { approveFiles, backLine, branchByDefault, chipWords, landAllOf, mergeLanding, needsApproval, noticeLine, openedRow, OVERLAP_WORD, overlapChip, repoLanding, rowOverlaps, runOverlaps, type OpenedRun, resultWord, runLanding, scenarioLine, scenarioTone, verdictTone, verdictWord } from "./landing";
 import { repoWorktrees, warmRows, warmWords } from "./landing";
 
 describe("the warm pool in the section", () => {
@@ -151,6 +151,17 @@ describe("a run's word and buttons", () => {
 });
 
 const sorted = (verdict: RunReview["verdict"], files: RunReview["files"] = [], over: Partial<RunReview> = {}): RunReview => ({ verdict, files, base: "b0", head: "h1", at: 1, ...over });
+
+test("a ready branch keeps its overlap on the row and the sheet once both runs ended (FR-040)", () => {
+  const kept = rec("a", { overlap: { with: "run/x-b", paths: ["a.ts", "notes.md"] } });
+  const ended: LandingInfo = { runs: [kept], entries: [], orphans: [], collisions: [] };
+  expect(rowOverlaps(ended, kept)).toEqual([{ id: "kept:a", name: "run/x-b", paths: ["a.ts", "notes.md"] }]);
+  expect(runLanding(run("a"), ended)?.overlaps).toEqual([{ name: "run/x-b", paths: ["a.ts", "notes.md"] }]);
+  expect(rowOverlaps(ended, rec("b"))).toEqual([]);
+  // a live pair wins over the kept mark
+  const c: Collision = { id: "r-a+r-c", repoId: "canopy", run: "r-a", name: "run/x-a", with: { kind: "run", run: "r-c", verb: "Ask", name: "run/x-c" }, paths: ["z.ts"], at: 1 };
+  expect(rowOverlaps({ ...ended, collisions: [c] }, kept)).toEqual([{ id: c.id, name: "run/x-c", paths: ["z.ts"] }]);
+});
 
 test("overlap chips: an entry's mark and both runs' live collisions; the notice line; merged across backends", () => {
   expect(overlapChip("run/x-b", ["a.ts", "b.ts"])).toEqual({ text: "⚠ overlaps run/x-b", title: "Both touch 2 files; the queue rebases and reports a conflict if it finds one. Nothing is held" });

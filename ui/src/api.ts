@@ -118,6 +118,7 @@ import type {
   ScreenProfile,
   EmulatorKind,
   EmulatorOpened,
+  Priority,
 } from "../../src/core/types";
 import type { SecretAct } from "../../src/core/secretwire";
 import { isStaleOffer, newestStale, type StaleOffer } from "../../src/core/stalecopy";
@@ -868,10 +869,10 @@ export const api = {
       qRun,
     );
   },
-  startGroup: async (id: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand = false, pr = false, reviewers?: 2) => {
+  startGroup: async (id: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand = false, pr = false, reviewers?: 2, priority?: Priority) => {
     const [b, plain] = on(id);
     return from(b, await req<RunGroup>(b, `/api/repos/run?${rq(plain)}`, {
-      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profiles ? { profiles } : {}), autoLand, pr, ...(reviewers ? { reviewers } : {}) }),
+      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profiles ? { profiles } : {}), autoLand, pr, ...(reviewers ? { reviewers } : {}), ...(priority ? { priority } : {}) }),
     }), qGroup);
   },
   groups: async (b: string = homeName()) => fromAll(b, await req<RunGroup[]>(b, "/api/groups"), qGroup),

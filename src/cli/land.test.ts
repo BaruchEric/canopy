@@ -48,6 +48,9 @@ test("a queued entry's overlap under its line, and canopy collisions", () => {
   expect(collisionLines(info, "canopy", "mini")).toEqual(["dev-tools/canopy on mini", "  run/x-x and your uncommitted changes: c.ts"]);
   expect(collisionLines({ ...info, runs: [], entries: [] }, "canopy")).toEqual(["dev-tools/canopy", "  run/x-x and your uncommitted changes: c.ts"]);
   expect(collisionLines(info, "other")).toEqual([]);
+  // a ready run that is not queued shows its own overlap, as its row's chip does
+  const ready: LandingInfo = { runs: [rec("d", { overlap: { with: "run/x-e", paths: ["a.ts", "notes.md"] } })], entries: [], orphans: [] };
+  expect(queueLines(ready, null)).toEqual(["dev-tools/canopy", "  ready            run/x-d  sorting  canopy land r-d", "    overlaps with run/x-e: a.ts, notes.md"]);
 });
 
 test("each ready run's verdict, and an entry that joined on its own", () => {

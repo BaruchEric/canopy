@@ -9,6 +9,8 @@ import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, task
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
+import { planPriority, priorityTitle } from "../capacity";
+import { DEFAULT_CAPACITY, type CapacitySettings } from "../../../src/core/capacity";
 import { resolveAgent } from "../../../src/core/route";
 import { effectiveRows, harnessesOf, hasRouting, ROLE_LABEL, ROLE_TITLE, withPick, profileNames } from "../agents";
 import { EffectiveTable, PickEditor } from "./AgentForm";
@@ -237,6 +239,26 @@ export function ToolsPreflight({ show, on, onChange }: { show: boolean; on: bool
   );
 }
 
+/** The pre-flight's priority (FR-036): a chip naming what the start waits
+ *  behind when the plan's usage window runs low. A group starts as low work,
+ *  so it also gets a raise to interactive for this one start. */
+export function PriorityPreflight({ group, raised, settings, onRaise }: { group: boolean; raised: boolean; settings: CapacitySettings; onRaise: (on: boolean) => void }) {
+  const priority = planPriority(group, raised);
+  return (
+    <p className="plan-priority">
+      <span className={`plan-priority-chip p-${priority}`} title={priorityTitle(priority, settings)}>
+        {priority} priority
+      </span>
+      {group && (
+        <label title="For this start only: the members start now even while the window is low">
+          <input type="checkbox" checked={raised} onChange={(e) => onRaise(e.target.checked)} />
+          start as interactive
+        </label>
+      )}
+    </p>
+  );
+}
+
 export function GroupPreflight({ onBranch, times, free, picks, profiles, reviewers, autoLand, onTimes, onPick, onReviewers, onAutoLand }: {
   onBranch: boolean; times: number; free: number; picks: readonly string[]; profiles: string[]; reviewers: 1 | 2; autoLand: boolean;
   onTimes: (n: number) => void; onPick: (member: number, profile: string) => void; onReviewers: (n: 1 | 2) => void; onAutoLand: (on: boolean) => void;
@@ -266,6 +288,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const [picks, setPicks] = useState<string[]>([]);
   const [reviewers, setReviewers] = useState<1 | 2>(1);
   const [autoLand, setAutoLand] = useState(false);
+  const [raised, setRaised] = useState(false);
+  const capSettings = useStore((s) => s.capacity[backendOf(repo.id)]?.settings ?? DEFAULT_CAPACITY);
   const startWsRun = useStore((s) => s.startWsRun);
   const spec = ACTIONS[action];
   const words = planWords(action, workspace);
@@ -309,7 +333,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     setError(null);
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
-      if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, groupProfiles(picks, times), autoLand, pr, reviewers === 2 ? 2 : undefined);
+      if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, groupProfiles(picks, times), autoLand, pr, reviewers === 2 ? 2 : undefined, raised ? "interactive" : undefined);
       else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined));
     } catch (err) {
       setError(errText(err));
@@ -395,6 +419,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
           </label>
         )}
         <ToolsPreflight show={!coordinate && !workspace && !repo.host && !repo.forge && !(branchable && onBranch && times > 1)} on={toolsPick ?? agent.canopyTools === true} onChange={setToolsPick} />
+        <PriorityPreflight group={branchable && onBranch && times > 1} raised={raised} settings={capSettings} onRaise={setRaised} />
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
@@ -627,6 +652,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             with {name}
             {run.workspace && <span className="run-by" title="it works in this repo and sees the workspace's other members"> · in workspace {run.workspace}</span>}
             {run.by && <span className="run-by" title="the device that started it"> · from {run.by}</span>}
+            {run.priority && <span className="run-by" title={`Started as ${run.priority} work, which waits while the plan's usage window runs low; a retry after a limit waits the same way`}> · {run.priority} priority</span>}
             {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>
           <h2 className="sheet-title">

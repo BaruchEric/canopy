@@ -1,7 +1,7 @@
 import { groupWord } from "../groups";
 import { useEffect, useState } from "react";
 import type { LandEntry, LandingRun, Repo } from "../../../src/core/types";
-import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
+import { approveFiles, backLine, chipWords, landAllOf, landWord, needsApproval, noticeLine, openedRow, overlapChip, rowOverlaps, runOverlaps, repoLanding, repoOrphans, hasLanding, stoppedLandTitle, stoppedWhole, verdictTone, verdictWord } from "../landing";
 import { repoWorktrees, warmRows, warmWords } from "../landing";
 import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, runFor, useStore } from "../store";
@@ -283,6 +283,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
                   {verdictWord(r)}
                 </span>
                 {drift(r) && <span className="landing-state landing-drift" title="What the spec-converge check found; this branch is its fix">{drift(r)}</span>}
+                {rowOverlaps(info, r).map((overlap) => <OverlapChip key={overlap.id} name={overlap.name} paths={overlap.paths} />)}
                 <span className="landing-tools">
                   {needsApproval(r) ? (
                     <button type="button" className="mini strong" disabled={busy !== null} title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(r.id)}>
@@ -333,7 +334,7 @@ export function LandingSection({ repo }: { repo: Repo }) {
               <li key={r.id} className={`landing-row st-${r.state}`}>
                 {runLink(r)}
                 <span className="landing-state">{r.state === "working" ? "working" : r.state === "uncommitted" ? "changes left uncommitted" : r.state === "stopped" ? "stopped by a restart" : "no commits"}</span>
-                {runOverlaps(info, r.runId).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
+                {rowOverlaps(info, r).map((collision) => <OverlapChip key={collision.id} name={collision.name} paths={collision.paths} />)}
                 {stoppedWhole(r) && (
                   <span className={`landing-state ${verdictTone(r)}`} title={r.review?.why ?? "What its sort says: the review rules in the repo's .canopy/review.json"}>
                     {verdictWord(r)}

@@ -5067,6 +5067,34 @@ button.dl-gut.has {
   font-size: 12px;
   color: var(--ink-dim);
 }
+/* the start's priority (FR-036) and, for a group, its one-off raise */
+.plan-priority {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.plan-priority label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.plan-priority-chip {
+  padding: 0 6px;
+  border: 1px solid var(--moss-pale);
+  border-radius: 3px;
+  color: var(--moss-deep);
+  font-size: 11px;
+  line-height: 17px;
+}
+.plan-priority-chip.p-low,
+.plan-priority-chip.p-normal {
+  border-color: var(--lichen);
+  color: var(--ink-dim);
+}
 /* under the note: how to start from a GitHub issue, and the issue it names */
 .plan-issue {
   display: flex;

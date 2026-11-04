@@ -149,6 +149,7 @@ import {
   type SourceState,
   type WorkflowEntry,
   type Workspace,
+  type Priority,
 } from "../../src/core/types";
 
 /** drag limits for the two resizable panes, in px */
@@ -1517,7 +1518,8 @@ export interface CanopyState {
   takePendingSearch: () => void;
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
-  startGroup: (repoId: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand?: boolean, pr?: boolean, reviewers?: 2) => Promise<void>;
+  /** `priority` raises the group above its low default for this one start (FR-036) */
+  startGroup: (repoId: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand?: boolean, pr?: boolean, reviewers?: 2, priority?: Priority) => Promise<void>;
   startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true, devTask?: true, canopyTools?: boolean) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
@@ -4871,9 +4873,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     const group = await api.dropGroup(id, keep);
     set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
   },
-  startGroup: async (repoId, action, note, times, profiles, autoLand = false, pr = false, reviewers) => {
+  startGroup: async (repoId, action, note, times, profiles, autoLand = false, pr = false, reviewers, priority) => {
     if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
-    const group = await api.startGroup(repoId, action, note, times, profiles, autoLand, pr, reviewers);
+    const group = await api.startGroup(repoId, action, note, times, profiles, autoLand, pr, reviewers, priority);
     const b = backendOf(repoId);
     set(s => {
       const info = s.landing[b] ?? { runs: [], entries: [], orphans: [] };

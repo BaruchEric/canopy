@@ -6,7 +6,7 @@ import {
   type CapacityWindow,
   type Window,
 } from "../../src/core/capacity";
-import type { CapacityInfo, HeldStart } from "../../src/core/types";
+import type { CapacityInfo, HeldStart, Priority } from "../../src/core/types";
 
 export const CAPACITY_GLYPH = "◔";
 
@@ -136,4 +136,19 @@ export function settingsPatch(form: { low: string; normal: string; weekly: strin
     patch.observedFiveHourUsd = n;
   }
   return patch;
+}
+
+/** The priority a pre-flight's start gets (FR-036): a best-of-N group is low
+ *  work unless raised for this one start; anything else the page starts is
+ *  interactive. */
+export function planPriority(group: boolean, raised: boolean): Priority {
+  return group && !raised ? "low" : "interactive";
+}
+
+/** What a start at this priority waits behind, in the backend's settings. */
+export function priorityTitle(priority: Priority, settings: CapacitySettings): string {
+  if (priority === "interactive") return "Starts now, whatever the plan's usage windows read.";
+  const five = holdPercent(priority === "low" ? settings.lowHold : settings.normalHold);
+  const week = priority === "low" ? `, the weekly window reads ${holdPercent(settings.weeklyLowHold)}% or more` : "";
+  return `Waits while the 5-hour window reads ${five}% or more${week}, or a limit hit stands, then starts by itself after the reset. With no reading it never waits.`;
 }

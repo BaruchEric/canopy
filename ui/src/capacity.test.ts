@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_CAPACITY, emptyCapacity, limitHit, type Capacity } from "../../src/core/capacity";
 import type { CapacityInfo } from "../../src/core/types";
-import { ageWord, capacityLine, capacityRows, capacityTone, capacityWord, heldRows, holdPercent, rowsTone, settingsPatch, windowWord } from "./capacity";
+import { ageWord, capacityLine, capacityRows, capacityTone, capacityWord, heldRows, holdPercent, planPriority, priorityTitle, rowsTone, settingsPatch, windowWord } from "./capacity";
 
 const NOW = Date.UTC(2026, 9, 26, 12);
 const THU_3PM = Date.UTC(2026, 9, 29, 15);
@@ -74,4 +74,18 @@ test("settingsPatch: percentages and a dollar figure, or what is wrong", () => {
   expect(settingsPatch({ ...form, low: "0" })).toBe("the hold for low work is a percentage above 0 and at most 100");
   expect(settingsPatch({ ...form, normal: "" })).toBe("the hold for normal work is a percentage above 0 and at most 100");
   expect(settingsPatch({ ...form, usd: "-2" })).toBe("the dollar figure is above 0, or empty for none");
+});
+
+test("planPriority: a group is low unless raised, anything else is interactive", () => {
+  expect(planPriority(true, false)).toBe("low");
+  expect(planPriority(true, true)).toBe("interactive");
+  expect(planPriority(false, false)).toBe("interactive");
+});
+
+test("priorityTitle names the backend's holds for the priority", () => {
+  expect(priorityTitle("interactive", DEFAULT_CAPACITY)).toBe("Starts now, whatever the plan's usage windows read.");
+  expect(priorityTitle("low", DEFAULT_CAPACITY)).toContain("5-hour window reads 70% or more, the weekly window reads 85% or more");
+  expect(priorityTitle("normal", DEFAULT_CAPACITY)).toContain("5-hour window reads 90% or more, or a limit hit stands");
+  expect(priorityTitle("normal", DEFAULT_CAPACITY)).not.toContain("weekly");
+  expect(priorityTitle("low", { ...DEFAULT_CAPACITY, lowHold: 0.5 })).toContain("50% or more");
 });

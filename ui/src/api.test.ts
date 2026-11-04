@@ -109,6 +109,14 @@ describe("a page with two backends", () => {
     expect(group.members[0]).toMatchObject({ run: "b|r", origin: "b|o" });
   });
 
+  test("group start sends a raised priority only when the pre-flight raised it (FR-036)", async () => {
+    reply = () => json({ id: "g", repoId: "x", members: [] });
+    await api.startGroup("b|x", "ask", "n", 2, undefined, false, false, undefined, "interactive");
+    expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ times: 2, priority: "interactive" });
+    await api.startGroup("b|x", "ask", "n", 2);
+    expect(JSON.parse(String(calls[1]?.init?.body))).not.toHaveProperty("priority");
+  });
+
   test("group mutations strip owning IDs and qualify every response reference", async () => {
     reply = () => json({ id: "g", repoId: "x", members: [{ run: "r", origin: "o", profile: null }], winner: "o", review: { run: "review", ranking: ["run/o"], why: {} }, scores: { o: { branch: "run/o" } } });
     const picked = await api.pickRunGroup("b|g", "b|o");

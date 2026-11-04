@@ -25,7 +25,8 @@ describe("run console actions", () => {
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Console, GroupPreflight, RunPane, ToolsPreflight, freeBranchSlots } from "./RunSheet";
+import { Console, GroupPreflight, PriorityPreflight, RunPane, ToolsPreflight, freeBranchSlots } from "./RunSheet";
+import { DEFAULT_CAPACITY } from "../../../src/core/capacity";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { Flow, PrWatch, Run } from "../../../src/core/types";
@@ -69,6 +70,20 @@ describe("group preflight", () => {
     expect(off).not.toContain('checked=""');
     expect(renderToStaticMarkup(createElement(ToolsPreflight, { ...props, on: true }))).toContain('checked=""');
   });
+  test("the priority chip: a page start is interactive, a group is low with a one-off raise (FR-036)", () => {
+    const props = { group: false, raised: false, settings: DEFAULT_CAPACITY, onRaise: () => {} };
+    const single = renderToStaticMarkup(createElement(PriorityPreflight, props));
+    expect(single).toContain("interactive priority");
+    expect(single).not.toContain("start as interactive");
+    const group = renderToStaticMarkup(createElement(PriorityPreflight, { ...props, group: true }));
+    expect(group).toContain("low priority");
+    expect(group).toContain("70% or more");
+    expect(group).toContain("start as interactive");
+    expect(group).not.toContain('checked=""');
+    const raised = renderToStaticMarkup(createElement(PriorityPreflight, { ...props, group: true, raised: true }));
+    expect(raised).toContain("interactive priority");
+    expect(raised).toContain('checked=""');
+  });
   test("store sends a profile per member and opens the returned group; one uses existing start", async () => {
     const original = api.startGroup;
     const single = useStore.getState().startRun;
@@ -82,6 +97,8 @@ describe("group preflight", () => {
       expect(useStore.getState().sheet).toEqual({ kind: "group", groupId: "g" });
       await useStore.getState().startGroup("repo", "ask", "n", 1);
       expect(calls[1]).toEqual(["repo", "ask", "n", true, undefined]);
+      await useStore.getState().startGroup("repo", "ask", "n", 2, undefined, false, false, undefined, "interactive");
+      expect(calls[2]?.[8]).toBe("interactive");
     } finally { api.startGroup = original; useStore.setState({ ...before, startRun: single }); }
   });
 });
@@ -94,6 +111,13 @@ function renderConsole(run: Run): string {
   try { return renderToStaticMarkup(createElement(Console, { run, repo: undefined })); }
   finally { Object.assign(initial, previous); }
 }
+
+describe("run console priority", () => {
+  test("a low or normal run names its priority; an interactive one says nothing (FR-036)", () => {
+    expect(renderConsole({ ...active("low", "low"), priority: "low" })).toContain(" · low priority");
+    expect(renderConsole(active("plain", "plain"))).not.toContain("priority");
+  });
+});
 
 describe("kept run console", () => {
   test("shows its recorded timeline and kept marker with close, never dismiss", () => {

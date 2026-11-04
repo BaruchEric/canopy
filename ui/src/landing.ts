@@ -45,6 +45,15 @@ export function runOverlaps(info: LandingInfo, runId: string): { id: string; nam
   return overlaps;
 }
 
+/** A landing row's overlaps: the live pairs, or once both sides have ended,
+ *  the overlap the backend kept on the branch's record until it leaves
+ *  landing (FR-040), so a ready branch still says what it shares. */
+export function rowOverlaps(info: LandingInfo, rec: Pick<LandingRun, "id" | "runId" | "overlap">): { id: string; name: string; paths: string[] }[] {
+  const live = runOverlaps(info, rec.runId);
+  if (live.length > 0 || !rec.overlap) return live;
+  return [{ id: `kept:${rec.id}`, name: rec.overlap.with, paths: rec.overlap.paths }];
+}
+
 /** A ready run's verdict in words; "sorting" until its sort is in. */
 export const verdictWord = (r: Pick<LandingRun, "review">): string => (r.review ? reviewWord(r.review) : "sorting");
 
@@ -250,9 +259,11 @@ function ordinaryRunLanding(run: Run, info: LandingInfo): RunLanding | null {
   const b = run.branch;
   if (!b) return null;
   const entry = info.entries.find((e) => e.id === b.origin);
+  const kept = info.runs.find((r) => r.id === b.origin);
   const overlaps = [
     ...(entry?.overlap ? [{ name: entry.overlap.with, paths: entry.overlap.paths }] : []),
-    ...runOverlaps(info, run.id).map(({ name, paths }) => ({ name, paths })),
+    // a queued entry says its own overlap; a branch not queued falls back to the kept one
+    ...(kept && !entry ? rowOverlaps(info, kept) : runOverlaps(info, run.id)).map(({ name, paths }) => ({ name, paths })),
   ];
   const overlapMark = overlaps.length > 0 ? { overlaps } : {};
   if (entry) {
