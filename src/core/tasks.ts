@@ -347,6 +347,8 @@ export interface TaskTimings {
   logAge: number;
   /** how long "no server" is doubted after live panes were seen: the shells container restarting */
   noServerGrace: number;
+  /** how often what listens is read for a worktree task with no port of its own */
+  readBack: number;
 }
 
 export const TASK_TIMINGS: TaskTimings = {
@@ -361,6 +363,7 @@ export const TASK_TIMINGS: TaskTimings = {
   logCap: 2 * 1024 * 1024,
   logAge: 7 * 86_400_000,
   noServerGrace: 30_000,
+  readBack: 10_000,
 };
 
 /** the wait before the n-th restart in a row (n from 1) */

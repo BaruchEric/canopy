@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mayServeHttp, mergeListeners, parseLsofCwd, parseLsofListen, parseProcNet, repoOfCwd } from "./ports";
+import { mayServeHttp, mergeListeners, parseLsofCwd, parseLsofListen, parseProcNet, repoOfCwd, portUnder, treeOfPort } from "./ports";
 
 const HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
 const row = (addr: string, st: string, inode: string) =>
@@ -87,4 +87,30 @@ test("mayServeHttp: adb and the databases never do, anything else or unknown may
   expect(mayServeHttp("bun")).toBe(true);
   expect(mayServeHttp("node")).toBe(true);
   expect(mayServeHttp(undefined)).toBe(true);
+});
+
+describe("ports in worktrees", () => {
+  const ls = [
+    { port: 3000, host: "127.0.0.1", cwd: "/w/a-other" },
+    { port: 5174, host: "127.0.0.1", cwd: "/w/a/ui", command: "node" },
+    { port: 5173, host: "127.0.0.1", cwd: "/w/a", command: "node" },
+    { port: 5037, host: "127.0.0.1", cwd: "/w/a", command: "adb" },
+  ];
+
+  test("a task's own port is the lowest web port under its folder", () => {
+    expect(portUnder(ls, "/w/a")).toBe(5173);
+    expect(portUnder(ls, "/w/none")).toBeUndefined();
+  });
+
+  test("a held port names its task and branch, a folder its branch, and anything else nothing", () => {
+    const trees = [
+      { repoId: "r", dir: "/w/a", branch: "run/a", task: "dev", ports: [7901] },
+      { repoId: "r", dir: "/w/b", branch: "run/b" },
+    ];
+    expect(treeOfPort({ port: 7901 }, trees)).toEqual({ repo: "r", name: "dev · run/a" });
+    expect(treeOfPort({ port: 5173, cwd: "/w/a/ui" }, trees)).toEqual({ repo: "r", name: "dev · run/a" });
+    expect(treeOfPort({ port: 5173, cwd: "/w/b" }, trees)).toEqual({ repo: "r", name: "run/b" });
+    expect(treeOfPort({ port: 5173, cwd: "/w/bb" }, trees)).toBeUndefined();
+    expect(treeOfPort({ port: 22 }, trees)).toBeUndefined();
+  });
 });

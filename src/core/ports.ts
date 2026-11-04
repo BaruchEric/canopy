@@ -146,6 +146,33 @@ export function repoOfCwd(cwd: string | undefined, repos: { id: string; path: st
   return best?.id;
 }
 
+const under = (cwd: string | undefined, dir: string): boolean => cwd !== undefined && (cwd === dir || cwd.startsWith(`${dir}/`));
+
+/** The port a server in `dir` listens on, its lowest, for a task that picked
+ *  its own. By folder rather than by the pane's pid: a dev server's listener
+ *  is often a child of what the pane started (probe P4, `next dev`). */
+export function portUnder(ls: readonly Listening[], dir: string): number | undefined {
+  const ports = ls.filter((l) => under(l.cwd, dir) && mayServeHttp(l.command)).map((l) => l.port);
+  return ports.length ? Math.min(...ports) : undefined;
+}
+
+/** a branch's worktree as the port list names it: its task and ports when one runs there */
+export interface TreeFolder {
+  repoId: string;
+  dir: string;
+  branch: string;
+  task?: string;
+  ports?: readonly number[];
+}
+
+/** Which worktree a port belongs to: the one holding it, else the one its
+ *  process runs in. The name reads `dev · run/<branch>`. A port held but
+ *  listened on by no process in the folder (a container's) is still found. */
+export function treeOfPort(l: { port: number; cwd?: string }, trees: readonly TreeFolder[]): { repo: string; name: string } | undefined {
+  const t = trees.find((x) => x.ports?.includes(l.port)) ?? trees.find((x) => under(l.cwd, x.dir));
+  return t ? { repo: t.repoId, name: t.task ? `${t.task} · ${t.branch}` : t.branch } : undefined;
+}
+
 /**
  * Daemons that listen on TCP but never speak HTTP, so a preview of their
  * port can only ever show the "nothing answers" page. They matter because

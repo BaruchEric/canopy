@@ -190,6 +190,8 @@ export interface TaskMeta {
   repoId: string;
   path: string;
   task: string;
+  /** the worktree it runs in; `path` stays the repo's main checkout */
+  tree?: string;
 }
 
 /**
@@ -219,6 +221,7 @@ export function taskSessionArgs(base: string[], meta: TaskMeta, size: TermSize):
     ...opt("@canopy_place", "strip"),
     ...opt("@canopy_path", meta.path),
     ...opt("@canopy_task", meta.task),
+    ...(meta.tree ? opt("@canopy_worktree", meta.tree) : []),
     ";",
     "set-option",
     "-w",
@@ -250,8 +253,8 @@ export const interruptArgs = (base: string[], id: string): string[] => [...base,
 
 /** one line per session on the server, its pane's fields off its active pane
  *  (a task's session has only the one): session, task, repo, path, dead,
- *  exit status, created */
-export const TASK_PANE_FORMAT = "#{session_name}\t#{@canopy_task}\t#{@canopy_repo}\t#{@canopy_path}\t#{pane_dead}\t#{pane_dead_status}\t#{session_created}";
+ *  exit status, created, worktree */
+export const TASK_PANE_FORMAT = "#{session_name}\t#{@canopy_task}\t#{@canopy_repo}\t#{@canopy_path}\t#{pane_dead}\t#{pane_dead_status}\t#{session_created}\t#{@canopy_worktree}";
 
 /** `list-sessions` rather than `list-panes -a`: the shells container's server
  *  outlives its last session, and `list-panes` there fails ("no current
@@ -268,6 +271,8 @@ export interface TaskPane {
   code: number | null;
   /** ms */
   createdAt: number;
+  /** the worktree it runs in, when not the repo's main checkout */
+  tree?: string;
 }
 
 /** reads `taskPanesArgs`, keeping the panes of task sessions canopy made */
@@ -275,7 +280,7 @@ export function parseTaskPanes(out: string): TaskPane[] {
   const panes: TaskPane[] = [];
   for (const line of out.split("\n")) {
     if (!line) continue;
-    const [name = "", task = "", repoId = "", path = "", dead = "", status = "", created = ""] = line.split("\t");
+    const [name = "", task = "", repoId = "", path = "", dead = "", status = "", created = "", tree = ""] = line.split("\t");
     const termId = sessionId(name);
     if (!termId || !task || !repoId || !path) continue;
     const code = Number(status);
@@ -288,6 +293,7 @@ export function parseTaskPanes(out: string): TaskPane[] {
       dead: dead === "1",
       code: dead === "1" && status !== "" && Number.isFinite(code) ? code : null,
       createdAt: Number.isFinite(secs) && secs > 0 ? secs * 1000 : Date.now(),
+      ...(tree ? { tree } : {}),
     });
   }
   return panes;

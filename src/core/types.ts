@@ -2021,7 +2021,7 @@ export type ServerEvent =
   | { type: "kept"; kept: KeptShell[] }
   | { type: "peers"; seen: PeerSeen[] }
   /** a repo's tasks, whenever one starts, stops, dies, is edited or a viewer comes or goes */
-  | { type: "tasks"; repoId: string; tasks: TaskInfo[] }
+  | { type: "tasks"; repoId: string; tasks: TaskInfo[]; trees?: TaskInfo[] }
   /** a tailchan message the UI's handle heard, or one the UI just sent */
   | { type: "chan"; message: ChanMessage }
   /** agent cards the broker changed, whole, and the ids of any it dropped
