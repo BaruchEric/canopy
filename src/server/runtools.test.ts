@@ -4,13 +4,29 @@ import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runsDir } from "../core/runlog";
-import { canopyMcpCommand, mcpConfigPath, removeMcpConfig, sweepMcpConfigs, writeMcpConfig } from "./runtools";
+import { BUNDLED_TOOLS_BRIEF, canopyMcpCommand, mcpConfigPath, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "canopy-runtools-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const entry = { command: "/bin/bun", args: ["x", "mcp"], env: { CANOPY_TOKEN: "t" } };
+
+describe("what a run with tools is told", () => {
+  test("the bundled brief says where a run stops, and the config dir's copy replaces it", async () => {
+    const bundled = await toolsBrief(dir);
+    expect(bundled).toBe((await readFile(BUNDLED_TOOLS_BRIEF, "utf8")).trim());
+    for (const words of ["canopy_run_start", "canopy_work_note", "landing queue", "never pushes", "must stand alone", "no right to land"]) expect(bundled).toContain(words);
+    await writeFile(join(dir, "canopy-tools.md"), "mine\n");
+    expect(await toolsBrief(dir)).toBe("mine");
+  });
+
+  test("Codex's launch line ends in the path, with no token in it", () => {
+    const { args, command } = runConfigLaunch("/c/run-tools/a.mcp.json");
+    expect(command).toBe(process.execPath);
+    expect(args.slice(-3)).toEqual(["mcp", "--run-config", "/c/run-tools/a.mcp.json"]);
+  });
+});
 
 describe("a run's mcp.json", () => {
   test("is 0600 in a 0700 folder and holds the entry", async () => {

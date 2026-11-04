@@ -2,10 +2,10 @@
  *  file in a 0700 folder, holding the run's token for the `canopy` MCP server.
  *  It sits apart from `runs/<id>/`, which the transcript owns and removes whole
  *  when a credential collides with its metadata. Bun-only. */
-import { chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { configDir } from "../core/store";
-import { mcpConfigJson, type McpEntry } from "../core/runtools";
+import { mcpConfigJson, type McpEntry, type McpLaunch } from "../core/runtools";
 
 const SUFFIX = ".mcp.json";
 
@@ -18,6 +18,25 @@ export const canopyMcpCommand = (): Pick<McpEntry, "command" | "args"> => ({
   command: process.execPath,
   args: [join(import.meta.dir, "../../bin/canopy-mcp.ts"), "mcp"],
 });
+
+/** The same server for a harness that names it on its command line: the path
+ *  goes on argv and `canopy mcp` reads the token from the file. */
+export const runConfigLaunch = (file: string): McpLaunch => {
+  const { command, args } = canopyMcpCommand();
+  return { command, args: [...args, "--run-config", file] };
+};
+
+/** the brief bundled with canopy; `<config dir>/canopy-tools.md` replaces it */
+export const BUNDLED_TOOLS_BRIEF = join(import.meta.dir, "../../lib/canopy-tools.md");
+
+/** What a run holding the tools is told about them. */
+export async function toolsBrief(dir = configDir()): Promise<string> {
+  for (const file of [join(dir, "canopy-tools.md"), BUNDLED_TOOLS_BRIEF]) {
+    const text = await readFile(file, "utf8").catch(() => "");
+    if (text.trim()) return text.trim();
+  }
+  return "You hold canopy's tools, an MCP server named canopy. You have no right to land or push, so say so rather than try.";
+}
 
 /** Writes the file and answers its path. `wx`, so it never follows a link or
  *  takes over a file that is already there. */

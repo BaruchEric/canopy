@@ -375,7 +375,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             open a PR when done
           </label>
         )}
-        <ToolsPreflight show={!coordinate && !workspace && !repo.host && !repo.forge && agent.harness === "claude" && !(branchable && onBranch && times > 1)} on={toolsPick ?? agent.canopyTools === true} onChange={setToolsPick} />
+        <ToolsPreflight show={!coordinate && !workspace && !repo.host && !repo.forge && !(branchable && onBranch && times > 1)} on={toolsPick ?? agent.canopyTools === true} onChange={setToolsPick} />
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">

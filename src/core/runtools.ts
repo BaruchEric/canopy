@@ -26,6 +26,13 @@ export function childRefusal(parent: (Pick<Run, "id" | "status"> & Partial<Pick<
   return null;
 }
 
+/** How a harness that names the server on its own command line starts it.
+ *  `args` ends in `--run-config <file>`, so no token rides on argv. */
+export interface McpLaunch {
+  command: string;
+  args: readonly string[];
+}
+
 /** Whether one run is the other's parent. */
 export const areKin = (a: Pick<Run, "id" | "parent">, b: Pick<Run, "id" | "parent">): boolean => a.parent === b.id || b.parent === a.id;
 

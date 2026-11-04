@@ -20,7 +20,7 @@ import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
 import type { RunLog, RunLogger } from "./runlog";
-import { childRefusal } from "./runtools";
+import { childRefusal, type McpLaunch } from "./runtools";
 import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { noWrapUpNote, STALL_AFTER, stallStep, stallStopNote, WRAP_UP_NOTE, wrapUpMessage } from "./stall";
@@ -98,6 +98,10 @@ export interface StartExtras {
   depth?: number;
   /** the run's `mcp.json`: it holds canopy's tools (FR-038) */
   mcpConfig?: string;
+  /** that server's launch line, for Codex */
+  mcpServer?: McpLaunch;
+  /** what the prompt tells it about those tools */
+  brief?: string;
   /** the run's id, chosen first: a coordinator's token is minted for it
    *  before the run exists */
   id?: string;
@@ -194,7 +198,7 @@ export function defaultDriver(harness: Harness, version = "0"): RunDriver {
 
 /** The command line each driver builds from these same resolved settings. */
 export function startArgv(harness: Harness, spec: DriveSpec, agent: AgentSettings, stage: boolean): string[] {
-  return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent)];
+  return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent, spec.mcpServer)];
 }
 
 /** What every run's process gets on top of canopy's own environment: which
@@ -458,7 +462,7 @@ export class Runner {
     // a folder no rule was kept for
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
-    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}) };
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;
@@ -511,7 +515,7 @@ export class Runner {
       ended,
       process: { kind: "idle" },
       repo,
-      spec,
+      spec: extras.brief ? { ...spec, brief: extras.brief } : spec,
       ...(scope ? { scope } : {}),
       ...(branch ? { branch } : {}),
       before: statusFingerprint(repo.status),

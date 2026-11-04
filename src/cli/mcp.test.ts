@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LineSplitter } from "../core/codexrpc";
 import { tokenFile } from "./api";
-import { apiOver, mcpToken, toolLines } from "./mcp";
+import { apiOver, mcpToken, runConfigEnv, toolLines } from "./mcp";
 
 const root = join(import.meta.dir, "../..");
 const oldConfig = process.env["CANOPY_CONFIG_DIR"];
@@ -123,4 +123,12 @@ test("the shells bundle answers initialize and refuses commands other than mcp",
   expect(reply).toMatchObject({ id: 1, result: { protocolVersion: "2024-11-05", serverInfo: { name: "canopy" } } });
   expect(code).toBe(0);
   expect(stderr).toBe("");
+});
+
+test("a run's file gives its server the token, and anything else is refused (FR-038)", () => {
+  const env = { CANOPY_API: "http://127.0.0.1:1", CANOPY_TOKEN: "run-token", CANOPY_RUN: "abcd1234" };
+  expect(runConfigEnv(JSON.stringify({ mcpServers: { canopy: { command: "bun", args: [], env: { ...env, OTHER: "x" } } } }))).toEqual(env);
+  expect(() => runConfigEnv("{")).toThrow();
+  expect(() => runConfigEnv("{}")).toThrow("not a run's canopy config");
+  expect(() => runConfigEnv(JSON.stringify({ mcpServers: { canopy: { env: { CANOPY_API: "x", CANOPY_RUN: "y" } } } }))).toThrow("not a run's canopy config");
 });

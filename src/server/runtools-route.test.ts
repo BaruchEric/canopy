@@ -18,6 +18,7 @@ import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
 const starts = new Map<string, DriveCtx>();
+const firstMessages = new Map<string, string>();
 
 /** Holds a run open until `end` finishes it. */
 class HeldDriver implements RunDriver {
@@ -25,7 +26,7 @@ class HeldDriver implements RunDriver {
   constructor(readonly harness: Harness) {}
   private ctx: DriveCtx | undefined;
   check(): string | null { return null; }
-  start(ctx: DriveCtx): void { this.ctx = ctx; starts.set(ctx.env["CANOPY_RUN"] ?? "", ctx); }
+  start(ctx: DriveCtx, message: string): void { this.ctx = ctx; starts.set(ctx.env["CANOPY_RUN"] ?? "", ctx); firstMessages.set(ctx.env["CANOPY_RUN"] ?? "", message); }
   say(): void {}
   stop(): void { this.ctx?.exited({ code: null, stderr: "" }); }
 }
@@ -123,6 +124,7 @@ describe("the file and the token", () => {
     expect(existsSync(fileOf(run.id))).toBe(false);
     const ctx = await until(async () => starts.get(run.id), "the driver");
     expect(ctx.spec.mcpConfig).toBeUndefined();
+    expect(firstMessages.get(run.id)).not.toContain("You hold canopy's tools");
     await end(run.id);
   });
 
@@ -131,11 +133,14 @@ describe("the file and the token", () => {
     expect(run.canopyTools).toBe(true);
     const file = fileOf(run.id);
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(statSync(join(config, "runs", run.id)).mode & 0o777).toBe(0o700);
+    expect(statSync(join(config, "run-tools")).mode & 0o777).toBe(0o700);
     const token = await tokenOf(run.id);
     expect(token.startsWith("cnp_run_")).toBe(true);
     const ctx = await until(async () => starts.get(run.id), "the driver");
     expect(ctx.spec.mcpConfig).toBe(file);
+    expect(ctx.spec.mcpServer?.args.slice(-2)).toEqual(["--run-config", file]);
+    expect(JSON.stringify(ctx.spec)).not.toContain(token);
+    expect(firstMessages.get(run.id)).toContain("You hold canopy's tools");
     expect(Object.values(ctx.env)).not.toContain(token);
     expect(ctx.env["CANOPY_TOKEN"]).toBeUndefined();
     const held = JSON.parse(await readFile(file, "utf8")) as { mcpServers: { canopy: { command: string; args: string[]; env: Record<string, string> } } };

@@ -31,6 +31,8 @@ export interface ActionSpec {
    *  ground rules, an ask frames the note as the task, a chat puts the
    *  first message last */
   mode: "job" | "ask" | "chat";
+  /** what a run holding canopy's tools is told about them (FR-038) */
+  brief?: string;
   /** no one answers this run: every prompt is denied at once with this message */
   unattended?: string;
   /** Claude's starting permission mode, over the agent's yolo */
@@ -341,8 +343,8 @@ export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: 
   // A chat's first message comes last, where a reply naturally follows it.
   const parts =
     spec.mode === "chat"
-      ? [head, spec.task, rules.chat, noteBlock]
-      : [head, spec.task, noteBlock, spec.mode === "ask" ? rules.ask : rules.job];
+      ? [head, spec.task, rules.chat, spec.brief, noteBlock]
+      : [head, spec.task, noteBlock, spec.mode === "ask" ? rules.ask : rules.job, spec.brief];
   return parts.filter(Boolean).join("\n\n");
 }
 

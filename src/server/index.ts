@@ -153,7 +153,7 @@ import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, type BranchStart, type StartExtras } from "../core/runner";
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
-import { canopyMcpCommand, removeMcpConfig, sweepMcpConfigs, writeMcpConfig } from "./runtools";
+import { canopyMcpCommand, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -1245,7 +1245,7 @@ async function startRepoRun(
   const base: StartExtras = { ...(priority === "interactive" ? {} : { priority }), ...(how.parent ? { parent: how.parent, child: true as const } : {}) };
   // the start's word beats the settings'; a start that asks outright hears
   // why it cannot have them, and settings that cannot apply here are passed over
-  const refused = toolsRefusal(state, repo, agent);
+  const refused = toolsRefusal(state, repo);
   if (how.tools === true && refused) throw new HttpError(400, refused);
   const tools = !refused && (how.tools ?? agent.canopyTools === true) ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
   try {
@@ -1272,9 +1272,8 @@ interface RunStartHow {
 
 /** Why a run here cannot hold canopy's tools, or null. An incubator seed runs
  *  in another container, which has no way to the file or the server. */
-function toolsRefusal(state: ServerState, repo: Repo, agent: AgentSettings): string | null {
+function toolsRefusal(state: ServerState, repo: Repo): string | null {
   if (isSeedPath(state.root, repo.path)) return "an incubator seed's run holds no canopy tools";
-  if (agent.harness !== "claude") return "canopy tools need Claude Code for now";
   if (!state.apiUrl) return "this server is not listening yet";
   return null;
 }
@@ -1288,7 +1287,7 @@ async function runTools(state: ServerState, repo: Repo, extras: StartExtras): Pr
   const release = (): Promise<void> => dropRunTools(state, id);
   try {
     const mcpConfig = await writeMcpConfig(id, { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } });
-    return { extras: { ...extras, id, mcpConfig }, release };
+    return { extras: { ...extras, id, mcpConfig, mcpServer: runConfigLaunch(mcpConfig), brief: await toolsBrief() }, release };
   } catch (err) {
     await release();
     throw new HttpError(500, `could not write the run's mcp.json: ${String(err instanceof Error ? err.message : err)}`);
@@ -1772,7 +1771,10 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   const notes = rec.work ? state.work.get(rec.work)?.notes ?? [] : [];
   const fence = handoffFence(notes);
   const resumed = queueLine ? `${reason}\n\n${branchLine(b)}` : reason;
-  const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b, notes);
+  // a resumed session read the brief when it began; a fresh one needs it again
+  const holdsTools = rec.canopyTools === true && !toolsRefusal(state, repo);
+  const askSpec = holdsTools && !resume ? { ...ACTIONS.ask, brief: await toolsBrief() } : ACTIONS.ask;
+  const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, askSpec, `${rec.note}\n\n${reason}`, b, notes);
   // a fix of a child stays one, and a run that held tools gets a fresh token
   const parent = how.parent ?? rec.parent;
   const base: StartExtras = {
@@ -1781,7 +1783,7 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
     ...(parent ? { parent } : {}),
     ...(rec.depth ? { depth: rec.depth } : {}),
   };
-  const tools = rec.canopyTools && !toolsRefusal(state, repo, agent) ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
+  const tools = holdsTools ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
   try {
     return state.runner.start(repo, "ask", ACTIONS.ask, note, agent, undefined, undefined, {
       branch: b,

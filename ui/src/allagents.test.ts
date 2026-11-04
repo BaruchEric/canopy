@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, CoordTask, Repo, Run, TermInfo } from "../../src/core/types";
-import { agentName, allAgents, chatOf, headingRuns, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
+import { agentName, allAgents, chatOf, headingRuns, holdsTools, madeWord, runCard, runOfCard, runState, shellsToProbe, type Ids } from "./allagents";
 
 // home is "mac"; another backend's ids carry "mini|"
 const ids: Ids = {
@@ -182,5 +182,16 @@ describe("chatOf", () => {
     expect(chat(runCard(run({ id: "mini|r3" }), repo, ids))).toBe(false);
     expect(chat(card({ where: where({ backend: "mac", term: "r2" }) }))).toBe(false);
     expect(chat(card())).toBe(false);
+  });
+});
+
+describe("the board's tools chip (FR-038)", () => {
+  const on = card({ where: { ...card().where, canopy: { backend: "mini", run: "r1" } } });
+  test("a card's live run holding tools shows it; an ended run, a run without, or no run does not", () => {
+    expect(holdsTools(on, { "mini|r1": run({ canopyTools: true }) }, ids)).toBe(true);
+    expect(holdsTools(on, { "mini|r1": run({ canopyTools: true, status: "done" }) }, ids)).toBe(false);
+    expect(holdsTools(on, { "mini|r1": run() }, ids)).toBe(false);
+    expect(holdsTools(on, {}, ids)).toBe(false);
+    expect(holdsTools(card(), { r1: run({ canopyTools: true }) }, ids)).toBe(false);
   });
 });

@@ -631,6 +631,13 @@ describe("the run log (FR-043)", () => {
 });
 
 
+test("FR-038 Codex's argv names the run's file and no token", () => {
+  const mcpServer = { command: "/opt/bun", args: ["mcp", "--run-config", "/c/a.mcp.json"] };
+  const argv = startArgv("codex", { ...ACTIONS.ask, mcpServer }, { ...DEFAULT_AGENT, harness: "codex" }, false);
+  expect(argv).toContain('mcp_servers.canopy.args=["mcp", "--run-config", "/c/a.mcp.json"]');
+  expect(argv.join(" ")).not.toContain("CANOPY_TOKEN");
+});
+
 test("FR-043 startArgv follows each harness and stage settings", () => {
   expect(startArgv("claude", { allowedTools: [], maxTurns: 5, resume: "fixture-session" }, DEFAULT_AGENT, false)).toEqual(expect.arrayContaining(["claude", "-p", "--resume", "fixture-session"]));
   const staged = startArgv("claude", ACTIONS.ask, { ...DEFAULT_AGENT, yolo: false }, true);

@@ -1,4 +1,4 @@
-import { agentName, madeWord, RUN_CARD } from "../allagents";
+import { agentName, holdsTools, madeWord, RUN_CARD } from "../allagents";
 import { lastWords } from "../waiting";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
@@ -38,7 +38,7 @@ import { popOutFocus } from "../routes";
 import { screenNow } from "../screens";
 import { useStore } from "../store";
 import { OVER_PAGE } from "../surface";
-import { AgentScreen, AskHere, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
+import { AgentScreen, AskHere, QuickAnswer, pageIds, useAllAgents, useShellProbe } from "./AgentFocus";
 import { AgentActions, Summary, glyphOf, harnessWord, useIsChat, useNow } from "./Registry";
 import { Seg } from "./Seg";
 import { SweepButton } from "./Sweep";
@@ -411,6 +411,7 @@ function BoardTile({
   const swipe = useRef<number | null>(null);
   const name = agentName(card);
   const run = useStore((s) => (card.id.startsWith(RUN_CARD) ? s.runs[card.id.slice(RUN_CARD.length)] : undefined));
+  const tools = useStore((s) => holdsTools(card, s.runs, pageIds));
   // a click anywhere on a tile focuses it, but not one meant for a control
   // or for the live shell inside it
   const click = (e: MouseEvent<HTMLElement>) => {
@@ -464,6 +465,7 @@ function BoardTile({
           {name}
         </button>
         {card.branch && slot.mode !== "chip" && slot.mode !== "lane" && <span className="bt-branch">{card.branch}</span>}
+        {tools && slot.mode !== "lane" && <span className="bt-tools" title="This run holds canopy's tools">⌁ tools</span>}
         <span className="bt-machine">{machineOf(card)}</span>
         {/* a lane's bar and dot say the state; its label has room for the name */}
         {slot.mode !== "lane" && <span className={`bt-state rs-${card.state}`}>{card.state}</span>}
