@@ -8,7 +8,7 @@ import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "no
 import { parseRemote } from "./access";
 import { git, onHost } from "./exec";
 import { shellQuote } from "./host";
-import { BUSY_MARKERS, ffTarget, isPeerName, isRunBranch, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, PEER_SKIP_RUNS, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted } from "./peers";
+import { BUSY_MARKERS, ffTarget, isPeerName, isRunBranch, isSafeRel, NO_PUSH, parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, PEER_SKIP_RUNS, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted, seedWanted, unreachableLine } from "./peers";
 import { isSessionId } from "./sessions";
 import { seedsDirOf, seedsRootOf } from "./seedgit";
 import { MIRRORS_DIR, mirrorPath, mirrorSlug } from "./seedmirror";
@@ -287,7 +287,8 @@ export async function initRepo(repo: string, id: string, peers: Peer[], dry: boo
   }
 }
 
-export type FetchOutcome = "ok" | "missing" | "unreachable" | { error: string };
+/** `unreachable` holds the stderr line that said so */
+export type FetchOutcome = "ok" | "missing" | { unreachable: string } | { error: string };
 
 /** A peer fetch ends after this long without a byte of progress, and at
  *  the cap however busy it is. The fixed 60 s these replaced ended every
@@ -358,7 +359,7 @@ export async function fetchPeer(repo: string, id: string, peer: Peer, env: Recor
   const r = await git(repo, ["fetch", "--prune", "--no-tags", "--progress", peerUrl(peer, id), heads, wip, PEER_SKIP_RUNS], FETCH_TIMEOUT, { GIT_TERMINAL_PROMPT: "0", ...env });
   await sweepTmpPacks(repo, r.code === 0 ? null : before);
   if (r.code === 0) return "ok";
-  if (peerUnreachable(r.stderr)) return "unreachable";
+  if (peerUnreachable(r.stderr)) return { unreachable: unreachableLine(r.stderr) };
   if (peerMissing(r.stderr)) return "missing";
   return { error: fetchError(r.stderr, r.code) };
 }
@@ -1356,17 +1357,37 @@ export interface PassOptions {
   skip?: (id: string) => boolean;
 }
 
-/** Peers that failed to connect this pass; shared by syncRepo calls so an
- *  asleep peer costs one timeout per pass. */
+/** Failures in a row that take a peer out of the rest of a pass. More than
+ *  a pass's workers (FETCH_CONCURRENCY), so one burst of fetches that all
+ *  fail together, as they can when they race for the shared ssh connection,
+ *  does not decide it alone. */
+export const PEER_DOWN_AFTER = 5;
+
+/** One repo's fetch that failed in a pass whose peer otherwise answered. */
+export interface PeerSlip { peer: string; id: string; error: string }
+
+/** What a pass learned of each peer; shared by syncRepo calls so an asleep
+ *  peer costs a few timeouts per pass, not one per repo. One repo's failed
+ *  fetch says little about the peer: it reads as offline only when nothing
+ *  answered, or after PEER_DOWN_AFTER failures in a row. */
 export class PassSeen {
   seen = new Map<string, PeerSeen>();
-  offline(name: string): boolean { return this.seen.get(name)?.ok === false; }
-  mark(name: string, ok: boolean, error?: string): void {
-    const prev = this.seen.get(name);
-    if (prev?.ok === false) return; // one failure holds for the pass
-    this.seen.set(name, { name, ok, at: Date.now(), ...(error ? { error } : {}) });
+  private fails = new Map<string, number>();
+  private missed: PeerSlip[] = [];
+  offline(name: string): boolean { return (this.fails.get(name) ?? 0) >= PEER_DOWN_AFTER; }
+  answered(name: string): void {
+    this.fails.delete(name);
+    this.seen.set(name, { name, ok: true, at: Date.now() });
+  }
+  failed(name: string, id: string, error: string): void {
+    this.fails.set(name, (this.fails.get(name) ?? 0) + 1);
+    this.missed.push({ peer: name, id, error });
+    if (this.seen.get(name)?.ok === true && !this.offline(name)) return;
+    this.seen.set(name, { name, ok: false, at: Date.now(), error });
   }
   list(): PeerSeen[] { return [...this.seen.values()]; }
+  /** failed fetches of the peers that still read as seen when the pass ended */
+  slips(): PeerSlip[] { return this.missed.filter((m) => this.seen.get(m.peer)?.ok === true); }
 }
 
 const running = new Map<string, Promise<PeerState>>();
@@ -1399,9 +1420,9 @@ async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<P
     for (const p of gitPeers) {
       if (seen.offline(p.name)) continue;
       const got = await fetchPeer(repo, id, p, env);
-      if (got === "ok") { seen.mark(p.name, true); answered.push(p); }
-      else if (got === "unreachable") seen.mark(p.name, false, "unreachable");
-      else if (got === "missing") { seen.mark(p.name, true); absent++; }
+      if (got === "ok") { seen.answered(p.name); answered.push(p); }
+      else if (got === "missing") { seen.answered(p.name); absent++; }
+      else if ("unreachable" in got) seen.failed(p.name, id, got.unreachable);
       else errors.push(`${p.name}: ${got.error}`);
     }
     if (errors.length > 0) state.error = errors.join("; ");
@@ -1429,6 +1450,7 @@ async function passOne(id: string, opts: PassOptions, seen: PassSeen): Promise<P
 export interface SyncAllResult {
   states: Map<string, PeerState>;
   seen: PeerSeen[];
+  slips: PeerSlip[];
   cloned: string[];
   failed: { id: string; error: string }[];
 }
@@ -1468,5 +1490,5 @@ async function syncAllOnce(ids: string[], opts: PassOptions, concurrency: number
   };
   const workers = Math.max(1, Math.min(concurrency, all.length));
   await Promise.all(Array.from({ length: workers }, worker));
-  return { states, seen: seen.list(), cloned, failed };
+  return { states, seen: seen.list(), slips: seen.slips(), cloned, failed };
 }

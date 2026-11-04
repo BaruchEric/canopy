@@ -160,8 +160,14 @@ export const NO_SUCH_SEED = "there is no such seed";
 export const peerMissing = (stderr: string): boolean =>
   /does not appear to be a git repository|not a repo:|repository .* not found|No such file or directory/i.test(stderr) || stderr.includes(NO_SUCH_SEED);
 
-export const peerUnreachable = (stderr: string): boolean =>
-  /ssh: (connect to host|Could not resolve)|Connection (closed|refused|timed out|reset)|Operation timed out|Host is down|No route to host|Permission denied \(publickey/i.test(stderr);
+const UNREACHABLE = /ssh: (connect to host|Could not resolve)|Connection (closed|refused|timed out|reset)|Operation timed out|Host is down|No route to host|Permission denied \(publickey/i;
+
+export const peerUnreachable = (stderr: string): boolean => UNREACHABLE.test(stderr);
+
+/** The stderr line that made `peerUnreachable` true. git's own closing lines
+ *  ("Could not read from remote repository") say nothing about why. */
+export const unreachableLine = (stderr: string): string =>
+  stderr.split(/\r|\n/).find((l) => UNREACHABLE.test(l))?.trim() ?? "";
 
 /** POSIX words as ssh hands them over: bare words, single quotes (with the
  *  '\'' idiom), double quotes holding no `$`, backtick or backslash. Anything

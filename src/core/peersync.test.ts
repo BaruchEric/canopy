@@ -19,6 +19,7 @@ import {
   isBusy,
   isDirty,
   PassSeen,
+  PEER_DOWN_AFTER,
   peerWips,
   resetBlocker,
   resetTree,
@@ -1511,9 +1512,10 @@ describe("syncRepo", () => {
   });
 
   test("an unreachable peer is skipped for the rest of the pass", async () => {
-    const { wsMac, peersOfMac } = await layout("asleep");
+    const { wsMac, mini, peersOfMac } = await layout("asleep");
+    await commit(mini, "b.txt", "b\n");
     const seen = new PassSeen();
-    seen.mark("mini", false, "timed out");
+    for (let i = 0; i < PEER_DOWN_AFTER; i++) seen.failed("mini", `r${i}`, "timed out");
     const st = await syncRepo("proj", { self: "mac", peers: peersOfMac, seed: [], dry: false, root: wsMac }, seen);
     expect(st.moved).toEqual([]);
     expect(st.error).toBeUndefined();
@@ -1535,13 +1537,63 @@ describe("syncRepo", () => {
     await a;
   });
 
-  test("the first connection failure marks the peer offline", async () => {
+  test("a peer that never answers reads as offline, with the line that said so", async () => {
     const { wsMac, mac } = await layout("dead");
     const dead: Peer = { name: "gone", alias: "canopy-peer-test-nowhere.invalid", root: "dev", role: "git" };
     await initRepo(mac, "proj", [dead], false);
     const seen = new PassSeen();
     await syncRepo("proj", { self: "mac", peers: [dead], seed: [], dry: false, root: wsMac }, seen);
-    expect(seen.offline("gone")).toBe(true);
+    expect(seen.list()).toMatchObject([{ name: "gone", ok: false, error: expect.stringContaining("ssh:") }]);
+    expect(seen.slips()).toEqual([]);
+  });
+});
+
+describe("PassSeen", () => {
+  test("a repo that fails after the peer answered leaves the peer seen", () => {
+    const seen = new PassSeen();
+    seen.answered("mini");
+    seen.failed("mini", "one", "Connection closed by 100.1.2.3 port 22");
+    expect(seen.offline("mini")).toBe(false);
+    expect(seen.list()).toMatchObject([{ name: "mini", ok: true }]);
+    expect(seen.list()[0]?.error).toBeUndefined();
+    expect(seen.slips()).toEqual([{ peer: "mini", id: "one", error: "Connection closed by 100.1.2.3 port 22" }]);
+  });
+
+  test("an answer after a failure clears it", () => {
+    const seen = new PassSeen();
+    seen.failed("mini", "one", "Connection reset");
+    expect(seen.list()).toMatchObject([{ name: "mini", ok: false, error: "Connection reset" }]);
+    seen.answered("mini");
+    expect(seen.list()).toMatchObject([{ name: "mini", ok: true }]);
+    expect(seen.slips()).toHaveLength(1);
+  });
+
+  test("a peer is skipped only after enough failures in a row", () => {
+    const seen = new PassSeen();
+    for (let i = 0; i < PEER_DOWN_AFTER - 1; i++) seen.failed("mini", `r${i}`, "timed out");
+    expect(seen.offline("mini")).toBe(false);
+    seen.failed("mini", "last", "timed out");
+    expect(seen.offline("mini")).toBe(true);
+    expect(seen.slips()).toEqual([]);
+  });
+
+  test("an answer starts the count again, and a peer that goes down mid-pass reads as offline", () => {
+    const seen = new PassSeen();
+    for (let i = 0; i < PEER_DOWN_AFTER - 1; i++) seen.failed("mini", `a${i}`, "timed out");
+    seen.answered("mini");
+    for (let i = 0; i < PEER_DOWN_AFTER - 1; i++) seen.failed("mini", `b${i}`, "timed out");
+    expect(seen.list()).toMatchObject([{ name: "mini", ok: true }]);
+    seen.failed("mini", "last", "No route to host");
+    expect(seen.offline("mini")).toBe(true);
+    expect(seen.list()).toMatchObject([{ name: "mini", ok: false, error: "No route to host" }]);
+  });
+
+  test("each peer keeps its own count", () => {
+    const seen = new PassSeen();
+    seen.answered("a");
+    for (let i = 0; i < PEER_DOWN_AFTER; i++) seen.failed("b", `r${i}`, "timed out");
+    expect(seen.offline("a")).toBe(false);
+    expect(seen.offline("b")).toBe(true);
   });
 });
 

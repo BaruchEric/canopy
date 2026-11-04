@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   BUSY_MARKERS, DEFAULT_SEED, ffTarget, globMatch, isSafeRel, linkPeers, normalizePeers, normalizeSeed,
-  parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, peerUrl, repoWanted,
+  parseNameStatus, parseQuotedWords, parseRefLines, parseWipLines, peerMissing, peerRefspecs, peerUnreachable, unreachableLine, peerUrl, repoWanted,
   seedWanted,
 } from "./peers";
 import type { PeerState, Repo } from "./types";
@@ -152,6 +152,8 @@ describe("parsers", () => {
     expect(peerUnreachable("ssh: Could not resolve hostname mac-peer")).toBe(true);
     expect(peerUnreachable("Connection closed by 100.1.2.3 port 22")).toBe(true);
     expect(peerUnreachable("fatal: bad object")).toBe(false);
+    expect(unreachableLine("Connection closed by 100.1.2.3 port 22\r\nfatal: Could not read from remote repository.\n")).toBe("Connection closed by 100.1.2.3 port 22");
+    expect(unreachableLine("fatal: bad object")).toBe("");
   });
   test("busy markers cover every in-progress operation", () => {
     expect(BUSY_MARKERS).toEqual(["MERGE_HEAD", "rebase-merge", "rebase-apply", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "index.lock"]);

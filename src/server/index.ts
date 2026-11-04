@@ -2294,7 +2294,7 @@ const notThere = (from: string, name: string, branch: string): string =>
 function fetchRefusal(got: FetchOutcome, from: string, name: string, branch: string): string | null {
   if (got === "ok") return null;
   if (got === "missing") return notThere(from, name, branch);
-  return `${from} could not be reached for ${name} (${typeof got === "string" ? got : got.error})`;
+  return `${from} could not be reached for ${name} (${"error" in got ? got.error : got.unreachable})`;
 }
 
 /** what a move check and a load both answer when peer sync only reports */
@@ -3541,7 +3541,7 @@ async function peerPass(state: ServerState): Promise<void> {
     // flipping to "on" without a restart must still set them up.
     if (!dry) state.inited.add(r.path);
   }
-  const { states, seen, cloned, failed } = await syncAll(
+  const { states, seen, slips, cloned, failed } = await syncAll(
     repos.map((r) => r.id),
     { self: s.self, peers: s.peers, seed: s.seed, dry, root: state.root, ...(state.seedsStayHome ? { skip: isSeedRepoId } : {}) },
     FETCH_CONCURRENCY,
@@ -3550,6 +3550,7 @@ async function peerPass(state: ServerState): Promise<void> {
   state.peerSeen = seen;
   for (const [id, st] of states) applyPeerState(state, id, st);
   for (const f of failed) console.error(`canopy: peer clone failed: ${f.id}: ${f.error}`);
+  for (const f of slips) console.error(`canopy: peer fetch failed: ${f.peer} ${f.id}: ${f.error}`);
   // In dry mode cloneMissing only lists what it would clone, without making
   // the folder, so `cloned` here is not real: nothing to rescan or announce.
   if (!dry && cloned.length > 0) {
