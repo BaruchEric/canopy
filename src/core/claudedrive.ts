@@ -18,6 +18,7 @@ import { normalizeAgent } from "./agent";
 import { absolutePath, claudeFold, foldClaude, toolPaths as foldToolPaths, type ClaudeFold } from "./claudefold";
 import { bunSpawn, LineSplitter, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
+import { CANOPY_TOOL_RULE } from "./runtools";
 import { agentArgs, withProviderFile } from "./harness";
 import { noteCliCommands } from "./mentions";
 import { providersDir } from "./store";
@@ -135,6 +136,8 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
   // a stage runs in a container without canopy's config dir, so a Claude
   // provider's settings file stays here and the stage keeps its own login
   const flags = agentArgs(withProviderFile({ ...agent, yolo: false }, stage ? null : providersDir()));
+  // one flag for the rules: --allowedTools takes every plain word after it
+  const allowed = spec.mcpConfig ? [...spec.allowedTools, CANOPY_TOOL_RULE] : spec.allowedTools;
   return [
     "-p",
     "--output-format",
@@ -157,7 +160,10 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     "--setting-sources",
     stage ? "user" : "user,project,local",
     "--strict-mcp-config",
-    ...(spec.allowedTools.length ? ["--allowedTools", spec.allowedTools.join(",")] : []),
+    // a path, so the token stays out of `ps` (probe P1); the flag is variadic,
+    // and --allowedTools always follows it here
+    ...(spec.mcpConfig ? ["--mcp-config", spec.mcpConfig] : []),
+    ...(allowed.length ? ["--allowedTools", allowed.join(",")] : []),
     ...(spec.addDirs ?? []).flatMap((d) => ["--add-dir", d]),
     ...(spec.resume ? ["--resume", spec.resume] : []),
     // a fork (FR-043 plan 3): the resumed session goes on under a new id,

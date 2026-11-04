@@ -70,6 +70,8 @@ export interface DriveSpec {
   /** with `resume`: fork the session under a new id rather than continue it
    *  (FR-043 plan 3): Claude's `--fork-session`, Codex's `thread/fork` */
   fork?: true;
+  /** the run's `mcp.json`, which carries its token (FR-038) */
+  mcpConfig?: string;
 }
 
 /** A prompt before the Runner numbers it. */

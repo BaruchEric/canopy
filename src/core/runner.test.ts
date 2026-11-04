@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RpcProc } from "./codexrpc";
 import { ACTIONS } from "./actions";
-import { cliArgs, Runner, startArgv } from "./runner";
+import { ChildRefusedError, cliArgs, Runner, startArgv, type BranchStart } from "./runner";
 import type { DriveCtx, RunDriver } from "./driver";
 import { DiskRunLogger, readKeptRun, WIRE_GZ, type RunLogger } from "./runlog";
 import { StageClient } from "./stageclient";
@@ -683,5 +683,66 @@ describe("a fork's start (FR-043 plan 3)", () => {
     runner.start(repo, "ask", ACTIONS.ask, "", DEFAULT_AGENT, undefined, undefined, { branch, message: "go on" }, { cleanup: async () => { order.push("cleanup"); throw new Error("gone already"); } });
     for (let n = 0; n < 100 && !order.includes("settle"); n++) await Bun.sleep(5);
     expect(order).toEqual(["done", "cleanup", "settle"]);
+  });
+});
+
+describe("a run's child (FR-038)", () => {
+  const repo = { id: "app", name: "app", path: "/tmp/app", group: "", source: "root", status: null } as unknown as Repo;
+  const branchOf = (id: string): BranchStart => ({ branch: { name: `run/${id}`, target: "main", base: "b0", dir: `/tmp/w/${id}`, state: "working", origin: id } });
+  const quiet = (harness: Harness): RunDriver => ({ harness, label: "fake", check: () => null, start: () => {}, say: () => {}, stop: () => {} });
+  const made = () => new Runner({ onChange: () => {}, onGone: () => {} }, { driver: quiet });
+  const parentOf = (runner: Runner, spec = ACTIONS.ask) => runner.start(repo, "ask", spec, "the parent", DEFAULT_AGENT, undefined, undefined, branchOf("p"));
+  const child = (runner: Runner, parent: string, n: number) => runner.start(repo, "ask", ACTIONS.ask, `child ${n}`, DEFAULT_AGENT, "run", undefined, branchOf(`c${n}`), { parent, child: true, priority: "low" });
+
+  test("a child takes its parent and the next depth; a coordinator's card keeps depth 0", () => {
+    const runner = made();
+    const parent = parentOf(runner);
+    expect(parent.depth).toBeUndefined();
+    const kid = child(runner, parent.id, 1);
+    expect([kid.parent, kid.depth]).toEqual([parent.id, 1]);
+    const card = runner.start(repo, "ask", ACTIONS.ask, "a card", DEFAULT_AGENT, "coordinator", undefined, branchOf("card"), { parent: "coord123" });
+    expect([card.parent, card.depth]).toEqual(["coord123", undefined]);
+  });
+
+  test("a child at RUN_DEPTH is refused, however it is asked", () => {
+    const runner = made();
+    const kid = child(runner, parentOf(runner).id, 1);
+    expect(() => child(runner, kid.id, 2)).toThrow(ChildRefusedError);
+    expect(runner.childRefusal(kid.id)).toContain("a child does not start children");
+  });
+
+  test("the fourth live child is refused, and an ended one gives its place back", () => {
+    const runner = made();
+    // a chat holds no branch slot, so its children reach the limit before the repo's
+    const parent = runner.start(repo, "chat", ACTIONS.chat, "", DEFAULT_AGENT);
+    const kids = [1, 2, 3].map((n) => child(runner, parent.id, n));
+    expect(kids.map((k) => k.parent)).toEqual([parent.id, parent.id, parent.id]);
+    expect(() => child(runner, parent.id, 4)).toThrow("3 children going");
+    kids[0]!.status = "done";
+    expect(runner.childRefusal(parent.id)).toBeNull();
+  });
+
+  test("an unattended run and a run that is gone are refused a child", () => {
+    const runner = made();
+    const parent = parentOf(runner, { ...ACTIONS.ask, unattended: "no one answers" });
+    expect(parent.unattended).toBe(true);
+    expect(() => child(runner, parent.id, 1)).toThrow("unattended");
+    expect(() => child(runner, "nope", 2)).toThrow("gone");
+  });
+
+  test("a fix of a child keeps its depth and takes no check", () => {
+    const runner = made();
+    const fix = runner.start(repo, "ask", ACTIONS.ask, "fix", DEFAULT_AGENT, undefined, undefined, branchOf("f"), { parent: "gone1234", depth: 1 });
+    expect([fix.parent, fix.depth]).toEqual(["gone1234", 1]);
+  });
+
+  test("a start with the file reaches the driver and marks the run; one without does neither", () => {
+    let seen: DriveCtx | undefined;
+    const driver: RunDriver = { ...quiet("claude"), start: (ctx) => { seen = ctx; } };
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, branchOf("t"), { mcpConfig: "/c/mcp.json" });
+    expect(run.canopyTools).toBe(true);
+    expect(seen?.spec.mcpConfig).toBe("/c/mcp.json");
+    expect(parentOf(made()).canopyTools).toBeUndefined();
   });
 });

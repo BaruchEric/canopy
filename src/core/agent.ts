@@ -27,6 +27,7 @@ export function normalizeAgent(v: unknown): AgentSettings {
     // it, and a shell line has no use for one
     // eslint-disable-next-line no-control-regex
     extra: typeof o["extra"] === "string" ? o["extra"].replace(/[\u0000-\u001f]/g, "").trim() : "",
+    ...(o["canopyTools"] === true ? { canopyTools: true } : {}),
   };
 }
 
@@ -42,7 +43,8 @@ export const sameAgent = (a: AgentSettings, b: AgentSettings): boolean =>
   (a.provider === undefined || a.provider === "default" ? undefined : a.provider) ===
     (b.provider === undefined || b.provider === "default" ? undefined : b.provider) &&
   a.yolo === b.yolo &&
-  a.extra === b.extra;
+  a.extra === b.extra &&
+  (a.canopyTools === true) === (b.canopyTools === true);
 
 export const isDefaultAgent = (a: AgentSettings): boolean => sameAgent(a, DEFAULT_AGENT);
 
@@ -58,6 +60,7 @@ export function describeAgent(a: AgentSettings, harness = true): string {
     ...(a.effort === "default" ? [] : [a.effort]),
     ...(a.provider === undefined || a.provider === "default" ? [] : [`provider ${a.provider}`]),
     a.yolo ? "yolo" : "ask",
+    ...(a.canopyTools ? ["canopy tools"] : []),
     ...(a.extra ? [a.extra] : []),
   ].join(" · ");
 }

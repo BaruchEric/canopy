@@ -919,3 +919,34 @@ describe("foldClaude replays the recorded wire into the steps the live run made"
     ]);
   });
 });
+
+test("a run with canopy's tools: the file by path, then one rule list that names them", () => {
+  const spec = { allowedTools: ["Read", "Grep"], maxTurns: 5, mcpConfig: "/c/runs/r1/mcp.json" };
+  const args = cliArgs(spec);
+  const at = args.indexOf("--mcp-config");
+  expect(args[at + 1]).toBe("/c/runs/r1/mcp.json");
+  // the flag is variadic, so what follows must be a flag
+  expect(args[at + 2]).toBe("--allowedTools");
+  expect(args[at + 3]).toBe("Read,Grep,mcp__canopy__*");
+  expect(args.filter((a) => a === "--allowedTools")).toHaveLength(1);
+  expect(args).toContain("--strict-mcp-config");
+});
+
+test("with no tools the command line is as it was, even when the settings ask for them", () => {
+  const args = cliArgs({ allowedTools: ["Read"], maxTurns: 5 }, { ...DEFAULT_AGENT, canopyTools: true });
+  expect(args).not.toContain("--mcp-config");
+  expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read");
+});
+
+test("a run with tools and no rules of its own still names them", () => {
+  const args = cliArgs({ allowedTools: [], maxTurns: 5, mcpConfig: "/m.json" });
+  expect(args[args.indexOf("--mcp-config") + 2]).toBe("--allowedTools");
+  expect(args[args.indexOf("--allowedTools") + 1]).toBe("mcp__canopy__*");
+});
+
+test("canopy's own tool call folds into a step like any other (probe P1)", async () => {
+  const d = await drive("canopytool");
+  const run = await d.until(d.done, "the end");
+  expect(run.status).toBe("done");
+  expect(run.steps.find((s) => s.tool?.name === "mcp__canopy__canopy_status")?.tool).toMatchObject({ status: "ok", output: "app  main" });
+});
