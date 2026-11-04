@@ -293,6 +293,14 @@ For Eric:
 7. Whether two reviewers (Anneal) are worth the default. One is proposed;
    `reviewers: 2` is there for sensitive repos.
 
+Made on 2026-11-03, with plan 2 (6 and 7 were never answered, so these defaults stand until Eric says otherwise):
+
+8. **Codex members for `propose`: the refusal stays.** A `propose` group with any member that is not Claude Code refuses before a branch is cut. This answers 6.
+9. **One reviewer by default.** `reviewers: 2` is opt-in. This answers 7.
+10. **A member's fix keeps its profile.** Fixing a Codex member on the default route would blur what the compare compares.
+11. **A group card weighs its `times`.** The cap counts children working, and a card of three is three children. It never auto-lands: call 4 holds for cards.
+12. **A group card settles as a child does.** Picked and landed are done, needs-you and dropped failed, as a sent-back child is. A settled card does not reopen when Eric picks later.
+
 ## Out of scope
 
 - Fan-out across backends (a member on the mini, one on the Mac). Groups
