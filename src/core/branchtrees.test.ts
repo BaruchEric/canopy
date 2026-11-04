@@ -24,6 +24,7 @@ import {
   treeDir,
   treePort,
   treePorts,
+  treePortsFor,
   TREES_RECORD,
   treeSlug,
   treesSource,
@@ -106,6 +107,15 @@ describe("ports", () => {
     expect(next).toBe(ports[(ports.indexOf(first) + 1) % ports.length] ?? null);
     expect(treePort("feat", ports, new Set(ports))).toBeNull();
     expect(treePort("feat", [], new Set())).toBeNull();
+  });
+  test("several ports for one key are all free and all different, or none", () => {
+    const ports = [7900, 7901, 7902];
+    const got = treePortsFor("feat", 2, ports, new Set([7901]));
+    expect(got).toHaveLength(2);
+    expect(new Set(got).size).toBe(2);
+    expect(got).not.toContain(7901);
+    expect(treePortsFor("feat", 3, ports, new Set([7901]))).toBeNull();
+    expect(treePortsFor("feat", 0, ports, new Set())).toEqual([]);
   });
 });
 

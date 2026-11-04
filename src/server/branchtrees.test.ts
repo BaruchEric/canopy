@@ -131,6 +131,36 @@ test("the port is the branch's hashed one unless taken, and shells are counted",
   expect(existsSync(join(first.tree.dir, "node_modules"))).toBe(false);
 });
 
+test("a task's held port is never a tree's, and comes back when released", async () => {
+  const w = await world();
+  const held = await w.trees.hold("task-a", "feat", 2);
+  expect(held).toHaveLength(2);
+  const free = [7900, 7901, 7902].filter((p) => !held?.includes(p));
+  const tree = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  expect(tree.tree.port).toBe(free[0] ?? null);
+  await w.trees.idle();
+  expect(await w.trees.hold("task-b", "other", 1)).toBeNull();
+  w.trees.release("task-a");
+  expect(await w.trees.hold("task-b", "other", 1)).toHaveLength(1);
+});
+
+test("a hold is the owner's: asked again it answers the same, and two at once never share", async () => {
+  const w = await world();
+  const [a, b] = await Promise.all([w.trees.hold("a", "feat", 1), w.trees.hold("b", "feat", 1)]);
+  expect(a).toHaveLength(1);
+  expect(b).toHaveLength(1);
+  expect(a?.[0]).not.toBe(b?.[0]);
+  expect(await w.trees.hold("a", "something else", 1)).toEqual(a);
+});
+
+test("a port something listens on is passed over, and a seeded hold is held", async () => {
+  const w = await world();
+  w.listening.now = [7900];
+  w.trees.seed("task-a", [7901]);
+  expect(await w.trees.hold("task-b", "feat", 1)).toEqual([7902]);
+  expect(await w.trees.hold("task-c", "feat", 1)).toBeNull();
+});
+
 test("a bad branch, a twin, a missing base and a branch checked out elsewhere are refused", async () => {
   const w = await world();
   expect((await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "a b" })).status).toBe(400);

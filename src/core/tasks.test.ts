@@ -4,6 +4,7 @@ import {
   detectTasks,
   expiredTaskLogs,
   definedFrom,
+  fillEnv,
   isTaskName,
   listedTask,
   logPage,
@@ -19,6 +20,7 @@ import {
   parseTaskFiles,
   parseTaskState,
   plainLines,
+  portSlots,
   reapable,
   startMark,
   staleWants,
@@ -282,5 +284,54 @@ describe("definedFrom", () => {
     expect(expiredTaskLogs(logs, new Set(), defined, 99 * 86_400_000, 7 * 86_400_000)).toEqual([]);
     const rec = { path: "/r", name: "n", want: "stopped" } as never;
     expect(staleWants({ host: rec }, new Set(), defined)).toEqual([]);
+  });
+});
+
+describe("a task's env", () => {
+  test("a good env reads, and one that does not says why under the task's name", () => {
+    expect(normalizeTaskPatch({ name: "dev", env: { PORT: "${PORT}", DEBUG: "1" } })).toEqual({ name: "dev", env: { PORT: "${PORT}", DEBUG: "1" } });
+    expect(normalizeTaskPatch({ name: "dev", env: ["PORT"] })).toBe("dev: env is an object of names and values");
+    expect(normalizeTaskPatch({ name: "dev", env: { "1BAD": "x" } })).toBe('dev: env: "1BAD" is not a variable name');
+    expect(normalizeTaskPatch({ name: "dev", env: { A: 1 } })).toBe("dev: env: A is one line of text");
+    expect(normalizeTaskPatch({ name: "dev", env: { A: "x\ny" } })).toBe("dev: env: A is one line of text");
+    expect(normalizeTaskPatch({ name: "dev", env: { A: "${HOME}" } })).toBe("dev: env: ${HOME} is not PORT, PORT_2 to PORT_9 or WORKTREE");
+  });
+
+  test("a plain dollar sign is the shell's, not a slot", () => {
+    expect(normalizeTaskPatch({ name: "dev", env: { A: "$HOME/x" } })).toEqual({ name: "dev", env: { A: "$HOME/x" } });
+  });
+
+  test("the ports an env asks for are its highest slot", () => {
+    expect(portSlots(undefined)).toBe(0);
+    expect(portSlots({ A: "1", B: "${WORKTREE}" })).toBe(0);
+    expect(portSlots({ A: "${PORT}" })).toBe(1);
+    expect(portSlots({ A: "${PORT_3}", B: "${PORT}" })).toBe(3);
+  });
+
+  test("filling puts each port and the folder in its slot, however often it is named", () => {
+    const env = { PORT: "${PORT}", URL: "http://localhost:${PORT}/${WORKTREE}", API: "${PORT_2}", DEBUG: "1" };
+    expect(fillEnv(env, [7901, 7902], "/w")).toEqual({ PORT: "7901", URL: "http://localhost:7901//w", API: "7902", DEBUG: "1" });
+    expect(fillEnv(undefined, [], "/w")).toEqual({});
+  });
+
+  test("a layer's env replaces the one below it whole", () => {
+    const { tasks } = mergeTasks([{ name: "dev", cmd: "vite" }], [{ name: "dev", env: { PORT: "${PORT}", A: "1" } }], [{ name: "dev", env: { PORT: "${PORT}" } }], true);
+    expect(tasks[0]?.env).toEqual({ PORT: "${PORT}" });
+  });
+
+  test("an override keeps env only when it differs", () => {
+    const below = { name: "dev", cmd: "vite", env: { PORT: "${PORT}" } };
+    expect(overrideOf({ name: "dev", env: { PORT: "${PORT}" } }, below)).toEqual({ name: "dev" });
+    expect(overrideOf({ name: "dev", env: { PORT: "1" } }, below)).toEqual({ name: "dev", env: { PORT: "1" } });
+    expect(overrideOf({ name: "dev" }, below)).toEqual({ name: "dev" });
+  });
+
+  test("a record keeps its worktree and ports, and drops a malformed one", () => {
+    const id = "a".repeat(32);
+    const rec = (over: object) => parseTaskState(JSON.stringify({ [id]: { repoId: "r", path: "/p", name: "dev", want: "running", ...over } }))[id];
+    expect(rec({ tree: { id: "t", dir: "/w/t", branch: "run/t" }, ports: [7901] })).toMatchObject({ tree: { id: "t", dir: "/w/t", branch: "run/t" }, ports: [7901] });
+    const bad = rec({ tree: { id: "t" }, ports: ["x"] });
+    expect(bad?.tree).toBeUndefined();
+    expect(bad?.ports).toBeUndefined();
   });
 });

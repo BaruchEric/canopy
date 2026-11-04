@@ -614,11 +614,13 @@ export class TaskHub {
         if (err instanceof TaskError) throw err;
         // no file yet
       }
+      const was = list.find((t) => t.name === name);
       list = list.filter((t) => t.name !== name);
       if (patch) {
         // nothing under the repo file names a folder, so "." there is the root it already means
         const { cwd, ...rest } = patch;
-        list.push(cwd === "." ? rest : patch);
+        // the sheet does not edit env, so its save must not drop it
+        list.push({ ...(cwd === "." ? rest : patch), ...(patch.env === undefined && was?.env ? { env: was.env } : {}) });
       }
       await mkdir(dir, { recursive: true });
       await writeFile(file, JSON.stringify(list, null, 2) + "\n");

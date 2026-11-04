@@ -166,6 +166,20 @@ export function treePort(branch: string, ports: readonly number[], taken: Readon
   return null;
 }
 
+/** `count` ports for `key`: its hash into the range, walking forward past
+ *  `taken` as `treePort` does; null when the range has too few left. */
+export function treePortsFor(key: string, count: number, ports: readonly number[], taken: ReadonlySet<number>): number[] | null {
+  const got: number[] = [];
+  const seen = new Set(taken);
+  for (let i = 0; i < count; i++) {
+    const port = treePort(key, ports, seen);
+    if (port === null) return null;
+    got.push(port);
+    seen.add(port);
+  }
+  return got;
+}
+
 export const treeDir = (repoPath: string, slug: string, root = treesRoot()): string => join(root, repoKey(repoPath), slug);
 
 const out = (r: { stdout: string }): string => r.stdout.trim();

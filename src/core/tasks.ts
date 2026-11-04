@@ -22,6 +22,47 @@ export function cwdError(cwd: string): string | null {
   return null;
 }
 
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const SLOT = /\$\{([^}]*)\}/g;
+const PORT_SLOT = /^PORT(?:_([2-9]))?$/;
+
+/** why an `env` is refused, or null for one that reads */
+function envError(v: unknown): string | null {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return "env is an object of names and values";
+  for (const [k, value] of Object.entries(v)) {
+    if (!ENV_NAME.test(k)) return `env: ${JSON.stringify(k)} is not a variable name`;
+    if (typeof value !== "string" || /[\r\n]/.test(value)) return `env: ${k} is one line of text`;
+    for (const [, slot = ""] of value.matchAll(SLOT)) {
+      if (slot !== "WORKTREE" && !PORT_SLOT.test(slot)) return `env: \${${slot}} is not PORT, PORT_2 to PORT_9 or WORKTREE`;
+    }
+  }
+  return null;
+}
+
+/** how many ports an `env` asks for: the highest port slot it names */
+export function portSlots(env: Readonly<Record<string, string>> | undefined): number {
+  let most = 0;
+  for (const value of Object.values(env ?? {})) {
+    for (const [, slot = ""] of value.matchAll(SLOT)) {
+      const m = PORT_SLOT.exec(slot);
+      if (m) most = Math.max(most, Number(m[1] ?? 1));
+    }
+  }
+  return most;
+}
+
+/** `env` with its slots filled: `ports` in slot order, `dir` the folder the task runs in */
+export function fillEnv(env: Readonly<Record<string, string>> | undefined, ports: readonly number[], dir: string): Record<string, string> {
+  const fill = (value: string): string =>
+    value.replace(SLOT, (whole, slot: string) => {
+      if (slot === "WORKTREE") return dir;
+      const m = PORT_SLOT.exec(slot);
+      const port = m ? ports[Number(m[1] ?? 1) - 1] : undefined;
+      return port === undefined ? whole : String(port);
+    });
+  return Object.fromEntries(Object.entries(env ?? {}).map(([k, v]) => [k, fill(v)]));
+}
+
 /** One layer's word on a task, checked field by field; a string says what is wrong. */
 export function normalizeTaskPatch(v: unknown): TaskPatch | string {
   if (!v || typeof v !== "object" || Array.isArray(v)) return "a task is an object";
@@ -52,6 +93,12 @@ export function normalizeTaskPatch(v: unknown): TaskPatch | string {
     if (flag === undefined) continue;
     if (typeof flag !== "boolean") return `${name}: ${f} is true or false`;
     out[f] = flag;
+  }
+  const env = o["env"];
+  if (env !== undefined) {
+    const err = envError(env);
+    if (err) return `${name}: ${err}`;
+    out.env = { ...(env as Record<string, string>) };
   }
   return out;
 }
@@ -268,6 +315,7 @@ export function overrideOf(want: TaskPatch, below: TaskDef | undefined): TaskPat
   if (want.cmd !== undefined && want.cmd !== below?.cmd) out.cmd = want.cmd;
   // no cwd below is the repo root, which the sheet sends back as "."
   if (want.cwd !== undefined && want.cwd !== (below?.cwd ?? ".")) out.cwd = want.cwd;
+  if (want.env !== undefined && JSON.stringify(want.env) !== JSON.stringify(below?.env ?? {})) out.env = want.env;
   for (const f of FLAGS) {
     const v = want[f];
     if (v !== undefined && v !== (below?.[f] ?? false)) out[f] = v;
@@ -427,6 +475,9 @@ export function parseTaskState(text: string): Record<string, TaskRecord> {
     if (typeof r["exitCode"] === "number" || r["exitCode"] === null) rec.exitCode = r["exitCode"] as number | null;
     if (typeof r["fails"] === "number" && Number.isInteger(r["fails"]) && r["fails"] > 0) rec.fails = r["fails"];
     if (r["gaveUp"] === true) rec.gaveUp = true;
+    const tree = r["tree"] as Record<string, unknown> | null | undefined;
+    if (tree && typeof tree["id"] === "string" && typeof tree["dir"] === "string" && typeof tree["branch"] === "string") rec.tree = { id: tree["id"], dir: tree["dir"], branch: tree["branch"] };
+    if (Array.isArray(r["ports"]) && r["ports"].length > 0 && r["ports"].every((p) => Number.isInteger(p))) rec.ports = r["ports"] as number[];
     out[id] = rec;
   }
   return out;
