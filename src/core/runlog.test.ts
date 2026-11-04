@@ -196,6 +196,16 @@ test("typed routing and fixed metadata survive short, numeric and quote context 
   }
 });
 
+test("a dev server's loopback switch leaves the transcript running and its digits alone", async () => {
+  const id = "loopback"; const dir = join(root, id); const current = run({ id, note: "port 1 of 1" });
+  // the server hands it in twice: from the run's env and as a retained secret
+  const logger = new DiskRunLogger({ dir, env: () => ({}), appliedFile: join(root, "no-applied"), now: () => 10, retainedSecrets: [{ name: "CANOPY_LOOPBACK_AUTH", value: "1" }] });
+  const log = logger.open(current, [], { CANOPY_RUN: id, CANOPY_REPO: "repo", CANOPY_LOOPBACK_AUTH: "1" }, () => {});
+  if (!log) throw new Error("the switch must not stop recording");
+  await log.settle(current);
+  expect((await readKeptRun(dir, id))?.note).toBe("port 1 of 1");
+});
+
 test("credential collisions in required routing and numeric facts fail closed once", async () => {
   const dir = join(root, "credential-collision"); const errors: string[] = [];
   const logger = new DiskRunLogger({ dir, env: () => ({ CANOPY_TOKEN: "identity" }), appliedFile: join(root, "no-applied"), now: () => 7 });

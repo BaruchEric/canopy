@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import type { Applied } from "./applied";
 import type { WireDir } from "./driver";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX } from "./envnames";
-import { redactArgv, redactLine, secretValues, type Secret } from "./redact";
+import { redactArgv, redactLine, secretValues, SWITCHES, type Secret } from "./redact";
 import { configDir } from "./store";
 import { AGENT_EFFORTS, PRIORITIES, type Harness, type KeptRunHead, type Run, type RunBranch, type RunStep } from "./types";
 
@@ -430,7 +430,7 @@ export class DiskRunLogger implements RunLogger {
   private retainedSecrets: readonly Secret[];
   constructor(private opts: { dir?: string; env?: () => Readonly<Record<string, string | undefined>>; appliedFile?: string; retainedSecrets?: readonly Secret[]; now?: () => number; max?: number } = {}) {
     this.dir = opts.dir ?? runsDir(); this.env = opts.env ?? (() => process.env); this.appliedFile = opts.appliedFile ?? join(configDir(), "secrets-applied.json");
-    this.retainedSecrets = (opts.retainedSecrets ?? []).map(({ name, value }) => ({ name, value }));
+    this.retainedSecrets = (opts.retainedSecrets ?? []).filter(({ name }) => !SWITCHES.has(name)).map(({ name, value }) => ({ name, value }));
   }
   async refresh(): Promise<void> { this.refreshNow(); }
   private refreshNow(): void {

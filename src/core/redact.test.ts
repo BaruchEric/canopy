@@ -4,6 +4,12 @@ import { redactArgv, redactLine, secretValues } from "./redact";
 const token = `cnp_coordinator_${"a".repeat(43)}`;
 
 describe("secretValues", () => {
+  test("a switch that holds no secret is left out, even under a name that sounds like one", () => {
+    expect(secretValues({ CANOPY_LOOPBACK_AUTH: "1", CANOPY_TOKEN: "t" })).toEqual([{ name: "CANOPY_TOKEN", value: "t" }]);
+    // named by an applied file, it is that file's secret after all
+    expect(secretValues({ CANOPY_LOOPBACK_AUTH: "1" }, { sink: { CANOPY_LOOPBACK_AUTH: "stamp" } })).toEqual([{ name: "CANOPY_LOOPBACK_AUTH", value: "1" }]);
+  });
+
   test("collects nonempty canopy, private and applied environment values in deterministic longest order", () => {
     const env = { CANOPY_B: "same", CANOPY_A: "same", CANOPY_SHORT: "x", CANOPY_EMPTY: "", CANOPY_UNSET: undefined, VERCEL_TOKEN: "private-secret", APPLIED: "applied-secret", OTHER: "public" };
     expect(secretValues(env, { sink: { APPLIED: "stamp", MISSING: "stamp" } })).toEqual([

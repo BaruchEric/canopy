@@ -292,6 +292,11 @@ Made on 2026-11-03, while building plan 2:
     Without it a tool call under `untrusted` waits and never reaches the
     server (plan 3's P3). It is the Codex half of Claude's `--allowedTools`.
 
+Eric confirmed calls 15, 16 and 18 on 2026-11-03. The run log no longer counts
+`CANOPY_LOOPBACK_AUTH` as a secret, so the failure call 15 records is gone, and
+the file stays where it is because a token file should not sit in a folder
+another module owns.
+
 ## Out of scope
 
 - An agent answering another run's permission prompts or questions.

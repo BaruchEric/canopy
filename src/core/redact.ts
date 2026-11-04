@@ -14,10 +14,15 @@ export const redactedWord = (name: string): string => `<redacted:${name}>`;
 
 const longestFirst = (a: Secret, b: Secret): number => b.value.length - a.value.length || a.name.localeCompare(b.name);
 
+/** CANOPY_ names that hold a switch rather than a secret. CANOPY_LOOPBACK_AUTH
+ *  is "1", and its name reads as a credential, so counting it would stop the
+ *  transcript of every run whose required facts hold that digit. */
+export const SWITCHES: ReadonlySet<string> = new Set(["CANOPY_LOOPBACK_AUTH"]);
+
 /** Applied entries name environment keys; their stamps are not secret values. */
 export function secretValues(env: Readonly<Record<string, string | undefined>>, applied?: Readonly<Record<string, Readonly<Record<string, string>>>>): Secret[] {
   const names = new Set<string>(PRIVATE_ENV);
-  for (const name of Object.keys(env)) if (name.startsWith("CANOPY_")) names.add(name);
+  for (const name of Object.keys(env)) if (name.startsWith("CANOPY_") && !SWITCHES.has(name)) names.add(name);
   for (const sink of Object.values(applied ?? {})) for (const name of Object.keys(sink)) names.add(name);
   return [...names].flatMap((name) => {
     const value = env[name];
