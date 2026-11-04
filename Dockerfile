@@ -107,6 +107,11 @@ ENV BUN_INSTALL_BIN=/home/bun/.bun/bin
 # ble.sh warns on every shell without a UTF-8 locale; C.UTF-8 needs no package
 ENV LANG=C.UTF-8
 
+# Change this date to take new claude and codex releases. Both install
+# unpinned, so a cached layer keeps the old ones until this line moves. It is
+# in the shells stage, so the deploy after a change recreates the shells.
+ARG TOOLS_AT=2026-11-03
+
 # Claude Code, Anthropic's official native install (subscription login, no
 # API key; the login itself is a mounted ~/.claude, see deploy.md).
 RUN curl -fsSL https://claude.ai/install.sh | bash

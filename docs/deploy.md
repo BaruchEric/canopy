@@ -664,7 +664,9 @@ canopy down too. If canopy does not come up after a deploy, the first look is
 In the stages image claude and codex are root's, under `/opt/stage-tools`,
 and the PATH holds root-owned folders only, so no stage can change what a
 later one runs; the build fails if that is not so. claude does not update
-itself there (`DISABLE_AUTOUPDATER=1`): a rebuild of stages is the update.
+itself there (`DISABLE_AUTOUPDATER=1`): a rebuild of stages is the update,
+and the install layer only rebuilds when `TOOLS_AT` in the Dockerfile changes.
+That also recreates the shells, so deploy it with `--shells`.
 Before every start the stage runner also reads the stages' claude settings
 (`settings.json` and `settings.local.json` in
 `~/.config/canopy-stages/claude`) and codex config (`config.toml` in
