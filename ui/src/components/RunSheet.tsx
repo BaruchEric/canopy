@@ -52,6 +52,7 @@ import { HARNESS } from "../../../src/core/harness";
 import { CENTERED } from "../pop";
 import { PopGear, PopGrip, PopHere } from "./PopGrip";
 import { api } from "../api";
+import { openSectionElsewhere, parseRoute } from "../routes";
 import { nextGap, REPLAY_SPEEDS, replayClock, replayEnd, replayTime, replayTimeline, replayView, type ReplayJumpKind, type ReplaySpeed, type ReplayTimeline } from "../replay";
 
 import { GROUP_MAX } from "../../../src/core/group";
@@ -1074,6 +1075,11 @@ function BranchApp({ run, act }: { run: Run; act: (fn: () => Promise<void>) => P
   if (!b || !standing || (!hasDev && !task)) return null;
   const up = task?.status === "running" || task?.status === "backoff";
   const down = task?.status === "failed" || task?.status === "gave-up";
+  // a run popped into its own window has no dock to show the preview in
+  const preview = (port: number) => {
+    previewBranch(repoId, port);
+    if (parseRoute(window.location.search).run !== null) openSectionElsewhere(repoId, "preview", "tab");
+  };
   const showLog = async (name: string) => {
     const page = await api.taskLog(repoId, name, "", undefined, b.origin);
     setLog(page.lines.slice(-20).map((l) => l.text).join("\n"));
@@ -1089,7 +1095,7 @@ function BranchApp({ run, act }: { run: Run; act: (fn: () => Promise<void>) => P
           </button>
         )}
         {up && task.port !== undefined && (
-          <button type="button" className="mini strong" title={`Show :${task.port} in the repo's preview`} onClick={() => task.port !== undefined && previewBranch(repoId, task.port)}>
+          <button type="button" className="mini strong" title={`Show :${task.port} in the repo's preview`} onClick={() => task.port !== undefined && preview(task.port)}>
             preview this branch
           </button>
         )}

@@ -177,6 +177,19 @@ With a scratch canopy pointed at a throwaway repo whose `.canopy/tasks.json` is 
 3. `GET /api/ports` lists the port with `tree.name` `dev · run/<branch>`.
 4. Drop the branch: the session is gone before the folder, and the port is free for the next start.
 
+### What the live check found, 2026-11-03
+
+A scratch canopy on :7877 with its own config folder, a stand-in `claude` that commits one file, and a throwaway repo. All four steps passed.
+
+- `canopy worktrees start app d67e5b93` printed `dev on :7908 in run/w-udv3ywbk-live-check`, and the port answered from the worktree's folder.
+- `canopy worktrees` listed `task    dev  running  :7908` under the run.
+- `GET /api/ports` listed `{port: 7908, tree: {repo: "app", name: "dev · run/w-udv3ywbk-live-check"}}`.
+- `POST /api/landing/drop` closed the port, removed the folder and left tmux with no session.
+- The toggle started the task after setup through the run route and through the pre-flight sheet, where it sits unticked. Stop and "run the app here" kept the same port (:7912).
+- "preview this branch" showed the branch through a preview slot from the main page and from a popped run window.
+
+The browser pass found two faults the tests had not: guided mode hid the preview until the main checkout's app ran, and a popped run window has no dock to show a preview in. Both are fixed; the popped window opens the repo's preview section in a tab.
+
 ## Decisions this plan makes beyond the spec
 
 - `${PORT}` in the main checkout is allotted from the same range, held by the task. A repo that writes `env` once gets a port everywhere, which is what the spec asks.
