@@ -100,11 +100,11 @@ describe("a page with two backends", () => {
     expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({ rule: "spec-weekly", title: "" });
   });
 
-  test("group start sends one shared profile to the owning backend", async () => {
+  test("group start sends each member's profile and the reviewers to the owning backend", async () => {
     reply = () => json({ id: "g", repoId: "x", members: [{ run: "r", origin: "o", profile: "fast" }] });
-    const group = await api.startGroup("b|x", "ask", "n", 2, "fast");
+    const group = await api.startGroup("b|x", "ask", "n", 2, ["fast", null], false, false, 2);
     expect(calls[0]?.url).toBe("http://b.test/api/repos/run?id=x");
-    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ action: "ask", note: "n", branch: true, times: 2, profiles: ["fast"], autoLand: false, pr: false });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ action: "ask", note: "n", branch: true, times: 2, profiles: ["fast", null], autoLand: false, pr: false, reviewers: 2 });
     expect(group.id).toBe("b|g");
     expect(group.members[0]).toMatchObject({ run: "b|r", origin: "b|o" });
   });

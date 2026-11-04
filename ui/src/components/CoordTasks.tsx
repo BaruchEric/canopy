@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { isSeedId } from "../../../src/core/sprout";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
 import { canStartCards, cardCounts, cardStatus, parentCard, type CoordEdit, type CoordView } from "../coord";
+import { groupReviews } from "../groups";
 import { ciChip, prLine } from "../prs";
 import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
@@ -106,9 +107,11 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
   const landing = useStore((s) => landingAll(s));
   const prs = useStore((s) => prsAll(s));
   const showRun = useStore((s) => s.showRun);
+  const showGroup = useStore((s) => s.showGroup);
   const coordRemove = useStore((s) => s.coordRemove);
   const [editing, setEditing] = useState(false);
-  const status = cardStatus(task, child, landing, prs);
+  const group = task.group ? landing.groups?.find((g) => g.id === task.group) : undefined;
+  const status = cardStatus(task, child, landing, prs, group);
   const chip = status.pr ? ciChip(status.pr) : null;
   const editable = !run.kept && task.state === "proposed" && isRunActive(run);
 
@@ -121,6 +124,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
       <div className="facts">
         <span className="branch">{idText(task.repo)}</span>
         <span className="branch">{ACTION_WORD[task.action]}</span>
+        {task.times !== undefined && task.times > 1 && <span className="branch">best of {task.times}</span>}
       </div>
       {editing && editable ? (
         <CardForm run={run} task={task} act={act} onDone={() => setEditing(false)} />
@@ -128,7 +132,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
         <p className="coord-note">{task.note}</p>
       )}
       {status.line && <p className={task.state === "failed" ? "coord-line err" : "coord-line"}>{status.line}</p>}
-      {(status.pr || (editable && !editing) || child) && (
+      {(status.pr || (editable && !editing) || child || group) && (
         <div className="coord-actions">
           {status.pr && (
             <a className="run-pr-link" href={status.pr.url} target="_blank" rel="noreferrer" title={`${status.pr.slug} #${status.pr.number}`}>
@@ -152,6 +156,11 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
               open its run
             </button>
           )}
+          {group && (
+            <button type="button" className="mini" title="Open the group this card started" onClick={() => showGroup(group.id)}>
+              open the group
+            </button>
+          )}
         </div>
       )}
     </li>
@@ -169,6 +178,7 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
   const [note, setNote] = useState(task.note);
   const [repo, setRepo] = useState(task.repo);
   const [action, setAction] = useState<CoordTask["action"]>(task.action);
+  const [times, setTimes] = useState(task.times ?? 1);
   const [busy, setBusy] = useState(false);
   const noteBox = useRef<HTMLTextAreaElement>(null);
   // the card's repo's files at @; the child run's harness is the repo's
@@ -180,6 +190,7 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
     ...(note.trim() !== task.note ? { note: note.trim() } : {}),
     ...(repo !== task.repo ? { repo } : {}),
     ...(action !== task.action ? { action } : {}),
+    ...(times !== (task.times ?? 1) ? { times } : {}),
   };
   const changed = Object.keys(change).length > 0;
   const ok = title.trim().length > 0 && note.trim().length > 0;
@@ -224,6 +235,11 @@ function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask; act: 
           <option value="ask">ask</option>
           <option value="propose">plan, then build</option>
         </select>
+        <select className="settings-input" value={times} aria-label="How many tries" title="2 or 3 starts that many runs of this note and lands the best one" onChange={(e) => setTimes(Number(e.target.value))}>
+          <option value={1}>one try</option>
+          <option value={2}>best of 2</option>
+          <option value={3}>best of 3</option>
+        </select>
       </div>
       <textarea
         ref={noteBox}
@@ -259,7 +275,7 @@ export function ParentLine({ run }: { run: Run }) {
   const showRun = useStore((s) => s.showRun);
   const group = useStore(s => landingAll(s).groups?.find(g => g.id === (run.group ?? run.branch?.group)));
   const showGroup = useStore(s => s.showGroup);
-  if (group) return <div className="run-parent"><span className="run-parent-text">{group.review?.run === run.id ? "reviewing best of" : "one of"} {group.expectedMembers}</span><span className="spacer" /><button type="button" className="mini" onClick={() => showGroup(group.id)}>open the group</button></div>;
+  if (group) return <div className="run-parent"><span className="run-parent-text">{groupReviews(group).some((review) => review.run === run.id) ? "reviewing best of" : "one of"} {group.expectedMembers}</span><span className="spacer" /><button type="button" className="mini" onClick={() => showGroup(group.id)}>open the group</button></div>;
   if (!run.parent) return null;
   const card = parentCard(parent, run.id);
   return (

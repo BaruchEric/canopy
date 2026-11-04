@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { groupProfiles } from "../groups";
 import type { TabRef } from "../sectiontabs";
 import { ACTIONS, planWords, repoFacts } from "../../../src/core/actions";
 import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
@@ -222,9 +223,9 @@ export function freeBranchSlots(repoId: string, runs: readonly Run[], flows: rea
   return Math.max(0, GROUP_MAX - origins.size);
 }
 
-export function GroupPreflight({ onBranch, times, free, profile, profiles, autoLand, onTimes, onProfile, onAutoLand }: {
-  onBranch: boolean; times: number; free: number; profile: string; profiles: string[]; autoLand: boolean;
-  onTimes: (n: number) => void; onProfile: (p: string) => void; onAutoLand: (on: boolean) => void;
+export function GroupPreflight({ onBranch, times, free, picks, profiles, reviewers, autoLand, onTimes, onPick, onReviewers, onAutoLand }: {
+  onBranch: boolean; times: number; free: number; picks: readonly string[]; profiles: string[]; reviewers: 1 | 2; autoLand: boolean;
+  onTimes: (n: number) => void; onPick: (member: number, profile: string) => void; onReviewers: (n: 1 | 2) => void; onAutoLand: (on: boolean) => void;
 }) {
   if (!onBranch) return null;
   return <fieldset className="plan-branch">
@@ -232,7 +233,8 @@ export function GroupPreflight({ onBranch, times, free, profile, profiles, autoL
     <div role="group" aria-label="Number of branch runs">{[1, 2, 3].map(n => <button type="button" className={`mini${times === n ? " on" : ""}`} key={n} disabled={n > free} aria-pressed={times === n} onClick={() => onTimes(n)}>{n}</button>)}</div>
     <p className="note">{free} of {GROUP_MAX} slots free</p>
     {times > 1 && <>
-      <label>Shared profile <select aria-label="Shared profile" value={profile} onChange={e => onProfile(e.target.value)}><option value="">repo's job route</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>
+      {Array.from({ length: times }, (_, i) => <label key={i}>Member {i + 1} <select aria-label={`Member ${i + 1} profile`} value={picks[i] ?? ""} onChange={e => onPick(i, e.target.value)}><option value="">repo's default</option>{profiles.map(p => <option key={p} value={p}>{p}</option>)}</select></label>)}
+      <div role="group" aria-label="Reviewers">Reviewers {([1, 2] as const).map(n => <button type="button" className={`mini${reviewers === n ? " on" : ""}`} key={n} aria-pressed={reviewers === n} title={n === 2 ? "A second reviewer reads the members in reverse order; the two must agree on the winner" : "One reviewer picks the winner"} onClick={() => onReviewers(n)}>{n}</button>)}</div>
       <label className="plan-branch"><input type="checkbox" checked={autoLand} onChange={e => onAutoLand(e.target.checked)} /> auto-land the winner when its own review says auto</label>
     </>}
   </fieldset>;
@@ -247,7 +249,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const routes = useStore(s => routesOf(s, backendOf(repo.id)));
   const profiles = profileNames(routes);
   const [times, setTimes] = useState(1);
-  const [profile, setProfile] = useState("");
+  const [picks, setPicks] = useState<string[]>([]);
+  const [reviewers, setReviewers] = useState<1 | 2>(1);
   const [autoLand, setAutoLand] = useState(false);
   const startWsRun = useStore((s) => s.startWsRun);
   const spec = ACTIONS[action];
@@ -281,7 +284,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     setError(null);
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
-      if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, profile || undefined, autoLand, pr);
+      if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, groupProfiles(picks, times), autoLand, pr, reviewers === 2 ? 2 : undefined);
       else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined));
     } catch (err) {
       setError(errText(err));
@@ -353,7 +356,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             on a branch of its own
           </label>
         )}
-        <GroupPreflight onBranch={branchable && onBranch} times={times} free={free} profile={profile} profiles={profiles} autoLand={autoLand} onTimes={setTimes} onProfile={setProfile} onAutoLand={setAutoLand} />
+        <GroupPreflight onBranch={branchable && onBranch} times={times} free={free} picks={picks} profiles={profiles} reviewers={reviewers} autoLand={autoLand} onTimes={setTimes} onPick={(member, picked) => setPicks(now => { const next = [...now]; next[member] = picked; return Array.from(next, p => p ?? ""); })} onReviewers={setReviewers} onAutoLand={setAutoLand} />
         {branchable && onBranch && (
           <label className="plan-branch" title="Once the run is ready, canopy pushes its branch and opens a PR on GitHub instead of landing it here, then watches its checks and reviews">
             <input type="checkbox" checked={asPr} onChange={(e) => setAsPr(e.target.checked)} />

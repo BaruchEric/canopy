@@ -2,10 +2,10 @@ import { describe, expect, test } from "bun:test";
 import type { RunGroup } from "../../src/core/group";
 import type { CostEntry } from "../../src/core/costs";
 import { api } from "./api";
-import { groupWord, memberColumns, costOfGroup, groupWaiting, canPickMember } from "./groups";
+import { groupFiles, groupProfiles, groupReviews, groupWord, memberColumns, costOfGroup, groupWaiting, canPickMember } from "./groups";
 import { repoLanding, chipWords, mergeLanding } from "./landing";
 import { mergeInbox as inbox } from "./inbox";
-import { qEvent, qGroup } from "./qualify";
+import { qEvent, qGroup, qRun } from "./qualify";
 
 const sampleGroup = (over: Partial<RunGroup> = {}): RunGroup => ({ id: "g", repoId: "repo", repoPath: "/repo", action: "ask", note: "make it better", expectedMembers: 2, members: [{ origin: "a", run: "r-a", profile: null }, { origin: "b", run: "r-b", profile: "fast" }], state: "needs-you", autoLand: false, startedAt: 1, scores: { a: { state: "ready", branch: "run/a", base: "base", gates: { ok: true }, verdict: "land", cost: { usd: 2, tokens: 30 } }, b: { state: "ready", branch: "run/b", base: "base", gates: { ok: false, red: "test" } } }, ...over });
 const empty = { runs: [], entries: [], orphans: [] };
@@ -149,4 +149,38 @@ test("queue and judge holds preserve group action fences; approval never becomes
   if (!approval) throw new Error("missing approval member");
   expect(memberActions(group, approval, info)).toMatchObject({ land: true, approve: true });
   expect(canPickMember({ ...group, scores: { a: { state: "ready", branch: "run/a", base: "b", gates: { ok: true }, scenarios: { total: 1, passed: 0, score: 0.5 } } } }, "a", info)).toBe(false);
+});
+
+describe("plan 2's helpers", () => {
+  test("picks become one profile per member, or nothing when all take the default", () => {
+    expect(groupProfiles([], 3)).toBeUndefined();
+    expect(groupProfiles(["", ""], 2)).toBeUndefined();
+    expect(groupProfiles(["", "fast"], 3)).toEqual([null, "fast", null]);
+    // a pick left over from a higher count does not ride along
+    expect(groupProfiles(["a", "b", "c"], 2)).toEqual(["a", "b"]);
+  });
+  test("reviews list in the order they ran", () => {
+    const first = { run: "c1", ranking: ["a"], why: {} };
+    const second = { run: "c2", error: "no block" };
+    expect(groupReviews({})).toEqual([]);
+    expect(groupReviews({ review: first })).toEqual([first]);
+    expect(groupReviews({ review: first, secondReview: second })).toEqual([first, second]);
+  });
+  test("files split by branch across sorted members", () => {
+    const review = (paths: string[]) => ({ verdict: "land" as const, files: paths.map(path => ({ path, cls: "logic" as const })), base: "b", head: "h", at: 1 });
+    const rec = (id: string, paths: string[]) => ({ ...landingMember, id, branch: `run/${id}`, review: review(paths) });
+    const info = { ...empty, runs: [rec("a", ["x.ts", "a.ts"]), rec("b", ["x.ts", "b.ts"])] };
+    const group = sampleGroup({ scores: {} });
+    expect(groupFiles(memberColumns(group, info))).toEqual({ every: ["x.ts"], only: [{ branch: "run/a", paths: ["a.ts"] }, { branch: "run/b", paths: ["b.ts"] }] });
+    expect(groupFiles(memberColumns(group, empty))).toEqual({ every: [], only: [] });
+  });
+  test("a card's group is qualified with its run", () => {
+    const q = (id: string) => `b|${id}`;
+    const run = { id: "c", repoId: "repo", action: "coordinate", verb: "coordinate", progress: "", expectsChange: false, chat: true, harness: "claude", note: "", status: "idle", startedAt: 1, steps: [], prompt: null, tasks: [{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 2, group: "g" }] } as const satisfies Run;
+    expect(qRun(q, { ...run, tasks: [...run.tasks] }).tasks?.[0]).toMatchObject({ group: "b|g", times: 2 });
+  });
+  test("the second reviewer's run is qualified like the first's", () => {
+    const q = (id: string) => `b|${id}`;
+    expect(qGroup(q, sampleGroup({ review: { run: "c1", ranking: [], why: {} }, secondReview: { run: "c2", ranking: [], why: {} } })).secondReview?.run).toBe("b|c2");
+  });
 });

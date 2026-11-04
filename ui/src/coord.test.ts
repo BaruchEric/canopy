@@ -146,3 +146,16 @@ describe("the view a phone opens a coordinator on", () => {
     expect(coordView(coord("done", started))).toBe("cards");
   });
 });
+
+describe("a card that started a group", () => {
+  const group = { id: "g", repoId: "repo", repoPath: "/r", action: "ask", note: "n", expectedMembers: 3, members: [], state: "reviewing", autoLand: false, startedAt: 1 } as const;
+  const running: CoordTask = { id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 3, group: "g" };
+  const none: LandingInfo = { runs: [], entries: [], orphans: [] };
+  test("a running card shows the group's word", () => {
+    expect(cardStatus(running, undefined, none, [], { ...group, members: [] })).toEqual({ word: "reviewing", tone: "sky", line: "" });
+  });
+  test("the settled words read as words, not as sentences", () => {
+    for (const outcome of ["winner picked", "landed"]) expect(cardStatus({ ...running, state: "done", outcome }, undefined, none, [])).toMatchObject({ word: outcome, tone: "moss", line: "" });
+    for (const outcome of ["needs you", "dropped"]) expect(cardStatus({ ...running, state: "failed", outcome }, undefined, none, [])).toMatchObject({ word: outcome, tone: "rust", line: "" });
+  });
+});

@@ -1,6 +1,6 @@
 /** Browser-side group words, columns and safe action availability. */
-import type { RunGroup, MemberScore } from "../../src/core/group";
-import { pickWinner } from "../../src/core/group";
+import type { GroupReview, RunGroup, MemberScore } from "../../src/core/group";
+import { fileSpread, pickWinner } from "../../src/core/group";
 import type { CostEntry } from "../../src/core/costs";
 import type { LandingInfo, LandingRun, Run } from "../../src/core/types";
 import { isRunActive } from "../../src/core/types";
@@ -27,6 +27,22 @@ export function memberColumns(group: RunGroup, info: LandingInfo, runs: Readonly
     const score = group.scores?.[member.origin];
     return { member, run, record, score, cost: score?.cost ?? { usd: run?.result?.costUsd ?? 0, tokens: run?.result?.tokens?.total ?? 0 } };
   });
+}
+/** The pre-flight's picks as the body's `profiles`, one per member, null for
+ *  the repo's default. Absent when every member takes the default. */
+export function groupProfiles(picks: readonly string[], times: number): (string | null)[] | undefined {
+  const profiles = Array.from({ length: times }, (_, i) => picks[i] || null);
+  return profiles.some(Boolean) ? profiles : undefined;
+}
+/** The group's reviewers in the order they ran. */
+export function groupReviews(group: Pick<RunGroup, "review" | "secondReview">): GroupReview[] {
+  return [group.review, group.secondReview].filter((review): review is GroupReview => review !== undefined);
+}
+/** The files every sorted member touched and those only one did, by branch. */
+export function groupFiles(columns: readonly GroupColumn[]): { every: string[]; only: { branch: string; paths: string[] }[] } {
+  const sorted = columns.flatMap(({ record, score }) => record?.review ? [[score?.branch ?? record.branch, record.review.files.map(file => file.path)] as const] : []);
+  const spread = fileSpread(Object.fromEntries(sorted));
+  return { every: spread.every, only: sorted.flatMap(([branch]) => { const paths = spread.only[branch]; return paths ? [{ branch, paths }] : []; }) };
 }
 export function costOfGroup(rows: readonly CostEntry[], groupId: string, runId: string): { usd: number; tokens: number } {
   return rows.filter(r => r.group === groupId && r.run === runId).reduce((sum, r) => ({ usd: sum.usd + (r.usd ?? 0), tokens: sum.tokens + (r.tokens?.total ?? 0) }), { usd: 0, tokens: 0 });

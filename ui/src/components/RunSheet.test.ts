@@ -41,18 +41,27 @@ describe("group preflight", () => {
     expect(freeBranchSlots("other", [active("reader1", "b")], [held])).toBe(3);
   });
   test("branch-only counts, free slots and default-off auto-land", () => {
-    const props = { onBranch: true, times: 1, free: 2, profile: "", profiles: ["default", "fast"], autoLand: false, onTimes: () => {}, onProfile: () => {}, onAutoLand: () => {} };
+    const props = { onBranch: true, times: 1, free: 2, picks: [], profiles: ["default", "fast"], reviewers: 1 as const, autoLand: false, onTimes: () => {}, onPick: () => {}, onReviewers: () => {}, onAutoLand: () => {} };
     expect(renderToStaticMarkup(createElement(GroupPreflight, { ...props, onBranch: false }))).toBe("");
     const single = renderToStaticMarkup(createElement(GroupPreflight, props));
     expect(single).toContain("2 of 3 slots free");
     expect(single).toContain('disabled=""');
-    expect(single).not.toContain("Shared profile");
+    expect(single).not.toContain("Member 1");
+    expect(single).not.toContain("Reviewers");
     const group = renderToStaticMarkup(createElement(GroupPreflight, { ...props, times: 2 }));
-    expect(group).toContain("Shared profile");
     expect(group).toContain("auto-land");
     expect(group).not.toContain('checked=""');
   });
-  test("store sends one shared profile and opens the returned group; one uses existing start", async () => {
+  test("a row per member offers the repo's default first, and one or two reviewers", () => {
+    const props = { onBranch: true, times: 3, free: 3, picks: ["", "fast"], profiles: ["default", "fast"], reviewers: 2 as const, autoLand: false, onTimes: () => {}, onPick: () => {}, onReviewers: () => {}, onAutoLand: () => {} };
+    const html = renderToStaticMarkup(createElement(GroupPreflight, props));
+    for (const n of [1, 2, 3]) expect(html).toContain(`aria-label="Member ${n} profile"`);
+    expect(html.indexOf("repo&#x27;s default")).toBeLessThan(html.indexOf(">fast<"));
+    expect(html).toContain('<option value="fast" selected="">fast</option>');
+    expect(html).toContain('aria-label="Reviewers"');
+    expect(html).toMatch(/aria-pressed="true"[^>]*>2<\/button>/);
+  });
+  test("store sends a profile per member and opens the returned group; one uses existing start", async () => {
     const original = api.startGroup;
     const single = useStore.getState().startRun;
     const before = useStore.getState();
@@ -60,8 +69,8 @@ describe("group preflight", () => {
     api.startGroup = async (...args) => { calls.push(args); return { id: "g", repoId: "repo", repoPath: "/r", action: "ask", note: "n", expectedMembers: 2, members: [], state: "working", autoLand: false, startedAt: 1 }; };
     useStore.setState({ startRun: async (...args) => { calls.push(args); } });
     try {
-      await useStore.getState().startGroup("repo", "ask", "n", 2, "fast");
-      expect(calls[0]).toEqual(["repo", "ask", "n", 2, "fast", false, false]);
+      await useStore.getState().startGroup("repo", "ask", "n", 2, ["fast", null], false, false, 2);
+      expect(calls[0]).toEqual(["repo", "ask", "n", 2, ["fast", null], false, false, 2]);
       expect(useStore.getState().sheet).toEqual({ kind: "group", groupId: "g" });
       await useStore.getState().startGroup("repo", "ask", "n", 1);
       expect(calls[1]).toEqual(["repo", "ask", "n", true, undefined]);

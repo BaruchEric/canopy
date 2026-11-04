@@ -57,6 +57,7 @@ export const qGroup = (q: Q, g: RunGroup): RunGroup => ({
   ...(g.winner ? { winner: q(g.winner) } : {}),
   ...(g.scores ? { scores: Object.fromEntries(Object.entries(g.scores).map(([id, score]) => [q(id), score])) } : {}),
   ...(g.review ? { review: { ...g.review, run: q(g.review.run) } } : {}),
+  ...(g.secondReview ? { secondReview: { ...g.secondReview, run: q(g.secondReview.run) } } : {}),
   ...(g.keptUntil ? { keptUntil: Object.fromEntries(Object.entries(g.keptUntil).map(([id, at]) => [q(id), at])) } : {}),
 });
 
@@ -70,7 +71,7 @@ export const qRun = (q: Q, r: Run): Run => ({
   ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
   // a fork names the run it was forked from (FR-043 plan 3)
   ...(r.forkOf ? { forkOf: { ...r.forkOf, run: q(r.forkOf.run) } } : {}),
-  ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}) })) } : {}),
+  ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}), ...(t.group !== undefined ? { group: q(t.group) } : {}) })) } : {}),
 });
 
 /** The landing queue: a branch's id, its runs' and its repo's under the
