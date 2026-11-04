@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { isSeedId } from "../../../src/core/sprout";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
-import { canStartCards, cardCounts, cardStatus, parentCard, type CoordEdit, type CoordView } from "../coord";
+import { canStartCards, cardCounts, cardStatus, parentCard, type CoordEdit, type CoordView, chainWords } from "../coord";
 import { ciChip, prLine } from "../prs";
 import { backendOf, plainOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
@@ -261,6 +261,20 @@ export function ParentLine({ run }: { run: Run }) {
   const showGroup = useStore(s => s.showGroup);
   if (group) return <div className="run-parent"><span className="run-parent-text">{group.review?.run === run.id ? "reviewing best of" : "one of"} {group.expectedMembers}</span><span className="spacer" /><button type="button" className="mini" onClick={() => showGroup(group.id)}>open the group</button></div>;
   if (!run.parent) return null;
+  // a coordinator's card starts at depth 0; a run's child has a depth (FR-038)
+  if (run.depth) {
+    return (
+      <div className="run-parent">
+        <span className="run-parent-text">{chainWords(run, parent)}</span>
+        <span className="spacer" />
+        {parent && (
+          <button type="button" className="mini" title="Open the run that started this one" onClick={() => showRun(parent.id)}>
+            open the parent
+          </button>
+        )}
+      </div>
+    );
+  }
   const card = parentCard(parent, run.id);
   return (
     <div className="run-parent">

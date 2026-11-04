@@ -25,7 +25,7 @@ describe("run console actions", () => {
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Console, GroupPreflight, RunPane, freeBranchSlots } from "./RunSheet";
+import { Console, GroupPreflight, RunPane, ToolsPreflight, freeBranchSlots } from "./RunSheet";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { Flow, PrWatch, Run } from "../../../src/core/types";
@@ -51,6 +51,14 @@ describe("group preflight", () => {
     expect(group).toContain("Shared profile");
     expect(group).toContain("auto-land");
     expect(group).not.toContain('checked=""');
+  });
+  test("the canopy tools toggle shows only where a run can hold them (FR-038)", () => {
+    const props = { show: true, on: false, onChange: () => {} };
+    expect(renderToStaticMarkup(createElement(ToolsPreflight, { ...props, show: false }))).toBe("");
+    const off = renderToStaticMarkup(createElement(ToolsPreflight, props));
+    expect(off).toContain("canopy tools");
+    expect(off).not.toContain('checked=""');
+    expect(renderToStaticMarkup(createElement(ToolsPreflight, { ...props, on: true }))).toContain('checked=""');
   });
   test("store sends one shared profile and opens the returned group; one uses existing start", async () => {
     const original = api.startGroup;

@@ -222,6 +222,19 @@ export function freeBranchSlots(repoId: string, runs: readonly Run[], flows: rea
   return Math.max(0, GROUP_MAX - origins.size);
 }
 
+/** The pre-flight's canopy tools toggle (FR-038): over the route's setting for
+ *  this one start. A group, a coordinator and a workspace run start without
+ *  them, so they get no toggle. */
+export function ToolsPreflight({ show, on, onChange }: { show: boolean; on: boolean; onChange: (on: boolean) => void }) {
+  if (!show) return null;
+  return (
+    <label className="plan-branch" title="The run gets canopy's MCP tools and a token held to its own run: it can read the board, start up to three children here and leave a work note. It cannot land, push or answer a prompt.">
+      <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
+      canopy tools
+    </label>
+  );
+}
+
 export function GroupPreflight({ onBranch, times, free, profile, profiles, autoLand, onTimes, onProfile, onAutoLand }: {
   onBranch: boolean; times: number; free: number; profile: string; profiles: string[]; autoLand: boolean;
   onTimes: (n: number) => void; onProfile: (p: string) => void; onAutoLand: (on: boolean) => void;
@@ -260,6 +273,8 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo.id, harness: agent.harness, side: "below" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // null follows the route's setting, which may arrive after this sheet opens
+  const [toolsPick, setToolsPick] = useState<boolean | null>(null);
   const noteReady = !busy && (!spec.noteRequired || note.trim().length > 0);
   // a branch of its own: on for propose, off for the rest, never for a
   // workspace run or a checkout on another host or the forge; a coordinator
@@ -282,7 +297,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
       if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, profile || undefined, autoLand, pr);
-      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined));
+      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, toolsPick ?? undefined));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -360,6 +375,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             open a PR when done
           </label>
         )}
+        <ToolsPreflight show={!coordinate && !workspace && !repo.host && !repo.forge && agent.harness === "claude" && !(branchable && onBranch && times > 1)} on={toolsPick ?? agent.canopyTools === true} onChange={setToolsPick} />
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">

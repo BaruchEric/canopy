@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
-import { canStartCards, cardCounts, cardStatus, childLine, coordTurn, coordView, isCoordinator, parentCard, stepLine } from "./coord";
+import { canStartCards, cardCounts, cardStatus, chainWords, childLine, coordTurn, coordView, isCoordinator, parentCard, stepLine } from "./coord";
 
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id,
@@ -122,6 +122,16 @@ describe("the coordinator's run", () => {
     expect(parentCard(undefined, "c3")).toBeUndefined();
     expect(cardCounts(tasks)).toBe("3 cards · 1 proposed, 2 running");
     expect(cardCounts([])).toBe("0 cards");
+  });
+});
+
+describe("who started a run's child (FR-038)", () => {
+  test("the chain reads up to the coordinator or the run above", () => {
+    expect(chainWords({ parent: "3f2a9c" })).toBe("started by run 3f2a");
+    expect(chainWords({ parent: "mac|3f2a9c" }, { parent: undefined })).toBe("started by run 3f2a");
+    expect(chainWords({ parent: "3f2a9c" }, { parent: "k1", depth: undefined })).toBe("started by run 3f2a, which the coordinator started");
+    expect(chainWords({ parent: "3f2a9c" }, { parent: "9b1e00", depth: 1 })).toBe("started by run 3f2a, which run 9b1e started");
+    expect(chainWords({ parent: undefined })).toBe("");
   });
 });
 

@@ -175,6 +175,18 @@ export function AgentSettingsForm({
         {value.yolo && <p className="settings-hint warn">Every command runs without asking.</p>}
       </section>
       <section className="settings-row">
+        <h3 className="panel-label">canopy tools</h3>
+        <Seg
+          label="Canopy tools"
+          value={value.canopyTools ? "on" : "off"}
+          options={[
+            { value: "off", label: "off", title: "A run starts with no canopy server and no token" },
+            { value: "on", label: "on", title: "A branch run or a chat gets canopy's MCP tools and a token held to its own run: read the board, start children, leave a work note; never land or push" },
+          ]}
+          onChange={(v) => set("canopyTools", v === "on")}
+        />
+      </section>
+      <section className="settings-row">
         <h3 className="panel-label">extra flags</h3>
         <input
           type="text"

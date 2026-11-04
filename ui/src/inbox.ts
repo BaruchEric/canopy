@@ -33,6 +33,7 @@ import type {
 import { pct, shareTone, weekKey, type HarnessWeek } from "../../src/core/harnessshare";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
+import { chainWords } from "./coord";
 import { handOffText } from "../../src/core/sprout";
 import { SCORE_GATE, sentBack } from "../../src/core/landing";
 import { scopeWords } from "../../src/core/shellwords";
@@ -241,13 +242,15 @@ function askItem(a: Ask, now: number, ctx: InboxContext): InboxItem {
   };
 }
 
-function runItem(run: Run, flow: Flow | undefined, ctx: InboxContext): InboxItem | null {
+function runItem(run: Run, flow: Flow | undefined, runs: Readonly<Record<string, Run>>, ctx: InboxContext): InboxItem | null {
   const p = run.prompt;
   if (run.status !== "waiting" || !p) return null;
   const repo = ctx.repos.find((r) => r.id === run.repoId);
   const backend = ctx.backendOf?.(run.id) ?? "";
   const step = flow?.steps.find((s) => s.runId === run.id);
-  const who = flow ? `${flow.workflow}${step ? ` · ${step.name}` : ""}` : `${agentWord(harnessOf(run))} ${run.chat ? "chat" : run.verb}`;
+  // a run's child names who started it (FR-038); a coordinator's card has depth 0
+  const started = run.depth && run.parent ? chainWords(run, runs[run.parent]) : "";
+  const who = flow ? `${flow.workflow}${step ? ` · ${step.name}` : ""}` : `${agentWord(harnessOf(run))} ${run.chat ? "chat" : run.verb}${started ? ` · ${started}` : ""}`;
   return {
     key: `run:${run.id}`,
     source: "run",
@@ -525,7 +528,7 @@ export function mergeInbox(
   const items: InboxItem[] = [];
   for (const a of asks) if (a.state === "open") items.push(askItem(a, now, ctx));
   for (const r of Object.values(runs)) {
-    const it = runItem(r, byRun.get(r.id), ctx);
+    const it = runItem(r, byRun.get(r.id), runs, ctx);
     if (it) items.push(it);
   }
   for (const f of Object.values(flows)) {
