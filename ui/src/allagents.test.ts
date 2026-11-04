@@ -194,4 +194,11 @@ describe("the board's tools chip (FR-038)", () => {
     expect(holdsTools(on, {}, ids)).toBe(false);
     expect(holdsTools(card(), { r1: run({ canopyTools: true }) }, ids)).toBe(false);
   });
+  test("a card made from a run with no hook reads the same", () => {
+    const held = run({ id: "mini|r9", canopyTools: true });
+    const [made] = allAgents({ cards: [], runs: [held], shells: [], shellAgents: {}, repos: [repo], ids } as never);
+    expect(made?.id).toBe("run:mini|r9");
+    expect(made && holdsTools(made, { "mini|r9": held }, ids)).toBe(true);
+    expect(holdsTools(runCard(held, repo, ids), { "mini|r9": { ...held, status: "done" } }, ids)).toBe(false);
+  });
 });

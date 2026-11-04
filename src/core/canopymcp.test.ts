@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { callTool, foldHealth, foldQueue, foldRuns, foldStatus, handleMessage, INSTRUCTIONS, serve, TOOLS, TOOLS_FOR, toolsFor, type CanopyApi, type McpContext, type ToolName } from "./canopymcp";
+import { LANES } from "./callers";
 import { parseMessage } from "./codexrpc";
 import { enqueue } from "./landing";
 import type { HealthCheck, LandingInfo, LandingRun, Repo, RepoStatus, Run } from "./types";
@@ -247,5 +248,25 @@ describe("a run's tools (FR-038)", () => {
     const reply = await handleMessage({ kind: "request", id: 1, method: "tools/call", params: { name: "canopy_land", arguments: { run: "r" } } }, ctx(api, "run"));
     expect(reply).toMatchObject({ error: { message: "canopy_land is not a tool this run token holds" } });
     expect(calls).toEqual([]);
+  });
+});
+
+describe("a run's token and its lane (FR-038)", () => {
+  // the lane matches exact paths, so a listed tool on any other path would be
+  // offered to the agent and refused every time
+  const ARGS: Partial<Record<ToolName, Record<string, unknown>>> = {
+    canopy_work_note: { text: "n" },
+    canopy_run_start: { note: "n" },
+    canopy_say: { id: "c1", text: "n" },
+    canopy_wake: { prompt: "n", when: "2026-11-04T09:00:00Z" },
+  };
+  test("every tool it lists calls a route on its lane", async () => {
+    for (const tool of toolsFor("run")) {
+      const seen: string[] = [];
+      const client: CanopyApi = { call: async <T,>(method: string, path: string) => { seen.push(`${method} ${path}`); return (path === "/api/runs" || path === "/api/health" ? [] : {}) as T; } };
+      await callTool(tool.name, ARGS[tool.name] ?? {}, { ...ctx(client, "run"), run: "abcd1234" });
+      expect(seen.length, tool.name).toBeGreaterThan(0);
+      for (const call of seen) expect(LANES.run?.has(call), `${tool.name}: ${call}`).toBe(true);
+    }
   });
 });
