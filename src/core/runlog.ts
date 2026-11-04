@@ -91,7 +91,7 @@ function isRun(v: unknown): v is Run {
     optional(v, "agentSettings", (x) => record(x) && harness(x["harness"]) && text(x["model"]) && oneOf(x["effort"], AGENT_EFFORTS) && optional(x, "provider", text)) &&
     optional(v, "todos", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "subject"]) && oneOf(t["status"], ["pending", "in_progress", "completed"]) && optional(t, "active", text))) &&
     optional(v, "result", (x) => record(x) && text(x["text"]) && number(x["durationMs"]) && number(x["turns"]) && optional(x, "costUsd", number) && optStrFields(x, ["model", "provider"]) && optional(x, "tokens", (t) => record(t) && ["input", "cachedInput", "output", "reasoning", "total"].every((key) => number(t[key])))) &&
-    optional(v, "tasks", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "title", "repo", "note"]) && oneOf(t["action"], ["propose", "ask"]) && oneOf(t["state"], ["proposed", "queued", "running", "done", "failed", "dropped"]) && optStrFields(t, ["run", "work", "outcome"])));
+    optional(v, "tasks", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "title", "repo", "note"]) && oneOf(t["action"], ["propose", "ask"]) && oneOf(t["state"], ["proposed", "queued", "running", "done", "failed", "dropped"]) && optStrFields(t, ["run", "work", "outcome", "group"]) && optional(t, "times", number)));
 }
 
 function credentialName(name: string): boolean {
@@ -165,7 +165,7 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
     };
   }
   if (run.todos) safe.todos = run.todos.map((todo) => ({ id: t(todo.id), subject: r(todo.subject), status: t(todo.status), ...(todo.active !== undefined ? { active: r(todo.active) } : {}) }));
-  if (run.tasks) safe.tasks = run.tasks.map((task) => ({ id: t(task.id), title: r(task.title), repo: t(task.repo), note: r(task.note), action: t(task.action), state: t(task.state), ...(task.run ? { run: t(task.run) } : {}), ...(task.work ? { work: t(task.work) } : {}), ...(task.outcome !== undefined ? { outcome: r(task.outcome) } : {}) }));
+  if (run.tasks) safe.tasks = run.tasks.map((task) => ({ id: t(task.id), title: r(task.title), repo: t(task.repo), note: r(task.note), action: t(task.action), state: t(task.state), ...(task.run ? { run: t(task.run) } : {}), ...(task.work ? { work: t(task.work) } : {}), ...(task.times !== undefined ? { times: task.times } : {}), ...(task.group ? { group: t(task.group) } : {}), ...(task.outcome !== undefined ? { outcome: r(task.outcome) } : {}) }));
   const prompt = run.prompt;
   if (prompt?.kind === "proposal") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), plan: r(prompt.plan), auto: prompt.auto };
   if (prompt?.kind === "permission") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), tool: r(prompt.tool), title: r(prompt.title), detail: r(prompt.detail),

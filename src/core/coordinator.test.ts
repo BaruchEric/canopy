@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { childOutcome, childSettled, COORD_AT_ONCE, MAX_PLAN, MAX_TASKS, nextToStart, settleNote, startNote, validatePlan, type ChildLanding } from "./coordinator";
+import { childOutcome, childSettled, COORD_AT_ONCE, groupNote, groupSettled, MAX_PLAN, MAX_TASKS, nextToStart, settleNote, startNote, validatePlan, type ChildLanding } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
+import type { RunGroup } from "./group";
 import type { CoordTask, LandEntry, Run, RunBranch } from "./types";
 
 const known = (repo: string): "local" | "remote" | null => (repo === "web" || repo === "api" ? "local" : repo === "mini:box" ? "remote" : null);
@@ -246,5 +247,70 @@ describe("startNote", () => {
         "result: api has no main or master branch to cut a run's branch from",
       ].join("\n"),
     );
+  });
+});
+
+describe("a card with times", () => {
+  const one = (over: Record<string, unknown>) => ({ title: "t", repo: "web", note: "n", action: "ask", ...over });
+  const queued = (id: string, times?: number): CoordTask => ({ id, title: id, repo: "web", note: "n", action: "ask", state: "queued", ...(times ? { times } : {}) });
+  test("a plan takes 2 or 3, and 1 stores nothing", () => {
+    const got = validatePlan([one({ times: 3 }), one({ times: 1 }), one({})], { known, have: 0 });
+    if ("error" in got) throw new Error(got.error);
+    expect(got.tasks.map((t) => t.times)).toEqual([3, undefined, undefined]);
+    expect("times" in (got.tasks[1] ?? {})).toBe(false);
+  });
+  test("a plan refuses anything else, naming the task", () => {
+    for (const times of [0, 4, 1.5, "2", null]) {
+      expect(validatePlan([one({}), one({ times })], { known, have: 0 })).toEqual({ error: "tasks[1].times must be 1 to 3" });
+    }
+  });
+  test("a card counts as its times against the 3 working", () => {
+    const repoFull = () => false;
+    expect(nextToStart([queued("t1", 3), queued("t2")], { working: 0, repoFull }).map((t) => t.id)).toEqual(["t1"]);
+    expect(nextToStart([queued("t1", 2), queued("t2", 2), queued("t3")], { working: 0, repoFull }).map((t) => t.id)).toEqual(["t1", "t3"]);
+  });
+  test("a card that does not fit the room left waits, and a later single goes ahead", () => {
+    expect(nextToStart([queued("t1", 3), queued("t2")], { working: 1, repoFull: () => false }).map((t) => t.id)).toEqual(["t2"]);
+  });
+  test("a card asks its repo for that many slots", () => {
+    const asked: (number | undefined)[] = [];
+    const repoFull = (_repo: string, need?: number) => { asked.push(need); return (need ?? 1) > 1; };
+    expect(nextToStart([queued("t1", 2), queued("t2")], { working: 0, repoFull }).map((t) => t.id)).toEqual(["t2"]);
+    expect(asked).toEqual([2, 1]);
+  });
+});
+
+describe("a group card settling", () => {
+  test("each state of the group as the card's word", () => {
+    expect(groupSettled({ state: "working" })).toBeNull();
+    expect(groupSettled({ state: "scoring" })).toBeNull();
+    expect(groupSettled({ state: "reviewing" })).toBeNull();
+    expect(groupSettled({ state: "picked" })).toEqual({ state: "done", outcome: "winner picked" });
+    expect(groupSettled({ state: "landed" })).toEqual({ state: "done", outcome: "landed" });
+    expect(groupSettled({ state: "needs-you" })).toEqual({ state: "failed", outcome: "needs you" });
+    expect(groupSettled({ state: "dropped" })).toEqual({ state: "failed", outcome: "dropped" });
+  });
+  const task: CoordTask = { id: "t2", title: "retry the import", repo: "web", note: "n", action: "ask", state: "running", times: 3, group: "g-a1b2c3d4" };
+  const group: RunGroup = {
+    id: "g-a1b2c3d4", repoId: "web", repoPath: "/w", action: "ask", note: "n", expectedMembers: 3, autoLand: false, startedAt: 1, state: "picked",
+    members: [{ run: "r1", origin: "o1", profile: null }],
+    winner: "o1",
+    scores: { o1: { branch: "run/a", base: "b", state: "ready", gates: { ok: true } } },
+    review: { run: "c1", ranking: ["run/a"], why: { "run/a": "It is the smallest." } },
+  };
+  test("a picked winner's note names its branch and the reviewer's reason", () => {
+    expect(groupNote(task, group, "winner picked")).toBe([
+      "canopy: a task you started has settled",
+      "task t2: retry the import (repo web)",
+      "outcome: winner picked",
+      "result: best of 3, It is the smallest.",
+      "branch: run/a, the winner, waiting for Eric to land it",
+    ].join("\n"));
+  });
+  test("a group that needs Eric says why and names no branch", () => {
+    const { winner: _w, ...rest } = group;
+    const text = groupNote(task, { ...rest, state: "needs-you", reason: "the reviewers disagree: run/a or run/b" }, "needs you");
+    expect(text).toContain("result: best of 3, the reviewers disagree: run/a or run/b");
+    expect(text).not.toContain("branch:");
   });
 });

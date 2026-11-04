@@ -111,10 +111,10 @@ usage:
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
   canopy mcp                         an MCP server on stdio for the agent that started it: canopy's tools with the rights of $CANOPY_TOKEN
   canopy mcp tools                   the tools that token holds, one per line
-  canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr]   start one branch run or a group to compare
+  canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr]   start one branch run or a group to compare
     --priority interactive|normal|low  who goes first when the plan's window runs low; a group is low unless raised
     --backend URL | --on NAME       select the backend that owns the repo
-  canopy groups [repo]              list best-of-N groups and each member's branch and state
+  canopy groups [repo]              list best-of-N groups and each member's branch, state and profile
   canopy groups pick <group> <run>  choose a green member as the winner
     --backend URL | --on NAME       select the backend that owns the group
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push

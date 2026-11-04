@@ -868,10 +868,10 @@ export const api = {
       qRun,
     );
   },
-  startGroup: async (id: string, action: RunAction, note: string, times: number, profile?: string, autoLand = false, pr = false) => {
+  startGroup: async (id: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand = false, pr = false, reviewers?: 2) => {
     const [b, plain] = on(id);
     return from(b, await req<RunGroup>(b, `/api/repos/run?${rq(plain)}`, {
-      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profile ? { profiles: [profile] } : {}), autoLand, pr }),
+      method: "POST", body: JSON.stringify({ action, note, branch: true, times, ...(profiles ? { profiles } : {}), autoLand, pr, ...(reviewers ? { reviewers } : {}) }),
     }), qGroup);
   },
   groups: async (b: string = homeName()) => fromAll(b, await req<RunGroup[]>(b, "/api/groups"), qGroup),

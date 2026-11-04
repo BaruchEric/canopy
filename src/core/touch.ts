@@ -90,7 +90,7 @@ export function addStep(t: Touched, step: RunStep): Touched {
   return t;
 }
 
-/** the set from every step so far; `group` is `Run.group` once FR-033 ships */
+/** the set from every step so far; `group` is the run's best-of-N group */
 export function touchedOf(run: Pick<Run, "id" | "verb" | "steps" | "branch">, group?: string): Touched {
   const touched: Touched = {
     run: run.id,

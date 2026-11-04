@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CostEntry } from "../../../src/core/costs";
 import { api } from "../api";
-import { canPickMember, costOfGroup, groupWord, memberActions, memberColumns } from "../groups";
+import { canPickMember, costOfGroup, groupFiles, groupReviews, groupWord, memberActions, memberColumns } from "../groups";
 import { landWord, runOverlaps } from "../landing";
 import { backendOf } from "../registry";
 import { idText, landingAll, prsAll, useStore } from "../store";
@@ -44,9 +44,9 @@ export function GroupSheet({ groupId }: { groupId: string }) {
     setBusy(true); setError("");
     void fn().catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
   };
-  const reviewer = group.review ? runs[group.review.run] : undefined;
-  const reviewCost = group.review ? ledger.some(r => r.group === group.id && r.run === group.review?.run) ? costOfGroup(ledger, group.id, group.review.run) : { usd: reviewer?.result?.costUsd ?? 0, tokens: reviewer?.result?.tokens?.total ?? 0 } : null;
+  const reviews = groupReviews(group);
   const columns = memberColumns(group, info, runs);
+  const files = groupFiles(columns);
   return <>
     <header className="sheet-head"><div><div className="eyebrow">{idText(group.repoId)} · {groupWord(group)}</div><h2 className="sheet-title">best of {group.expectedMembers}: {group.note}</h2></div><button type="button" className="mini close" onClick={close} aria-label="Close">✕</button></header>
     <div className="sheet-body">
@@ -56,7 +56,7 @@ export function GroupSheet({ groupId }: { groupId: string }) {
         const actions = memberActions(group, column, info);
         const watch = watches.find(w => w.id === member.origin);
         const entry = info.entries.find(e => e.id === member.origin);
-        const why = group.review && "why" in group.review ? group.review.why[score?.branch ?? record?.branch ?? ""] : undefined;
+        const whys = reviews.flatMap(review => { const why = "why" in review ? review.why[score?.branch ?? record?.branch ?? ""] : undefined; return why ? [why] : []; });
         const costs = costOfGroup(ledger, group.id, member.run);
         const extra = record && record.runId !== member.run ? costOfGroup(ledger, group.id, record.runId) : { usd: 0, tokens: 0 };
         const cost = ledger.some(r => r.group === group.id && (r.run === member.run || r.run === record?.runId)) ? { usd: costs.usd + extra.usd, tokens: costs.tokens + extra.tokens } : column.cost;
@@ -69,7 +69,7 @@ export function GroupSheet({ groupId }: { groupId: string }) {
           <p>review: {record?.review?.verdict ?? score?.verdict ?? "sorting"}{record?.review?.why ? ` · ${record.review.why}` : ""}</p>
           {score?.diffstat && <p>{score.diffstat.files} files · +{score.diffstat.added} −{score.diffstat.removed}</p>}
           <p>{usd(cost.usd)} · {fmtTokens(cost.tokens)} tokens</p>
-          {why && <p>{why}</p>}
+          {whys.map((why, i) => <p key={i}>{why}</p>)}
           {group.keptUntil?.[member.origin] !== undefined && <p className="note">kept until {new Date(group.keptUntil[member.origin] ?? 0).toLocaleString()}</p>}
           {entry?.reason && <p className="rust">{entry.reason}</p>}
           {runOverlaps(info, record?.runId ?? member.run).map(c => <OverlapChip key={c.id} name={c.name} paths={c.paths} />)}
@@ -84,7 +84,12 @@ export function GroupSheet({ groupId }: { groupId: string }) {
           {group.winner !== member.origin && !["landed", "dropped"].includes(group.state) && <label className="plan-branch"><input type="checkbox" checked={keep.includes(member.origin)} onChange={e => setKeep(xs => e.target.checked ? [...xs, member.origin] : xs.filter(x => x !== member.origin))} /> keep this branch for 24 hours when dropping the group</label>}
         </section>;
       })}</div>
-      {group.review && <section><h3>Reviewer</h3>{reviewer && <button type="button" className="mini" onClick={() => showRun(reviewer.id)}>open reviewer run</button>}<p>{reviewCost ? `${usd(reviewCost.usd)} · ${fmtTokens(reviewCost.tokens)} tokens` : ""}</p>{"error" in group.review && <p className="rust">{group.review.error}</p>}{reviewer?.result?.text && <pre className="ask-detail">{reviewer.result.text}</pre>}</section>}
+      {(files.every.length > 0 || files.only.length > 0) && <section><h3>Files</h3>{files.every.length > 0 && <p>every member: {files.every.join(", ")}</p>}{files.only.map(({ branch, paths }) => <p key={branch}>only {branch}: {paths.join(", ")}</p>)}</section>}
+      {reviews.map((review, i) => {
+        const reviewer = runs[review.run];
+        const reviewCost = ledger.some(r => r.group === group.id && r.run === review.run) ? costOfGroup(ledger, group.id, review.run) : { usd: reviewer?.result?.costUsd ?? 0, tokens: reviewer?.result?.tokens?.total ?? 0 };
+        return <section key={review.run}><h3>{reviews.length > 1 || group.reviewers === 2 ? `Reviewer ${i + 1}` : "Reviewer"}</h3>{reviewer && <button type="button" className="mini" onClick={() => showRun(reviewer.id)}>open reviewer run</button>}<p>{usd(reviewCost.usd)} · {fmtTokens(reviewCost.tokens)} tokens</p>{"error" in review && <p className="rust">{review.error}</p>}{"ranking" in review && review.ranking.length > 0 && <p>ranked {review.ranking.join(", ")}</p>}{reviewer?.result?.text && <pre className="ask-detail">{reviewer.result.text}</pre>}</section>;
+      })}
       {costError && <p className="note">Cost ledger unavailable: {costError}</p>}
       {error && <p className="note err" role="alert">{error}</p>}
     </div>

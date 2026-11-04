@@ -2,12 +2,14 @@
  *  card's state chip, its child's one-line status, the parent card a
  *  child was started for, and whether start these applies. Pure. */
 
+import type { RunGroup } from "../../src/core/group";
 import { isRunActive, type CoordTask, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
+import { groupWord } from "./groups";
 import { runLanding } from "./landing";
 import { prOfRun, prWord } from "./prs";
 
 /** What an edit of a proposed card may change; a field left out stays. */
-export type CoordEdit = Partial<Pick<CoordTask, "title" | "note" | "repo" | "action">>;
+export type CoordEdit = Partial<Pick<CoordTask, "title" | "note" | "repo" | "action" | "times">>;
 
 /** A coordinate run: a chat that holds no repo, so it never counts as the
  *  run going there (the server's `Runner.activeFor` skips it too). */
@@ -25,6 +27,9 @@ export const OUTCOME_WORDS: readonly string[] = Object.freeze([
   "uncommitted",
   "plan turned down",
   "no change",
+  "winner picked",
+  "needs you",
+  "dropped",
 ]);
 
 export type CardTone = "moss" | "sky" | "rust" | "lichen" | "faint";
@@ -64,12 +69,14 @@ export function childLine(run: Pick<Run, "steps">): string {
 
 /** What a card shows of itself and its child. `child` is the run the card
  *  started when this page still has it. A card still running whose child
- *  ended waits on the landing queue, so it shows the child's landing word. */
+ *  ended waits on the landing queue, so it shows the child's landing word.
+ *  A card that started a group shows the group's word in its place. */
 export function cardStatus(
   task: CoordTask,
   child: Run | undefined,
   landing: LandingInfo,
   prs: readonly PrWatch[],
+  group?: RunGroup,
 ): CardStatus {
   const line = child ? childLine(child) : "";
   const pr = child ? prOfRun(child, prs) : undefined;
@@ -81,6 +88,7 @@ export function cardStatus(
     case "queued":
       return { word: "queued", tone: "sky", line: task.outcome ?? "" };
     case "running": {
+      if (group) return { word: groupWord(group), tone: "sky", line: group.reason ?? "" };
       if (!child) return { word: "running", tone: "sky", line: task.outcome ?? "" };
       if (isRunActive(child)) return { word: child.status === "waiting" ? "needs you" : "running", tone: child.status === "waiting" ? "lichen" : "sky", line, ...withPr };
       const word = pr ? prWord(pr) : (runLanding(child, landing)?.word ?? "settling");

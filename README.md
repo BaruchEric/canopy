@@ -96,8 +96,8 @@ canopy land <run> --approve <id>   # land a run that touches sensitive files, wi
 canopy land <run> --skip-judge     # land anyway from a judge hold; command scenarios still run
 canopy land --all [repo]           # every ready run that needs no approval; names the ones it left
 canopy queue [repo]                # every landing queue: queued in order, sent back and why, ready to land and its verdict
-canopy run <repo> <action> [-m note] [--times 1|2|3] [--auto-land] [--pr] [--backend URL | --on NAME] # start one run or a group
-canopy groups [repo] [--backend URL | --on NAME] # list groups and each member's branch and state
+canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr] [--backend URL | --on NAME] # start one run or a group; an empty name in --profiles is the repo's job route
+canopy groups [repo] [--backend URL | --on NAME] # list groups and each member's branch, state and profile
 canopy groups pick <group> <run> [--backend URL | --on NAME] # choose a green ready member
 canopy worktrees [repo] [--json]   # every run and warm worktree on the backend, the failed refills, the orphans and the free disk
 canopy worktrees warm <repo> [N]   # keep N prepared worktrees for the repo on this machine; no N takes the gates file's warm

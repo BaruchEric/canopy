@@ -1508,7 +1508,7 @@ export interface CanopyState {
   takePendingSearch: () => void;
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
-  startGroup: (repoId: string, action: RunAction, note: string, times: number, profile?: string, autoLand?: boolean, pr?: boolean) => Promise<void>;
+  startGroup: (repoId: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand?: boolean, pr?: boolean, reviewers?: 2) => Promise<void>;
   startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
@@ -4843,9 +4843,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     const group = await api.dropGroup(id, keep);
     set(s => ({ landing: withGroup(s.landing, backendOf(id), group) }));
   },
-  startGroup: async (repoId, action, note, times, profile, autoLand = false, pr = false) => {
+  startGroup: async (repoId, action, note, times, profiles, autoLand = false, pr = false, reviewers) => {
     if (times === 1) return get().startRun(repoId, action, note, true, pr ? true : undefined);
-    const group = await api.startGroup(repoId, action, note, times, profile, autoLand, pr);
+    const group = await api.startGroup(repoId, action, note, times, profiles, autoLand, pr, reviewers);
     const b = backendOf(repoId);
     set(s => {
       const info = s.landing[b] ?? { runs: [], entries: [], orphans: [] };

@@ -19,6 +19,10 @@ export interface RunArgs {
   explicitTimes: boolean;
   autoLand: boolean;
   pr: boolean;
+  /** one per member, null for the repo's job route; a short list repeats its last */
+  profiles?: (string | null)[];
+  /** 2 asks a second reviewer, who must agree on the winner */
+  reviewers?: 2;
   /** who may go first when the plan's window runs low (FR-036); absent, the
    *  backend's default for the start */
   priority?: Priority;
@@ -40,6 +44,10 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
   const note = take(args, "-m");
   const timesFlag = args.includes("--times");
   const rawTimes = take(args, "--times");
+  const profilesFlag = args.includes("--profiles");
+  const rawProfiles = take(args, "--profiles");
+  const reviewersFlag = args.includes("--reviewers");
+  const rawReviewers = take(args, "--reviewers");
   const autoLand = has(args, "--auto-land");
   const pr = has(args, "--pr");
   const priorityFlag = args.includes("--priority");
@@ -48,6 +56,8 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
   if (onFlag && on === undefined) return "--on needs a value";
   if (noteFlag && note === undefined) return "-m needs a note";
   if (timesFlag && rawTimes === undefined) return "--times needs a value";
+  if (profilesFlag && rawProfiles === undefined) return "--profiles needs a list of names";
+  if (reviewersFlag && rawReviewers !== "1" && rawReviewers !== "2") return "--reviewers must be 1 or 2";
   const priority = rawPriority === undefined ? undefined : parsePriority(rawPriority);
   if (priorityFlag && (priority === undefined || priority === null)) return "--priority must be interactive, normal or low";
   if (backend !== undefined && !/^https?:\/\/[^/\s]+$/.test(apiBase(backend))) {
@@ -67,6 +77,11 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     if (times < 1 || times > 3) return "--times must be 1, 2, or 3";
   }
   if (autoLand && times === 1) return "--auto-land requires --times 2 or 3";
+  if (profilesFlag && times === 1) return "--profiles requires --times 2 or 3";
+  if (reviewersFlag && times === 1) return "--reviewers requires --times 2 or 3";
+  // an empty name is the repo's job route: --profiles ,codex-fast
+  const profiles = rawProfiles?.split(",").map((name) => name.trim() || null);
+  if (profiles && profiles.length > times) return `--profiles names ${profiles.length} members; --times says ${times}`;
 
   return {
     repo,
@@ -76,6 +91,8 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     explicitTimes: timesFlag,
     autoLand,
     pr,
+    ...(profiles ? { profiles } : {}),
+    ...(rawReviewers === "2" ? { reviewers: 2 as const } : {}),
     ...(priority ? { priority } : {}),
     ...(backend !== undefined ? { backend } : {}),
     ...(on !== undefined ? { on } : {}),
@@ -111,7 +128,7 @@ export function runCommand(argv: string[], deps: RunCommandDeps): Promise<void> 
 function firstWord(args: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     const value = args[i];
-    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority" || value === "--at" || value === "--profile") {
+    if (value === "-m" || value === "--times" || value === "--backend" || value === "--on" || value === "--priority" || value === "--at" || value === "--profile" || value === "--profiles" || value === "--reviewers") {
       i += 1;
       continue;
     }
@@ -162,6 +179,8 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     note: parsed.note,
     branch: true,
     ...(parsed.explicitTimes ? { times: parsed.times } : {}),
+    ...(parsed.profiles ? { profiles: parsed.profiles } : {}),
+    ...(parsed.reviewers ? { reviewers: parsed.reviewers } : {}),
     ...(parsed.autoLand ? { autoLand: true } : {}),
     ...(parsed.pr ? { pr: true } : {}),
     ...(parsed.priority ? { priority: parsed.priority } : {}),

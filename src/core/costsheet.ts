@@ -43,6 +43,8 @@ export interface ServedRow extends CostRow {
 export interface CostLine {
   /** The run behind a by-run line, on the backend that recorded it. */
   run?: { backend: string; id: string };
+  /** The best-of-N group a by-run line folds, in place of `run`. */
+  group?: { backend: string; id: string };
   key: string;
   label: string;
   detail: string;
@@ -149,7 +151,15 @@ export function sessionLines(parts: readonly LeadSessions[], since: number): Cos
 
 const NO_REPO = "\u0000none";
 
-export function costSheet(rows: readonly ServedRow[], history: HistoryOverview | null, days: number, cards: readonly RepoCard[]): CostSheet {
+/** A folded group's line: "best of 3 · plan". The count comes from the groups
+ *  the caller holds, since a fix run's rows carry the group as well and
+ *  counting runs would overstate it. */
+const groupLabel = (size: number | undefined, verb: string | undefined): string =>
+  [size ? `best of ${size}` : "best-of group", verb].filter(Boolean).join(" · ");
+
+/** `sizes` maps `<backend>:<group id>` to its member count. A group's members
+ *  and reviewers fold into one by-run line. */
+export function costSheet(rows: readonly ServedRow[], history: HistoryOverview | null, days: number, cards: readonly RepoCard[], sizes: ReadonlyMap<string, number> = new Map()): CostSheet {
   const archive = history?.available === true;
   const cardOf = new Map(cards.flatMap((c) => c.checkouts.map((r) => [r.id, c] as const)));
   const claude = claudeByCard(history, days, cards);
@@ -160,6 +170,7 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
   const runs = new Map<string, CostLine>();
   const runServices = new Map<string, Set<string>>();
   const runDetails = new Map<string, Set<string>>();
+  const groupVerbs = new Map<string, string>();
 
   const claudeLine = line("claude:anthropic", SERVICE_NAME.claude, archive ? "claude-history's sessions across configured providers, synced hourly" : "anthropic · canopy's runs only: claude-history did not answer");
   for (const [key, usd] of claude) {
@@ -202,9 +213,15 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
     }
 
     if (r.run) {
-      const k = `${r.backend}:${r.run}`;
+      const k = r.group ? `${r.backend}:group:${r.group}` : `${r.backend}:${r.run}`;
       const l = runs.get(k) ?? line(k, r.label ?? "run");
-      l.run = { backend: r.backend, id: r.run };
+      if (r.group) {
+        l.group = { backend: r.backend, id: r.group };
+        // the reviewer's verb is "compare"; the line says what the members did
+        if (r.label && r.action !== "compare" && !groupVerbs.has(k)) groupVerbs.set(k, r.label);
+      } else {
+        l.run = { backend: r.backend, id: r.run };
+      }
       runs.set(k, l);
       add(l, r);
       const where = (r.qid ? cardOf.get(r.qid)?.name : undefined) ?? r.repoName;
@@ -227,6 +244,7 @@ export function costSheet(rows: readonly ServedRow[], history: HistoryOverview |
   if (canopyClaude > 0) claudeLine.detail += ` (canopy's ${canopyClaude} ${canopyClaude === 1 ? "reply" : "replies"}: $${canopyClaudeUsd.toFixed(2)})`;
   for (const [k, l] of runs) {
     l.detail = [l.detail, [...(runServices.get(k) ?? [])].join(" + "), [...(runDetails.get(k) ?? [])].join(" · ")].filter(Boolean).join(" · ");
+    if (l.group) l.label = groupLabel(sizes.get(`${l.group.backend}:${l.group.id}`), groupVerbs.get(k));
   }
 
   const serviceLines = [...(claudeLine.usd > 0 || claudeLine.at > 0 ? [claudeLine] : []), ...[...services.values()].sort(byWorth)];

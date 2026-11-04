@@ -12,6 +12,7 @@ import {
 import { join } from "node:path";
 import { git } from "../core/exec";
 import {
+  agree,
   comparePrompt,
   GROUP_MAX,
   LOSER_KEEP,
@@ -19,6 +20,7 @@ import {
   pickWinner,
   settleGroup,
   type GroupDry,
+  type GroupReview,
   type MemberScore,
   type RunGroup,
 } from "../core/group";
@@ -140,6 +142,13 @@ const member = (value: unknown): value is RunGroup["members"][number] =>
   typeof value["run"] === "string" &&
   typeof value["origin"] === "string" &&
   (value["profile"] === null || typeof value["profile"] === "string");
+const reviewShape = (v: unknown): boolean =>
+  record(v) &&
+  typeof v["run"] === "string" &&
+  (typeof v["error"] === "string" ||
+    (strings(v["ranking"]) &&
+      record(v["why"]) &&
+      Object.values(v["why"]).every((w) => typeof w === "string")));
 const STATES = new Set([
   "working",
   "scoring",
@@ -180,16 +189,9 @@ function isGroup(value: unknown): value is StoredGroup {
       value["scores"],
       (v) => record(v) && Object.values(v).every(score),
     ) &&
-    optional(
-      value["review"],
-      (v) =>
-        record(v) &&
-        typeof v["run"] === "string" &&
-        (typeof v["error"] === "string" ||
-          (strings(v["ranking"]) &&
-            record(v["why"]) &&
-            Object.values(v["why"]).every((w) => typeof w === "string"))),
-    ) &&
+    optional(value["reviewers"], (v) => v === 1 || v === 2) &&
+    optional(value["review"], reviewShape) &&
+    optional(value["secondReview"], reviewShape) &&
     optional(value["reason"], (v) => typeof v === "string") &&
     optional(
       value["winner"],
@@ -231,8 +233,27 @@ function isGroup(value: unknown): value is StoredGroup {
     )
   );
 }
+/** One reviewer's word, in the shape `agree` answers two reviewers' in. */
+const pickOne = (
+  group: RunGroup,
+  ranking: readonly string[],
+  minimum: number,
+): { winner: string } | { reason: string } => {
+  const winner = pickWinner(group, ranking, minimum);
+  return winner ? { winner } : { reason: "no member passed the gates" };
+};
 const errText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/** Which reviewer a group waits on. A record keeps one field per reviewer. */
+type ReviewSlot = "review" | "secondReview";
+const SLOTS: readonly ReviewSlot[] = ["review", "secondReview"];
+const startKey = (group: string, slot: ReviewSlot): string => `${group}:${slot}`;
+/** a reviewer's finished ranking; a running one's list is empty */
+const rankingOf = (review: GroupReview | undefined): string[] | undefined =>
+  review && "ranking" in review && review.ranking.length > 0
+    ? review.ranking
+    : undefined;
 
 class GroupError extends Error {
   constructor(
@@ -357,7 +378,7 @@ export class GroupHub {
       | "autoLand"
       | "startedAt"
       | "expectedMembers"
-    > & { pr?: true },
+    > & { pr?: true; reviewers?: 2 },
   ): Promise<RunGroup> {
     const epoch = this.owned();
     if (
@@ -497,11 +518,12 @@ export class GroupHub {
         delete next.scores;
         delete next._dispatch;
         delete next.review;
+        delete next.secondReview;
         delete next.reason;
         delete next.winner;
         delete next.pickedBy;
         delete next.minimum;
-        this.startingReview.delete(group.id);
+        this.forgetStarting(group.id);
         void this.set(next, this.ownership).catch(() => {});
       }
     }
@@ -517,6 +539,10 @@ export class GroupHub {
       prs.filter((pr) => pr.state?.status === "merged").map((pr) => pr.id),
     );
     for (const group of this.groups.values()) this.kick(group.repoId);
+  }
+
+  private forgetStarting(group: string): void {
+    for (const slot of SLOTS) this.startingReview.delete(startKey(group, slot));
   }
 
   private kick(repo: string): void {
@@ -723,9 +749,15 @@ export class GroupHub {
     }
     group = this.current(id, epoch, "reviewing");
     if (!group) return;
-    let review = group.review
-      ? this.run(group.review.run)
-      : this.startingReview.get(id);
+    // the second reviewer's turn comes once the first has a ranking; a group
+    // that asked for one reviewer never leaves the first slot
+    const slot: ReviewSlot =
+      group.reviewers === 2 && rankingOf(group.review)
+        ? "secondReview"
+        : "review";
+    const key = startKey(id, slot);
+    const held = group[slot];
+    let review = held ? this.run(held.run) : this.startingReview.get(key);
     if (!review) {
       if (
         this.deps.activeFor(group.repoId) ||
@@ -748,6 +780,14 @@ export class GroupHub {
           minimum: group.minimum ?? 1,
         };
       }
+      const files = Object.fromEntries(
+        Object.keys(dry).map((origin) => [
+          origin,
+          (
+            this.facts().runs.find((r) => r.id === origin)?.review?.files ?? []
+          ).map((file) => file.path),
+        ]),
+      );
       const reviewGroup = group;
       const revision = this.revisions.get(id) ?? 0;
       const current = (): boolean =>
@@ -756,7 +796,10 @@ export class GroupHub {
       try {
         const started = await this.deps.startReviewer(
           structuredClone(group),
-          comparePrompt(group, dry),
+          comparePrompt(group, dry, {
+            reversed: slot === "secondReview",
+            files,
+          }),
           current,
         );
         if (!started) return;
@@ -776,10 +819,10 @@ export class GroupHub {
         await this.cancelReview(id, review.id);
         return;
       }
-      this.startingReview.set(id, review);
+      this.startingReview.set(key, review);
       const attached: StoredGroup = {
         ...reviewGroup,
-        review: { run: review.id, ranking: [], why: {} },
+        [slot]: { run: review.id, ranking: [], why: {} },
       };
       try {
         await this.set(attached, epoch);
@@ -795,9 +838,9 @@ export class GroupHub {
         await this.cancelReview(id, review.id);
         return;
       }
-    } else if (!group.review) {
+    } else if (!held) {
       await this.set(
-        { ...group, review: { run: review.id, ranking: [], why: {} } },
+        { ...group, [slot]: { run: review.id, ranking: [], why: {} } },
         epoch,
       );
     }
@@ -819,33 +862,43 @@ export class GroupHub {
         {
           ...group,
           state: "needs-you",
-          review: { run: review.id, error: parsed.error },
+          [slot]: { run: review.id, error: parsed.error },
           reason: parsed.closing || parsed.error,
         },
         epoch,
       );
       return;
     }
-    const winner = pickWinner(group, parsed.ranking, group.minimum ?? 1);
+    const first = rankingOf(group.review);
     await this.set(
       {
         ...group,
-        review: { run: review.id, ranking: parsed.ranking, why: parsed.why },
+        [slot]: { run: review.id, ranking: parsed.ranking, why: parsed.why },
       },
       epoch,
     );
     group = this.current(id, epoch, "reviewing");
     if (!group) return;
-    if (winner) await this.pick(group, winner, "reviewer", epoch);
+    if (group.reviewers === 2 && slot === "review") {
+      await this.advance(id, epoch);
+      return;
+    }
+    const minimum = group.minimum ?? 1;
+    const verdict =
+      slot === "secondReview" && first
+        ? agree(group, first, parsed.ranking, minimum)
+        : pickOne(group, parsed.ranking, minimum);
+    if ("winner" in verdict)
+      await this.pick(group, verdict.winner, "reviewer", epoch);
     else
-      await this.set(
-        { ...group, state: "needs-you", reason: "no member passed the gates" },
-        epoch,
-      );
+      await this.set({ ...group, state: "needs-you", reason: verdict.reason }, epoch);
   }
   private async cancelReview(groupId: string, runId: string): Promise<void> {
-    if (this.startingReview.get(groupId)?.id === runId)
-      this.startingReview.delete(groupId);
+    for (const slot of SLOTS) {
+      const key = startKey(groupId, slot);
+      if (this.startingReview.get(key)?.id === runId)
+        this.startingReview.delete(key);
+    }
     await this.deps.stopReviewer(runId);
   }
 
@@ -1091,8 +1144,9 @@ export class GroupHub {
           const next: StoredGroup = { ...group, state: "reviewing" };
           delete next._dispatch;
           delete next.review;
+          delete next.secondReview;
           delete next.reason;
-          this.startingReview.delete(group.id);
+          this.forgetStarting(group.id);
           await this.set(next, epoch);
         }
         this.kick(group.repoId);

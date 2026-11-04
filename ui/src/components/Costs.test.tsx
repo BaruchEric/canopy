@@ -13,3 +13,9 @@ test("a run cost line is a button while service, repo and archive lines remain l
   const readOnly = renderToStaticMarkup(<Lines title="By service" lines={[line]} empty="none" />);
   expect(readOnly).not.toContain("<button");
 });
+
+test("a folded group's line is a button too", () => {
+  const { run: _run, ...rest } = line;
+  const html = renderToStaticMarkup(<Lines title="By run and chat" lines={[{ ...rest, key: "b:group:g", label: "best of 3 · plan", group: { backend: "b", id: "g" } }]} empty="none" onOpen={() => {}} />);
+  expect(html).toContain('class="landing-branch landing-open">best of 3 · plan</button>');
+});

@@ -8,7 +8,7 @@ import { COST_WINDOWS, claudeLeads, costSheet, sessionLines, tokensWord as fmtTo
 import type { RepoCard } from "../../../src/core/cards";
 import type { HistoryOverview } from "../../../src/core/types";
 import { backendOf, plainOf, qual } from "../registry";
-import { isOnline, useStore } from "../store";
+import { isOnline, landingAll, useStore } from "../store";
 import { CapacityBlock } from "./Capacity";
 import { Seg } from "./Seg";
 
@@ -197,7 +197,7 @@ export function Lines({ title, lines, empty, limit, onOpen }: { title: string; l
           {shown.map((l) => (
             <li key={l.key} className="cost-row">
               <span className="cost-name">
-                {l.run && onOpen ? <button type="button" className="landing-branch landing-open" onClick={() => onOpen(l)}>{l.label}</button> : l.label}
+                {(l.run || l.group) && onOpen ? <button type="button" className="landing-branch landing-open" onClick={() => onOpen(l)}>{l.label}</button> : l.label}
                 {l.detail && <small>{l.detail}</small>}
               </span>
               <span className="cost-usage">{usageWords(l, fmtTokens)}</span>
@@ -227,10 +227,13 @@ export function CostsView() {
   const [win, setWin] = useState<CostWindow>("7");
   const days = Number(win);
   const showRun = useStore((s) => s.showRun);
+  const showGroup = useStore((s) => s.showGroup);
+  const groups = useStore((s) => landingAll(s).groups);
   const got = useLedger(days);
   const { repos, order, history } = useStore(useShallow((s) => ({ repos: s.repos, order: s.backendOrder, history: s.history })));
   const cards = useMemo(() => joinRepos(repos, order, (id) => [backendOf(id), plainOf(id)]), [repos, order]);
-  const sheet = useMemo(() => (got.kind === "done" ? costSheet(got.rows, history, days, cards) : null), [got, history, days, cards]);
+  const sizes = useMemo(() => new Map((groups ?? []).map((g) => [`${backendOf(g.id)}:${plainOf(g.id)}`, g.expectedMembers])), [groups]);
+  const sheet = useMemo(() => (got.kind === "done" ? costSheet(got.rows, history, days, cards, sizes) : null), [got, history, days, cards, sizes]);
   const leads = useMemo(() => claudeLeads(history, days, cards), [history, days, cards]);
   const sessions = useSessions(leads, days);
   return (
@@ -263,7 +266,7 @@ export function CostsView() {
           {!sheet.archive && <p className="cost-note">claude-history did not answer, so Claude here is only what canopy's own runs reported.</p>}
           <Lines title="By service" lines={sheet.services} empty="Nothing spent in this window." />
           <Lines title="By repo" lines={sheet.repos} empty="Nothing spent in a repo in this window." limit={15} />
-          <Lines title="By run and chat" lines={sheet.runs} empty="No canopy run, chat or voice call in a chat spent anything in this window." limit={15} onOpen={(l) => l.run && showRun(qual(l.run.backend, plainOf(l.run.id)))} />
+          <Lines title="By run and chat" lines={sheet.runs} empty="No canopy run, chat or voice call in a chat spent anything in this window." limit={15} onOpen={(l) => (l.group ? showGroup(qual(l.group.backend, plainOf(l.group.id))) : l.run && showRun(qual(l.run.backend, plainOf(l.run.id))))} />
           {sheet.archive && (
             <Lines
               title="Claude sessions"
