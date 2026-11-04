@@ -67,7 +67,7 @@ export function GroupSheet({ groupId }: { groupId: string }) {
           {score?.gates?.tail && <details><summary>gate output</summary><pre className="ask-detail">{score.gates.tail}</pre></details>}
           <p>scenarios: {score?.scenarios ? `${score.scenarios.passed}/${score.scenarios.total} · ${score.scenarios.score.toFixed(2)} (minimum ${(group.minimum ?? 0).toFixed(2)})` : "none scored"}</p>
           <p>review: {record?.review?.verdict ?? score?.verdict ?? "sorting"}{record?.review?.why ? ` · ${record.review.why}` : ""}</p>
-          {score?.diffstat && <p>{score.diffstat.files} files · +{score.diffstat.added} −{score.diffstat.removed}</p>}
+          {score?.diffstat && <p>{score.diffstat.files} {score.diffstat.files === 1 ? "file" : "files"} · +{score.diffstat.added} −{score.diffstat.removed}</p>}
           <p>{usd(cost.usd)} · {fmtTokens(cost.tokens)} tokens</p>
           {whys.map((why, i) => <p key={i}>{why}</p>)}
           {group.keptUntil?.[member.origin] !== undefined && <p className="note">kept until {new Date(group.keptUntil[member.origin] ?? 0).toLocaleString()}</p>}

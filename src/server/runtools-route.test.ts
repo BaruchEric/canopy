@@ -305,7 +305,7 @@ describe("what a run's token reaches", () => {
     await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [] }));
     await exec(["git", "-C", repo, "add", "-A"]);
     await exec(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "no gate"]);
-  });
+  }, 30_000); // a landing with a real gate; the 5 s default ran out under a full suite
 
   test("a person's token names the parent, and keeps the routes it had", async () => {
     expect((await post("/api/runs/child", { note: "x" })).status).toBe(400);
