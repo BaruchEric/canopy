@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang" | "latenudge",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "canopytool" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang" | "latenudge",
   message = "do the thing",
   unattended?: string,
   opts: {

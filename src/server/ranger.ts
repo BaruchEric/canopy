@@ -818,10 +818,16 @@ export class RangerHub {
     if (!active && this.wakes.some((w) => w.run === runId)) void this.deliver();
   }
 
-  async addWake(body: unknown): Promise<RangerWake> {
-    const by = body && typeof body === "object" && (body as Record<string, unknown>)["by"] === "eric" ? "eric" : "ranger";
-    const w = readWake(body, by, randomBytes(4).toString("hex"), this.now());
-    if (typeof w === "string") throw new RangerError(400, w);
+  /** `from` is the run a run's token speaks for: the wake goes down as that
+   *  run's whatever the body claims, and is one time, since the run's rights
+   *  end with it and a schedule would not (FR-038). */
+  async addWake(body: unknown, from?: string): Promise<RangerWake> {
+    const said = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+    if (from !== undefined && said["cron"] !== undefined) throw new RangerError(403, "a run's wake is one time: give when or run, not cron");
+    const by = from !== undefined ? "run" : said["by"] === "eric" ? "eric" : "ranger";
+    const read = readWake(body, by, randomBytes(4).toString("hex"), this.now());
+    if (typeof read === "string") throw new RangerError(400, read);
+    const w: RangerWake = from !== undefined ? { ...read, from } : read;
     if (w.run && !this.deps.run(w.run)) throw new RangerError(404, `no run ${w.run} on ${this.deps.backend()}`);
     if (this.wakes.length >= WAKES_MAX) throw new RangerError(409, `the ranger holds ${WAKES_MAX} wakes already; remove one first`);
     this.wakes = [...this.wakes, w];
@@ -900,7 +906,8 @@ export class RangerHub {
 
   /* ---------- routes ---------- */
 
-  async handle(req: Request, url: URL): Promise<Response | null> {
+  /** `from` is the run behind a run's token, when one is calling. */
+  async handle(req: Request, url: URL, from?: string): Promise<Response | null> {
     const path = url.pathname;
     if (path !== "/api/ranger" && !path.startsWith("/api/ranger/")) return null;
     await this.diskRead;
@@ -913,7 +920,7 @@ export class RangerHub {
       if (path === "/api/ranger/restart" && method === "POST") return json(await this.restart());
       if (path === "/api/ranger/fresh" && method === "POST") return json(await this.fresh());
       if (path === "/api/ranger/wakes" && method === "GET") return json(this.wakes);
-      if (path === "/api/ranger/wakes" && method === "POST") return json(await this.addWake(await body()), 201);
+      if (path === "/api/ranger/wakes" && method === "POST") return json(await this.addWake(await body(), from), 201);
       if (path === "/api/ranger/wakes" && method === "DELETE") {
         await this.removeWake(url.searchParams.get("id") ?? "");
         return json(this.info());

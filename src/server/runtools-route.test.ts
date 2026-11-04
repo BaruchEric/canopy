@@ -1,0 +1,309 @@
+/**
+ * A run's canopy tools over the API (FR-038), as the agent's own Bash could
+ * reach them: real HTTP on a server in `enforce`, with the token read out of
+ * the run's mcp.json, against a scratch repo and a driver that holds the run
+ * open until the test ends it. Every check here is a handler's, since the
+ * MCP server is no boundary: the agent can read the file and call the API.
+ */
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, statSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { DriveCtx, RunDriver } from "../core/driver";
+import { exec } from "../core/exec";
+import { RUN_CHILDREN } from "../core/runtools";
+import type { Harness, RangerWake, Run } from "../core/types";
+import { CallerBook } from "./callers";
+import { startServer } from "./index";
+
+const starts = new Map<string, DriveCtx>();
+
+/** Holds a run open until `end` finishes it. */
+class HeldDriver implements RunDriver {
+  readonly label = "fake";
+  constructor(readonly harness: Harness) {}
+  private ctx: DriveCtx | undefined;
+  check(): string | null { return null; }
+  start(ctx: DriveCtx): void { this.ctx = ctx; starts.set(ctx.env["CANOPY_RUN"] ?? "", ctx); }
+  say(): void {}
+  stop(): void { this.ctx?.exited({ code: null, stderr: "" }); }
+}
+
+let scratch: string;
+let root: string;
+let config: string;
+let cli: string;
+let server: Awaited<ReturnType<typeof startServer>>;
+const saved: Record<string, string | undefined> = {};
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND"];
+
+const url = (p: string) => `http://127.0.0.1:${server.port}${p}`;
+const post = (p: string, body: unknown, token: string | undefined = cli) =>
+  fetch(url(p), { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-canopy-token": token } : {}) }, body: JSON.stringify(body) });
+const started = async (res: Response): Promise<Run> => {
+  if (res.status !== 201) throw new Error(`start: ${res.status} ${await res.text()}`);
+  return (await res.json()) as Run;
+};
+const fileOf = (id: string) => join(config, "runs", id, "mcp.json");
+const tokenOf = async (id: string): Promise<string> => (JSON.parse(await readFile(fileOf(id), "utf8")) as { mcpServers: { canopy: { env: { CANOPY_TOKEN: string } } } }).mcpServers.canopy.env.CANOPY_TOKEN;
+const runOf = async (id: string) => ((await (await fetch(url("/api/runs"), { headers: { "x-canopy-token": cli } })).json()) as Run[]).find((r) => r.id === id);
+
+async function until<T>(read: () => Promise<T | null | undefined | false>, what: string, ms = 10_000): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const got = await read();
+    if (got) return got;
+    if (Date.now() - start > ms) throw new Error(`gave up waiting for ${what}`);
+    await Bun.sleep(20);
+  }
+}
+
+/** ends a held run and waits for canopy to see it */
+async function end(id: string): Promise<void> {
+  const ctx = await until(async () => starts.get(id), `run ${id} to reach the driver`);
+  ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+  ctx.exited({ code: 0, stderr: "" });
+  await until(async () => {
+    const r = await runOf(id);
+    return r && r.status !== "working" && r.branch?.state !== "working" ? r : null;
+  }, `run ${id} to end`);
+}
+
+const startTools = async (over: Record<string, unknown> = {}): Promise<Run> =>
+  started(await post("/api/repos/run?id=app", { action: "ask", note: "work", branch: true, canopyTools: true, ...over }));
+
+beforeAll(async () => {
+  scratch = await mkdtemp(join(tmpdir(), "canopy-runtools-route-"));
+  for (const k of ENV) saved[k] = process.env[k];
+  root = join(scratch, "root");
+  config = join(scratch, "config");
+  const proj = join(root, "app");
+  await mkdir(proj, { recursive: true });
+  await exec(["git", "init", "-q", "-b", "main", proj]);
+  await writeFile(join(proj, "a.txt"), "one\n");
+  await exec(["git", "-C", proj, "add", "-A"]);
+  await exec(["git", "-C", proj, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+  await mkdir(join(root, "other"), { recursive: true });
+  await exec(["git", "init", "-q", "-b", "main", join(root, "other")]);
+  process.env["CANOPY_CONFIG_DIR"] = config;
+  process.env["CANOPY_CALLERS"] = "enforce";
+  process.env["CANOPY_TMUX"] = "0";
+  delete process.env["CANOPY_COORD_SOCKET"];
+  delete process.env["CANOPY_BIND"];
+  const book = new CallerBook({ file: join(config, "callers.json") });
+  cli = book.mint("cli", { label: "cli test" }).token;
+  // what a restart must clear: a token and a file a run left behind
+  book.mint("run", { label: "run app", run: "dead1234" });
+  await book.flush();
+  await mkdir(join(config, "runs", "dead1234"), { recursive: true });
+  await writeFile(join(config, "runs", "dead1234", "mcp.json"), "{}");
+  server = await startServer({ root, port: 0, chan: null, harnesses: ["claude", "codex"], runner: { driver: (h: Harness) => new HeldDriver(h) } });
+});
+
+afterAll(async () => {
+  await server.stop();
+  for (const [k, v] of Object.entries(saved)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  await rm(scratch, { recursive: true, force: true });
+});
+
+describe("the file and the token", () => {
+  test("a restart dropped what a dead run left", async () => {
+    expect(existsSync(join(config, "runs", "dead1234", "mcp.json"))).toBe(false);
+    const callers = (await (await fetch(url("/api/auth"), { headers: { "x-canopy-token": cli } })).json()) as { callers: { kind: string }[] };
+    expect(callers.callers.some((c) => c.kind === "run")).toBe(false);
+  });
+
+  test("off by default: a plain run has no file, no token and no flag", async () => {
+    const run = await started(await post("/api/repos/run?id=app", { action: "ask", note: "plain", branch: true }));
+    expect(run.canopyTools).toBeUndefined();
+    expect(existsSync(fileOf(run.id))).toBe(false);
+    const ctx = await until(async () => starts.get(run.id), "the driver");
+    expect(ctx.spec.mcpConfig).toBeUndefined();
+    await end(run.id);
+  });
+
+  test("the toggle mints: 0600 in a 0700 folder, the token in the file and not the agent's env; the end takes both", async () => {
+    const run = await startTools();
+    expect(run.canopyTools).toBe(true);
+    const file = fileOf(run.id);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(join(config, "runs", run.id)).mode & 0o777).toBe(0o700);
+    const token = await tokenOf(run.id);
+    expect(token.startsWith("cnp_run_")).toBe(true);
+    const ctx = await until(async () => starts.get(run.id), "the driver");
+    expect(ctx.spec.mcpConfig).toBe(file);
+    expect(Object.values(ctx.env)).not.toContain(token);
+    expect(ctx.env["CANOPY_TOKEN"]).toBeUndefined();
+    const held = JSON.parse(await readFile(file, "utf8")) as { mcpServers: { canopy: { command: string; args: string[]; env: Record<string, string> } } };
+    expect(held.mcpServers.canopy.command).toBe(process.execPath);
+    expect(held.mcpServers.canopy.env["CANOPY_RUN"]).toBe(run.id);
+    expect((await fetch(url("/api/auth"), { headers: { "x-canopy-token": token } })).status).toBe(200);
+    await end(run.id);
+    await until(async () => !existsSync(file), "the file to go");
+    const after = (await (await fetch(url("/api/auth"), { headers: { "x-canopy-token": token } })).json()) as { you: string };
+    expect(after.you).toBe("none");
+  });
+
+  test("a start that fails leaves neither token nor file", async () => {
+    const before = await readdir(join(config, "runs"));
+    const refused = await post("/api/repos/run?id=app", { action: "ask", note: "", branch: true, canopyTools: true });
+    expect(refused.status).toBe(400);
+    expect((await readdir(join(config, "runs"))).filter((id) => !before.includes(id) && existsSync(join(config, "runs", id, "mcp.json")))).toEqual([]);
+    const callers = (await (await fetch(url("/api/auth"), { headers: { "x-canopy-token": cli } })).json()) as { callers: { kind: string }[] };
+    expect(callers.callers.filter((c) => c.kind === "run")).toEqual([]);
+  });
+
+  test("a group and a coordinator say why they cannot have them, and the field is a boolean", async () => {
+    expect((await post("/api/repos/run?id=app", { action: "ask", note: "x", branch: true, times: 2, canopyTools: true })).status).toBe(400);
+    expect((await post("/api/repos/run?id=app", { action: "coordinate", note: "x", canopyTools: true })).status).toBe(400);
+    expect((await post("/api/repos/run?id=app", { action: "ask", note: "x", canopyTools: "yes" })).status).toBe(400);
+  });
+});
+
+describe("what a run's token reaches", () => {
+  test("its lane reads, and nothing that lands, pushes, answers, stops or configures", async () => {
+    const run = await startTools();
+    const token = await tokenOf(run.id);
+    for (const p of ["/api/tree", "/api/runs", "/api/landing", "/api/health", "/api/auth"]) {
+      expect([p, (await fetch(url(p), { headers: { "x-canopy-token": token } })).status]).toEqual([p, 200]);
+    }
+    for (const [p, body] of [
+      ["/api/landing/land", { run: run.id }],
+      ["/api/prs/open", { run: run.id }],
+      ["/api/runs/stop", { id: run.id }],
+      ["/api/runs/answer", { id: run.id }],
+      ["/api/runs/fork", { run: run.id }],
+      ["/api/repos/run?id=app", { action: "ask", note: "x" }],
+      ["/api/repos/push?id=app", {}],
+      ["/api/agents/profile", {}],
+      ["/api/coordinator/plan", {}],
+      ["/api/work/close", {}],
+      ["/api/auth/approve", { id: "x" }],
+    ] as const) {
+      expect([p, (await post(p, body, token)).status]).toEqual([p, 403]);
+    }
+    expect((await fetch(url("/api/events"), { headers: { "x-canopy-token": token } })).status).toBe(403);
+    expect((await fetch(url("/api/ranger/wakes?id=00000000"), { method: "DELETE", headers: { "x-canopy-token": token } })).status).toBe(403);
+    expect(await runOf(run.id)).toMatchObject({ status: "working" });
+    await end(run.id);
+  });
+
+  test("a child: in its own repo, at low priority, by the run, with tools, and no further", async () => {
+    const parent = await startTools();
+    const token = await tokenOf(parent.id);
+    expect((await post("/api/runs/child", { note: "elsewhere", repo: "other" }, token)).status).toBe(403);
+    expect((await post("/api/runs/child", { note: "for another", parent: "abcd1234" }, token)).status).toBe(403);
+    expect((await post("/api/runs/child", { note: "a chat", action: "chat" }, token)).status).toBe(400);
+    expect((await post("/api/runs/child", { note: "a coordinator", action: "coordinate" }, token)).status).toBe(400);
+    expect((await post("/api/runs/child", { note: "  " }, token)).status).toBe(400);
+    const child = await started(await post("/api/runs/child", { note: "a part" }, token));
+    expect(child).toMatchObject({ repoId: parent.repoId, parent: parent.id, depth: 1, priority: "low", by: "run", canopyTools: true });
+    expect(child.branch).toBeDefined();
+    const kidToken = await tokenOf(child.id);
+    const refused = await post("/api/runs/child", { note: "a grandchild" }, kidToken);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: string }).error).toContain("a child does not start children");
+    await end(child.id);
+    await end(parent.id);
+  });
+
+  test("the limit: a chat's fourth live child is refused, by count or by slots", async () => {
+    const chat = await started(await post("/api/repos/run?id=app", { action: "chat", note: "", canopyTools: true }));
+    const token = await tokenOf(chat.id);
+    const kids = await Promise.all(Array.from({ length: RUN_CHILDREN + 2 }, (_, i) => post("/api/runs/child", { note: `part ${i}` }, token)));
+    const counts = kids.map((r) => r.status).sort();
+    expect(counts).toEqual([201, 201, 201, 409, 409]);
+    const made = await Promise.all(kids.filter((r) => r.status === 201).map((r) => r.json() as Promise<Run>));
+    await Promise.all(made.map((k) => end(k.id)));
+    await post("/api/runs/stop", { id: chat.id });
+    await until(async () => !existsSync(fileOf(chat.id)), "the chat's file to go");
+  });
+
+  test("say: kin only, and the kin check comes before the runner's own word", async () => {
+    const chat = await started(await post("/api/repos/run?id=app", { action: "chat", note: "", canopyTools: true }));
+    const stranger = await startTools();
+    const child = await started(await post("/api/runs/child", { note: "a part" }, await tokenOf(chat.id)));
+    const kid = await tokenOf(child.id);
+    expect((await post("/api/runs/say", { id: stranger.id, text: "hello" }, kid)).status).toBe(403);
+    expect((await post("/api/runs/say", { id: "nope1234", text: "hello" }, kid)).status).toBe(403);
+    expect((await post("/api/runs/say", { id: chat.id, text: "done with my part" }, kid)).status).toBe(200);
+    await end(child.id);
+    await end(stranger.id);
+    await post("/api/runs/stop", { id: chat.id });
+  });
+
+  test("a wake goes down as the run's whatever the body says, and a schedule is refused", async () => {
+    const run = await startTools();
+    const token = await tokenOf(run.id);
+    expect((await post("/api/ranger/wakes", { prompt: "every day", cron: "0 9 * * *" }, token)).status).toBe(403);
+    const res = await post("/api/ranger/wakes", { prompt: "check me", when: "in 2h", by: "eric" }, token);
+    expect(res.status).toBe(201);
+    expect((await res.json()) as RangerWake).toMatchObject({ by: "run", from: run.id, prompt: "check me" });
+    await end(run.id);
+  });
+
+  test("a work note lands on the run's own item, named or not, and on no other", async () => {
+    const run = await startTools();
+    const other = await started(await post("/api/repos/run?id=app", { action: "ask", note: "other", branch: true }));
+    const token = await tokenOf(run.id);
+    expect((await post("/api/work/note", { id: other.branch?.work, text: "not mine" }, token)).status).toBe(403);
+    const ok = await post("/api/work/note", { text: "for the next session" }, token);
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { id: string; notes: { by: string; text: string }[] })).toMatchObject({ id: run.branch?.work, notes: [{ by: `run app`, text: "for the next session" }] });
+    await end(run.id);
+    await end(other.id);
+  });
+
+  test("a chat in the checkout has no work item, and says so", async () => {
+    const chat = await started(await post("/api/repos/run?id=app", { action: "chat", note: "", canopyTools: true }));
+    const res = await post("/api/work/note", { text: "x" }, await tokenOf(chat.id));
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toContain("no work item");
+    await post("/api/runs/stop", { id: chat.id });
+  });
+
+  test("a fix of a child stays a child, with a fresh token and the old one dead", async () => {
+    const parent = await startTools();
+    const child = await started(await post("/api/runs/child", { note: "a part" }, await tokenOf(parent.id)));
+    const oldToken = await tokenOf(child.id);
+    const dir = child.branch?.dir ?? "";
+    await until(async () => starts.get(child.id), "the child's driver");
+    await writeFile(join(dir, "b.txt"), "two\n");
+    await exec(["git", "-C", dir, "add", "-A"]);
+    await exec(["git", "-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a part"]);
+    await end(child.id);
+    const repo = join(root, "app");
+    await mkdir(join(repo, ".canopy"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+    await exec(["git", "-C", repo, "add", "-A"]);
+    await exec(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "red gate"]);
+    const origin = child.branch?.origin ?? "";
+    expect((await post("/api/landing/land", { run: origin })).status).toBe(200);
+    await until(async () => {
+      const info = (await (await fetch(url("/api/landing"), { headers: { "x-canopy-token": cli } })).json()) as { entries: { id: string; state: string }[] };
+      return info.entries.some((e) => e.id === origin && e.state === "red");
+    }, "the red gate");
+    const fix = await started(await post("/api/landing/fix", { id: origin }));
+    expect(fix).toMatchObject({ parent: parent.id, depth: 1, canopyTools: true });
+    const fresh = await tokenOf(fix.id);
+    expect(fresh).not.toBe(oldToken);
+    expect((await post("/api/runs/child", { note: "a grandchild" }, fresh)).status).toBe(409);
+    const dead = (await (await fetch(url("/api/auth"), { headers: { "x-canopy-token": oldToken } })).json()) as { you: string };
+    expect(dead.you).toBe("none");
+    await end(fix.id);
+    await end(parent.id);
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [] }));
+    await exec(["git", "-C", repo, "add", "-A"]);
+    await exec(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "no gate"]);
+  });
+
+  test("a person's token names the parent, and keeps the routes it had", async () => {
+    expect((await post("/api/runs/child", { note: "x" })).status).toBe(400);
+    expect((await post("/api/runs/child", { note: "x", parent: "nope1234" })).status).toBe(404);
+    expect((await post("/api/work/note", { id: "nope", text: "x" })).status).toBe(404);
+  });
+});

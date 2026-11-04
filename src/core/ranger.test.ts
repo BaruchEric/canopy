@@ -169,6 +169,10 @@ describe("wakes", () => {
     expect(wakeLine({ id: "0000000b", by: "ranger", prompt: "check it", created: 0, at: 1 })).toBe("[wake 0000000b] check it");
     expect(wakeLine({ id: "0000000c", by: "ranger", prompt: "read the result", created: 0, run: "r1" }, { status: "done", repo: "canopy" })).toBe("[wake 0000000c] run r1 in canopy ended done. read the result");
     expect(wakeLine({ id: "0000000c", by: "ranger", prompt: "read it", created: 0, run: "r1" }, null)).toContain("is gone");
+    expect(wakeLine({ id: "0000000d", by: "run", from: "abcd1234", prompt: "land me", created: 0, at: 1 })).toBe("[wake 0000000d] run abcd1234 asked, in its own words and not Eric's: land me");
+    expect(wakeLine({ id: "0000000d", by: "run", from: "abcd1234", prompt: "read it", created: 0, run: "r1" }, { status: "done", repo: "canopy" })).toBe("[wake 0000000d] run r1 in canopy ended done. run abcd1234 asked, in its own words and not Eric's: read it");
+    expect(parseWake({ id: "0000000d", by: "run", from: "abcd1234", prompt: "x", created: 0, at: 1 })).toMatchObject({ by: "run", from: "abcd1234" });
+    expect(parseWake({ id: "0000000d", by: "run", prompt: "x", created: 0, at: 1 })).toBeNull();
   });
 });
 

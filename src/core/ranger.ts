@@ -333,10 +333,11 @@ export function parseWake(v: unknown): RangerWake | null {
   if (!v || typeof v !== "object" || Array.isArray(v)) return null;
   const w = v as Record<string, unknown>;
   if (typeof w["id"] !== "string" || !/^[0-9a-f]{8}$/.test(w["id"])) return null;
-  if (w["by"] !== "eric" && w["by"] !== "ranger") return null;
+  if (w["by"] !== "eric" && w["by"] !== "ranger" && w["by"] !== "run") return null;
+  if (w["by"] === "run" && (typeof w["from"] !== "string" || !RUN_ID.test(w["from"]))) return null;
   if (typeof w["prompt"] !== "string" || !w["prompt"] || w["prompt"].length > WAKE_PROMPT_MAX) return null;
   if (typeof w["created"] !== "number") return null;
-  const base: RangerWake = { id: w["id"], by: w["by"], prompt: w["prompt"], created: w["created"] };
+  const base: RangerWake = { id: w["id"], by: w["by"], ...(w["by"] === "run" ? { from: w["from"] as string } : {}), prompt: w["prompt"], created: w["created"] };
   const next = typeof w["next"] === "number" ? { next: w["next"] } : {};
   if (isCron(w["cron"])) return { ...base, cron: w["cron"], ...next };
   if (typeof w["at"] === "number") return { ...base, at: w["at"], next: typeof w["next"] === "number" ? w["next"] : w["at"] };
@@ -349,11 +350,13 @@ export function parseWake(v: unknown): RangerWake | null {
  *  prefixes mean) */
 export function wakeLine(w: RangerWake, run?: { status: string; repo: string } | null): string {
   const tag = w.by === "eric" && w.cron ? `[cron ${w.id}]` : `[wake ${w.id}]`;
+  // the ranger holds operate and a run does not: its words say whose they are
+  const prompt = w.by === "run" ? `run ${w.from ?? "?"} asked, in its own words and not Eric's: ${w.prompt}` : w.prompt;
   if (w.run) {
     const what = run ? `run ${w.run} in ${run.repo} ended ${run.status}` : `run ${w.run} is gone (canopy restarted, or it was dismissed)`;
-    return `${tag} ${what}. ${w.prompt}`;
+    return `${tag} ${what}. ${prompt}`;
   }
-  return `${tag} ${w.prompt}`;
+  return `${tag} ${prompt}`;
 }
 
 /** when a cron wake fires after it just did, or null when it never will */

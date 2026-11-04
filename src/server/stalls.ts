@@ -114,8 +114,9 @@ export class StallHub {
     // a flow's step stops its flow, which is picked up by hand; a job in
     // the checkout has no branch to carry on; a coordinator's child and a
     // best-of-N member belong to an owner that reads the stop itself, and
-    // a resume here would work their branch as an orphan it never sees
-    if (!b || run.flowStep || b.held || run.parent || run.group) return { kind: "none" };
+    // a resume here would work their branch as an orphan it never sees. A
+    // run's child (it has a depth) has no such owner, and a resume keeps it one
+    if (!b || run.flowStep || b.held || (run.parent && !run.depth) || run.group) return { kind: "none" };
     const rec = this.deps.record(b.origin);
     if (!rec) return { kind: "none" };
     const count = this.deps.countStall(b.origin);
