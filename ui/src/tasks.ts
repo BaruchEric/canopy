@@ -132,6 +132,20 @@ export function renameOld(t: TaskDef & { source: TaskSource }, target: "canopy" 
 
 export const devTask = (tasks: readonly TaskInfo[]): TaskInfo | undefined => tasks.find((t) => t.dev && !t.hidden);
 
+const taskUp = (t: TaskInfo): boolean => t.status === "running" || t.status === "backoff";
+
+/** the task to show for a branch: its running one, else the last it had */
+export function branchTask(tasks: readonly TaskInfo[], branchId: string): TaskInfo | undefined {
+  const mine = tasks.filter((t) => t.tree?.id === branchId);
+  return mine.find(taskUp) ?? mine[0];
+}
+
+/** a branch's task in a line: `dev :7901 running`, `dev exit 1 · 3m ago` */
+export function branchTaskWords(t: TaskInfo, now: number): string {
+  const port = taskUp(t) && t.port !== undefined ? ` :${t.port}` : "";
+  return `${t.name}${port} ${taskUp(t) ? STATUS_WORD[t.status] : taskWhen(t, now)}`.trim();
+}
+
 /** whether an action, answered with the repo's tasks, started its dev
  *  task: what unfolds the preview, from whichever button it was */
 export function startsDev(action: TaskAction, name: string | undefined, tasks: readonly TaskInfo[]): boolean {

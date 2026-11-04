@@ -125,6 +125,8 @@ usage:
   canopy worktrees add <repo> <branch> [--base REF] [--no-caches]   keep a worktree on the branch (new, from the base) with setup run and build caches cloned in
   canopy worktrees rm <repo> <branch> [--force] [--delete-branch]   remove a kept worktree; refused while it holds changes, commits or shells unless forced
   canopy worktrees path <repo> <branch>   print a kept worktree's folder
+  canopy worktrees start <repo> <run branch> [task]   run a task, the dev task unless named, in a run's worktree on a port of its own
+  canopy worktrees stop <repo> <run branch> [task]    stop it; the worktree stays
   canopy worktrees shell-init        print the cw function: cw <branch> changes into the kept worktree for the repo the shell sits in
   canopy scenarios <repo>            the repo's holdout scenarios, name and kind; the text never leaves the server's config dir
   canopy scenarios <repo> add <name> [--judge] [--run CMD]   a new scenario file under <configDir>/scenarios/<repo key>/; edit it there

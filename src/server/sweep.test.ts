@@ -276,6 +276,15 @@ describe("the sweep hub", () => {
     expect(w.calls.endShell).toEqual([]);
   });
 
+  test("closing a run ends its branch's tasks first", async () => {
+    const w = world();
+    const order: string[] = [];
+    w.runs = [run({ id: "d1", status: "done", endedAt: NOW - 4 * 24 * H })];
+    const hub = new SweepHub({ ...w.deps, endRunTasks: async (id) => void order.push(`end ${id}`), dismissRun: (id) => void order.push(`dismiss ${id}`) });
+    await hub.close(["run:d1"], "eric");
+    expect(order).toEqual(["end d1", "dismiss d1"]);
+  });
+
   test("close ends a shell with keep, stops a chat and records it, dismisses a run", async () => {
     const w = world();
     w.shells = [shell()];

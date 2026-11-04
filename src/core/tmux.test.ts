@@ -345,3 +345,15 @@ describe("parseActivity", () => {
     expect(parseActivity("abc\t1729598400\nbad\tx\n")).toEqual(new Map([["abc", 1729598400000]]));
   });
 });
+
+describe("a task in a worktree", () => {
+  test("its session carries the folder and the pane list reads it back", () => {
+    const meta = { id: ID, repoId: "app", path: "/repo", task: "dev", tree: "/w/t1" };
+    const args = taskSessionArgs(["tmux"], meta, { cols: 80, rows: 24 });
+    expect(args.join(" ")).toContain("@canopy_worktree /w/t1");
+    expect(taskSessionArgs(["tmux"], { ...meta, tree: undefined }, { cols: 80, rows: 24 }).join(" ")).not.toContain("@canopy_worktree");
+    const [pane] = parseTaskPanes(`canopy-${ID}\tdev\tapp\t/repo\t0\t\t100\t/w/t1`);
+    expect(pane?.tree).toBe("/w/t1");
+    expect(parseTaskPanes(`canopy-${ID}\tdev\tapp\t/repo\t0\t\t100\t`)[0]?.tree).toBeUndefined();
+  });
+});

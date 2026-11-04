@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import type { BranchTree, BranchTreesInfo, WorktreesInfo } from "../core/types";
+import type { BranchTree, BranchTreesInfo, TasksResult, WorktreesInfo } from "../core/types";
 import { setHomeBase, setTokenFlag } from "./api";
 import { main } from "./index";
-import { ageWord, SHELL_INIT, sizeWord, worktreeLines, worktreesCommand } from "./worktrees";
+import { ageWord, branchIdOf, SHELL_INIT, sizeWord, treeTaskLine, worktreeLines, worktreesCommand } from "./worktrees";
 
 const H = 3_600_000;
 const GB = 1024 ** 3;
@@ -369,4 +369,26 @@ test("invalid worktree arguments are refused before contacting the backend", asy
     server.stop(true);
   }
   expect(requests).toBe(0);
+});
+
+test("a run's branch is found by id or by name, and what nothing lists passes through", () => {
+  const entry = info.repos[0];
+  expect(branchIdOf(entry, "ab12cd34")).toBe("ab12cd34");
+  expect(branchIdOf(entry, "run/fix-x-ab12cd34")).toBe("ab12cd34");
+  expect(branchIdOf(entry, "run/later")).toBe("run/later");
+  expect(branchIdOf(undefined, "ab12cd34")).toBe("ab12cd34");
+});
+
+test("a start says the task and port, a stop says the task, and an unlisted task still answers", () => {
+  const tree = { id: "ab12cd34", dir: "/w/x", branch: "run/x" };
+  const trees = [{ name: "dev", port: 7901, tree }] as TasksResult["trees"];
+  const r = { tasks: [], errors: [], trees } as unknown as TasksResult;
+  expect(treeTaskLine(r, "ab12cd34", undefined, "start")).toBe("dev on :7901 in run/x");
+  expect(treeTaskLine(r, "ab12cd34", "dev", "stop")).toBe("stopped dev in run/x");
+  expect(treeTaskLine({ ...r, trees: [] }, "ab12cd34", undefined, "stop")).toBe("stopped the dev task");
+});
+
+test("a run's task shows under the run with its port", () => {
+  const withTask: WorktreesInfo = { ...info, repos: [{ ...info.repos[0]!, runs: [{ ...info.repos[0]!.runs[0]!, task: { name: "dev", status: "running", port: 7901 } }] }] };
+  expect(worktreeLines(withTask, null, 1000).join("\n")).toContain("task    dev  running  :7901");
 });

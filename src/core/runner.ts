@@ -73,6 +73,8 @@ export interface BranchStart {
 /** What a run the server sets up itself starts with beyond the plain
  *  arguments. */
 export interface StartExtras {
+  /** start the repo's dev task in the branch's worktree once `prepare` is done (the pre-flight's toggle) */
+  devTask?: true;
   /** Private in-memory identity for steps belonging to one flow. */
   flowOwner?: symbol;
   /** best-of-N attribution, including the first event and costs */

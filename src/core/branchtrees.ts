@@ -166,6 +166,20 @@ export function treePort(branch: string, ports: readonly number[], taken: Readon
   return null;
 }
 
+/** `count` ports for `key`: its hash into the range, walking forward past
+ *  `taken` as `treePort` does; null when the range has too few left. */
+export function treePortsFor(key: string, count: number, ports: readonly number[], taken: ReadonlySet<number>): number[] | null {
+  const got: number[] = [];
+  const seen = new Set(taken);
+  for (let i = 0; i < count; i++) {
+    const port = treePort(key, ports, seen);
+    if (port === null) return null;
+    got.push(port);
+    seen.add(port);
+  }
+  return got;
+}
+
 export const treeDir = (repoPath: string, slug: string, root = treesRoot()): string => join(root, repoKey(repoPath), slug);
 
 const out = (r: { stdout: string }): string => r.stdout.trim();
@@ -375,6 +389,8 @@ export async function mergeTree(
   base: string,
   opts: MergeOptions,
   check: (dir: string) => Promise<string | null>,
+  /** awaited before the tree goes, for what runs in it */
+  beforeRemove?: (dir: string) => Promise<unknown>,
 ): Promise<MergeOutcome> {
   if (branch === base) return { stopped: `the tree is on ${base} itself` };
   if (!base || (await revOf(repo, base)) === null) return { stopped: `${base || "its base"} is no longer a branch of the repo` };
@@ -426,6 +442,7 @@ export async function mergeTree(
   const head = await git(repo, ["rev-parse", "--short", base]);
   if (!opts.keep) {
     try {
+      await beforeRemove?.(dir);
       await removeBranchTree(repo, dir, branch, true);
     } catch (err) {
       return { stopped: errMessage(err) };

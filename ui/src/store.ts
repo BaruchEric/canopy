@@ -2,6 +2,7 @@ import type { RunGroup } from "../../src/core/group";
 import type { QuickNote } from "../../src/core/notes";
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
+import { saveChoice } from "./preview";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
 import { rangerSessions } from "./ranger";
 import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatus, type Reg } from "./backends";
@@ -955,6 +956,10 @@ export interface CanopyState {
   jobs: Record<string, Job>;
   /** each repo's tasks as last read or told, by repo id */
   tasks: Record<string, TaskInfo[]>;
+  /** the tasks in each repo's worktrees, apart from `tasks`, whose words match by name */
+  treeTasks: Record<string, TaskInfo[]>;
+  /** a branch's port to show in its repo's preview, asked for from a run's sheet */
+  previewAsk: { repoId: string; port: number; at: number } | null;
   taskErrors: Record<string, string[]>;
   /** every task not idle across the repos of every backend, for the top bar */
   taskAll: TaskInfo[];
@@ -1078,6 +1083,10 @@ export interface CanopyState {
   /** reads a repo's tasks from its backend */
   loadTasks: (repoId: string) => Promise<void>;
   taskAct: (repoId: string, action: TaskAction, name?: string) => Promise<void>;
+  /** starts, stops or restarts a task in a branch's worktree, the dev task when none is named */
+  treeTaskAct: (repoId: string, worktree: string, action: TaskAction, name?: string) => Promise<void>;
+  /** shows a branch's port in its repo's preview */
+  previewBranch: (repoId: string, port: number) => void;
   saveTaskDef: (repoId: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => Promise<void>;
   /** opening a panel starts its tasks flagged to start with it */
   startPanelTasks: (repoId: string) => void;
@@ -1509,7 +1518,7 @@ export interface CanopyState {
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
   startGroup: (repoId: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand?: boolean, pr?: boolean, reviewers?: 2) => Promise<void>;
-  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true) => Promise<void>;
+  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true, devTask?: true) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
@@ -1640,6 +1649,7 @@ function treeState(
   | "panelTermHeights"
   | "closedSections"
   | "tasks"
+  | "treeTasks"
   | "taskErrors"
   | "front"
 > {
@@ -1673,6 +1683,7 @@ function treeState(
     panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos, mine),
     closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
     tasks: pruneByRepo(s.tasks, tree.repos, mine),
+    treeTasks: pruneByRepo(s.treeTasks, tree.repos, mine),
     taskErrors: pruneByRepo(s.taskErrors, tree.repos, mine),
   };
 }
@@ -2344,6 +2355,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   remembered: {},
   jobs: {},
   tasks: {},
+  treeTasks: {},
+  previewAsk: null,
   taskErrors: {},
   taskAll: [],
   buildsAt: {},
@@ -2778,6 +2791,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       fleets: recordOut(s.fleets, name),
       jobs: recordOut(s.jobs, name),
       tasks: recordOut(s.tasks, name),
+      treeTasks: recordOut(s.treeTasks, name),
       taskErrors: recordOut(s.taskErrors, name),
       taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
       sprouts: recordOut(s.sprouts, name),
@@ -2993,7 +3007,21 @@ export const useStore = create<CanopyState>((set, get) => ({
 
   loadTasks: async (repoId) => {
     const r = await api.tasks(repoId);
-    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks }, taskErrors: { ...s.taskErrors, [repoId]: r.errors } }));
+    set((s) => ({ tasks: { ...s.tasks, [repoId]: r.tasks }, treeTasks: { ...s.treeTasks, [repoId]: r.trees ?? [] }, taskErrors: { ...s.taskErrors, [repoId]: r.errors } }));
+  },
+  treeTaskAct: async (repoId, worktree, action, name) => {
+    const r = await api.taskAct(repoId, action, name, undefined, worktree);
+    set((s) => ({ treeTasks: { ...s.treeTasks, [repoId]: r.trees ?? [] } }));
+  },
+  previewBranch: (repoId, port) => {
+    saveChoice(repoId, { port, path: "/" });
+    set((s) => ({
+      ...dockPanel(s, repoId),
+      closedSections: unfoldIn(s.closedSections, repoId, "preview"),
+      reveal: { repoId, key: "preview", at: Date.now() },
+      previewAsk: { repoId, port, at: Date.now() },
+      sheet: null,
+    }));
   },
   taskAct: async (repoId, action, name) => {
     const r = await api.taskAct(repoId, action, name);
@@ -3441,7 +3469,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     } else if (ev.type === "tasks") {
       set((s) => {
         const others = s.taskAll.filter((t) => t.repoId !== ev.repoId);
-        return { tasks: { ...s.tasks, [ev.repoId]: ev.tasks }, taskAll: [...others, ...ev.tasks.filter(listedTask)] };
+        return { tasks: { ...s.tasks, [ev.repoId]: ev.tasks }, ...(ev.trees ? { treeTasks: { ...s.treeTasks, [ev.repoId]: ev.trees } } : {}), taskAll: [...others, ...ev.tasks.filter(listedTask)] };
       });
     } else if (ev.type === "job") {
       set((s) => ({ jobs: { ...s.jobs, [ev.job.id]: ev.job } }));
@@ -4852,8 +4880,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       return { landing: { ...s.landing, [b]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } }, sheet: { kind: "group", groupId: group.id } };
     });
   },
-  startRun: async (repoId, action, note, branch, pr) => {
-    const run = await api.run(repoId, action, note, clientId(), branch, pr);
+  startRun: async (repoId, action, note, branch, pr, devTask) => {
+    const run = await api.run(repoId, action, note, clientId(), branch, pr, devTask);
     set((s) => ({
       runs: { ...s.runs, [run.id]: run },
       sheet: { kind: "run", runId: run.id },
@@ -5814,6 +5842,7 @@ export function foldStartedFleets(
 const NO_TASKS: TaskInfo[] = [];
 /** a repo's tasks as last read or told; a stable empty list when none */
 export const tasksOf = (s: CanopyState, repoId: string): TaskInfo[] => s.tasks[repoId] ?? NO_TASKS;
+export const treeTasksOf = (s: CanopyState, repoId: string): TaskInfo[] => s.treeTasks[repoId] ?? NO_TASKS;
 
 let landingIn: Record<string, LandingInfo> | null = null;
 let landingOut: LandingInfo = { runs: [], entries: [], orphans: [] };

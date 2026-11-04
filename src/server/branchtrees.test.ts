@@ -131,6 +131,36 @@ test("the port is the branch's hashed one unless taken, and shells are counted",
   expect(existsSync(join(first.tree.dir, "node_modules"))).toBe(false);
 });
 
+test("a task's held port is never a tree's, and comes back when released", async () => {
+  const w = await world();
+  const held = await w.trees.hold("task-a", "feat", 2);
+  expect(held).toHaveLength(2);
+  const free = [7900, 7901, 7902].filter((p) => !held?.includes(p));
+  const tree = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  expect(tree.tree.port).toBe(free[0] ?? null);
+  await w.trees.idle();
+  expect(await w.trees.hold("task-b", "other", 1)).toBeNull();
+  w.trees.release("task-a");
+  expect(await w.trees.hold("task-b", "other", 1)).toHaveLength(1);
+});
+
+test("a hold is the owner's: asked again it answers the same, and two at once never share", async () => {
+  const w = await world();
+  const [a, b] = await Promise.all([w.trees.hold("a", "feat", 1), w.trees.hold("b", "feat", 1)]);
+  expect(a).toHaveLength(1);
+  expect(b).toHaveLength(1);
+  expect(a?.[0]).not.toBe(b?.[0]);
+  expect(await w.trees.hold("a", "something else", 1)).toEqual(a);
+});
+
+test("a port something listens on is passed over, and a seeded hold is held", async () => {
+  const w = await world();
+  w.listening.now = [7900];
+  w.trees.seed("task-a", [7901]);
+  expect(await w.trees.hold("task-b", "feat", 1)).toEqual([7902]);
+  expect(await w.trees.hold("task-c", "feat", 1)).toBeNull();
+});
+
 test("a bad branch, a twin, a missing base and a branch checked out elsewhere are refused", async () => {
   const w = await world();
   expect((await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "a b" })).status).toBe(400);
@@ -300,6 +330,29 @@ test("merge stops on a conflict, a failing gate or the checkout's own changes, s
   await w.trees.idle();
   expect(lastTrees(w.events).repos).toEqual([]);
   expect(await sh(w.repo.path, "log", "--format=%s", "-3")).toBe("c q.txt\nc p.txt\nc y.txt");
+});
+
+test("a tree's tasks end before its folder goes, on remove, clean and merge", async () => {
+  const stopped: [string, boolean][] = [];
+  const w = await world({ stopTree: async (dir) => void stopped.push([dir, existsSync(dir)]) }, "");
+  const add = async (branch: string) => (await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch, caches: false }))).tree;
+  const one = await add("one");
+  const two = await add("two");
+  const three = await add("three");
+  await w.trees.idle();
+  await post(w.trees, "/api/trees/remove", { repo: w.repo.id, tree: "one", force: true });
+  expect(stopped).toEqual([[one.dir, true]]);
+  await post(w.trees, "/api/trees/clean", { repo: w.repo.id });
+  expect(stopped).toContainEqual([two.dir, true]);
+  expect(stopped).toContainEqual([three.dir, true]);
+  expect(existsSync(two.dir)).toBe(false);
+  const four = await add("four");
+  await w.trees.idle();
+  await writeFile(join(four.dir, "new.txt"), "x\n");
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "four" });
+  await w.trees.idle();
+  expect(stopped.at(-1)).toEqual([four.dir, true]);
+  expect(existsSync(four.dir)).toBe(false);
 });
 
 test("clean removes the trees merged into their base that hold nothing, branch and all, and leaves the rest", async () => {

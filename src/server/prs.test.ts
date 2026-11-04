@@ -81,6 +81,8 @@ interface World {
   /** runs that ended stopped or failed */
   failed: Set<string>;
   forgot: string[];
+  /** folders `stopTree` was called on, and whether each still stood then */
+  stopped: [string, boolean][];
   held: string | null;
   recDir: string;
   /** the hub's clock when set, else the real one */
@@ -133,7 +135,7 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
   const records = new Map([[id, rec]]);
   const recDir = join(root, `prs${n}`);
   const scen: World["scen"] = { root: join(root, `scen${n}`), calls: [], answers: {}, wait: null };
-  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], held: null, hold: null, limitedRuns: new Map(), recDir, clock: null, scen } as unknown as World;
+  const w = { path, bare, dir, rec, records, gh: g, events: [], fixes: [], notes: [], closes: [], links: [], active: new Set<string>(), failed: new Set<string>(), forgot: [], stopped: [], held: null, hold: null, limitedRuns: new Map(), recDir, clock: null, scen } as unknown as World;
   const fake = async (args: string[]): Promise<ExecResult> => {
     g.calls.push(args);
     const [a, b] = args;
@@ -176,6 +178,10 @@ async function world(opts: { repoDefault?: string; work?: string } = {}): Promis
         if (!r) return;
         const { pr: _p, ...rest } = r;
         records.set(x, pr === null ? rest : { ...rest, pr });
+      },
+      stopTree: async (d) => {
+        w.stopped.push([d, existsSync(d)]);
+        return ["stopped dev"];
       },
       forget: async (x) => {
         w.forgot.push(x);
@@ -831,6 +837,7 @@ describe("auto-merge", () => {
     expect(w.gh.calls.find((c) => c[1] === "merge")).toEqual(["pr", "merge", "7", "-R", "o/r", "--match-head-commit", head!, "--squash"]);
     expect(pr.state?.status).toBe("merged");
     expect(existsSync(w.dir)).toBe(false);
+    expect(w.stopped).toEqual([[w.dir, true]]);
     expect((await exec(["git", "rev-parse", "-q", "--verify", `refs/heads/${w.rec.branch}`], { cwd: w.bare })).code).not.toBe(0);
     expect(w.forgot).toEqual([w.rec.id]);
     // no holdout set: nothing ran before the merge

@@ -3,7 +3,7 @@
  *  merge, clean up, remove and find the trees kept by hand (FR-051). */
 
 import { treeWords } from "../core/treewords";
-import type { BranchTree, BranchTreesInfo, WorktreesInfo, WorktreeRepoInfo } from "../core/types";
+import type { BranchTree, BranchTreesInfo, TasksResult, WorktreesInfo, WorktreeRepoInfo } from "../core/types";
 import { apiBase } from "./api";
 import { ask, errText, has, take, Unreachable, type Target } from "./health";
 
@@ -18,6 +18,8 @@ export const WORKTREES_USAGE = [
   "       canopy worktrees clean [repo] [--backend URL]",
   "       canopy worktrees rm <repo> <branch> [--force] [--delete-branch] [--backend URL]",
   "       canopy worktrees path <repo> <branch> [--backend URL]",
+  "       canopy worktrees start <repo> <run branch> [task] [--backend URL]",
+  "       canopy worktrees stop <repo> <run branch> [task] [--backend URL]",
   "       canopy worktrees shell-init",
 ].join("\n");
 
@@ -85,7 +87,10 @@ export function worktreeLines(info: WorktreesInfo, repo: string | null, now: num
       out.push(`${entry.repoId}  ${entry.want} warm wanted${gates}`);
     }
 
-    for (const run of entry.runs) out.push(`  run     ${run.branch}  ${run.state}  ${run.dir}`);
+    for (const run of entry.runs) {
+      out.push(`  run     ${run.branch}  ${run.state}  ${run.dir}`);
+      if (run.task) out.push(`  task    ${run.task.name}  ${run.task.status}${run.task.port !== undefined ? `  :${run.task.port}` : ""}`);
+    }
     for (const t of kept) out.push(treeLine(t));
     for (const warm of entry.warm) out.push(`  warm    ${warm.name}  ${warm.base.slice(0, 7)}  ${ageWord(now - warm.madeAt)}  ${sizeWord(warm.size)}`);
     if (entry.refilling) out.push(`  warm    ${entry.refilling}  refilling`);
@@ -101,6 +106,19 @@ export function worktreeLines(info: WorktreesInfo, repo: string | null, now: num
   }
   out.push(`free ${sizeWord(info.free)} under ${info.root}`);
   return out;
+}
+
+/** a run's branch id, from its id or its branch's name; what nothing lists
+ *  (a run still starting) is passed on for the backend to answer */
+export function branchIdOf(entry: Pick<WorktreeRepoInfo, "runs"> | undefined, name: string): string {
+  return entry?.runs.find((r) => r.id === name || r.branch === name)?.id ?? name;
+}
+
+/** what a start or stop left in the worktree */
+export function treeTaskLine(result: TasksResult, id: string, name: string | undefined, action: "start" | "stop"): string {
+  const t = result.trees?.find((x) => x.tree?.id === id && (name === undefined || x.name === name));
+  if (!t) return `${action === "start" ? "started" : "stopped"} ${name ?? "the dev task"}`;
+  return action === "stop" ? `stopped ${t.name} in ${t.tree?.branch}` : `${t.name} on ${t.port !== undefined ? `:${t.port}` : "a port of its own"} in ${t.tree?.branch}`;
 }
 
 /** The shell function `canopy worktrees shell-init` prints: `cw <branch>`
@@ -287,6 +305,20 @@ export async function worktreesCommand(argv: string[], { fail }: { fail: Fail })
       ...(deleteBranch ? { deleteBranch } : {}),
     }).catch(requestFailed);
     console.log(`removed ${removed}${deleteBranch ? ` and the branch ${branch}` : ""}`);
+    return;
+  }
+
+  if (args[0] === "start" || args[0] === "stop") {
+    const action = args.shift() as "start" | "stop";
+    const repo = args.shift();
+    const branch = args.shift();
+    const name = args.shift();
+    if (!repo || !branch || branch.startsWith("--") || name?.startsWith("--") || args.length > 0) return fail(WORKTREES_USAGE);
+    const info = await getInfo();
+    const id = repoId(info, repo, fail);
+    const worktree = branchIdOf(info.repos.find((r) => r.repoId === id), branch);
+    const result = await ask<TasksResult>(target, "POST", `/api/repos/tasks?id=${encodeURIComponent(id)}`, { action, worktree, ...(name ? { name } : {}) }).catch(requestFailed);
+    console.log(treeTaskLine(result, worktree, name, action));
     return;
   }
 

@@ -9,7 +9,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { git } from "../core/exec";
 import { LOCKFILES, readGates, type Gates } from "../core/gates";
 import type { ProbeResult } from "../core/health";
-import type { LandingInfo, LockfileStamp, Repo, ServerEvent, WorktreesInfo } from "../core/types";
+import type { LandingInfo, LockfileStamp, Repo, ServerEvent, TaskStatus, WorktreesInfo } from "../core/types";
 import { isWarmName, nextRefill, overWant, parseWarmRecord, reconcile, sameStamp, staleWhy, WARM_MAX, WARM_RECORD, WARM_TICK, worktreesProbe, type WarmRecord } from "../core/warm";
 import { aheadOf, currentBranch, defaultBranch, detachedTree, listWarmTreeDirs, midRebase, removeRunTree, repoKey, revOf, takeWarm, treeSize, worktreesRoot } from "../core/worktree";
 import type { CheckOutcome } from "./landing";
@@ -28,6 +28,8 @@ export async function freeBytes(dir: string): Promise<number> {
 }
 
 export interface WarmDeps {
+  /** the task a run's worktree holds, for the listing */
+  taskIn?: (dir: string) => { name: string; status: TaskStatus; port?: number } | undefined;
   root?: string;
   repos: () => Repo[];
   want: (repoPath: string) => Promise<number>;
@@ -504,7 +506,10 @@ export class WarmPool {
         repoPath: repo.path,
         want,
         ...(gates.warm === undefined ? {} : { fileWarm: gates.warm }),
-        runs: landing.runs.filter((r) => r.repoPath === repo.path).map(({ dir, id, runId, branch, state }) => ({ dir, id, runId, branch, state })),
+        runs: landing.runs.filter((r) => r.repoPath === repo.path).map(({ dir, id, runId, branch, state }) => {
+          const task = this.deps.taskIn?.(dir);
+          return { dir, id, runId, branch, state, ...(task ? { task } : {}) };
+        }),
         warm: record.trees.map((t) => ({ ...t, name: basename(t.dir) })),
         refilling: this.refilling?.repo === repo.path && this.refilling.owner === this.owner ? basename(this.refilling.dir) : null,
         fails: record.fails.map((f) => ({ name: basename(f.dir), why: f.why, at: f.at, fails: f.fails })),

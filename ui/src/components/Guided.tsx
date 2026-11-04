@@ -29,6 +29,8 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
   const previewClosed = useStore((s) => closedIn(s, repo.id, "preview"));
   const toggleSection = useStore((s) => s.toggleSection);
   const [previewShown, setPreviewShown] = useState(false);
+  // a branch's port asked for from a run's sheet shows with the app stopped
+  const branchAsked = useStore((s) => s.previewAsk?.repoId === repo.id);
   useEffect(() => {
     if (state !== "running" || previewShown) return;
     setPreviewShown(true);
@@ -79,7 +81,7 @@ export function GuidedPanel({ repo, onMore, targets }: { repo: Repo; onMore: () 
         </button>
       </div>
       {seed && <p className="panel-hint">{SEED_RUN_NOTE}</p>}
-      {state === "running" && <PreviewSection repo={repo} />}
+      {(state === "running" || branchAsked) && <PreviewSection repo={repo} />}
     </div>
   );
 }

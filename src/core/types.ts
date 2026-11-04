@@ -1857,7 +1857,7 @@ export interface WorktreeRepoInfo {
   /** what the repo's gates file says, when it says */
   fileWarm?: number;
   /** the live run worktrees, from the landing records */
-  runs: { dir: string; id: string; runId: string; branch: string; state: RunBranchState }[];
+  runs: { dir: string; id: string; runId: string; branch: string; state: RunBranchState; task?: { name: string; status: TaskStatus; port?: number } }[];
   warm: WarmTreeInfo[];
   /** the slot being cut now */
   refilling: string | null;
@@ -2025,7 +2025,7 @@ export type ServerEvent =
   | { type: "kept"; kept: KeptShell[] }
   | { type: "peers"; seen: PeerSeen[] }
   /** a repo's tasks, whenever one starts, stops, dies, is edited or a viewer comes or goes */
-  | { type: "tasks"; repoId: string; tasks: TaskInfo[] }
+  | { type: "tasks"; repoId: string; tasks: TaskInfo[]; trees?: TaskInfo[] }
   /** a tailchan message the UI's handle heard, or one the UI just sent */
   | { type: "chan"; message: ChanMessage }
   /** agent cards the broker changed, whole, and the ids of any it dropped
@@ -3058,6 +3058,8 @@ export interface TaskFlags {
   withPanel?: boolean;
   /** left out of the list (a detected task you do not want) */
   hidden?: boolean;
+  /** a compose stack: a project of its own in a worktree. Read off a cmd that starts with docker compose when unset */
+  compose?: boolean;
 }
 
 /** a whole task, as detection or a merge produces it */
@@ -3067,6 +3069,9 @@ export interface TaskDef extends TaskFlags {
   cmd: string;
   /** relative to the repo root, never outside it */
   cwd?: string;
+  /** added to the command's environment; `${PORT}`, `${PORT_2}` and up and
+   *  `${WORKTREE}` are filled at each start (`fillEnv`) */
+  env?: Record<string, string>;
 }
 
 /** what one layer says about a task: a repo file or canopy's config may set
@@ -3075,6 +3080,15 @@ export interface TaskPatch extends TaskFlags {
   name: string;
   cmd?: string;
   cwd?: string;
+  env?: Record<string, string>;
+}
+
+/** the worktree a task runs in, in place of the repo's main checkout */
+export interface TaskTree {
+  /** the branch's id: a run worktree's folder name */
+  id: string;
+  dir: string;
+  branch: string;
 }
 
 /** one task as the browser reads it: its merged definition and what it is doing */
@@ -3098,10 +3112,19 @@ export interface TaskInfo extends TaskDef {
   viewers: string[];
   /** a task still running whose definition or repo is gone */
   gone?: "definition" | "repo";
+  /** the worktree it runs in; such a task is listed in `trees`, never `tasks` */
+  tree?: TaskTree;
+  /** the ports it holds, `${PORT}` first */
+  ports?: number[];
+  /** the port to preview: its first held one, else what was read back from what listens */
+  port?: number;
 }
 
 export interface TasksResult {
   tasks: TaskInfo[];
+  /** the tasks running in this repo's worktrees, apart from `tasks` since a
+   *  branch's `dev` shares its name with the checkout's */
+  trees?: TaskInfo[];
   /** what was wrong with `.canopy/tasks.json` or the merge */
   errors: string[];
 }
@@ -3121,6 +3144,12 @@ export interface TaskRecord {
   fails?: number;
   /** keep running gave up on it; only a start by hand clears this */
   gaveUp?: boolean;
+  /** it runs in this worktree; `path` stays the repo's main checkout */
+  tree?: TaskTree;
+  /** the ports it holds, read back into the allotter at a restart */
+  ports?: number[];
+  /** a compose stack of canopy's in its folder, which `down` ends; the name is worked out from the folder, never kept */
+  stack?: true;
 }
 
 export interface TaskLogLine {
@@ -3196,6 +3225,9 @@ export interface ListeningPort {
   command?: string;
   /** the id of the repo the process runs in, when its cwd is inside one */
   repo?: string;
+  /** the branch's worktree it runs in, apart from `repo` so a repo's preview
+   *  never falls on a branch by itself; `name` reads `dev · run/<branch>` */
+  tree?: { repo: string; name: string };
 }
 
 /** `GET /api/ports`: what listens, and whether previews can be served at all */

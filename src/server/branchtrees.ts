@@ -28,6 +28,7 @@ import {
   treePort,
   treePorts,
   treeSlug,
+  treePortsFor,
   treeStatus,
   treesRoot,
   TREES_RECORD,
@@ -61,6 +62,8 @@ export interface TreesDeps {
   listening: () => Promise<number[]>;
   /** live shells sitting in a folder */
   shellsIn: (dir: string) => number;
+  /** ends the tasks running in a tree before its folder goes */
+  stopTree?: (dir: string) => Promise<unknown>;
   broadcast: (ev: ServerEvent) => void;
   /** the port range, in place of `CANOPY_TREE_PORTS` */
   ports?: number[];
@@ -104,6 +107,9 @@ export class BranchTrees {
   private readonly root: string;
   private readonly ports: number[];
   private readonly records = new Map<string, TreesRecord>();
+  /** the ports tasks hold, by the task's term id; `takenPorts` counts them,
+   *  so a tree and a task never get the same one */
+  private readonly held = new Map<string, number[]>();
   private readonly chains = new Map<string, Promise<unknown>>();
   /** the preparations and merges running in the background */
   private readonly jobs = new Set<Promise<void>>();
@@ -146,11 +152,38 @@ export class BranchTrees {
   private takenPorts(): Set<number> {
     const taken = new Set<number>();
     for (const rec of this.records.values()) for (const t of rec.trees) if (t.port !== null) taken.add(t.port);
+    for (const ports of this.held.values()) for (const p of ports) taken.add(p);
     return taken;
   }
   private async allot(branch: string): Promise<number | null> {
     const listening = await this.deps.listening().catch((): number[] => []);
     return treePort(branch, this.ports, new Set([...this.takenPorts(), ...listening]));
+  }
+
+  /** `count` ports for a task, kept for it until `release`; null when the
+   *  range has too few. An owner already holding that many keeps them. The
+   *  pick and the write share one synchronous stretch after the only await,
+   *  which is what keeps two holds at once apart. */
+  async hold(owner: string, key: string, count: number): Promise<number[] | null> {
+    const have = this.held.get(owner);
+    if (have?.length === count) return have;
+    const listening = await this.deps.listening().catch((): number[] => []);
+    const again = this.held.get(owner);
+    if (again?.length === count) return again;
+    this.held.delete(owner);
+    const got = treePortsFor(key, count, this.ports, new Set([...this.takenPorts(), ...listening]));
+    if (got !== null) this.held.set(owner, got);
+    return got;
+  }
+
+  /** what a task held goes back to the range */
+  release(owner: string): void {
+    this.held.delete(owner);
+  }
+
+  /** a hold read back from a task's record after a restart */
+  seed(owner: string, ports: readonly number[]): void {
+    this.held.set(owner, [...ports]);
   }
 
   /** The records read back and squared with the disk: a record whose
@@ -340,7 +373,7 @@ export class BranchTrees {
     const dir = treeDir(repo.path, entry.slug, this.root);
     let outcome: MergeOutcome;
     try {
-      outcome = await mergeTree(repo.path, dir, entry.branch, entry.base, opts, (d) => this.check(repo.path, d));
+      outcome = await mergeTree(repo.path, dir, entry.branch, entry.base, opts, (d) => this.check(repo.path, d), this.deps.stopTree);
     } catch (err) {
       outcome = { stopped: message(err) };
     }
@@ -453,6 +486,7 @@ export class BranchTrees {
             continue;
           }
           // its base holds every commit, so the branch goes with it
+          await this.deps.stopTree?.(treeDir(r.path, t.slug, this.root))?.catch(() => {});
           await removeBranchTree(r.path, treeDir(r.path, t.slug, this.root), t.branch, true).catch(() => {});
           removed.push({ repoId: r.id, slug: t.slug, branch: t.branch });
         }
@@ -475,6 +509,7 @@ export class BranchTrees {
         const refusal = removeRefusal(live);
         if (refusal) throw new TreesError(409, refusal);
       }
+      await this.deps.stopTree?.(treeDir(repo.path, t.slug, this.root));
       await removeBranchTree(repo.path, treeDir(repo.path, t.slug, this.root), t.branch, deleteBranch);
       await this.save(repo.path, { trees: rec.trees.filter((x) => x !== t) });
       void this.publish();

@@ -857,13 +857,13 @@ export const api = {
     );
   },
   /** `client` is this browser's id, so the run says which device started it */
-  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean) => {
+  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean, devTask?: boolean) => {
     const [b, plain] = on(id);
     return from(
       b,
       await req<Run>(b, `/api/repos/run?${rq(plain)}`, {
         method: "POST",
-        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}), ...(pr ? { pr } : {}) }),
+        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}), ...(pr ? { pr } : {}), ...(devTask ? { devTask } : {}) }),
       }),
       qRun,
     );
@@ -1215,7 +1215,7 @@ export const api = {
   /* the in-app browser: what listens on the backend, and a preview port for one */
   ports: async (b: string = homeName()): Promise<PortsResult> => {
     const r = await req<PortsResult>(b, "/api/ports");
-    return { ...r, ports: r.ports.map((p) => (p.repo === undefined ? p : { ...p, repo: qual(b, p.repo) })) };
+    return { ...r, ports: r.ports.map((p) => ({ ...p, ...(p.repo === undefined ? {} : { repo: qual(b, p.repo) }), ...(p.tree ? { tree: { ...p.tree, repo: qual(b, p.tree.repo) } } : {}) })) };
   },
   preview: (port: number, b: string = homeName()) =>
     req<PreviewSlot>(b, "/api/preview", {
@@ -1276,15 +1276,15 @@ export const api = {
   tasks: async (id: string) => {
     const [b, plain] = on(id);
     const r = await req<TasksResult>(b, `/api/repos/tasks?${rq(plain)}`);
-    return { ...r, tasks: fromAll(b, r.tasks, qTask) };
+    return { ...r, tasks: fromAll(b, r.tasks, qTask), ...(r.trees ? { trees: fromAll(b, r.trees, qTask) } : {}) };
   },
-  taskAct: async (id: string, action: TaskAction, name?: string, reason?: string) => {
+  taskAct: async (id: string, action: TaskAction, name?: string, reason?: string, worktree?: string) => {
     const [b, plain] = on(id);
     const r = await req<TasksResult>(b, `/api/repos/tasks?${rq(plain)}`, {
       method: "POST",
-      body: JSON.stringify({ action, ...(name ? { name } : {}), ...(reason ? { reason } : {}) }),
+      body: JSON.stringify({ action, ...(name ? { name } : {}), ...(reason ? { reason } : {}), ...(worktree ? { worktree } : {}) }),
     });
-    return { ...r, tasks: fromAll(b, r.tasks, qTask) };
+    return { ...r, tasks: fromAll(b, r.tasks, qTask), ...(r.trees ? { trees: fromAll(b, r.trees, qTask) } : {}) };
   },
   taskDef: async (id: string, name: string, def: TaskPatch | null, target: "canopy" | "repo") => {
     const [b, plain] = on(id);
@@ -1297,8 +1297,8 @@ export const api = {
   saveRepoCheck: (id: string, check: RepoCheckDef) =>
     repoReq<RepoHealthInfo>(id, (p) => `/api/repos/health?${rq(p)}`, { method: "POST", body: JSON.stringify(check) }),
   removeRepoCheck: (id: string, name: string) => repoReq<RepoHealthInfo>(id, (p) => `/api/repos/health?${rq(p, { name })}`, { method: "DELETE" }),
-  taskLog: (id: string, name: string, q = "", before?: number) =>
-    repoReq<TaskLogPage>(id, (p) => `/api/repos/tasks/log?${rq(p, { name, q, ...(before ? { before: String(before) } : {}) })}`),
+  taskLog: (id: string, name: string, q = "", before?: number, worktree?: string) =>
+    repoReq<TaskLogPage>(id, (p) => `/api/repos/tasks/log?${rq(p, { name, q, ...(before ? { before: String(before) } : {}), ...(worktree ? { worktree } : {}) })}`),
   allTasks: async (b: string = homeName()) => fromAll(b, await req<TaskInfo[]>(b, "/api/tasks"), qTask),
   jobs: async (b: string = homeName()) => fromAll(b, await req<Job[]>(b, "/api/jobs"), qJob),
   stopJob: async (id: string) => {
