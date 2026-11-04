@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { LANES } from "../core/callers";
 import { CallerBook, CallerGate, coordinatorRefusal, coordPort, laneAllows, laneVerdict, loopbackAuthWanted, loopbackBypass } from "./callers";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -444,7 +445,6 @@ describe("a coordinator at the gate", () => {
       ["POST", "/api/coordinator/tasks"],
       ["POST", "/api/coordinator/start"],
       ["POST", "/api/repos/run"],
-      ["POST", "/api/runs/say"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
       ["POST", "/api/asks/answer"],
@@ -452,6 +452,10 @@ describe("a coordinator at the gate", () => {
       ["POST", "/api/auth/approve"],
     ] as const) {
       expect([m, p, at(m, p)]).toEqual([m, p, 403]);
+    }
+    // the table's plan routes are a run's; the lane, ahead of the gate, keeps the coordinator off them
+    for (const p of ["/api/runs/say", "/api/runs/child", "/api/ranger/wakes", "/api/work/note"]) {
+      expect([p, laneVerdict(false, "coordinator", "POST", p)]).toEqual([p, "route"]);
     }
   });
 
@@ -491,7 +495,7 @@ describe("the coordinator's lane", () => {
       ["GET", "/api/landing"],
       ["POST", "/api/coordinator/plan"],
     ] as const) {
-      expect([m, p, laneAllows(m, p)]).toEqual([m, p, true]);
+      expect([m, p, laneAllows("coordinator", m, p)]).toEqual([m, p, true]);
     }
     for (const [m, p] of [
       ["GET", "/api/repos/diff"],
@@ -510,7 +514,7 @@ describe("the coordinator's lane", () => {
       ["POST", "/api/coordinator/tasks"],
       ["POST", "/api/repos/run"],
     ] as const) {
-      expect([m, p, laneAllows(m, p)]).toEqual([m, p, false]);
+      expect([m, p, laneAllows("coordinator", m, p)]).toEqual([m, p, false]);
     }
   });
 
@@ -524,6 +528,66 @@ describe("the coordinator's lane", () => {
     expect(laneVerdict(false, "coordinator", "POST", "/api/coordinator/plan")).toBeNull();
     expect(laneVerdict(false, "none", "GET", "/api/repos/diff")).toBeNull();
     expect(laneVerdict(false, "page", "GET", "/api/repos/diff")).toBeNull();
+  });
+
+  test("LANES pins both kinds, and a run's token keeps to its own on the main listener", () => {
+    expect([...(LANES.coordinator ?? [])].sort()).toEqual(["GET /api/about", "GET /api/landing", "GET /api/runs", "GET /api/tree", "POST /api/coordinator/plan"]);
+    expect([...(LANES.run ?? [])].sort()).toEqual([
+      "GET /api/auth",
+      "GET /api/health",
+      "GET /api/landing",
+      "GET /api/runs",
+      "GET /api/tree",
+      "POST /api/ranger/wakes",
+      "POST /api/runs/child",
+      "POST /api/runs/say",
+      "POST /api/work/note",
+    ]);
+    for (const [m, p] of [...(LANES.run ?? [])].map((line) => line.split(" ") as [string, string])) {
+      expect([m, p, laneVerdict(false, "run", m, p)]).toEqual([m, p, null]);
+    }
+    expect(laneVerdict(false, "run", "HEAD", "/api/runs")).toBeNull();
+    for (const [m, p] of [
+      ["POST", "/api/landing/land"],
+      ["POST", "/api/prs/open"],
+      ["POST", "/api/runs/stop"],
+      ["POST", "/api/runs/answer"],
+      ["POST", "/api/runs/fork"],
+      ["POST", "/api/repos/run"],
+      ["POST", "/api/repos/push"],
+      ["POST", "/api/coordinator/plan"],
+      ["POST", "/api/work/close"],
+      ["POST", "/api/auth/approve"],
+      ["DELETE", "/api/ranger/wakes"],
+      ["DELETE", "/api/runs"],
+      ["GET", "/api/runs/child"],
+      ["GET", "/api/runs/"],
+      ["GET", "/api/repos/diff"],
+      ["GET", "/api/events"],
+      ["GET", "/api/term"],
+      ["GET", "/library"],
+      ["GET", "/"],
+    ] as const) {
+      expect([m, p, laneVerdict(false, "run", m, p)]).toEqual([m, p, "route"]);
+    }
+  });
+
+  test("the coordinator's listener takes no run token, on a route in the run's lane or not", () => {
+    expect(laneVerdict(true, "run", "GET", "/api/runs")).toBe("token");
+    expect(laneVerdict(true, "run", "POST", "/api/runs/child")).toBe("token");
+    expect(laneVerdict(true, "run", "POST", "/api/landing/land")).toBe("token");
+  });
+
+  test("a run's refusal says what a run's token is for and is logged once", () => {
+    const lines: string[] = [];
+    const book = open();
+    const caller = book.check(book.mint("run", { label: "run app", run: "r1" }).token);
+    const gate = new CallerGate({ book, mode: "off", log: (line) => lines.push(line) });
+    const url = new URL("http://x/api/landing/land");
+    const refused = (): Response | null => gate.lane(new Request(url.href, { method: "POST" }), url, caller, "1.2.3.4", false);
+    expect(refused()?.status).toBe(403);
+    expect(refused()?.status).toBe(403);
+    expect(lines.filter((line) => line.includes("run lane refused run POST /api/landing/land"))).toHaveLength(1);
   });
 
   test("the gate refuses in every mode, counts the refusal, and says each kind, method and path once", () => {

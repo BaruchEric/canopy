@@ -7,7 +7,7 @@
  *  unless the table names it (the sweep's do). */
 
 export type Right = "read" | "plan" | "operate" | "shell" | "admin" | "helper";
-export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "helper" | "none";
+export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "run" | "helper" | "none";
 
 /** the kinds a pair request may ask for: the ones a person or a helper
  *  signs in as, and never a shell, ranger or coordinator */
@@ -24,8 +24,29 @@ export const KIND_RIGHTS: Record<CallerKind, readonly Right[]> = {
   shell: ["read", "operate"],
   ranger: ["read", "operate"],
   coordinator: ["read", "plan"],
+  run: ["read", "plan"],
   helper: ["helper"],
   none: ["read"],
+};
+
+/** What a kind held to a lane may call, method and exact path; a kind with no
+ *  entry is held by the table alone. A coordinator gets the reads its brief
+ *  (lib/coordinator.md) names, /api/about, and its plan. A run gets the reads
+ *  its tools make and the four plan routes, each of which also holds a run's
+ *  token to its own run in its handler (FR-038). */
+export const LANES: Partial<Record<CallerKind, ReadonlySet<string>>> = {
+  coordinator: new Set(["GET /api/about", "GET /api/tree", "GET /api/runs", "GET /api/landing", "POST /api/coordinator/plan"]),
+  run: new Set([
+    "GET /api/tree",
+    "GET /api/runs",
+    "GET /api/landing",
+    "GET /api/health",
+    "GET /api/auth",
+    "POST /api/runs/child",
+    "POST /api/runs/say",
+    "POST /api/ranger/wakes",
+    "POST /api/work/note",
+  ]),
 };
 
 /** `open` routes are the ones pairing needs before a caller has a token.
@@ -54,14 +75,19 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["triggers/*"], right: "operate" },
   { methods: DEL, paths: ["triggers/events"], right: "operate" },
   { methods: POST, paths: ["grep", "remembered/check", "repos/movecheck"], right: "read" },
-  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/say", "runs/fork"], right: "operate" },
+  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork"], right: "operate" },
   // a coordinator's token holds plan alone: it proposes cards, and editing
   // them or starting them is the user's
   { methods: POST, paths: ["coordinator/plan"], right: "plan" },
+  // what a run's token may do beyond reading (FR-038). Whoever operates may
+  // plan, so the rest keep these routes; a run's handler holds it to its own
+  // run, and the coordinator's lane leaves these out
+  { methods: POST, paths: ["runs/child", "runs/say", "ranger/wakes", "work/note"], right: "plan" },
   { methods: POST, paths: ["coordinator/tasks", "coordinator/start"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
   { methods: POST, paths: ["flows/resume", "flows/stop", "fleet/stop", "jobs/stop"], right: "operate" },
-  { methods: POST_DEL, paths: ["fleet", "repos/health", "incubator", "ranger/wakes", "layouts"], right: "operate" },
+  { methods: POST_DEL, paths: ["fleet", "repos/health", "incubator", "layouts"], right: "operate" },
+  { methods: DEL, paths: ["ranger/wakes"], right: "operate" },
   { methods: ["POST", "DELETE", "PATCH"], paths: ["workspaces"], right: "operate" },
   { methods: POST, paths: ["workspaces/run", "workspaces/open"], right: "operate" },
   { methods: POST, paths: REPO_OPERATE.map((a) => `repos/${a}`), right: "operate" },

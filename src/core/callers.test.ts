@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { allows, needs } from "./callers";
+import { allows, KIND_RIGHTS, needs, PAIR_KINDS } from "./callers";
 
 describe("needs", () => {
   test("a GET needs read, bar the two upgrades and the Library", () => {
@@ -106,7 +106,12 @@ describe("needs", () => {
     expect(needs("POST", "/api/voice/ended")).toBe("operate");
     expect(needs("GET", "/api/costs")).toBe("read");
     expect(needs("GET", "/api/voice")).toBe("read");
-    expect(needs("POST", "/api/ranger/wakes")).toBe("operate");
+    expect(needs("POST", "/api/ranger/wakes")).toBe("plan");
+    expect(needs("DELETE", "/api/ranger/wakes")).toBe("operate");
+    expect(needs("POST", "/api/runs/say")).toBe("plan");
+    expect(needs("POST", "/api/runs/child")).toBe("plan");
+    expect(needs("POST", "/api/work/note")).toBe("plan");
+    expect(needs("POST", "/api/work/close")).toBe("operate");
     expect(needs("POST", "/api/tailchan/send")).toBe("operate");
     expect(needs("POST", "/api/presence/beat")).toBe("operate");
     expect(needs("POST", "/api/layouts/reset")).toBe("operate");
@@ -207,7 +212,6 @@ describe("the coordinator's routes", () => {
       ["POST", "/api/coordinator/tasks"],
       ["POST", "/api/coordinator/start"],
       ["POST", "/api/repos/run"],
-      ["POST", "/api/runs/say"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
       ["POST", "/api/runs/fork"],
@@ -221,10 +225,10 @@ describe("the coordinator's routes", () => {
 });
 
 describe("the work ledger's routes", () => {
-  test("reads are read, a note or a close operate", () => {
+  test("reads are read, a note plans and a close operates", () => {
     expect(needs("GET", "/api/work")).toBe("read");
     expect(needs("GET", "/api/work/one")).toBe("read");
-    expect(needs("POST", "/api/work/note")).toBe("operate");
+    expect(needs("POST", "/api/work/note")).toBe("plan");
     expect(needs("POST", "/api/work/close")).toBe("operate");
     expect(allows("shell", needs("POST", "/api/work/note"))).toBe(true);
     expect(allows("coordinator", needs("POST", "/api/work/close"))).toBe(false);
@@ -295,4 +299,25 @@ test("kept runs: reading is open, pruning is admin", () => {
   expect(needs("POST", "/api/runs/prune")).toBe("admin");
   expect(allows("shell", needs("POST", "/api/runs/prune"))).toBe(false);
   expect(allows("cli", needs("POST", "/api/runs/prune"))).toBe(true);
+});
+
+describe("a run's token (FR-038)", () => {
+  test("holds read and plan, never operate, and is not a kind a pair may ask for", () => {
+    expect(KIND_RIGHTS.run).toEqual(["read", "plan"]);
+    for (const right of ["operate", "shell", "admin", "helper"] as const) expect([right, allows("run", right)]).toEqual([right, false]);
+    expect(PAIR_KINDS).not.toContain("run" as never);
+  });
+  test("reaches none of what lands, pushes, answers, stops or configures, by the table alone", () => {
+    for (const [method, path] of [
+      ["POST", "/api/landing/land"],
+      ["POST", "/api/prs/open"],
+      ["POST", "/api/runs/answer"],
+      ["POST", "/api/runs/stop"],
+      ["POST", "/api/repos/push"],
+      ["POST", "/api/repos/run"],
+      ["POST", "/api/agents/profile"],
+    ] as const) {
+      expect([path, allows("run", needs(method, path))]).toEqual([path, false]);
+    }
+  });
 });

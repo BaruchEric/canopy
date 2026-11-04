@@ -92,6 +92,7 @@ export const TOOLS_FOR: Record<CallerKind, readonly ToolName[]> = {
   shell: namesFor("shell"),
   ranger: namesFor("ranger"),
   coordinator: namesFor("coordinator"),
+  run: namesFor("run"),
   helper: namesFor("helper"),
   none: namesFor("none"),
 };
