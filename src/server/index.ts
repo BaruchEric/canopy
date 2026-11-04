@@ -240,6 +240,7 @@ import { KitHub, kitPath } from "./kit";
 import { LandingHub } from "./landing";
 import { WarmPool, type Take } from "./warm";
 import { BranchTrees } from "./branchtrees";
+import { isCanopyStack, realCompose } from "./stacks";
 import { treesRoot, treesSource } from "../core/branchtrees";
 import { TREES_SOURCE } from "../core/treewords";
 import { GroupHub } from "./groups";
@@ -5962,6 +5963,7 @@ export async function startServer(opts: {
       treeOf: (repo, id) => runTreeOf(state, repo, id),
       listening: () => listeningPorts(),
       ended: (repoId, text) => console.log(`tasks: ${repoId}: ${text}`),
+      compose: { ...realCompose(), ownStack: (repo) => isCanopyStack(repo, join(import.meta.dir, "../..")) },
       ...(opts.tasks ? { timings: opts.tasks } : {}),
     }),
     ranger: new RangerHub({

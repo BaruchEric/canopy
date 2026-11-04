@@ -3054,6 +3054,8 @@ export interface TaskFlags {
   withPanel?: boolean;
   /** left out of the list (a detected task you do not want) */
   hidden?: boolean;
+  /** a compose stack: a project of its own in a worktree. Read off a cmd that starts with docker compose when unset */
+  compose?: boolean;
 }
 
 /** a whole task, as detection or a merge produces it */
@@ -3142,6 +3144,8 @@ export interface TaskRecord {
   tree?: TaskTree;
   /** the ports it holds, read back into the allotter at a restart */
   ports?: number[];
+  /** a compose stack of canopy's in its folder, which `down` ends; the name is worked out from the folder, never kept */
+  stack?: true;
 }
 
 export interface TaskLogLine {

@@ -335,3 +335,10 @@ describe("a task's env", () => {
     expect(bad?.ports).toBeUndefined();
   });
 });
+
+test("a task's record keeps that it holds a stack, and only as true", () => {
+  const id = "a".repeat(32);
+  const base = { repoId: "r", path: "/p", name: "dev", want: "running" };
+  expect(parseTaskState(JSON.stringify({ [id]: { ...base, stack: true } }))[id]?.stack).toBe(true);
+  expect(parseTaskState(JSON.stringify({ [id]: { ...base, stack: "cw-x" } }))[id]?.stack).toBeUndefined();
+});

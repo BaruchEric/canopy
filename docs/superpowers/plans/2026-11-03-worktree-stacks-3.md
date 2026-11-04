@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** in progress on branch `fr-039-plans-2-3`.
+**Status:** implemented on branch `fr-039-plans-2-3`, not yet merged.
 
 **Goal:** a repo whose dev task is `docker compose up` gets one stack per worktree, on ports of its own, torn down with the worktree. Two branches run side by side, and nothing canopy runs can reach a stack it did not make.
 
-**Architecture:** a task is a compose task when `compose` says so or its `cmd` starts with `docker compose`. In a worktree, `core/compose.ts` derives the project name from the folder, and the task runs with `COMPOSE_PROJECT_NAME` set. `server/compose.ts` tears a stack down through an injected exec: it checks what the project is, then runs `down`. The real exec exists only in `server/index.ts`; tests use a fake.
+**Architecture:** a task is a compose task when `compose` says so or its `cmd` starts with `docker compose`. In a worktree, `core/compose.ts` derives the project name from the folder, and the task runs with `COMPOSE_PROJECT_NAME` set. `server/stacks.ts` tears a stack down through an injected exec: it checks what the project is, then runs `down`. The real exec exists only in `server/index.ts`; tests use a fake.
 
 **Tech Stack:** Bun, TypeScript strict, bun:test. No new dependencies.
 
@@ -47,10 +47,22 @@ On the Mac: Docker Desktop server 29.9.2, compose 5.6.1, busybox:1.36, project n
 ## Tasks
 
 - [ ] **Task 1: `core/compose.ts`.** `isComposeTask`, `composeCmdError`, `projectName`, `composeDownArgs`, `composeLsArgs`, `volumeLsArgs`, `parseComposeLs`, `configInside`, `foreignVolumes`. `TaskDef.compose`, normalized as a flag. Tests first.
-- [ ] **Task 2: `server/compose.ts`.** `tearDown` over an injected exec, `realCompose`, `isCanopyStack`. Tests with a fake exec: the order of calls, each refusal, `-v` dropped, failures reported.
+- [ ] **Task 2: `server/stacks.ts`.** `tearDown` over an injected exec, `realCompose`, `isCanopyStack`. Tests with a fake exec: the order of calls, each refusal, `-v` dropped, failures reported.
 - [ ] **Task 3: the hub.** `TaskRecord.stack`; `launch` sets `COMPOSE_PROJECT_NAME`, adds the implicit `PORT`, and refuses docker missing, a named project, and canopy's own stack; ports stay held while an `up -d` stack is up, which also reads as running; `stopTask` runs `down`; `endOne` runs `down -v`; `endGone` covers a kept tree's folder. Tests with a real tmux and a fake compose.
 - [ ] **Task 4: wiring.** `server/index.ts` passes `realCompose` and `isCanopyStack`.
 - [ ] **Task 5: docs.** architecture, README, the spec's Calls, the plans index.
+
+## Live check, 2026-11-03
+
+A scratch canopy on :7877 with its own config folder, a stand-in `claude`, and a throwaway repo whose compose file publishes `127.0.0.1:${PORT:?need}:8080` and has one named volume. Docker Desktop 29.9.2. The only project names it touched were the two canopy generated, `cw-app-dc75f523-*`.
+
+- Two branches ran side by side on :7942 and :7929, and both answered.
+- `/api/ports` showed both under their branches, from `com.docker.backend`.
+- Dropping one took its stack and its volume, and left the other's alone.
+- `canopy worktrees stop` on the other removed its containers and kept its volume. Starting again came back on the same port.
+- Dropping that one took its stack and volume. `docker ps -a` and `docker volume ls` held nothing with the prefix afterwards.
+
+Not tried live: the fixed-name volume path and the outside-files refusal. Fake-exec tests cover both, and P3 is the evidence for the first.
 
 ## Review focus
 

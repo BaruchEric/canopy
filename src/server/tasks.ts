@@ -5,11 +5,15 @@
  * named like a shell, so the terminal socket joins it with `attach=1`;
  * the shell lists pass over it by its `task` tag.
  */
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { interruptTask, listTaskPanes, logPath, readLog, readTaskFiles, readTaskState, startTaskSession, taskTermId, writeTaskState, appendMark, rotateIfBig, repipe, listLogs, removeLog } from "../core/taskrun";
+import { treesRoot } from "../core/branchtrees";
+import { composeCmdError, isComposeTask, OWN_STACK, projectName, type ComposeRoots } from "../core/compose";
 import { portUnder, type Listening, type TreeFolder } from "../core/ports";
+import { worktreesRoot } from "../core/worktree";
+import { notDown, tearDown, type ComposeExec } from "./stacks";
 import { detectTasks, fillEnv, portSlots, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, definedFrom, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, listedTask, overrideOf, paneReading, type MergedTask, type TaskTimings } from "../core/tasks";
 import { killSession, type TaskPane } from "../core/tmux";
 import { loadConfig, setTask, tasksFor } from "../core/store";
@@ -43,6 +47,25 @@ export interface TaskHubDeps {
   listening?: () => Promise<Listening[]>;
   /** said when a worktree task is ended because its folder is gone */
   ended?: (repoId: string, text: string) => void;
+  /** docker, for a compose task in a worktree; without it such a task is refused */
+  compose?: ComposeExec & {
+    /** what stops compose here, in words; null when it can run */
+    missing(): Promise<string | null>;
+    /** whether a repo is canopy itself, whose stack is redeploy's */
+    ownStack(repo: { name: string; path: string }): Promise<boolean>;
+  };
+}
+
+const composeRoots = (): ComposeRoots => ({ runs: worktreesRoot(), kept: treesRoot() });
+
+/** the names a folder goes by: compose reports the resolved one, and the folder may be gone */
+function namesOf(dir: string): string[] {
+  try {
+    const real = existsSync(dir) ? realpathSync(dir) : join(realpathSync(dirname(dir)), basename(dir));
+    return real === dir ? [dir] : [dir, real];
+  } catch {
+    return [dir];
+  }
 }
 
 export class TaskError extends Error {
@@ -145,7 +168,10 @@ export class TaskHub {
    *  and its ports go back to the range. At a restart, and at each sweep. */
   private async endGone(): Promise<void> {
     const gone = new Set<string>();
-    for (const rec of Object.values(this.state)) if (rec.tree && !existsSync(rec.tree.dir)) gone.add(rec.tree.dir);
+    for (const rec of Object.values(this.state)) {
+      const dir = rec.tree?.dir ?? (rec.stack ? rec.path : undefined);
+      if (dir !== undefined && !existsSync(dir)) gone.add(dir);
+    }
     for (const p of this.panes.values()) if (p.tree && !existsSync(p.tree)) gone.add(p.tree);
     for (const dir of gone) {
       const repoIds = this.inFolder(dir).map((id) => this.state[id]?.repoId ?? this.panes.get(id)?.repoId);
@@ -230,7 +256,7 @@ export class TaskHub {
       ...d,
       repoId: repo.id,
       termId: id,
-      status: taskStatus({ live: p !== undefined, dead: p?.dead ?? false, want: rec?.want, exitedAt: rec?.exitedAt, exitCode: rec?.exitCode, retryAt: rt?.retryAt, gaveUp: rec?.gaveUp ?? false }),
+      status: this.stackUp(id) ? "running" : taskStatus({ live: p !== undefined, dead: p?.dead ?? false, want: rec?.want, exitedAt: rec?.exitedAt, exitCode: rec?.exitCode, retryAt: rt?.retryAt, gaveUp: rec?.gaveUp ?? false }),
       live: p !== undefined,
       ...(rec?.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
       ...(rec?.exitedAt !== undefined ? { exitedAt: rec.exitedAt } : {}),
@@ -326,12 +352,15 @@ export class TaskHub {
 
   /** Runs a task. `fresh` is a start by hand: it forgets the failures in a
    *  row and a gave-up; a retry or a recovery carries them on. */
-  private async launch(repo: Repo, def: MergedTask, fresh: boolean, tree?: TaskTree): Promise<void> {
+  private async launch(repo: Repo, task: MergedTask, fresh: boolean, tree?: TaskTree): Promise<void> {
     const tmux = this.need();
     // tmux not answering may be its container restarting: a start now could
     // make a second server, or land on one about to go
     if (this.answering === false) throw new TaskError(503, "tmux is not answering; try again in a moment");
     const dir = tree?.dir ?? repo.path;
+    const project = await this.projectOf(repo, task, dir);
+    // a stack that says nothing of ports gets one to publish
+    const def = project !== null && !task.env ? { ...task, env: { PORT: "${PORT}" } } : task;
     const id = taskTermId(dir, def.name);
     const at = Date.now();
     // set before anything touches tmux, so a tick listing meanwhile knows this run is newer
@@ -346,7 +375,8 @@ export class TaskHub {
     // canopy's own TZ, as a shell gets it: the tmux server in the shells
     // container has none, and a dev server's log would read in UTC
     const tz = process.env["TZ"];
-    const env = { ...(tz && !repo.host ? { TZ: tz } : {}), ...fillEnv(def.env, ports, dir) };
+    // the env var and not -p: a cmd is a shell line, and this outranks .env and the file's name (P3)
+    const env = { ...(tz && !repo.host ? { TZ: tz } : {}), ...fillEnv(def.env, ports, dir), ...(project !== null ? { COMPOSE_PROJECT_NAME: project } : {}) };
     try {
       await startTaskSession(tmux, { id, repoId: repo.id, path: repo.path, task: def.name, ...(tree ? { tree: tree.dir } : {}) }, dir, def.cmd, def.cwd, env);
     } catch (err) {
@@ -356,10 +386,36 @@ export class TaskHub {
     // a tick that saw the old dead pane may have let the ports go meanwhile
     if (ports.length) this.deps.ports?.seed(id, ports);
     const fails = fresh ? 0 : (this.state[id]?.fails ?? 0);
-    this.state[id] = { repoId: repo.id, path: repo.path, name: def.name, want: "running", startedAt: at, ...(fails ? { fails } : {}), ...(tree ? { tree } : {}), ...(ports.length ? { ports } : {}) };
+    this.state[id] = { repoId: repo.id, path: repo.path, name: def.name, want: "running", startedAt: at, ...(fails ? { fails } : {}), ...(tree ? { tree } : {}), ...(project !== null || this.state[id]?.stack ? { stack: true as const } : {}), ...(ports.length ? { ports } : {}) };
     await this.save();
     this.panes.set(id, { termId: id, task: def.name, repoId: repo.id, path: repo.path, dead: false, code: null, createdAt: at, ...(tree ? { tree: tree.dir } : {}) });
     this.deps.hold({ id, repoId: repo.id, path: repo.path, place: "strip", attached: false, viewers: [], startedAt: at, task: def.name });
+  }
+
+  /** The compose project a task runs as in this folder, or why it may not
+   *  run. Null for an ordinary task, and for a compose task in a main
+   *  checkout, which is the repo's own business, canopy's excepted. */
+  private async projectOf(repo: Repo, def: MergedTask, dir: string): Promise<string | null> {
+    if (!isComposeTask(def)) return null;
+    const c = this.deps.compose;
+    if (await c?.ownStack(repo)) throw new TaskError(403, OWN_STACK);
+    const project = projectName(dir, composeRoots());
+    if (project === null) return null;
+    if (!c) throw new TaskError(503, `${def.name} is a compose task, and this backend runs none`);
+    const bad = composeCmdError(def.cmd);
+    if (bad) throw new TaskError(400, `${def.name}: ${bad}`);
+    const missing = await c.missing();
+    if (missing) throw new TaskError(503, missing);
+    return project;
+  }
+
+  /** Ends the stack a record says is in `dir`. The name is worked out again
+   *  from the folder, and canopy's own stack is refused here too. */
+  private async downStack(rec: TaskRecord, dir: string, volumes: boolean): Promise<string[]> {
+    const c = this.deps.compose;
+    if (!c) return [`could not read compose project in ${dir}: this backend has no docker`];
+    if (await c.ownStack({ name: basename(rec.path), path: rec.path })) return [`refused: ${OWN_STACK}`];
+    return tearDown(c, dir, composeRoots(), { volumes, folders: namesOf(dir) });
   }
 
   /** The ports `def`'s env asks for, in slot order. A kept tree's card has
@@ -393,10 +449,26 @@ export class TaskHub {
     return p !== undefined && !p.dead;
   }
 
+  /** an `up -d` ended well: its pane is done and its stack is what runs */
+  private stackUp(id: string): boolean {
+    const rec = this.state[id];
+    return rec?.stack === true && rec.want === "running" && rec.exitCode === 0;
+  }
+
+  private up(id: string): boolean {
+    return this.running(id) || this.stackUp(id);
+  }
+
   private async stopTask(repo: Repo, name: string, dir?: string): Promise<void> {
-    const id = taskTermId(dir ?? repo.path, name);
+    const folder = dir ?? repo.path;
+    const id = taskTermId(folder, name);
     await this.halt(id);
+    const rec = this.state[id];
+    const lines = rec?.stack ? await this.downStack(rec, folder, false) : [];
     if (this.letGo(id)) await this.save();
+    for (const line of lines) this.deps.ended?.(repo.id, line);
+    const left = lines.find(notDown);
+    if (left) throw new TaskError(502, left);
   }
 
   private async halt(id: string): Promise<void> {
@@ -449,7 +521,7 @@ export class TaskHub {
   treeHolds(): TreeFolder[] {
     const out: TreeFolder[] = [];
     for (const [id, rec] of Object.entries(this.state)) {
-      if (!rec.tree || !this.running(id)) continue;
+      if (!rec.tree || !this.up(id)) continue;
       const read = this.rt.get(id)?.port;
       out.push({ repoId: rec.repoId, dir: rec.tree.dir, branch: rec.tree.branch, task: rec.name, ports: rec.ports ?? (read !== undefined ? [read] : []) });
     }
@@ -459,13 +531,13 @@ export class TaskHub {
   /** the task a worktree holds, the first running one, for the listing */
   taskIn(dir: string): { name: string; status: TaskInfo["status"]; port?: number } | undefined {
     const ids = this.inFolder(dir);
-    const id = ids.find((x) => this.running(x)) ?? ids[0];
+    const id = ids.find((x) => this.up(x)) ?? ids[0];
     const rec = id === undefined ? undefined : this.state[id];
     if (id === undefined || !rec) return undefined;
     const p = this.panes.get(id);
     const rt = this.rt.get(id);
     const port = rec.ports?.[0] ?? rt?.port;
-    const status = taskStatus({ live: p !== undefined, dead: p?.dead ?? false, want: rec.want, exitedAt: rec.exitedAt, exitCode: rec.exitCode, retryAt: rt?.retryAt, gaveUp: rec.gaveUp ?? false });
+    const status = this.stackUp(id) ? "running" : taskStatus({ live: p !== undefined, dead: p?.dead ?? false, want: rec.want, exitedAt: rec.exitedAt, exitCode: rec.exitCode, retryAt: rt?.retryAt, gaveUp: rec.gaveUp ?? false });
     return { name: rec.name, status, ...(port !== undefined ? { port } : {}) };
   }
 
@@ -487,19 +559,22 @@ export class TaskHub {
   }
 
   private async endOne(id: string): Promise<string[]> {
-    const name = this.state[id]?.name ?? this.panes.get(id)?.task;
-    const was = this.running(id);
+    const rec = this.state[id];
+    const name = rec?.name ?? this.panes.get(id)?.task;
+    const was = this.up(id);
     await this.halt(id);
     // a dead pane too: its session would sit in a folder that is going
     if (this.panes.has(id)) {
       await killSession(this.need(), id);
       this.panes.delete(id);
     }
+    // after a failed up too: it leaves a created container (P3)
+    const down = rec?.stack ? await this.downStack(rec, rec.tree?.dir ?? rec.path, true) : [];
     this.deps.ports?.release(id);
     this.rt.delete(id);
     delete this.state[id];
     await this.save();
-    return was ? [`stopped ${name}`] : [];
+    return [...(was ? [`stopped ${name}`] : []), ...down];
   }
 
   /** Stops a task whose repo left the scan, the top bar's one action on it.
@@ -704,7 +779,7 @@ export class TaskHub {
     this.panes = next;
     // a task that is down with no restart coming holds no port
     for (const [id, rec] of Object.entries(this.state)) {
-      if (newer(id) || this.running(id)) continue;
+      if (newer(id) || this.up(id)) continue;
       const keeps = rec.want === "running" && rec.exitCode !== 0 && !rec.gaveUp && this.defs.get(rec.path)?.merged.find((m) => m.name === rec.name)?.keep;
       if (!keeps && this.letGo(id)) {
         dirty = true;

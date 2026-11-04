@@ -13,7 +13,7 @@ const TASK_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/;
 
 export const isTaskName = (v: unknown): v is string => typeof v === "string" && TASK_NAME.test(v);
 
-const FLAGS = ["dev", "keep", "withPanel", "hidden"] as const satisfies readonly (keyof TaskFlags)[];
+const FLAGS = ["dev", "keep", "withPanel", "hidden", "compose"] as const satisfies readonly (keyof TaskFlags)[];
 
 /** why a cwd is refused, or null for one that stays inside the repo */
 export function cwdError(cwd: string): string | null {
@@ -481,6 +481,7 @@ export function parseTaskState(text: string): Record<string, TaskRecord> {
     const tree = r["tree"] as Record<string, unknown> | null | undefined;
     if (tree && typeof tree["id"] === "string" && typeof tree["dir"] === "string" && typeof tree["branch"] === "string") rec.tree = { id: tree["id"], dir: tree["dir"], branch: tree["branch"] };
     if (Array.isArray(r["ports"]) && r["ports"].length > 0 && r["ports"].every((p) => Number.isInteger(p))) rec.ports = r["ports"] as number[];
+    if (r["stack"] === true) rec.stack = true;
     out[id] = rec;
   }
   return out;
