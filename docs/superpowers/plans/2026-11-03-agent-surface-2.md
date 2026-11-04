@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** in progress on branch `fr-038-plans-2-3`, 2026-11-03.
+**Status:** implemented on branch `fr-038-plans-2-3`, 2026-11-03; not merged or deployed.
 
 **Goal:** a branch run or a chat may hold canopy's tools. When the start asks for them, the runner mints a `run` token for that run, writes it into a 0600 `mcp.json` and passes the file through `--mcp-config`. The token holds `read` and a `plan` the handlers hold to its own run: it can read the board, start up to three children of its own run in its own repo, say to its kin, wake the ranger and leave a note on its own work item. It cannot land, push, open a PR, answer a prompt, stop a run or touch the config. Off by default: no profile turns it on and a run with it off starts exactly as today.
 
