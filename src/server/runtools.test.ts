@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runsDir } from "../core/runlog";
 import { canopyMcpCommand, mcpConfigPath, removeMcpConfig, sweepMcpConfigs, writeMcpConfig } from "./runtools";
 
 let dir: string;
@@ -16,42 +17,38 @@ describe("a run's mcp.json", () => {
     const file = await writeMcpConfig("aaaa1111", entry, dir);
     expect(file).toBe(mcpConfigPath("aaaa1111", dir));
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(statSync(join(dir, "aaaa1111")).mode & 0o777).toBe(0o700);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
     expect(JSON.parse(await readFile(file, "utf8")).mcpServers.canopy.env.CANOPY_TOKEN).toBe("t");
   });
 
+  test("never sits in a run's transcript folder, which the log may remove whole", () => {
+    expect(mcpConfigPath("aaaa1111").startsWith(join(runsDir(), "aaaa1111"))).toBe(false);
+  });
+
   test("a loose folder is tightened, and a link in the file's place is refused", async () => {
-    await mkdir(join(dir, "bbbb2222"), { mode: 0o755 });
+    await chmod(dir, 0o755);
     await writeMcpConfig("bbbb2222", entry, dir);
-    expect(statSync(join(dir, "bbbb2222")).mode & 0o777).toBe(0o700);
-    await mkdir(join(dir, "cccc3333"));
-    await symlink(join(dir, "elsewhere"), join(dir, "cccc3333", "mcp.json"));
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    await symlink(join(dir, "elsewhere"), mcpConfigPath("cccc3333", dir));
     await expect(writeMcpConfig("cccc3333", entry, dir)).rejects.toThrow();
     expect(existsSync(join(dir, "elsewhere"))).toBe(false);
   });
 
-  test("going leaves a transcript where it is and an empty folder gone", async () => {
+  test("going removes the file, and a file already gone is nothing", async () => {
     await writeMcpConfig("aaaa1111", entry, dir);
-    await writeFile(join(dir, "aaaa1111", "wire.jsonl"), "x");
     await removeMcpConfig("aaaa1111", dir);
     expect(existsSync(mcpConfigPath("aaaa1111", dir))).toBe(false);
-    expect(existsSync(join(dir, "aaaa1111", "wire.jsonl"))).toBe(true);
-    await writeMcpConfig("bbbb2222", entry, dir);
-    await removeMcpConfig("bbbb2222", dir);
-    expect(existsSync(join(dir, "bbbb2222"))).toBe(false);
     await removeMcpConfig("never000", dir);
   });
 
-  test("the sweep clears every file and no transcript; a missing folder is nothing", async () => {
+  test("the sweep clears every run's file and nothing else; a missing folder is nothing", async () => {
     await writeMcpConfig("aaaa1111", entry, dir);
     await writeMcpConfig("bbbb2222", entry, dir);
-    await writeFile(join(dir, "aaaa1111", "run.json"), "{}");
-    await writeFile(join(dir, "index.json"), "{}");
+    await writeFile(join(dir, "note.txt"), "x");
     await sweepMcpConfigs(dir);
     expect(existsSync(mcpConfigPath("aaaa1111", dir))).toBe(false);
     expect(existsSync(mcpConfigPath("bbbb2222", dir))).toBe(false);
-    expect(existsSync(join(dir, "aaaa1111", "run.json"))).toBe(true);
-    expect(existsSync(join(dir, "index.json"))).toBe(true);
+    expect(existsSync(join(dir, "note.txt"))).toBe(true);
     await sweepMcpConfigs(join(dir, "nothing"));
   });
 });

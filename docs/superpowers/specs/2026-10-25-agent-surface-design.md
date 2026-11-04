@@ -116,7 +116,7 @@ for a branch run or a chat when the start says `tools: canopy`:
   only where asked.
 - `startRepoRun` mints `mint("run", {label: "run <repo id>", run: id})` as
   `startCoordinator` does, chooses the run's id first (`StartExtras.id`),
-  writes `<configDir>/runs/<id>/mcp.json` (0700 folder, 0600 file) holding
+  writes `<configDir>/run-tools/<id>.mcp.json` (0700 folder, 0600 file; see call 15) holding
   `{mcpServers: {canopy: {command: "canopy", args: ["mcp"], env: {CANOPY_API,
   CANOPY_TOKEN, CANOPY_RUN}}}}`, and passes `--mcp-config <that file>` and
   `--allowedTools mcp__canopy__*` (P2) through a new `DriveSpec.mcpConfig`.
@@ -263,8 +263,8 @@ Made on 2026-11-03, while building plan 2:
 9. **The file's command is `bun <canopy>/bin/canopy-mcp.ts mcp`, not
    `canopy mcp`.** launchd's PATH and the container's may lack `canopy`, and
    the MCP entry starts in 36 ms where the whole CLI takes 107.
-10. **`runs/<id>/mcp.json` alone goes, not the folder.** That folder is the
-    run's transcript, which outlives the run.
+10. **The file alone goes, never the run's transcript.** The transcript
+    outlives the run. Call 15 moved the file out of that folder.
 11. **A restart drops every `run` token.** The spec kept a `stopped` run's,
     but no run outlives a restart and its fix gets a fresh token anyway, so
     the kept one would be a live credential nothing holds.
@@ -276,6 +276,12 @@ Made on 2026-11-03, while building plan 2:
 14. **A run's wake is one time.** `cron` is refused, since the run's rights
     end with it and a schedule would not, and the wake says which run asked,
     because the ranger holds `operate` and a run's words are not Eric's.
+15. **The file is `run-tools/<id>.mcp.json`, not `runs/<id>/mcp.json`.** A
+    live check showed why: the run log removes `runs/<id>/` whole when a
+    credential collides with its metadata, which took the file with it and
+    failed the run at start. A dev server with `CANOPY_LOOPBACK_AUTH=1` hits
+    that on every run. A token file should not sit in a folder another module
+    owns.
 
 ## Out of scope
 

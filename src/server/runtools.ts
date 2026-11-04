@@ -1,15 +1,16 @@
-/** A run's `mcp.json` (FR-038): `<config dir>/runs/<id>/mcp.json`, a 0600 file
- *  in the run's 0700 transcript folder, holding the run's token for the
- *  `canopy` MCP server. It goes when the run ends and the folder stays, since
- *  the folder is the transcript. Bun-only. */
-import { chmod, mkdir, readdir, rm, rmdir, writeFile } from "node:fs/promises";
+/** A run's `mcp.json` (FR-038): `<config dir>/run-tools/<id>.mcp.json`, a 0600
+ *  file in a 0700 folder, holding the run's token for the `canopy` MCP server.
+ *  It sits apart from `runs/<id>/`, which the transcript owns and removes whole
+ *  when a credential collides with its metadata. Bun-only. */
+import { chmod, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { runsDir } from "../core/runlog";
+import { configDir } from "../core/store";
 import { mcpConfigJson, type McpEntry } from "../core/runtools";
 
-const FILE = "mcp.json";
+const SUFFIX = ".mcp.json";
 
-export const mcpConfigPath = (id: string, dir = runsDir()): string => join(dir, id, FILE);
+export const toolsDir = (): string => join(configDir(), "run-tools");
+export const mcpConfigPath = (id: string, dir = toolsDir()): string => join(dir, `${id}${SUFFIX}`);
 
 /** The server a run starts: this canopy's own MCP entry under this bun, so it
  *  needs no `canopy` on a PATH launchd or a container may not have. */
@@ -20,24 +21,21 @@ export const canopyMcpCommand = (): Pick<McpEntry, "command" | "args"> => ({
 
 /** Writes the file and answers its path. `wx`, so it never follows a link or
  *  takes over a file that is already there. */
-export async function writeMcpConfig(id: string, entry: McpEntry, dir = runsDir()): Promise<string> {
+export async function writeMcpConfig(id: string, entry: McpEntry, dir = toolsDir()): Promise<string> {
   const file = mcpConfigPath(id, dir);
-  const folder = join(dir, id);
-  await mkdir(folder, { recursive: true, mode: 0o700 });
-  await chmod(folder, 0o700);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await chmod(dir, 0o700);
   await writeFile(file, mcpConfigJson(entry), { mode: 0o600, flag: "wx" });
   await chmod(file, 0o600);
   return file;
 }
 
-/** Removes the file, and the folder too when it held nothing else. */
-export async function removeMcpConfig(id: string, dir = runsDir()): Promise<void> {
+export async function removeMcpConfig(id: string, dir = toolsDir()): Promise<void> {
   await rm(mcpConfigPath(id, dir), { force: true });
-  await rmdir(join(dir, id)).catch(() => {});
 }
 
 /** At start: no run outlives a restart, so no file should be here. */
-export async function sweepMcpConfigs(dir = runsDir()): Promise<void> {
-  const ids = await readdir(dir).catch(() => [] as string[]);
-  for (const id of ids) await removeMcpConfig(id, dir).catch(() => {});
+export async function sweepMcpConfigs(dir = toolsDir()): Promise<void> {
+  const names = await readdir(dir).catch(() => [] as string[]);
+  for (const name of names) if (name.endsWith(SUFFIX)) await rm(join(dir, name), { force: true }).catch(() => {});
 }

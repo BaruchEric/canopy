@@ -45,7 +45,7 @@ const started = async (res: Response): Promise<Run> => {
   if (res.status !== 201) throw new Error(`start: ${res.status} ${await res.text()}`);
   return (await res.json()) as Run;
 };
-const fileOf = (id: string) => join(config, "runs", id, "mcp.json");
+const fileOf = (id: string) => join(config, "run-tools", `${id}.mcp.json`);
 const tokenOf = async (id: string): Promise<string> => (JSON.parse(await readFile(fileOf(id), "utf8")) as { mcpServers: { canopy: { env: { CANOPY_TOKEN: string } } } }).mcpServers.canopy.env.CANOPY_TOKEN;
 const runOf = async (id: string) => ((await (await fetch(url("/api/runs"), { headers: { "x-canopy-token": cli } })).json()) as Run[]).find((r) => r.id === id);
 
@@ -96,8 +96,8 @@ beforeAll(async () => {
   // what a restart must clear: a token and a file a run left behind
   book.mint("run", { label: "run app", run: "dead1234" });
   await book.flush();
-  await mkdir(join(config, "runs", "dead1234"), { recursive: true });
-  await writeFile(join(config, "runs", "dead1234", "mcp.json"), "{}");
+  await mkdir(join(config, "run-tools"), { recursive: true });
+  await writeFile(fileOf("dead1234"), "{}");
   server = await startServer({ root, port: 0, chan: null, harnesses: ["claude", "codex"], runner: { driver: (h: Harness) => new HeldDriver(h) } });
 });
 
@@ -112,7 +112,7 @@ afterAll(async () => {
 
 describe("the file and the token", () => {
   test("a restart dropped what a dead run left", async () => {
-    expect(existsSync(join(config, "runs", "dead1234", "mcp.json"))).toBe(false);
+    expect(existsSync(fileOf("dead1234"))).toBe(false);
     const callers = (await (await fetch(url("/api/auth"), { headers: { "x-canopy-token": cli } })).json()) as { callers: { kind: string }[] };
     expect(callers.callers.some((c) => c.kind === "run")).toBe(false);
   });
@@ -149,10 +149,11 @@ describe("the file and the token", () => {
   });
 
   test("a start that fails leaves neither token nor file", async () => {
-    const before = await readdir(join(config, "runs"));
+    const held = async () => (await readdir(join(config, "run-tools")).catch(() => [] as string[])).sort();
+    const before = await held();
     const refused = await post("/api/repos/run?id=app", { action: "ask", note: "", branch: true, canopyTools: true });
     expect(refused.status).toBe(400);
-    expect((await readdir(join(config, "runs"))).filter((id) => !before.includes(id) && existsSync(join(config, "runs", id, "mcp.json")))).toEqual([]);
+    expect(await held()).toEqual(before);
     const callers = (await (await fetch(url("/api/auth"), { headers: { "x-canopy-token": cli } })).json()) as { callers: { kind: string }[] };
     expect(callers.callers.filter((c) => c.kind === "run")).toEqual([]);
   });

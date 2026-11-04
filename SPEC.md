@@ -61,7 +61,7 @@ canopy ui ~/dev
 - Runs live in server memory; the last 60 finished ones stay until a restart, and every run's record is kept under `runs/` for 30 days, from where `GET /api/runs/<id>` and `canopy run` read it after a restart, and the run sheet replays it from its wire (`GET /api/runs/<id>/replay`). A finished run forks from a step of that replay (`POST /api/runs/fork`, `canopy run fork`) into a new branch run cut from the original's base; a Claude fork resumes a copy of the original's transcript cut after the step, written mode 0600 under `~/.claude/projects/<fork worktree slug>/<new id>.jsonl` for the fork's start and removed when it ends. A branch run's record and its landing queue entry outlive a restart in `landing/`.
 - Session history is read from claude-history's CLI (`--json`), never its sqlite file.
 - The secret store: `secrets.json` in the private Forgejo repo `eric/secrets`, its values sealed with age and the file signed. On the mini the `secrets-data` volume holds the checkout, the keys, `passkeys.json`, `audit.jsonl` and `applied.json`. On every other backend, next to the config: `secrets/` (a pulled copy), `secrets-config.json` (the pinned key and remote), `secrets-key.age` (that machine's passphrase-wrapped key) and `secrets-applied.json`.
-- `runs/<id>/mcp.json`, 0600, only while a run holds canopy tools: the one file that carries a `run` token, deleted when the run ends.
+- `run-tools/<id>.mcp.json`, 0600, only while a run holds canopy tools: the one file that carries a `run` token, deleted when the run ends.
 - No database of its own: git and the files above are the state.
 
 ## Decisions

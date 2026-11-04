@@ -20,10 +20,16 @@ A scratch stdio server and a throwaway token, run the way `cliArgs` runs `claude
 - **P2.** `--allowedTools "mcp__canopy__*"` lets a call run in `--permission-mode default` with no ask. Without it the wire shows `control_request` `can_use_tool` with `tool_name: "mcp__canopy__canopy_status"`, `display_name: "Canopy Status"` and `mcp_server: {name: "canopy", source: "dynamic"}`. `permissionAsk` already titles an `mcp__` name through `actions.ts`, so nothing there changes.
 - **P4.** Spawn to the `initialize` reply against a stub backend, 7 runs at load 6.3: `bin/canopy.ts` 107 ms median, `bin/canopy-mcp.ts` 36 ms, a built bundle 19 ms. All are under 300 ms, so P4 forces nothing. Off by default stands as a call on its own (a smaller tool list, and a credential only where asked).
 
+## Live check (2026-11-03, real `claude` against a scratch server in enforce)
+
+A branch ask with `canopyTools` called `canopy_status`, `canopy_work_note` and `canopy_run_start` through `bin/canopy-mcp.ts` with no prompt. The child started with `parent`, depth 1 and its own file. The file was 0600 in a 0700 folder. With the token from that file, `GET /api/runs` answered 200, and `POST /api/landing/land`, a run's stop and `POST /api/repos/run` answered 403 from the lane. A child in the other repo, a child under another parent and a cron wake answered 403 from their handlers. When the parent ended, its file and its entry in `callers.json` were gone and the child's stayed while the child worked.
+
+The first pass failed the child at start, which is how spec call 15 came about. `CANOPY_LOOPBACK_AUTH=1` is credential-named with the value `1`, so the run log's collision check removed `runs/<id>/` whole, and the file with it. The run log still stops on that scratch server, and the run now carries on.
+
 ## Global constraints
 
 - `run` holds `read` and `plan`, never `operate`, and is not in `PAIR_KINDS`.
-- The token rides in `<config dir>/runs/<id>/mcp.json` (0700 folder, 0600 file) and never in the agent's env or on argv.
+- The token rides in `<config dir>/run-tools/<id>.mcp.json` (0700 folder, 0600 file; spec call 15) and never in the agent's env or on argv.
 - The file's `command` is `process.execPath` and its args are `[<canopy>/bin/canopy-mcp.ts, "mcp"]`, not `canopy` off the PATH: launchd's and the container's PATH may lack it, and this path is three times faster to start.
 - The `run` lane is `GET /api/tree`, `/api/runs`, `/api/landing`, `/api/health`, `/api/auth` and `POST /api/runs/child`, `/api/runs/say`, `/api/ranger/wakes`, `/api/work/note`, on the main listener. On the coordinator's listener a run token gets the `token` verdict, even on a route in its lane.
 - `RUN_CHILDREN` is 3 live children, `RUN_DEPTH` is 2: depth 0 may start a child at depth 1, depth 1 may not.
