@@ -1853,7 +1853,7 @@ export interface WorktreeRepoInfo {
   /** what the repo's gates file says, when it says */
   fileWarm?: number;
   /** the live run worktrees, from the landing records */
-  runs: { dir: string; id: string; runId: string; branch: string; state: RunBranchState }[];
+  runs: { dir: string; id: string; runId: string; branch: string; state: RunBranchState; task?: { name: string; status: TaskStatus; port?: number } }[];
   warm: WarmTreeInfo[];
   /** the slot being cut now */
   refilling: string | null;

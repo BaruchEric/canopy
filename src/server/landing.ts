@@ -76,6 +76,10 @@ export interface LandingDeps {
   broadcast: (ev: ServerEvent) => void;
   /** a run worktree was removed: a land, a drop, an orphan's remove; the warm pool refills */
   treeRemoved?: (repoPath: string) => void;
+  /** ends what runs in a worktree before its folder goes; the lines say what it did */
+  stopTree?: (dir: string) => Promise<string[]>;
+  /** whether something still runs in a folder, which refuses its removal */
+  treeBusy?: (dir: string) => boolean;
   /** the scan's repo by id */
   repo: (id: string) => Repo | undefined;
   /** the scan's repo by its absolute path */
@@ -208,6 +212,17 @@ export class LandingHub {
   private tell(id: string, text: string): void {
     const work = this.runs.get(id)?.work;
     if (work) this.deps.work?.note(work, text);
+  }
+
+  /** What runs in a worktree, ended before the folder goes, with what that
+   *  did told to the branch's work item. */
+  private async freeTree(id: string, dir: string): Promise<void> {
+    for (const line of (await this.deps.stopTree?.(dir)) ?? []) this.tell(id, line);
+  }
+
+  /** refuses a worktree something still runs in */
+  private notBusy(dir: string): void {
+    if (this.deps.treeBusy?.(dir)) throw new LandError("a task still runs in that worktree; stop it first");
   }
 
   private end(id: string, state: "landed" | "dropped", text: string): void {
@@ -943,7 +958,8 @@ export class LandingHub {
     if (rec && this.deps.runActive(rec.runId)) throw new LandError("the run is still going");
     const target = rec ?? entry;
     if (!target) throw new LandError("nothing by that id", 404);
-    await removeRunTree(target.repoPath, target.dir, target.branch);
+    await this.freeTree(target.id, target.dir);
+    await removeRunTree(target.repoPath, target.dir, target.branch, () => this.notBusy(target.dir));
     this.deps.treeRemoved?.(target.repoPath);
     this.entries = this.entries.filter((e) => e.id !== target.id);
     this.end(target.id, "dropped", "dropped with its worktree");
@@ -963,6 +979,9 @@ export class LandingHub {
     const o = this.orphans.find((x) => x.dir === dir);
     if (!o) throw new LandError("no orphaned worktree there", 404);
     if (action === "remove") {
+      assertOwner?.();
+      await this.deps.stopTree?.(dir);
+      this.notBusy(dir);
       assertOwner?.();
       if (o.repoPath) {
         const branch = await currentBranch(dir);
@@ -1228,8 +1247,14 @@ export class LandingHub {
       this.step(e, { t: "landed", head: landed });
       if (e.auto) this.notice({ entry: e.id, repoId: e.repoId, branch: e.branch, note: e.note, kind: "landed", head: landed });
       this.end(e.id, "landed", `landed on ${e.target}`);
-      await removeRunTree(e.repoPath, e.dir, e.branch);
-      this.deps.treeRemoved?.(e.repoPath);
+      // the branch has landed: a stop that fails keeps the worktree, as an
+      // orphan to clear, and undoes nothing
+      await this.freeTree(e.id, e.dir).catch((err: unknown) => this.tell(e.id, `could not stop what runs in the worktree: ${err instanceof Error ? err.message : err}`));
+      if (this.deps.treeBusy?.(e.dir)) this.tell(e.id, `a task still runs in ${e.dir}, so the worktree was kept`);
+      else {
+        await removeRunTree(e.repoPath, e.dir, e.branch);
+        this.deps.treeRemoved?.(e.repoPath);
+      }
       await this.dropRun(e.id);
       this.publish();
       return;

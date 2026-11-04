@@ -62,6 +62,8 @@ export interface TreesDeps {
   listening: () => Promise<number[]>;
   /** live shells sitting in a folder */
   shellsIn: (dir: string) => number;
+  /** ends the tasks running in a tree before its folder goes */
+  stopTree?: (dir: string) => Promise<unknown>;
   broadcast: (ev: ServerEvent) => void;
   /** the port range, in place of `CANOPY_TREE_PORTS` */
   ports?: number[];
@@ -371,7 +373,7 @@ export class BranchTrees {
     const dir = treeDir(repo.path, entry.slug, this.root);
     let outcome: MergeOutcome;
     try {
-      outcome = await mergeTree(repo.path, dir, entry.branch, entry.base, opts, (d) => this.check(repo.path, d));
+      outcome = await mergeTree(repo.path, dir, entry.branch, entry.base, opts, (d) => this.check(repo.path, d), this.deps.stopTree);
     } catch (err) {
       outcome = { stopped: message(err) };
     }
@@ -484,6 +486,7 @@ export class BranchTrees {
             continue;
           }
           // its base holds every commit, so the branch goes with it
+          await this.deps.stopTree?.(treeDir(r.path, t.slug, this.root))?.catch(() => {});
           await removeBranchTree(r.path, treeDir(r.path, t.slug, this.root), t.branch, true).catch(() => {});
           removed.push({ repoId: r.id, slug: t.slug, branch: t.branch });
         }
@@ -506,6 +509,7 @@ export class BranchTrees {
         const refusal = removeRefusal(live);
         if (refusal) throw new TreesError(409, refusal);
       }
+      await this.deps.stopTree?.(treeDir(repo.path, t.slug, this.root));
       await removeBranchTree(repo.path, treeDir(repo.path, t.slug, this.root), t.branch, deleteBranch);
       await this.save(repo.path, { trees: rec.trees.filter((x) => x !== t) });
       void this.publish();

@@ -49,6 +49,11 @@ interface World {
   opened: string[];
   dropped: string[];
   treeRemoved: string[];
+  /** folders `stopTree` was called on, and whether each still stood then */
+  stopped: [string, boolean][];
+  stopLines: string[];
+  stopFails: boolean;
+  busy: Set<string>;
   held: Set<string>;
   /** where the scenario sets live */
   scenRoot: string;
@@ -94,6 +99,10 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
     opened: [],
     dropped: [],
     treeRemoved: [],
+    stopped: [],
+    stopLines: [],
+    stopFails: false,
+    busy: new Set(),
     held: new Set(),
     scenRoot: join(root, `scen${n}`),
     scenarios: [],
@@ -114,6 +123,12 @@ async function world(opts: { gates?: string[]; noPackage?: boolean; judge?: fals
       if (ev.type === "landing") w.landingObserver?.(ev.landing);
     },
     treeRemoved: (path) => w.treeRemoved.push(path),
+    stopTree: async (dir) => {
+      w.stopped.push([dir, existsSync(dir)]);
+      if (w.stopFails) throw new Error("tmux said no");
+      return w.stopLines;
+    },
+    treeBusy: (dir) => w.busy.has(dir),
     repo: (id) => (id === repo.id ? repo : undefined),
     repoByPath: (p) => repoAtPath([repo], p),
     check: async (cwd, line) => {
@@ -1533,6 +1548,68 @@ test("a land and a drop tell the pool which repo lost a worktree", async () => {
   await w.hub.idle();
   await w.hub.drop("wt2");
   expect(w.treeRemoved).toEqual([w.repo.path, w.repo.path]);
+});
+
+test("a land and a drop end what runs in the worktree before the folder goes, and tell the work item", async () => {
+  const w = await world();
+  w.stopLines = ["stopped dev"];
+  await readyRun(w, "st1", "b.txt", "b\n", "item1");
+  await w.hub.land("st1");
+  await w.hub.idle();
+  expect(entryOf(w, "st1")?.state).toBe("landed");
+  const landed = runTreeDir(w.repo.path, "st1", w.wts);
+  expect(w.stopped).toEqual([[landed, true]]);
+  expect(existsSync(landed)).toBe(false);
+  expect(w.notes).toContain("item1 stopped dev");
+  await readyRun(w, "st2", "c.txt", "c\n", "item2");
+  await w.hub.idle();
+  await w.hub.drop("st2");
+  const dropped = runTreeDir(w.repo.path, "st2", w.wts);
+  expect(w.stopped.at(-1)).toEqual([dropped, true]);
+  expect(existsSync(dropped)).toBe(false);
+  expect(w.notes).toContain("item2 stopped dev");
+});
+
+test("a stop that fails undoes no landing: the branch stays landed and a busy worktree is kept", async () => {
+  const w = await world();
+  await readyRun(w, "st3", "b.txt", "b\n", "item3");
+  const dir = runTreeDir(w.repo.path, "st3", w.wts);
+  w.stopFails = true;
+  w.busy.add(dir);
+  await w.hub.land("st3");
+  await w.hub.idle();
+  expect(entryOf(w, "st3")?.state).toBe("landed");
+  expect(existsSync(dir)).toBe(true);
+  expect(w.treeRemoved).toEqual([]);
+  expect(w.notes).toContain("item3 could not stop what runs in the worktree: tmux said no");
+  expect(w.notes).toContain(`item3 a task still runs in ${dir}, so the worktree was kept`);
+});
+
+test("a drop is refused while a task still runs in the worktree", async () => {
+  const w = await world();
+  await readyRun(w, "st4", "b.txt", "b\n");
+  await w.hub.idle();
+  const dir = runTreeDir(w.repo.path, "st4", w.wts);
+  w.busy.add(dir);
+  await expect(w.hub.drop("st4")).rejects.toThrow("a task still runs in that worktree");
+  expect(existsSync(dir)).toBe(true);
+  w.busy.clear();
+  await w.hub.drop("st4");
+  expect(existsSync(dir)).toBe(false);
+});
+
+test("removing an orphan ends what runs in it first", async () => {
+  const w = await world();
+  const dir = runTreeDir(w.repo.path, "task-orphan", w.wts);
+  await addRunTree(w.repo.path, dir, "run/task-orphan", "main");
+  await w.hub.adopt();
+  w.busy.add(dir);
+  await expect(w.hub.orphan(dir, "remove")).rejects.toThrow("a task still runs");
+  expect(existsSync(dir)).toBe(true);
+  w.busy.clear();
+  await w.hub.orphan(dir, "remove");
+  expect(w.stopped.at(-1)).toEqual([dir, true]);
+  expect(existsSync(dir)).toBe(false);
 });
 
 test("removing an orphan tells the pool which repo lost a worktree", async () => {

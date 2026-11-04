@@ -8,7 +8,7 @@ import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueN
 import { handoffFence, titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
-import { listeningPorts, mayServeHttp, repoOfCwd } from "../core/ports";
+import { listeningPorts, mayServeHttp, repoOfCwd, treeOfPort, type TreeFolder } from "../core/ports";
 import { mkdirSync, existsSync, watch, type FSWatcher } from "node:fs";
 import { chmod, lstat, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
@@ -213,6 +213,7 @@ import {
   type Workspace,
   type WsColor,
   TERM_GONE,
+  type TaskTree,
 } from "../core/types";
 import type { About, AdviceAccepted, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
 import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
@@ -1196,6 +1197,8 @@ async function startRepoRun(
   /** who may go first when the window runs low (FR-036): a start from the
    *  page or the CLI is interactive unless it says otherwise */
   priority: Priority = "interactive",
+  /** the pre-flight's toggle: the dev task starts in the branch's worktree */
+  devTask = false,
 ): Promise<Run> {
   // A coordinator runs only through its own start, in its sandbox with its
   // token; this path would spawn it here, unisolated.
@@ -1219,6 +1222,7 @@ async function startRepoRun(
   if (onBranch && scope) throw new HttpError(400, "a workspace run works in its folders, not on a branch");
   if (onBranch && seed) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
   if (pr && !onBranch) throw new HttpError(400, "only a run on a branch of its own can open a PR");
+  if (devTask && !onBranch) throw new HttpError(400, "only a run on a branch of its own has a worktree to start the dev task in");
   if (onBranch) {
     const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
@@ -1242,7 +1246,7 @@ async function startRepoRun(
   const extras = priority === "interactive" ? {} : { priority };
   if (onBranch) {
     const resolved = await issueNoteFor(repo, note);
-    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], extras, resolved.work);
+    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...extras, ...(devTask ? { devTask } : {}) }, resolved.work);
   }
   return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, extras);
 }
@@ -1366,6 +1370,7 @@ async function startBranchRun(
     let start: BranchStart | undefined;
     try {
       start = await cutBranch(repo, note, pr, item.id, state.warm);
+      if (extras.devTask) start = withDevTask(state, repo, start);
       current();
       const prepare = start.prepare;
       const owned = valid ? { ...start, prepare: async (say: (text: string) => void) => { await prepare?.(say); current(); } } : start;
@@ -1472,6 +1477,36 @@ async function dropCoordFolder(id: string): Promise<void> {
  *  `from` cuts the branch at that commit instead of the default branch's
  *  tip (a fork starts where its original did, FR-043 plan 3); a warm
  *  worktree sits at the tip, so none is taken then. */
+/** The pre-flight's toggle: the dev task starts in the worktree once setup
+ *  is done, so it finds its dependencies. A dev task that will not start is
+ *  said in the run and never fails it. */
+function withDevTask(state: ServerState, repo: Repo, start: BranchStart): BranchStart {
+  const { branch, prepare } = start;
+  return {
+    ...start,
+    prepare: async (say) => {
+      await prepare?.(say);
+      try {
+        const { trees } = await state.tasks.actIn(repo, { id: branch.origin, dir: branch.dir, branch: branch.name }, "start");
+        const task = trees?.find((t) => t.tree?.id === branch.origin);
+        say(`${task?.name ?? "the dev task"} started in the worktree${task?.port !== undefined ? ` on :${task.port}` : ""}`);
+      } catch (err) {
+        say(`the dev task did not start: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    },
+  };
+}
+
+/** a run worktree of `repo` by its branch id, from the landing record or the
+ *  run that owns it; only ever the folder canopy itself cut for that id */
+function runTreeOf(state: ServerState, repo: Repo, id: string): TaskTree | null {
+  const rec = state.landing.info().runs.find((r) => r.id === id && r.repoPath === repo.path);
+  const live = state.runner.list().find((r) => r.repoId === repo.id && r.branch?.origin === id)?.branch;
+  const branch = rec?.branch ?? live?.name;
+  const dir = runTreeDir(repo.path, id);
+  return branch && (rec?.dir ?? live?.dir) === dir ? { id, dir, branch } : null;
+}
+
 async function cutBranch(repo: Repo, note: string, pr: boolean, work: string, pool: WarmPool, from?: string): Promise<BranchStart> {
   const target = await defaultBranch(repo.path);
   const tip = target ? await revOf(repo.path, `refs/heads/${target}`) : null;
@@ -3788,11 +3823,13 @@ async function handleApi(
   if (path === "/api/ports" && method === "GET") {
     const reserved = state.preview?.reserved ?? [];
     const local = state.result.repos.filter((r) => !r.host && !r.forge);
+    const trees: TreeFolder[] = [...state.tasks.treeHolds(), ...state.landing.info().runs.map((r) => ({ repoId: r.repoId, dir: r.dir, branch: r.branch }))];
     const ports: ListeningPort[] = (await listeningPorts())
       .filter((l) => !reserved.includes(l.port) && mayServeHttp(l.command))
       .map((l) => {
         const repo = repoOfCwd(l.cwd, local);
-        return { port: l.port, ...(l.command ? { command: l.command } : {}), ...(repo ? { repo } : {}) };
+        const tree = repo ? undefined : treeOfPort(l, trees);
+        return { port: l.port, ...(l.command ? { command: l.command } : {}), ...(repo ? { repo } : {}), ...(tree ? { tree } : {}) };
       });
     const pub = state.preview?.publicTemplate;
     const host = state.preview?.host;
@@ -5193,7 +5230,7 @@ async function handleApi(
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
       }
-      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority), 201);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, b.devTask === true), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
@@ -5920,6 +5957,11 @@ export async function startServer(opts: {
       },
       broadcast: (ev) => broadcast(state, ev),
       gaveUp: (repo, task) => state.chan.onTaskGaveUp(repo, task),
+      ports: { hold: (owner, key, count) => state.trees.hold(owner, key, count), release: (owner) => state.trees.release(owner), seed: (owner, ports) => state.trees.seed(owner, ports) },
+      keptPort: (dir) => state.trees.treeAt(dir)?.port ?? null,
+      treeOf: (repo, id) => runTreeOf(state, repo, id),
+      listening: () => listeningPorts(),
+      ended: (repoId, text) => console.log(`tasks: ${repoId}: ${text}`),
       ...(opts.tasks ? { timings: opts.tasks } : {}),
     }),
     ranger: new RangerHub({
@@ -6139,6 +6181,8 @@ export async function startServer(opts: {
     }),
     landing: new LandingHub({
       treeRemoved: (path) => state.warm.poke(path),
+      stopTree: (dir) => state.tasks.endTree(dir),
+      treeBusy: (dir) => state.tasks.busy(dir),
       judge: hasGatewayKey() ? jevScenario : null,
       broadcast: (ev) => {
         broadcast(state, ev.type === "landing" ? { ...ev, landing: { ...ev.landing, groups: state.groups.info() } } : ev);
@@ -6181,6 +6225,7 @@ export async function startServer(opts: {
       landing: () => state.landing.info(),
       landingBusy: (path) => state.landing.info().entries.some((e) => e.repoPath === path && (e.state === "rebasing" || e.state === "landing")),
       removeOrphan: (dir, assertOwner) => state.landing.orphan(dir, "remove", assertOwner),
+      taskIn: (dir) => state.tasks.taskIn(dir),
       broadcast: (ev) => broadcast(state, ev),
     }),
     trees: new BranchTrees({
@@ -6193,6 +6238,7 @@ export async function startServer(opts: {
         for (const t of state.terms.values()) if (t.info.path === dir && !t.info.task && !t.info.ranger) count++;
         return count;
       },
+      stopTree: (dir) => state.tasks.endTree(dir),
       broadcast: (ev) => broadcast(state, ev),
     }),
     collisions: new CollisionHub({
@@ -6232,6 +6278,7 @@ export async function startServer(opts: {
     }),
     prs: new PrHub({
       ...opts.prs,
+      stopTree: (dir) => state.tasks.endTree(dir),
       broadcast: (ev) => {
         broadcast(state, ev);
         if (ev.type === "prs") state.groups.onPrs(ev.prs);
@@ -6300,6 +6347,13 @@ export async function startServer(opts: {
       runStatus: (id) => state.runner.get(id)?.status,
       stopChat: (id) => state.runner.stop(id),
       dismissRun: (id) => state.runner.dismiss(id),
+      // planSweep offers no run with a landing record, but a sibling run of a
+      // live branch can come up: only a branch nothing holds loses its tasks
+      endRunTasks: async (id) => {
+        const branch = state.runner.get(id)?.branch;
+        if (!branch || state.landing.info().runs.some((r) => r.id === branch.origin) || state.prs.holds(branch.origin)) return;
+        await state.tasks.endTree(branch.dir);
+      },
       dropKept: async (id) => { await state.readyRunlog(); return dropKept(runsDir(), id); },
       startChat: (c) => startSweptChat(state, c),
       keptSwept: async () => state.kept.filter((k) => k.swept),

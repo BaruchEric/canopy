@@ -389,6 +389,8 @@ export async function mergeTree(
   base: string,
   opts: MergeOptions,
   check: (dir: string) => Promise<string | null>,
+  /** awaited before the tree goes, for what runs in it */
+  beforeRemove?: (dir: string) => Promise<unknown>,
 ): Promise<MergeOutcome> {
   if (branch === base) return { stopped: `the tree is on ${base} itself` };
   if (!base || (await revOf(repo, base)) === null) return { stopped: `${base || "its base"} is no longer a branch of the repo` };
@@ -440,6 +442,7 @@ export async function mergeTree(
   const head = await git(repo, ["rev-parse", "--short", base]);
   if (!opts.keep) {
     try {
+      await beforeRemove?.(dir);
       await removeBranchTree(repo, dir, branch, true);
     } catch (err) {
       return { stopped: errMessage(err) };

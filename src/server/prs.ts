@@ -164,6 +164,8 @@ export interface PrDeps {
   markPr: (id: string, pr: number | null) => void;
   /** a merged PR's branch: its landing record goes */
   forget: (id: string) => Promise<void>;
+  /** ends what runs in a worktree before its folder goes; the lines say what it did */
+  stopTree?: (dir: string) => Promise<string[]>;
   /** starts a fix run on the branch with this message; `label` is its note;
    *  `priority` is normal unless a held fix is released (FR-036) */
   startFix: (rec: LandingRun, prompt: string, label: string, priority?: Priority) => Promise<Run>;
@@ -1007,7 +1009,10 @@ export class PrHub {
     const ahead = await git(w.repoPath, ["rev-list", "--count", `${w.pushed}..refs/heads/${w.branch}`]);
     const dirty = await dirtyFiles(w.dir).catch(() => []);
     const keep = (ahead.code === 0 && Number(ahead.stdout.trim()) > 0) || dirty.length > 0;
-    if (!keep) await removeRunTree(w.repoPath, w.dir, w.branch);
+    if (!keep) {
+      for (const line of await this.deps.stopTree?.(w.dir).catch((err: unknown) => [`could not stop what runs in the worktree: ${errText(err)}`]) ?? []) if (w.work) this.deps.work?.note(w.work, line);
+      await removeRunTree(w.repoPath, w.dir, w.branch);
+    }
     await git(w.repoPath, ["fetch", "--quiet", w.remote], 120_000);
     await this.deps.forget(w.id).catch((err) => console.error(`prs: forgetting ${w.branch}: ${errText(err)}`));
     const { fixing: _f, ...rest } = w;

@@ -36,6 +36,9 @@ export interface SweepDeps {
   stopChat(runId: string): Run;
   /** forgets a finished run */
   dismissRun(runId: string): void;
+  /** ends what runs in the worktree of a closed run's branch, when nothing
+   *  holds that branch any more */
+  endRunTasks?(runId: string): Promise<void>;
   /** Removes a kept transcript folder, false when already gone. */
   dropKept(runId: string): Promise<boolean>;
   /** starts a chat on the session a swept chat had */
@@ -466,6 +469,7 @@ export class SweepHub {
         return { key, result: "closed" };
       }
       case "run":
+        await this.deps.endRunTasks?.(id);
         this.deps.dismissRun(id);
         return { key, result: "closed" };
       case "transcript":
