@@ -32,7 +32,7 @@ export type AgentLaunch = AgentSettings & {
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** a TOML basic string, for a codex `-c` value */
-const tomlString = (v: string): string => `"${v.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
+export const tomlString = (v: string): string => `"${v.replace(/[\\"]/g, (c) => `\\${c}`)}"`;
 
 export interface HarnessInfo {
   id: Harness;

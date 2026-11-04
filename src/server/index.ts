@@ -152,6 +152,8 @@ import {
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, type BranchStart, type StartExtras } from "../core/runner";
+import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
+import { canopyMcpCommand, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -1198,8 +1200,7 @@ async function startRepoRun(
   /** who may go first when the window runs low (FR-036): a start from the
    *  page or the CLI is interactive unless it says otherwise */
   priority: Priority = "interactive",
-  /** the pre-flight's toggle: the dev task starts in the branch's worktree */
-  devTask = false,
+  how: RunStartHow = {},
 ): Promise<Run> {
   // A coordinator runs only through its own start, in its sandbox with its
   // token; this path would spawn it here, unisolated.
@@ -1223,7 +1224,7 @@ async function startRepoRun(
   if (onBranch && scope) throw new HttpError(400, "a workspace run works in its folders, not on a branch");
   if (onBranch && seed) throw new HttpError(400, "an incubator seed's runs work in the seed, not on a branch");
   if (pr && !onBranch) throw new HttpError(400, "only a run on a branch of its own can open a PR");
-  if (devTask && !onBranch) throw new HttpError(400, "only a run on a branch of its own has a worktree to start the dev task in");
+  if (how.devTask && !onBranch) throw new HttpError(400, "only a run on a branch of its own has a worktree to start the dev task in");
   if (onBranch) {
     const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
     if (going >= BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${going} branch runs going; wait for one to end`);
@@ -1242,14 +1243,92 @@ async function startRepoRun(
   if (scope && agent.harness !== "claude") throw new HttpError(400, "workspace runs need Claude Code");
   await needHarness(state, agent.harness, repo.path);
   // the device it was started from, when the browser said and is on the stream
-  const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+  const by = how.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
   needCapacity(state, agent.harness, priority);
-  const extras = priority === "interactive" ? {} : { priority };
-  if (onBranch) {
-    const resolved = await issueNoteFor(repo, note);
-    return startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...extras, ...(devTask ? { devTask } : {}) }, resolved.work);
+  const base: StartExtras = { ...(priority === "interactive" ? {} : { priority }), ...(how.parent ? { parent: how.parent, child: true as const } : {}) };
+  // the start's word beats the settings'; a start that asks outright hears
+  // why it cannot have them, and settings that cannot apply here are passed over
+  const refused = toolsRefusal(state, repo);
+  if (how.tools === true && refused) throw new HttpError(400, refused);
+  const tools = !refused && (how.tools ?? agent.canopyTools === true) ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
+  try {
+    if (onBranch) {
+      const resolved = await issueNoteFor(repo, note);
+      return await startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...tools.extras, ...(how.devTask ? { devTask: true } : {}) }, resolved.work);
+    }
+    return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, tools.extras);
+  } catch (err) {
+    await tools.release();
+    throw err;
   }
-  return state.runner.start(repo, action, ACTIONS[action], note, agent, by, scope, undefined, extras);
+}
+
+/** What a start says beyond the plain arguments (FR-038). */
+interface RunStartHow {
+  /** canopy's tools on or off for this start, over the settings' */
+  tools?: boolean;
+  /** the run this is a child of */
+  parent?: string;
+  /** who started it, in place of the device */
+  by?: string;
+  /** the pre-flight's toggle: the dev task starts in the branch's worktree */
+  devTask?: boolean;
+}
+
+/** Why a run here cannot hold canopy's tools, or null. An incubator seed runs
+ *  in another container, which has no way to the file or the server. */
+function toolsRefusal(state: ServerState, repo: Repo): string | null {
+  if (isSeedPath(state.root, repo.path)) return "an incubator seed's run holds no canopy tools";
+  if (!state.apiUrl) return "this server is not listening yet";
+  return null;
+}
+
+/** Mints a run's token and writes its `mcp.json`, for a run whose id is chosen
+ *  here. The token rides in the file and never in the agent's env, and dies
+ *  with the run (`dropRunTools`). `release` undoes both for a start that fails. */
+async function runTools(state: ServerState, repo: Repo, extras: StartExtras): Promise<{ extras: StartExtras; release: () => Promise<void> }> {
+  const id = extras.id ?? crypto.randomUUID().slice(0, 8);
+  const { token } = state.callers.mint("run", { label: `run ${repo.id}`, run: id });
+  const release = (): Promise<void> => dropRunTools(state, id);
+  try {
+    const mcpConfig = await writeMcpConfig(id, { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } });
+    return { extras: { ...extras, id, mcpConfig, mcpServer: runConfigLaunch(mcpConfig), brief: await toolsBrief() }, release };
+  } catch (err) {
+    await release();
+    throw new HttpError(500, `could not write the run's mcp.json: ${String(err instanceof Error ? err.message : err)}`);
+  }
+}
+
+/** Revokes a run's token and removes its file; safe to call twice. */
+async function dropRunTools(state: ServerState, id: string): Promise<void> {
+  await state.callers.dropRun(id).catch(() => {});
+  await removeMcpConfig(id).catch(() => {});
+}
+
+/** A child a run starts through its tools, or a person starts for it with
+ *  `canopy runs child`: one branch run in the parent's repo, at low priority,
+ *  holding tools when its parent does. A run's token speaks only for its own
+ *  run and repo, whatever the body says. */
+async function startChildRun(state: ServerState, caller: Caller | null, b: Record<string, unknown>): Promise<Run> {
+  const own = caller?.kind === "run" ? caller.run : undefined;
+  if (caller?.kind === "run" && !own) throw new HttpError(403, "this token is bound to no run");
+  const named = typeof b["parent"] === "string" ? b["parent"] : undefined;
+  if (own && named !== undefined && named !== own) throw new HttpError(403, "a run's token starts children of its own run alone");
+  const parentId = own ?? named;
+  if (!parentId) throw new HttpError(400, "name the parent run");
+  const parent = state.runner.get(parentId);
+  if (!parent) throw new HttpError(404, `no run ${parentId} on this backend`);
+  if (b["repo"] !== undefined && b["repo"] !== parent.repoId) throw new HttpError(403, `a child works in its parent's repo, ${parent.repoId}`);
+  const action = b["action"] ?? "ask";
+  const picked = RUN_CHILD_ACTIONS.find((a) => a === action);
+  if (!picked) throw new HttpError(400, `a child's action is one of ${RUN_CHILD_ACTIONS.join(", ")}`);
+  const note = typeof b["note"] === "string" ? b["note"].trim() : "";
+  if (!note) throw new HttpError(400, "a child's note must say what it should do");
+  const refused = state.runner.childRefusal(parentId);
+  if (refused) throw new HttpError(409, refused);
+  const repo = state.result.repos.find((r) => r.id === parent.repoId);
+  if (!repo) throw new HttpError(404, `${parent.repoId} is not in the tree`);
+  return startRepoRun(state, repo, picked, note, undefined, undefined, true, false, "low", { parent: parentId, by: "run", ...(parent.canopyTools ? { tools: true } : {}) });
 }
 
 /** A group reserves its preflight through fanout against other API branch starts. */
@@ -1401,6 +1480,7 @@ async function startBranchRun(
       if (err instanceof Error && err.name === "StageAwayError") throw err;
       if (isCapacityHeld(err)) throw err;
       if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
+      if (err instanceof Error && err.name === "ChildRefusedError") throw new HttpError(409, message);
       if (!start && err instanceof HttpError) throw err;
       throw new HttpError(400, message);
     }
@@ -1749,18 +1829,27 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   const notes = rec.work ? state.work.get(rec.work)?.notes ?? [] : [];
   const fence = handoffFence(notes);
   const resumed = queueLine ? `${reason}\n\n${branchLine(b)}` : reason;
-  const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, ACTIONS.ask, `${rec.note}\n\n${reason}`, b, notes);
+  // a resumed session read the brief when it began; a fresh one needs it again
+  const holdsTools = rec.canopyTools === true && !toolsRefusal(state, repo);
+  const askSpec = holdsTools && !resume ? { ...ACTIONS.ask, brief: await toolsBrief() } : ACTIONS.ask;
+  const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, askSpec, `${rec.note}\n\n${reason}`, b, notes);
+  // a fix of a child stays one, and a run that held tools gets a fresh token
+  const parent = how.parent ?? rec.parent;
+  const base: StartExtras = {
+    ...(rec.group ? { group: rec.group } : {}),
+    ...(priority !== "interactive" ? { priority } : {}),
+    ...(parent ? { parent } : {}),
+    ...(rec.depth ? { depth: rec.depth } : {}),
+  };
+  const tools = holdsTools ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
   try {
     return state.runner.start(repo, "ask", ACTIONS.ask, note, agent, undefined, undefined, {
       branch: b,
       message,
       ...(resume ? { resume } : {}),
-    }, {
-      ...(rec.group ? { group: rec.group } : {}),
-      ...(priority !== "interactive" ? { priority } : {}),
-      ...(how.parent ? { parent: how.parent } : {}),
-    });
+    }, tools.extras);
   } catch (err) {
+    await tools.release();
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     if (isCapacityHeld(err)) throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
@@ -3805,7 +3894,7 @@ async function handleApi(
   if (chanRes) return chanRes;
   const registryRes = await state.registry.handle(req, url);
   if (registryRes) return registryRes;
-  const rangerRes = await state.ranger.handle(req, url);
+  const rangerRes = await state.ranger.handle(req, url, caller?.kind === "run" ? caller.run ?? "" : undefined);
   if (rangerRes) return rangerRes;
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
@@ -4449,8 +4538,14 @@ async function handleApi(
     if (typeof b.id !== "string" || typeof b.text !== "string") {
       return json({ error: "missing run id or text" }, 400);
     }
+    if (caller?.kind === "run") {
+      const me = caller.run ? state.runner.get(caller.run) : undefined;
+      const them = state.runner.get(b.id);
+      if (!me || !them || !areKin(me, them)) return json({ error: "a run's token says only to its own parent and children" }, 403);
+    }
     return json(state.runner.say(b.id, b.text));
   }
+  if (path === "/api/runs/child" && method === "POST") return json(await startChildRun(state, caller, await objectBody(req)), 201);
 
   if (path === "/api/verdict" && method === "GET") return json({ ready: state.flows.hasEvaluator });
 
@@ -5263,12 +5358,14 @@ async function handleApi(
       // --priority and the pre-flight's raise; absent, by who starts it
       const priority = b.priority === undefined ? undefined : parsePriority(b.priority);
       if (priority === null) return json({ error: "priority must be interactive, normal or low" }, 400);
+      if (b.canopyTools !== undefined && typeof b.canopyTools !== "boolean") return json({ error: "canopyTools must be true or false" }, 400);
+      if (b.canopyTools === true && (times > 1 || b.action === "coordinate")) return json({ error: "a group or a coordinator starts without canopy tools" }, 400);
       if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority, b.reviewers === 2 ? { reviewers: 2 } : {}), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
       }
-      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, b.devTask === true), 201);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, { ...(b.canopyTools === undefined ? {} : { tools: b.canopyTools }), ...(b.devTask === true ? { devTask: true } : {}) }), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
@@ -5726,12 +5823,14 @@ export async function startServer(opts: {
         state.callers.dropRun(run.id).catch(() => {});
         void dropCoordFolder(run.id);
       }
+      // so does a run's, and its mcp.json with it (FR-038)
+      if (run.canopyTools && !isRunActive(run)) void dropRunTools(state, run.id);
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });
       recountAwake(state);
       state.chan.forget(id);
-      state.callers.dropRun(id).catch(() => {});
+      void dropRunTools(state, id);
       void dropCoordFolder(id);
     },
     // Re-read status directly rather than waiting on the watcher's
@@ -6583,6 +6682,7 @@ export async function startServer(opts: {
     }),
     work: new WorkHub({
       broadcast: (ev) => broadcast(state, ev),
+      runItem: (run) => state.runner.get(run)?.branch?.work,
       facts: (item) => ({
         active: item.runs.some((id) => {
           const r = state.runner.get(id);
@@ -6690,6 +6790,9 @@ export async function startServer(opts: {
   state.callers.prune(new Set(state.terms.keys())).catch(() => {});
   // and every coordinator's: no run outlives a restart to hold one
   state.callers.dropKind("coordinator").catch(() => {});
+  // and every run's, with its file: a fix gets a fresh one
+  state.callers.dropKind("run").catch(() => {});
+  await sweepMcpConfigs().catch(() => {});
   // and the ones a machine going down left behind, which are offered to
   // restore rather than held
   const kept = await refreshKept(state);

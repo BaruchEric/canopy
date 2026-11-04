@@ -1518,7 +1518,7 @@ export interface CanopyState {
   /** `branch` puts the run on a branch of its own; unset, the backend's
    *  default for the action. `pr` opens a PR once it is ready (FR-011) */
   startGroup: (repoId: string, action: RunAction, note: string, times: number, profiles?: (string | null)[], autoLand?: boolean, pr?: boolean, reviewers?: 2) => Promise<void>;
-  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true, devTask?: true) => Promise<void>;
+  startRun: (repoId: string, action: RunAction, note: string, branch?: boolean, pr?: true, devTask?: true, canopyTools?: boolean) => Promise<void>;
   /** a run on a workspace's primary that sees its other members too */
   startWsRun: (name: string, action: RunAction, note: string) => Promise<void>;
   answerRun: (runId: string, promptId: string, answer: RunAnswer) => Promise<void>;
@@ -4880,8 +4880,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       return { landing: { ...s.landing, [b]: { ...info, groups: [...(info.groups ?? []).filter(g => g.id !== group.id), group] } }, sheet: { kind: "group", groupId: group.id } };
     });
   },
-  startRun: async (repoId, action, note, branch, pr, devTask) => {
-    const run = await api.run(repoId, action, note, clientId(), branch, pr, devTask);
+  startRun: async (repoId, action, note, branch, pr, devTask, canopyTools) => {
+    const run = await api.run(repoId, action, note, clientId(), branch, pr, devTask, canopyTools);
     set((s) => ({
       runs: { ...s.runs, [run.id]: run },
       sheet: { kind: "run", runId: run.id },

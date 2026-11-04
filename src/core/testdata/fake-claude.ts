@@ -13,6 +13,7 @@
  *          and once the first is answered finishes with a result whose text
  *          is `env:$CANOPY_RUN`
  *    chat  answers every user message with a text and a result
+ *    canopytool  calls canopy's own status tool, as probe P1 saw it, and ends
  *    die   writes "boom" to stderr and exits 3 before any result
  *    limited answers every user message with a synthetic usage-limit result
  *    limitdie writes a synthetic usage limit to stderr and exits 1
@@ -249,6 +250,13 @@ function onUser(): void {
     }
     out({ type: "assistant", session_id: "sess-1", parent_tool_use_id: "ag1", message: { role: "assistant", content: [{ type: "tool_use", id: "sub1", name: "Bash", input: { command: "git log" } }] } });
     out({ type: "control_request", request_id: "req-a", request: { subtype: "can_use_tool", tool_name: "Bash", input: { command: "git log" }, tool_use_id: "sub1" } });
+    return;
+  }
+  if (mode === "canopytool") {
+    // the call probe P1 saw, once the model has loaded the deferred tool
+    out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "tool_use", id: "mc1", name: "mcp__canopy__canopy_status", input: {} }] } });
+    out({ type: "user", session_id: "sess-1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "mc1", content: [{ type: "text", text: "app  main" }], is_error: false }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: "read the board", num_turns: 1, total_cost_usd: 0.01, duration_ms: 1, session_id: "sess-1" });
     return;
   }
   if (mode === "bgshell") {

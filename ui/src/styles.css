@@ -13374,6 +13374,11 @@ button.trigger-title:hover {
   text-overflow: ellipsis;
   color: var(--moss);
 }
+.bt-tools {
+  flex: none;
+  color: var(--moss);
+  white-space: nowrap;
+}
 .bt-machine {
   flex: 0 1 auto;
   min-width: 0;

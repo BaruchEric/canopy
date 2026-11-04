@@ -5,6 +5,7 @@
 import type { RunGroup } from "../../src/core/group";
 import { isRunActive, type CoordTask, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
 import { groupWord } from "./groups";
+import { SEP } from "../../src/core/backendid";
 import { runLanding } from "./landing";
 import { prOfRun, prWord } from "./prs";
 
@@ -14,6 +15,19 @@ export type CoordEdit = Partial<Pick<CoordTask, "title" | "note" | "repo" | "act
 /** A coordinate run: a chat that holds no repo, so it never counts as the
  *  run going there (the server's `Runner.activeFor` skips it too). */
 export const isCoordinator = (run: Pick<Run, "action">): boolean => run.action === "coordinate";
+
+const shortId = (id: string): string => (id.split(SEP).pop() ?? id).slice(0, 4);
+
+/** Who started a run's child, up its chain (FR-038): "started by run 3f2a,
+ *  which the coordinator started". A coordinator's card has a parent and no
+ *  depth; a run's child has both. `parent` is absent once the page has lost
+ *  it, so the words keep to what is known. */
+export function chainWords(run: Pick<Run, "parent">, parent?: Pick<Run, "parent" | "depth">): string {
+  if (!run.parent) return "";
+  const first = `started by run ${shortId(run.parent)}`;
+  if (!parent?.parent) return first;
+  return parent.depth ? `${first}, which run ${shortId(parent.parent)} started` : `${first}, which the coordinator started`;
+}
 
 /** The words a settled card's outcome uses (`childOutcome` on the server).
  *  Anything else in `outcome` is a sentence: why it waits or failed to start. */

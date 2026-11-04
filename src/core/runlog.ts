@@ -84,6 +84,7 @@ function isRun(v: unknown): v is Run {
   if (!record(v) || !strFields(v, ["id", "repoId", "action", "verb", "progress", "note"]) || !harness(v["harness"]) || !terminal(v["status"]) ||
     !boolean(v["expectsChange"]) || !boolean(v["chat"]) || !number(v["startedAt"]) || !optional(v, "endedAt", number) || !Array.isArray(v["steps"]) || !v["steps"].every(isStep) || !isPrompt(v["prompt"])) return false;
   return optStrFields(v, ["session", "by", "workspace", "proposal", "error", "awayWhy", "parent", "group"]) && optional(v, "kept", (x) => x === true) && optional(v, "away", boolean) &&
+    optional(v, "depth", number) && optional(v, "canopyTools", (x) => x === true) && optional(v, "unattended", (x) => x === true) &&
     optional(v, "priority", (x) => oneOf(x, PRIORITIES)) &&
     optional(v, "outcome", (x) => x === "changed" || x === "unchanged") && optional(v, "proposalState", (x) => oneOf(x, ["waiting", "approved", "approved-auto", "sent back", "turned down"])) &&
     optional(v, "branch", isBranch) && optional(v, "limited", (x) => record(x) && number(x["at"]) && text(x["text"]) && optional(x, "resetsAt", number) && optional(x, "window", (w) => w === "fiveHour" || w === "weekly")) &&
@@ -144,6 +145,9 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
   if (run.away !== undefined) safe.away = run.away;
   if (run.outcome) safe.outcome = t(run.outcome);
   if (run.parent) safe.parent = t(run.parent);
+  if (run.depth !== undefined) safe.depth = run.depth;
+  if (run.canopyTools) safe.canopyTools = true;
+  if (run.unattended) safe.unattended = true;
   if (run.group !== undefined) safe.group = t(run.group);
   if (run.priority !== undefined) safe.priority = t(run.priority);
   if (run.proposalState) safe.proposalState = t(run.proposalState);

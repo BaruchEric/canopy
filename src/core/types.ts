@@ -932,6 +932,9 @@ export interface AgentSettings {
   yolo: boolean;
   /** anything else for the command line, split like a shell would */
   extra: string;
+  /** a run on these settings holds canopy's tools (FR-038): a `run` token and
+   *  the `canopy` MCP server. Absent is off, and no start turns it on for you */
+  canopyTools?: boolean;
 }
 
 export const DEFAULT_AGENT: AgentSettings = {
@@ -1380,8 +1383,16 @@ export interface Run {
   outcome?: "changed" | "unchanged";
   /** a branch run's own branch and worktree (the landing queue) */
   branch?: RunBranch;
-  /** the coordinator run that started this one, for a coordinator's child */
+  /** the run that started this one: a coordinator, for its card's child, or
+   *  a run holding canopy's tools (FR-038); `depth` tells them apart */
   parent?: string;
+  /** how many runs up its chain goes; absent is 0, as a page's, a trigger's
+   *  or a coordinator card's start is (FR-038) */
+  depth?: number;
+  /** it holds canopy's tools: a `run` token and the `canopy` MCP server */
+  canopyTools?: true;
+  /** no one answers it (`ActionSpec.unattended`), so it never starts a child */
+  unattended?: true;
   /** a coordinator's cards, in the order it proposed them */
   tasks?: CoordTask[];
   /** the stall watchdog's marks (FR-035, `core/stall.ts`): when canopy told
@@ -1801,6 +1812,11 @@ export interface LandingRun {
   /** how many of the branch's runs the stall watchdog stopped (FR-035):
    *  the first is resumed once, a second is left for Eric */
   stalls?: number;
+  /** its run held canopy's tools, so a fix gets a fresh token (FR-038) */
+  canopyTools?: true;
+  /** a run's child: its chain, which a fix keeps so that it stays a child */
+  parent?: string;
+  depth?: number;
 }
 
 /** Whether a run a restart stopped may land as its worktree is now: clean,
@@ -3573,8 +3589,9 @@ export type RangerHome = "own" | "root";
  */
 export type RangerState = "off" | "starting" | "trust" | "running" | "backoff" | "gave-up" | "handle-taken" | "no-tmux" | "no-claude" | "error";
 
-/** Who set a wake: Eric (a cron, from Settings or the CLI) or the ranger itself. */
-export type RangerWakeBy = "eric" | "ranger";
+/** Who set a wake: Eric (a cron, from Settings or the CLI), the ranger itself,
+ *  or a run holding canopy's tools (FR-038), named by `from`. */
+export type RangerWakeBy = "eric" | "ranger" | "run";
 
 /**
  * Something that wakes the ranger: a prompt canopy DMs it, once at a time
@@ -3585,6 +3602,8 @@ export interface RangerWake {
   /** 8 hex */
   id: string;
   by: RangerWakeBy;
+  /** the run that asked, when `by` is `run` */
+  from?: string;
   prompt: string;
   at?: number;
   cron?: string;

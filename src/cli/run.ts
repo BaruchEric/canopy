@@ -26,6 +26,8 @@ export interface RunArgs {
   /** who may go first when the plan's window runs low (FR-036); absent, the
    *  backend's default for the start */
   priority?: Priority;
+  /** canopy's tools on or off for this start (FR-038); absent, the settings' */
+  canopyTools?: boolean;
   backend?: string;
   on?: string;
 }
@@ -52,6 +54,9 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
   const pr = has(args, "--pr");
   const priorityFlag = args.includes("--priority");
   const rawPriority = take(args, "--priority");
+  const toolsOn = has(args, "--tools");
+  const toolsOff = has(args, "--no-tools");
+  if (toolsOn && toolsOff) return "use either --tools or --no-tools";
   if (backendFlag && backend === undefined) return "--backend needs a value";
   if (onFlag && on === undefined) return "--on needs a value";
   if (noteFlag && note === undefined) return "-m needs a note";
@@ -94,9 +99,47 @@ export function parseRunArgs(argv: string[]): RunArgs | string {
     ...(profiles ? { profiles } : {}),
     ...(rawReviewers === "2" ? { reviewers: 2 as const } : {}),
     ...(priority ? { priority } : {}),
+    ...(toolsOn || toolsOff ? { canopyTools: toolsOn } : {}),
     ...(backend !== undefined ? { backend } : {}),
     ...(on !== undefined ? { on } : {}),
   };
+}
+
+export const RUNS_USAGE = "usage: canopy runs child <repo> --note text --parent <run> [--action ask|propose] [--backend URL] [--on NAME]";
+
+export interface ChildArgs {
+  repo: string;
+  note: string;
+  parent: string;
+  action?: string;
+  backend?: string;
+  on?: string;
+}
+
+/** `canopy runs child`'s words, without mutating the caller's arguments. */
+export function parseChildArgs(argv: string[]): ChildArgs | string {
+  const args = [...argv];
+  const backend = take(args, "--backend");
+  const on = take(args, "--on");
+  const note = take(args, "--note");
+  const parent = take(args, "--parent");
+  const action = take(args, "--action");
+  if (args.shift() !== "child") return RUNS_USAGE;
+  const repo = args.shift();
+  if (!repo || args.length > 0 || !note?.trim() || !parent) return RUNS_USAGE;
+  if (backend !== undefined && on !== undefined) return "use either --backend URL or --on NAME";
+  return { repo, note, parent, ...(action !== undefined ? { action } : {}), ...(backend !== undefined ? { backend } : {}), ...(on !== undefined ? { on } : {}) };
+}
+
+/** The same start `canopy_run_start` makes, from a shell. */
+export async function runsCommand(argv: string[], { fail }: { fail: Fail }): Promise<void> {
+  const parsed = parseChildArgs(argv);
+  if (typeof parsed === "string") return fail(parsed);
+  const target = await selectedTarget({ ...parsed }, fail);
+  const repo = await repoId(parsed.repo, target, fail);
+  const run = await ask<Run>(target, "POST", "/api/runs/child", { repo, note: parsed.note, parent: parsed.parent, ...(parsed.action !== undefined ? { action: parsed.action } : {}) })
+    .catch(requestFailure(target, fail));
+  console.log(`started run ${run.id} on ${run.branch?.name ?? "its branch"}, child of ${parsed.parent}`);
 }
 
 type Fail = (message: string) => never;
@@ -141,7 +184,7 @@ function requestFailure(target: Target, fail: Fail): (error: unknown) => never {
   return (error: unknown) => fail(error instanceof Unreachable ? `${target.name} did not answer: ${error.message}` : errText(error));
 }
 
-async function selectedTarget(args: RunArgs, fail: Fail): Promise<Target> {
+async function selectedTarget(args: Pick<RunArgs, "backend" | "on">, fail: Fail): Promise<Target> {
   const home = apiBase(args.backend);
   if (!/^https?:\/\/[^/\s]+$/.test(home)) return fail(`--backend must be an http(s) origin, got ${home}`);
   const homeTarget: Target = { name: "home", urls: [home] };
@@ -184,6 +227,7 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     ...(parsed.autoLand ? { autoLand: true } : {}),
     ...(parsed.pr ? { pr: true } : {}),
     ...(parsed.priority ? { priority: parsed.priority } : {}),
+    ...(parsed.canopyTools !== undefined ? { canopyTools: parsed.canopyTools } : {}),
   };
   const result = await ask<Run | RunGroup>(
     target,

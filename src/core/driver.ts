@@ -25,6 +25,7 @@ import { stageEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
 import type { Harness, PermissionAsk, ProposalState, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTodo, RunTokens } from "./types";
+import type { McpLaunch } from "./runtools";
 
 /** steps kept per run; the oldest fall off with a note */
 export const STEP_CAP = 400;
@@ -70,6 +71,10 @@ export interface DriveSpec {
   /** with `resume`: fork the session under a new id rather than continue it
    *  (FR-043 plan 3): Claude's `--fork-session`, Codex's `thread/fork` */
   fork?: true;
+  /** the run's `mcp.json`, which carries its token (FR-038) */
+  mcpConfig?: string;
+  /** the same server for Codex, which takes it as `-c` lines */
+  mcpServer?: McpLaunch;
 }
 
 /** A prompt before the Runner numbers it. */

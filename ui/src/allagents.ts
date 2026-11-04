@@ -1,5 +1,5 @@
 import type { AgentCard, AgentKind, AgentState, Repo, Run, RunStatus, TermInfo } from "../../src/core/types";
-import { isLiveAgent } from "../../src/core/types";
+import { isLiveAgent, isRunActive } from "../../src/core/types";
 import { cardName, repoName, type IsChat } from "./agentcards";
 import { coordTurn, isCoordinator } from "./coord";
 
@@ -212,6 +212,13 @@ export function shellsToProbe(cards: readonly AgentCard[], shells: readonly Term
 
 /** the run a card stands for, as the page keys its runs */
 export const runOfCard = (c: AgentCard, ids: Ids): string | null => claimedBy(c, ids, "run");
+
+/** Whether the run a card stands for holds canopy's tools now (FR-038). */
+export function holdsTools(c: AgentCard, runs: Readonly<Record<string, Run>>, ids: Ids): boolean {
+  const id = runOfCard(c, ids);
+  const run = id ? runs[id] : undefined;
+  return run?.canopyTools === true && isRunActive(run);
+}
 
 /** Whether a card is a canopy chat's, given the chats' run ids as the page
  *  qualifies them: a made run card and a registry card naming the run

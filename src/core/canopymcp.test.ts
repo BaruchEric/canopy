@@ -1,19 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { callTool, foldHealth, foldQueue, foldRuns, foldStatus, handleMessage, INSTRUCTIONS, serve, TOOLS, TOOLS_FOR, toolsFor, type CanopyApi, type McpContext, type ToolName } from "./canopymcp";
+import { LANES } from "./callers";
 import { parseMessage } from "./codexrpc";
 import { enqueue } from "./landing";
 import type { HealthCheck, LandingInfo, LandingRun, Repo, RepoStatus, Run } from "./types";
 
-const ALL = ["canopy_status", "canopy_runs", "canopy_queue", "canopy_health", "canopy_say", "canopy_wake", "canopy_land", "canopy_pr"] as const;
+const ALL = ["canopy_status", "canopy_runs", "canopy_queue", "canopy_health", "canopy_work_note", "canopy_run_start", "canopy_say", "canopy_wake", "canopy_land", "canopy_pr"] as const;
 
 describe("the tool table", () => {
   test("names, rights and the list per kind", () => {
     expect(TOOLS.map((t) => [t.name, t.right])).toEqual([
       ["canopy_status", "read"], ["canopy_runs", "read"], ["canopy_queue", "read"], ["canopy_health", "read"],
-      ["canopy_say", "plan"], ["canopy_wake", "plan"], ["canopy_land", "operate"], ["canopy_pr", "operate"],
+      ["canopy_work_note", "plan"], ["canopy_run_start", "plan"], ["canopy_say", "plan"], ["canopy_wake", "plan"], ["canopy_land", "operate"], ["canopy_pr", "operate"],
     ]);
     for (const kind of ["page", "cli", "shell", "ranger"] as const) expect(TOOLS_FOR[kind]).toEqual(ALL);
-    expect(TOOLS_FOR.coordinator).toEqual(ALL.slice(0, 6));
+    expect(TOOLS_FOR.coordinator).toEqual(ALL.slice(0, 8));
+    expect(TOOLS_FOR.run).toEqual(ALL.slice(0, 8));
+    expect(TOOLS_FOR.run).not.toContain("canopy_land");
+    expect(TOOLS_FOR.run).not.toContain("canopy_pr");
     expect(TOOLS_FOR.none).toEqual(ALL.slice(0, 4));
     expect(TOOLS_FOR.helper).toEqual([]);
     expect(toolsFor("shell").map((t) => t.name)).toEqual([...ALL]);
@@ -202,4 +206,67 @@ test("serve reads newline messages in order, drops junk, and flushes the last li
   });
   expect(ids).toEqual([1, 2, 3]);
   expect(JSON.parse(output[1] ?? "null")).toEqual({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text: "no checks" }] } });
+});
+
+describe("a run's tools (FR-038)", () => {
+  const fake = (answers: Record<string, unknown>) => {
+    const calls: [string, string, unknown][] = [];
+    const api: CanopyApi = {
+      async call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<T> {
+        calls.push([method, path, body]);
+        return answers[`${method} ${path}`] as T;
+      },
+    };
+    return { api, calls };
+  };
+
+  test("canopy_run_start names this run as parent by default, and a shell names one itself", async () => {
+    const { api, calls } = fake({ "POST /api/runs/child": { id: "kid12345", branch: { name: "run/w-kid" } } });
+    const run: McpContext = { ...ctx(api, "run"), run: "abcd1234" };
+    expect(await callTool("canopy_run_start", { note: "a part" }, run)).toEqual({ text: "started run kid12345 on run/w-kid", isError: false });
+    expect(await callTool("canopy_run_start", { note: "a part", parent: "ffff0000", repo: "app", action: "propose" }, ctx(api))).toMatchObject({ isError: false });
+    expect(calls.map((c) => c[2])).toEqual([{ note: "a part", parent: "abcd1234" }, { note: "a part", action: "propose", repo: "app", parent: "ffff0000" }]);
+    expect(await callTool("canopy_run_start", {}, run)).toEqual({ text: "canopy_run_start needs note", isError: true });
+  });
+
+  test("canopy_work_note leaves the id to the server in a run", async () => {
+    const { api, calls } = fake({ "POST /api/work/note": { id: "w-1" } });
+    expect(await callTool("canopy_work_note", { text: "for later" }, { ...ctx(api, "run"), run: "abcd1234" })).toEqual({ text: "noted on w-1", isError: false });
+    expect(calls[0]).toEqual(["POST", "/api/work/note", { text: "for later" }]);
+  });
+
+  test("a run's wake claims no one, and the API's refusal comes back as its words", async () => {
+    const { api, calls } = fake({ "POST /api/ranger/wakes": { id: "1a2b3c4d", by: "run", prompt: "p", at: 5, created: 1 } });
+    await callTool("canopy_wake", { prompt: "p", when: "in 30m" }, ctx(api, "run"));
+    expect(calls[0]?.[2]).toEqual({ prompt: "p", when: "in 30m" });
+    const refused: CanopyApi = { call: () => Promise.reject(new Error("run abcd1234 has 3 children going; wait for one to end")) };
+    expect(await callTool("canopy_run_start", { note: "x" }, ctx(refused, "run"))).toEqual({ text: "run abcd1234 has 3 children going; wait for one to end", isError: true });
+  });
+
+  test("a run asking for a tool it does not hold is refused before any call", async () => {
+    const { api, calls } = fake({});
+    const reply = await handleMessage({ kind: "request", id: 1, method: "tools/call", params: { name: "canopy_land", arguments: { run: "r" } } }, ctx(api, "run"));
+    expect(reply).toMatchObject({ error: { message: "canopy_land is not a tool this run token holds" } });
+    expect(calls).toEqual([]);
+  });
+});
+
+describe("a run's token and its lane (FR-038)", () => {
+  // the lane matches exact paths, so a listed tool on any other path would be
+  // offered to the agent and refused every time
+  const ARGS: Partial<Record<ToolName, Record<string, unknown>>> = {
+    canopy_work_note: { text: "n" },
+    canopy_run_start: { note: "n" },
+    canopy_say: { id: "c1", text: "n" },
+    canopy_wake: { prompt: "n", when: "2026-11-04T09:00:00Z" },
+  };
+  test("every tool it lists calls a route on its lane", async () => {
+    for (const tool of toolsFor("run")) {
+      const seen: string[] = [];
+      const client: CanopyApi = { call: async <T,>(method: string, path: string) => { seen.push(`${method} ${path}`); return (path === "/api/runs" || path === "/api/health" ? [] : {}) as T; } };
+      await callTool(tool.name, ARGS[tool.name] ?? {}, { ...ctx(client, "run"), run: "abcd1234" });
+      expect(seen.length, tool.name).toBeGreaterThan(0);
+      for (const call of seen) expect(LANES.run?.has(call), `${tool.name}: ${call}`).toBe(true);
+    }
+  });
 });

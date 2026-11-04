@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ACTIONS, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
+import { ACTIONS, FIRST_MESSAGE, branchLine, branchPrompt, buildPrompt, busyWith, checkWhen, describeTool, planWords, repoFacts, splitMembers, toolDetail } from "./actions";
 import { isRunAction, RUN_ACTIONS, statusFingerprint, type Repo, type RepoStatus } from "./types";
 import { HANDOFF_HEADING, handoffFence, type WorkNote } from "./work";
 
@@ -76,6 +76,12 @@ test("a workspace prompt names the primary and the other folders, and widens the
   expect(p).toContain("Work only inside these folders");
   expect(p).not.toContain("Work only inside this repository");
   expect(buildPrompt(repo(), ACTIONS.ask, "x")).toContain("Work only inside this repository");
+  const job = buildPrompt(repo(), { ...ACTIONS.ask, brief: "TOOLS BRIEF" }, "x");
+  expect(job.endsWith("TOOLS BRIEF")).toBe(true);
+  const chat = buildPrompt(repo(), { ...ACTIONS.chat, brief: "TOOLS BRIEF" }, "hello");
+  expect(chat.indexOf("TOOLS BRIEF")).toBeGreaterThan(0);
+  expect(chat.endsWith(`${FIRST_MESSAGE}\nhello`)).toBe(true);
+  expect(buildPrompt(repo(), ACTIONS.ask, "x")).not.toContain("TOOLS BRIEF");
 });
 
 test("a workspace's members split into local folders to add and the rest left out in words", () => {

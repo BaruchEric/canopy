@@ -73,6 +73,17 @@ describe("the process and the thread", () => {
     expect(appServerArgs({ extra: "-c 'k=\"v w\"'" })).toEqual(["app-server", "--listen", "stdio://", "-c", 'k="v w"']);
   });
 
+  test("canopy's server rides as -c lines after the box, with a path and no token (FR-038)", () => {
+    const mcp = { command: "/opt/bun", args: ["/app/bin/canopy-mcp.ts", "mcp", "--run-config", '/c/run-tools/a"b.mcp.json'] };
+    expect(appServerArgs({ extra: "-c a=1" }, mcp)).toEqual([
+      "app-server", "--listen", "stdio://", "-c", "a=1",
+      "-c", 'mcp_servers.canopy.command="/opt/bun"',
+      "-c", 'mcp_servers.canopy.args=["/app/bin/canopy-mcp.ts", "mcp", "--run-config", "/c/run-tools/a\\"b.mcp.json"]',
+      "-c", 'mcp_servers.canopy.default_tools_approval_mode="approve"',
+    ]);
+    expect(appServerArgs({ extra: "" })).toEqual(["app-server", "--listen", "stdio://"]);
+  });
+
   test("ask mode asks for every command and edit canopy's rules have to judge; yolo is the bypass pair", () => {
     // untrusted: codex asks for everything but its own known-safe reads, and
     // for every patch, so the job's rules see each one (on-request would let

@@ -10,7 +10,7 @@ export const SERVER_NAME = "canopy";
 export const PROTOCOL_VERSION = "2025-06-18";
 export const PROTOCOL_VERSIONS: readonly string[] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-export type ToolName = "canopy_status" | "canopy_runs" | "canopy_queue" | "canopy_health" | "canopy_say" | "canopy_wake" | "canopy_land" | "canopy_pr";
+export type ToolName = "canopy_status" | "canopy_runs" | "canopy_queue" | "canopy_health" | "canopy_work_note" | "canopy_run_start" | "canopy_say" | "canopy_wake" | "canopy_land" | "canopy_pr";
 export interface ToolInput { type: "string" | "boolean"; description: string }
 export interface ToolSchema { type: "object"; properties: Record<string, ToolInput>; required?: string[]; additionalProperties: false }
 export interface ToolSpec { name: ToolName; right: Right; description: string; inputSchema: ToolSchema }
@@ -49,6 +49,23 @@ export const TOOLS: readonly ToolSpec[] = [
     right: "read",
     description: "canopy's health checks, the bad ones first.",
     inputSchema: schema({}),
+  },
+  {
+    name: "canopy_work_note",
+    right: "plan",
+    description: "Leave a note on a work item for the next session that picks this work up. In a run, the note goes on that run's own item and id is not needed.",
+    inputSchema: schema({ text: stringInput("What the next session needs to know."), id: stringInput("The work item's id, outside a run.") }, ["text"]),
+  },
+  {
+    name: "canopy_run_start",
+    right: "plan",
+    description: "Start a child: one branch run in the parent's repo at low priority, which lands through the landing queue under the repo's review rules and never pushes. Its note must stand alone, since it knows nothing of this session. In a run, the parent is this run; a run has at most three live children and a child starts none.",
+    inputSchema: schema({
+      note: stringInput("Everything the child needs to know to do its work."),
+      action: stringInput("ask (the default) or propose."),
+      repo: stringInput("The repo's id; it must be the parent's own."),
+      parent: stringInput("The parent run's id, outside a run."),
+    }, ["note"]),
   },
   {
     name: "canopy_say",
@@ -92,6 +109,7 @@ export const TOOLS_FOR: Record<CallerKind, readonly ToolName[]> = {
   shell: namesFor("shell"),
   ranger: namesFor("ranger"),
   coordinator: namesFor("coordinator"),
+  run: namesFor("run"),
   helper: namesFor("helper"),
   none: namesFor("none"),
 };
@@ -192,7 +210,7 @@ export interface McpContext {
   api: CanopyApi;
   /** the token's kind, from GET /api/auth at start */
   kind: CallerKind;
-  /** CANOPY_RUN when set; no tool reads it in plan 1 */
+  /** CANOPY_RUN when set: the parent `canopy_run_start` names by default */
   run: string | null;
   /** what serverInfo says */
   version: string;
@@ -237,6 +255,27 @@ export async function callTool(name: ToolName, args: unknown, ctx: McpContext): 
         const health = await ctx.api.call<{ checks: HealthCheck[] }>("GET", "/api/health");
         return { text: foldHealth(health.checks), isError: false };
       }
+      case "canopy_work_note": {
+        const text = stringArg(args, "text");
+        if (text === undefined) return invalid("text");
+        const id = stringArg(args, "id");
+        const item = await ctx.api.call<{ id: string }>("POST", "/api/work/note", { text, ...(id !== undefined ? { id } : {}) });
+        return { text: `noted on ${item.id}`, isError: false };
+      }
+      case "canopy_run_start": {
+        const note = stringArg(args, "note");
+        if (note === undefined) return invalid("note");
+        const action = stringArg(args, "action");
+        const repo = stringArg(args, "repo");
+        const parent = stringArg(args, "parent") ?? ctx.run ?? undefined;
+        const child = await ctx.api.call<Run>("POST", "/api/runs/child", {
+          note,
+          ...(action !== undefined ? { action } : {}),
+          ...(repo !== undefined ? { repo } : {}),
+          ...(parent !== undefined ? { parent } : {}),
+        });
+        return { text: `started run ${child.id} on ${child.branch?.name ?? "its branch"}`, isError: false };
+      }
       case "canopy_say": {
         const id = stringArg(args, "id");
         if (id === undefined) return invalid("id");
@@ -256,7 +295,8 @@ export async function callTool(name: ToolName, args: unknown, ctx: McpContext): 
           ...(when !== undefined ? { when } : {}),
           ...(cron !== undefined ? { cron } : {}),
           ...(run !== undefined ? { run } : {}),
-          ...(ctx.kind === "ranger" ? {} : { by: "eric" }),
+          // a run's wake is stamped as the run's by the server
+          ...(ctx.kind === "ranger" || ctx.kind === "run" ? {} : { by: "eric" }),
         };
         const wake = await ctx.api.call<RangerWake>("POST", "/api/ranger/wakes", body);
         const whenSet = wake.cron ? `cron ${wake.cron}` : wake.run ? `the end of run ${wake.run}` : new Date(wake.at ?? 0).toISOString();

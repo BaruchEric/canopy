@@ -147,6 +147,13 @@ describe("mergeInbox", () => {
     expect(a).toMatchObject({ source: "ask", kind: "permission", who: "app-0123", repoId: "app", repo: "app", where: "canopy shell on mini", left: 30_000, until: 160_000 });
     expect(r).toMatchObject({ source: "run", kind: "permission", who: "claude tidy", where: "canopy run on mini", title: "run ls", detail: "ls -la", promptId: "p1", at: 120_000 });
   });
+  test("a run's child says who started it; a coordinator's card keeps its plain line (FR-038)", () => {
+    const child = run({ id: "c1", parent: "abcd12", depth: 1 });
+    const card = run({ id: "c2", parent: "k1" });
+    const items = mergeInbox([], { abcd12: run({ id: "abcd12", status: "working", parent: "k1", prompt: null }), c1: child, c2: card }, {}, 0, { repos: [], cards: {} });
+    expect(items.find((i) => i.id === "c1")?.who).toBe("claude tidy · started by run abcd, which the coordinator started");
+    expect(items.find((i) => i.id === "c2")?.who).toBe("claude tidy");
+  });
 
   test("a flow's step run is named by its flow, a question by its first question", () => {
     const q = run({ id: "fr", prompt: { id: "p2", kind: "question", questions: [{ question: "Which?", header: "", options: [], multiSelect: false }] } });

@@ -94,11 +94,25 @@ describe("agent settings", () => {
 
   test("one line for the menu, the harness named only when it is not claude", () => {
     expect(describeAgent(DEFAULT_AGENT)).toBe("yolo");
+    expect(describeAgent({ ...DEFAULT_AGENT, canopyTools: true })).toBe("yolo · canopy tools");
     expect(describeAgent({ ...DEFAULT_AGENT, model: "opus" })).toBe("opus · yolo");
     expect(describeAgent({ ...DEFAULT_AGENT, provider: "local" })).toBe("provider local · yolo");
     expect(describeAgent({ ...DEFAULT_AGENT, effort: "max", yolo: false, extra: "--x" })).toBe("max · ask · --x");
     expect(describeAgent(codex({ model: "gpt-5.5", effort: "high", yolo: false }))).toBe("codex · gpt-5.5 · high · ask");
     expect(describeAgent(codex())).toBe("codex · yolo");
     expect(describeAgent(codex({ provider: "team_1" }))).toBe("codex · provider team_1 · yolo");
+  });
+});
+
+describe("canopyTools", () => {
+  test("survives normalizing only as true, and absent stays absent", () => {
+    expect(normalizeAgent({ canopyTools: true }).canopyTools).toBe(true);
+    for (const v of [false, "yes", 1, undefined]) expect("canopyTools" in normalizeAgent({ canopyTools: v })).toBe(false);
+    expect("canopyTools" in normalizeAgent(DEFAULT_AGENT)).toBe(false);
+  });
+  test("counts as a change, and off is the default", () => {
+    expect(sameAgent(DEFAULT_AGENT, { ...DEFAULT_AGENT, canopyTools: true })).toBe(false);
+    expect(sameAgent(DEFAULT_AGENT, { ...DEFAULT_AGENT, canopyTools: false })).toBe(true);
+    expect(isDefaultAgent({ ...DEFAULT_AGENT, canopyTools: true })).toBe(false);
   });
 });

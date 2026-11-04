@@ -149,6 +149,15 @@ describe("StallHub", () => {
     expect(w.records.get("b1")?.stalls).toBeUndefined();
   });
 
+  test("a run's child has no such owner, so the watchdog treats it as any branch run", async () => {
+    const w = world();
+    w.stall(run("k1", { parent: "p1", depth: 1 }));
+    expect(w.hub.starting("k1")).toBe(true);
+    w.end("k1");
+    await w.hub.idle();
+    expect(w.resumed.length).toBe(1);
+  });
+
   test("a coordinator's child and a group's member are only stopped: their owner reads the stop", async () => {
     const w = world();
     w.stall(run("c1", { parent: "co1" }));

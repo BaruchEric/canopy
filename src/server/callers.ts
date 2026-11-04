@@ -11,7 +11,7 @@ import { readFileSync, renameSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { allows, kindOfLabel, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
+import { allows, kindOfLabel, LANES, needs, PAIR_KINDS, type CallerKind, type PairKind, type Right } from "../core/callers";
 import { configDir } from "../core/store";
 import { isLoopback, isLoopbackHost } from "../core/client";
 import type { PendingPair } from "../core/types";
@@ -27,7 +27,7 @@ const LOOPBACK_ID = "loopback";
 type Ticketed = "shell" | "helper";
 type Pair = { id: string; label: string; addr: string; kind: PairKind; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied" };
 
-const KINDS: readonly CallerKind[] = ["page", "cli", "shell", "ranger", "coordinator", "helper", "none"];
+const KINDS: readonly CallerKind[] = ["page", "cli", "shell", "ranger", "coordinator", "run", "helper", "none"];
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const DAY = 24 * 60 * 60 * 1000;
 /** a session of a person is over after this long unused */
@@ -454,20 +454,18 @@ export function coordinatorRefusal(mode: CallersMode, laneDown: string | null): 
   return laneDown;
 }
 
-/** What a coordinator may call, method and exact path: the reads its brief
- *  (lib/coordinator.md) names, /api/about, and its plan. Nothing else. */
-const LANE: ReadonlySet<string> = new Set(["GET /api/about", "GET /api/tree", "GET /api/runs", "GET /api/landing", "POST /api/coordinator/plan"]);
-
-/** whether the lane lets a request through; a HEAD is a GET without the body */
-export const laneAllows = (method: string, path: string): boolean => LANE.has(`${method === "HEAD" ? "GET" : method} ${path}`);
+/** whether `kind`'s lane lets a request through; a HEAD is a GET without the
+ *  body. A kind with no lane has nothing here to pass. */
+export const laneAllows = (kind: CallerKind, method: string, path: string): boolean => LANES[kind]?.has(`${method === "HEAD" ? "GET" : method} ${path}`) ?? false;
 
 /** The lane's word on a request: null to let it on to the gate, `token`
- *  for a caller on the coordinator's listener that is not a coordinator,
- *  `route` for a coordinator (on either listener) off its routes. */
+ *  for a caller on the coordinator's listener that is not a coordinator (a
+ *  run's token included, on a route in its own lane too), `route` for a kind
+ *  with a lane, on either listener, off its routes. */
 export function laneVerdict(onLane: boolean, kind: CallerKind, method: string, path: string): "token" | "route" | null {
-  if (!onLane && kind !== "coordinator") return null;
-  if (kind !== "coordinator") return "token";
-  return laneAllows(method, path) ? null : "route";
+  if (onLane && kind !== "coordinator") return "token";
+  if (!LANES[kind]) return null;
+  return laneAllows(kind, method, path) ? null : "route";
 }
 
 const RECENT = 20;
@@ -557,10 +555,10 @@ export class CallerGate {
     this.onRefused();
   }
 
-  /** The coordinator's lane, ahead of `gate` and in every mode. A request
-   *  on the coordinator's own listener (`onLane`) must carry a coordinator's
-   *  token, and a coordinator's token, on either listener, reaches only
-   *  `laneAllows`'s routes. Null lets the request on. The lane goes by the
+  /** The lanes, ahead of `gate` and in every mode. A request on the
+   *  coordinator's own listener (`onLane`) must carry a coordinator's token,
+   *  and a coordinator's or a run's token, on either listener, reaches only
+   *  its kind's `laneAllows` routes. Null lets the request on. The lane goes by the
    *  socket a request came in on, never by its source address: docker's
    *  userland proxy hands canopy one gateway address for every client. */
   lane(req: Request, url: URL, caller: Caller | null, addr: string, onLane: boolean): Response | null {
@@ -571,12 +569,14 @@ export class CallerGate {
     const key = `${kind} ${req.method} ${url.pathname}`;
     if (!this.laneSaid.has(key)) {
       this.laneSaid.add(key);
-      this.log(`callers: coordinator lane refused ${key} from ${addr}`);
+      this.log(`callers: ${kind === "run" ? "run" : "coordinator"} lane refused ${key} from ${addr}`);
     }
     const error =
       verdict === "token"
         ? "a call on the coordinator's listener needs a coordinator's token"
-        : "a coordinator's token reads the tree, runs and landing queue and posts its plan, and nothing else";
+        : kind === "run"
+          ? "a run's token reads the board and starts, says to and notes on its own run's work, and nothing else; landing, pushing and answering prompts are yours to ask of the user"
+          : "a coordinator's token reads the tree, runs and landing queue and posts its plan, and nothing else";
     return Response.json({ error }, { status: 403 });
   }
 

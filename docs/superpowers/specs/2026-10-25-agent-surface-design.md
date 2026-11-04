@@ -116,7 +116,7 @@ for a branch run or a chat when the start says `tools: canopy`:
   only where asked.
 - `startRepoRun` mints `mint("run", {label: "run <repo id>", run: id})` as
   `startCoordinator` does, chooses the run's id first (`StartExtras.id`),
-  writes `<configDir>/runs/<id>/mcp.json` (0700 folder, 0600 file) holding
+  writes `<configDir>/run-tools/<id>.mcp.json` (0700 folder, 0600 file; see call 15) holding
   `{mcpServers: {canopy: {command: "canopy", args: ["mcp"], env: {CANOPY_API,
   CANOPY_TOKEN, CANOPY_RUN}}}}`, and passes `--mcp-config <that file>` and
   `--allowedTools mcp__canopy__*` (P2) through a new `DriveSpec.mcpConfig`.
@@ -250,12 +250,47 @@ Made on 2026-10-25:
 6. **No second listener for runs.** The kind gates; the coordinator's
    listener stays for its container.
 
-For Eric:
+Made on 2026-11-03 (Eric was asked and did not answer, so these are the
+defaults plans 2 and 3 took; he can overturn either):
 
-7. **Which profiles turn it on.** The ranger's session and Eric's own
-   shells, surely; whether `propose` and coordinator children should, or
-   only runs that name it.
-8. **Codex parity in plan 1 or plan 2**, pending P3.
+7. **Which profiles turn it on: none by default.** The toggle exists per
+   profile and on the pre-flight, and nothing is switched on for any
+   existing profile.
+8. **Codex parity: plan 3**, as the Plans section says.
+
+Made on 2026-11-03, while building plan 2:
+
+9. **The file's command is `bun <canopy>/bin/canopy-mcp.ts mcp`, not
+   `canopy mcp`.** launchd's PATH and the container's may lack `canopy`, and
+   the MCP entry starts in 36 ms where the whole CLI takes 107.
+10. **The file alone goes, never the run's transcript.** The transcript
+    outlives the run. Call 15 moved the file out of that folder.
+11. **A restart drops every `run` token.** The spec kept a `stopped` run's,
+    but no run outlives a restart and its fix gets a fresh token anyway, so
+    the kept one would be a live credential nothing holds.
+12. **A child holds tools when its parent does**, so it can leave a work
+    note and say to its parent. Its depth stops it starting children, and a
+    fix of a child keeps that depth.
+13. **A child is `ask` or `propose`.** A chat would hold a branch slot idle
+    until someone stopped it.
+14. **A run's wake is one time.** `cron` is refused, since the run's rights
+    end with it and a schedule would not, and the wake says which run asked,
+    because the ranger holds `operate` and a run's words are not Eric's.
+15. **The file is `run-tools/<id>.mcp.json`, not `runs/<id>/mcp.json`.** A
+    live check showed why: the run log removes `runs/<id>/` whole when a
+    credential collides with its metadata, which took the file with it and
+    failed the run at start. A dev server with `CANOPY_LOOPBACK_AUTH=1` hits
+    that on every run. A token file should not sit in a folder another module
+    owns.
+16. **The board's chip reads `Run.canopyTools`,** not an `AgentCard` field a
+    hook sets from `CANOPY_TOOLS=1`. The hook lives in tailchan's repo, and
+    the run record already says it, so no env marker is needed.
+17. **Codex reads the same file.** P3's `-c ...env.CANOPY_TOKEN` would put the
+    token on argv, where `ps` and the run log see it. `canopy mcp --run-config
+    <file>` takes it from the 0600 file, and the `-c` lines carry the path.
+18. **Codex needs `default_tools_approval_mode="approve"` on that server.**
+    Without it a tool call under `untrusted` waits and never reaches the
+    server (plan 3's P3). It is the Codex half of Claude's `--allowedTools`.
 
 ## Out of scope
 

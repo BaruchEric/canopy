@@ -10,6 +10,8 @@ import { readWorkItems, workDir, writeWorkItem } from "../core/workstore";
 import type { Caller } from "./callers";
 
 export interface WorkDeps {
+  /** the work item of a live run, for a run's token */
+  runItem?: (run: string) => string | undefined;
   broadcast: (ev: ServerEvent) => void;
   /** what the hubs know of an item's runs and branches, for its state */
   facts: (item: WorkItem) => WorkFacts;
@@ -257,8 +259,15 @@ export class WorkHub implements WorkSink {
 
     if (req.method === "POST" && path === "/api/work/note") {
       const body = await this.body(req);
-      if (!body || typeof body["id"] !== "string" || typeof body["text"] !== "string") return json({ error: "id and text are required" }, 400);
-      const item = this.get(body["id"]);
+      // a run's token notes on its own run's item alone, named or not (FR-038)
+      const own = caller?.kind === "run" ? this.deps.runItem?.(caller.run ?? "") : undefined;
+      if (caller?.kind === "run") {
+        if (!own) return json({ error: "this run has no work item; only a run on a branch has one" }, 403);
+        if (body?.["id"] !== undefined && body["id"] !== own) return json({ error: "a run's token notes on its own work item alone" }, 403);
+      }
+      const id = own ?? body?.["id"];
+      if (!body || typeof id !== "string" || typeof body["text"] !== "string") return json({ error: "id and text are required" }, 400);
+      const item = this.get(id);
       if (!item) return json({ error: "no work item by that id" }, 404);
       this.note(item.id, body["text"], caller?.label || "eric");
       return json(this.get(item.id) ?? item);

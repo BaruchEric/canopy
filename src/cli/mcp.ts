@@ -6,13 +6,29 @@ import { versionLine } from "../core/version";
 import { apiBase, callerToken } from "./api";
 import { errText, take } from "./health";
 
-export const MCP_USAGE = "usage: canopy mcp [--backend URL]\n       canopy mcp tools [--backend URL]";
+export const MCP_USAGE = "usage: canopy mcp [--backend URL] [--run-config FILE]\n       canopy mcp tools [--backend URL]";
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const isKind = (value: unknown): value is CallerKind => typeof value === "string" && Object.hasOwn(KIND_RIGHTS, value);
 
-/** The session's token wins over a CLI token saved on the same machine. */
+/** The session's token wins over a CLI token saved on the same machine. A
+ *  run's server takes no other: on the Mac the file holds an admin token, and
+ *  a run whose own went missing must get nothing rather than that. */
 export function mcpToken(base: string, env: Record<string, string | undefined> = process.env): string | null {
-  return env["CANOPY_TOKEN"]?.trim() || callerToken(base);
+  const own = env["CANOPY_TOKEN"]?.trim();
+  if (own) return own;
+  return env["CANOPY_RUN"]?.trim() ? null : callerToken(base);
+}
+
+/** The environment a run's `mcp.json` holds, for a harness that cannot hand
+ *  the server an env without putting the token on argv. Throws on a file that
+ *  is not one: a run's server takes that file's token or none. */
+export function runConfigEnv(text: string): Record<string, string> {
+  const parsed: unknown = JSON.parse(text);
+  const servers = isRecord(parsed) ? parsed["mcpServers"] : null;
+  const entry = isRecord(servers) ? servers["canopy"] : null;
+  const env = isRecord(entry) ? entry["env"] : null;
+  if (!isRecord(env) || typeof env["CANOPY_API"] !== "string" || typeof env["CANOPY_TOKEN"] !== "string" || typeof env["CANOPY_RUN"] !== "string") throw new Error("it is not a run's canopy config");
+  return { CANOPY_API: env["CANOPY_API"], CANOPY_TOKEN: env["CANOPY_TOKEN"], CANOPY_RUN: env["CANOPY_RUN"] };
 }
 
 /** One HTTP request per call. A refusal or redirect is never retried. */
@@ -38,9 +54,13 @@ export function toolLines(kind: CallerKind, base: string): string[] {
 export async function mcpCommand(argv: string[], { fail }: { fail: (message: string) => never }): Promise<void> {
   const args = [...argv];
   if (args.includes("--backend") && !args[args.indexOf("--backend") + 1]) return fail(MCP_USAGE);
-  const base = apiBase(take(args, "--backend"));
+  if (args.includes("--run-config") && !args[args.indexOf("--run-config") + 1]) return fail(MCP_USAGE);
+  const file = take(args, "--run-config");
+  const held = file === undefined ? null : await Bun.file(file).text().then(runConfigEnv).catch((err: unknown) => fail(`canopy mcp: ${file}: ${errText(err)}`));
+  const env = held ?? process.env;
+  const base = apiBase(take(args, "--backend") ?? held?.["CANOPY_API"]);
   if (args.length > 1 || (args.length === 1 && args[0] !== "tools")) return fail(MCP_USAGE);
-  const api = apiOver(base, mcpToken(base));
+  const api = apiOver(base, mcpToken(base, env));
   const auth = await api.call<unknown>("GET", "/api/auth").catch((err: unknown) => fail(`canopy mcp: ${base} did not answer: ${errText(err)}`));
   if (!isRecord(auth) || !isKind(auth["you"])) return fail(`canopy mcp: ${base} did not answer with a caller kind`);
   const kind = auth["you"];
@@ -49,5 +69,5 @@ export async function mcpCommand(argv: string[], { fail }: { fail: (message: str
     return;
   }
   const writer = Bun.stdout.writer();
-  await serve(Bun.stdin.stream(), { write: async (line: string) => { writer.write(line + "\n"); await writer.flush(); } }, { api, kind, run: process.env["CANOPY_RUN"] ?? null, version: versionLine(readBuild()) });
+  await serve(Bun.stdin.stream(), { write: async (line: string) => { writer.write(line + "\n"); await writer.flush(); } }, { api, kind, run: env["CANOPY_RUN"] ?? null, version: versionLine(readBuild()) });
 }

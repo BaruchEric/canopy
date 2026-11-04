@@ -61,6 +61,7 @@ canopy ui ~/dev
 - Runs live in server memory; the last 60 finished ones stay until a restart, and every run's record is kept under `runs/` for 30 days, from where `GET /api/runs/<id>` and `canopy run` read it after a restart, and the run sheet replays it from its wire (`GET /api/runs/<id>/replay`). A finished run forks from a step of that replay (`POST /api/runs/fork`, `canopy run fork`) into a new branch run cut from the original's base; a Claude fork resumes a copy of the original's transcript cut after the step, written mode 0600 under `~/.claude/projects/<fork worktree slug>/<new id>.jsonl` for the fork's start and removed when it ends. A branch run's record and its landing queue entry outlive a restart in `landing/`.
 - Session history is read from claude-history's CLI (`--json`), never its sqlite file.
 - The secret store: `secrets.json` in the private Forgejo repo `eric/secrets`, its values sealed with age and the file signed. On the mini the `secrets-data` volume holds the checkout, the keys, `passkeys.json`, `audit.jsonl` and `applied.json`. On every other backend, next to the config: `secrets/` (a pulled copy), `secrets-config.json` (the pinned key and remote), `secrets-key.age` (that machine's passphrase-wrapped key) and `secrets-applied.json`.
+- `run-tools/<id>.mcp.json`, 0600, only while a run holds canopy tools: the one file that carries a `run` token, deleted when the run ends. `canopy-tools.md` next to the config replaces the brief those runs read.
 - No database of its own: git and the files above are the state.
 
 ## Decisions
@@ -82,6 +83,7 @@ canopy ui ~/dev
 - 2026-10-26: The harness repo list is explicit config, seeded once from a local `package.json` named `canopy`; later scans never guess again, since the list is a mark Eric controls.
 - 2026-11-02: A start the capacity governor holds waits in its owner's own record (a queued trigger event, a coordinator card, a parked flow, a PR watch, a landing entry), not in a queue of the governor's, because each of those already outlives a restart and says why it waits.
 - 2026-10-20: Costs take Claude's dollars from claude-history and keep a per-backend ledger for the rest, with no built-in prices, because the archive already counts every Claude session and only Claude reports dollars; the others are usage until a `prices.json` says what it costs.
+- 2026-11-03: A run's token rides in a 0600 file its MCP server reads, off by default and never in the agent's env, because the agent's shell can read env and a file can die with the run; the handlers hold the limits, since that shell can read the file too.
 
 ## Out of scope
 

@@ -20,6 +20,7 @@ import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver
 import { rememberOffer } from "./offer";
 import { pathsInside, rememberedFor, ruleCovers, type RunScope } from "./remember";
 import type { RunLog, RunLogger } from "./runlog";
+import { childRefusal, type McpLaunch } from "./runtools";
 import { EDIT_TOOLS } from "./shellwords";
 import { holdQuiet, type QuietHold, type StageClient } from "./stageclient";
 import { noWrapUpNote, STALL_AFTER, stallStep, stallStopNote, WRAP_UP_NOTE, wrapUpMessage } from "./stall";
@@ -52,6 +53,13 @@ export class BranchCapError extends Error {
   override name = "BranchCapError";
 }
 
+/** A run's child refused by its parent's limits (FR-038): a 409 to a route.
+ *  The check sits in `start`, which nothing interleaves, so two children
+ *  asked for at once cannot both take the last place. */
+export class ChildRefusedError extends Error {
+  override name = "ChildRefusedError";
+}
+
 /** What a branch run starts with beyond a plain run's arguments. */
 export interface BranchStart {
   /** the branch and worktree, made before the run starts */
@@ -82,9 +90,20 @@ export interface StartExtras {
   /** who may go first when the plan's window runs low (FR-036); absent is
    *  interactive, which the governor never holds */
   priority?: Priority;
-  /** the coordinator that started it, set before the run's first change is
-   *  heard, so every listener sees a child as one */
+  /** the coordinator or run that started it, set before the run's first
+   *  change is heard, so every listener sees a child as one */
   parent?: string;
+  /** it is a child `parent` is starting by its tools (FR-038): `start` holds
+   *  it to `childRefusal` and sets its depth from the parent's */
+  child?: true;
+  /** its depth, for a fix of a run's child; a new child's comes from `child` */
+  depth?: number;
+  /** the run's `mcp.json`: it holds canopy's tools (FR-038) */
+  mcpConfig?: string;
+  /** that server's launch line, for Codex */
+  mcpServer?: McpLaunch;
+  /** what the prompt tells it about those tools */
+  brief?: string;
   /** the run's id, chosen first: a coordinator's token is minted for it
    *  before the run exists */
   id?: string;
@@ -181,7 +200,7 @@ export function defaultDriver(harness: Harness, version = "0"): RunDriver {
 
 /** The command line each driver builds from these same resolved settings. */
 export function startArgv(harness: Harness, spec: DriveSpec, agent: AgentSettings, stage: boolean): string[] {
-  return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent)];
+  return harness === "claude" ? ["claude", ...cliArgs(spec, agent, stage)] : ["codex", ...appServerArgs(agent, spec.mcpServer)];
 }
 
 /** What every run's process gets on top of canopy's own environment: which
@@ -357,6 +376,10 @@ export class Runner {
     const settings = normalizeAgent(agent);
     const coordinate = isCoordinate({ action });
     if (extras.id !== undefined && this.live.has(extras.id)) throw new Error(`a run ${extras.id} exists already`);
+    if (extras.child) {
+      const refused = this.childRefusal(extras.parent);
+      if (refused) throw new ChildRefusedError(refused);
+    }
     if (coordinate) {
       if (scope || branch) throw new Error("a coordinator starts at a repo, not on a workspace or a branch");
       if (this.coordinatorFor(repo.id)) throw new Error(`${repo.name} already has a coordinator going`);
@@ -422,6 +445,10 @@ export class Runner {
     };
     if (by) run.by = by;
     if (extras.parent) run.parent = extras.parent;
+    const depth = extras.child ? (this.get(extras.parent ?? "")?.depth ?? 0) + 1 : extras.depth ?? 0;
+    if (depth > 0) run.depth = depth;
+    if (extras.mcpConfig) run.canopyTools = true;
+    if (spec.unattended) run.unattended = true;
     const group = extras.group ?? branch?.branch.group;
     if (group) run.group = group;
     if (extras.priority) run.priority = extras.priority;
@@ -437,7 +464,7 @@ export class Runner {
     // a folder no rule was kept for
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
-    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}) };
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;
@@ -490,7 +517,7 @@ export class Runner {
       ended,
       process: { kind: "idle" },
       repo,
-      spec,
+      spec: extras.brief ? { ...spec, brief: extras.brief } : spec,
       ...(scope ? { scope } : {}),
       ...(branch ? { branch } : {}),
       before: statusFingerprint(repo.status),
@@ -523,6 +550,12 @@ export class Runner {
     this.hooks.onChange(run);
     this.begin(live, branch?.message ?? spec.message ?? this.firstMessage(live, run.note));
     return run;
+  }
+
+  /** Why run `parent` may not start a child now, or null (`childRefusal`). */
+  childRefusal(parent: string | undefined): string | null {
+    const live = [...this.live.values()].filter(({ ctx }) => ctx.run.parent === parent && isRunActive(ctx.run)).length;
+    return childRefusal(parent === undefined ? undefined : this.get(parent), live);
   }
 
   /** The prompt a run's first message is wrapped in: the repo's framing, or

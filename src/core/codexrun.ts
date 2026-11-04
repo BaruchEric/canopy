@@ -41,7 +41,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { describeTool, toolDetail } from "./actions";
 import { splitArgs } from "./agent";
-import { takesProvider } from "./harness";
+import { takesProvider, tomlString } from "./harness";
+import type { McpLaunch } from "./runtools";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { changesInput, codexFold, codexThread, codexTurn, fileChanges, foldCodex, NO_COST, ownThread, type CodexFold, type CodexFolded, type FileChange } from "./codexfold";
@@ -181,8 +182,20 @@ export function configFlags(extra: string): string[] {
 
 /** argv after the binary. The transport is named, not left to the default,
  *  so a change of default cannot move canopy off stdio. */
-export function appServerArgs(agent: Pick<DriveAgent, "extra">): string[] {
-  return ["app-server", "--listen", "stdio://", ...configFlags(agent.extra)];
+export function appServerArgs(agent: Pick<DriveAgent, "extra">, mcp?: McpLaunch): string[] {
+  return ["app-server", "--listen", "stdio://", ...configFlags(agent.extra), ...(mcp ? codexMcpFlags(mcp) : [])];
+}
+
+/** canopy's own server as `-c` lines, after the extra-flags box so they win.
+ *  They replace the kit's `[mcp_servers.canopy]` for this process. Without the
+ *  approval key a tool call waits and never reaches the server (probe P3).
+ *  The token stays in the file `args` names: a `-c` value is on argv. */
+export function codexMcpFlags(mcp: McpLaunch): string[] {
+  return [
+    "-c", `mcp_servers.canopy.command=${tomlString(mcp.command)}`,
+    "-c", `mcp_servers.canopy.args=[${mcp.args.map(tomlString).join(", ")}]`,
+    "-c", 'mcp_servers.canopy.default_tools_approval_mode="approve"',
+  ];
 }
 
 const codexModel = (model: string): string | null =>
@@ -732,7 +745,7 @@ export class CodexDriver implements RunDriver {
     }
     let rpc: RpcClient;
     try {
-      const started = (ctx.spawn ?? this.opts.spawn ?? bunSpawn)([...command, ...appServerArgs(ctx.agent)], {
+      const started = (ctx.spawn ?? this.opts.spawn ?? bunSpawn)([...command, ...appServerArgs(ctx.agent, ctx.spec.mcpServer)], {
         cwd: ctx.cwd,
         env: spawnEnv(ctx),
       });

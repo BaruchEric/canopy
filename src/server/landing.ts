@@ -568,6 +568,8 @@ export class LandingHub {
         ...(b.openPr ? { openPr: true as const } : {}),
         ...(b.work ? { work: b.work } : {}),
         ...(run.group ?? b.group ? { group: run.group ?? b.group } : {}),
+        ...(run.canopyTools ? { canopyTools: true as const } : {}),
+        ...(run.depth ? { depth: run.depth, ...(run.parent ? { parent: run.parent } : {}) } : {}),
       };
     }
     const next: LandingRun = {

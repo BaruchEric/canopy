@@ -1,0 +1,77 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, statSync } from "node:fs";
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { runsDir } from "../core/runlog";
+import { BUNDLED_TOOLS_BRIEF, canopyMcpCommand, mcpConfigPath, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
+
+let dir: string;
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "canopy-runtools-")); });
+afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+const entry = { command: "/bin/bun", args: ["x", "mcp"], env: { CANOPY_TOKEN: "t" } };
+
+describe("what a run with tools is told", () => {
+  test("the bundled brief says where a run stops, and the config dir's copy replaces it", async () => {
+    const bundled = await toolsBrief(dir);
+    expect(bundled).toBe((await readFile(BUNDLED_TOOLS_BRIEF, "utf8")).trim());
+    for (const words of ["canopy_run_start", "canopy_work_note", "landing queue", "never pushes", "must stand alone", "no right to land"]) expect(bundled).toContain(words);
+    await writeFile(join(dir, "canopy-tools.md"), "mine\n");
+    expect(await toolsBrief(dir)).toBe("mine");
+  });
+
+  test("Codex's launch line ends in the path, with no token in it", () => {
+    const { args, command } = runConfigLaunch("/c/run-tools/a.mcp.json");
+    expect(command).toBe(process.execPath);
+    expect(args.slice(-3)).toEqual(["mcp", "--run-config", "/c/run-tools/a.mcp.json"]);
+  });
+});
+
+describe("a run's mcp.json", () => {
+  test("is 0600 in a 0700 folder and holds the entry", async () => {
+    const file = await writeMcpConfig("aaaa1111", entry, dir);
+    expect(file).toBe(mcpConfigPath("aaaa1111", dir));
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(JSON.parse(await readFile(file, "utf8")).mcpServers.canopy.env.CANOPY_TOKEN).toBe("t");
+  });
+
+  test("never sits in a run's transcript folder, which the log may remove whole", () => {
+    expect(mcpConfigPath("aaaa1111").startsWith(join(runsDir(), "aaaa1111"))).toBe(false);
+  });
+
+  test("a loose folder is tightened, and a link in the file's place is refused", async () => {
+    await chmod(dir, 0o755);
+    await writeMcpConfig("bbbb2222", entry, dir);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    await symlink(join(dir, "elsewhere"), mcpConfigPath("cccc3333", dir));
+    await expect(writeMcpConfig("cccc3333", entry, dir)).rejects.toThrow();
+    expect(existsSync(join(dir, "elsewhere"))).toBe(false);
+  });
+
+  test("going removes the file, and a file already gone is nothing", async () => {
+    await writeMcpConfig("aaaa1111", entry, dir);
+    await removeMcpConfig("aaaa1111", dir);
+    expect(existsSync(mcpConfigPath("aaaa1111", dir))).toBe(false);
+    await removeMcpConfig("never000", dir);
+  });
+
+  test("the sweep clears every run's file and nothing else; a missing folder is nothing", async () => {
+    await writeMcpConfig("aaaa1111", entry, dir);
+    await writeMcpConfig("bbbb2222", entry, dir);
+    await writeFile(join(dir, "note.txt"), "x");
+    await sweepMcpConfigs(dir);
+    expect(existsSync(mcpConfigPath("aaaa1111", dir))).toBe(false);
+    expect(existsSync(mcpConfigPath("bbbb2222", dir))).toBe(false);
+    expect(existsSync(join(dir, "note.txt"))).toBe(true);
+    await sweepMcpConfigs(join(dir, "nothing"));
+  });
+});
+
+test("the command is this bun and canopy's own MCP entry, on no PATH", async () => {
+  const { command, args } = canopyMcpCommand();
+  expect(command).toBe(process.execPath);
+  expect(args[1]).toBe("mcp");
+  expect(existsSync(args[0] as string)).toBe(true);
+});
