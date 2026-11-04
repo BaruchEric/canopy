@@ -252,6 +252,10 @@ Made on 2026-11-03, taking the defaults for 7 and 8:
     their own.
 11. **Kept worktrees moved plan 2's design.** See "What changed from the
     spec" in `2026-11-03-worktree-stacks-2.md`.
+12. **A stack's project is set by `COMPOSE_PROJECT_NAME`, not `-p`, and
+    `down -v` has two checks in front of it.** P3 found a fixed-name volume
+    can belong to another stack. See "What changed from the spec" in
+    `2026-11-03-worktree-stacks-3.md`.
 
 ## Out of scope
 
