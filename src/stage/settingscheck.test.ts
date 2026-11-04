@@ -29,6 +29,10 @@ describe("a stage's claude settings", () => {
     );
   });
 
+  test("takes the renderer an interactive login writes", () => {
+    expect(claudeSettingsRefusal(JSON.stringify({ tui: "fullscreen" }), F)).toBe(null);
+  });
+
   test("takes the allowed keys, and an empty object", () => {
     expect(claudeSettingsRefusal(JSON.stringify({ $schema: "https://json.schemastore.org/claude-code-settings.json", model: "opus", theme: "dark" }), F)).toBe(null);
     expect(claudeSettingsRefusal("{}", F)).toBe(null);

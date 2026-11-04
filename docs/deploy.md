@@ -677,7 +677,7 @@ the file and the key; remove the key by hand, then retry the step:
 cat ~/.config/canopy-stages/claude/settings.json ~/.config/canopy-stages/codex/config.toml
 ```
 
-claude may keep `$schema`, `model` and `theme`; codex may keep `model`,
+claude may keep `$schema`, `model`, `theme` and `tui`; codex may keep `model`,
 `model_reasoning_effort`, `model_reasoning_summary`, `model_verbosity`,
 `personality`, `service_tier`, `preferred_auth_method` and the `[notice]`
 table.

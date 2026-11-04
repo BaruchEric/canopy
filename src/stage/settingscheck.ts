@@ -18,8 +18,9 @@ import { join } from "node:path";
 /** What a stage's claude settings may hold. A fresh config writes no
  *  settings.json at all (only .claude.json, backups/ and projects/), and a
  *  login writes its account into .claude.json and .credentials.json; the
- *  model picker and the theme are what claude itself would put here. */
-export const CLAUDE_SETTINGS_KEYS: readonly string[] = ["$schema", "model", "theme"];
+ *  model picker, the theme and the renderer are what claude itself would put
+ *  here. An interactive `claude`, which a re-login needs, writes `tui`. */
+export const CLAUDE_SETTINGS_KEYS: readonly string[] = ["$schema", "model", "theme", "tui"];
 
 /** What a stage's codex config may hold at its top level: the model and how
  *  it reasons, the personality and service tier codex's own commands set,
