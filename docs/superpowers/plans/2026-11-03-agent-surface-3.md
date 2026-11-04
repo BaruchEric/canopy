@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** in progress on branch `fr-038-plans-2-3`, 2026-11-03.
+**Status:** implemented on branch `fr-038-plans-2-3`, 2026-11-03; not merged or deployed.
 
 **Goal:** a Codex run holds canopy's tools the way a Claude run does, an agent holding them is told what they are and where they stop, and the agents board says which runs hold them.
 
@@ -17,9 +17,13 @@
 Driven through `codex app-server --listen stdio://` as `codexrun.ts` drives it (`experimentalApi: false`, `approvalPolicy: "untrusted"`, `sandbox: "read-only"`), against a scratch stdio MCP server.
 
 - **`-c` lines work.** `-c mcp_servers.canopy.command=...` and `-c mcp_servers.canopy.args=[...]` start the server: `mcpServer/startupStatus/updated` says `canopy` is `ready`, and the server sees `initialize`, `notifications/initialized` and `tools/list`. They override this machine's own `[mcp_servers.canopy]`, which the kit writes as `canopy mcp`.
-- **The wire names.** The item is `mcpToolCall` with `server: "canopy"` and `tool: "canopy_status"`. The spec's `mcp__<server>__<tool>` is not what this wire says, so nothing in canopy matches on that form.
+- **The wire names.** The item is `mcpToolCall` with `server: "canopy"` and `tool: "canopy_status"`. `codexfold.ts` already builds `mcp__canopy__canopy_status` from those two fields, so a step reads the same as Claude's.
 - **Approval, the part the spec missed.** With no approval key the item stays `inProgress`, `tools/call` never reaches the server, and no request reaches the client in 100 s, with `approvals_reviewer="user"` as well. A run would stall on its first tool. `-c mcp_servers.canopy.default_tools_approval_mode="approve"` is a key in the 0.166.0 binary's `RawMcpServerConfig`; with it the call completes in 1 ms with no ask. `codex exec` with no key fails at once: "MCP tool call requires approval, but approval policy is never".
 - **Env.** `-c mcp_servers.canopy.env.X=...` reaches the server and not the agent's shell: `printenv` there came back empty. The spec's `CANOPY_TOKEN` line is still wrong, since a `-c` value sits on argv, which `ps` shows and the run log records through `startArgv`. So the token stays in the file and the `-c` lines carry only its path.
+
+## Live check (2026-11-03, real `codex` and `claude` against a scratch server in enforce)
+
+A branch ask with `canopyTools` on Codex called `canopy_status`, `canopy_work_note` and `canopy_run_start` with no prompt, and its child answered and ended `done`, at `untrusted` and again with `yolo` (`approvalPolicy: "never"`). The same run on Claude did the same. In all three, `ps -axww` held the file's path and not the token, the run's `wire.jsonl` and `run.json` did not hold the token, and the file and its `callers.json` entry were gone when the run ended. With the token from the file, land, stop and `POST /api/repos/run` answered 403 from the lane, and a child in another repo, a child under another parent and a cron wake answered 403 from their handlers.
 
 ## Global constraints
 
@@ -33,6 +37,7 @@ Driven through `codex app-server --listen stdio://` as `codexrun.ts` drives it (
 
 - Spec call 16: the chip reads `Run.canopyTools`, not an `AgentCard` field set by a hook. The hook lives in tailchan's repo, and the run record already says it, so the env marker `CANOPY_TOOLS=1` is not needed.
 - Spec call 17: `--run-config` replaces the spec's `-c ...env.CANOPY_TOKEN` line.
+- Spec call 18: `default_tools_approval_mode="approve"` on canopy's server.
 
 ## File structure
 
@@ -46,19 +51,19 @@ Driven through `codex app-server --listen stdio://` as `codexrun.ts` drives it (
 
 ### Task 1: the Codex lines and `--run-config`
 
-- [ ] Tests in `codexrun.test.ts` (flags in order, no token, paths quoted) and `src/cli/mcp.test.ts` (reads the file's env, an unreadable file fails).
-- [ ] `DriveSpec.mcpServer`, `StartExtras.mcpServer`, `runTools` sets it, `toolsRefusal` lets Codex through.
+- [x] Tests in `codexrun.test.ts` (flags in order, no token, paths quoted) and `src/cli/mcp.test.ts` (reads the file's env, an unreadable file fails).
+- [x] `DriveSpec.mcpServer`, `StartExtras.mcpServer`, `runTools` sets it, `toolsRefusal` lets Codex through.
 
 ### Task 2: the brief
 
-- [ ] Tests in `actions.test.ts` (after the rules on a job, before the first message in a chat) and the route test (a run with tools gets the brief, a run without none, the config dir's copy wins).
-- [ ] `lib/canopy-tools.md`, `toolsBrief`, a fix that starts fresh carries it.
+- [x] Tests in `actions.test.ts` (after the rules on a job, before the first message in a chat) and the route test (a run with tools gets the brief, a run without none, the config dir's copy wins).
+- [x] `lib/canopy-tools.md`, `toolsBrief`, a fix that starts fresh carries it.
 
 ### Task 3: the chip and the pre-flight
 
-- [ ] `ToolsPreflight` shows for Codex. The tile shows `⌁ tools` while the card's run is live and holds them.
+- [x] `ToolsPreflight` shows for Codex. The tile shows `⌁ tools` while the card's run is live and holds them.
 
 ### Task 4: docs and gates
 
-- [ ] `docs/architecture.md` "Callers and tokens" and "The agents board", SPEC.md if it went wrong, the plan index, this Status line.
-- [ ] typecheck, lint, test, build, and a live check with real `codex`.
+- [x] `docs/architecture.md` "Callers and tokens" and "The agents board", SPEC.md if it went wrong, the plan index, this Status line.
+- [x] typecheck, lint, test, build, and a live check with real `codex`.

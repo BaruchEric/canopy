@@ -282,6 +282,15 @@ Made on 2026-11-03, while building plan 2:
     failed the run at start. A dev server with `CANOPY_LOOPBACK_AUTH=1` hits
     that on every run. A token file should not sit in a folder another module
     owns.
+16. **The board's chip reads `Run.canopyTools`,** not an `AgentCard` field a
+    hook sets from `CANOPY_TOOLS=1`. The hook lives in tailchan's repo, and
+    the run record already says it, so no env marker is needed.
+17. **Codex reads the same file.** P3's `-c ...env.CANOPY_TOKEN` would put the
+    token on argv, where `ps` and the run log see it. `canopy mcp --run-config
+    <file>` takes it from the 0600 file, and the `-c` lines carry the path.
+18. **Codex needs `default_tools_approval_mode="approve"` on that server.**
+    Without it a tool call under `untrusted` waits and never reaches the
+    server (plan 3's P3). It is the Codex half of Claude's `--allowedTools`.
 
 ## Out of scope
 
