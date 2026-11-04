@@ -77,57 +77,57 @@ Inputs the spec implies and no section of it names. Each has a test in the task 
 
 **Files:** `src/core/callers.ts`, `src/server/callers.ts`, `src/core/callers.test.ts`, `src/server/callers.test.ts`, `src/core/canopymcp.ts` (the `TOOLS_FOR` row)
 
-- [ ] Tests first: `allows("run", "operate")` false, `allows("run", "plan")` true, `run` not in `PAIR_KINDS`; `needs` gives `plan` for `POST runs/child`, `runs/say`, `ranger/wakes`, `work/note`, and `operate` for `DELETE ranger/wakes`, `POST work/close`, `runs/stop`, `runs/answer`, `landing/land`, `prs/open`; `LANES` pinned for both kinds; `laneVerdict` for a run token on and off its lane on both listeners.
-- [ ] Move `LANE` into `LANES` in `core/callers.ts`; `laneAllows(kind, method, path)`; `laneVerdict` over the table; the refusal's words and log line per kind; `KINDS` gains `run`.
-- [ ] Commit.
+- [x] Tests first: `allows("run", "operate")` false, `allows("run", "plan")` true, `run` not in `PAIR_KINDS`; `needs` gives `plan` for `POST runs/child`, `runs/say`, `ranger/wakes`, `work/note`, and `operate` for `DELETE ranger/wakes`, `POST work/close`, `runs/stop`, `runs/answer`, `landing/land`, `prs/open`; `LANES` pinned for both kinds; `laneVerdict` for a run token on and off its lane on both listeners.
+- [x] Move `LANE` into `LANES` in `core/callers.ts`; `laneAllows(kind, method, path)`; `laneVerdict` over the table; the refusal's words and log line per kind; `KINDS` gains `run`.
+- [x] Commit.
 
 ### Task 2: settings and the run's new fields
 
 **Files:** `src/core/types.ts`, `src/core/agent.ts`, `src/core/agent.test.ts`, `src/core/runlog.ts`
 
-- [ ] Tests first: `normalizeAgent` keeps `canopyTools: true` and drops anything else; `sameAgent` tells a toggled copy apart; `describeAgent` says `canopy tools`.
-- [ ] `Run.depth?`, `Run.canopyTools?`, `Run.unattended?`; `LandingRun.parent?`, `depth?`, `canopyTools?`; the kept snapshot carries them.
-- [ ] Commit.
+- [x] Tests first: `normalizeAgent` keeps `canopyTools: true` and drops anything else; `sameAgent` tells a toggled copy apart; `describeAgent` says `canopy tools`.
+- [x] `Run.depth?`, `Run.canopyTools?`, `Run.unattended?`; `LandingRun.parent?`, `depth?`, `canopyTools?`; the kept snapshot carries them.
+- [x] Commit.
 
 ### Task 3: the wire and the runner's child check
 
 **Files:** `src/core/runtools.ts`, `src/core/driver.ts`, `src/core/claudedrive.ts`, `src/core/runner.ts`, tests
 
-- [ ] Tests first. `cliArgs` with `mcpConfig`: `--mcp-config <file>` then a flag, one `--allowedTools` holding the action's rules and `mcp__canopy__*`, none of it without the field. `Runner`: a child's `parent` and `depth`, a coordinator's child stays depth 0, refusals at `RUN_CHILDREN`, `RUN_DEPTH`, an unattended parent and a gone parent, all raised by `Runner.start` as `ChildRefusedError`. A fake CLI replays P1's `mcp__canopy__canopy_status` call into a step.
-- [ ] `childRefusal` pure in `core/runtools.ts`; `Runner.childRefusal(parent)` reads the live map; `Runner.start` checks under `extras.child`.
-- [ ] Commit.
+- [x] Tests first. `cliArgs` with `mcpConfig`: `--mcp-config <file>` then a flag, one `--allowedTools` holding the action's rules and `mcp__canopy__*`, none of it without the field. `Runner`: a child's `parent` and `depth`, a coordinator's child stays depth 0, refusals at `RUN_CHILDREN`, `RUN_DEPTH`, an unattended parent and a gone parent, all raised by `Runner.start` as `ChildRefusedError`. A fake CLI replays P1's `mcp__canopy__canopy_status` call into a step.
+- [x] `childRefusal` pure in `core/runtools.ts`; `Runner.childRefusal(parent)` reads the live map; `Runner.start` checks under `extras.child`.
+- [x] Commit.
 
 ### Task 4: minting, the file and the handlers
 
 **Files:** `src/server/runtools.ts`, `src/server/index.ts`, `src/server/work.ts`, `src/server/ranger.ts`, `src/core/ranger.ts`, `src/server/stalls.ts`, `lib/ranger.md`, tests
 
-- [ ] Tests first, over HTTP with a fake harness on a scratch repo, one server in `enforce`: the file is 0600 in a 0700 folder and holds the token, the run's env does not; the token dies and the file goes when the run settles; a start that fails leaves neither; a restart drops every `run` token and removes its file; a run token is 403 on `landing/land`, `prs/open`, `runs/stop`, `runs/answer`, `runs/fork`, `agents/profile`, `repos/run`; `runs/child` naming another repo or parent is 403; a fourth live child, a grandchild and an unattended parent are 409; `runs/say` to a stranger is 403 and to a kin chat is 200; a wake's `by` is stamped and `cron` refused; `work/note` naming another item is 403.
-- [ ] `startRepoRun` takes `RunStartOptions`; `runToolsFor` mints, writes and hands back the extras and a release; `POST /api/runs/child`; `tools` on `repos/run`, refused for a group, a coordinator, a seed and, until plan 3, Codex.
-- [ ] `startBranchFix` gives a fresh token to a fix of a tools run and keeps its depth and parent.
-- [ ] Commit.
+- [x] Tests first, over HTTP with a fake harness on a scratch repo, one server in `enforce`: the file is 0600 in a 0700 folder and holds the token, the run's env does not; the token dies and the file goes when the run settles; a start that fails leaves neither; a restart drops every `run` token and removes its file; a run token is 403 on `landing/land`, `prs/open`, `runs/stop`, `runs/answer`, `runs/fork`, `agents/profile`, `repos/run`; `runs/child` naming another repo or parent is 403; a fourth live child, a grandchild and an unattended parent are 409; `runs/say` to a stranger is 403 and to a kin chat is 200; a wake's `by` is stamped and `cron` refused; `work/note` naming another item is 403.
+- [x] `startRepoRun` takes `RunStartOptions`; `runToolsFor` mints, writes and hands back the extras and a release; `POST /api/runs/child`; `tools` on `repos/run`, refused for a group, a coordinator, a seed and, until plan 3, Codex.
+- [x] `startBranchFix` gives a fresh token to a fix of a tools run and keeps its depth and parent.
+- [x] Commit.
 
 ### Task 5: the tools
 
 **Files:** `src/core/canopymcp.ts`, `src/cli/mcp.ts`, tests
 
-- [ ] Tests first: `TOOLS_FOR.run` is the read tools and the plan tools and never `canopy_land` or `canopy_pr`; `canopy_run_start` posts `{repo, note, action, parent}`; `canopy_work_note` posts `{id, text}`; the wake stops claiming `by: "eric"` for a run; `mcpToken` with `CANOPY_RUN` set ignores the token file.
-- [ ] Commit.
+- [x] Tests first: `TOOLS_FOR.run` is the read tools and the plan tools and never `canopy_land` or `canopy_pr`; `canopy_run_start` posts `{repo, note, action, parent}`; `canopy_work_note` posts `{id, text}`; the wake stops claiming `by: "eric"` for a run; `mcpToken` with `CANOPY_RUN` set ignores the token file.
+- [x] Commit.
 
 ### Task 6: the CLI
 
 **Files:** `src/cli/index.ts`, `src/core/help.ts`, `README.md`
 
-- [ ] `canopy runs child <repo> --note ... --parent <run>`; `--tools` and `--no-tools` on the run start. Tests in the CLI's own file.
-- [ ] Commit.
+- [x] `canopy runs child <repo> --note ... --parent <run>`; `--tools` and `--no-tools` on the run start. Tests in the CLI's own file.
+- [x] Commit.
 
 ### Task 7: the UI
 
 **Files:** `ui/src/components/AgentForm.tsx`, `RunSheet.tsx`, `CoordTasks.tsx`, `ui/src/api.ts`, `ui/src/store.ts`, `ui/src/styles.css` only if a class is new, tests
 
-- [ ] The form's toggle; the pre-flight's toggle, hidden for a coordinator, a group, a seed and Codex; `ParentLine` tells a run's parent from a coordinator and shows the chain.
-- [ ] Commit.
+- [x] The form's toggle; the pre-flight's toggle, hidden for a coordinator, a group, a seed and Codex; `ParentLine` tells a run's parent from a coordinator and shows the chain.
+- [x] Commit.
 
 ### Task 8: docs and gates
 
-- [ ] `docs/architecture.md` "Callers and tokens"; `SPEC.md` (state and a decision line); the design doc's Calls; `README.md`.
-- [ ] Full `bun run typecheck`, `bun run lint`, `bun test`, `bun run build`. Commit.
+- [x] `docs/architecture.md` "Callers and tokens"; `SPEC.md` (state and a decision line); the design doc's Calls; `README.md`.
+- [x] Full `bun run typecheck`, `bun run lint`, `bun test`, `bun run build`. Commit.
