@@ -1363,11 +1363,21 @@ added the mini's two loopback entries:
 
 ```
 # the mini's .env
-CANOPY_ORIGINS=https://canopy-mac.beric.ca,https://erics-macbook-pro.tail2d2c60.ts.net:7850,https://macmini-2018.tail2d2c60.ts.net:7849,http://127.0.0.1:7850,http://localhost:7850
+CANOPY_ORIGINS=https://canopy-mac.beric.ca,https://erics-macbook-pro.tail2d2c60.ts.net:7850,https://macmini-2018.tail2d2c60.ts.net:7849,http://127.0.0.1:7850,http://localhost:7850,https://desoto-canopy.tail2d2c60.ts.net:7849,http://desoto-canopy:7850,http://100.84.82.123:7850
 
 # the Mac's launchd plist (ca.beric.canopy-server)
-CANOPY_ORIGINS=https://canopy.beric.ca,https://macmini-2018.tail2d2c60.ts.net:7849,https://erics-macbook-pro.tail2d2c60.ts.net:7850,http://macmini-2018:7850,http://100.68.139.95:7850
+CANOPY_ORIGINS=https://canopy.beric.ca,https://macmini-2018.tail2d2c60.ts.net:7849,https://erics-macbook-pro.tail2d2c60.ts.net:7850,http://macmini-2018:7850,http://100.68.139.95:7850,https://desoto-canopy.tail2d2c60.ts.net:7849,http://desoto-canopy:7850,http://100.84.82.123:7850
+
+# the De Soto LXC's .env (homelab services/rio-store-router/canopy-lxc.sh writes it)
+CANOPY_ORIGINS=https://canopy.beric.ca,https://canopy-mac.beric.ca,https://macmini-2018.tail2d2c60.ts.net:7849,https://erics-macbook-pro.tail2d2c60.ts.net:7850,https://desoto-canopy.tail2d2c60.ts.net:7849,http://127.0.0.1:7850,http://localhost:7850,http://macmini-2018:7850,http://100.68.139.95:7850
 ```
+
+Since 2026-11-05 there is a third backend, `desoto`, on the De Soto store's Proxmox box
+(homelab `services/rio-store-router/README.md`, "Canopy on the box"): an LXC that is its own
+tailnet node, served at `https://desoto-canopy.tail2d2c60.ts.net:7849` and published plain at
+`http://desoto-canopy:7850`. The Mac and the mini list those three origins so a page opened
+there can drive them; the LXC lists both public names, every tailnet https origin and the
+plain addresses the other two pages can be open at. It has no public name.
 
 Both machines list both tailnet https origins (each `tailscale serve` name,
 amendment 2), since a page opened from either tailnet address may reach
