@@ -2,10 +2,6 @@
 
 ## Open
 
-### FR-053 · The backends chip names Chrome's local network access permission instead of connecting forever
-P2 · added 2026-11-05 · source: Eric (desoto backend, 2026-11-05)
-From a public page (canopy.beric.ca) a backend that has only a tailnet URL reads *connecting* and never moves: Chrome holds a public site's first request to a local address (the box's 100.x) behind its local network access permission, and the page's fetches and event stream wait on a prompt nobody answered. The chip should read the permission (`navigator.permissions`, `local-network-access`), say "needs local network access" with the site-settings hint while it is prompt or denied, ask for it from the retry click, and come back on its own when it turns granted. Background in docs/deploy.md, "Other canopy pages".
-
 ### FR-046 · Paseo interop study
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo)
 Paseo (getpaseo/paseo, Apache-2.0) has canopy's daemon-plus-clients shape, multi-host model, voice and worktrees, and the native phone apps canopy lacks. A two-half-day study with written thresholds decides between an adapter that speaks its protocol, a landing-queue plugin contributed upstream, or no, which is the default while FR-042 covers the phone.
@@ -51,6 +47,11 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. The mini runs the fix, and librarySync went back on for the Mac on 2026-11-03.
 
 ## Shipped
+
+### FR-053 · The backends chip names Chrome's local network access permission instead of connecting forever
+P2 · added 2026-11-05 · source: Eric (desoto backend, 2026-11-05) · shipped 2026-11-05
+From a public page (canopy.beric.ca) a backend that has only a tailnet URL reads *connecting* and never moves: Chrome holds a public site's first request to a local address (the box's 100.x) behind its local network access permission, and the page's fetches and event stream wait on a prompt nobody answered. The chip should read the permission (`navigator.permissions`, `local-network-access`), say "needs local network access" with the site-settings hint while it is prompt or denied, ask for it from the retry click, and come back on its own when it turns granted. Background in docs/deploy.md, "Other canopy pages".
+Shipped as 64a2096 and deployed to the mini, the Mac and the De Soto LXC on 2026-11-05.
 
 ### FR-040 · Pre-edit collision warnings
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Concord, foremerge, juliensimon/canopy) · shipped 2026-11-03
