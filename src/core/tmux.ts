@@ -378,16 +378,49 @@ export function parseRangerPanes(out: string): RangerPane[] {
  *  ssh line that does the same on the other host, so the pane's exit status
  *  is the command's own either way. The cd is in the command rather than
  *  left to `respawn-pane -c`, since tmux quietly starts in the home folder
- *  when that one is missing; this way a missing folder fails the task. */
-export function taskCommand(locator: string, cmd: string, cwd?: string): { command: string[]; dir: string | null } {
+ *  when that one is missing; this way a missing folder fails the task.
+ *  With `setup`, `setupFirst` runs ahead of the command. */
+export function taskCommand(locator: string, cmd: string, cwd?: string, setup?: TaskSetup): { command: string[]; dir: string | null } {
   const { host, path } = parseLocator(locator);
   const dir = cwd ? join(path, cwd) : path;
+  const script = setup ? `${setupFirst(path, setup)}\n${cmd}` : cmd;
   // BROWSER=none: a task is started from any device, often a phone, and a
   // dev server's own open flag (vite --open) would put a window on the
   // backend's desktop; canopy's preview is where the app shows
-  const run = `BROWSER=none exec sh -lc ${shellQuote(cmd)}`;
+  const run = `BROWSER=none exec sh -lc ${shellQuote(script)}`;
   if (host === null) return { command: ["sh", "-c", `cd -- ${shellQuote(dir)} && ${run}`], dir };
   return { command: ["ssh", "-t", "--", host, `cd ${shellQuote(dir)} && ${run}`], dir: null };
+}
+
+/** A setup line a task runs first in a checkout with no node_modules, and
+ *  the files, any one of which must be at the root for it to run. */
+export interface TaskSetup {
+  line: string;
+  ifAny?: readonly string[];
+}
+
+/** The setup a repo with a bun lockfile and no setup line of its own gets. */
+export const BUN_SETUP: TaskSetup = { line: "bun install --frozen-lockfile", ifAny: ["bun.lock", "bun.lockb"] };
+
+/** What a task's shell runs ahead of its command, so a checkout that has a
+ *  package.json and no node_modules (a fresh clone) installs before its
+ *  first build: the setup line, at the checkout's root, announced so the log
+ *  says why the start is slow. A setup that fails ends the task with its
+ *  exit code. The check runs where the task runs, so it holds on another
+ *  host too. Each part sits on a line of its own, so a trailing comment in
+ *  the line cuts nothing off. */
+export function setupFirst(root: string, setup: TaskSetup): string {
+  const q = shellQuote(root);
+  const any = setup.ifAny?.length ? ` && { ${setup.ifAny.map((f) => `[ -f ${q}/${shellQuote(f)} ]`).join(" || ")}; }` : "";
+  return [
+    `if [ -f ${q}/package.json ] && [ ! -d ${q}/node_modules ]${any}; then`,
+    `printf '%s\\n' ${shellQuote(`canopy: no node_modules, so the setup line runs first: ${setup.line}`)}`,
+    "(",
+    `cd -- ${q} || exit`,
+    setup.line,
+    ") || exit $?",
+    "fi",
+  ].join("\n");
 }
 
 /** What a client is sent before tmux draws for it: the captured history as

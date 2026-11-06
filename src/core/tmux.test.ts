@@ -1,4 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { shellQuote } from "./host";
 import {
   attachArgs,
   captureArgs,
@@ -25,6 +29,9 @@ import {
   keysArgs,
   parseTaskPanes,
   taskCommand,
+  setupFirst,
+  BUN_SETUP,
+  type TaskSetup,
   parsePane,
   textArgs,
   screenArgs,
@@ -273,6 +280,48 @@ describe("tasks on tmux", () => {
       command: ["ssh", "-t", "--", "mini", "cd '/r/app/ui' && BROWSER=none exec sh -lc 'x'"],
       dir: null,
     });
+  });
+  test("a setup line goes ahead of the command, checked at the checkout's root", () => {
+    const { command } = taskCommand("ssh://mini/r/app", "bun run build", "ui", { line: "bun install" });
+    expect(command[4]).toBe(`cd '/r/app/ui' && BROWSER=none exec sh -lc ${shellQuote(`${setupFirst("/r/app", { line: "bun install" })}\nbun run build`)}`);
+    expect(setupFirst("/r/app", { line: "bun install" })).toContain("[ ! -d '/r/app'/node_modules ]; then");
+    expect(setupFirst("/r/app", BUN_SETUP)).toContain("[ ! -d '/r/app'/node_modules ] && { [ -f '/r/app'/'bun.lock' ] || [ -f '/r/app'/'bun.lockb' ]; }; then");
+  });
+  test("a fresh checkout runs the setup line once, and a setup that fails ends the task", async () => {
+    const root = await mkdtemp(join(tmpdir(), "canopy-setup-"));
+    try {
+      await mkdir(join(root, "ui"));
+      await writeFile(join(root, "package.json"), "{}");
+      const run = (cmd: string, setup: TaskSetup) => {
+        const r = Bun.spawnSync(taskCommand(root, cmd, "ui", setup).command, { stdout: "pipe", stderr: "pipe" });
+        return { code: r.exitCode, out: r.stdout.toString() };
+      };
+      // a trailing comment in the setup line must not swallow the rest
+      const setup = { line: "mkdir node_modules && echo installed # from gates.json" };
+      const first = run("echo built in $(basename \"$PWD\")", setup);
+      expect(first.code).toBe(0);
+      expect(first.out).toContain("canopy: no node_modules, so the setup line runs first");
+      expect(first.out).toContain("installed");
+      expect(first.out).toContain("built in ui");
+      const again = run("echo built again", setup);
+      expect(again.out).not.toContain("installed");
+      expect(again.out).toContain("built again");
+      await rm(join(root, "node_modules"), { recursive: true });
+      const failed = run("echo should not run", { line: "exit 7" });
+      expect(failed.code).toBe(7);
+      expect(failed.out).not.toContain("should not run");
+      // a setup that needs a lockfile waits for one
+      const locked = { line: "mkdir node_modules && echo installed", ifAny: ["bun.lock", "bun.lockb"] };
+      expect(run("echo plain", locked).out).not.toContain("installed");
+      await writeFile(join(root, "bun.lockb"), "");
+      expect(run("echo locked", locked).out).toContain("installed");
+      // no package.json: nothing to install, the setup line never runs
+      await rm(join(root, "node_modules"), { recursive: true });
+      await rm(join(root, "package.json"));
+      expect(run("echo plain", setup).out).not.toContain("installed");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
   test("the session list reads the task tag", () => {
     const line = `${name}\tapp\tstrip\t100\t/r/app\t\tdev`;

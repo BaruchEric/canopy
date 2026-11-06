@@ -15,7 +15,8 @@ import { portUnder, type Listening, type TreeFolder } from "../core/ports";
 import { worktreesRoot } from "../core/worktree";
 import { notDown, tearDown, type ComposeExec } from "./stacks";
 import { detectTasks, fillEnv, portSlots, logPage, mergeTasks, nextDelay, normalizeTaskPatch, parseTaskFile, expiredTaskLogs, definedFrom, reapable, staleWants, TASK_TIMINGS, taskStatus, isTaskName, listedTask, overrideOf, paneReading, type MergedTask, type TaskTimings } from "../core/tasks";
-import { killSession, type TaskPane } from "../core/tmux";
+import { BUN_SETUP, killSession, type TaskPane, type TaskSetup } from "../core/tmux";
+import { parseGatesFile } from "../core/gates";
 import { loadConfig, setTask, tasksFor } from "../core/store";
 import type { Repo, ServerEvent, TaskAction, TaskDef, TaskPatch, TaskInfo, TaskRecord, TasksResult, TaskTree, TermInfo } from "../core/types";
 
@@ -87,6 +88,9 @@ interface Runtime {
   port?: number;
 }
 
+/** a repo's merged tasks, and the setup a task in a fresh checkout runs first */
+type Defs = TasksResult & { merged: MergedTask[]; setup?: TaskSetup };
+
 const say = (what: string) => (err: unknown) => console.error(`${what}: ${err instanceof Error ? err.message : err}`);
 
 const json = (body: unknown, status = 200): Response =>
@@ -100,8 +104,8 @@ export class TaskHub {
   /** the last pane list, by termId */
   private panes = new Map<string, TaskPane>();
   private rt = new Map<string, Runtime>();
-  /** merged definitions by repo path, from the last read */
-  private defs = new Map<string, TasksResult & { merged: MergedTask[] }>();
+  /** merged definitions by repo path, with the setup a fresh checkout runs first, from the last read */
+  private defs = new Map<string, Defs>();
   /** what each repo's tasks looked like when last told, by repo id */
   private told = new Map<string, string>();
   private locks = new Map<string, Promise<unknown>>();
@@ -227,14 +231,20 @@ export class TaskHub {
 
   /* ---------- definitions ---------- */
 
-  private async defsOf(repo: Repo, fresh: boolean): Promise<TasksResult & { merged: MergedTask[] }> {
+  private async defsOf(repo: Repo, fresh: boolean): Promise<Defs> {
     const cached = this.defs.get(repo.path);
     if (cached && !fresh) return cached;
     const files = await readTaskFiles(repo.path);
     const file = files.repoFile !== undefined ? parseTaskFile(files.repoFile) : { patches: [], errors: [] };
     const cfg = await loadConfig();
     const { tasks, errors } = mergeTasks(detectTasks(files), file.patches, tasksFor(cfg, repo.path), await this.deps.own(repo));
-    const out = { merged: tasks, tasks: [] as TaskInfo[], errors: [...file.errors, ...errors] };
+    // the gates file's setup line, else bun install for a package.json repo
+    // with a bun lockfile; a gates file that does not parse is the landing
+    // queue's to report, and here it only means no line of its own
+    const gates = files.gates !== undefined ? parseGatesFile(files.gates) : null;
+    const line = gates && !("error" in gates) ? gates.setup : undefined;
+    const setup = line ? { line } : files.pkg !== undefined ? BUN_SETUP : undefined;
+    const out: Defs = { merged: tasks, tasks: [], errors: [...file.errors, ...errors], ...(setup ? { setup } : {}) };
     this.defs.set(repo.path, out);
     return out;
   }
@@ -377,8 +387,11 @@ export class TaskHub {
     const tz = process.env["TZ"];
     // the env var and not -p: a cmd is a shell line, and this outranks .env and the file's name (P3)
     const env = { ...(tz && !repo.host ? { TZ: tz } : {}), ...fillEnv(def.env, ports, dir), ...(project !== null ? { COMPOSE_PROJECT_NAME: project } : {}) };
+    // the main checkout's setup line, as a run's worktree gets it; a compose
+    // task builds in its containers and has no use for node_modules here
+    const setup = isComposeTask(def) ? undefined : (await this.defsOf(repo, false)).setup;
     try {
-      await startTaskSession(tmux, { id, repoId: repo.id, path: repo.path, task: def.name, ...(tree ? { tree: tree.dir } : {}) }, dir, def.cmd, def.cwd, env);
+      await startTaskSession(tmux, { id, repoId: repo.id, path: repo.path, task: def.name, ...(tree ? { tree: tree.dir } : {}) }, dir, def.cmd, def.cwd, env, setup);
     } catch (err) {
       if (!this.running(id)) this.deps.ports?.release(id);
       throw err;

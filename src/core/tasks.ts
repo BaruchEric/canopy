@@ -192,8 +192,9 @@ export function parseMakeTargets(text: string): TaskDef[] {
   return out;
 }
 
-/** the files a repo's tasks are read from, by the key `TaskFiles` uses */
-export const TASK_FILES = { pkg: "package.json", cargo: "Cargo.toml", make: "Makefile", repoFile: ".canopy/tasks.json" } as const;
+/** the files a repo's tasks are read from, by the key `TaskFiles` uses;
+ *  `gates` is for its setup line, which a task in a fresh clone runs first */
+export const TASK_FILES = { pkg: "package.json", cargo: "Cargo.toml", make: "Makefile", repoFile: ".canopy/tasks.json", gates: ".canopy/gates.json" } as const;
 
 export type TaskFiles = Partial<Record<keyof typeof TASK_FILES, string>>;
 

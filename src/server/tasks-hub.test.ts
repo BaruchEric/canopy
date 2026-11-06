@@ -340,6 +340,39 @@ describe.skipIf(!tmux)("the supervisor", () => {
     const all = await h.all();
     expect(all.find((t) => t.name === "lonely")).toMatchObject({ status: "stopped", live: false });
   });
+
+  test("a task in a checkout with no node_modules runs the gates file's setup line first", async () => {
+    const fresh = await makeRepo("fresh", [{ name: "build", cmd: "ls -d node_modules && echo built" }]);
+    await writeFile(join(fresh.path, "package.json"), "{}");
+    await writeFile(join(fresh.path, ".canopy/gates.json"), JSON.stringify({ setup: "mkdir node_modules && echo installed", gates: [] }));
+    repos = [app, solo, fresh];
+    const h = hub();
+    await h.start();
+    await h.act(fresh, "start", "build");
+    const log = join(process.env["CANOPY_CONFIG_DIR"]!, `tasks/logs/${taskTermId(fresh.path, "build")}.log`);
+    // a whole line: the start mark ahead of the run holds the command's text
+    await until(async () => (await readFile(log, "utf8").catch(() => "")).split(/\r?\n/).includes("built"), "the build's output");
+    const lines = (await readFile(log, "utf8")).split(/\r?\n/);
+    expect(lines.indexOf("installed")).toBeGreaterThan(-1);
+    expect(lines.indexOf("installed")).toBeLessThan(lines.indexOf("built"));
+  });
+
+  test("a repo with a bun lockfile and no setup line of its own installs with bun first", async () => {
+    const locked = await makeRepo("locked", [{ name: "build", cmd: "ls -d node_modules/dep && echo built" }]);
+    // a local dependency, so the lockfile is real and the install needs no network
+    await mkdir(join(locked.path, "dep"));
+    await writeFile(join(locked.path, "dep/package.json"), JSON.stringify({ name: "dep", version: "1.0.0" }));
+    await writeFile(join(locked.path, "package.json"), JSON.stringify({ name: "locked", dependencies: { dep: "file:./dep" } }));
+    expect(Bun.spawnSync([process.execPath, "install"], { cwd: locked.path }).exitCode).toBe(0);
+    await rm(join(locked.path, "node_modules"), { recursive: true });
+    repos = [app, solo, locked];
+    const h = hub();
+    await h.start();
+    await h.act(locked, "start", "build");
+    const log = join(process.env["CANOPY_CONFIG_DIR"]!, `tasks/logs/${taskTermId(locked.path, "build")}.log`);
+    await until(async () => (await readFile(log, "utf8").catch(() => "")).split(/\r?\n/).includes("built"), "the build's output");
+    expect(await readFile(log, "utf8")).toContain("canopy: no node_modules, so the setup line runs first: bun install --frozen-lockfile");
+  });
 });
 
 describe.skipIf(!tmux)("routes", () => {

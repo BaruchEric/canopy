@@ -238,7 +238,7 @@ canopy finds tasks on its own in `package.json` scripts, a `Cargo.toml` and a `M
 ]
 ```
 
-`dev` marks the task the preview pairs with, one per repo. `keep` restarts it when it fails (after 1, 2, 4 seconds and on up to a minute, giving up after five quick failures) and after the backend itself restarts. `withPanel` starts it when the repo's panel opens. `hidden` drops a detected task you do not want. `keep` and `withPanel` apply only in a repo whose remote is yours, so a project you cloned from someone else never starts a process by itself. Like shells, tasks survive a canopy redeploy.
+`dev` marks the task the preview pairs with, one per repo. `keep` restarts it when it fails (after 1, 2, 4 seconds and on up to a minute, giving up after five quick failures) and after the backend itself restarts. `withPanel` starts it when the repo's panel opens. `hidden` drops a detected task you do not want. `keep` and `withPanel` apply only in a repo whose remote is yours, so a project you cloned from someone else never starts a process by itself. Like shells, tasks survive a canopy redeploy. In a checkout with a `package.json` and no `node_modules` (a fresh clone), a task first runs the repo's `setup` line from `.canopy/gates.json`, or `bun install --frozen-lockfile` when the repo has none and keeps a `bun.lock`, and its log says so; a setup that fails fails the task.
 
 The panel's **tasks** section lists them with start, stop, restart, a window of their own and edit. A card carries a chip for its running tasks, and the top bar lists every running task across the grove. In the project bench the tasks sit along the side and the picked one's live terminal or log fills the log pane.
 

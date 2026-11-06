@@ -87,8 +87,8 @@ describe("detection", () => {
     expect(t.map((x) => `${x.name}=${x.cmd}`)).toEqual(["build=bun run build", "test=cargo test", "run=cargo run", "extra=make extra"]);
   });
   test("the file dump splits back into files", () => {
-    const out = "\x1epackage.json\n{\"a\":1}\n\x1eMakefile\nall:\n";
-    expect(parseTaskFiles(out)).toEqual({ pkg: '{"a":1}\n', make: "all:\n" });
+    const out = "\x1epackage.json\n{\"a\":1}\n\x1eMakefile\nall:\n\x1e.canopy/gates.json\n{}\n";
+    expect(parseTaskFiles(out)).toEqual({ pkg: '{"a":1}\n', make: "all:\n", gates: "{}\n" });
     expect(parseTaskFiles("")).toEqual({});
   });
 });

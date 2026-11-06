@@ -23,6 +23,7 @@ import {
   taskSessionArgs,
   type TaskMeta,
   type TaskPane,
+  type TaskSetup,
 } from "./tmux";
 import type { TaskRecord } from "./types";
 
@@ -124,15 +125,16 @@ export async function removeLog(termId: string): Promise<void> {
  * Runs a task's command on its session: the session made first when there
  * is none, the log's pipe attached (again, so a rotated log is followed),
  * then the command swapped in for whatever the pane held, with `env` added
- * to its environment.
+ * to its environment. `setup` runs first in a checkout with no
+ * node_modules (`setupFirst`).
  */
-export async function startTaskSession(base: string[], meta: TaskMeta, locator: string, cmd: string, cwd?: string, env: Record<string, string> = {}): Promise<void> {
+export async function startTaskSession(base: string[], meta: TaskMeta, locator: string, cmd: string, cwd?: string, env: Record<string, string> = {}, setup?: TaskSetup): Promise<void> {
   await mkdir(logDir(), { recursive: true });
   if (!(await hasSession(base, meta.id))) {
     const made = await exec(taskSessionArgs(base, meta, { cols: 120, rows: 32 }), { timeoutMs: 15_000 });
     if (made.code !== 0 && !/duplicate session/.test(made.stderr)) throw new Error(made.stderr.trim() || "tmux could not make the task's session");
   }
-  const { command, dir } = taskCommand(locator, cmd, cwd);
+  const { command, dir } = taskCommand(locator, cmd, cwd, setup);
   let piped = await exec(pipeArgs(base, meta.id, logPath(meta.id)), { timeoutMs: 10_000 });
   if (piped.code !== 0 && /has exited/.test(piped.stderr)) {
     // A pane whose last command ended is dead and takes no pipe. Put the
