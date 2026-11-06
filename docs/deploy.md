@@ -1405,6 +1405,10 @@ tailnet node, served at `https://desoto-canopy.tail2d2c60.ts.net:7849` and publi
 `http://desoto-canopy:7850`. The Mac and the mini list those three origins so a page opened
 there can drive them; the LXC lists both public names, every tailnet https origin and the
 plain addresses the other two pages can be open at. It has no public name.
+Its `.env` needs `GH_TOKEN` like the mini's (see Configure). It went up without
+one, and every push from it failed "could not read Username" until the token
+was added on 2026-11-06. The box sits in the store, so a fine-grained token
+limited to the repos pushed from there is safer than a full `gh` login.
 
 Both machines list both tailnet https origins (each `tailscale serve` name,
 amendment 2), since a page opened from either tailnet address may reach
