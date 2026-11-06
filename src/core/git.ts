@@ -930,11 +930,7 @@ export async function push(repoPath: string): Promise<string> {
     );
   }
   if (isNoLogin(lastErr)) {
-    throw new Error(
-      `${lastErr}\n\nThis machine has no login for that remote, so git could ` +
-        `not ask for one. Push from a machine that has one, or give git a ` +
-        `credential helper here.`,
-    );
+    throw new Error(`${lastErr}\n\n${noLoginAdvice(parseLocator(repoPath).host ? {} : process.env)}`);
   }
   throw new Error(lastErr);
 }
@@ -1185,6 +1181,27 @@ export async function dropStaleCopies(repoPath: string, want: { stale: string; o
  *  is not the remote refusing us. */
 export function isNoLogin(stderr: string): boolean {
   return /could not read (?:username|password)/i.test(stderr);
+}
+
+/** What to do about a push git had no login for. In canopy's containers gh is
+ *  git's credential helper (GIT_CONFIG_* in docker-compose.yml) and GH_TOKEN
+ *  is its only login, so an empty GH_TOKEN is the gap, not a missing helper.
+ *  `env` is the server's own; pass `{}` for a repo on another host. */
+export function noLoginAdvice(env: Record<string, string | undefined>): string {
+  const count = Number(env.GIT_CONFIG_COUNT ?? 0);
+  let ghHelper = false;
+  for (let i = 0; i < count; i++) {
+    if (/^credential\..*helper$/i.test(env[`GIT_CONFIG_KEY_${i}`] ?? "") &&
+      /\bgh auth git-credential\b/.test(env[`GIT_CONFIG_VALUE_${i}`] ?? "")) ghHelper = true;
+  }
+  if (ghHelper && !env.GH_TOKEN && !env.GITHUB_TOKEN) {
+    return "gh is git's credential helper here, but GH_TOKEN is empty, so gh " +
+      "had no login to hand over. Set GH_TOKEN in this backend's .env and " +
+      "recreate its containers (docs/deploy.md, Configure).";
+  }
+  return "This machine has no login for that remote, so git could not ask " +
+    "for one. Push from a machine that has one, or give git a credential " +
+    "helper here.";
 }
 
 /** How long a push or a pull may take. A clone months behind a busy

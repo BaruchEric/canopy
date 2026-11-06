@@ -12,6 +12,7 @@ import {
   isAccessDenied,
   isLockedIndex,
   isNoLogin,
+  noLoginAdvice,
   isHash,
   parseLog,
   parseNameStatusZ,
@@ -890,5 +891,22 @@ describe("isNoLogin", () => {
   test("a refusal or a rejected ref is something else", () => {
     expect(isNoLogin("remote: Permission to a/b.git denied to c.")).toBe(false);
     expect(isNoLogin("! [rejected] main -> main (fetch first)")).toBe(false);
+  });
+});
+
+describe("noLoginAdvice", () => {
+  const gh = {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "credential.https://github.com.helper",
+    GIT_CONFIG_VALUE_0: "!gh auth git-credential",
+  };
+  test("gh as the helper with no token names the empty GH_TOKEN", () => {
+    expect(noLoginAdvice({ ...gh, GH_TOKEN: "" })).toMatch(/GH_TOKEN is empty/);
+    expect(noLoginAdvice(gh)).toMatch(/GH_TOKEN is empty/);
+  });
+  test("a token, or no gh helper, keeps the general advice", () => {
+    expect(noLoginAdvice({ ...gh, GH_TOKEN: "x" })).toMatch(/no login for that remote/);
+    expect(noLoginAdvice({ ...gh, GITHUB_TOKEN: "x" })).toMatch(/no login for that remote/);
+    expect(noLoginAdvice({})).toMatch(/no login for that remote/);
   });
 });
