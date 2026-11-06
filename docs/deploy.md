@@ -588,6 +588,9 @@ rules at start and never checks them again, so after the stop,
 `systemctl restart docker`. With `"live-restore": true` in
 `/etc/docker/daemon.json` (reloadable: write it, then `systemctl reload
 docker`) the restart leaves every container and shell running.
+`canopy-backend.service` has `Requires=docker.service`, so systemd re-runs
+it with the restart and its force-recreate step rebuilds the canopy
+container alone: a live run there ends, the shells stay.
 
 **1. Copy the script where only root can change it, and read that copy.**
 The checkout is writable by canopy's containers and peer sync, so the file
