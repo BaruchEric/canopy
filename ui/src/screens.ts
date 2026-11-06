@@ -55,6 +55,16 @@ export function screenNow(): Screen | null {
   return { cls: screenClass(w, h), w, h };
 }
 
+/** Says on <html> what kind of screen the page is on, which styles.css reads
+ *  to scale the type (`--ui`). */
+export function markScreen(): void {
+  const now = screenNow();
+  if (now && typeof document !== "undefined") document.documentElement.dataset["screen"] = now.cls;
+}
+
+/** how much bigger each class sets the type, which is `--ui` in styles.css */
+export const UI_SCALE: Partial<Record<ScreenClass, number>> = { wide: 1.1, ultra: 1.25 };
+
 /** What a window is for, which is its layout: the whole grove, one repo's
  *  panel, one section of it, or one shell. */
 export type WindowKind = "main" | "solo" | "section" | "shell" | "agent";
@@ -150,4 +160,42 @@ export function putScreen(stored: Stored, patch: Stored, slot: string | null, ke
   const screens = isRecord(stored.screens) ? stored.screens : {};
   out.screens = { ...screens, [slot]: { ...slotOf(stored, slot), ...sized } };
   return out;
+}
+
+/** the saved zooms a slot can hold, by key, each a map of name to zoom */
+const ZOOM_MAPS = ["zoom", "frontZoom", "popZooms"];
+
+/** A slot's zooms with the class's new type scale taken out of them, each to
+ *  the nearest of `stops`. */
+function unscaled(slot: Stored, scale: number, stops: readonly number[]): Stored {
+  const out: Stored = { ...slot };
+  for (const key of ZOOM_MAPS) {
+    const map = slot[key];
+    if (!isRecord(map)) continue;
+    out[key] = Object.fromEntries(
+      Object.entries(map).map(([name, z]) => {
+        if (typeof z !== "number") return [name, z];
+        const want = z / scale;
+        return [name, stops.reduce((best, s) => (Math.abs(s - want) < Math.abs(best - want) ? s : best), 1)];
+      }),
+    );
+  }
+  return out;
+}
+
+/** Zooms picked before `--ui` were picked against smaller type, so on a class
+ *  it scales they would now stack on top of it: a board at 150% on an ultra
+ *  screen would come out at 188%. This takes the scale back out of every
+ *  slot of those classes, once. The mark is on the stored object, so a zoom
+ *  picked after it stays as picked. The flat copy is any screen's and stays
+ *  as it is. */
+export function withoutOldScale(stored: Stored, stops: readonly number[]): Stored {
+  if (stored.uiScaled === true) return stored;
+  const screens = isRecord(stored.screens) ? stored.screens : {};
+  const slots: Stored = {};
+  for (const [key, slot] of Object.entries(screens)) {
+    const scale = UI_SCALE[key.split(".")[0] as ScreenClass];
+    slots[key] = scale && isRecord(slot) ? unscaled(slot, scale, stops) : slot;
+  }
+  return { ...stored, screens: slots, uiScaled: true };
 }

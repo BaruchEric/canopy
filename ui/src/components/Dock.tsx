@@ -1,6 +1,6 @@
 import { agentName, allAgents } from "../allagents";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import type { CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import type { CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode, RefObject } from "react";
 import { api, staleOf } from "../api";
 import {
   FILE_COL_INFO,
@@ -85,7 +85,7 @@ import { CommitRow } from "./Commit";
 import { DiffView } from "./DiffView";
 import { ReviewNotesStrip } from "./ReviewNotes";
 import { takesNotes, WORKING_TREE } from "../reviewnotes";
-import { baseName, branchText, changesHead, pushText, worktreeText } from "../elsewhere";
+import { baseName, branchText, changesHead, pushText, worktreeText, type HeadPart } from "../elsewhere";
 import { ElsewhereChips, PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
 import { Star } from "./Star";
@@ -99,6 +99,7 @@ import { PanelShells } from "./TermDock";
 import { Gear, type GearEntry } from "./Gear";
 import {
   FocusBackdrop,
+  PanelRail,
   Section,
   useLeaveOnEscape,
   modeEntries,
@@ -106,7 +107,9 @@ import {
   useSectionClosed,
   useZoom,
   zoomStyle,
+  type PanelRailContext,
 } from "./Surface";
+import { Icon, type IconName } from "./Icon";
 import { SECTION_WORD, foldKeys, moveSection, toggleHidden, type SectionKey, type SurfaceMode } from "../surface";
 import { POPUP_WORD, sectionApplies, tabbedKeys, type TabRef } from "../sectiontabs";
 import { openElsewhere, soloUrl } from "../routes";
@@ -116,6 +119,7 @@ import {
   OPENER_IDS,
   type ElsewhereDetail,
   type LogEntry,
+  type OpenerId,
   type PushAccess,
   type Repo,
   type RepoFile,
@@ -124,6 +128,16 @@ import {
 } from "../../../src/core/types";
 import { SPEC_TONE, SPEC_WORDS } from "../../../src/core/treelines";
 import { isTreeCard } from "../../../src/core/treewords";
+
+/** the tool each opener shows as along a panel's action row */
+const OPENER_ICON: Record<OpenerId, IconName> = {
+  kitty: "window",
+  terminal: "terminal",
+  code: "code",
+  finder: "folder",
+  agent: "spark",
+  herdr: "herd",
+};
 
 /** The width of each column, in the order the settings put them. The
  *  checkbox is always the first track. */
@@ -458,13 +472,14 @@ function WorkspaceMenu({
     <span className="ws-menu">
       <button
         type="button"
-        className="mini"
+        className={memberOf.length > 0 ? "tool tool-word" : "tool"}
         onClick={() => setOpen(!open)}
         aria-expanded={open}
+        aria-label={memberOf.length > 0 ? `In workspace ${memberOf.map((w) => w.name).join(", ")}` : "Add to workspace"}
+        title={memberOf.length > 0 ? "The workspaces this repo is in" : "Add to workspace"}
       >
-        {memberOf.length > 0
-          ? `ws: ${memberOf.map((w) => w.name).join(", ")}`
-          : "add to workspace"}
+        <Icon name="layers" />
+        {memberOf.length > 0 && <span>{memberOf.map((w) => w.name).join(", ")}</span>}
       </button>
       {open && (
         <span className="ws-pop">
@@ -1014,6 +1029,7 @@ function History({ repo }: { repo: Repo }) {
       k="history"
       className="history"
       label="History"
+      tab={log && unpushedIn(log) ? `↑${unpushedIn(log)}` : null}
       head={log ? `${unpushedIn(log) ? `↑${unpushedIn(log)} not pushed · ` : ""}${log.length}` : "…"}
     >
       {error ? (
@@ -1129,6 +1145,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
     on: view === v.value,
     run: () => setSetting("fileView", v.value),
   }));
+  const headParts = changesHead(st, peerWipCounts(repo.peers));
 
   return (
     <Section
@@ -1136,15 +1153,9 @@ function ChangesSection({ repo }: { repo: Repo }) {
       k="changes"
       className="changes-section"
       label="Changes"
-      head={changesHead(st, peerWipCounts(repo.peers)).map((p, i, all) => (
-        <Fragment key={i}>
-          {/* +12 −3 read as one figure, the rest apart */}
-          {i > 0 && (p.cls === "n-del" && all[i - 1]?.cls === "n-add" ? " " : " · ")}
-          <span className={p.cls} title={p.title}>
-            {p.text}
-          </span>
-        </Fragment>
-      ))}
+      tab={(st?.files.length ?? 0) > 0 ? st?.files.length : null}
+      head={headLine(headParts)}
+      bar={headLine(headParts.slice(1))}
       layout={views}
       copy={() => files.map((f) => `${markOf(f)} ${f.orig ? `${f.orig} → ${f.path}` : f.path}`).join("\n")}
       // a paste lands in the commit message, after what is there
@@ -1186,7 +1197,7 @@ function ChangesSection({ repo }: { repo: Repo }) {
             <span className="spacer" />
             <button
               type="button"
-              className="mini strong"
+              className="mini"
               disabled={busy !== null}
               onClick={() => void doCommit(false)}
             >
@@ -1314,6 +1325,7 @@ function SpecSection({ repo, state }: { repo: Repo; state: SpecState }) {
       k="spec"
       className="spec"
       label="Spec"
+      tab={null}
       head={<span className={`spec-state t-${SPEC_TONE[state]}`}>{SPEC_WORDS[state]}</span>}
       title="Where this checkout stands against the shared repo spec"
     >
@@ -1464,6 +1476,7 @@ function PanelGear({
   const popOut = useStore((s) => s.popOut);
   const carousel = useStore((s) => s.settings.dockCarousel);
   const panelClose = useStore((s) => s.settings.panelClose);
+  const sectionsAs = useStore((s) => s.settings.panelSections);
   // a phone's dock stays as it was, without the moves, the carousel or
   // pop out
   const phone = useMedia(PHONE);
@@ -1509,6 +1522,13 @@ function PanelGear({
       ] satisfies GearEntry[]),
     { type: "item", label: "intermediate panel", on: level === "intermediate", run: () => setSetting("level", "intermediate") },
     { type: "item", label: "advanced panel", on: level === "advanced", run: () => setSetting("level", "advanced") },
+    {
+      type: "item",
+      label: "sections as tabs",
+      on: sectionsAs === "tabs",
+      title: sectionsAs === "tabs" ? "One section in view at a time. Pick for a stack where several fold open at once" : "A stack of folding sections. Pick for one in view at a time",
+      run: () => setSetting("panelSections", sectionsAs === "tabs" ? "stack" : "tabs"),
+    },
   ];
   const rows: GearEntry[] = order.map((k, i) => ({
     type: "row",
@@ -1524,7 +1544,7 @@ function PanelGear({
   const front = useStore((s) => s.front);
   const foldSections = useStore((s) => s.foldSections);
   const foldable = foldKeys(order, hidden, (k) => benchHolds(front, repo.id, k));
-  const foldAll: GearEntry[] = [
+  const foldAll: GearEntry[] = sectionsAs === "tabs" && mode !== "focus" ? [] : [
     {
       type: "item",
       label: `fold every section of ${repo.name}`,
@@ -2783,6 +2803,44 @@ function CliPanel({
   );
 }
 
+/** a changes head's parts on one line */
+function headLine(parts: readonly HeadPart[]): ReactNode {
+  return parts.map((p, i, all) => (
+    <Fragment key={i}>
+      {/* +12 −3 read as one figure, the rest apart */}
+      {i > 0 && (p.cls === "n-del" && all[i - 1]?.cls === "n-add" ? " " : " · ")}
+      <span className={p.cls} title={p.title}>
+        {p.text}
+      </span>
+    </Fragment>
+  ));
+}
+
+/** How many of its own text's ems a panel needs before its summary moves
+ *  beside its sections. In ems so a bigger screen class or zoom moves the
+ *  line with the words. */
+const WIDE_PANEL_EMS = 58;
+
+/** Whether the panel body has room for two columns. A class set from here
+ *  and not a container query, since a size container traps the fixed boxes
+ *  inside it in the browsers that still apply layout containment. */
+function useWideBody(body: RefObject<HTMLElement | null>, on: boolean): boolean {
+  const [wide, setWide] = useState(false);
+  useLayoutEffect(() => {
+    const el = body.current;
+    if (!on || !el) {
+      setWide(false);
+      return;
+    }
+    const measure = () => setWide(el.clientWidth >= WIDE_PANEL_EMS * parseFloat(getComputedStyle(el).fontSize));
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    measure();
+    return () => watch.disconnect();
+  }, [body, on]);
+  return wide;
+}
+
 export function RepoPanel({
   id,
   width,
@@ -2882,6 +2940,34 @@ export function RepoPanel({
   const benchRail = useStore((s) => s.settings.benchRail);
   const benchDock = useStore((s) => s.settings.benchDock);
   const benchSplit = useStore((s) => s.settings.benchSplit);
+  // The rail of section tabs: its sections show one at a time, the one
+  // picked for this repo or else the first the order has. The bench lays
+  // its sections out itself, and a guided panel shows none.
+  const asTabs = useStore((s) => s.settings.panelSections) === "tabs" && !bench && !(level === "intermediate" && !more);
+  const wide = useWideBody(bodyRef, !!repo && !bench && !(level === "intermediate" && !more));
+  const [railEl, setRailEl] = useState<HTMLElement | null>(null);
+  const [offered, setOffered] = useState<readonly SectionKey[]>([]);
+  const addTab = useCallback((k: SectionKey) => setOffered((now) => (now.includes(k) ? now : [...now, k])), []);
+  const dropTab = useCallback((k: SectionKey) => setOffered((now) => now.filter((x) => x !== k)), []);
+  const pickedTab = useStore((s) => s.panelTabs[id]);
+  const setPanelTab = useStore((s) => s.setPanelTab);
+  const pickTab = useCallback((k: SectionKey) => setPanelTab(id, k), [id, setPanelTab]);
+  const tabShowing = offered.find((k) => k === pickedTab) ?? order.find((k) => offered.includes(k)) ?? null;
+  const rail = useMemo<PanelRailContext | null>(
+    () => (asTabs ? { el: railEl, active: tabShowing, pick: pickTab, add: addTab, drop: dropTab, keys: order.filter((k) => offered.includes(k)) } : null),
+    [asTabs, railEl, tabShowing, pickTab, addTab, dropTab, order, offered],
+  );
+  // a narrow rail scrolls sideways: the tab showing stays in it, without
+  // moving the dock the way scrollIntoView would
+  useEffect(() => {
+    const on = railEl?.querySelector<HTMLElement>(".section-tab.on");
+    const row = on?.parentElement;
+    if (!on || !row) return;
+    const left = on.offsetLeft - row.offsetLeft;
+    const right = left + on.offsetWidth;
+    if (left < row.scrollLeft) row.scrollLeft = left;
+    else if (right > row.scrollLeft + row.clientWidth) row.scrollLeft = right - row.clientWidth;
+  }, [railEl, tabShowing]);
   // true full screen: the browser's, over the whole page, with the panel
   // in its fill-the-window mode. Leaving by any road ends it. Where the
   // browser can, Escape is locked to the page while it lasts, so a shell
@@ -3022,7 +3108,6 @@ export function RepoPanel({
   const guided = level === "intermediate" && !more;
 
   const showError = (text: string) => setNote({ kind: "err", text });
-
   const run = async (label: string, fn: () => Promise<string | void>) => {
     setBusy(label);
     setNote(null);
@@ -3061,7 +3146,7 @@ export function RepoPanel({
       {bench && <FocusBackdrop onLeave={() => setMode("normal")} />}
     <section
       ref={box}
-      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}${modeClass}`}
+      className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${asTabs ? " panel-tabbed" : ""}${wide ? " panel-wide" : ""}${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
       data-pane={bench ? (shownPane ?? undefined) : undefined}
@@ -3090,10 +3175,10 @@ export function RepoPanel({
           {GLYPH[stateOf(repo)]}
         </span>
         <span className="panel-name" title={repo.path} {...(movable && dragHandle(id, repo.name))}>
-          <IdLabel id={repo.id} name={isTreeCard(repo) ? repo.name : undefined} />
+          <IdLabel id={repo.id} name={isTreeCard(repo) ? repo.name : undefined} folder />
         </span>
         <Star repoId={repo.id} name={repo.name} onError={showError} />
-        {!guided && repo.link && <RepoLink url={repo.link} name={repo.name} labeled />}
+        {!guided && repo.link && <RepoLink url={repo.link} name={repo.name} />}
         {!guided && many && <PanelMachines id={id} />}
         <span className="spacer" />
         {!repo.forge && (
@@ -3105,7 +3190,7 @@ export function RepoPanel({
             aria-pressed={bench}
             onClick={() => setMode(bench ? "normal" : "focus")}
           >
-            ⧉
+            <Icon name="front" />
           </button>
         )}
         <PanelGear repo={repo} mode={mode} setMode={setMode} body={() => bodyRef.current} solo={solo} screen={screen} toggleScreen={toggleScreen} />
@@ -3117,7 +3202,7 @@ export function RepoPanel({
             onClick={() => closePanel(id)}
             aria-label={`Close ${repo.name}`}
           >
-            ✕
+            <Icon name="close" />
           </button>
         )}
       </header>
@@ -3136,136 +3221,140 @@ export function RepoPanel({
               </button>
             </div>
           )}
-          {many && <PanelAway id={id} />}
-          {!repo.host && !repo.forge && isHome(repo.id) && (
-            <a
-              className="panel-library"
-              href={`?view=library&project=${encodeURIComponent(repo.path)}`}
-            >
-              Library · tags, notes, links & dev server →
-            </a>
-          )}
-          {repo.description && (
-            <p className="panel-desc" title={repo.description}>
-              {repo.description}
-            </p>
-          )}
+          <div className="panel-lede">
+            {many && <PanelAway id={id} />}
+            {repo.description && (
+              <p className="panel-desc" title={repo.description}>
+                {repo.description}
+              </p>
+            )}
 
-          <div className="panel-sub">
-            <span className="branch">{st?.branch ?? "—"}</span>
-            {st?.upstream && <span className="upstream">⇢ {st.upstream}</span>}
-            {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
-            {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
-            {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
-            <ElsewhereChips st={st} />
-            <PeerChips st={repo.peers} />
-            {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
-            <span className="when">{ago(st?.lastCommit?.at)}</span>
-            {st?.user && (
-              <span
-                className="who"
-                title={`commits as ${st.user.name} <${st.user.email}>`}
-              >
-                {st.user.name || st.user.email}
+            <div className="panel-sub">
+              <span className="branch">{st?.branch ?? "—"}</span>
+              {st?.upstream && <span className="upstream">⇢ {st.upstream}</span>}
+              {(st?.ahead ?? 0) > 0 && <span className="ahead">↑{st?.ahead}</span>}
+              {(st?.behind ?? 0) > 0 && <span className="behind">↓{st?.behind}</span>}
+              {st?.tip && <RemoteTipChip tip={st.tip} upstream={st.upstream} />}
+              <ElsewhereChips st={st} />
+              <PeerChips st={repo.peers} />
+              {repo.pulls && <Pulls pulls={repo.pulls} name={repo.name} />}
+              <TaskChip repoId={repo.id} />
+              <NoteChip repoId={repo.id} />
+              <span className="when" title={st?.user ? `commits as ${st.user.name} <${st.user.email}>` : undefined}>
+                {ago(st?.lastCommit?.at)}
               </span>
-            )}
-          </div>
-
-          {(repoFlow || repoRun) && (
-            <div className="panel-run">
-              {repoActiveFlow ? (
-                <FlowChip flow={repoActiveFlow} long />
-              ) : repoRun ? (
-                <RunChip run={repoRun} long />
-              ) : (
-                repoFlow && <FlowChip flow={repoFlow} long />
-              )}
             </div>
-          )}
-          <TaskChip repoId={repo.id} />
-          <NoteChip repoId={repo.id} />
 
-          <div className="panel-actions">
-            {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (
-              <button
-                key={app}
-                type="button"
-                className="mini"
-                title={
-                  app === "agent"
-                    ? "Start the repo's agent (its shell route: Claude Code or Codex) in a terminal here"
-                    : app === "herdr"
-                      ? "Open this repo as a herdr workspace with the repo's agent running in it"
+            {(repoFlow || repoRun) && (
+              <div className="panel-run">
+                {repoActiveFlow ? (
+                  <FlowChip flow={repoActiveFlow} long />
+                ) : repoRun ? (
+                  <RunChip run={repoRun} long />
+                ) : (
+                  repoFlow && <FlowChip flow={repoFlow} long />
+                )}
+              </div>
+            )}
+
+            <div className="panel-actions">
+              <div className="panel-tools" role="group" aria-label={`Open ${repo.name}`}>
+                {OPENER_IDS.filter((app) => openers.includes(app)).map((app) => (
+                  <button
+                    key={app}
+                    type="button"
+                    className="tool"
+                    aria-label={`Open in ${app}`}
+                    title={
+                      app === "agent"
+                        ? "Start the repo's agent (its shell route: Claude Code or Codex) in a terminal here"
+                        : app === "herdr"
+                          ? "Open this repo as a herdr workspace with the repo's agent running in it"
+                          : `Open in ${app}`
+                    }
+                    onClick={() =>
+                      void run(`open-${app}`, async () => {
+                        await openApp(id, app);
+                      })
+                    }
+                  >
+                    <Icon name={OPENER_ICON[app]} />
+                  </button>
+                ))}
+                {!openers.includes("code") && !repo.host && !repo.forge && backend.sshHost && (
+                  <a
+                    className="tool"
+                    href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
+                    aria-label="Open in VS Code over Remote-SSH"
+                    title="Open this repo in VS Code over Remote-SSH on your own machine"
+                  >
+                    <Icon name="code" />
+                  </a>
+                )}
+                {!repo.host && !repo.forge && isHome(repo.id) && (
+                  <a
+                    className="tool panel-library"
+                    href={`?view=library&project=${encodeURIComponent(repo.path)}`}
+                    aria-label="Library"
+                    title="The Library: this repo's tags, notes, links and dev server"
+                  >
+                    <Icon name="book" />
+                  </a>
+                )}
+                {isHome(repo.id) && <WorkspaceMenu repo={repo} onError={showError} />}
+              </div>
+              <div className="panel-sync">
+                <button
+                  type="button"
+                  className="mini"
+                  disabled={busy !== null}
+                  onClick={pull}
+                >
+                  pull
+                </button>
+                <button
+                  type="button"
+                  className={st?.ahead ? "mini strong" : "mini"}
+                  // A branch with no upstream reports ahead: 0 but still needs its
+                  // first push, so only a tracked-and-level branch disables this.
+                  disabled={busy !== null || ((st?.ahead ?? 0) === 0 && !!st?.upstream)}
+                  title={
+                    st?.ahead
+                      ? `send ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream ?? "the remote"}; history marks them ↑ not pushed`
                       : undefined
-                }
-                onClick={() =>
-                  void run(`open-${app}`, async () => {
-                    await openApp(id, app);
-                  })
-                }
-              >
-                {app}
-              </button>
-            ))}
-            {!openers.includes("code") && !repo.host && !repo.forge && backend.sshHost && (
-              <a
-                className="mini"
-                href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
-                title="Open this repo in VS Code over Remote-SSH on your own machine"
-              >
-                code ↗
-              </a>
-            )}
-            <span className="spacer" />
-            <button
-              type="button"
-              className="mini"
-              disabled={busy !== null}
-              onClick={pull}
-            >
-              pull
-            </button>
-            <button
-              type="button"
-              className="mini"
-              // A branch with no upstream reports ahead: 0 but still needs its
-              // first push, so only a tracked-and-level branch disables this.
-              disabled={busy !== null || ((st?.ahead ?? 0) === 0 && !!st?.upstream)}
-              title={
-                st?.ahead
-                  ? `send ${st.ahead} commit${st.ahead === 1 ? "" : "s"} to ${st.upstream ?? "the remote"}; history marks them ↑ not pushed`
-                  : undefined
-              }
-              onClick={push}
-            >
-              {busy === "push"
-                ? "pushing…"
-                : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
-            </button>
-          </div>
-          <GitNote id={id} note={note} setNote={setNote} retry={lastMove} />
-
-          {access === "denied" && (
-            <p className="panel-hint">
-              No remote accepts your pushes. Fork the repo, then add your copy as a
-              remote to push this branch.
-            </p>
-          )}
-
-          {isHome(repo.id) && (
-            <div className="panel-ws">
-              <WorkspaceMenu repo={repo} onError={showError} />
+                  }
+                  onClick={push}
+                >
+                  {busy === "push"
+                    ? "pushing…"
+                    : `push${st?.ahead ? ` ↑${st.ahead}` : ""}`}
+                </button>
+              </div>
             </div>
-          )}
+            <GitNote id={id} note={note} setNote={setNote} retry={lastMove} />
 
-          <ReviewNotesStrip repo={repo} onNote={(kind, text) => setNote({ kind, text })} />
+            {access === "denied" && (
+              <p className="panel-hint">
+                No remote accepts your pushes. Fork the repo, then add your copy as a
+                remote to push this branch.
+              </p>
+            )}
+
+            <ReviewNotesStrip repo={repo} onNote={(kind, text) => setNote({ kind, text })} />
+
+            {rail && !repo.error && <div className="section-rail" role="tablist" aria-orientation={wide ? "vertical" : "horizontal"} aria-label={`Sections of ${repo.name}`} ref={setRailEl} />}
+          </div>
 
           {repo.error ? (
             <p className="panel-error">Could not read this repo: {repo.error}</p>
           ) : (
-            order
-              .filter((k) => !hiddenSections.includes(k) && !tabbed.has(k))
-              .map((k) => <PanelSection key={k} k={k} repo={repo} />)
+            <PanelRail.Provider value={rail}>
+              {order
+                .filter((k) => !hiddenSections.includes(k) && !tabbed.has(k))
+                .map((k) => (
+                  <PanelSection key={k} k={k} repo={repo} />
+                ))}
+            </PanelRail.Provider>
           )}
         </>
       )}

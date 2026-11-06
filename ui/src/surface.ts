@@ -291,3 +291,14 @@ export function escapeLeaves(target: { closest(sel: string): unknown } | null, t
   if (target.closest(OWN_ESCAPE)) return false;
   return !(typing && target.closest(TEXT_ESCAPE));
 }
+
+/** The tab a key moves to along a rail of `keys` from `at`: the arrows step
+ *  either way whichever way the rail runs, wrapping, and Home and End go to
+ *  its ends. Null for any other key. */
+export function railStep<K extends string>(keys: readonly K[], at: K, key: string): K | null {
+  if (key === "Home") return keys[0] ?? null;
+  if (key === "End") return keys[keys.length - 1] ?? null;
+  const step = key === "ArrowRight" || key === "ArrowDown" ? 1 : key === "ArrowLeft" || key === "ArrowUp" ? -1 : 0;
+  if (step === 0) return null;
+  return keys[(keys.indexOf(at) + step + keys.length) % keys.length] ?? null;
+}

@@ -255,6 +255,7 @@ export function TreesSection({ repo }: { repo: Repo }) {
       k="worktrees"
       className="trees-section"
       label="Worktrees"
+      tab={trees.length > 0 ? trees.length : null}
       head={<span className={headTone}>{treesHead(trees)}</span>}
       title="Worktrees kept by hand, one per branch, each with the repo's setup run and its build caches cloned in. A shell or an agent opens inside one; sync rebases a tree onto its base, by hand or by itself whenever the base moves; merge folds a tree's branch into its base and removes it; clean up removes the trees already merged."
       copy={() => treeLines(trees)}

@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode, RefObject } from "react";
+import { createPortal } from "react-dom";
 import { openSectionElsewhere } from "../routes";
 import { closedIn, idText, useStore } from "../store";
 import {
@@ -11,6 +12,7 @@ import {
   withFrontZoom,
   withZoom,
   zoomOf,
+  railStep,
   zoomStep,
   zoomWord,
   ZOOM_MAX,
@@ -39,14 +41,32 @@ import { Gear, type GearEntry, type GearGroup } from "./Gear";
  *  and its gear has no place in a panel to offer */
 export const SectionWindow = createContext(false);
 
+/** A panel's rail of section tabs, while its sections show one at a time:
+ *  where each section's tab goes, the one showing, and the sections that
+ *  turned up, since a section with nothing to say renders no tab. Null in a
+ *  stacked panel and wherever a section sits outside a panel, so a section
+ *  there keeps its fold. */
+export interface PanelRailContext {
+  el: HTMLElement | null;
+  active: string | null;
+  pick: (key: SectionKey) => void;
+  add: (key: SectionKey) => void;
+  drop: (key: SectionKey) => void;
+  /** the tabs in the order they show */
+  keys: readonly SectionKey[];
+}
+export const PanelRail = createContext<PanelRailContext | null>(null);
+
 /** whether `key` is folded in `repoId`'s panel; never in a section window,
  *  which reads the grove's folds but must not write them, nor for a pane
  *  of the project's bench while it is in front */
 export function useSectionClosed(repoId: string, key: string): boolean {
   const lone = useContext(SectionWindow);
+  const rail = useContext(PanelRail);
   const held = useStore((s) => benchHolds(s.front, repoId, key));
   const closed = useStore((s) => closedIn(s, repoId, key));
-  return lone || held ? false : closed;
+  if (lone || held) return false;
+  return rail ? rail.active !== key : closed;
 }
 
 /** true while the project's bench holds `key` open, so its fold does nothing */
@@ -425,6 +445,8 @@ export function Section({
   className,
   label,
   head,
+  bar,
+  tab,
   title,
   after,
   layout = [],
@@ -442,6 +464,13 @@ export function Section({
   label: string;
   /** what the fold header says after the section's name */
   head: ReactNode;
+  /** the head on the section's own line under a tab, where the tab already
+   *  says part of it */
+  bar?: ReactNode;
+  /** what its tab in a panel's rail says after its name, where the head is
+   *  too long to sit there; null says nothing. Left out, the tab says the
+   *  head, and the section's own line does not say it again. */
+  tab?: ReactNode;
   title?: string;
   /** shown under the header whether folded or not */
   after?: ReactNode;
@@ -460,6 +489,18 @@ export function Section({
   children: ReactNode;
 }) {
   const lone = useContext(SectionWindow);
+  // behind a panel's rail its header is a tab there and its tools a bar over
+  // the body, while it shows
+  const rail = useContext(PanelRail);
+  const tabbed = rail !== null && !lone;
+  const railAdd = rail?.add;
+  const railDrop = rail?.drop;
+  useLayoutEffect(() => {
+    if (!railAdd || !railDrop) return;
+    railAdd(k);
+    return () => railDrop(k);
+  }, [railAdd, railDrop, k]);
+  const place = useStore((s) => s.settings.sectionOrder.indexOf(k));
   const closed = useSectionClosed(repo.id, k);
   const toggleSection = useStore((s) => s.toggleSection);
   const box = useRef<HTMLElement>(null);
@@ -504,32 +545,75 @@ export function Section({
       entries: shareEntries({ el: () => box.current, label: `${word} ${idText(repo.id)}`, copy, paste, noCapture }),
     },
   ];
+  const toolbar = !closed && (typeof tools === "function" ? tools(shown, setMode) : tools);
+  const gear = <Gear label={`${word} at ${repo.name}`} groups={groups} />;
+  // what the tab says after the word: the head, unless told otherwise
+  const note = tab === undefined ? head : tab;
   return (
-    <section
+    <>
+      {tabbed &&
+        rail.el &&
+        createPortal(
+          <button
+            type="button"
+            role="tab"
+            className={`section-tab${closed ? "" : " on"}`}
+            data-key={k}
+            aria-selected={!closed}
+            tabIndex={closed ? -1 : 0}
+            style={{ order: place }}
+            title={title}
+            onClick={() => rail.pick(k)}
+            onKeyDown={(e) => {
+              const to = railStep(rail.keys, k, e.key);
+              if (!to) return;
+              e.preventDefault();
+              rail.pick(to);
+              rail.el?.querySelector<HTMLElement>(`[data-key="${to}"]`)?.focus();
+            }}
+          >
+            <span className="section-tab-word">{word}</span>
+            {note !== null && note !== "" && note !== "0" && note !== "…" && <span className="section-tab-note">{note}</span>}
+          </button>,
+          rail.el,
+        )}
+      <section
         ref={box}
         className={`${className} surface${mode === "full" ? " section-full" : ""}`}
         aria-label={label}
         data-section={k}
+        hidden={tabbed && closed}
       >
-        <div className="section-head">
-          <button
-            type="button"
-            className={`panel-label fold${closed ? "" : " open"}`}
-            aria-expanded={!closed}
-            disabled={lone || held}
-            onClick={() => toggleSection(repo.id, k)}
-            title={title}
-          >
-            {word} <span>{head}</span>
-          </button>
-          {!closed && (typeof tools === "function" ? tools(shown, setMode) : tools)}
-          <Gear label={`${word} at ${repo.name}`} groups={groups} />
-        </div>
+        {tabbed ? (
+          !closed && (
+            <div className="section-bar">
+              <span className="section-bar-head">{bar !== undefined ? bar : tab !== undefined && head}</span>
+              <span className="section-bar-tools">{toolbar}</span>
+              {gear}
+            </div>
+          )
+        ) : (
+          <div className="section-head">
+            <button
+              type="button"
+              className={`panel-label fold${closed ? "" : " open"}`}
+              aria-expanded={!closed}
+              disabled={lone || held}
+              onClick={() => toggleSection(repo.id, k)}
+              title={title}
+            >
+              {word} <span>{head}</span>
+            </button>
+            {toolbar}
+            {gear}
+          </div>
+        )}
         <div className="section-main" style={zoomStyle(zoom)}>
           {after}
           {!closed && children}
         </div>
         {!closed && below}
-    </section>
+      </section>
+    </>
   );
 }

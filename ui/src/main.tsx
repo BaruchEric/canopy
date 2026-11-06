@@ -4,6 +4,8 @@ import { App } from "./App";
 import { installSoftKeys } from "./softkeys";
 import { registerWorker } from "./install";
 import { startPush } from "./pushclient";
+import "@fontsource-variable/instrument-sans/wght.css";
+import "@fontsource-variable/jetbrains-mono/wght.css";
 import "./styles.css";
 
 installSoftKeys();

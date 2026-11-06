@@ -14,13 +14,14 @@ import { TERM_FONT } from "./term";
 import { termFontSize } from "./touch";
 import { PREVIEW_H, previewHeightOf } from "./preview";
 import { BENCH_DOCK, BENCH_SPLIT, benchRailOf, shareOf } from "./front";
-import { putScreen, slotsNow, withScreen, writesFlat } from "./screens";
+import { putScreen, slotsNow, withScreen, withoutOldScale, writesFlat } from "./screens";
 import { popSizesOf, popZoomsOf, type PopSizes, type PopZooms } from "./pop";
 import { splitsOf, type PaneTree } from "./splitpanes";
 import { itemTabsOf, sectionTabsOf, type ItemTab, type SectionTab } from "./sectiontabs";
 import { BOARD_GROUPINGS, BOARD_LAYOUTS, type BoardGrouping, type BoardLayout } from "./board";
 import {
   SECTION_KEYS,
+  ZOOM_STOPS,
   normalizeTermFonts,
   normalizeZooms,
   sectionOrder,
@@ -98,6 +99,11 @@ export type Palette = (typeof PALETTES)[number];
 export const DENSITIES = ["cozy", "compact"] as const;
 export type Density = (typeof DENSITIES)[number];
 
+/** How a panel lays out its sections: one in view at a time behind a rail of
+ *  tabs, or all of them folding in a stack. */
+export const PANEL_SECTIONS = ["tabs", "stack"] as const;
+export type PanelSections = (typeof PANEL_SECTIONS)[number];
+
 export const FORGE_VIEWS = ["missing", "all"] as const;
 /** "missing" keeps only the forge repos with no clone on this machine, which
  *  is the half a folder scan cannot already show. */
@@ -161,6 +167,8 @@ export interface Settings {
   sectionOrder: SectionKey[];
   /** the sections every panel leaves out */
   sectionsHidden: SectionKey[];
+  /** a panel's sections as tabs or as a folding stack */
+  panelSections: PanelSections;
   /** the backends the home backend named last time, so the page can say
    *  which ones it knows before the answer comes */
   backends: BackendEntry[];
@@ -258,6 +266,7 @@ export const DEFAULT_SETTINGS: Settings = {
   frontZoom: {},
   sectionOrder: [...SECTION_KEYS],
   sectionsHidden: [],
+  panelSections: "tabs",
   backends: [],
   hiddenBackends: [],
   level: "intermediate",
@@ -388,6 +397,7 @@ export const SCREEN_SETTINGS = [
   "fileSort",
   "sectionOrder",
   "sectionsHidden",
+  "panelSections",
   "inboxText",
   "inboxWrap",
   "inboxFold",
@@ -415,7 +425,10 @@ export function loadSettings(): Settings {
     // A browser that kept a layout but never changed a setting is one from
     // before levels, not a new one: it keeps the panel it had.
     if (!raw) return localStorage.getItem("canopy.layout") ? { ...DEFAULT_SETTINGS, ...levelOf({}) } : DEFAULT_SETTINGS;
-    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(storedSettings(), slotsNow(), SCREEN_SETTINGS);
+    const stored = storedSettings();
+    const scaled = withoutOldScale(stored, ZOOM_STOPS);
+    if (scaled !== stored) localStorage.setItem(KEY, JSON.stringify(scaled));
+    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(scaled, slotsNow(), SCREEN_SETTINGS);
     // Every field is validated against its list: a value written by an older
     // build or edited by hand must not put the UI in a state it cannot render.
     return {
@@ -446,6 +459,7 @@ export function loadSettings(): Settings {
       frontZoom: normalizeZooms(saved.frontZoom, true),
       sectionOrder: sectionOrder(saved.sectionOrder),
       sectionsHidden: sectionsHidden(saved.sectionsHidden),
+      panelSections: pick(PANEL_SECTIONS, saved.panelSections, DEFAULT_SETTINGS.panelSections),
       backends: backendEntries(saved.backends),
       hiddenBackends: backendNamesOf(saved.hiddenBackends),
       inboxText: inboxTextOf(saved.inboxText),
@@ -478,7 +492,7 @@ export function saveSettings(s: Settings): void {
     // and a pop-out leaves the flat ones as the main window set them
     const stored = storedSettings();
     const flat = writesFlat();
-    const base: Record<string, unknown> = stored.screens === undefined ? {} : { screens: stored.screens };
+    const base: Record<string, unknown> = { ...(stored.screens !== undefined && { screens: stored.screens }), ...(stored.uiScaled === true && { uiScaled: true }) };
     if (!flat) for (const k of SCREEN_SETTINGS) if (k in stored) base[k] = stored[k];
     localStorage.setItem(KEY, JSON.stringify(putScreen(base, { ...s }, slotsNow()[0] ?? null, SCREEN_SETTINGS, flat)));
   } catch {

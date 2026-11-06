@@ -99,7 +99,7 @@ import {
 } from "./waiting";
 import { badRepoIds } from "./health";
 import { staleRepos } from "./triggers";
-import { putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
+import { markScreen, putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import { CARDS, SEAM } from "./cardswidth";
 import { NARROW } from "./media";
 import { newColumnWidth, type ColumnRoom } from "./columnwidth";
@@ -200,6 +200,21 @@ export function sectionsFor(closed: ClosedSections, repoId: string): readonly st
  *  built on it is stable where the array behind it is not */
 export function closedIn(s: { closedSections: ClosedSections }, repoId: string, key: string): boolean {
   return sectionsFor(s.closedSections, repoId).includes(key);
+}
+
+/** the section each tabbed panel shows, by repo id */
+export type PanelTabs = Record<string, string>;
+
+/** a saved `panelTabs`, keeping only what reads as one */
+export function panelTabsOf(saved: unknown): PanelTabs {
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return {};
+  return Object.fromEntries(Object.entries(saved).filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== ""));
+}
+
+/** What brings `key` up in one repo's panel, however the panel lays its
+ *  sections out: unfolded in a stack, the tab showing behind a rail. */
+export function showSectionIn(s: { closedSections: ClosedSections; panelTabs: PanelTabs }, repoId: string, key: string): { closedSections: ClosedSections; panelTabs: PanelTabs } {
+  return { closedSections: unfoldIn(s.closedSections, repoId, key), panelTabs: { ...s.panelTabs, [repoId]: key } };
 }
 
 /** `closed` with `key` folded or unfolded in one repo's panel, the others untouched */
@@ -303,6 +318,8 @@ interface Layout {
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude…) by repo id */
   closedSections: ClosedSections;
+  /** the section a tabbed panel shows, by repo id */
+  panelTabs: PanelTabs;
   /** the shell tabs, each named for its shell on the server, and the one
    *  showing in the strip: a reload comes back to the shells still there */
   terms: TermTab[];
@@ -352,6 +369,7 @@ export function loadLayout(): Layout {
     sidebarOpen: true,
     collapsed: [],
     closedSections: {},
+    panelTabs: {},
     knownSections: [...DEFAULT_CLOSED],
     termHeight: TERM.initial,
     panelTermHeights: {},
@@ -383,6 +401,7 @@ export function loadLayout(): Layout {
       sidebarOpen?: unknown;
       collapsed?: unknown;
       closedSections?: unknown;
+      panelTabs?: unknown;
       knownSections?: unknown;
       termHeight?: unknown;
       panelTermHeights?: Record<string, unknown>;
@@ -449,6 +468,7 @@ export function loadLayout(): Layout {
       sidebarOpen: saved.sidebarOpen !== false,
       collapsed: strings(saved.collapsed),
       closedSections,
+      panelTabs: panelTabsOf(saved.panelTabs),
       knownSections: [...DEFAULT_CLOSED],
       termHeight:
         typeof th === "number" && Number.isFinite(th)
@@ -519,7 +539,7 @@ export function loadDock(
 /** a record of strings to strings, anything else in it left out */
 function stringMap(v: unknown): Record<string, string> {
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
-  return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === "string"));
+  return Object.fromEntries(Object.entries(v).filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== ""));
 }
 
 /** the layout as stored, unread; null when there is none or it will not parse */
@@ -575,6 +595,7 @@ export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   sidebarOpen: s.sidebarOpen,
   collapsed: s.collapsed,
   closedSections: s.closedSections,
+  panelTabs: s.panelTabs,
   termHeight: s.termHeight,
   panelTermHeights: s.panelTermHeights,
   focusSize: s.focusSize,
@@ -918,6 +939,8 @@ export interface CanopyState {
   collapsed: string[];
   /** folded panel sections (changes, shell, history, claude…) by repo id */
   closedSections: ClosedSections;
+  /** the section a tabbed panel shows, by repo id */
+  panelTabs: PanelTabs;
   /** repo id → px width its column had when it closed while alone in it,
    *  for a column it opens in later; missing means PANEL.initial. Before
    *  phase B every panel's width, read once for the first layout */
@@ -1159,6 +1182,8 @@ export interface CanopyState {
   foldGroups: (keys: readonly string[], fold: boolean) => void;
   /** folds or unfolds one section (changes, shell, history, claude…) of one repo's panel */
   toggleSection: (repoId: string, key: string) => void;
+  /** shows `key` in a tabbed panel */
+  setPanelTab: (repoId: string, key: string) => void;
   /** folds (`fold`) or unfolds every section one repo's panel shows, its
    *  shells too; a hidden section, or one the bench holds open, stays as it was */
   foldSections: (repoId: string, fold: boolean) => void;
@@ -1651,6 +1676,7 @@ function treeState(
   | "panelWidths"
   | "panelTermHeights"
   | "closedSections"
+  | "panelTabs"
   | "tasks"
   | "treeTasks"
   | "taskErrors"
@@ -1685,6 +1711,7 @@ function treeState(
     panelWidths: pruneByRepo(s.panelWidths, tree.repos, mine),
     panelTermHeights: pruneByRepo(s.panelTermHeights, tree.repos, mine),
     closedSections: pruneByRepo(s.closedSections, tree.repos, mine),
+    panelTabs: pruneByRepo(s.panelTabs, tree.repos, mine),
     tasks: pruneByRepo(s.tasks, tree.repos, mine),
     treeTasks: pruneByRepo(s.treeTasks, tree.repos, mine),
     taskErrors: pruneByRepo(s.taskErrors, tree.repos, mine),
@@ -2343,6 +2370,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   aboutAtLoad: null,
   collapsed: layout.collapsed,
   closedSections: layout.closedSections,
+  panelTabs: layout.panelTabs,
   settings: loadSettings(),
   runs: {},
   sheet: null,
@@ -3038,7 +3066,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     saveChoice(repoId, { port, path: "/" });
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "preview"),
+      ...showSectionIn(s, repoId, "preview"),
       reveal: { repoId, key: "preview", at: Date.now() },
       previewAsk: { repoId, port, at: Date.now() },
       sheet: null,
@@ -3052,7 +3080,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const show = startsDev(action, name, r.tasks) && repo !== undefined && !repo.host && !repo.forge;
     set((s) => ({
       tasks: { ...s.tasks, [repoId]: r.tasks },
-      ...(show ? { closedSections: unfoldIn(s.closedSections, repoId, "preview"), reveal: { repoId, key: "preview", at: Date.now() } } : {}),
+      ...(show ? { ...showSectionIn(s, repoId, "preview"), reveal: { repoId, key: "preview", at: Date.now() } } : {}),
     }));
   },
   saveTaskDef: async (repoId, name, def, target) => {
@@ -3594,6 +3622,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     }),
   toggleSection: (repoId, key) =>
     set((s) => ({ closedSections: toggleIn(s.closedSections, repoId, key) })),
+  setPanelTab: (repoId, key) => set((s) => ({ panelTabs: { ...s.panelTabs, [repoId]: key } })),
   foldSections: (repoId, fold) =>
     set((s) => {
       // the "waiting on you" panel folds its own groups
@@ -4742,27 +4771,27 @@ export const useStore = create<CanopyState>((set, get) => ({
   showTasks: (repoId) =>
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "tasks"),
+      ...showSectionIn(s, repoId, "tasks"),
     })),
   showAgents: (repoId) =>
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "agents"),
+      ...showSectionIn(s, repoId, "agents"),
     })),
   showHealth: (repoId) =>
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "health"),
+      ...showSectionIn(s, repoId, "health"),
     })),
   showLanding: (repoId) =>
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "landing"),
+      ...showSectionIn(s, repoId, "landing"),
     })),
   showSection: (repoId, key) =>
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, key),
+      ...showSectionIn(s, repoId, key),
     })),
   bringTask: (repoId, task = null) =>
     set((s) => ({ ...dockPanel(s, repoId), front: frontForTask(s.front, repoId, task) })),
@@ -4802,7 +4831,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   showLaunch: (repoId) =>
     set((s) => ({
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "launch"),
+      ...showSectionIn(s, repoId, "launch"),
     })),
   stopJob: async (jobId) => {
     const job = await api.stopJob(jobId);
@@ -4876,7 +4905,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       sheet: null,
       pendingSearch: { repoId, q },
       ...dockPanel(s, repoId),
-      closedSections: unfoldIn(s.closedSections, repoId, "search"),
+      ...showSectionIn(s, repoId, "search"),
     })),
   takePendingSearch: () => set({ pendingSearch: null }),
   showGroup: groupId => set({ sheet: { kind: "group", groupId } }),
@@ -5150,7 +5179,9 @@ useStore.subscribe((s, prev) => {
 // of another size, and the screen's own change event where it has one.
 let screenSeen = slotsNow().join();
 if (typeof window !== "undefined" && typeof window.screen !== "undefined") {
+  markScreen();
   const onScreen = () => {
+    markScreen();
     const now = slotsNow().join();
     if (now === screenSeen) return;
     screenSeen = now;

@@ -31,6 +31,7 @@ One developer (the owner) across a laptop, an always-on Linux backend, a tablet 
 - ai 7.0.127 and @ai-sdk/gateway 4.0.103 for commit message suggestions.
 - oxlint 1.86.0 for lint, configured in `.oxlintrc.json`; a hook called after an early return fails lint (`react/rules-of-hooks`).
 - Plain CSS in `ui/src/styles.css`; no CSS framework.
+- Instrument Sans and JetBrains Mono as bundled variable fonts (@fontsource-variable 5.3.0), so a page never fetches a font.
 - git, gh and the `claude` CLI are shelled out to, never linked.
 - age-encryption 0.3.1 seals the secret store's values; @simplewebauthn/server 14.0.3 and @simplewebauthn/browser 14.0.0 are its passkey gate.
 
@@ -84,6 +85,7 @@ canopy ui ~/dev
 - 2026-11-02: A start the capacity governor holds waits in its owner's own record (a queued trigger event, a coordinator card, a parked flow, a PR watch, a landing entry), not in a queue of the governor's, because each of those already outlives a restart and says why it waits.
 - 2026-10-20: Costs take Claude's dollars from claude-history and keep a per-backend ledger for the rest, with no built-in prices, because the archive already counts every Claude session and only Claude reports dollars; the others are usage until a `prices.json` says what it costs.
 - 2026-11-03: A run's token rides in a 0600 file its MCP server reads, off by default and never in the agent's env, because the agent's shell can read env and a file can die with the run; the handlers hold the limits, since that shell can read the file too.
+- 2026-11-06: A repo panel shows one section at a time behind a rail of tabs, with the repo's summary beside them in a wide panel, because fourteen stacked sections were what made a panel crowded. The stack stays one gear entry away for anyone who wants several open. Words are in Instrument Sans and only what is read a character at a time is mono. `--ui` lifts the type on wide and ultra HD screens, because 12px at 1x on a 7680px screen is what every saved zoom was working around, and those zooms were scaled back once so sizes hold.
 
 ## Out of scope
 

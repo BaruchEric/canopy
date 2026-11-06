@@ -31,6 +31,8 @@ import {
   foldAllIn,
   toggleIn,
   unfoldAllIn,
+  panelTabsOf,
+  showSectionIn,
   unfoldIn,
   useStore,
   visibleCards,
@@ -146,6 +148,19 @@ describe("per-repo folds", () => {
     expect(unfoldAllIn(none, "a", keys)).toBe(none);
     // a key left out (hidden, or held by the bench) keeps its fold
     expect(sectionsFor(unfoldAllIn({ a: ["search", "preview"] }, "a", ["search"]), "a")).toEqual(["preview"]);
+  });
+});
+
+describe("panel tabs", () => {
+  test("a saved map keeps only strings by repo", () => {
+    expect(panelTabsOf({ a: "history", b: 3, c: "" })).toEqual({ a: "history" });
+    expect(panelTabsOf(null)).toEqual({});
+    expect(panelTabsOf(["history"])).toEqual({});
+  });
+  test("showing a section unfolds it for the stack and picks it for the tabs", () => {
+    const shown = showSectionIn({ closedSections: { a: ["history", "files"] }, panelTabs: { a: "files", b: "tasks" } }, "a", "history");
+    expect(sectionsFor(shown.closedSections, "a")).toEqual(["files"]);
+    expect(shown.panelTabs).toEqual({ a: "history", b: "tasks" });
   });
 });
 

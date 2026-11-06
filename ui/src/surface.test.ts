@@ -28,6 +28,7 @@ import {
   withTermFont,
   withZoom,
   zoomOf,
+  railStep,
   zoomStep,
   zoomWord,
 } from "./surface";
@@ -274,5 +275,26 @@ describe("foldKeys", () => {
   });
   test("a hidden section and one held open are left out", () => {
     expect(foldKeys(["changes", "search", "preview"], ["search"], (k) => k === "preview" || k === "shell")).toEqual(["changes"]);
+  });
+});
+
+describe("railStep", () => {
+  const keys = ["changes", "history", "files"] as const;
+  test("the arrows step either way, whichever way the rail runs", () => {
+    expect(railStep(keys, "changes", "ArrowDown")).toBe("history");
+    expect(railStep(keys, "changes", "ArrowRight")).toBe("history");
+    expect(railStep(keys, "history", "ArrowUp")).toBe("changes");
+    expect(railStep(keys, "history", "ArrowLeft")).toBe("changes");
+  });
+  test("wraps at either end", () => {
+    expect(railStep(keys, "files", "ArrowDown")).toBe("changes");
+    expect(railStep(keys, "changes", "ArrowUp")).toBe("files");
+  });
+  test("Home and End go to the ends", () => {
+    expect(railStep(keys, "history", "Home")).toBe("changes");
+    expect(railStep(keys, "history", "End")).toBe("files");
+  });
+  test("any other key is not the rail's", () => {
+    expect(railStep(keys, "history", "a")).toBeNull();
   });
 });

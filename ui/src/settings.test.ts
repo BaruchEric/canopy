@@ -147,6 +147,40 @@ describe("the dock's carousel", () => {
   });
 });
 
+describe("panel sections", () => {
+  test("start as tabs, survive a reload, are kept per screen, and a bad value falls back to tabs", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    expect(SCREEN_SETTINGS).toContain("panelSections");
+    store.set("canopy.settings", "{}");
+    expect(loadSettings().panelSections).toBe("tabs");
+    saveSettings({ ...loadSettings(), panelSections: "stack" });
+    expect(loadSettings().panelSections).toBe("stack");
+    store.set("canopy.settings", JSON.stringify({ panelSections: "piles" }));
+    expect(loadSettings().panelSections).toBe("tabs");
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
+describe("the type scale's one pass over saved zooms", () => {
+  test("rescales on the first load and keeps its mark through a save", () => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    };
+    store.set("canopy.settings", JSON.stringify({ screens: { ultra: { zoom: { board: 1.5 } } } }));
+    saveSettings(loadSettings());
+    const saved = JSON.parse(store.get("canopy.settings") ?? "{}") as { uiScaled?: boolean; screens: { ultra: { zoom: unknown } } };
+    expect(saved.uiScaled).toBe(true);
+    expect(saved.screens.ultra.zoom).toEqual({ board: 1.25 });
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+});
+
 describe("panel close buttons", () => {
   test("start on, survive a reload, are kept per screen, and a bad value falls back to on", () => {
     const store = new Map<string, string>();

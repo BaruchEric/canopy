@@ -5,11 +5,15 @@ import { Crowns } from "./TopBar";
 /** A repo's id as its own backend knows it, then that backend's name when it
  *  is not the page's own. `name` stands in for the id where the id says less
  *  than the card does, as a worktree card's `trees:<dir>` id does. */
-export function IdLabel({ id, name }: { id: string; name?: string }) {
+export function IdLabel({ id, name, folder = false }: { id: string; name?: string; folder?: boolean }) {
   const { plain, backend } = idLabel(id);
+  const text = name ?? plain;
+  // the repo's own name carries the label; the folder it is filed in steps back
+  const cut = folder ? text.lastIndexOf("/") + 1 : 0;
   return (
     <>
-      {name ?? plain}
+      {cut > 0 && <span className="id-folder">{text.slice(0, cut)}</span>}
+      {text.slice(cut)}
       {backend && <span className="backend-word">{backend}</span>}
     </>
   );
