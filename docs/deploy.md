@@ -1421,6 +1421,20 @@ backend:
    use*" means the `backends` entry itself has no public or tailnet URL this
    page's protocol can reach, which is a config problem on this machine, not
    the other one.
+
+   A backend that has only a tailnet URL (desoto) fails one more way, and it
+   looks like none of these: from a public page (`https://canopy.beric.ca`,
+   `https://canopy-mac.beric.ca`) the chip reads *connecting* and never moves,
+   while `curl` on the same machine answers at once. Chrome counts a tailnet
+   address (100.64/10) as the local network, so a public site's first request
+   to it waits on the browser's *local network access* permission, and the
+   page's fetches and event stream hang until someone answers the prompt
+   (`navigator.permissions.query({ name: "local-network-access" })` on the
+   page says `prompt`). Allow it once for the site, in the prompt or under
+   Chrome's site settings, Local network access. A page opened at a tailnet
+   or loopback origin (`https://macmini-2018.tail2d2c60.ts.net:7849`, the
+   Mac's `http://127.0.0.1:7850`) is local already and never asks. Seen
+   2026-11-05 with desoto on Chrome 156.
 5. Find a repo checked out on both machines: its card should carry two
    machine chips, and clicking the non-home one should open that checkout's
    panel and, from there, a shell on the other machine.
