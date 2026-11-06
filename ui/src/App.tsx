@@ -1,13 +1,7 @@
 import { HealthView } from "./components/Health";
-import { CostsView } from "./components/Costs";
-import { KitView } from "./components/Kit";
-import { SecretsView } from "./components/Secrets";
+import { AgentsView, CostsView, IncubatorView, KitView, Library, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Library } from "./components/Library";
-import { AgentsView } from "./components/AgentsView";
-import { SessionsView } from "./components/Sessions";
-import { IncubatorView } from "./components/Incubator";
 import { Wordmark } from "./components/TopBar";
 import { Dock } from "./components/Dock";
 import { CardsSeam } from "./components/CardsSeam";
@@ -16,9 +10,7 @@ import { feedOnSide, feedPlaceShown } from "./feed";
 import { RepoGrid } from "./components/RepoGrid";
 import { Resizer } from "./components/Resizer";
 import { RunSheet } from "./components/RunSheet";
-import { TriggersView } from "./components/Triggers";
 import { triggersBadge } from "./triggers";
-import { WorkView } from "./components/Work";
 import { workBadge, workRows } from "./work";
 import { qual } from "./registry";
 import { SelectBar } from "./components/SelectBar";
@@ -362,6 +354,9 @@ export function App() {
     useStore.getState().openInbox(`ask:${route.ask}`);
     dropAskHere();
   }, [loaded]);
+
+  // the views and xterm that load on demand, fetched once the grove is up
+  useEffect(() => (loaded ? warmChunks() : undefined), [loaded]);
 
   // Pop out and back, the main window's side (listenPanes)
   useEffect(() => {

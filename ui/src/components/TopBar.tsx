@@ -25,7 +25,7 @@ import { BackendMenu } from "./BackendMenu";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { NotesChip } from "./Notes";
-import { NewProjectButton } from "./Incubator";
+import { NewProjectButton } from "./IncubatorSheets";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
 import { RangerChip } from "./Ranger";

@@ -3,7 +3,7 @@ import { escapeCloses } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { capsFor, connOf, multi, routesOf, useStore } from "../store";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
-import { Routing } from "./AgentsView";
+import { Routing } from "./Routing";
 import { harnessesOf, hasRouting } from "../agents";
 import { PopGrip } from "./PopGrip";
 import { deviceName } from "../../../src/core/presence";

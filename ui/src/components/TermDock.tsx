@@ -1,8 +1,8 @@
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, MouseEvent, PointerEvent } from "react";
-import { Terminal, type ITheme } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "@xterm/xterm/css/xterm.css";
+import type { ITheme, Terminal } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
+import { loadXterm, xtermHere, type Xterm } from "../xterm";
 import { api, reachable, socketUrl as backendSocket } from "../api";
 import { copyText } from "../share";
 import { backendOf, baseOf, plainOf, qual } from "../registry";
@@ -203,6 +203,23 @@ function exitOf(text: string): number | null | undefined {
   return undefined;
 }
 
+/** xterm once it is here; a string says why it could not load */
+function useXterm(): Xterm | string | null {
+  const [got, setGot] = useState<Xterm | string | null>(xtermHere);
+  useEffect(() => {
+    if (got !== null) return;
+    let live = true;
+    loadXterm().then(
+      (x) => live && setGot(x),
+      (err: unknown) => live && setGot(`the terminal could not load (${err instanceof Error ? err.message : String(err)}); reload the page`),
+    );
+    return () => {
+      live = false;
+    };
+  }, [got]);
+  return got;
+}
+
 /**
  * One shell: an xterm on a websocket to the pty at the repo. It lives for
  * the tab's life, hidden rather than unmounted when another tab is showing,
@@ -255,10 +272,12 @@ export function TermView({
   setModsRef.current = setMods;
   const sendRef = useRef<(data: string) => void>(() => {});
   const touch = useCoarsePointer();
+  const xterm = useXterm();
 
   useEffect(() => {
     const el = host.current;
-    if (!el) return;
+    if (!el || xterm === null || typeof xterm === "string") return;
+    const { Terminal, FitAddon } = xterm;
     const term = new Terminal({
       cursorBlink: true,
       fontFamily: TERM_FONT.family,
@@ -674,7 +693,7 @@ export function TermView({
       termRef.current = null;
       fitRef.current = null;
     };
-  }, [tab.id, tab.repoId, tab.path, endTerm]);
+  }, [tab.id, tab.repoId, tab.path, endTerm, xterm]);
 
   useEffect(() => {
     if (!active) return;
@@ -713,6 +732,7 @@ export function TermView({
 
   return (
     <div className="term-view" hidden={!active}>
+      {typeof xterm === "string" && <p className="empty" role="alert">{xterm}</p>}
       <div ref={host} className="term-screen" />
       {touch && (
         <KeyBar

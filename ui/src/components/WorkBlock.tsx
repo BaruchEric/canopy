@@ -5,7 +5,7 @@
 import type { Run } from "../../../src/core/types";
 import { backendOf, qual } from "../registry";
 import { useStore } from "../store";
-import { LastNotes, NoteBox } from "./Work";
+import { LastNotes, NoteBox } from "./WorkSheet";
 
 export function WorkBlock({ run }: { run: Run }) {
   const work = run.branch?.work;
