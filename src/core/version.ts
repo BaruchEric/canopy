@@ -1,7 +1,7 @@
 // Browser-safe words for which canopy is running: the CLI's --version, the
 // server's /api/about and the settings' about section all read these, and the
 // UI compares the build it was bundled from against the server's.
-import type { BuildInfo } from "./types";
+import type { BuildInfo } from "./types.ts";
 
 /** The seven hex digits git shows for a commit. */
 export function shortCommit(commit: string | null): string | null {

@@ -1,6 +1,6 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
-import { readBuild } from "../src/core/build";
+import { readBuild } from "../src/core/build.ts";
 
 export default defineConfig({
   plugins: [react()],

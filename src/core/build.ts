@@ -1,11 +1,13 @@
 // Which canopy this checkout is, read once: package.json's version and git's
 // HEAD. Plain node APIs rather than Bun's, since vite.config.ts stamps the UI
-// bundle through this too and vite may run it on node.
+// bundle through this too and vite may run it on node. Its imports name the
+// .ts file, as must those of anything it comes to import: Vite's native config
+// loader runs it without a bundler.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { BuildInfo } from "./types";
-import { buildFrom } from "./version";
+import type { BuildInfo } from "./types.ts";
+import { buildFrom } from "./version.ts";
 
 /** canopy's own checkout, two folders up from this file */
 export const CANOPY_DIR = join(import.meta.dirname, "..", "..");
