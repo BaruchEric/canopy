@@ -577,6 +577,18 @@ systemctl is-enabled nftables.service iptables.service ip6tables.service   # eac
 grep MANAGE_BUILTINS /etc/default/ufw                    # MANAGE_BUILTINS=no
 ```
 
+On Debian the unit is more than its start: `nftables.service` has
+`ExecStop=nft flush ruleset`, so `systemctl disable --now nftables.service`
+on a host where it is active flushes every table, docker's nat and filter
+tables included, and every container loses its way out. The De Soto LXC sat
+that way from 2026-11-05 22:37 until the next morning: `curl` from a shell
+timed out everywhere while the host answered, `iptables -t nat -S` showed no
+MASQUERADE and `nft list tables` only the raw tables. Docker writes its
+rules at start and never checks them again, so after the stop,
+`systemctl restart docker`. With `"live-restore": true` in
+`/etc/docker/daemon.json` (reloadable: write it, then `systemctl reload
+docker`) the restart leaves every container and shell running.
+
 **1. Copy the script where only root can change it, and read that copy.**
 The checkout is writable by canopy's containers and peer sync, so the file
 read and the file installed must be one root-owned copy:
@@ -1344,6 +1356,18 @@ shell into them is an ssh session, so that host needs its own git, `claude`, and
   `.ts.net` name, or a bare machine name); a dotted public name is still
   refused, since a domain someone else controls could resolve to the same
   address.
+- `~/.claude.json` in the shells container is the host's file, bind-mounted
+  over the one the native installer wrote into the image at build, and that
+  installer is what writes `installMethod: "native"`. A host that never ran
+  the installer itself (the De Soto LXC) has no such key, so `claude update`
+  in a shell warns "Running native installation but config install method is
+  'unknown'" and stops; the mini never saw it because its own claude had put
+  the key in its file. Set it in place, `jq '.installMethod = "native"'` to a
+  temp file and `cat` over the original: a rename would break the bind mount
+  (the kit's `inplaceWrite` keeps the inode for the same reason). An update
+  run inside the shells container lands in that container's writable layer
+  and lasts until the shells are recreated, which a `TOOLS_AT` change does.
+  Seen on the De Soto LXC 2026-11-06.
 
 ## Other canopy pages (multi-backend)
 
