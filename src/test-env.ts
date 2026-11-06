@@ -1,37 +1,29 @@
 /** Preloaded by `bun test` (bunfig.toml). A shell inside the deployed
  *  container carries the backend's own env: `NODE_ENV=production`, which
- *  `peerSettingsFromEnv` refuses, and `CANOPY_BIND`/`CANOPY_PUBLIC_ORIGIN`/
- *  `CANOPY_SSH_HOST`, which change what the server under test does. Bun sets
- *  `NODE_ENV=test` only when it is unset, so the suite resets them itself;
- *  a test that wants one sets it. */
+ *  `peerSettingsFromEnv` refuses, and the compose service's CANOPY_ names,
+ *  which change what the server under test does. Bun sets `NODE_ENV=test`
+ *  only when it is unset, so the suite resets them itself; a test that wants
+ *  one sets it. */
 import { setDefaultTimeout } from "bun:test";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 process.env["NODE_ENV"] = "test";
-for (const k of ["CANOPY_BIND", "CANOPY_PUBLIC_ORIGIN", "CANOPY_SSH_HOST", "CANOPY_NO_DESKTOP"]) delete process.env[k];
 
-// A canopy shell on the Mac carries the launchd server's settings too:
-// CANOPY_CALLERS=enforce makes every test server refuse the suite's calls
-// with a 401 (and its sockets with a failed upgrade), and CANOPY_ORIGINS and
+// Every CANOPY_ name goes, whoever set it. A canopy shell on the Mac carries
+// the launchd server's settings: CANOPY_CALLERS=enforce makes every test
+// server refuse the suite's calls with a 401, and CANOPY_ORIGINS and
 // CANOPY_PREVIEW_PUBLIC change what it allows. The shell's own names
-// (INHERITED_ENV in core/term.ts, listed here since importing it would load
-// modules before this file is done) would name another server's API and
-// token to every CLI call and shell a test starts.
-for (const k of [
-  "CANOPY_CALLERS",
-  "CANOPY_LOOPBACK_AUTH",
-  "CANOPY_ORIGINS",
-  "CANOPY_PREVIEW_PUBLIC",
-  "CANOPY_TERM",
-  "CANOPY_API",
-  "CANOPY_REPO",
-  "CANOPY_BACKEND",
-  "CANOPY_RUN",
-  "CANOPY_TOKEN",
-  "TAILCHAN_AS",
-]) {
-  delete process.env[k];
+// (INHERITED_ENV in core/term.ts) would name another server's API and token
+// to every CLI call and shell a test starts. A shell in a compose container
+// carries the service's: CANOPY_STAGE_SOCKET gives a test server the live
+// stage runner, which reports its stages check up and keeps seeds home, so
+// a move of one is refused for the wrong reason; and CANOPY_TMUX=1, read as
+// a secret, redacted every "1" in a test run's transcript. A list of names
+// missed whichever one the next deploy added. A name ending in _IT is a live
+// test's opt-in (CANOPY_CODEX_IT) and stays.
+for (const k of Object.keys(process.env)) {
+  if ((k.startsWith("CANOPY_") && !k.endsWith("_IT")) || k === "TAILCHAN_AS") delete process.env[k];
 }
 
 // Bun loads the checkout's .env before this runs. On the mini that is the

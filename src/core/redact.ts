@@ -14,15 +14,45 @@ export const redactedWord = (name: string): string => `<redacted:${name}>`;
 
 const longestFirst = (a: Secret, b: Secret): number => b.value.length - a.value.length || a.name.localeCompare(b.name);
 
-/** CANOPY_ names that hold a switch rather than a secret. CANOPY_LOOPBACK_AUTH
- *  is "1", and its name reads as a credential, so counting it would stop the
- *  transcript of every run whose required facts hold that digit. */
-export const SWITCHES: ReadonlySet<string> = new Set(["CANOPY_LOOPBACK_AUTH"]);
+/** CANOPY_ names whose values are settings rather than secrets: switches
+ *  (a digit, a mode word, a port range) and the folders and sockets a
+ *  backend runs from. Each value is matched anywhere in a line, so counted
+ *  as a secret each took its text out of every transcript: CANOPY_TMUX=1 on
+ *  the compose canopy service made every "1" read `<redacted:CANOPY_TMUX>`,
+ *  CANOPY_CALLERS=enforce took that word out, the dev task's
+ *  CANOPY_AGENT_SCAN=0 took every 0, and CANOPY_CONFIG_DIR=/config cut
+ *  `src/config.ts` to `src<redacted:CANOPY_CONFIG_DIR>.ts`. A folder is
+ *  not a credential, and the transcripts stay in the 0700 config dir. URLs
+ *  stay redacted, since one can carry a token, and so do the names a run is
+ *  given (CANOPY_RUN, CANOPY_REPO, CANOPY_TOKEN). CANOPY_LOOPBACK_AUTH is
+ *  "1" under a name that reads as a credential. */
+export const PLAIN_SETTINGS: ReadonlySet<string> = new Set([
+  // switches
+  "CANOPY_LOOPBACK_AUTH",
+  "CANOPY_TMUX",
+  "CANOPY_CALLERS",
+  "CANOPY_AGENT_SCAN",
+  "CANOPY_NO_DESKTOP",
+  "CANOPY_INCUBATOR_AUTOSTART",
+  "CANOPY_INCUBATOR_UNISOLATED",
+  "CANOPY_PREVIEW_PORTS",
+  // folders and sockets
+  "CANOPY_CONFIG_DIR",
+  "CANOPY_HOST_HOME",
+  "CANOPY_COORD_ROOT",
+  "CANOPY_STAGE_ROOT",
+  "CANOPY_FENCE_ROOT",
+  "CANOPY_RESTART_DIR",
+  "CANOPY_FIREBASE_PATH",
+  "CANOPY_SECRETS_SOCKET",
+  "CANOPY_STAGE_SOCKET",
+  "CANOPY_COORD_SOCKET",
+]);
 
 /** Applied entries name environment keys; their stamps are not secret values. */
 export function secretValues(env: Readonly<Record<string, string | undefined>>, applied?: Readonly<Record<string, Readonly<Record<string, string>>>>): Secret[] {
   const names = new Set<string>(PRIVATE_ENV);
-  for (const name of Object.keys(env)) if (name.startsWith("CANOPY_") && !SWITCHES.has(name)) names.add(name);
+  for (const name of Object.keys(env)) if (name.startsWith("CANOPY_") && !PLAIN_SETTINGS.has(name)) names.add(name);
   for (const sink of Object.values(applied ?? {})) for (const name of Object.keys(sink)) names.add(name);
   return [...names].flatMap((name) => {
     const value = env[name];

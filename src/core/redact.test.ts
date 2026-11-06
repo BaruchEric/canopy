@@ -10,6 +10,18 @@ describe("secretValues", () => {
     expect(secretValues({ CANOPY_LOOPBACK_AUTH: "1" }, { sink: { CANOPY_LOOPBACK_AUTH: "stamp" } })).toEqual([{ name: "CANOPY_LOOPBACK_AUTH", value: "1" }]);
   });
 
+  test("the compose service's and the dev task's switches are left out, so no digit or mode word is redacted", () => {
+    const env = { CANOPY_TMUX: "1", CANOPY_CALLERS: "enforce", CANOPY_AGENT_SCAN: "0", CANOPY_NO_DESKTOP: "1", CANOPY_INCUBATOR_AUTOSTART: "0", CANOPY_INCUBATOR_UNISOLATED: "1", CANOPY_PREVIEW_PORTS: "0", CANOPY_TOKEN: "t" };
+    expect(secretValues(env)).toEqual([{ name: "CANOPY_TOKEN", value: "t" }]);
+    expect(redactLine("reply 1 of 10, enforce 0", secretValues(env))).toEqual({ line: "reply 1 of 10, enforce 0", count: 0 });
+  });
+
+  test("the folders and sockets a backend runs from are left out, so a path that contains one stays whole", () => {
+    const env = { CANOPY_CONFIG_DIR: "/config", CANOPY_HOST_HOME: "/home/eric", CANOPY_STAGE_SOCKET: "/run/canopy-stage/runner.sock", CANOPY_API: "http://127.0.0.1:7850/?t=x" };
+    expect(secretValues(env)).toEqual([{ name: "CANOPY_API", value: "http://127.0.0.1:7850/?t=x" }]);
+    expect(redactLine("edit src/config.ts in /home/eric/dev", secretValues(env))).toEqual({ line: "edit src/config.ts in /home/eric/dev", count: 0 });
+  });
+
   test("collects nonempty canopy, private and applied environment values in deterministic longest order", () => {
     const env = { CANOPY_B: "same", CANOPY_A: "same", CANOPY_SHORT: "x", CANOPY_EMPTY: "", CANOPY_UNSET: undefined, VERCEL_TOKEN: "private-secret", APPLIED: "applied-secret", OTHER: "public" };
     expect(secretValues(env, { sink: { APPLIED: "stamp", MISSING: "stamp" } })).toEqual([
