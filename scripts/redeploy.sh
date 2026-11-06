@@ -176,6 +176,38 @@ STAGE_DEV_ROOT=${STAGE_DEV_ROOT:-/home/eric/dev}
 STAGE_HOST_HOME=${HOST_HOME:-$(envval HOST_HOME)}
 STAGE_HOST_HOME=${STAGE_HOST_HOME:-/home/eric}
 
+# Why compose would recreate the shells container, so the refusal names the
+# cause. compose recreates when the service's config hash (environment,
+# mounts, ports; not the build) moved, or when its image did. The image is
+# inferred from a matching hash rather than read: on the containerd image
+# store the tag's ID is the manifest list, whose provenance attestation is new
+# on every build, while the container keeps the platform manifest. Names
+# only, never values: they can be tokens.
+shells_why() {
+  local have want env names
+  have=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' canopy-shells-1 2>/dev/null) || {
+    echo "  (no canopy-shells-1 to compare with)"
+    return 0
+  }
+  want=$(docker compose config --hash shells 2>/dev/null | awk '$1 == "shells" { print $2 }' || true)
+  if [ -n "$want" ] && [ "$want" = "$have" ]; then
+    echo "  its settings are the same, so its image changed (the Dockerfile's shells stage)"
+    return 0
+  fi
+  if command -v jq >/dev/null 2>&1; then
+    env=$(docker inspect -f '{{json .Config.Env}}' canopy-shells-1 2>/dev/null || echo '[]')
+    names=$(docker compose config --format json shells 2>/dev/null | jq -r --argjson env "$env" '
+      ($env | map(capture("^(?<k>[^=]*)=(?<v>.*)$"; "s") | {(.k): .v}) | add // {}) as $have
+      | (.services.shells.environment // {}) | to_entries[]
+      | select($have[.key] != (.value // "")) | .key' | paste -sd, - | sed 's/,/, /g' || true)
+  fi
+  if [ -n "${names:-}" ]; then
+    echo "  its environment changed: $names (compose reads it from .env)"
+  else
+    echo "  its settings in docker-compose.yml or .env changed (a mount, a port or the like)"
+  fi
+}
+
 # the whole deploy, detached from this session
 job() {
   set -o pipefail
@@ -212,11 +244,13 @@ job() {
   plan=$(docker compose --dry-run up -d 2>&1 || true)
   if grep -q 'canopy-shells-1.*Recreate' <<<"$plan"; then
     if [ "$shells" != 1 ]; then
-      echo "this deploy recreates the shells container, which ends every shell."
+      echo "this deploy recreates the shells container, which ends every shell:"
+      shells_why
       echo "run it again with --shells when nothing needs them."
       return 3
     fi
-    echo "recreating the shells container: every shell ends"
+    echo "recreating the shells container, which ends every shell:"
+    shells_why
   fi
   # Recreating canopy cuts off what it has going: a run working or waiting on
   # a prompt, a coordinator with cards queued or running, a flow or fleet
@@ -308,7 +342,7 @@ job() {
   echo "$sha on $port, $(date)" >"$LOGS/deployed"
   echo "== deployed $sha on $port"
 }
-export -f job
+export -f job shells_why
 export sha shells restart force LOGS CANOPY_COMMIT CANOPY_COMMITTED STAGE_DEV_ROOT STAGE_HOST_HOME
 setsid nohup bash -c 'job; echo $? > "$0"' "$rc" >"$log" 2>&1 </dev/null &
 
