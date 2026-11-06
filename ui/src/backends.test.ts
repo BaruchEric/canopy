@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   backendState,
+  crossesIntoLocal,
   hasOtherBackend,
   isLaunchSource,
+  isLocalHost,
   onPublicSide,
+  permissionWords,
   pickUrl,
   qualify,
   RETRY_MAX,
@@ -120,6 +123,16 @@ describe("backendState", () => {
     expect(backendState(s, { kind: "unreachable", reason: "x" })).toBe(s);
     expect(backendState(s, { kind: "answered" })).toEqual({ state: "online" });
   });
+  test("the browser's local network permission is its own state, and a refused dial keeps it", () => {
+    const s = backendState(connecting, { kind: "permission", state: "prompt" });
+    expect(s).toEqual({ state: "permission", reason: permissionWords("prompt") });
+    expect(backendState(s, { kind: "permission", state: "prompt" })).toBe(s);
+    expect(backendState(s, { kind: "unreachable", reason: "x" })).toBe(s);
+    expect(backendState(s, { kind: "stream-lost" })).toBe(s);
+    expect(backendState(s, { kind: "permission", state: "denied" })).toEqual({ state: "permission", reason: permissionWords("denied") });
+    expect(backendState(s, { kind: "answered" })).toEqual({ state: "online" });
+    expect(backendState(s, { kind: "retry" })).toEqual({ state: "connecting" });
+  });
   test("a retry is connecting", () => {
     expect(backendState({ state: "offline", reason: "x" }, { kind: "retry" })).toEqual({ state: "connecting" });
   });
@@ -195,5 +208,38 @@ describe("retryWait", () => {
     expect(retryWait(5)).toBe(RETRY_MAX);
     expect(retryWait(1000)).toBe(RETRY_MAX);
     expect(retryWait(2, 10, 1_000)).toBe(40);
+  });
+});
+
+describe("isLocalHost and crossesIntoLocal", () => {
+  test("tailnet names, bare names and private addresses are local", () => {
+    for (const h of [
+      "desoto-canopy.tail2d2c60.ts.net",
+      "macmini-2018",
+      "localhost",
+      "100.84.82.123",
+      "192.168.1.76",
+      "10.250.14.1",
+      "172.18.0.2",
+      "127.0.0.1",
+      "169.254.1.1",
+      "[fd7a:115c:a1e0::ba31:527c]",
+      "nas.local",
+    ])
+      expect(isLocalHost(h)).toBe(true);
+  });
+  test("public names and addresses are not", () => {
+    for (const h of ["canopy.beric.ca", "104.21.90.159", "100.200.1.1", "172.32.0.1", "example.com"]) expect(isLocalHost(h)).toBe(false);
+  });
+  test("only a public page reaching a local backend crosses", () => {
+    expect(crossesIntoLocal("https://canopy.beric.ca", "https://desoto-canopy.tail2d2c60.ts.net:7849")).toBe(true);
+    expect(crossesIntoLocal("https://canopy.beric.ca", "https://canopy-mac.beric.ca")).toBe(false);
+    expect(crossesIntoLocal("https://macmini-2018.tail2d2c60.ts.net:7849", "https://desoto-canopy.tail2d2c60.ts.net:7849")).toBe(false);
+    expect(crossesIntoLocal("http://127.0.0.1:7850", "http://100.84.82.123:7850")).toBe(false);
+    expect(crossesIntoLocal("not a url", "https://x")).toBe(false);
+  });
+  test("the words name the prompt or the site settings", () => {
+    expect(permissionWords("prompt")).toContain("prompt");
+    expect(permissionWords("denied")).toContain("site settings");
   });
 });

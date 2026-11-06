@@ -6,6 +6,7 @@ import { saveChoice } from "./preview";
 import { backendOf, baseOf, homeName, isHome, plainOf, qual, registry, setBase, setRegistry } from "./registry";
 import { rangerSessions } from "./ranger";
 import { backendState, RETRY_FIRST, retryWait, sliceIn, split, type BackendStatus, type Reg } from "./backends";
+import { localNetworkPermission } from "./localnet";
 import { mergeHistory } from "./qualify";
 import { applyQuery, type RepoFilter } from "./filters";
 import { cardChangedAt, cardFavorite, joinRepos, leadOf, type RepoCard } from "./checkouts";
@@ -2614,6 +2615,24 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     setBase(name, base);
     set((s) => ({ conns: withConn(s, name, { base }) }));
+    // From a public page, Chrome holds the first request to a local address
+    // (a tailnet backend with no public name) behind its local network
+    // access permission, and a dial would wait on the browser's prompt with
+    // nothing on the page to say so. Read the permission first and say what
+    // is wanted. While it is "prompt" the dial still goes out, since the
+    // request is what raises the prompt, and an answer makes the backend
+    // online; "denied" dials nothing, the browser would refuse it. Either
+    // way a grant later, in the prompt or in site settings, dials again.
+    const perm = await localNetworkPermission(pageOrigin(), base);
+    if (!live()) return;
+    if (perm && perm.state !== "granted") {
+      const held = perm.state;
+      set((s) => ({ conns: withConn(s, name, { status: backendState(connOf(s, name).status, { kind: "permission", state: held }) }) }));
+      perm.onchange = () => {
+        if (perm.state === "granted" && !dead.has(e) && get().backendOrder.includes(name)) void get().connect(name);
+      };
+      if (held === "denied") return;
+    }
     let got;
     try {
       got = await Promise.all([

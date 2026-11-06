@@ -53,7 +53,7 @@ function awayCheck(backend: string, conn: ConnLike | undefined, now: number): He
     label: `the ${backend} backend`,
     scope: { kind: "canopy" },
     state: state === "connecting" ? "unknown" : "down",
-    why: state === "signin" ? "sign in to it" : state === "connecting" ? "connecting" : `offline${reason ? `: ${reason}` : ""}`,
+    why: state === "signin" ? "sign in to it" : state === "permission" ? "needs local network access" : state === "connecting" ? "connecting" : `offline${reason ? `: ${reason}` : ""}`,
     since: now,
     lastOk: null,
     heal: "none",

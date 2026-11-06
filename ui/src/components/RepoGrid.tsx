@@ -49,6 +49,8 @@ function machineTitle(backend: string, state: string, reason: string | undefined
       return `${repo.name} on ${backend}${repo.status ? `, on ${repo.status.branch}` : ""}`;
     case "signin":
       return `sign in to ${backend}; showing what it last said`;
+    case "permission":
+      return `${backend} needs local network access; showing what it last said`;
     case "connecting":
       return `waiting for ${backend}`;
     default:

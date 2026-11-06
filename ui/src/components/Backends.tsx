@@ -9,6 +9,7 @@ const STATE_WORD: Record<string, string> = {
   online: "online",
   offline: "offline",
   signin: "sign in",
+  permission: "needs permission",
 };
 
 /** The backends as the bar names them: one word per backend this page
@@ -78,7 +79,7 @@ export function BackendsSection() {
               <span className="backend-acts">
                 {shown && name !== home && status.state !== "online" && (
                   <button type="button" className="mini" onClick={() => void retryBackend(name)}>
-                    retry
+                    {status.state === "permission" ? "allow" : "retry"}
                   </button>
                 )}
                 {shown && status.state === "signin" && status.login && (

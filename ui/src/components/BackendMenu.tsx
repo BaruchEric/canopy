@@ -15,6 +15,7 @@ function liveWord(state: string, reason: string | undefined): string {
   if (state === "online") return "live: changes show as they happen";
   if (state === "connecting") return "connecting to the backend…";
   if (state === "signin") return "sign in to the backend";
+  if (state === "permission") return "needs local network access";
   return `offline${reason ? `: ${reason}` : ""}; showing what it last said`;
 }
 

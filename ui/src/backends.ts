@@ -57,7 +57,7 @@ export function hasOtherBackend(entries: readonly BackendEntry[], home: string):
   return entries.some((e) => e.name !== home);
 }
 
-export type BackendState = "connecting" | "online" | "offline" | "signin";
+export type BackendState = "connecting" | "online" | "offline" | "signin" | "permission";
 
 export interface BackendStatus {
   state: BackendState;
@@ -78,6 +78,9 @@ export type BackendSignal =
   /** canopy's own caller check refused a call for want of a token or a
    *  right: the backend answered, and this page should sign in to it */
   | { kind: "refused"; status: number; need: string; token: string | null }
+  /** the browser holds this page's requests to the backend behind its
+   *  local network access permission, still to be asked for or refused */
+  | { kind: "permission"; state: "prompt" | "denied" }
   | { kind: "stream-open" }
   | { kind: "stream-lost" }
   /** the page is trying again */
@@ -95,13 +98,60 @@ export function backendState(prev: BackendStatus, sig: BackendSignal): BackendSt
     case "signin":
       return prev.state === "signin" && prev.login === sig.login ? prev : { state: "signin", login: sig.login };
     case "unreachable":
-      if (prev.state === "signin") return prev;
+      if (prev.state === "signin" || prev.state === "permission") return prev;
       return prev.state === "offline" && prev.reason === sig.reason ? prev : { state: "offline", reason: sig.reason };
     case "stream-lost":
-      if (prev.state === "signin" || prev.state === "offline") return prev;
+      if (prev.state === "signin" || prev.state === "offline" || prev.state === "permission") return prev;
       return { state: "offline", reason: "the event stream dropped" };
+    case "permission": {
+      const reason = permissionWords(sig.state);
+      return prev.state === "permission" && prev.reason === reason ? prev : { state: "permission", reason };
+    }
     case "retry":
       return prev.state === "connecting" ? prev : { state: "connecting" };
+  }
+}
+
+/** What the chip says while the browser holds the page's requests to a
+ *  backend behind its local network access permission. */
+export function permissionWords(state: "prompt" | "denied"): string {
+  return state === "denied"
+    ? "local network access is blocked for this site: allow it in the browser's site settings"
+    : "needs local network access: allow it in the browser's prompt";
+}
+
+/** Whether a host is on the local network as Chrome counts it: a tailnet
+ *  name, a bare machine name, localhost, an mDNS name, or a loopback,
+ *  private, CGNAT or link-local address. */
+export function isLocalHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".ts.net") || h.endsWith(".local")) return true;
+  if (h === "::1" || h.startsWith("fd") || h.startsWith("fc") || h.startsWith("fe80:")) return true;
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(h);
+  if (m) {
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    return (
+      a === 10 ||
+      a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254)
+    );
+  }
+  return !h.includes(".");
+}
+
+/** Whether a page reaching a backend crosses from the public internet
+ *  into the local network: the page's own host is public and the backend's
+ *  is local. Chrome holds such a request behind its local network access
+ *  permission, so the page reads that permission before it dials. */
+export function crossesIntoLocal(pageOrigin: string, base: string): boolean {
+  try {
+    return !isLocalHost(new URL(pageOrigin).hostname) && isLocalHost(new URL(base).hostname);
+  } catch {
+    return false;
   }
 }
 

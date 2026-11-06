@@ -313,7 +313,7 @@ export function TermView({
     const sayAway = () => {
       const s = useStore.getState();
       const state = connOf(s, backendOf(tab.id)).status.state;
-      if (!saidAway && multi(s) && (state === "offline" || state === "signin")) {
+      if (!saidAway && multi(s) && (state === "offline" || state === "signin" || state === "permission")) {
         saidAway = true;
         note("[backend offline]");
       }

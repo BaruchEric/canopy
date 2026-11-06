@@ -1655,6 +1655,17 @@ function AwayWords({
         )}
       </>
     );
+  if (state === "permission")
+    return (
+      <>
+        <span>{reason ?? `${name} needs local network access`}</span>
+        {onRetry && (
+          <button type="button" className="mini" onClick={onRetry}>
+            allow
+          </button>
+        )}
+      </>
+    );
   if (state === "connecting") return <span>waiting for {name}…</span>;
   return (
     <>
