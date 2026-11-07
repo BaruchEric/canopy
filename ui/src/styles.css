@@ -2093,7 +2093,9 @@ div.waiting-row {
    ink, code with its line numbers). The list under it, or beside it in a
    card wide enough, is one line a clip, its source word in that source's
    color. canopy's own copies are the plain ones; the rest come from
-   somewhere else and say so in color. */
+   somewhere else and say so in color. Rust stays the error color, so the
+   tailnet, the farthest source, takes lichen, and lichen marks nothing
+   else in here. */
 .clips .s-shell {
   --src: var(--moss);
 }
@@ -2372,7 +2374,7 @@ div.waiting-row {
   color: var(--ink-dim);
 }
 .clip-cut {
-  color: var(--lichen);
+  color: var(--ink-dim);
 }
 .clip-acts {
   display: flex;
