@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { freeToFocus, tappedOn, typesInto } from "./softkeys";
+import { KEYBOARD_MIN, KEY_ONLY, freeToFocus, keyboardFit, tappedOn, typesInto } from "./softkeys";
 
 test("typesInto: text fields bring the keyboard, pickers and the rest do not", () => {
   expect(typesInto({ tagName: "TEXTAREA" })).toBe(true);
@@ -14,14 +14,16 @@ test("typesInto: text fields bring the keyboard, pickers and the rest do not", (
   expect(typesInto({ tagName: "SELECT" })).toBe(false);
 });
 
-/** A pretend tree with the two things tappedOn reads off an element:
- *  `contains` and `closest("label")`, whose `control` is a field. */
+/** A pretend tree with the things tappedOn reads off an element:
+ *  `contains`, `closest("label")`, whose `control` is a field, and
+ *  `hasAttribute`. */
 function tree() {
   const parents = new Map<object, object | null>();
-  const add = (tag: string, parent: object | null, control?: object) => {
+  const add = (tag: string, parent: object | null, control?: object, attrs: string[] = []) => {
     const self: object = {
       tagName: tag,
       control,
+      hasAttribute: (name: string) => attrs.includes(name),
       contains: (o: object | null) => {
         for (let at = o; at; at = parents.get(at) ?? null) if (at === self) return true;
         return false;
@@ -56,6 +58,56 @@ test("tappedOn: the field, a part of it, or a label for it", () => {
   expect(tappedOn(field, button)).toBe(false);
   expect(tappedOn(field, form)).toBe(false);
   expect(tappedOn(field, null)).toBe(false);
+});
+
+test("tappedOn: a shell's textarea is never tapped on, even when the touch lands on it", () => {
+  const add = tree();
+  const view = add("DIV", null);
+  const textarea = add("TEXTAREA", view, undefined, [KEY_ONLY]);
+  const screen = add("DIV", view);
+  expect(tappedOn(textarea, textarea)).toBe(false);
+  expect(tappedOn(textarea, screen)).toBe(false);
+});
+
+test("keyboardFit: the page losing a keyboard's height is the keyboard up, getting it back is down", () => {
+  let fit = keyboardFit(null, 412, 860);
+  expect(fit.up).toBe(false);
+  fit = keyboardFit(fit, 412, 520);
+  expect(fit.up).toBe(true);
+  fit = keyboardFit(fit, 412, 860);
+  expect(fit.up).toBe(false);
+});
+
+test("keyboardFit: the address bar coming and going is not the keyboard", () => {
+  let fit = keyboardFit(null, 412, 860);
+  fit = keyboardFit(fit, 412, 804);
+  expect(fit.up).toBe(false);
+  fit = keyboardFit(fit, 412, 860);
+  fit = keyboardFit(fit, 412, 860 - (KEYBOARD_MIN - 1));
+  expect(fit.up).toBe(false);
+});
+
+test("keyboardFit: a keyboard that slides in and out over several resizes still counts", () => {
+  let fit = keyboardFit(null, 412, 860);
+  for (const h of [800, 740, 680, 620, 560]) fit = keyboardFit(fit, 412, h);
+  expect(fit.up).toBe(true);
+  for (const h of [590, 620, 650]) fit = keyboardFit(fit, 412, h);
+  expect(fit.up).toBe(true);
+  fit = keyboardFit(fit, 412, 760);
+  expect(fit.up).toBe(false);
+});
+
+test("keyboardFit: a change of width starts over and keeps whether the keyboard is up", () => {
+  let fit = keyboardFit(null, 412, 860);
+  fit = keyboardFit(fit, 412, 520);
+  // unfolded with the keyboard still up
+  fit = keyboardFit(fit, 884, 560);
+  expect(fit.up).toBe(true);
+  fit = keyboardFit(fit, 884, 900);
+  expect(fit.up).toBe(false);
+  // folded with it down: a new width, not a keyboard
+  fit = keyboardFit(fit, 412, 520);
+  expect(fit.up).toBe(false);
 });
 
 test("freeToFocus: a shell never takes the caret from a field typed in elsewhere", () => {

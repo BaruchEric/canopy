@@ -45,7 +45,7 @@ import { clientId, myPlatform } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, shortcutOf, withMods, type BarKey, type Mods } from "../keys";
 import { osc52Text } from "../osc52";
 import { GLIDE_MIN, TAP_SLOP, dragLines, gapOf, glide, pinchFont, speedOf } from "../touch";
-import { freeToFocus, showKeyboard } from "../softkeys";
+import { KEY_ONLY, freeToFocus, showKeyboard } from "../softkeys";
 import { takeSoftInput } from "../softinput";
 import { Wordmark } from "./TopBar";
 import { AgentButtons } from "./AgentButtons";
@@ -298,6 +298,8 @@ export function TermView({
     // a phone keyboard's typing goes to the shell as it lands (softinput.ts)
     const coarse = matchMedia("(pointer: coarse)");
     const dropSoftInput = takeSoftInput(term, el, () => coarse.matches);
+    // its keyboard comes from the ⌨ key alone, never a touch near the caret
+    term.textarea?.setAttribute(KEY_ONLY, "");
     termRef.current = term;
     fitRef.current = fit;
     LIVE.set(tab.id, term);
@@ -551,9 +553,15 @@ export function TermView({
     // on, and two fingers pinch the text size. A touch that stays within
     // TAP_SLOP is left alone and arrives at xterm as a click, which focuses
     // it; the phone's keyboard stays down for that (softkeys.ts) and comes
-    // up from the key bar's ⌨.
-    let drag: { start: number; y: number; carry: number; moved: boolean; samples: { y: number; t: number }[] } | null =
-      null;
+    // up from the key bar's ⌨. A touch that stops a glide is not a click.
+    let drag: {
+      start: number;
+      y: number;
+      carry: number;
+      moved: boolean;
+      stopped: boolean;
+      samples: { y: number; t: number }[];
+    } | null = null;
     let pinch: { gap: number; font: number } | null = null;
     let at = { x: 0, y: 0 };
     let gliding = 0;
@@ -598,6 +606,7 @@ export function TermView({
       } else term.scrollLines(lines);
     };
     const onTouchStart = (e: TouchEvent) => {
+      const stopped = gliding !== 0;
       stopGlide();
       const [a, b] = [e.touches[0], e.touches[1]];
       if (a && b) {
@@ -606,7 +615,7 @@ export function TermView({
       } else if (a && e.touches.length === 1) {
         pinch = null;
         at = { x: a.clientX, y: a.clientY };
-        drag = { start: a.clientY, y: a.clientY, carry: 0, moved: false, samples: [{ y: a.clientY, t: e.timeStamp }] };
+        drag = { start: a.clientY, y: a.clientY, carry: 0, moved: false, stopped, samples: [{ y: a.clientY, t: e.timeStamp }] };
       }
     };
     const onTouchMove = (e: TouchEvent) => {
@@ -642,7 +651,10 @@ export function TermView({
       }
       const d = drag;
       drag = null;
-      if (!d?.moved) return;
+      if (!d?.moved) {
+        if (d?.stopped && e.cancelable) e.preventDefault();
+        return;
+      }
       // a drag is not a click
       if (e.cancelable) e.preventDefault();
       let v = speedOf(d.samples);
