@@ -291,6 +291,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 const KEY = "canopy.settings";
+const SCALED_KEY = "canopy.uiScaled";
 
 export const LEVELS = ["intermediate", "advanced"] as const;
 export type Level = (typeof LEVELS)[number];
@@ -419,16 +420,23 @@ function storedSettings(): Record<string, unknown> {
   return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
+/** Takes the type scale out of the zooms saved before it, once per browser,
+ *  a browser with nothing saved included. The mark has a key of its own so a
+ *  tab still running an older build cannot drop it on a save. */
+function rescaleOnce(): void {
+  if (localStorage.getItem(SCALED_KEY)) return;
+  localStorage.setItem(SCALED_KEY, "1");
+  if (localStorage.getItem(KEY)) localStorage.setItem(KEY, JSON.stringify(withoutOldScale(storedSettings(), ZOOM_STOPS)));
+}
+
 export function loadSettings(): Settings {
   try {
+    rescaleOnce();
     const raw = localStorage.getItem(KEY);
     // A browser that kept a layout but never changed a setting is one from
     // before levels, not a new one: it keeps the panel it had.
     if (!raw) return localStorage.getItem("canopy.layout") ? { ...DEFAULT_SETTINGS, ...levelOf({}) } : DEFAULT_SETTINGS;
-    const stored = storedSettings();
-    const scaled = withoutOldScale(stored, ZOOM_STOPS);
-    if (scaled !== stored) localStorage.setItem(KEY, JSON.stringify(scaled));
-    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(scaled, slotsNow(), SCREEN_SETTINGS);
+    const saved: Partial<Record<keyof Settings, unknown>> = withScreen(storedSettings(), slotsNow(), SCREEN_SETTINGS);
     // Every field is validated against its list: a value written by an older
     // build or edited by hand must not put the UI in a state it cannot render.
     return {
@@ -492,7 +500,7 @@ export function saveSettings(s: Settings): void {
     // and a pop-out leaves the flat ones as the main window set them
     const stored = storedSettings();
     const flat = writesFlat();
-    const base: Record<string, unknown> = { ...(stored.screens !== undefined && { screens: stored.screens }), ...(stored.uiScaled === true && { uiScaled: true }) };
+    const base: Record<string, unknown> = stored.screens === undefined ? {} : { screens: stored.screens };
     if (!flat) for (const k of SCREEN_SETTINGS) if (k in stored) base[k] = stored[k];
     localStorage.setItem(KEY, JSON.stringify(putScreen(base, { ...s }, slotsNow()[0] ?? null, SCREEN_SETTINGS, flat)));
   } catch {

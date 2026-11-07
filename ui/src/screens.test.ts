@@ -137,9 +137,4 @@ describe("withoutOldScale", () => {
   test("leaves the flat copy alone, which any screen may have written", () => {
     expect(withoutOldScale({ zoom: { board: 1.5 } }, ZOOM_STOPS).zoom).toEqual({ board: 1.5 });
   });
-  test("runs once, so a zoom picked afterwards stays as picked", () => {
-    const once = withoutOldScale({ screens: { ultra: { zoom: { board: 1.5 } } } }, ZOOM_STOPS);
-    expect(once.uiScaled).toBe(true);
-    expect(withoutOldScale(once, ZOOM_STOPS)).toBe(once);
-  });
 });

@@ -166,17 +166,40 @@ describe("panel sections", () => {
 });
 
 describe("the type scale's one pass over saved zooms", () => {
-  test("rescales on the first load and keeps its mark through a save", () => {
+  const storage = (seed?: string) => {
     const store = new Map<string, string>();
+    if (seed) store.set("canopy.settings", seed);
     (globalThis as { localStorage?: unknown }).localStorage = {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, v),
     };
+    return store;
+  };
+  const ultra = (store: Map<string, string>) =>
+    (JSON.parse(store.get("canopy.settings") ?? "{}") as { screens: { ultra: { zoom: unknown } } }).screens.ultra.zoom;
+
+  test("rescales what was saved before it, and only the first time", () => {
+    const store = storage(JSON.stringify({ screens: { ultra: { zoom: { board: 1.5 } } } }));
+    loadSettings();
+    expect(ultra(store)).toEqual({ board: 1.25 });
+    loadSettings();
+    expect(ultra(store)).toEqual({ board: 1.25 });
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+  test("a new browser has nothing to rescale, then or after its first save", () => {
+    const store = storage();
+    loadSettings();
     store.set("canopy.settings", JSON.stringify({ screens: { ultra: { zoom: { board: 1.5 } } } }));
-    saveSettings(loadSettings());
-    const saved = JSON.parse(store.get("canopy.settings") ?? "{}") as { uiScaled?: boolean; screens: { ultra: { zoom: unknown } } };
-    expect(saved.uiScaled).toBe(true);
-    expect(saved.screens.ultra.zoom).toEqual({ board: 1.25 });
+    loadSettings();
+    expect(ultra(store)).toEqual({ board: 1.5 });
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+  test("a save by a tab on an older build, which knows no mark, cannot bring it back", () => {
+    const store = storage(JSON.stringify({ screens: { ultra: { zoom: { board: 1.5 } } } }));
+    loadSettings();
+    store.set("canopy.settings", JSON.stringify({ screens: { ultra: { zoom: { board: 1.25 } } } }));
+    loadSettings();
+    expect(ultra(store)).toEqual({ board: 1.25 });
     delete (globalThis as { localStorage?: unknown }).localStorage;
   });
 });

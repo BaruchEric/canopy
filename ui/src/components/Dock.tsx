@@ -2953,9 +2953,13 @@ export function RepoPanel({
   const setPanelTab = useStore((s) => s.setPanelTab);
   const pickTab = useCallback((k: SectionKey) => setPanelTab(id, k), [id, setPanelTab]);
   const tabShowing = offered.find((k) => k === pickedTab) ?? order.find((k) => offered.includes(k)) ?? null;
+  // A tab once shown stays open behind the others, the way an unfolded
+  // section did, so a preview keeps its page and a picked file stays picked.
+  const [seenTabs, setSeenTabs] = useState<readonly SectionKey[]>([]);
+  if (tabShowing && !seenTabs.includes(tabShowing)) setSeenTabs([...seenTabs, tabShowing]);
   const rail = useMemo<PanelRailContext | null>(
-    () => (asTabs ? { el: railEl, active: tabShowing, pick: pickTab, add: addTab, drop: dropTab, keys: order.filter((k) => offered.includes(k)) } : null),
-    [asTabs, railEl, tabShowing, pickTab, addTab, dropTab, order, offered],
+    () => (asTabs ? { el: railEl, active: tabShowing, pick: pickTab, add: addTab, drop: dropTab, keys: order.filter((k) => offered.includes(k)), seen: seenTabs } : null),
+    [asTabs, railEl, tabShowing, pickTab, addTab, dropTab, order, offered, seenTabs],
   );
   // a narrow rail scrolls sideways: the tab showing stays in it, without
   // moving the dock the way scrollIntoView would

@@ -54,19 +54,22 @@ export interface PanelRailContext {
   drop: (key: SectionKey) => void;
   /** the tabs in the order they show */
   keys: readonly SectionKey[];
+  /** the tabs shown so far, which stay open behind the one showing */
+  seen: readonly SectionKey[];
 }
 export const PanelRail = createContext<PanelRailContext | null>(null);
 
 /** whether `key` is folded in `repoId`'s panel; never in a section window,
  *  which reads the grove's folds but must not write them, nor for a pane
- *  of the project's bench while it is in front */
+ *  of the project's bench while it is in front. Behind tabs, folded means
+ *  never shown: a tab once shown stays open behind the others. */
 export function useSectionClosed(repoId: string, key: string): boolean {
   const lone = useContext(SectionWindow);
   const rail = useContext(PanelRail);
   const held = useStore((s) => benchHolds(s.front, repoId, key));
   const closed = useStore((s) => closedIn(s, repoId, key));
   if (lone || held) return false;
-  return rail ? rail.active !== key : closed;
+  return rail ? !rail.seen.some((k) => k === key) : closed;
 }
 
 /** true while the project's bench holds `key` open, so its fold does nothing */
@@ -549,6 +552,7 @@ export function Section({
   const gear = <Gear label={`${word} at ${repo.name}`} groups={groups} />;
   // what the tab says after the word: the head, unless told otherwise
   const note = tab === undefined ? head : tab;
+  const showing = !tabbed || rail.active === k;
   return (
     <>
       {tabbed &&
@@ -557,10 +561,10 @@ export function Section({
           <button
             type="button"
             role="tab"
-            className={`section-tab${closed ? "" : " on"}`}
+            className={`section-tab${showing ? " on" : ""}`}
             data-key={k}
-            aria-selected={!closed}
-            tabIndex={closed ? -1 : 0}
+            aria-selected={showing}
+            tabIndex={showing ? 0 : -1}
             style={{ order: place }}
             title={title}
             onClick={() => rail.pick(k)}
@@ -582,7 +586,7 @@ export function Section({
         className={`${className} surface${mode === "full" ? " section-full" : ""}`}
         aria-label={label}
         data-section={k}
-        hidden={tabbed && closed}
+        hidden={!showing}
       >
         {tabbed ? (
           !closed && (

@@ -186,16 +186,13 @@ function unscaled(slot: Stored, scale: number, stops: readonly number[]): Stored
 /** Zooms picked before `--ui` were picked against smaller type, so on a class
  *  it scales they would now stack on top of it: a board at 150% on an ultra
  *  screen would come out at 188%. This takes the scale back out of every
- *  slot of those classes, once. The mark is on the stored object, so a zoom
- *  picked after it stays as picked. The flat copy is any screen's and stays
- *  as it is. */
+ *  slot of those classes. The flat copy is any screen's and stays as it is. */
 export function withoutOldScale(stored: Stored, stops: readonly number[]): Stored {
-  if (stored.uiScaled === true) return stored;
   const screens = isRecord(stored.screens) ? stored.screens : {};
   const slots: Stored = {};
   for (const [key, slot] of Object.entries(screens)) {
     const scale = UI_SCALE[key.split(".")[0] as ScreenClass];
     slots[key] = scale && isRecord(slot) ? unscaled(slot, scale, stops) : slot;
   }
-  return { ...stored, screens: slots, uiScaled: true };
+  return { ...stored, screens: slots };
 }
