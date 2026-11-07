@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { tappedOn, typesInto } from "./softkeys";
+import { freeToFocus, tappedOn, typesInto } from "./softkeys";
 
 test("typesInto: text fields bring the keyboard, pickers and the rest do not", () => {
   expect(typesInto({ tagName: "TEXTAREA" })).toBe(true);
@@ -56,4 +56,18 @@ test("tappedOn: the field, a part of it, or a label for it", () => {
   expect(tappedOn(field, button)).toBe(false);
   expect(tappedOn(field, form)).toBe(false);
   expect(tappedOn(field, null)).toBe(false);
+});
+
+test("freeToFocus: a shell never takes the caret from a field typed in elsewhere", () => {
+  const add = tree();
+  const page = add("BODY", null);
+  const box = add("DIV", page);
+  const own = add("TEXTAREA", box);
+  const search = add("INPUT", page);
+  const button = add("BUTTON", page);
+  expect(freeToFocus(box, null)).toBe(true);
+  expect(freeToFocus(box, page)).toBe(true);
+  expect(freeToFocus(box, button)).toBe(true);
+  expect(freeToFocus(box, own)).toBe(true);
+  expect(freeToFocus(box, search)).toBe(false);
 });

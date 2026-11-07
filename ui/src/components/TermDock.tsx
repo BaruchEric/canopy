@@ -45,7 +45,8 @@ import { clientId, myPlatform } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, shortcutOf, withMods, type BarKey, type Mods } from "../keys";
 import { osc52Text } from "../osc52";
 import { GLIDE_MIN, TAP_SLOP, dragLines, gapOf, glide, pinchFont, speedOf } from "../touch";
-import { showKeyboard } from "../softkeys";
+import { freeToFocus, showKeyboard } from "../softkeys";
+import { takeSoftInput } from "../softinput";
 import { Wordmark } from "./TopBar";
 import { AgentButtons } from "./AgentButtons";
 import { LIVE } from "../liveTerms";
@@ -294,6 +295,9 @@ export function TermView({
     term.loadAddon(fit);
     term.open(el);
     fit.fit();
+    // a phone keyboard's typing goes to the shell as it lands (softinput.ts)
+    const coarse = matchMedia("(pointer: coarse)");
+    const dropSoftInput = takeSoftInput(term, el, () => coarse.matches);
     termRef.current = term;
     fitRef.current = fit;
     LIVE.set(tab.id, term);
@@ -405,7 +409,9 @@ export function TermView({
         opened = true;
         tries = 0;
         saidAway = false;
-        if (!quietRef.current) term.focus();
+        // a socket opens late and again after every drop: never into the
+        // middle of typing in some other box
+        if (!quietRef.current && freeToFocus(el, document.activeElement)) term.focus();
       };
       sock.onmessage = (e: MessageEvent<ArrayBuffer | string>) => {
         if (typeof e.data === "string") {
@@ -682,6 +688,7 @@ export function TermView({
       el.removeEventListener("paste", onPaste, true);
       el.removeEventListener("dragover", onDragOver);
       el.removeEventListener("drop", onDrop);
+      dropSoftInput();
       for (const s of subs) s.dispose();
       // closing the socket leaves the shell running for the next view of it
       if (ws) {

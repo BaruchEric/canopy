@@ -13,12 +13,8 @@ import {
   type BenchPane,
 } from "../front";
 import { clamp } from "../util";
-import { useMedia } from "../media";
+import { useBenchOne } from "../media";
 import { Seg } from "./Seg";
-
-/** A window too small for the bench's parts side by side, a phone either
- *  way up; styles.css turns at the same widths and heights. */
-export const BENCH_ONE = "(max-width: 760px), (max-height: 480px)";
 
 export type { BenchPane };
 
@@ -57,7 +53,7 @@ export function BenchBar({
   const taskAll = useStore((s) => s.taskAll);
   const repos = useStore((s) => s.repos);
   const bringProject = useStore((s) => s.bringProject);
-  const phone = useMedia(BENCH_ONE);
+  const phone = useBenchOne();
   // with several machines shown, the same project on two reads apart
   const many = useStore(multi);
   const projects = useMemo(() => benchProjects(panels, terms, shells, taskAll, repos), [panels, terms, shells, taskAll, repos]);

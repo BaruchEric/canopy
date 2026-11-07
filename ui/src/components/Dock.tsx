@@ -54,8 +54,8 @@ import { WaitingBody } from "./Waiting";
 import { benchHolds, benchIs, benchSolo } from "../front";
 import { devTask } from "../tasks";
 import { devState } from "../guided";
-import { BENCH_ONE, BenchBar, BenchSeams, type BenchPane } from "./Bench";
-import { PHONE, useMedia } from "../media";
+import { BenchBar, BenchSeams, type BenchPane } from "./Bench";
+import { PHONE, useBenchOne, useMedia } from "../media";
 import { stableOrder } from "../dock";
 import { clipBox, columnVar, dropTarget, gearDrops, gridOf, gridTemplate, placements, resizeSeam, rowsTemplate, seamDrag, seamLabel, seamRange, seamStart, stepPanel, stripDrop, zoneRect, type Arrangement, type Box, type DockLayout, type Drop, type GridPlan, type StripDrop, type TabBox } from "../grid";
 import { PAN_SLOP, overflowsX, snapTo, wheelTake } from "../carousel";
@@ -2922,7 +2922,7 @@ export function RepoPanel({
   // the part filling the bench, which the part's own ⧉ or the bar picks
   const benchPart = useStore((s) => benchSolo(s.front, id));
   const soloBench = useStore((s) => s.soloBench);
-  const phone = useMedia(BENCH_ONE);
+  const phone = useBenchOne();
   const hasTasks = useStore((s) => tasksOf(s, id).length > 0);
   // a guided panel shows the preview only while the app runs
   const devUp = useStore((s) => devState(devTask(tasksOf(s, id))) === "running");
@@ -3133,7 +3133,7 @@ export function RepoPanel({
     void run("push", async () => (await api.push(id)).out);
   };
 
-  const modeClass = mode === "full" ? " surface-full" : bench ? " panel-bench" : "";
+  const modeClass = mode === "full" ? " surface-full" : bench ? ` panel-bench${phone ? " bench-one" : ""}` : "";
   // what the bench has to show one part at a time
   const has: Record<BenchPane, boolean> = {
     files: true,

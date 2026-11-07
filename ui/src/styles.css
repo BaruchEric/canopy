@@ -11278,40 +11278,40 @@ button.machine:hover {
   flex: none;
 }
 
-/* a phone: the part picked in the bar's second row */
-@media (max-width: 760px), (max-height: 480px) {
-  .panel.panel-bench {
-    --bench-bar: 84px;
-    inset: 0;
-    border: 0;
-    border-radius: 0;
-  }
-  .bench-bar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-rows: 40px 44px;
-    padding: 0 8px 0 4px;
-    padding-top: env(safe-area-inset-top);
-  }
-  .bench-bar > .bench-projects {
-    grid-row: 1;
-    grid-column: 1;
-  }
-  .bench-bar > .bench-leave {
-    grid-row: 1;
-    grid-column: 2;
-    align-self: center;
-  }
-  .bench-bar > .bench-panes {
-    grid-row: 2;
-    grid-column: 1 / -1;
-    align-self: center;
-    justify-self: stretch;
-    display: flex;
-  }
-  .bench-bar > .bench-panes > button {
-    flex: 1;
-  }
+/* a phone: the part picked in the bar's second row. A class, not a media
+   query: useBenchOne (media.ts) sets it from the window's height without
+   the phone's keyboard, which a max-height query would count. */
+.panel.panel-bench.bench-one {
+  --bench-bar: 84px;
+  inset: 0;
+  border: 0;
+  border-radius: 0;
+}
+.bench-one > .bench-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 40px 44px;
+  padding: 0 8px 0 4px;
+  padding-top: env(safe-area-inset-top);
+}
+.bench-one > .bench-bar > .bench-projects {
+  grid-row: 1;
+  grid-column: 1;
+}
+.bench-one > .bench-bar > .bench-leave {
+  grid-row: 1;
+  grid-column: 2;
+  align-self: center;
+}
+.bench-one > .bench-bar > .bench-panes {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  align-self: center;
+  justify-self: stretch;
+  display: flex;
+}
+.bench-one > .bench-bar > .bench-panes > button {
+  flex: 1;
 }
 .panel-head > .panel-bench-btn {
   flex: none;

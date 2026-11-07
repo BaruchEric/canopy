@@ -21,6 +21,14 @@ export function typesInto(el: { tagName: string; type?: string; isContentEditabl
   return el.isContentEditable === true;
 }
 
+/** Whether a shell in `box` may take the focus by itself (as it connects,
+ *  or connects again after a drop) without pulling it out of a text field
+ *  being typed in elsewhere, which on a phone also puts the keyboard down. */
+export function freeToFocus(box: { contains(el: Element | null): boolean }, active: Element | null): boolean {
+  if (!active || box.contains(active)) return true;
+  return !typesInto(active as Element & { type?: string; isContentEditable?: boolean });
+}
+
 /** whether a finger put down on `tapped` was put down on the field itself,
  *  or on a label that hands it the focus */
 export function tappedOn(field: Element, tapped: Element | null): boolean {
