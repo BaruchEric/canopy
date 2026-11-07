@@ -7753,9 +7753,6 @@ body.ss-grabbing * {
 /* a shell alone in the panel: its name is on its tab, so its head is only
    its actions, over the shell's corner while the pointer is there */
 @media (hover: hover) {
-  .panel-shells .ss-pane:not(.split) {
-    position: relative;
-  }
   .panel-shells .ss-pane:not(.split) > .ss-pane-head {
     position: absolute;
     z-index: 2;

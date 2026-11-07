@@ -53,15 +53,24 @@ async function openShell(page: Page) {
 try {
   {
     const page = await fresh();
-    const js: { name: string; at: number }[] = [];
-    const t0 = Date.now();
-    page.on("request", (r) => {
-      if (r.url().endsWith(".js")) js.push({ name: r.url().split("/").pop()!.replace(/-[A-Za-z0-9_-]{8}\.js$/, ""), at: Date.now() - t0 });
+    // when .app first exists, on the page's own clock: the chunks come in the
+    // first idle moment, which on a slow box falls before `load`, since the
+    // fonts hold that back, so a time taken after it counts them as the page's
+    await page.addInitScript(() => {
+      new MutationObserver((_, watch) => {
+        if (!document.querySelector(".app")) return;
+        document.documentElement.dataset["upAt"] = String(performance.now());
+        watch.disconnect();
+      }).observe(document, { childList: true, subtree: true });
     });
     await page.goto(`${base}/`, { waitUntil: "load" });
     await page.waitForSelector(".app", { timeout: 20_000 });
-    const up = Date.now() - t0;
     await page.waitForTimeout(7000);
+    const { up, js } = await page.evaluate(() => ({
+      up: Number(document.documentElement.dataset["upAt"]),
+      js: performance.getEntriesByType("resource").filter((e) => e.name.endsWith(".js"))
+        .map((e) => ({ name: e.name.split("/").pop()!.replace(/-[A-Za-z0-9_-]{8}\.js$/, ""), at: e.startTime })),
+    }));
     const before = js.filter((j) => j.at <= up).map((j) => j.name);
     const after = js.filter((j) => j.at > up).map((j) => j.name);
     check(!LAZY.some((n) => before.includes(n)), `the page loads without the on-demand chunks (with it: ${before.join(" ")})`);
