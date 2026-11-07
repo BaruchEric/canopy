@@ -116,7 +116,7 @@ select.mini.active{border-color:transparent;color:var(--text);background:var(--w
 .cat h2 .count::before,.cat h2 .count::after{content:none}
 .cat .blurb{color:var(--muted);font:13.5px/1.45 var(--words);margin:0 0 12px;max-width:72ch}
 .chev{color:var(--faint);font-size:14px}
-.grid{grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:10px}
+.grid{grid-template-columns:repeat(auto-fill,minmax(min(310px,100%),1fr));gap:10px}
 
 /* a card */
 div.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px 14px;gap:6px}
