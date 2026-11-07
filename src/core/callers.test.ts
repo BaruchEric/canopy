@@ -248,6 +248,19 @@ describe("the notes' routes (FR-020)", () => {
   });
 });
 
+describe("the clipboard's routes (FR-054)", () => {
+  test("reading and every change operate, so a caller with no token never sees a clip", () => {
+    expect(needs("GET", "/api/clips")).toBe("operate");
+    for (const p of ["/api/clips", "/api/clips/use", "/api/clips/pin", "/api/clips/clear"]) expect(needs("POST", p)).toBe("operate");
+    expect(needs("DELETE", "/api/clips")).toBe("operate");
+    expect(allows("page", needs("GET", "/api/clips"))).toBe(true);
+    expect(allows("shell", needs("POST", "/api/clips"))).toBe(true);
+    expect(allows("none", needs("GET", "/api/clips"))).toBe(false);
+    expect(allows("run", needs("GET", "/api/clips"))).toBe(false);
+    expect(allows("coordinator", needs("POST", "/api/clips"))).toBe(false);
+  });
+});
+
 describe("allows", () => {
   test("each kind holds what the table gives it", () => {
     expect(allows("page", "shell")).toBe(true);

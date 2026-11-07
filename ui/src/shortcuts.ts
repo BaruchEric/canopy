@@ -18,6 +18,7 @@ export type KeyAction =
   | "tree"
   | "feed"
   | "waiting"
+  | "clips"
   | "dirty"
   | "favorites"
   | "select"
@@ -58,6 +59,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "tree", press: "[", what: "Show or hide the tree", views: GIT },
   { action: "feed", press: "e", what: "Show or hide the feed", views: GIT },
   { action: "waiting", press: "w", what: "Open what is waiting on you", views: GIT },
+  { action: "clips", press: "v", what: "Open the clipboard: every copy, from every shell, page and device", views: GIT },
   { action: "dirty", press: "d", what: "Only repos with changes, or all", views: GIT },
   { action: "favorites", press: "*", what: "Only starred repos, or all", views: GIT },
   { action: "sort", press: "s", what: "The next sort", views: GIT },

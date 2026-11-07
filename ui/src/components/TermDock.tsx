@@ -49,7 +49,7 @@ import { KEY_ONLY, freeToFocus, showKeyboard } from "../softkeys";
 import { takeSoftInput } from "../softinput";
 import { Wordmark } from "./TopBar";
 import { AgentButtons } from "./AgentButtons";
-import { LIVE } from "../liveTerms";
+import { LIVE, noteShellFocus } from "../liveTerms";
 import { TERM_GONE, type Repo } from "../../../src/core/types";
 import { NewShellButton } from "./NewShell";
 import { NARROW, useMedia } from "../media";
@@ -261,6 +261,10 @@ export function TermView({
   saveFont.current = (px: number) => saveTermFont(spot, px);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
+  // what the tab says, for the clipboard: where a copy came from, and the
+  // shell its "paste into the shell" names
+  const nameRef = useRef(tab.label ?? tab.name);
+  nameRef.current = tab.label ?? tab.name;
   // the touch key bar's sticky Ctrl/Alt, read by the phone keyboard's input
   // inside the effect below, so a ref beside the state the bar renders
   const [mods, setModsState] = useState<Mods>(NO_MODS);
@@ -300,6 +304,8 @@ export function TermView({
     const dropSoftInput = takeSoftInput(term, el, () => coarse.matches);
     // its keyboard comes from the ⌨ key alone, never a touch near the caret
     term.textarea?.setAttribute(KEY_ONLY, "");
+    const onFocus = () => noteShellFocus(tab.id, nameRef.current);
+    term.textarea?.addEventListener("focus", onFocus);
     termRef.current = term;
     fitRef.current = fit;
     LIVE.set(tab.id, term);
@@ -457,7 +463,9 @@ export function TermView({
     // here: the browser's paste event reaches xterm without any permission.
     let unsent: string | null = null;
     const toClipboard = (text: string) => {
-      copyText(text).then(
+      // canopy's clipboard keeps it as it is tried, so a refused copy can
+      // still be taken from there (FR-054)
+      copyText(text, { source: "shell", from: nameRef.current }).then(
         () => {
           unsent = null;
         },
@@ -708,6 +716,7 @@ export function TermView({
         ws.close();
       }
       if (LIVE.get(tab.id) === term) LIVE.delete(tab.id);
+      term.textarea?.removeEventListener("focus", onFocus);
       term.dispose();
       termRef.current = null;
       fitRef.current = null;

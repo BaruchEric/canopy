@@ -14,3 +14,16 @@ export function typeInto(termId: string, text: string): boolean {
   term.focus();
   return true;
 }
+
+/** the shell the keyboard was last in, by tab id, with what its tab says */
+let last: { id: string; name: string } | null = null;
+
+/** Notes that the keyboard went into a shell, for "paste into the shell". */
+export function noteShellFocus(id: string, name: string): void {
+  last = { id, name };
+}
+
+/** the shell the keyboard was last in while a view of it is still mounted here, or null */
+export function lastShell(): { id: string; name: string } | null {
+  return last && LIVE.has(last.id) ? last : null;
+}

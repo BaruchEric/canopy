@@ -75,6 +75,11 @@ usage:
   canopy note list [--all]           the open notes, reminders first; --all shows the done ones too
   canopy note done <id>              mark a note done; canopy note delete <id> removes it
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy clip "<text>"               keep text on canopy's clipboard, on every page and device; no text reads stdin
+  canopy clip list [-n N] [--json]   the newest clips on every backend: count, id, when, source, kind, text
+  canopy clip get [N | id]           print a clip's text as copied (the newest by default): canopy clip get | pbcopy
+  canopy clip pin|unpin|rm <id>      keep a clip past the cap and the age, or drop it; canopy clip clear drops the unpinned
+    --backend URL, --on NAME         one backend only (default: every backend the home one lists)
   canopy run                         the runs kept on disk, newest first: id, when, repo, what, status, cost
   canopy run show <id>               a kept run's head and timeline (a live run's too)
   canopy run show <id> --wire        a finished run's steps as its kept wire replays them, with the prompts it asked

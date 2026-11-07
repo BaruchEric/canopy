@@ -253,6 +253,7 @@ import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
+import { ClipsHub } from "./clips";
 import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
 import { exportRun } from "../core/export";
 import { redactLine } from "../core/redact";
@@ -411,6 +412,8 @@ interface ServerState {
   work: WorkHub;
   /** quick notes and reminders, and the delivery of a reminder that came due (server/notes, FR-020) */
   notes: NotesHub;
+  /** the clipboard: every copy the pages, shells and CLI send, kept to be taken again (server/clips, FR-054) */
+  clips: ClipsHub;
   /** the tokens this backend knows and the pairing that hands them out (server/callers) */
   callers: CallerBook;
   /** the caller check at the top of route(), and what it refused */
@@ -3924,6 +3927,8 @@ async function handleApi(
   if (workRes) return workRes;
   const notesRes = await state.notes.handle(req, url);
   if (notesRes) return notesRes;
+  const clipsRes = await state.clips.handle(req, url);
+  if (clipsRes) return clipsRes;
   const healthRes = await state.health.handle(req, url);
   if (healthRes) return healthRes;
   const capacityRes = await state.capacity.handle(req, url);
@@ -6701,6 +6706,9 @@ export async function startServer(opts: {
     notes: new NotesHub({
       broadcast: (ev) => broadcast(state, ev),
       repo: (ref) => state.result.repos.find((r) => r.id === ref) ?? repoAtPath(state.result.repos, ref),
+    }),
+    clips: new ClipsHub({
+      broadcast: (ev) => broadcast(state, ev),
     }),
     kit: new KitHub({
       self: selfName(cfg.self, hostname()),

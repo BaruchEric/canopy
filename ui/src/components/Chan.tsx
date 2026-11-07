@@ -38,7 +38,7 @@ function Message({ m, me, now, onError }: { m: ChanMessage; me: string; now: num
           {messageText(m)}
         </a>
       ) : m.kind === "clip" ? (
-        <button type="button" className="chan-text chan-clip" title="Copy to this device's clipboard" onClick={() => void copyText(m.body).catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))}>
+        <button type="button" className="chan-text chan-clip" title="Copy to this device's clipboard" onClick={() => void copyText(m.body, { from: "tailchan" }).catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))}>
           {messageText(m)} · copy
         </button>
       ) : (
@@ -257,7 +257,7 @@ export function ChanPopBody(props: { draft?: Held; to?: Held }) {
             send clipboard
           </button>
           {clip && clip.kind === "clip" && (
-            <button type="button" className="mini" onClick={() => void act(() => copyText(clip.body))} title={`from ${clip.handle}@${clip.node}`}>
+            <button type="button" className="mini" onClick={() => void act(() => copyText(clip.body, { from: "tailchan" }))} title={`from ${clip.handle}@${clip.node}`}>
               copy the latest ({ago(clip.ts, now)})
             </button>
           )}

@@ -2014,6 +2014,10 @@ export type ServerEvent =
   | { type: "work"; items: WorkItem[] }
   /** every note the backend keeps, whole, whenever one changes or a reminder is delivered (FR-020) */
   | { type: "notes"; notes: QuickNote[] }
+  /** the ids of clips kept or changed and of clips dropped, whenever the
+   *  clipboard changes (FR-054). Ids only: every stream hears an event, and
+   *  reading a clip's text takes the operate right (GET /api/clips?ids=) */
+  | { type: "clips"; put: string[]; gone: string[] }
   /** every trigger event kept, whole, whenever one changes */
   | { type: "triggers"; events: TriggerEvent[]; digest?: TriggerDigest }
   /** the pair requests still waiting, whole, whenever one comes, is answered or is claimed */

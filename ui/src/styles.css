@@ -2086,6 +2086,432 @@ div.waiting-row {
     min-width: 20rem;
   }
 }
+/* ---------- the clipboard (FR-054) ---------- */
+/* Every copy from every source: the top bar's popup, its tab and its dock
+   card. The clip picked sits in a well, drawn as what it is (a link's host
+   large, a color as a swatch, a hash's short form in ink, a path's name in
+   ink, code with its line numbers). The list under it, or beside it in a
+   card wide enough, is one line a clip, its source word in that source's
+   color. canopy's own copies are the plain ones; the rest come from
+   somewhere else and say so in color. */
+.clips .s-shell {
+  --src: var(--moss);
+}
+.clips .s-canopy {
+  --src: var(--ink-dim);
+}
+.clips .s-page {
+  --src: var(--term-magenta);
+}
+.clips .s-cli {
+  --src: var(--sky);
+}
+.clips .s-clipboard {
+  --src: var(--term-cyan);
+}
+.clips .s-tailnet {
+  --src: var(--lichen);
+}
+.clips-pop {
+  width: 460px;
+  max-height: min(82dvh, 700px);
+  display: flex;
+  flex-direction: column;
+}
+/* the gear sits in the popover's corner: the find row keeps clear of it,
+   not the whole body */
+.settings-pop.clips-pop:has(> .pop-gear.corner):not(.prefs) > .clips {
+  padding-right: 0;
+}
+.clips-pop .clips-tools {
+  padding-right: 40px;
+}
+.popup-tab[data-popup="clips"] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.clips {
+  container: clips / inline-size;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.clips-tools {
+  flex-direction: row;
+  align-items: center;
+}
+.clips-find {
+  flex: 1;
+  min-width: 0;
+}
+.clips-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0 calc(var(--gutter) - 8px) 6px;
+}
+.clips-source {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: var(--r);
+  font-size: var(--t-sm);
+  color: var(--src, var(--ink-dim));
+}
+.clips-source:hover {
+  background: var(--wash);
+}
+.clips-source[aria-pressed="true"] {
+  color: var(--src, var(--ink));
+  background: var(--wash-strong);
+}
+.clips-n {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.clips-error {
+  padding: 0 var(--gutter) 6px;
+}
+.clips-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.clips-none {
+  padding: 6px var(--gutter);
+}
+.clips-empty {
+  display: grid;
+  gap: 6px;
+  padding: 6px var(--gutter) 12px;
+}
+.clips-empty > p:first-child {
+  margin: 0;
+  font-size: var(--t-lg);
+}
+.clips-empty code {
+  font-family: var(--mono);
+}
+.clip-src {
+  color: var(--src);
+}
+/* the clip picked */
+.clip-specimen {
+  flex: none;
+  min-width: 0;
+  padding: 2px var(--gutter) 10px;
+}
+.clip-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  margin: 0 0 6px;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.clip-label .clip-src {
+  font-weight: 600;
+}
+.clip-from {
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.clip-label .clip-when {
+  margin-left: auto;
+}
+.clip-when {
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.clip-view {
+  max-height: calc(var(--t-md) * 17);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px;
+  border-radius: var(--r-card);
+  background: var(--well);
+  color: var(--ink);
+}
+.clip-prose {
+  margin: 0;
+  font-size: var(--t-lg);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.clip-link {
+  display: block;
+  font-family: var(--mono);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.clip-host {
+  display: block;
+  font-size: var(--t-xl);
+  font-weight: 600;
+  color: var(--sky);
+}
+.clip-rest {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--t-sm);
+  line-height: 1.45;
+  color: var(--ink-dim);
+}
+.clip-link:hover .clip-host {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.clip-color {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.clip-swatch {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--r-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+.clip-color code {
+  font-family: var(--mono);
+  font-size: var(--t-2xl);
+  overflow-wrap: anywhere;
+}
+.clip-hash,
+.clip-path {
+  display: block;
+  font-family: var(--mono);
+  font-size: var(--t-lg);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.clip-hash {
+  color: var(--ink-faint);
+  letter-spacing: 0.03em;
+}
+.clip-short {
+  font-weight: 600;
+  color: var(--ink);
+}
+/* each folder and the name are a piece that wraps whole while it fits on
+   a line, so a path breaks after a slash, never at a dash in a name */
+.clip-dir,
+.clip-base {
+  display: inline-block;
+  max-width: 100%;
+}
+.clip-dir {
+  color: var(--ink-faint);
+}
+.clip-base {
+  font-weight: 600;
+}
+/* what a clip says, character for character: the mono's ligatures would
+   draw => and === as arrows and bars */
+.clip-view,
+.clip-line.mono {
+  font-variant-ligatures: none;
+}
+.clip-well {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  white-space: pre;
+  tab-size: 2;
+}
+.clip-well.numbered {
+  counter-reset: clip-ln;
+}
+.clip-ln {
+  counter-increment: clip-ln;
+}
+.clip-ln::before {
+  content: counter(clip-ln);
+  display: inline-block;
+  min-width: 3ch;
+  margin-right: 2ch;
+  text-align: right;
+  color: var(--ink-faint);
+}
+.clip-cmd {
+  font-size: var(--t-md);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.clip-prompt {
+  margin-right: 1ch;
+  font-weight: 600;
+  color: var(--moss);
+  user-select: none;
+}
+.clip-more {
+  margin: 6px 0 0;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.clip-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin: 8px 0 0;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+.clip-facts > :first-child {
+  color: var(--ink-dim);
+}
+.clip-cut {
+  color: var(--lichen);
+}
+.clip-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+/* the list: pinned clips first, a rule under the last of them */
+.clip-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 2px calc(var(--gutter) - 8px) 6px;
+}
+.clip-list li {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.clip-list li.pinned + li:not(.pinned) {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hair);
+}
+.clip-row {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: var(--r);
+  text-align: left;
+  color: var(--ink);
+  font-size: var(--t-md);
+}
+.clip-row:hover {
+  background: var(--wash);
+}
+.clip-row.on {
+  background: var(--wash-strong);
+}
+.clip-row .clip-src {
+  flex: none;
+  width: 4.6em;
+  font-size: var(--t-sm);
+}
+.clip-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clip-line.mono {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+}
+.clip-pin {
+  flex: none;
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+.clip-row .clip-when {
+  flex: none;
+  min-width: 2.6ch;
+  font-size: var(--t-sm);
+  text-align: right;
+}
+.clip-quick {
+  flex: none;
+  padding-inline: 6px;
+}
+/* with a pointer, a row's quick copy shows under it or with the focus in
+   the row; a touch screen shows it always */
+@media (hover: hover) {
+  .clip-list li:not(:hover, :focus-within) .clip-quick {
+    opacity: 0;
+  }
+}
+.clips-foot {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--hair);
+}
+.clips-foot .settings-hint {
+  flex: 1;
+  min-width: 0;
+}
+.clips-clear {
+  flex: none;
+  display: inline-flex;
+  gap: 4px;
+}
+/* a copy from elsewhere since a clipboard last showed */
+.dot.clips-fresh {
+  align-self: center;
+  background: var(--term-cyan);
+}
+/* a card wide enough puts the list on the left and the clip beside it, each
+   scrolling in its own column */
+@container clips (min-width: 44em) {
+  .clips-main {
+    display: grid;
+    grid-template-columns: minmax(16em, 2fr) minmax(0, 3fr);
+  }
+  .clips-main > .clip-list {
+    grid-column: 1;
+    grid-row: 1;
+    padding-top: 0;
+  }
+  .clips-main > .clip-specimen,
+  .clips-main > .clips-none {
+    grid-column: 2;
+    grid-row: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .clips-main > .clip-specimen .clip-view {
+    max-height: none;
+  }
+}
+/* a clip lands when it takes the stage: a new copy or one picked */
+@media (prefers-reduced-motion: no-preference) {
+  .clip-view {
+    animation: clip-land 0.18s ease-out;
+  }
+  @keyframes clip-land {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+}
 .inbox-recent li {
   display: flex;
   align-items: baseline;

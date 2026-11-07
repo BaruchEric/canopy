@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { copyText } from "../share";
 import { api } from "../api";
 import { when } from "../util";
 import { DiffView } from "./DiffView";
@@ -91,7 +92,7 @@ function Detail({ repo, hash }: { repo: Repo; hash: string }) {
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(detail.hash);
+      await copyText(detail.hash, { from: "a commit" });
       setCopied(true);
     } catch {
       // no clipboard here; the hash is still on screen to select

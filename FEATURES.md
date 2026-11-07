@@ -48,6 +48,11 @@ The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: 
 
 ## Shipped
 
+### FR-054 · A clipboard of every copy, from every source
+P2 · added 2026-11-07 · source: Eric ("a clipboard viewer and manager from all sources", 2026-11-07) · shipped 2026-11-07
+One place for everything copied: in a shell (OSC 52), with a copy button or y and a letter, by selecting text on the page, from any shell with canopy clip, from the device's own clipboard, and tailchan's #clipboard from the tailnet's other devices. Each clip is drawn as what it is, can be copied again, pasted into the last shell, pinned or dropped, and shows on every page and device.
+Built 2026-11-07: clips live in clips.json (0600) and are served at /api/clips at operate; the event carries ids only. The page has the ⎘ chip (v) with its popup, tab and dock card, and the CLI has canopy clip, list, get, pin, unpin, rm and clear. Text shaped like a key or a password is never kept. docs/architecture.md, "The clipboard", has the rest.
+
 ### FR-053 · The backends chip names Chrome's local network access permission instead of connecting forever
 P2 · added 2026-11-05 · source: Eric (desoto backend, 2026-11-05) · shipped 2026-11-05
 From a public page (canopy.beric.ca) a backend that has only a tailnet URL reads *connecting* and never moves: Chrome holds a public site's first request to a local address (the box's 100.x) behind its local network access permission, and the page's fetches and event stream wait on a prompt nobody answered. The chip should read the permission (`navigator.permissions`, `local-network-access`), say "needs local network access" with the site-settings hint while it is prompt or denied, ask for it from the retry click, and come back on its own when it turns granted. Background in docs/deploy.md, "Other canopy pages".

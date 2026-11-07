@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { copyText } from "../share";
 import { isSeedId } from "../../../src/core/sprout";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
@@ -249,7 +250,7 @@ export function RepoMenu({
   const copyClone = async () => {
     if (!forge || forge.empty) return;
     try {
-      await navigator.clipboard.writeText(forge.clone);
+      await copyText(forge.clone, { from: "clone line" });
       setCopied(true);
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);

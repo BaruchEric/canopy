@@ -350,7 +350,7 @@ export function kbCopy(key: CopyKey, solo: string | null = null): void {
     return;
   }
   const { plain, backend } = key === "r" ? idLabel(text) : { plain: text, backend: null };
-  copyText(plain).then(
+  copyText(plain, { from: name }).then(
     () => say(`copied ${name}: ${plain}${backend ? ` on ${backend}` : ""}`),
     (e: unknown) => say(`could not copy: ${e instanceof Error ? e.message : String(e)}`, true),
   );

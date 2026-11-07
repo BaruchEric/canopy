@@ -1,5 +1,6 @@
 import type { RunGroup } from "../../src/core/group";
 import type { QuickNote, QuickNotesInfo } from "../../src/core/notes";
+import type { Clip, ClipIn, ClipsInfo } from "../../src/core/clips";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { CapacitySettings } from "../../src/core/capacity";
@@ -147,6 +148,7 @@ import {
   qPrs,
   qTriggers,
   qNotes,
+  qClips,
   qRun,
   qScan,
   qSource,
@@ -192,17 +194,21 @@ export class PartialFleetError extends Error {
   }
 }
 
+/** the reads that carry the page's token to another origin too */
+const KEYED_READS: ReadonlySet<string> = new Set(["/api/auth", "/api/clips"]);
+
 async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<T> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
   // The backend's own token, when this page signed in to it. To another
   // origin it rides only where it is needed: a write, and /api/auth, which
-  // says who this page is. A read is open to anyone, and a GET with no
-  // custom header and no Content-Type is a simple request with no preflight,
-  // whose failing at an edge gate would mark the whole backend offline.
+  // says who this page is, and the clipboard, which only a token may read
+  // (FR-054). Any other read is open to anyone, and a GET with no custom
+  // header and no Content-Type is a simple request with no preflight, whose
+  // failing at an edge gate would mark the whole backend offline.
   const method = (init.method ?? "GET").toUpperCase();
-  const keyed = !base || (method !== "GET" && method !== "HEAD") || path.split("?")[0] === "/api/auth";
+  const keyed = !base || (method !== "GET" && method !== "HEAD") || KEYED_READS.has(path.split("?")[0] ?? "");
   const headers = keyed ? tokenHeaders(originOf(base), init.headers) : new Headers(init.headers);
   if (typeof init.body === "string" && init.headers === undefined) headers.set("Content-Type", "application/json");
   const sent = headers.get(TOKEN_HEADER);
@@ -796,6 +802,36 @@ export const api = {
     return from(b, [n], qNotes)[0] ?? n;
   },
   deleteQuickNote: (id: string) => req<{ ok: true }>(backendOf(id), `/api/notes?id=${encodeURIComponent(plainOf(id))}`, { method: "DELETE" }),
+  /** one backend's clips (FR-054), newest first, or only those of `ids` (by
+   *  the page's ids); null for an older backend that has none */
+  clips: async (b: string = homeName(), ids?: readonly string[]): Promise<Clip[] | null> => {
+    const path = ids ? `/api/clips?ids=${encodeURIComponent(ids.map(plainOf).join(","))}` : "/api/clips";
+    const r = await req<ClipsInfo | null>(b, path);
+    if (!r || !Array.isArray(r.clips)) return null;
+    return from(b, r.clips, qClips);
+  },
+  /** keeps a copy on one backend; the same text already kept moves up */
+  addClip: async (b: string, body: ClipIn): Promise<Clip> => {
+    const c = await req<Clip>(b, "/api/clips", { method: "POST", body: JSON.stringify(body) });
+    return from(b, [c], qClips)[0] ?? c;
+  },
+  /** a clip taken again from the list: to the top, its source kept */
+  takeClip: async (id: string): Promise<Clip> => {
+    const b = backendOf(id);
+    const c = await req<Clip>(b, "/api/clips/use", { method: "POST", body: JSON.stringify({ id: plainOf(id) }) });
+    return from(b, [c], qClips)[0] ?? c;
+  },
+  pinClip: async (id: string, pinned: boolean): Promise<Clip> => {
+    const b = backendOf(id);
+    const c = await req<Clip>(b, "/api/clips/pin", { method: "POST", body: JSON.stringify({ id: plainOf(id), pinned }) });
+    return from(b, [c], qClips)[0] ?? c;
+  },
+  deleteClip: (id: string) => req<{ ok: true }>(backendOf(id), `/api/clips?id=${encodeURIComponent(plainOf(id))}`, { method: "DELETE" }),
+  /** drops every unpinned clip on one backend; the ids that went, by the page's ids */
+  clearClips: async (b: string): Promise<string[]> => {
+    const r = await req<{ gone: string[] }>(b, "/api/clips/clear", { method: "POST" });
+    return b === homeName() ? r.gone : r.gone.map((id) => qual(b, id));
+  },
   /** the retro lessons on offer */
   advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
   /** accepts or dismisses one; a chat it opened is named by the page's ids */

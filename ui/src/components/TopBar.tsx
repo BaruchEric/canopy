@@ -25,6 +25,7 @@ import { BackendMenu } from "./BackendMenu";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { NotesChip } from "./Notes";
+import { ClipsChip } from "./Clipboard";
 import { NewProjectButton } from "./IncubatorSheets";
 import { KeptShells } from "./KeptShells";
 import { ShellsChip } from "./Shells";
@@ -805,6 +806,7 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
             <Cluster label="For you">
               <InboxChip />
               <NotesChip />
+              <ClipsChip />
               <ChanChip />
             </Cluster>
             <Cluster label="Running">
@@ -880,6 +882,7 @@ export function TopBar({ nav }: { nav?: ReactNode }) {
             <WaitingButton />
             <InboxChip />
             <NotesChip />
+            <ClipsChip />
             <ChanChip />
           </Cluster>
           <Cluster label="Running">

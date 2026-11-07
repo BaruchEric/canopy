@@ -1131,6 +1131,7 @@ describe("several backends", () => {
         "/api/worktrees",
         "/api/secrets",
         "/api/notes",
+        "/api/clips",
       ].sort(),
     );
     const s = useStore.getState();
@@ -2080,7 +2081,7 @@ describe("several backends", () => {
       expect(useStore.getState().sweep).toEqual(sweep);
     });
 
-    test("to another origin the token rides on writes and /api/auth alone, so a read is never preflighted", async () => {
+    test("to another origin the token rides on writes, /api/auth and the clipboard alone, so any other read is never preflighted", async () => {
       kept.set(B_TOKEN, "cnp_page_b");
       heard.length = 0;
       await go();
@@ -2088,8 +2089,10 @@ describe("several backends", () => {
       await api.rescan("b").catch(() => {});
       const of = (call: string) => heard.filter(([c]) => c === call).map(([, t]) => t);
       expect(of("GET /api/tree").length).toBeGreaterThan(0);
-      expect(heard.filter(([c]) => c.startsWith("GET ") && c !== "GET /api/auth").every(([, t]) => t === null)).toBe(true);
+      expect(heard.filter(([c]) => c.startsWith("GET ") && c !== "GET /api/auth" && c !== "GET /api/clips").every(([, t]) => t === null)).toBe(true);
       expect(of("GET /api/auth")).toContain("cnp_page_b");
+      // reading a clip takes the operate right (FR-054)
+      expect(of("GET /api/clips")).toContain("cnp_page_b");
       expect(of("POST /api/rescan")).toEqual(["cnp_page_b"]);
     });
 

@@ -152,6 +152,10 @@ canopy sweep --yes [--kind shell,chat,run,pr]   # close the ones the plan ticks,
 canopy note add "<text>" [--repo R] [--at <time>]   # jot a note on the backend, on a repo with --repo; --at (in 30m, 14:00, an ISO time) makes it a reminder that lands in the inbox then
 canopy note list [--all]           # the open notes, reminders first; --all shows the done ones too
 canopy note done <id>              # mark a note done; canopy note delete <id> removes it
+canopy clip "<text>"               # keep text on canopy's clipboard, shown on every page and device; no text reads stdin (make | canopy clip)
+canopy clip list [-n N] [--json]   # the newest clips on every backend: when, source, kind, text
+canopy clip get [N | id]           # a clip's text as copied, the newest by default (canopy clip get | pbcopy)
+canopy clip pin|unpin|rm <id>      # keep a clip past 14 days and 200 newer ones, or drop it; canopy clip clear drops the unpinned
 canopy run                         # the runs kept on disk under <configDir>/runs/, newest first
 canopy run show <id>               # a kept run's head and timeline; a live run's too
 canopy run show <id> --wire        # a finished run's steps as its kept wire replays them, with the prompts it asked

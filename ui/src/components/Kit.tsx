@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { copyText } from "../share";
 import { api } from "../api";
 import { useStore } from "../store";
 import {
@@ -116,7 +117,7 @@ function ToolSheet({ backend, cell, onDone }: { backend: string; cell: KitCell; 
           <p className="kit-note">canopy on {machine} runs in a container built from the same image as the shells there. An install in it would land in canopy's container alone and be gone at the next recreate, so add the tool to the shells stage of canopy's Dockerfile and redeploy. Its install line:</p>
           <pre className="kit-command">{line}</pre>
           <div className="kit-line">
-            <button type="button" className="mini" onClick={() => void navigator.clipboard?.writeText(line).catch(() => {})}>copy</button>
+            <button type="button" className="mini" onClick={() => void copyText(line, { from: "the kit" }).catch(() => {})}>copy</button>
           </div>
         </>
       ) : cell.sudo ? (
@@ -124,7 +125,7 @@ function ToolSheet({ backend, cell, onDone }: { backend: string; cell: KitCell; 
           <p className="kit-note">This line uses sudo, which cannot prompt over canopy's non-interactive ssh. Run it in a terminal on {machine}, then rescan:</p>
           <pre className="kit-command">{line}</pre>
           <div className="kit-line">
-            <button type="button" className="mini" onClick={() => void navigator.clipboard?.writeText(line).catch(() => {})}>copy</button>
+            <button type="button" className="mini" onClick={() => void copyText(line, { from: "the kit" }).catch(() => {})}>copy</button>
           </div>
         </>
       ) : sure ? (

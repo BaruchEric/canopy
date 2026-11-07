@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import type { PopupName } from "../sectiontabs";
 import { useStore } from "../store";
 import { ChanPopBody } from "./Chan";
+import { ClipsPopBody } from "./Clipboard";
 import { HealthPopBody } from "./Health";
 import { InboxPopBody } from "./Inbox";
 import { KeptPopBody } from "./KeptShells";
@@ -43,6 +44,8 @@ function PopupBody({ name }: { name: PopupName }) {
       return <TasksPopBody />;
     case "notes":
       return <NotesPopBody />;
+    case "clips":
+      return <ClipsPopBody />;
     case "health":
       return <HealthPopBody />;
     case "shells":

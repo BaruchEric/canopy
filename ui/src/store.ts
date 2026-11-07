@@ -1,5 +1,8 @@
 import type { RunGroup } from "../../src/core/group";
 import type { QuickNote } from "../../src/core/notes";
+import { applyClips, looksSecret, type Clip } from "../../src/core/clips";
+import type { Copied } from "./clipsink";
+import { copyText } from "./share";
 import { create } from "zustand";
 import { api, onBackendSignal, PartialFleetError, resolveBase, subscribe } from "./api";
 import { saveChoice } from "./preview";
@@ -50,7 +53,7 @@ import { snapshot, watch, type Note as Notice, type Watch } from "./notify";
 import { setTitleCount } from "./title";
 import { TERM_FONT, PANEL_TERM_ROWS, adoptLabels, adoptPlaces, adoptPoppedTerms, adoptTerms, cleanLabel, loadFocusSize, loadTermTabs, needsPanelShell, nextStripTab, panelShellStart, reconcileTerms, renameTab, rowsPx, swapTabs, termId, type FocusSize, type TermTab } from "./term";
 import { benchHolds, clearTask, frontForTab, frontForTask, keepFront, projectFront, withSolo, type BenchPane, type Front } from "./front";
-import { clientId, identity } from "./client";
+import { clientId, identity, myDeviceName, myPlatform } from "./client";
 export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
@@ -863,6 +866,13 @@ export interface CanopyState {
   quickNotes: Record<string, QuickNote[]>;
   /** whether the notes popup is up, so a card's chip can open it */
   quickNotesOpen: boolean;
+  /** each backend's clips by the page's ids, newest first (server/clips,
+   *  FR-054); an older backend that has none is missing */
+  clips: Record<string, Clip[]>;
+  /** whether the clipboard popup is up */
+  clipsOpen: boolean;
+  /** the newest copy's time when a clipboard last showed, for the chip's dot */
+  clipsSeen: number;
   /** each backend's caller check as this page last read it (server/callers),
    *  with whether this page holds a token for it; an older backend that has
    *  none is missing */
@@ -1339,6 +1349,24 @@ export interface CanopyState {
   editQuickNote: (id: string, patch: { text?: string; repo?: string | null; at?: string | null }) => Promise<QuickNote>;
   doneQuickNote: (id: string) => Promise<void>;
   deleteQuickNote: (id: string) => Promise<void>;
+  /** reads one backend's clips, home by default (FR-054) */
+  loadClips: (backend?: string) => Promise<void>;
+  /** reads the newest clips on tailchan's #clipboard, which the clipboard shows beside canopy's own */
+  loadChanClips: () => void;
+  openClips: () => void;
+  closeClips: () => void;
+  /** a clipboard showed clips up to `at`: the chip's dot goes */
+  seeClips: (at: number) => void;
+  /** keeps a copy on home's clipboard; text shaped like a secret keeps
+   *  nothing, and a backend without a clipboard says nothing */
+  keepClip: (c: Copied) => Promise<void>;
+  /** puts a clip back on this device's clipboard and moves it up; throws
+   *  when the browser refuses the copy */
+  copyClip: (id: string) => Promise<void>;
+  pinClip: (id: string, pinned: boolean) => Promise<void>;
+  deleteClip: (id: string) => Promise<void>;
+  /** drops every unpinned clip on every backend shown */
+  clearClips: () => Promise<void>;
   /** fires a made-up issue through one backend's rule */
   fireTrigger: (backend: string, rule: string, title: string, repo?: string) => Promise<Delivery>;
   /** runs one backend's rule's poll now */
@@ -1901,6 +1929,23 @@ const triggersEvents = new Map<string, number>();
 const workEvents = new Map<string, number>();
 /* and the notes', so a read that lands after an event never puts an older list back */
 const quickNotesEvents = new Map<string, number>();
+/* and the clipboard's: a read that lands after an event is read again, since
+   the event carries ids, not a list to put back */
+const clipsEvents = new Map<string, number>();
+/* the clip ids each backend dropped: an id never comes back, so a fetch that
+   lands after its clip went keeps it gone */
+const clipsGone = new Map<string, Set<string>>();
+/* the last copy kept, so one heard twice in a moment is kept once */
+let lastKept: { text: string; at: number } | null = null;
+
+/** `got` filed as backend `b`'s clips, past the ids it dropped */
+function freshClips(b: string, got: readonly Clip[]): Clip[] {
+  const gone = clipsGone.get(b);
+  return gone ? got.filter((c) => !gone.has(c.id)) : [...got];
+}
+
+/** the newest copy's time in a list, 0 for none */
+const newestAt = (clips: readonly Clip[]): number => clips.reduce((m, c) => Math.max(m, c.at), 0);
 /* and each backend's pair events */
 const authEvents = new Map<string, number>();
 /* each sign-in's poll, by backend, so one in flight is not started twice
@@ -2081,6 +2126,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   void get().loadTriggers(b);
   void get().loadWork(b);
   void get().loadQuickNotes(b);
+  void get().loadClips(b);
   void get().loadAuth(b);
   // a sign-in this tab left waiting before a reload picks up where it was
   void get().signIn(b, true);
@@ -2333,6 +2379,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   work: {},
   quickNotes: {},
   quickNotesOpen: false,
+  clips: {},
+  clipsOpen: false,
+  clipsSeen: 0,
   authByBackend: {},
   signIns: {},
   secrets: {},
@@ -2565,6 +2614,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadTriggers();
     void get().loadWork();
     void get().loadQuickNotes();
+    void get().loadClips();
     void get().loadAuth();
     void get().signIn(get().home, true);
     void get().loadSecrets();
@@ -2753,6 +2803,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadTriggers(name);
     void get().loadWork(name);
     void get().loadQuickNotes(name);
+    void get().loadClips(name);
     void get().loadAuth(name);
     void get().signIn(name, true);
     void get().loadSecrets(name);
@@ -2820,6 +2871,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _work, ...work } = s.work;
     workEvents.set(name, (workEvents.get(name) ?? 0) + 1);
     const { [name]: _quickNotes, ...quickNotes } = s.quickNotes;
+    const { [name]: _clips, ...clips } = s.clips;
+    clipsEvents.set(name, (clipsEvents.get(name) ?? 0) + 1);
     const { [name]: _auth, ...authByBackend } = s.authByBackend;
     const { [name]: _signIn, ...signIns } = s.signIns;
     signingIn.delete(name);
@@ -2857,6 +2910,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       triggers,
       work,
       quickNotes,
+      clips,
       authByBackend,
       signIns,
       secrets,
@@ -3405,6 +3459,27 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (ev.type === "notes") {
       quickNotesEvents.set(b, (quickNotesEvents.get(b) ?? 0) + 1);
       set((st) => ({ quickNotes: { ...st.quickNotes, [b]: ev.notes } }));
+    }
+    if (ev.type === "clips") {
+      // ids only: the gone ones drop now, the put ones are read with this
+      // page's token, since every stream hears the event
+      clipsEvents.set(b, (clipsEvents.get(b) ?? 0) + 1);
+      if (ev.gone.length > 0) {
+        const gone = clipsGone.get(b) ?? new Set<string>();
+        for (const id of ev.gone) gone.add(id);
+        clipsGone.set(b, gone);
+        set((st) => (st.clips[b] ? { clips: { ...st.clips, [b]: applyClips(st.clips[b] ?? [], { gone: ev.gone }) } } : {}));
+      }
+      if (ev.put.length > 0) {
+        void api.clips(b, ev.put).then(
+          (got) => {
+            if (!got || !isShown(get(), b)) return;
+            set((st) => ({ clips: { ...st.clips, [b]: applyClips(st.clips[b] ?? [], { put: freshClips(b, got) }) } }));
+          },
+          () => {},
+        );
+      }
+      return;
     }
     if (ev.type === "prs") {
       prsEvents.set(b, (prsEvents.get(b) ?? 0) + 1);
@@ -3983,6 +4058,85 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // an older backend has no notes; nothing shows for it
     }
+  },
+  loadClips: async (backend) => {
+    const b = backend ?? get().home;
+    // a read that an event overtook is read once more before it is trusted
+    for (let tries = 0; tries < 2; tries++) {
+      const mark = clipsEvents.get(b) ?? 0;
+      let got: Clip[] | null;
+      try {
+        got = await api.clips(b);
+      } catch {
+        // an older backend has no clipboard, or this page holds no token for it
+        return;
+      }
+      if (!got || !isShown(get(), b)) return;
+      if ((clipsEvents.get(b) ?? 0) !== mark && tries === 0) continue;
+      const list = freshClips(b, got);
+      set((s) => ({
+        clips: { ...s.clips, [b]: list },
+        // what was already there when the page came up is not news
+        ...(s.clips[b] === undefined ? { clipsSeen: Math.max(s.clipsSeen, newestAt(list)) } : {}),
+      }));
+      return;
+    }
+  },
+  loadChanClips: () => readClips(20),
+  // the body that shows reads tailchan's clips when it mounts
+  openClips: () => set({ clipsOpen: true }),
+  closeClips: () => set({ clipsOpen: false }),
+  seeClips: (at) => {
+    if (at > get().clipsSeen) set({ clipsSeen: at });
+  },
+  keepClip: async (c) => {
+    if (!c.text.trim() || looksSecret(c.text)) return;
+    const now = Date.now();
+    if (lastKept && lastKept.text === c.text && now - lastKept.at < 1500) return;
+    lastKept = { text: c.text, at: now };
+    const b = get().home;
+    const device = { id: clientId(), name: myDeviceName(get().settings.device), platform: myPlatform() };
+    try {
+      const clip = await api.addClip(b, { text: c.text, source: c.source, ...(c.from ? { from: c.from } : {}), device });
+      if (!isShown(get(), b)) return;
+      // this page made it: no dot for its own copy
+      set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [clip] }) }, clipsSeen: Math.max(s.clipsSeen, clip.at) }));
+    } catch {
+      // an older backend has no clipboard: the copy itself still happened
+    }
+  },
+  copyClip: async (id) => {
+    const b = backendOf(id);
+    const clip = get().clips[b]?.find((c) => c.id === id);
+    if (!clip) return;
+    await copyText(clip.text, { keep: false });
+    const c = await api.takeClip(id).catch(() => null);
+    if (c) set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [c] }) }, clipsSeen: Math.max(s.clipsSeen, c.at) }));
+  },
+  pinClip: async (id, pinned) => {
+    const c = await api.pinClip(id, pinned);
+    const b = backendOf(id);
+    set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [c] }) } }));
+  },
+  deleteClip: async (id) => {
+    await api.deleteClip(id);
+    const b = backendOf(id);
+    set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { gone: [id] }) } }));
+  },
+  clearClips: async () => {
+    const held = Object.entries(get().clips).filter(([, list]) => list.some((c) => !c.pinned));
+    const errors: string[] = [];
+    await Promise.all(
+      held.map(async ([b]) => {
+        try {
+          const gone = await api.clearClips(b);
+          set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { gone }) } }));
+        } catch (e) {
+          errors.push(`${b}: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }),
+    );
+    if (errors.length > 0) throw new Error(errors.join("; "));
   },
   openQuickNotes: () => set({ quickNotesOpen: true }),
   closeQuickNotes: () => set({ quickNotesOpen: false }),
@@ -5140,9 +5294,9 @@ export function dockless(): boolean {
 
 /** The latest clips, for tailchan's "copy the latest", whether or not this
  *  handle follows the clipboard channel. */
-function readClips(): void {
+function readClips(n = 5): void {
   void api
-    .chanRead("#clipboard", 5)
+    .chanRead("#clipboard", n)
     .then((msgs) => useStore.setState((st) => ({ chanMsgs: { ...st.chanMsgs, clipboard: mergeMessages(st.chanMsgs["clipboard"], msgs) } })))
     .catch(() => {});
 }

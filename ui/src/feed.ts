@@ -562,6 +562,8 @@ export function describeEvent(
     case "triggers":
     // a reminder that came due is an inbox row, not a feed line
     case "notes":
+    // a copy is the clipboard's, not a feed line
+    case "clips":
     // a pair request is answered where callers are listed, not in the feed
     case "auth":
       return [];

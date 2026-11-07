@@ -71,6 +71,7 @@ import { PUSH_WORDS, pushCommand } from "./push";
 import { isLibrarySync, librarySyncCommand } from "./libsync";
 import { sweepCommand } from "./sweep";
 import { noteCommand } from "./notes";
+import { clipCommand } from "./clips";
 import { secretsCommand } from "./secrets";
 import { groupsCommand } from "./groups";
 import { runCommand, runsCommand } from "./run";
@@ -120,6 +121,8 @@ const COMMANDS = new Set([
   "sweep",
   "note",
   "notes",
+  "clip",
+  "clips",
   "awake",
   "run",
   "groups",
@@ -949,6 +952,9 @@ export async function main(argv: string[]): Promise<void> {
     case "note":
     case "notes":
       return noteCommand(args, { fail });
+    case "clip":
+    case "clips":
+      return clipCommand(args, { fail });
     case "awake":
       return awakeCommand(args, { fail });
     case "secrets":

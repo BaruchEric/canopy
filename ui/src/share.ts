@@ -2,6 +2,7 @@
  *  paste into it. The clipboard API needs a secure page, which canopy over
  *  the tailnet's plain http is not, so each has a way round it there. */
 import { captureName } from "./surface";
+import { noteCopied, type CopyHow } from "./clipsink";
 
 /** whether this page may read the clipboard */
 export const canReadClipboard = (): boolean =>
@@ -31,8 +32,13 @@ function copyByCommand(text: string): boolean {
 
 /** Puts `text` on the clipboard: through the clipboard API where the page
  *  may, else through the old copy command, which any page may run inside a
- *  click or a key, and a hidden textarea as the last way round. */
-export async function copyText(text: string): Promise<void> {
+ *  click or a key, and a hidden textarea as the last way round. Every copy
+ *  is heard by canopy's clipboard (clipsink.ts) as it is tried, so one the
+ *  browser refuses can still be taken from there; `how` says what made it
+ *  (canopy's own buttons when it says nothing), and `keep: false` is for a
+ *  copy the clipboard made of a clip it already holds. */
+export async function copyText(text: string, how: CopyHow = {}): Promise<void> {
+  if (how.keep !== false) noteCopied({ text, source: how.source ?? "canopy", ...(how.from ? { from: how.from } : {}) });
   if (window.isSecureContext && navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -48,6 +54,8 @@ export async function copyText(text: string): Promise<void> {
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
+  // the page's own copy listener would hear this box's copy as a second one
+  area.setAttribute("data-no-clip", "");
   area.style.position = "fixed";
   area.style.opacity = "0";
   document.body.append(area);

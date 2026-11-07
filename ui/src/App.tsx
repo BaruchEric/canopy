@@ -27,6 +27,7 @@ import { CHORD_MS, chordView, copyKeyOf, pressOf, shortcutFor } from "./shortcut
 import { TYPES_INTO, ringTakes, type RingPress } from "./kbfocus";
 import { KbWatch, kbCopy, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./components/KbFocus";
 import { Said } from "./components/Said";
+import { noteCopied, onCopied, pageCopyText } from "./clipsink";
 import { runPanel } from "./itempanel";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
@@ -417,6 +418,31 @@ export function App() {
     };
   }, []);
 
+  // Every copy canopy makes or hears goes on canopy's clipboard (FR-054):
+  // copyText and the shells say theirs through clipsink, and a copy of the
+  // page's own text is read here. On the document in the bubble phase, so
+  // copyText's own command copy, which its window capture listener stops,
+  // is not heard a second time.
+  useEffect(() => {
+    const stop = onCopied((c) => void useStore.getState().keepClip(c));
+    const onCopy = (e: ClipboardEvent) => {
+      const sel = document.getSelection();
+      const node = sel?.anchorNode ?? null;
+      const anchor = node instanceof Element ? node : (node?.parentElement ?? null);
+      const target = e.target instanceof Element ? e.target : null;
+      const text = pageCopyText(target, anchor, sel?.toString() ?? "");
+      if (!text) return;
+      // where on the page: the panel, sheet or popup it was in, else the view
+      const place = (anchor ?? target)?.closest(".panel[aria-label], .sheet[aria-label], [role='dialog'][aria-label]")?.getAttribute("aria-label");
+      noteCopied({ text, source: "page", from: place || new URLSearchParams(location.search).get("view") || "git" });
+    };
+    document.addEventListener("copy", onCopy);
+    return () => {
+      stop();
+      document.removeEventListener("copy", onCopy);
+    };
+  }, []);
+
   // A `?repo=` link pins that repo once the tree is in. Only once: a rescan
   // that drops the repo should not bring the panel back.
   useEffect(() => {
@@ -556,6 +582,10 @@ export function App() {
           // j and k walk its rows next.
           st.openPanel(WAITING_PANEL);
           kbZone("dock");
+          return;
+        case "clips":
+          // opens the clipboard's popover; never closes it
+          if (!st.clipsOpen && !st.sheet && !over) st.openClips();
           return;
         case "dirty":
           setDirtyOnly(!st.dirtyOnly);

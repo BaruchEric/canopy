@@ -358,7 +358,7 @@ export function shareEntries({
         const out = copy ? await copy() : box ? surfaceText(box) : "";
         const text = typeof out === "string" ? out : out.text;
         if (!text) return "nothing to copy";
-        await copyText(text);
+        await copyText(text, { from: label });
         return copiedWord(out);
       },
     },
