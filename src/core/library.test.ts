@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Script } from "node:vm";
 import { coordApiHost, Library, libraryArgs, libraryOriginAllowed, openBind, tailnetHost } from "./library";
 
-interface Manifest { categories: Record<string, { projects: Array<{name: string; tags: string[]}> }>; references: Array<{title: string}> }
+interface Manifest { categories: Record<string, { projects: Array<{name: string; tags: string[]; description: string}> }>; references: Array<{title: string}> }
 let base: string;
 let root: string;
 let state: string;
@@ -43,7 +43,8 @@ beforeAll(async () => {
   for (const name of ["alpha", "beta"]) {
     const path = join(root, "apps", name);
     await mkdir(path, { recursive: true });
-    await writeFile(join(path, "README.md"), `# ${name}\n\nA fixture project.\n`);
+    // beta's line carries the entities a README's html leaves in its tagline
+    await writeFile(join(path, "README.md"), `# ${name}\n\n${name === "beta" ? "&nbsp; A fixture &amp; project." : "A fixture project."}\n`);
     await writeFile(join(path, "package.json"), JSON.stringify({ name, scripts: { dev: "vite" }, devDependencies: { vite: "*" } }));
     const git = Bun.spawn(["git", "init", "--quiet", path]);
     expect(await git.exited).toBe(0);
@@ -173,10 +174,12 @@ describe("workspace library integration", () => {
     const snapshot = await (await request("/library/manifest")).json() as Manifest;
     expect(snapshot.categories["apps"]!.projects.map((p: { name: string }) => p.name)).toEqual(["alpha", "beta"]);
     expect(snapshot.categories["apps"]!.projects[0]!.tags).toEqual(["imported"]);
+    expect(snapshot.categories["apps"]!.projects[1]!.description).toBe("A fixture & project.");
     expect(await (await request("/library/api/dev/state")).json()).toEqual({ok: true, running: {}});
     const html = await (await request("/library/")).text();
     expect(html).toContain("Canopy · Library");
     expect(html).toContain("Git cockpit →");
+    expect(html).toContain("Search the library…");
     expect(html).not.toContain("http://127.0.0.1:${DATA.helper_port}");
     for (const script of html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)) {
       expect(() => new Script(script[1]!)).not.toThrow();

@@ -87,7 +87,8 @@ def adapt_templates():
         text = text.replace('devhub · Ports', 'Canopy · Ports')
         text = text.replace('· ~/Arik/dev', '· Library')
         text = text.replace('python3 _devhub/devhub.py index', 'canopy library index')
-        text = text.replace('static snapshot · regenerate with', 'workspace snapshot · refresh above or use')
+        text = text.replace('static snapshot · regenerate with', 'refresh above or run')
+        text = text.replace('Search projects, links, languages, descriptions…', 'Search the library…')
         text = text.replace('href="/"', 'href="/library/"')
         # A port row carries a name; the helper requires an absolute project path.
         text = text.replace('path=${encodeURIComponent(name)}',

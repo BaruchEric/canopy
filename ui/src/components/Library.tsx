@@ -18,10 +18,13 @@ export function Library({ ports, project, onRepo, onPorts }: {
   const frame = useRef<HTMLIFrameElement>(null);
   const { zoom, entry: zoomEntry } = useZoom("library");
   // the library is a page of its own, same origin: zoom its root, since css
-  // zoom on the iframe would size the frame as well as what is in it
+  // zoom on the iframe would size the frame as well as what is in it. Its
+  // sizes are the engine's fixed px, so the screen's --ui has to come in here.
   const zoomFrame = () => {
     const root = frame.current?.contentDocument?.documentElement;
-    if (root) root.style.zoom = zoom === 1 ? "" : String(zoom);
+    if (!root) return;
+    const scale = zoom * (Number(getComputedStyle(document.documentElement).getPropertyValue("--ui")) || 1);
+    root.style.zoom = scale === 1 ? "" : String(scale);
   };
   useEffect(zoomFrame);
   useEffect(() => {

@@ -555,7 +555,7 @@ def read_description(path: Path, pkg: dict | None = None) -> str:
                     if opens > closes:
                         in_anchor = True
                         continue
-                    line = re.sub(r"<[^>]+>", "", raw).strip()
+                    line = html.unescape(re.sub(r"<[^>]+>", "", raw)).strip()
                     line = re.sub(r"^[#>*\-\s]+", "", line).strip()
                     if not line:
                         continue

@@ -15,9 +15,10 @@ in a mode-600 file in Canopy's state directory for `announce`; they never enter
 browser HTML. The original helper's externally trusted origins are not imported.
 
 The existing dashboard and editors run inside Canopy's app shell, using
-`bridge.js` for repository navigation and theme changes. `theme.css` applies
-Canopy's colors. The Git cockpit remains React; the library retains the Python
-renderer's UI rather than duplicating the mature workflows in React.
+`bridge.js` for repository navigation, theme changes, the page's fonts and the
+dashboard's rail. `theme.css` holds Canopy's look over the engine's stylesheet.
+The Git cockpit remains React; the library retains the Python renderer's markup
+and workflows rather than duplicating them in React.
 
 Intentional engine adaptations: correct absolute paths on port-page Start,
 wait for server readiness, preserve active port/command edits across polling, re-read edited port settings before launching, escape
