@@ -2108,7 +2108,7 @@ div.waiting-row {
 .clips .s-cli {
   --src: var(--sky);
 }
-.clips .s-clipboard {
+.clips .s-device {
   --src: var(--term-cyan);
 }
 .clips .s-tailnet {
@@ -2240,6 +2240,69 @@ div.waiting-row {
   border-radius: var(--r-card);
   background: var(--well);
   color: var(--ink);
+}
+/* a picture sits on a checkerboard, so a transparent one shows as one */
+.clip-view.k-image.is-file {
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  background:
+    repeating-conic-gradient(var(--wash) 0 25%, transparent 0 50%) 0 0 / 16px 16px,
+    var(--well);
+}
+.clip-img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(var(--t-md) * 15);
+  object-fit: contain;
+}
+.clip-view.k-pdf.is-file {
+  padding: 0;
+  overflow: hidden;
+}
+.clip-pdf {
+  display: block;
+  width: 100%;
+  height: min(56dvh, 30em);
+  border: 0;
+  border-radius: inherit;
+}
+.clip-video {
+  display: block;
+  width: 100%;
+  max-height: calc(var(--t-md) * 15);
+  border-radius: calc(var(--r-card) / 2);
+}
+.clip-audio {
+  display: block;
+  width: 100%;
+}
+/* a file with no drawing: its extension large, its name under it */
+.clip-filecard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+}
+.clip-ext {
+  font-family: var(--mono);
+  font-size: calc(var(--t-lg) * 2.2);
+  line-height: 1;
+  color: var(--ink-dim);
+}
+.clip-fname {
+  font-size: var(--t-md);
+  overflow-wrap: anywhere;
+}
+.clip-loading {
+  margin: 0;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.clip-type {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
 }
 .clip-prose {
   margin: 0;
@@ -2441,6 +2504,21 @@ div.waiting-row {
   font-size: var(--t-xs);
   color: var(--ink-faint);
 }
+.clip-size {
+  flex: none;
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* the body holds the focus so a paste lands in it; a file dragged over it
+   rings it */
+.clips:focus {
+  outline: none;
+}
+.clips.dropping {
+  outline: 2px dashed var(--term-cyan);
+  outline-offset: -6px;
+}
 .clip-row .clip-when {
   flex: none;
   min-width: 2.6ch;
@@ -2500,6 +2578,10 @@ div.waiting-row {
   }
   .clips-main > .clip-specimen .clip-view {
     max-height: none;
+  }
+  .clips-main > .clip-specimen .clip-img,
+  .clips-main > .clip-specimen .clip-video {
+    max-height: min(60dvh, 34em);
   }
 }
 /* a clip lands when it takes the stage: a new copy or one picked */

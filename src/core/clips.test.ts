@@ -20,7 +20,22 @@ import {
   sortClips,
   swatchOf,
   takeClip,
+  clipKey,
+  fileKind,
+  fileName,
+  kindOf,
+  looksSecretFile,
+  mediaType,
+  openable,
+  parseClip,
+  servedType,
+  sizeWord,
+  sniffType,
+  textFile,
+  textFileKind,
+  textHead,
   type Clip,
+  type ClipFile,
 } from "./clips";
 
 const clip = (id: string, over: Partial<Clip> = {}): Clip => ({ id, text: id, source: "canopy", createdAt: 1_000, at: 1_000, count: 1, ...over });
@@ -223,5 +238,87 @@ describe("agoWord", () => {
     expect(agoWord(0, 2 * 3_600_000)).toBe("2h");
     expect(agoWord(0, 3 * DAY)).toBe("3d");
     expect(agoWord(5_000, 1_000)).toBe("now");
+  });
+});
+
+describe("files on the clipboard", () => {
+  const file = (sha: string, over: Partial<ClipFile> = {}): ClipFile => ({ name: "shot.png", type: "image/png", size: 10, sha: sha.repeat(64).slice(0, 64), ...over });
+  test("the same bytes are the same clip under any name, and never the same as text of the name", () => {
+    let clips: Clip[] = [];
+    clips = putClip(clips, { text: "shot.png", source: "device", file: file("a") }, 1_000, "c-aaaaaaaa").clips;
+    clips = putClip(clips, { text: "shot.png", source: "canopy" }, 2_000, "c-bbbbbbbb").clips;
+    const again = putClip(clips, { text: "other.png", source: "cli", file: file("a", { name: "other.png" }) }, 3_000, "c-cccccccc");
+    expect(again.clip).toMatchObject({ id: "c-aaaaaaaa", text: "other.png", count: 2, file: { name: "other.png" } });
+    expect(again.clips.map((c) => c.id)).toEqual(["c-aaaaaaaa", "c-bbbbbbbb"]);
+    expect(clipKey(again.clip)).toBe(`file:${"a".repeat(64)}`);
+    expect(clipKey({ text: "shot.png" })).toBe("shot.png");
+  });
+  test("past the byte budget the oldest unpinned files go, the text and the pinned stay", () => {
+    const now = 10_000;
+    const clips = [
+      clip("c-aaaaaaaa", { at: 9_000, file: file("a", { size: 400 }) }),
+      clip("c-bbbbbbbb", { at: 8_000, text: "words" }),
+      clip("c-cccccccc", { at: 7_000, file: file("c", { size: 400 }) }),
+      clip("c-dddddddd", { at: 6_000, file: file("d", { size: 400 }), pinned: true }),
+      clip("c-eeeeeeee", { at: 5_000, file: file("e", { size: 100 }) }),
+    ];
+    const out = pruneClips(clips, now, 600);
+    expect(out.gone).toEqual(["c-cccccccc"]);
+    expect(out.clips.map((c) => c.id)).toEqual(["c-aaaaaaaa", "c-bbbbbbbb", "c-dddddddd", "c-eeeeeeee"]);
+  });
+  test("a kept record with a file reads back with its name as its text; the old device source reads as device", () => {
+    const c = parseClip({ id: "c-aaaaaaaa", text: "x", source: "clipboard", at: 5, file: { name: "a/b.pdf", type: "Application/PDF; q=1", size: 3, sha: "f".repeat(64) } });
+    expect(c).toEqual({ id: "c-aaaaaaaa", text: "b.pdf", source: "device", createdAt: 5, at: 5, count: 1, file: { name: "b.pdf", type: "application/pdf", size: 3, sha: "f".repeat(64) } });
+    expect(parseClip({ id: "c-aaaaaaaa", text: "x", source: "device", at: 5, file: { name: "a", size: 3, sha: "short" } })?.file).toBeUndefined();
+  });
+  test("names, types and sizes as kept", () => {
+    expect(fileName("C:\\Users\\e\\shot 1.png")).toBe("shot 1.png");
+    expect(fileName("../../etc/passwd")).toBe("passwd");
+    expect(fileName("a\u0000b\nc")).toBe("abc");
+    expect(fileName("..")).toBe("file");
+    expect(fileName(undefined)).toBe("file");
+    expect(mediaType("IMAGE/PNG")).toBe("image/png");
+    expect(mediaType("text/html; charset=utf-8")).toBe("text/html");
+    expect(mediaType("nonsense")).toBe("application/octet-stream");
+    expect(sizeWord(512)).toBe("512 B");
+    expect(sizeWord(14_000)).toBe("14 KB");
+    expect(sizeWord(2.4 * 1024 * 1024)).toBe("2.4 MB");
+    expect(sizeWord(25 * 1024 * 1024)).toBe("25 MB");
+  });
+  test("a key's file name is refused, its .pub is not", () => {
+    for (const n of ["id_rsa", "id_ed25519", "id_ed25519_sk", "server.pem", "tls.key", "cert.p12", "vault.kdbx", ".env", ".env.local"]) expect({ n, secret: looksSecretFile(n) }).toEqual({ n, secret: true });
+    for (const n of ["id_ed25519.pub", "keys.md", "envoy.yaml", "photo.png", "keynote.pdf"]) expect({ n, secret: looksSecretFile(n) }).toEqual({ n, secret: false });
+  });
+  test("text in a file, read for the secret check and the viewer; bytes that are not text are not", () => {
+    expect(textHead(new TextEncoder().encode("hello, wörld"))).toBe("hello, wörld");
+    expect(textHead(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 1]))).toBeNull();
+    expect(textHead(new Uint8Array([0xff, 0xfe, 0xfd, 0xfc, 0xfb, 0xfa, 0xf9, 0xf8]))).toBeNull();
+  });
+  test("a pipe's first bytes name its type", () => {
+    expect(sniffType(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d]))).toEqual({ type: "image/png", ext: "png" });
+    expect(sniffType(new TextEncoder().encode("%PDF-1.7"))).toEqual({ type: "application/pdf", ext: "pdf" });
+    expect(sniffType(new TextEncoder().encode("RIFF\u0000\u0000\u0000\u0000WEBPVP8 "))).toEqual({ type: "image/webp", ext: "webp" });
+    expect(sniffType(new TextEncoder().encode("plain"))).toBeNull();
+  });
+  test("kinds, what is served as itself, what may open in a tab, what reads as text", () => {
+    expect(["image/png", "image/svg+xml", "application/pdf", "video/mp4", "audio/mpeg", "application/zip"].map(fileKind)).toEqual(["image", "image", "pdf", "video", "audio", "file"]);
+    expect(kindOf({ text: "https://a.b/c" })).toBe("link");
+    expect(kindOf({ text: "https://a.b/c", file: file("a", { type: "application/pdf" }) })).toBe("pdf");
+    expect(servedType("image/png")).toBe("image/png");
+    expect(servedType("image/svg+xml")).toBe("image/svg+xml");
+    expect(servedType("text/html")).toBe("application/octet-stream");
+    expect(servedType("application/javascript")).toBe("application/octet-stream");
+    expect(openable("application/pdf")).toBe(true);
+    expect(openable("image/svg+xml")).toBe(false);
+    expect(openable("text/html")).toBe(false);
+    expect(textFile({ name: "a.ts", type: "application/octet-stream", size: 100 })).toBe(true);
+    expect(textFile({ name: "notes", type: "text/plain", size: 100 })).toBe(true);
+    expect(textFile({ name: "a.png", type: "image/png", size: 100 })).toBe(false);
+    expect(textFile({ name: "big.log", type: "text/plain", size: 600 * 1024 })).toBe(false);
+    // an SVG is XML, and still draws as a picture
+    expect(textFile({ name: "logo.svg", type: "image/svg+xml", size: 100 })).toBe(false);
+    expect(textFileKind({ name: "notes.md", type: "text/markdown" }, "pick up the router")).toBe("text");
+    expect(textFileKind({ name: "page.html", type: "text/html" }, "<h1>hi</h1>")).toBe("code");
+    expect(textFileKind({ name: "a.json", type: "application/json" }, '{"a":1}')).toBe("json");
   });
 });

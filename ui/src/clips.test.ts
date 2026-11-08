@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Clip } from "../../src/core/clips";
 import type { ChanMessage } from "../../src/core/types";
-import { commandText, filterClips, headLines, linkParts, pathParts, pinnedFirst, prettyJson, shownClips, sourceCounts } from "./clips";
+import { commandText, filterClips, headLines, linkParts, pathParts, pinnedFirst, prettyJson, shownClips, shownFile, sourceCounts } from "./clips";
 
 const clip = (id: string, over: Partial<Clip> = {}): Clip => ({ id, text: id, source: "canopy", createdAt: 1, at: 1, count: 1, ...over });
 const msg = (id: number, body: string, over: Partial<ChanMessage> = {}): ChanMessage => ({ id, channel: "clipboard", handle: "eric", node: "pixel", kind: "clip", body, meta: {}, ts: 1, ...over });
@@ -23,6 +23,31 @@ describe("shownClips", () => {
     expect(list[1]).toEqual({ key: "chan:2", text: "from the phone", source: "tailnet", from: "eric@pixel", at: 7, count: 1, pinned: false, cut: false });
     expect(list[1]?.id).toBeUndefined();
     expect(list[2]?.pinned).toBe(true);
+  });
+});
+
+describe("files in the list", () => {
+  test("the same bytes once; tailchan's files shown with their blob, one named like a key left out", () => {
+    const file = { name: "shot.png", type: "image/png", size: 10, sha: "a".repeat(64) };
+    const list = shownClips(
+      {
+        home: [clip("c-aaaaaaaa", { text: "shot.png", file, at: 5 }), clip("c-bbbbbbbb", { text: "shot.png", at: 4 })],
+        "mini|": [clip("mini|c-cccccccc", { text: "old.png", file: { ...file, name: "old.png" }, at: 3 })],
+      },
+      [
+        msg(7, "clipboard file", { kind: "object", ts: 9, meta: { blob: "f".repeat(32), name: "phone.jpg", mime: "image/jpeg", size: 2048 } }),
+        msg(8, "clipboard file", { kind: "object", ts: 8, meta: { blob: "e".repeat(32), name: "id_rsa", mime: "text/plain", size: 9 } }),
+        msg(9, "clipboard file", { kind: "object", ts: 7, meta: { name: "no blob" } }),
+      ],
+    );
+    expect(list.map((c) => [c.key, c.text, c.file ? "file" : c.chanFile ? "chan file" : "text"])).toEqual([
+      ["chan:7", "phone.jpg", "chan file"],
+      ["c-aaaaaaaa", "shot.png", "file"],
+      ["c-bbbbbbbb", "shot.png", "text"],
+    ]);
+    expect(list[0]?.chanFile).toEqual({ name: "phone.jpg", type: "image/jpeg", size: 2048, blob: "f".repeat(32) });
+    expect(shownFile(list[1]!)).toEqual(file);
+    expect(shownFile(list[2]!)).toBeNull();
   });
 });
 

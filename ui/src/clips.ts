@@ -5,7 +5,7 @@
  * path, a path's folder and name, pretty JSON, a code well's lines). Pure
  * and tested (clips.test.ts); the records are `src/core/clips.ts`.
  */
-import { CLIP_SOURCES, CLIP_SOURCE_WHAT, looksSecret, type Clip, type ClipDevice, type ClipSource } from "../../src/core/clips";
+import { clipKey, fileName, looksSecret, looksSecretFile, mediaType, CLIP_SOURCES, CLIP_SOURCE_WHAT, type Clip, type ClipDevice, type ClipFile, type ClipSource } from "../../src/core/clips";
 import type { ChanMessage } from "../../src/core/types";
 
 /** what a shown clip came from: canopy's own sources, and tailchan's
@@ -17,6 +17,15 @@ export const SOURCE_WHAT: Readonly<Record<ShownSource, string>> = {
   ...CLIP_SOURCE_WHAT,
   tailnet: "Sent to tailchan's #clipboard by a device on the tailnet",
 };
+
+/** a file tailchan holds, as the list shows it: its name, type and size, and
+ *  the blob id its link reads; canopy never keeps its bytes */
+export interface ChanFile {
+  name: string;
+  type: string;
+  size: number;
+  blob: string;
+}
 
 interface ShownBase {
   /** the clip's id by the page's ids, or `chan:` and tailchan's message id */
@@ -31,8 +40,11 @@ interface ShownBase {
 }
 
 /** a clip as the list shows it: one canopy keeps, under its id by the
- *  page's ids, or one of tailchan's, which has none to pin or drop by */
-export type ShownClip = (ShownBase & { source: ClipSource; id: string }) | (ShownBase & { source: "tailnet"; id?: undefined });
+ *  page's ids, maybe a file; or one of tailchan's, text or a file it holds,
+ *  with no id to pin or drop by */
+export type ShownClip =
+  | (ShownBase & { source: ClipSource; id: string; file?: ClipFile; chanFile?: undefined })
+  | (ShownBase & { source: "tailnet"; id?: undefined; file?: undefined; chanFile?: ChanFile });
 
 const shown = (c: Clip): ShownClip => ({
   key: c.id,
@@ -41,17 +53,28 @@ const shown = (c: Clip): ShownClip => ({
   source: c.source,
   ...(c.from ? { from: c.from } : {}),
   ...(c.device ? { device: c.device } : {}),
+  ...(c.file ? { file: c.file } : {}),
   at: c.at,
   count: c.count,
   pinned: c.pinned === true,
   cut: c.cut === true,
 });
 
+/** a tailchan message's file, when it is one with a blob to read */
+function chanFileOf(m: ChanMessage): ChanFile | null {
+  const blob = m.meta["blob"];
+  if (m.kind !== "object" || typeof blob !== "string" || !/^[0-9a-f]{32}$/.test(blob)) return null;
+  const size = m.meta["size"];
+  return { name: fileName(m.meta["name"]), type: mediaType(m.meta["mime"]), size: typeof size === "number" && size >= 0 ? size : 0, blob };
+}
+
 /**
- * One list, newest first: every backend's clips, the same text once at its
- * newest copy, then tailchan's text clips whose text canopy does not
- * already hold (a kept clip is the one to show, since it can be pinned and
- * dropped). Tailchan's text shaped like a secret is left out here too.
+ * One list, newest first: every backend's clips, the same text (or the same
+ * file) once at its newest copy, then tailchan's text clips whose text
+ * canopy does not already hold (a kept clip is the one to show, since it
+ * can be pinned and dropped) and the files sent there. Tailchan's text
+ * shaped like a secret, and its files named like a key, are left out here
+ * too.
  */
 export function shownClips(byBackend: Readonly<Record<string, readonly Clip[]>>, chan: readonly ChanMessage[] = []): ShownClip[] {
   const kept = Object.values(byBackend)
@@ -60,17 +83,28 @@ export function shownClips(byBackend: Readonly<Record<string, readonly Clip[]>>,
   const seen = new Set<string>();
   const out: ShownClip[] = [];
   for (const c of kept) {
-    if (seen.has(c.text)) continue;
-    seen.add(c.text);
+    if (seen.has(clipKey(c))) continue;
+    seen.add(clipKey(c));
     out.push(shown(c));
   }
   for (const m of chan) {
+    const from = `${m.handle}@${m.node}`;
+    const file = chanFileOf(m);
+    if (file) {
+      if (seen.has(`chan:${file.blob}`) || looksSecretFile(file.name)) continue;
+      seen.add(`chan:${file.blob}`);
+      out.push({ key: `chan:${m.id}`, text: file.name, source: "tailnet", from, chanFile: file, at: m.ts, count: 1, pinned: false, cut: false });
+      continue;
+    }
     if (m.kind !== "clip" || !m.body.trim() || seen.has(m.body) || looksSecret(m.body)) continue;
     seen.add(m.body);
-    out.push({ key: `chan:${m.id}`, text: m.body, source: "tailnet", from: `${m.handle}@${m.node}`, at: m.ts, count: 1, pinned: false, cut: false });
+    out.push({ key: `chan:${m.id}`, text: m.body, source: "tailnet", from, at: m.ts, count: 1, pinned: false, cut: false });
   }
   return out.sort((a, b) => b.at - a.at);
 }
+
+/** a shown clip's file, kept or tailchan's, as one shape: its name, type and size */
+export const shownFile = (c: ShownClip): { name: string; type: string; size: number } | null => c.file ?? c.chanFile ?? null;
 
 /** how many clips each source has, the sources with none left out, in the list's order */
 export function sourceCounts(list: readonly ShownClip[]): { source: ShownSource; n: number }[] {

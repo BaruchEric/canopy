@@ -76,8 +76,9 @@ usage:
   canopy note done <id>              mark a note done; canopy note delete <id> removes it
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy clip "<text>"               keep text on canopy's clipboard, on every page and device; no text reads stdin
-  canopy clip list [-n N] [--json]   the newest clips on every backend: count, id, when, source, kind, text
-  canopy clip get [N | id]           print a clip's text as copied (the newest by default): canopy clip get | pbcopy
+  canopy clip --file <path>          keep a picture, a PDF or any file up to 25 MB as a clip
+  canopy clip list [-n N] [--json]   the newest clips on every backend: count, id, when, source, kind, text or name
+  canopy clip get [N | id] [-o path] print a clip's text as copied (the newest by default), or write a file clip to path
   canopy clip pin|unpin|rm <id>      keep a clip past the cap and the age, or drop it; canopy clip clear drops the unpinned
     --backend URL, --on NAME         one backend only (default: every backend the home one lists)
   canopy run                         the runs kept on disk, newest first: id, when, repo, what, status, cost

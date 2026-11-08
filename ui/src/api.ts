@@ -1,6 +1,6 @@
 import type { RunGroup } from "../../src/core/group";
 import type { QuickNote, QuickNotesInfo } from "../../src/core/notes";
-import type { Clip, ClipIn, ClipsInfo } from "../../src/core/clips";
+import type { Clip, ClipDevice, ClipIn, ClipSource, ClipsInfo } from "../../src/core/clips";
 import type { Dictation, LiveAnswer, VoiceContext, VoiceInfo, VoiceSession } from "../../src/core/voicewire";
 import type { CostReport } from "../../src/core/costs";
 import type { CapacitySettings } from "../../src/core/capacity";
@@ -195,7 +195,7 @@ export class PartialFleetError extends Error {
 }
 
 /** the reads that carry the page's token to another origin too */
-const KEYED_READS: ReadonlySet<string> = new Set(["/api/auth", "/api/clips"]);
+const KEYED_READS: ReadonlySet<string> = new Set(["/api/auth", "/api/clips", "/api/clips/file"]);
 
 async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<T> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
@@ -303,8 +303,10 @@ async function repoReq<T>(id: string, path: (plain: string) => string, init?: Re
 async function blobReq(b: string, path: string): Promise<Blob> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
-  // a read: the token rides on the page's own origin alone, as in req
-  const r = await fetch(base + path, base ? { credentials: "include" } : { headers: tokenHeaders(originOf(base)) });
+  // a read: the token rides on the page's own origin, and to another origin
+  // only for the keyed reads (a clipboard file), as in req
+  const keyed = !base || KEYED_READS.has(path.split("?")[0] ?? "");
+  const r = await fetch(base + path, { ...(base ? { credentials: "include" as const } : {}), ...(keyed ? { headers: tokenHeaders(originOf(base)) } : {}) });
   if (!r.ok) {
     const body = (await r.json().catch(() => null)) as { error?: string } | null;
     throw Object.assign(new Error(body?.error ?? `${r.status} ${r.statusText}`), { status: r.status });
@@ -815,6 +817,19 @@ export const api = {
     const c = await req<Clip>(b, "/api/clips", { method: "POST", body: JSON.stringify(body) });
     return from(b, [c], qClips)[0] ?? c;
   },
+  /** keeps a file on one backend: a picture, a PDF, anything up to 25 MB;
+   *  the same bytes already kept move up */
+  addClipFile: async (b: string, file: Blob, meta: { name: string; source: ClipSource; from?: string; device?: ClipDevice }): Promise<Clip> => {
+    const q = new URLSearchParams({ name: meta.name, source: meta.source });
+    if (meta.from) q.set("from", meta.from);
+    if (meta.device) q.set("device", JSON.stringify(meta.device));
+    const c = await req<Clip>(b, `/api/clips/file?${q}`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream" }, body: file });
+    return from(b, [c], qClips)[0] ?? c;
+  },
+  /** a kept file's bytes, by the page's id */
+  clipFile: (id: string): Promise<Blob> => blobReq(backendOf(id), `/api/clips/file?id=${encodeURIComponent(plainOf(id))}`),
+  /** a file tailchan holds, through home's link to it */
+  chanBlob: (blob: string): Promise<Blob> => blobReq(homeName(), chanBlobUrl(blob)),
   /** a clip taken again from the list: to the top, its source kept */
   takeClip: async (id: string): Promise<Clip> => {
     const b = backendOf(id);

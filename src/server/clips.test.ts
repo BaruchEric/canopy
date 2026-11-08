@@ -126,3 +126,110 @@ describe("ClipsHub routes", () => {
     expect((await t.call("PUT", "/api/clips")).status).toBe(404);
   });
 });
+
+describe("ClipsHub files", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  const upload = async (t: ReturnType<typeof hub>, bytes: Uint8Array, q: string, type = "image/png") => {
+    const path = `/api/clips/file?${q}`;
+    const res = await t.h.handle(new Request(`http://x${path}`, { method: "POST", body: bytes, headers: { "content-type": type } }), new URL(`http://x${path}`));
+    if (!res) throw new Error("no answer");
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+  const download = async (t: ReturnType<typeof hub>, id: string) => {
+    const path = `/api/clips/file?id=${id}`;
+    const res = await t.h.handle(new Request(`http://x${path}`), new URL(`http://x${path}`));
+    if (!res) throw new Error("no answer");
+    return res;
+  };
+
+  test("a picture is kept under its clip's id, 0600 in a 0700 folder, and served back as a sandboxed download", async () => {
+    const t = hub();
+    const added = await upload(t, PNG, `name=${encodeURIComponent("../Screen Shot 1.png")}&source=device&from=pasted&device=${encodeURIComponent(JSON.stringify(DEVICE))}`);
+    expect(added.status).toBe(201);
+    expect(added.body).toMatchObject({ id: "c-testaaaa", text: "Screen Shot 1.png", source: "device", from: "pasted", device: DEVICE, file: { name: "Screen Shot 1.png", type: "image/png", size: PNG.byteLength } });
+    expect(t.events).toEqual([{ type: "clips", put: ["c-testaaaa"], gone: [] }]);
+    const bytes = join(t.dir, "clips", "c-testaaaa");
+    expect(new Uint8Array(await readFile(bytes))).toEqual(PNG);
+    expect((await stat(bytes)).mode & 0o777).toBe(0o600);
+    expect((await stat(join(t.dir, "clips"))).mode & 0o777).toBe(0o700);
+    const res = await download(t, "c-testaaaa");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="Screen Shot 1.png"; filename*=UTF-8''Screen%20Shot%201.png`);
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+  });
+
+  test("HTML and anything a browser would run goes out as plain bytes; a name cannot break the header", async () => {
+    const t = hub();
+    await upload(t, new TextEncoder().encode("<script>alert(1)</script>"), `name=${encodeURIComponent('a"b\r\nc.html')}&source=device`, "text/html");
+    const res = await download(t, "c-testaaaa");
+    expect(res.headers.get("content-type")).toBe("application/octet-stream");
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="a_bc.html"; filename*=UTF-8''a_bc.html`);
+  });
+
+  test("the same bytes kept again are the same clip, under any name; a text clip of the name is another", async () => {
+    const t = hub();
+    await upload(t, PNG, "name=one.png&source=device");
+    await t.call("POST", "/api/clips", { text: "two.png", source: "canopy" });
+    t.tick(1000);
+    const again = await upload(t, PNG, "name=two.png&source=cli");
+    expect(again.body).toMatchObject({ id: "c-testaaaa", text: "two.png", count: 2, source: "cli" });
+    const list = (await t.call("GET", "/api/clips")).body["clips"] as Clip[];
+    expect(list.map((c) => [c.id, c.text, c.file ? "file" : "text"])).toEqual([
+      ["c-testaaaa", "two.png", "file"],
+      ["c-testbbbb", "two.png", "text"],
+    ]);
+    // the second copy's bytes were not kept beside the first
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(join(t.dir, "clips"))).sort()).toEqual(["c-testaaaa"]);
+  });
+
+  test("refusals: empty, too large, a key's name, a key inside, an unknown source", async () => {
+    const t = hub();
+    expect((await upload(t, new Uint8Array(), "name=a.png&source=device")).status).toBe(400);
+    expect((await upload(t, new Uint8Array(26 * 1024 * 1024), "name=big.bin&source=device", "application/octet-stream")).status).toBe(413);
+    expect((await upload(t, new TextEncoder().encode("ssh-ed25519 AAAA"), "name=id_ed25519&source=device", "text/plain")).body).toEqual({ error: "a file that looks like a key or a password is never kept" });
+    expect((await upload(t, new TextEncoder().encode("-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n"), "name=notes.txt&source=device", "text/plain")).status).toBe(422);
+    expect((await upload(t, new TextEncoder().encode("DB_PASSWORD=hunter2hunter2\n"), "name=settings.txt&source=device", "text/plain")).status).toBe(422);
+    expect((await upload(t, PNG, "name=a.png&source=fax")).status).toBe(400);
+    expect((await upload(t, new TextEncoder().encode("ssh-ed25519 AAAA eric@mac"), "name=id_ed25519.pub&source=device", "text/plain")).status).toBe(201);
+  });
+
+  test("a clip that goes takes its bytes: drop, clear, and the budget's prune", async () => {
+    const t = hub();
+    await upload(t, PNG, "name=a.png&source=device");
+    await upload(t, new Uint8Array([...PNG, 9]), "name=b.png&source=device");
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(join(t.dir, "clips"))).sort()).toEqual(["c-testaaaa", "c-testbbbb"]);
+    await t.call("DELETE", "/api/clips?id=c-testaaaa");
+    expect(await readdir(join(t.dir, "clips"))).toEqual(["c-testbbbb"]);
+    await t.call("POST", "/api/clips/clear");
+    expect(await readdir(join(t.dir, "clips"))).toEqual([]);
+    expect((await download(t, "c-testbbbb")).status).toBe(404);
+  });
+
+  test("the sweep clears bytes no record names once they are a minute old, never younger", async () => {
+    const t = hub();
+    await upload(t, PNG, "name=a.png&source=device");
+    const { utimes, readdir } = await import("node:fs/promises");
+    await writeFile(join(t.dir, "clips", "c-strayaaa"), "x");
+    await writeFile(join(t.dir, "clips", "c-strayzzz"), "x");
+    const old = new Date(t.clock() - 2 * 60_000);
+    await utimes(join(t.dir, "clips", "c-strayaaa"), old, old);
+    await utimes(join(t.dir, "clips", "c-testaaaa"), old, old);
+    // the young stray is in the future of the hub's clock, so it stays
+    const young = new Date(t.clock());
+    await utimes(join(t.dir, "clips", "c-strayzzz"), young, young);
+    await t.h.sweepNow();
+    expect((await readdir(join(t.dir, "clips"))).sort()).toEqual(["c-strayzzz", "c-testaaaa"]);
+  });
+
+  test("a file read is 404 for a text clip, a bad id is 400", async () => {
+    const t = hub();
+    await t.call("POST", "/api/clips", { text: "hello", source: "canopy" });
+    expect((await download(t, "c-testaaaa")).status).toBe(404);
+    expect((await download(t, "../clips.json")).status).toBe(400);
+  });
+});

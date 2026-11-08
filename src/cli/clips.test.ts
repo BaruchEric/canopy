@@ -40,3 +40,15 @@ describe("cliFrom", () => {
     expect(cliFrom({}, "macmini-2018")).toBe("macmini-2018");
   });
 });
+
+describe("files in the CLI's list", () => {
+  test("a file shows its kind, name and size, and the same bytes on two backends show once", () => {
+    const file = { name: "shot.png", type: "image/png", size: 2_400_000, sha: "a".repeat(64) };
+    const held = mergeHeld([
+      { backend: "mac", clips: [clip("c-aaaaaaaa", { text: "shot.png", file, at: 5 })] },
+      { backend: "mini", clips: [clip("c-bbbbbbbb", { text: "copy.png", file: { ...file, name: "copy.png" }, at: 9 }), clip("c-cccccccc", { text: "shot.png", at: 1 })] },
+    ]);
+    expect(held.map((h) => h.clip.id)).toEqual(["c-bbbbbbbb", "c-cccccccc"]);
+    expect(clipLines(held, 9, false)[0]).toBe("  1  c-bbbbbbbb  now  cli       image   copy.png  2.3 MB");
+  });
+});

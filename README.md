@@ -153,8 +153,9 @@ canopy note add "<text>" [--repo R] [--at <time>]   # jot a note on the backend,
 canopy note list [--all]           # the open notes, reminders first; --all shows the done ones too
 canopy note done <id>              # mark a note done; canopy note delete <id> removes it
 canopy clip "<text>"               # keep text on canopy's clipboard, shown on every page and device; no text reads stdin (make | canopy clip)
-canopy clip list [-n N] [--json]   # the newest clips on every backend: when, source, kind, text
-canopy clip get [N | id]           # a clip's text as copied, the newest by default (canopy clip get | pbcopy)
+canopy clip --file shot.png        # keep a picture, a PDF or any file up to 25 MB; piped bytes that are not text go as a file too
+canopy clip list [-n N] [--json]   # the newest clips on every backend: when, source, kind, text or file name and size
+canopy clip get [N | id] [-o path] # a clip's text as copied, the newest by default (canopy clip get | pbcopy); a file's bytes to path or stdout
 canopy clip pin|unpin|rm <id>      # keep a clip past 14 days and 200 newer ones, or drop it; canopy clip clear drops the unpinned
 canopy run                         # the runs kept on disk under <configDir>/runs/, newest first
 canopy run show <id>               # a kept run's head and timeline; a live run's too

@@ -2087,12 +2087,15 @@ describe("several backends", () => {
       await go();
       await settle();
       await api.rescan("b").catch(() => {});
+      await api.clipFile("b|c-aaaaaaaa").catch(() => {});
       const of = (call: string) => heard.filter(([c]) => c === call).map(([, t]) => t);
+      const keyed = new Set(["GET /api/auth", "GET /api/clips", "GET /api/clips/file"]);
       expect(of("GET /api/tree").length).toBeGreaterThan(0);
-      expect(heard.filter(([c]) => c.startsWith("GET ") && c !== "GET /api/auth" && c !== "GET /api/clips").every(([, t]) => t === null)).toBe(true);
+      expect(heard.filter(([c]) => c.startsWith("GET ") && !keyed.has(c)).every(([, t]) => t === null)).toBe(true);
       expect(of("GET /api/auth")).toContain("cnp_page_b");
-      // reading a clip takes the operate right (FR-054)
+      // reading a clip, or a clip's file, takes the operate right (FR-054)
       expect(of("GET /api/clips")).toContain("cnp_page_b");
+      expect(of("GET /api/clips/file")).toEqual(["cnp_page_b"]);
       expect(of("POST /api/rescan")).toEqual(["cnp_page_b"]);
     });
 

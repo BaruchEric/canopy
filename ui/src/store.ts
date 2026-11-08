@@ -1360,9 +1360,15 @@ export interface CanopyState {
   /** keeps a copy on home's clipboard; text shaped like a secret keeps
    *  nothing, and a backend without a clipboard says nothing */
   keepClip: (c: Copied) => Promise<void>;
-  /** puts a clip back on this device's clipboard and moves it up; throws
-   *  when the browser refuses the copy */
+  /** keeps a file (a picture, a PDF, anything up to 25 MB) on home's
+   *  clipboard as one from this device; throws the backend's refusal */
+  keepFile: (file: Blob, name: string, from: string) => Promise<Clip>;
+  /** puts a text clip back on this device's clipboard and moves it up;
+   *  throws when the browser refuses the copy. A file is copied by the
+   *  clipboard itself (clipfiles.ts), which then calls `tookClip`. */
   copyClip: (id: string) => Promise<void>;
+  /** a clip was taken again (a picture copied, a file saved): it moves up */
+  tookClip: (id: string) => Promise<void>;
   pinClip: (id: string, pinned: boolean) => Promise<void>;
   deleteClip: (id: string) => Promise<void>;
   /** drops every unpinned clip on every backend shown */
@@ -4105,11 +4111,22 @@ export const useStore = create<CanopyState>((set, get) => ({
       // an older backend has no clipboard: the copy itself still happened
     }
   },
+  keepFile: async (file, name, from) => {
+    const b = get().home;
+    const device = { id: clientId(), name: myDeviceName(get().settings.device), platform: myPlatform() };
+    const clip = await api.addClipFile(b, file, { name, source: "device", from, device });
+    if (isShown(get(), b)) set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [clip] }) }, clipsSeen: Math.max(s.clipsSeen, clip.at) }));
+    return clip;
+  },
   copyClip: async (id) => {
     const b = backendOf(id);
     const clip = get().clips[b]?.find((c) => c.id === id);
-    if (!clip) return;
+    if (!clip || clip.file) return;
     await copyText(clip.text, { keep: false });
+    await get().tookClip(id);
+  },
+  tookClip: async (id) => {
+    const b = backendOf(id);
     const c = await api.takeClip(id).catch(() => null);
     if (c) set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [c] }) }, clipsSeen: Math.max(s.clipsSeen, c.at) }));
   },
