@@ -167,6 +167,29 @@ usage:
                                      --all keeps the repos whose check found nothing
   canopy version                     the version and the commit this canopy was built from
 
+canopy help <command>, or --help after one, prints only that command's lines and runs nothing.
+
 every command except source also takes:
     --token T                        the caller token to send (default: the token file for the backend, else $CANOPY_TOKEN)
 `;
+
+/** --help or -h among a command's words, before any -- that hands the rest
+ *  to another program */
+export function asksHelp(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  return (end === -1 ? args : args.slice(0, end)).some((a) => a === "--help" || a === "-h");
+}
+
+/** one command's lines from the help: each "  canopy <verb> ..." line and
+ *  the deeper-indented lines under it; undefined for a verb it does not list */
+export function verbHelp(verb: string, text: string = HELP_TEXT): string | undefined {
+  const out: string[] = [];
+  let inside = false;
+  for (const line of text.split("\n")) {
+    const head = /^ {2}canopy (\S+)/.exec(line);
+    if (head) inside = head[1] === verb;
+    else if (!/^ {3,}\S/.test(line)) inside = false;
+    if (inside) out.push(line);
+  }
+  return out.length > 0 ? `usage:\n${out.join("\n")}` : undefined;
+}

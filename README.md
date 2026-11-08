@@ -33,6 +33,7 @@ A few ideas decided most of what canopy grew into.
 ```bash
 canopy [dir]                       # tree of every repo under dir (default: .)
 canopy status [dir]                # only repos that need attention
+canopy help <command>              # only that command's lines; --help after any command does the same and runs nothing
 canopy ui [dir] [--port N]         # web UI at http://127.0.0.1:7850 (--no-open: no browser tab)
 canopy commit <repo> -m "msg"      # commit staged changes
 canopy commit <repo> --ai --all --push   # AI message, stage everything, push

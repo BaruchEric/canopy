@@ -24,12 +24,6 @@ export const CLIP_USAGE = [
 
 const SUBS = new Set(["put", "list", "ls", "get", "pin", "unpin", "rm", "delete", "clear"]);
 
-/** --help or -h anywhere asks for the usage; without this, "canopy clip
- *  --help" kept the word on every device's clipboard */
-export function asksUsage(argv: readonly string[]): boolean {
-  return argv.some((a) => a === "--help" || a === "-h");
-}
-
 /** a clip with the backend that keeps it */
 export interface HeldClip {
   clip: Clip;
@@ -111,10 +105,6 @@ async function fetchFile(t: Target, id: string): Promise<Uint8Array> {
 }
 
 export async function clipCommand(argv: string[], { fail }: { fail: (msg: string) => never }): Promise<void> {
-  if (asksUsage(argv)) {
-    console.log(CLIP_USAGE);
-    return;
-  }
   const args = [...argv];
   const given = take(args, "--backend");
   const on = take(args, "--on");

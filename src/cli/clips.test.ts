@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Clip } from "../core/clips";
-import { asksUsage, cliFrom, clipLines, mergeHeld, pickHeld } from "./clips";
+import { cliFrom, clipLines, mergeHeld, pickHeld } from "./clips";
 
 const clip = (id: string, over: Partial<Clip> = {}): Clip => ({ id, text: id, source: "cli", createdAt: 1, at: 1, count: 1, ...over });
 
@@ -50,18 +50,5 @@ describe("files in the CLI's list", () => {
     ]);
     expect(held.map((h) => h.clip.id)).toEqual(["c-bbbbbbbb", "c-cccccccc"]);
     expect(clipLines(held, 9, false)[0]).toBe("  1  c-bbbbbbbb  now  cli       image   copy.png  2.3 MB");
-  });
-});
-
-describe("asksUsage", () => {
-  test("--help or -h asks for the usage instead of keeping the word", () => {
-    expect(asksUsage(["--help"])).toBe(true);
-    expect(asksUsage(["-h"])).toBe(true);
-    expect(asksUsage(["list", "--help"])).toBe(true);
-  });
-  test("text that only mentions the flag is kept as text", () => {
-    expect(asksUsage(["run with --help to see"])).toBe(false);
-    expect(asksUsage(["help"])).toBe(false);
-    expect(asksUsage([])).toBe(false);
   });
 });

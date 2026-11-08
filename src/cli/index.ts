@@ -49,7 +49,7 @@ import { localEmulators } from "../core/emulatord";
 import { readBuild } from "../core/build";
 import { versionLine } from "../core/version";
 import { bold, dim, lichen, moss, paintLine, renderTree, sky } from "./render";
-import { HELP_TEXT } from "../core/help";
+import { asksHelp, HELP_TEXT, verbHelp } from "../core/help";
 import { healthCommand } from "./health";
 import { costsCommand } from "./costs";
 import { capacityCommand } from "./capacity";
@@ -173,6 +173,12 @@ export async function main(argv: string[]): Promise<void> {
   // to the default tree view (`canopy ~/dev`).
   const cmd =
     args[0] !== undefined && COMMANDS.has(args[0]) ? args.shift() : undefined;
+  // --help or -h after a command prints its lines and runs nothing, so
+  // "canopy note add --help" never keeps a note; library has its own help
+  if (cmd !== undefined && cmd !== "library" && asksHelp(args)) {
+    console.log(verbHelp(cmd) ?? HELP);
+    return;
+  }
   // --token is every command's, except `source add --forgejo --token`, which
   // carries a Forgejo token and not a caller's
   if (cmd !== "source") setTokenFlag(opt(args, "--token"));
@@ -765,7 +771,7 @@ export async function main(argv: string[]): Promise<void> {
     case "help":
     case "--help":
     case "-h":
-      console.log(HELP);
+      console.log((args[0] === undefined ? undefined : verbHelp(args[0])) ?? HELP);
       return;
     case "new": {
       const parsed = parseNewArgs(args, process.env);
