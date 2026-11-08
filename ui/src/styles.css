@@ -5598,6 +5598,15 @@ button.dl-gut.has {
     0 2px 6px -2px var(--float-shadow),
     0 22px 48px -16px var(--float-shadow);
 }
+/* a line inside a menu is drawn against the float, not the page: the
+   page's hair is all but the float's own color in the dark, so a menu's
+   groups ran together there. Mixed from the menu's edge, it reads the
+   same in both schemes and in every palette and contrast. */
+.menu,
+.mention-menu,
+.ss-tabmenu {
+  --hair: color-mix(in srgb, var(--float-edge) 60%, var(--float));
+}
 .menu-label {
   margin: 6px 12px 2px;
   font-size: var(--t-sm);

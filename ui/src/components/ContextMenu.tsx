@@ -17,6 +17,8 @@
  * - Submenus open beside their row on hover or →, and a pointer crossing a
  *   sibling row on its way into an open submenu leaves it open. On a phone
  *   the menu is a sheet at the bottom and a submenu replaces its rows.
+ * - A long-press (Android's right-click) opens it too, and the word the
+ *   long-press selected on its way is dropped.
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, SyntheticEvent } from "react";
@@ -195,6 +197,9 @@ function footShows(): boolean {
 
 /** how long after a keyboard open a stray contextmenu event is ignored */
 const KEY_ECHO_MS = 400;
+/** the longest a touch can be held before its contextmenu event and still
+ *  count as that event's long-press */
+const LONG_PRESS_MS = 3000;
 
 /**
  * Mounted once per window (App mounts it in both of its branches): hears
@@ -207,6 +212,13 @@ export function ContextMenuHost({ build }: { build: CtxBuild }) {
 
   useEffect(() => {
     let keyedAt = 0;
+    // a long-press selects the word under the finger before its
+    // contextmenu event comes, so the last touch's start says whether a
+    // selection was there already (meant) or is the long-press's own
+    let touchDown: { at: number; selected: boolean } | null = null;
+    const onDown = (e: PointerEvent) => {
+      touchDown = e.pointerType === "touch" ? { at: Date.now(), selected: !(getSelection()?.isCollapsed ?? true) } : null;
+    };
     const onMenu = (e: MouseEvent) => {
       if (e.defaultPrevented || !(e.target instanceof Element)) return;
       if (Date.now() - keyedAt < KEY_ECHO_MS) {
@@ -221,9 +233,15 @@ export function ContextMenuHost({ build }: { build: CtxBuild }) {
         return;
       }
       if (skip) return;
-      const selection = selectedText();
+      const pressed = touchDown !== null && Date.now() - touchDown.at < LONG_PRESS_MS;
+      const madeByPress = pressed && touchDown?.selected === false;
+      const selection = madeByPress ? "" : selectedText();
       if (!buildRef.current(target, chain, selection)) return;
       e.preventDefault();
+      // the menu is about the thing pressed, not a word: drop the
+      // long-press's selection, and with it the handles and the phone's
+      // own search bar it brings up
+      if (madeByPress) getSelection()?.removeAllRanges();
       // a keyboard's contextmenu event comes at 0,0 or with no pointer
       const keyed = (e.clientX === 0 && e.clientY === 0) || (e instanceof PointerEvent && e.pointerId === -1);
       const r = target.getBoundingClientRect();
@@ -242,9 +260,11 @@ export function ContextMenuHost({ build }: { build: CtxBuild }) {
       keyedAt = Date.now();
       openCtx(() => buildRef.current(target, chainOf(target), selection), { under: target.getBoundingClientRect() }, true, target);
     };
+    document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("contextmenu", onMenu);
     window.addEventListener("keydown", onKey);
     return () => {
+      document.removeEventListener("pointerdown", onDown, true);
       document.removeEventListener("contextmenu", onMenu);
       window.removeEventListener("keydown", onKey);
     };
