@@ -98,7 +98,7 @@ const RULES: readonly Rule[] = [
   // a clipboard holds whatever was copied, so even reading it is a hand's: a
   // page, the CLI or a shell's token may read, keep, pin and drop clips, and a
   // caller with no token never sees them (FR-054)
-  { methods: ["GET"], paths: ["clips"], right: "operate" },
+  { methods: ["GET"], paths: ["clips", "clips/*"], right: "operate" },
   { methods: POST_DEL, paths: ["clips", "clips/*"], right: "operate" },
   { methods: POST, paths: ["landing/*", "groups/*", "prs/*", "incubator/*"], right: "operate" },
   // reading the windows now and starting a held start as interactive are a

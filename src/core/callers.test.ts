@@ -251,6 +251,8 @@ describe("the notes' routes (FR-020)", () => {
 describe("the clipboard's routes (FR-054)", () => {
   test("reading and every change operate, so a caller with no token never sees a clip", () => {
     expect(needs("GET", "/api/clips")).toBe("operate");
+    // a read under the prefix is gated too, so a later route there never ships open
+    expect(needs("GET", "/api/clips/c-aaaaaaaa")).toBe("operate");
     for (const p of ["/api/clips", "/api/clips/use", "/api/clips/pin", "/api/clips/clear"]) expect(needs("POST", p)).toBe("operate");
     expect(needs("DELETE", "/api/clips")).toBe("operate");
     expect(allows("page", needs("GET", "/api/clips"))).toBe(true);
