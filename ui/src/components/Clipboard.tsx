@@ -463,8 +463,11 @@ export function ClipsPopBody({ onDone: _onDone }: { onDone?: () => void } = {}) 
 
   const takeIn = () =>
     act(async () => {
-      // a picture first, where the browser hands one over; then text
+      // a picture first, where the browser hands one over; then text. The
+      // text comes from the same read where there was one: a second ask can
+      // prompt again, or fail once the press is spent (Safari, Firefox)
       const items = navigator.clipboard?.read ? await navigator.clipboard.read().catch(() => null) : null;
+      let text: string | null = null;
       for (const item of items ?? []) {
         const type = item.types.find((t) => t.startsWith("image/"));
         if (type) {
@@ -474,8 +477,9 @@ export function ClipsPopBody({ onDone: _onDone }: { onDone?: () => void } = {}) 
           say("kept the picture on this device's clipboard");
           return;
         }
+        if (text === null && item.types.includes("text/plain")) text = await (await item.getType("text/plain")).text();
       }
-      await keepText((await readText()) ?? "", myDeviceName(device));
+      await keepText((items ? text : await readText()) ?? "", myDeviceName(device));
       setPick(null);
     });
 
