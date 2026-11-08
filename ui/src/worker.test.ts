@@ -29,6 +29,15 @@ describe("worker cache boundaries", () => {
     expect(plan("http://canopy.example/assets/a.js")).toBe("pass");
     expect(plan("/favicon.ico")).toBe("pass");
   });
+  test("only the share sheet's POST navigation to /share is held for the page", () => {
+    expect(plan("/share", "navigate", "POST")).toBe("share");
+    expect(plan("/share", "cors", "POST")).toBe("pass");
+    expect(plan("/share?x=1", "navigate", "POST")).toBe("share");
+    expect(plan("/share/", "navigate", "POST")).toBe("pass");
+    expect(plan("https://peer.example/share", "navigate", "POST")).toBe("pass");
+    // a GET to /share is a page like any other
+    expect(plan("/share", "navigate")).toBe("shell");
+  });
   test("redirected, cross-origin and failed answers never enter the cache", () => {
     expect(keepable({ status: 200, redirected: false, type: "basic" })).toBe(true);
     for (const response of [
@@ -45,6 +54,8 @@ test("a new build retires older caches and asks for an update only across versio
   const keep = cacheName(build);
   expect(keep).toBe("canopy-0.2.0 (1ac8fe7, 2026-10-26)");
   expect(staleCaches([keep, "canopy-old", "other"], keep)).toEqual(["canopy-old", "other"]);
+  // a share waiting for the page outlives a new build
+  expect(staleCaches([keep, "canopy-share-1794096000000-ab12cd34"], keep)).toEqual([]);
   expect(wantsUpdate(build, { ...build, commit: "1ac8fe7" })).toBe(false);
   expect(wantsUpdate(build, { ...build, commit: "abcdef0" })).toBe(true);
   expect(wantsUpdate(build, null)).toBe(false);

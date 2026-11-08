@@ -1358,8 +1358,9 @@ export interface CanopyState {
   /** a clipboard showed clips up to `at`: the chip's dot goes */
   seeClips: (at: number) => void;
   /** keeps a copy on home's clipboard; text shaped like a secret keeps
-   *  nothing, and a backend without a clipboard says nothing */
-  keepClip: (c: Copied) => Promise<void>;
+   *  nothing, and a backend without a clipboard says nothing. True when the
+   *  text is on the clipboard now (kept, or the same text a moment ago) */
+  keepClip: (c: Copied) => Promise<boolean>;
   /** keeps a file (a picture, a PDF, anything up to 25 MB) on home's
    *  clipboard as one from this device; throws the backend's refusal */
   keepFile: (file: Blob, name: string, from: string) => Promise<Clip>;
@@ -4100,19 +4101,20 @@ export const useStore = create<CanopyState>((set, get) => ({
     if (at > get().clipsSeen) set({ clipsSeen: at });
   },
   keepClip: async (c) => {
-    if (!c.text.trim() || looksSecret(c.text)) return;
+    if (!c.text.trim() || looksSecret(c.text)) return false;
     const now = Date.now();
-    if (lastKept && lastKept.text === c.text && now - lastKept.at < 1500) return;
+    if (lastKept && lastKept.text === c.text && now - lastKept.at < 1500) return true;
     lastKept = { text: c.text, at: now };
     const b = get().home;
     const device = { id: clientId(), name: myDeviceName(get().settings.device), platform: myPlatform() };
     try {
       const clip = await api.addClip(b, { text: c.text, source: c.source, ...(c.from ? { from: c.from } : {}), device });
-      if (!isShown(get(), b)) return;
       // this page made it: no dot for its own copy
-      set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [clip] }) }, clipsSeen: Math.max(s.clipsSeen, clip.at) }));
+      if (isShown(get(), b)) set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [clip] }) }, clipsSeen: Math.max(s.clipsSeen, clip.at) }));
+      return true;
     } catch {
       // an older backend has no clipboard: the copy itself still happened
+      return false;
     }
   },
   keepFile: async (file, name, from) => {

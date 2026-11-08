@@ -4,11 +4,14 @@ import { App } from "./App";
 import { installSoftKeys } from "./softkeys";
 import { registerWorker } from "./install";
 import { startPush } from "./pushclient";
+import { startShareIn } from "./takeshare";
 import "@fontsource-variable/instrument-sans/wght.css";
 import "@fontsource-variable/jetbrains-mono/wght.css";
 import "./styles.css";
 
 installSoftKeys();
+// before the app reads the address: a share comes in as ?share=<id>
+startShareIn();
 
 const el = document.getElementById("root");
 if (el) {
