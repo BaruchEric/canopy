@@ -1466,6 +1466,10 @@ export interface CanopyState {
   /** brings a project's bench to the front, opening its panel; null puts
    *  it back */
   bringProject: (repoId: string | null) => void;
+  /** a double-click on a project's card or tree row: its bench to the
+   *  front, where a click opens its panel on this page (a click that opens
+   *  a tab or a window has already gone there); a forge repo has none */
+  bringOnDouble: (repoId: string) => void;
   /** one part fills `repoId`'s bench while it is in front, or with null
    *  every part shows side by side again */
   soloBench: (repoId: string, pane: BenchPane | null) => void;
@@ -4763,6 +4767,12 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFront: (front) => set({ front }),
   bringProject: (repoId) =>
     set((s) => (repoId === null ? { front: null } : isReservedPanel(repoId) ? {} : { ...dockPanel(s, repoId), front: projectFront(repoId) })),
+  bringOnDouble: (repoId) => {
+    const s = get();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo || repo.forge || (s.settings.openIn !== "dock" && s.settings.openIn !== "tabs")) return;
+    s.bringProject(repoId);
+  },
   soloBench: (repoId, pane) =>
     set((s) => {
       const front = withSolo(s.front, repoId, pane);

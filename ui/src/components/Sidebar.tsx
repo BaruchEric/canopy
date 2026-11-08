@@ -1,6 +1,7 @@
 import { memo, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { pickable } from "../flows";
+import { onBox } from "../front";
 import { peerWipCounts } from "../peers";
 import { groupRepos, sectionKey } from "../grouping";
 import { pickCount, pickState } from "../select";
@@ -18,6 +19,7 @@ import { useKb } from "../kbring";
  *  does, shift included, instead of opening it. */
 const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
   const openRepo = useStore((s) => s.openRepo);
+  const bringOnDouble = useStore((s) => s.bringOnDouble);
   const selecting = useStore((s) => s.selecting);
   const picked = useStore((s) => s.selected.includes(repo.id));
   const toggleSelected = useStore((s) => s.toggleSelected);
@@ -37,7 +39,14 @@ const TreeItem = memo(function TreeItem({ repo }: { repo: Repo }) {
       aria-disabled={selecting && !canPick ? true : undefined}
       onClick={(e) => {
         if (selecting) toggleSelected(repo.id, e.shiftKey);
-        else openRepo(repo.id, e);
+        // the second click of a double-click is the double-click's
+        else if (e.detail <= 1) openRepo(repo.id, e);
+      }}
+      // a double-click brings the project to the front, as on its card
+      onDoubleClick={(e) => {
+        if (selecting || !onBox(e.target, e.currentTarget)) return;
+        getSelection()?.removeAllRanges();
+        bringOnDouble(repo.id);
       }}
       onAuxClick={(e) => {
         if (!selecting && e.button === 1) openRepo(repo.id, { metaKey: true });

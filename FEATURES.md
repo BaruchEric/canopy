@@ -48,6 +48,10 @@ The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: 
 
 ## Shipped
 
+### FR-055 · Double-click a panel or a card to bring it to the front
+P2 · added 2026-11-07 · source: Eric ("add double click a panel, card bring it to focus", 2026-11-07) · shipped 2026-11-07
+A double-click on a repo panel's head brings the project's bench to the front, and again puts it back. A double-click on a repo card or its tree row does the same, where a click opens the panel on this page. A double-click on a button or a link inside them stays that control's, and the second click of a double-click no longer opens a second panel, tab or window.
+
 ### FR-054 · A clipboard of every copy, from every source
 P2 · added 2026-11-07 · source: Eric ("a clipboard viewer and manager from all sources", 2026-11-07) · shipped 2026-11-07
 One place for everything copied: in a shell (OSC 52), with a copy button or y and a letter, by selecting text on the page, from any shell with canopy clip, from the device's own clipboard, and tailchan's #clipboard from the tailnet's other devices. Each clip is drawn as what it is, can be copied again, pasted into the last shell, pinned or dropped, and shows on every page and device.

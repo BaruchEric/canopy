@@ -20,6 +20,7 @@ import {
   paneOf,
   projectFront,
   withSolo,
+  onBox,
   type Front,
 } from "./front";
 import type { TaskInfo, TermInfo } from "../../src/core/types";
@@ -177,5 +178,53 @@ describe("the bench's seams", () => {
     expect(splitAt(1390, 400, 1400)).toBe(BENCH_SPLIT.min);
     expect(splitAt(10, 400, 1400)).toBe(BENCH_SPLIT.max);
     expect(splitAt(5, 400, 400)).toBe(BENCH_SPLIT.initial);
+  });
+});
+
+describe("a double-click that brings a project to the front", () => {
+  // a stand-in for the page's elements: each knows its parent and its own match
+  interface Fake {
+    match: boolean;
+    parent: Fake | null;
+    closest(sel: string): Fake | null;
+    contains(o: Fake | null): boolean;
+  }
+  const fake = (match: boolean, parent: Fake | null = null): Fake => ({
+    match,
+    parent,
+    closest(this: Fake, sel: string): Fake | null {
+      return this.match ? this : (this.parent?.closest(sel) ?? null);
+    },
+    contains(this: Fake, o: Fake | null) {
+      for (let at = o; at; at = at.parent) if (at === this) return true;
+      return false;
+    },
+  });
+  // the rule reads an element by its closest and contains alone
+  const el = (match: boolean, parent: Fake | null = null) => fake(match, parent) as Fake & Element;
+  test("on the head itself, or a name or a glyph in it, it counts", () => {
+    const head = el(false);
+    const name = el(false, head);
+    expect(onBox(head, head)).toBe(true);
+    expect(onBox(name, head)).toBe(true);
+  });
+  test("on a button or a link in the head, the control keeps it", () => {
+    const head = el(false);
+    const star = el(true, head);
+    const icon = el(false, star);
+    expect(onBox(star, head)).toBe(false);
+    expect(onBox(icon, head)).toBe(false);
+  });
+  test("a card that is a button itself still counts, and its menu does not", () => {
+    const card = el(true);
+    const title = el(false, card);
+    const menu = el(true, card);
+    expect(onBox(title, card)).toBe(true);
+    expect(onBox(card, card)).toBe(true);
+    expect(onBox(menu, card)).toBe(false);
+  });
+  test("no element, no double-click", () => {
+    expect(onBox(null, el(false))).toBe(false);
+    expect(onBox({} as EventTarget, el(false))).toBe(false);
   });
 });

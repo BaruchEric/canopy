@@ -180,3 +180,17 @@ export const dockAt = (y: number, bottom: number, height: number): number =>
 /** the log's share for a pointer at `x` over the row from `left` to `right` */
 export const splitAt = (x: number, left: number, right: number): number =>
   right > left ? shareOf((right - x) / (right - left), BENCH_SPLIT) : BENCH_SPLIT.initial;
+
+/** the controls in a panel head, a card or a tree row that keep a double-click as their own */
+const OWN_DOUBLE = "button, a, input, select, textarea, summary, label, [role=button], [role=menu], [role=menuitem], [contenteditable]";
+
+/** Whether a double-click at `target` is one on `box` itself (its head, a
+ *  card, a tree row) rather than on a control inside it, which keeps its
+ *  own: a card or a row that is a button itself still counts. It reads the
+ *  target by its methods, not `instanceof`, so it tests without a DOM. */
+export function onBox(target: EventTarget | null, box: Element): boolean {
+  const t = target as Element | null;
+  if (typeof t?.closest !== "function") return false;
+  const hit = t.closest(OWN_DOUBLE);
+  return hit === null || hit === box || !box.contains(hit);
+}

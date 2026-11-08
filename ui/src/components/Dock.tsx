@@ -51,7 +51,7 @@ import { LandingSection } from "./Landing";
 import { TreesSection } from "./Trees";
 import { CliBody } from "./CommandLine";
 import { WaitingBody } from "./Waiting";
-import { benchHolds, benchIs, benchSolo } from "../front";
+import { benchHolds, benchIs, benchSolo, onBox } from "../front";
 import { devTask } from "../tasks";
 import { devState } from "../guided";
 import { BenchBar, BenchSeams, type BenchPane } from "./Bench";
@@ -3174,7 +3174,17 @@ export function RepoPanel({
       {/* Everything but the shells scrolls in here; the shells sit below it,
           along the panel's bottom edge, whatever the scroll position. */}
       <div className="panel-body" ref={bodyRef} style={zoomStyle(zoom)}>
-      <header className="panel-head" {...panelHead(id, repo.name, movable)}>
+      <header
+        className="panel-head"
+        {...panelHead(id, repo.name, movable)}
+        // a double-click on the head brings the project to the front, and
+        // puts it back from there; its buttons keep theirs
+        onDoubleClick={(e) => {
+          if (repo.forge || !onBox(e.target, e.currentTarget)) return;
+          getSelection()?.removeAllRanges();
+          setMode(bench ? "normal" : "focus");
+        }}
+      >
         <span className="glyph" {...(movable && dragHandle(id, repo.name))}>
           {GLYPH[stateOf(repo)]}
         </span>
@@ -3189,7 +3199,7 @@ export function RepoPanel({
           <button
             type="button"
             className={`term-new term-focus panel-bench-btn${bench ? " on" : ""}`}
-            title={bench ? "Put the project back (Esc)" : "Bring the project to the front: its changes, shells, app and log in one box"}
+            title={bench ? "Put the project back (Esc, or double-click the head)" : "Bring the project to the front: its changes, shells, app and log in one box (or double-click the head)"}
             aria-label={bench ? "Put the project back" : "Bring the project to the front"}
             aria-pressed={bench}
             onClick={() => setMode(bench ? "normal" : "focus")}

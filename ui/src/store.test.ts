@@ -748,6 +748,28 @@ describe("a project's bench in front", () => {
     expect(useStore.getState().front).toBeNull();
   });
 
+  test("a double-click on a card or a row brings the bench where a click opens the panel here", () => {
+    const set = (openIn: "dock" | "tabs" | "tab" | "window") => useStore.setState({ settings: { ...useStore.getState().settings, openIn } });
+    set("dock");
+    useStore.getState().bringOnDouble("f-a");
+    expect(useStore.getState().front).toEqual(projectFront("f-a"));
+    expect(useStore.getState().panels).toContain("f-a");
+    set("tabs");
+    useStore.getState().bringOnDouble("f-b");
+    expect(useStore.getState().front).toEqual(projectFront("f-b"));
+    // a click that opens a window or a tab has gone there already
+    useStore.getState().bringProject(null);
+    set("window");
+    useStore.getState().bringOnDouble("f-a");
+    expect(useStore.getState().front).toBeNull();
+    // a forge repo has no bench, and an unknown id brings nothing
+    set("dock");
+    useStore.setState({ repos: [...useStore.getState().repos, { ...repo("f-c"), forge: { host: "github.com" } } as unknown as Repo] });
+    useStore.getState().bringOnDouble("f-c");
+    useStore.getState().bringOnDouble("nope");
+    expect(useStore.getState().front).toBeNull();
+  });
+
   test("closing the panel ends its bench; another panel's close leaves it", () => {
     useStore.getState().openPanel("f-b");
     useStore.getState().bringProject("f-a");

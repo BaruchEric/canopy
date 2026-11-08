@@ -39,6 +39,7 @@ import { isTreeCard } from "../../../src/core/treewords";
 import { TreeRows, TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
 import { historyFor, type Repo } from "../../../src/core/types";
+import { onBox } from "../front";
 import { kbKey } from "../kbfocus";
 import { useKb } from "../kbring";
 
@@ -122,6 +123,7 @@ function MachineStrip({ card, lead, selecting }: { card: Card; lead: string; sel
 
 const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) {
   const openRepo = useStore((s) => s.openRepo);
+  const bringOnDouble = useStore((s) => s.bringOnDouble);
   const many = useStore(multi);
   const card = useStore((s) => (multi(s) ? cardOf(s, repo.id) : undefined));
   // a card none of whose machines answers is shown as it last was, dimmed
@@ -186,7 +188,16 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           toggleSelected(repo.id, e.shiftKey);
           return;
         }
+        // the second click of a double-click is the double-click's, never a
+        // second panel, tab or window
+        if (e.detail > 1) return;
         openRepo(repo.id, e);
+      }}
+      // a double-click brings the project to the front
+      onDoubleClick={(e) => {
+        if (selecting || !onBox(e.target, e.currentTarget)) return;
+        getSelection()?.removeAllRanges();
+        bringOnDouble(repo.id);
       }}
       onAuxClick={(e) => {
         if (selecting) return;
