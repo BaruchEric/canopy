@@ -127,6 +127,7 @@ usage:
     --backend URL | --on NAME       select the backend that owns the group
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
+  canopy collisions [repo]           runs on one repo editing the same files right now, and what they share; never a hold
   canopy worktrees [repo] [--json]   every run and warm worktree on the backend, the failed refills, the orphans and the free disk
   canopy worktrees warm <repo> [N]   keep N prepared worktrees for the repo on this machine; no N takes the gates file's warm
   canopy worktrees prune [repo]      remove orphans and stale warm trees and forget failed refills, so the pool tries again
@@ -180,14 +181,19 @@ export function asksHelp(args: readonly string[]): boolean {
   return (end === -1 ? args : args.slice(0, end)).some((a) => a === "--help" || a === "-h");
 }
 
+/** words the CLI takes for another command's: notes is note, and tree is
+ *  the bare canopy [dir] */
+const SAME_AS: Readonly<Record<string, string>> = { notes: "note", clips: "clip", sources: "source", tree: "[dir]" };
+
 /** one command's lines from the help: each "  canopy <verb> ..." line and
  *  the deeper-indented lines under it; undefined for a verb it does not list */
 export function verbHelp(verb: string, text: string = HELP_TEXT): string | undefined {
+  const want = SAME_AS[verb] ?? verb;
   const out: string[] = [];
   let inside = false;
   for (const line of text.split("\n")) {
     const head = /^ {2}canopy (\S+)/.exec(line);
-    if (head) inside = head[1] === verb;
+    if (head) inside = head[1] === want;
     else if (!/^ {3,}\S/.test(line)) inside = false;
     if (inside) out.push(line);
   }

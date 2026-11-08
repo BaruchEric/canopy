@@ -114,7 +114,7 @@ async function scanOpts(): Promise<{ maxDepth: number; ignore: string[] }> {
 }
 
 
-const COMMANDS = new Set([
+export const COMMANDS = new Set([
   "new",
   "incubator",
   "ranger",

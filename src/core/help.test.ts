@@ -35,6 +35,12 @@ describe("verbHelp", () => {
     expect(health).toContain("canopy health lint [dir]");
     expect(health).not.toContain("canopy spec");
   });
+  test("another word for a command gets that command's lines", () => {
+    expect(verbHelp("notes")).toBe(verbHelp("note"));
+    expect(verbHelp("clips")).toBe(verbHelp("clip"));
+    expect(verbHelp("sources")).toBe(verbHelp("source"));
+    expect(verbHelp("tree")).toContain("canopy [dir]");
+  });
   test("a verb the help does not list has none", () => {
     expect(verbHelp("nope")).toBeUndefined();
     expect(verbHelp("[dir]", "usage:\n  canopy [dir]   tree\n")).toBe("usage:\n  canopy [dir]   tree");
