@@ -325,9 +325,13 @@ function CtxMenu({ open }: { open: Open }) {
     const was = what?.getBoundingClientRect();
     const scroll = (e: Event) => {
       const t = e.target;
-      if (inside(t) || (t instanceof Node && what && !t.contains(what))) return;
-      const now = what?.isConnected ? what.getBoundingClientRect() : null;
-      if (!now || !was || Math.abs(now.top - was.top) > 2 || Math.abs(now.left - was.left) > 2) close();
+      if (inside(t)) return;
+      // what was clicked is gone (its card moved to another group), so a
+      // scroll anywhere closes the menu, as nothing holds it in place
+      if (!what?.isConnected || !was) return close();
+      if (t instanceof Node && !t.contains(what)) return;
+      const now = what.getBoundingClientRect();
+      if (Math.abs(now.top - was.top) > 2 || Math.abs(now.left - was.left) > 2) close();
     };
     const gone = () => close();
     // the focus left the menu (a click outside that kept it open cannot,
