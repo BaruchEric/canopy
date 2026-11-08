@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
+import { GEAR_ROOTS, gearChanged, registerGear } from "../ctxgears";
 import { PHONE, useMedia } from "../media";
 import { oneMenu } from "../menus";
 import { keptForNow } from "../screens";
@@ -131,6 +132,19 @@ export function Gear({
   const menu = useRef<HTMLDivElement>(null);
   // a sheet sits on the bottom edge by its stylesheet, not beside the button
   const asSheet = useMedia(PHONE) && sheet;
+  // A right-click on the surface this gear sets offers its groups too
+  // (FR-056): registered once against that surface, read through a ref so
+  // the menu always has this render's groups, and told of each new render.
+  const latest = useRef(groups);
+  latest.current = groups;
+  const name = useRef(label);
+  name.current = label;
+  useEffect(() => {
+    const root = trigger.current?.closest(GEAR_ROOTS);
+    if (!root) return;
+    return registerGear(root, { label: () => name.current, groups: () => latest.current });
+  }, []);
+  useEffect(gearChanged);
 
   const place = useCallback(() => {
     if (!trigger.current || !menu.current) return;
@@ -286,7 +300,9 @@ export function Gear({
   );
 }
 
-function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay: boolean) => void }) {
+/** One line of a gear's menu; the context menu draws a gear's groups with
+ *  it too, so a line looks and acts the same in both. */
+export function Entry({ entry, act }: { entry: GearEntry; act: (fn: () => unknown, stay: boolean) => void }) {
   switch (entry.type) {
     case "zoom":
       return (

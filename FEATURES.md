@@ -48,6 +48,10 @@ The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: 
 
 ## Shipped
 
+### FR-056 · Right-click menus everywhere
+P2 · added 2026-11-07 · source: Eric ("add stunning smart Right click, etc Menus etc every where", 2026-11-07) · shipped 2026-11-07
+A right-click on a card, a tree row, a dock tab, a panel's head or body, a section, an inbox row, a trigger event or an agents-board card opens a menu about that thing: its state and branch at the top, the few moves used most as buttons, the ⋯ menu's whole list, a copy submenu, and the gear's zoom, layout and share for the part clicked. Selected text, a link and a branch or path get their own rows, and empty space gets "go to" and the page's commands. Typing filters every row, submenus included. The menu key and Shift+F10 open it from the keyboard, and a phone gets a sheet. Shift+right-click, text boxes, shells, pictures and the Secrets view keep the browser's menu.
+
 ### FR-055 · Double-click a panel or a card to bring it to the front
 P2 · added 2026-11-07 · source: Eric ("add double click a panel, card bring it to focus", 2026-11-07) · shipped 2026-11-07
 A double-click on a repo panel's head brings the project's bench to the front, and again puts it back. A double-click on a repo card or its tree row does the same, where a click opens the panel on this page. A double-click on a button or a link inside them stays that control's, and the second click of a double-click no longer opens a second panel, tab or window.

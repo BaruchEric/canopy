@@ -65,6 +65,12 @@ const PATHS = {
       <path d="m17.5 6.5-11 11" />
     </>
   ),
+  copy: (
+    <>
+      <rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2.2" />
+      <path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5" />
+    </>
+  ),
   down: <path d="M12 4.5v12M7 12l5 5 5-5M6 20.5h12" />,
   up: <path d="M12 17V5M7 9.5 12 4.5l5 5M6 20.5h12" />,
 } satisfies Record<string, ReactNode>;

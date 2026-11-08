@@ -5662,6 +5662,304 @@ button.dl-gut.has {
   background: var(--sky);
 }
 
+/* ---------- right-click menus (FR-056) ----------
+   One floating layer, as the ⋯ and the gears are: the float surface, its
+   edge and its shadow, rows of flat words that take a wash. Two things set
+   it apart. Its head names what was right-clicked, with the card's leaf
+   edge in that thing's state colour, so the menu reads as that card's.
+   And it grows out of the pointer rather than dropping from a button. */
+.ctx-menu {
+  z-index: 60;
+  width: max-content;
+  min-width: calc(236px * var(--ui));
+  max-width: min(calc(340px * var(--ui)), calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  transform-origin: var(--ctx-ox, 0) var(--ctx-oy, 0);
+  animation: ctx-in 150ms var(--ease);
+}
+.ctx-menu:focus-visible {
+  outline: none;
+}
+.ctx-sub {
+  min-width: calc(196px * var(--ui));
+  animation-name: ctx-side;
+}
+@keyframes ctx-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+@keyframes ctx-side {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+}
+/* the thing right-clicked: its glyph, its name, a line of its facts */
+.ctx-head {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 6px 14px 9px;
+  border-bottom: 1px solid var(--hair);
+}
+.ctx-head::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 7px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 2px 2px 0;
+  background: var(--state, var(--hair2));
+}
+.ctx-head-glyph {
+  flex: none;
+  font-size: var(--t-lg);
+  color: var(--state, var(--ink-faint));
+}
+.ctx-head-words {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.ctx-head-title {
+  overflow: hidden;
+  font-size: var(--t-lg);
+  font-weight: 600;
+  color: var(--ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-head-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.ctx-head-facts > .mono {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  line-height: inherit;
+  color: var(--ink-dim);
+}
+/* the few things done most, as glyphs in a row under the head */
+.ctx-quick {
+  display: flex;
+  gap: 2px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--hair);
+}
+.ctx-quick-btn {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  height: calc(30px * var(--ui));
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  font-size: var(--t-xl);
+}
+.ctx-quick-btn:hover,
+.ctx-quick-btn[data-active] {
+  background: var(--wash-strong);
+  color: var(--ink);
+}
+.ctx-quick-btn.on {
+  color: var(--moss);
+}
+.ctx-star {
+  font-size: var(--t-lg);
+  line-height: 1;
+}
+/* the filter: folded away until a key is typed, then a line of its own */
+.ctx-find {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 0;
+  padding: 0 14px;
+  overflow: hidden;
+  opacity: 0;
+  transition:
+    height 120ms var(--ease),
+    opacity 120ms var(--ease);
+}
+.ctx-find.on {
+  height: calc(32px * var(--ui));
+  border-bottom: 1px solid var(--hair);
+  opacity: 1;
+}
+.ctx-find-mark {
+  flex: none;
+  color: var(--ink-faint);
+}
+.ctx-find .ctx-find-box {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--ink);
+  font-size: var(--t-md);
+  outline: none;
+}
+.ctx-find-count {
+  flex: none;
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+/* runs of rows; a hairline between each that shows */
+.ctx-block {
+  padding: 2px 0;
+}
+.ctx-block:not([data-miss]) ~ .ctx-block:not([data-miss]) {
+  margin-top: 2px;
+  padding-top: 4px;
+  border-top: 1px solid var(--hair);
+}
+.ctx-node > :not(.menu-label, [data-miss]) + .menu-label {
+  margin: 6px 0 2px;
+  padding: 8px 12px 0;
+  border-top: 1px solid var(--hair);
+}
+.ctx-menu [data-miss],
+.ctx-filtering .ctx-node > .menu-label {
+  display: none;
+}
+.ctx-item {
+  min-height: calc(26px * var(--ui));
+}
+.ctx-menu [data-active] {
+  background: color-mix(in srgb, var(--ink) 9%, var(--float));
+  color: var(--ink);
+}
+.ctx-menu [data-active][aria-disabled="true"] {
+  background: var(--wash);
+}
+.ctx-glyph {
+  flex: none;
+  width: 1em;
+  color: var(--ink-faint);
+  text-align: center;
+}
+.ctx-item.t-rust {
+  color: var(--rust);
+}
+.ctx-item.t-sky {
+  color: var(--sky);
+}
+.ctx-item.t-moss {
+  color: var(--moss);
+}
+.ctx-item.t-lichen {
+  color: var(--lichen);
+}
+.ctx-item.ctx-open {
+  background: var(--wash);
+  color: var(--ink);
+}
+.ctx-path {
+  color: var(--ink-faint);
+}
+.menu-fact.mono {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+}
+.ctx-keys {
+  flex: none;
+  margin-left: auto;
+  padding-left: 14px;
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ctx-chev {
+  flex: none;
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--ink-faint);
+}
+.menu-fact ~ .ctx-keys,
+.menu-fact ~ .ctx-chev,
+.ctx-keys ~ .ctx-chev {
+  margin-left: 0;
+}
+.ctx-none {
+  margin: 4px 14px;
+  font-size: var(--t-md);
+  color: var(--ink-faint);
+}
+/* a word on the two things a newcomer would not guess; it stops showing
+   once the menu has opened a few times in this browser */
+.ctx-foot {
+  margin: 4px 0 0;
+  padding: 6px 14px 2px;
+  border-top: 1px solid var(--hair);
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+}
+/* on a phone: a sheet along the bottom, one level of rows at a time */
+.ctx-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 59;
+  background: color-mix(in srgb, var(--bark0) 45%, transparent);
+  animation: ctx-fade 150ms var(--ease);
+}
+.ctx-menu.ctx-sheet {
+  top: auto;
+  right: 8px;
+  bottom: 8px;
+  left: 8px;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: 72dvh;
+  padding-bottom: calc(6px + env(safe-area-inset-bottom));
+  border-radius: var(--r-sheet);
+  transform-origin: 50% 100%;
+  animation-name: ctx-rise;
+}
+.ctx-sheet .ctx-item {
+  min-height: 42px;
+}
+.ctx-sheet .ctx-quick-btn {
+  height: 44px;
+}
+.ctx-back {
+  color: var(--ink);
+  font-weight: 600;
+}
+@keyframes ctx-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+@keyframes ctx-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ctx-menu,
+  .ctx-scrim {
+    animation: none;
+  }
+  .ctx-find {
+    transition: none;
+  }
+}
+
 /* ---------- runs on the card, in the panel, in the top bar ---------- */
 /* While Claude works, the leaf edge carries sap (sky); while it waits for an
    answer, the edge asks in lichen like everything else that needs a hand. */

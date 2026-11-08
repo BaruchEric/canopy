@@ -16,6 +16,7 @@ import { qual } from "./registry";
 import { SelectBar } from "./components/SelectBar";
 import { Sidebar } from "./components/Sidebar";
 import { AgentSolo } from "./components/AgentSolo";
+import { ContextMenus } from "./components/ContextMenus";
 import { RunSolo } from "./components/RunSolo";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
@@ -653,6 +654,8 @@ export function App() {
       <>
         {solo}
         <DictationFloat />
+        <ContextMenus />
+        <Said />
       </>
     );
   const nav = <ViewSwitch view={view} navigate={navigate} />;
@@ -736,6 +739,7 @@ export function App() {
       <CommandPop />
       <DictationFloat />
       <KbWatch view={view} />
+      <ContextMenus />
       <Said />
     </div>
   );

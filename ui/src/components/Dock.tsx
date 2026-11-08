@@ -3153,6 +3153,8 @@ export function RepoPanel({
       className={`panel s-${stateOf(repo)}${guided ? " guided-panel" : ""}${asTabs ? " panel-tabbed" : ""}${wide ? " panel-wide" : ""}${strip ? " has-strip" : ""}${wasTab ? " was-tab" : ""}${modeClass}`}
       aria-label={repo.name}
       hidden={hidden}
+      // which repo a right-click inside it is about (FR-056)
+      data-repo={repo.id}
       data-pane={bench ? (shownPane ?? undefined) : undefined}
       data-cell={cell}
       style={

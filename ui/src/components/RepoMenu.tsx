@@ -51,54 +51,7 @@ export function RepoMenu({
   /** where an opener failure is reported; the console when omitted */
   onError?: (message: string) => void;
 }) {
-  const plan = useStore((s) => s.plan);
-  const openRepo = useStore((s) => s.openRepo);
-  const openApp = useStore((s) => s.openApp);
-  const showRun = useStore((s) => s.showRun);
-  const openChat = useStore((s) => s.openChat);
-  const editAgent = useStore((s) => s.editAgent);
-  const editLaunch = useStore((s) => s.editLaunch);
-  const showLaunch = useStore((s) => s.showLaunch);
-  const openTerm = useStore((s) => s.openTerm);
-  const agent = useStore((s) => agentFor(s, repo));
-  // a chat and a job start on whatever the repo's routes say for them
-  const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
-  const jobAgent = useStore((s) => agentFor(s, repo, "job"));
-  // a coordinator (FR-010) only where the backend has its isolated runner
-  const coordHere = useStore((s) => connOf(s, backendOf(repo.id)).about?.coordinator === true);
-  const coordAgent = useStore((s) => agentFor(s, repo, "coordinate"));
-  const coordinator = useStore((s) => coordinatorFor(s, repo.id));
-  const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
-  // a shell's agent: on another host for a repo there
-  const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
-  const routes = useStore((s) => routesOf(s, backendOf(repo.id)));
-  const extraProfiles = profileNames(routes).filter((n) => n !== "default");
-  const launch = useStore((s) => launchFor(s, repo));
-  // The launcher runs on the backend host; a headless backend (a container)
-  // cannot, so it is hidden there. The desktop openers are what this browser
-  // can open: the backend's own desktop when it is a Mac this browser runs
-  // on, else a helper on this machine, else none. Without a `code` opener
-  // VS Code is kept as a client-side Remote-SSH link the browser opens itself.
-  // all of it the repo's own backend's: another machine's checkout opens
-  // through that machine's openers and helpers, never this page's
-  const backend = useStore((s) => connOf(s, backendOf(repo.id)).backend);
-  const client = useStore(useShallow((s) => capsFor(s, backendOf(repo.id))));
-  const can = (app: OpenerId) => client.openers.includes(app);
-  const apps = OPENERS.filter(can);
-  const active = useStore((s) => activeRunFor(s, repo.id));
-  const workflows = useStore((s) => s.workflows[repo.id]);
-  const loadWorkflows = useStore((s) => s.loadWorkflows);
-  const planFlow = useStore((s) => s.planFlow);
-  const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
-  const showFlow = useStore((s) => s.showFlow);
-  const archiveRepo = useStore((s) => s.archiveRepo);
-  const favoriteRepo = useStore((s) => s.favoriteRepo);
-  const harnessRepo = useStore((s) => s.harnessRepo);
-  const favorite = useStore((s) => isFavorite(s, repo.id));
-  const harness = useStore((s) => isHarness(s, repo.id));
-  const hideArchived = useStore((s) => s.settings.hideArchived);
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -114,12 +67,6 @@ export function RepoMenu({
     const top = below + h > window.innerHeight - 8 ? Math.max(8, r.top - 6 - h) : below;
     setPos({ top, left });
   }, [open]);
-
-  // A fresh fetch on every open, so a workflow file edited since the last
-  // one shows up without a rescan.
-  useEffect(() => {
-    if (open && !repo.host && !repo.forge) void loadWorkflows(repo.id);
-  }, [open, repo.id, repo.host, repo.forge, loadWorkflows]);
 
   useEffect(() => {
     if (!open) return;
@@ -177,88 +124,6 @@ export function RepoMenu({
     }
   };
 
-  const openIn = async (app: OpenerId) => {
-    setOpen(false);
-    try {
-      await openApp(repo.id, app);
-    } catch (err) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (onError) onError(msg);
-      else console.error(msg);
-    }
-  };
-
-  // a seed's agents run through the incubator alone: no shell here starts one
-  const seed = isSeedId(repo.id);
-
-  const agentShell = (pick: { harness: (typeof HARNESSES)[number] } | { profile: string }) => {
-    setOpen(false);
-    openTerm(repo.id, undefined, "agent", undefined, pick);
-  };
-
-  const choose = (action: RunAction) => {
-    setOpen(false);
-    plan(repo.id, action);
-  };
-
-  const chat = async () => {
-    setOpen(false);
-    try {
-      await openChat(repo.id);
-    } catch (err) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (onError) onError(msg);
-      else console.error(msg);
-    }
-  };
-
-  const forge = repo.forge;
-
-  const archive = async () => {
-    setOpen(false);
-    try {
-      await archiveRepo(repo.id, repo.archived !== "canopy");
-    } catch (err) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (onError) onError(msg);
-      else console.error(msg);
-    }
-  };
-
-  const star = async () => {
-    setOpen(false);
-    try {
-      await favoriteRepo(repo.id, !favorite);
-    } catch (err) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (onError) onError(msg);
-      else console.error(msg);
-    }
-  };
-
-  const markHarness = async () => {
-    setOpen(false);
-    try {
-      await harnessRepo(repo.id, !harness);
-    } catch (err) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (onError) onError(msg);
-      else console.error(msg);
-    }
-  };
-
-  const copyClone = async () => {
-    if (!forge || forge.empty) return;
-    try {
-      await copyText(forge.clone, { from: "clone line" });
-      setCopied(true);
-    } catch (err) {
-      const msg = String(err instanceof Error ? err.message : err);
-      if (onError) onError(msg);
-      else console.error(msg);
-    }
-  };
-
   // Events inside the portal bubble through React to the card, which would
   // open a panel for every menu click.
   const swallow = (e: SyntheticEvent) => e.stopPropagation();
@@ -276,7 +141,6 @@ export function RepoMenu({
         onClick={(e) => {
           e.stopPropagation();
           setPos(null);
-          setCopied(false);
           setOpen(!open);
         }}
         onPointerDown={swallow}
@@ -312,462 +176,619 @@ export function RepoMenu({
               onMenuKey(e);
             }}
           >
-            {forge ? (
-              <>
-                <div className="menu-label">on the forge</div>
-                <a
-                  role="menuitem"
-                  className="menu-item"
-                  href={repo.path}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  title={linkLabel(repo.path)}
-                  onClick={() => setOpen(false)}
-                >
-                  <span className="menu-text">{forge.slug}</span>
-                  <span className="menu-fact">browser ↗</span>
-                </a>
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item"
-                  aria-disabled={forge.empty}
-                  title={forge.empty ? "nothing pushed to it yet" : forge.clone}
-                  onClick={() => void copyClone()}
-                >
-                  <span className="menu-text">copy the clone url</span>
-                  <span className="menu-fact">{copied ? "copied" : "ssh"}</span>
-                </button>
-                {forge.clonedAs !== undefined && (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    title="Open the clone already on this machine"
-                    onClick={() => {
-                      setOpen(false);
-                      openRepo(forge.clonedAs ?? "");
-                    }}
-                  >
-                    <span className="menu-text">the clone here</span>
-                    <span className="menu-fact">{forge.clonedAs}</span>
-                  </button>
-                )}
-              </>
-            ) : (
-              <>
-              <div className="menu-label">with an agent</div>
-              {active && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item live"
-                  onClick={() => {
-                    setOpen(false);
-                    showRun(active.id);
-                  }}
-                >
-                  <span className="dot sky" />
-                  <span className="menu-text">
-                    {active.status === "waiting"
-                      ? `${active.verb} needs you`
-                      : active.status === "idle"
-                        ? "chat open, your turn"
-                        : `${active.verb} in progress`}
-                  </span>
-                  <span className="menu-fact">show</span>
-                </button>
-              )}
-              {activeFlow && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item live"
-                  onClick={() => {
-                    setOpen(false);
-                    showFlow(activeFlow.id);
-                  }}
-                >
-                  <span className="dot sky" />
-                  <span className="menu-text">{flowWord(activeFlow, true)}</span>
-                  <span className="menu-fact">show</span>
-                </button>
-              )}
-              {!repo.host && (() => {
-                // a live run is shown whatever it runs on; a new chat needs
-                // its harness on the repo's backend
-                const missing = !active && !has.includes(chatAgent.harness);
-                const off = !!activeFlow || missing;
-                return (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    aria-disabled={off}
-                    tabIndex={off ? -1 : 0}
-                    title={
-                      activeFlow
-                        ? "workflow running"
-                        : missing
-                          ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
-                          : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
-                    }
-                    onClick={() => {
-                      if (!off) void chat();
-                    }}
-                  >
-                    <span className="menu-text">
-                      <span className={`harness-glyph h-${chatAgent.harness}`} aria-hidden="true">
-                        {HARNESS[chatAgent.harness].glyph}
-                      </span>{" "}
-                      {ACTIONS.chat.label}
-                    </span>
-                    <span className="menu-fact">
-                      {activeFlow ? "workflow running" : active ? "show" : missing ? "not installed" : "in canopy"}
-                    </span>
-                  </button>
-                );
-              })()}
-              {!repo.host && !seed && (coordHere || coordinator) && (() => {
-                // a coordinator holds no repo, so nothing else going here stops one
-                const off = !coordinator && coordAgent.harness !== "claude";
-                return (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className={coordinator ? "menu-item live" : "menu-item"}
-                    aria-disabled={off}
-                    tabIndex={off ? -1 : 0}
-                    title={
-                      coordinator
-                        ? "Show the coordinator going at this repo"
-                        : off
-                          ? "the coordinator needs Claude Code"
-                          : "A chat that splits your goal into branch runs across repos, proposed as cards you edit before anything starts"
-                    }
-                    onClick={() => {
-                      if (off) return;
-                      setOpen(false);
-                      plan(repo.id, "coordinate");
-                    }}
-                  >
-                    {coordinator && <span className="dot sky" />}
-                    <span className="menu-text">
-                      {coordinator ? (
-                        coordinator.status === "waiting" ? "coordinator needs you" : "coordinator going"
-                      ) : (
-                        <>
-                          <span className={`harness-glyph h-${coordAgent.harness}`} aria-hidden="true">
-                            {HARNESS[coordAgent.harness].glyph}
-                          </span>{" "}
-                          {ACTIONS.coordinate.label}
-                        </>
-                      )}
-                    </span>
-                    <span className="menu-fact">{coordinator ? "show" : off ? "needs Claude Code" : "in a sandbox"}</span>
-                  </button>
-                );
-              })()}
-              {JOBS.map((action) => {
-                const check = activeFlow
-                  ? { ok: false as const, why: "workflow running" }
-                  : active
-                    ? { ok: false as const, why: "wait for the current run" }
-                    : action === "propose" && jobAgent.harness !== "claude"
-                      ? { ok: false as const, why: "plan, then build needs Claude Code" }
-                      : !has.includes(jobAgent.harness)
-                        ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
-                        : checkWhen(repo, "any");
-                return (
-                  <button
-                    key={action}
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    aria-disabled={!check.ok}
-                    title={check.ok ? `A job on ${AGENT_NAME[jobAgent.harness]} (the repo's job route)` : check.why}
-                    tabIndex={check.ok ? 0 : -1}
-                    onClick={() => {
-                      if (check.ok) choose(action);
-                    }}
-                  >
-                    <span className="menu-text">
-                      <span className={`harness-glyph h-${jobAgent.harness}`} aria-hidden="true">
-                        {HARNESS[jobAgent.harness].glyph}
-                      </span>{" "}
-                      {ACTIONS[action].label}
-                    </span>
-                    <span className="menu-fact">{check.ok ? "" : check.why}</span>
-                  </button>
-                );
-              })}
-              {!repo.host && (workflows ?? []).map((e) => {
-                if (!e.ok) {
-                  return (
-                    <button key={`wf-${e.name}`} type="button" role="menuitem" className="menu-item" aria-disabled title={e.error} tabIndex={-1}>
-                      <span className="menu-text">{e.name}</span>
-                      <span className="menu-fact">will not parse</span>
-                    </button>
-                  );
-                }
-                const w = e.workflow;
-                const check = active || activeFlow ? { ok: false as const, why: "wait for the current run" } : checkWhen(repo, w.when);
-                return (
-                  <button
-                    key={`wf-${w.name}`}
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    aria-disabled={!check.ok}
-                    title={check.ok ? w.blurb : check.why}
-                    tabIndex={check.ok ? 0 : -1}
-                    onClick={() => {
-                      if (!check.ok) return;
-                      setOpen(false);
-                      planFlow(repo.id, w.name);
-                    }}
-                  >
-                    <span className="menu-text">{w.label}</span>
-                    <span className="menu-fact">
-                      {check.ok ? (w.steps.length === 1 ? "" : `${w.steps.length} steps`) : check.why}
-                    </span>
-                  </button>
-                );
-              })}
-              {!seed && HARNESSES.map((h) => {
-                const here = shellHas.includes(h);
-                const routed = agent.harness === h;
-                return (
-                  <button
-                    key={`shell-${h}`}
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    aria-disabled={!here}
-                    tabIndex={here ? 0 : -1}
-                    title={
-                      here
-                        ? `A shell at this repo with ${HARNESS[h].label} started in it${routed ? ", the way its route says" : ", in place of its route for this one start"}`
-                        : `${HARNESS[h].label} is not installed on ${backendOf(repo.id)}`
-                    }
-                    onClick={() => {
-                      if (here) agentShell({ harness: h });
-                    }}
-                  >
-                    <span className="menu-text">
-                      <span className={`harness-glyph h-${h}`} aria-hidden="true">
-                        {HARNESS[h].glyph}
-                      </span>{" "}
-                      new {HARNESS[h].label} shell
-                    </span>
-                    <span className="menu-fact">{here ? (routed ? describeAgent(agent, false) : "") : "not installed"}</span>
-                  </button>
-                );
-              })}
-              {!seed && extraProfiles.length > 0 && (
-                <div className="menu-row" aria-label="A shell with a profile">
-                  {extraProfiles.map((name) => {
-                    const p = routes.profiles[name]!;
-                    const here = shellHas.includes(p.harness);
-                    return (
-                      <button
-                        key={`profile-${name}`}
-                        type="button"
-                        role="menuitem"
-                        className="mini"
-                        disabled={!here}
-                        title={here ? `A shell with profile ${name}: ${HARNESS[p.harness].label} · ${describeAgent(p, false)}` : `${HARNESS[p.harness].label} is not installed here`}
-                        onClick={() => agentShell({ profile: name })}
-                      >
-                        {HARNESS[p.harness].glyph} {name}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {!seed && can("agent") && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item"
-                  title="Start the repo's agent in a terminal at this repo"
-                  onClick={() => void openIn("agent")}
-                >
-                  <span className="menu-text">agent</span>
-                  <span className="menu-fact">interactive, in a terminal</span>
-                </button>
-              )}
-              {!seed && can("herdr") && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="menu-item"
-                  title="Open this repo as a herdr workspace with its agent running in it"
-                  onClick={() => void openIn("herdr")}
-                >
-                  <span className="menu-text">herdr</span>
-                  <span className="menu-fact">a workspace in herdr</span>
-                </button>
-              )}
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="Which agent this repo starts, whole or per role, and how"
-                onClick={() => {
-                  setOpen(false);
-                  editAgent(repo.id);
-                }}
-              >
-                <span className="menu-text">agent routing…</span>
-                <span className="menu-fact">
-                  {HARNESS[agent.harness].glyph} {describeAgent(agent, false)}
-                </span>
-              </button>
-              {backend.openers && (
-                <>
-                  <div className="menu-label">launch</div>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    title="Released builds installed here, pull requests built here, and this checkout, each launched with a click"
-                    onClick={() => {
-                      setOpen(false);
-                      showLaunch(repo.id);
-                    }}
-                  >
-                    <span className="menu-text">builds & releases</span>
-                    <span className="menu-fact">in the panel</span>
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    title="Build and run lines, and which release asset is for this machine"
-                    onClick={() => {
-                      setOpen(false);
-                      editLaunch(repo.id);
-                    }}
-                  >
-                    <span className="menu-text">launch settings…</span>
-                    <span className="menu-fact">{describeLaunch(launch)}</span>
-                  </button>
-                </>
-              )}
-              <div className="menu-label">open in</div>
-              <button
-                type="button"
-                role="menuitem"
-                className="menu-item"
-                title="A shell at this repo, where the shell setting puts it"
-                onClick={() => {
-                  setOpen(false);
-                  openTerm(repo.id);
-                }}
-              >
-                <span className="menu-text">shell</span>
-                <span className="menu-fact">in canopy</span>
-              </button>
-              {repo.link && (
-                <a
-                  role="menuitem"
-                  className="menu-item"
-                  href={repo.link}
-                  target="_blank"
-                  rel="noreferrer noopener"
-                  title={linkLabel(repo.link)}
-                  onClick={() => setOpen(false)}
-                >
-                  <span className="menu-text">git remote</span>
-                  <span className="menu-fact">browser ↗</span>
-                </a>
-              )}
-              {apps.length > 0 && (
-                <div className="menu-row">
-                  {apps.map((app) => (
-                    <button
-                      key={app}
-                      type="button"
-                      role="menuitem"
-                      className="mini"
-                      onClick={() => void openIn(app)}
-                    >
-                      {app}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {!can("code") && !repo.host && backend.sshHost && (
-                <a
-                  role="menuitem"
-                  className="menu-item"
-                  href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
-                  title="Open this repo in VS Code over Remote-SSH on your own machine"
-                  onClick={() => setOpen(false)}
-                >
-                  <span className="menu-text">VS Code</span>
-                  <span className="menu-fact">remote ↗</span>
-                </a>
-              )}
-              </>
-            )}
-            <div className="menu-label">in canopy</div>
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              title={
-                favorite
-                  ? "Take the star off; the favorites filter and grouping leave it out again"
-                  : "Star this repo; the filters menu can show favorites only, and the ★ grouping puts them first"
-              }
-              onClick={() => void star()}
-            >
-              <span className="menu-text">{favorite ? "unstar" : "star"}</span>
-              <span className="menu-fact">{favorite ? "★ favorite" : "☆"}</span>
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              title={
-                harness
-                  ? "Stop counting this repo as tooling"
-                  : "Count this repo as tooling, work on canopy itself rather than on your projects: the costs view then says what share of the spend and the sessions went into it"
-              }
-              onClick={() => void markHarness()}
-            >
-              <span className="menu-text">{harness ? "not tooling" : "counts as tooling"}</span>
-              {harness && <span className="menu-fact">tooling</span>}
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="menu-item"
-              title={
-                repo.archived === "canopy"
-                  ? "Put this repo back on the board"
-                  : repo.archived === "github"
-                    ? "GitHub has this repo archived, which already hides it; this marks it in canopy as well"
-                    : "Keep scanning this repo but leave it off the board; the filters menu can show archived repos again"
-              }
-              onClick={() => void archive()}
-            >
-              <span className="menu-text">{repo.archived === "canopy" ? "unarchive" : "archive"}</span>
-              <span className="menu-fact">
-                {repo.archived === "canopy"
-                  ? "archived"
-                  : repo.archived === "github"
-                    ? "archived on GitHub"
-                    : hideArchived
-                      ? "hides it"
-                      : "marks it"}
-              </span>
-            </button>
+            <RepoMenuItems repo={repo} onDone={() => setOpen(false)} onError={onError} />
           </div>,
           document.body,
         )}
+    </>
+  );
+}
+
+/**
+ * What the card's ⋯ menu holds, without the menu around it: the ⋯ draws
+ * it in its dropdown and a right-click on the card, its tree row or its
+ * panel draws it in the context menu (FR-056), so the two never differ.
+ * `onDone` closes whichever holds it. Workflows are read fresh each time
+ * it mounts, so a workflow file edited since shows up without a rescan.
+ */
+export function RepoMenuItems({
+  repo,
+  onDone,
+  onError,
+}: {
+  repo: Repo;
+  onDone: () => void;
+  /** where an opener failure is reported; the console when omitted */
+  onError?: (message: string) => void;
+}) {
+  const plan = useStore((s) => s.plan);
+  const openRepo = useStore((s) => s.openRepo);
+  const openApp = useStore((s) => s.openApp);
+  const showRun = useStore((s) => s.showRun);
+  const openChat = useStore((s) => s.openChat);
+  const editAgent = useStore((s) => s.editAgent);
+  const editLaunch = useStore((s) => s.editLaunch);
+  const showLaunch = useStore((s) => s.showLaunch);
+  const openTerm = useStore((s) => s.openTerm);
+  const agent = useStore((s) => agentFor(s, repo));
+  // a chat and a job start on whatever the repo's routes say for them
+  const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
+  const jobAgent = useStore((s) => agentFor(s, repo, "job"));
+  // a coordinator (FR-010) only where the backend has its isolated runner
+  const coordHere = useStore((s) => connOf(s, backendOf(repo.id)).about?.coordinator === true);
+  const coordAgent = useStore((s) => agentFor(s, repo, "coordinate"));
+  const coordinator = useStore((s) => coordinatorFor(s, repo.id));
+  const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
+  // a shell's agent: on another host for a repo there
+  const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
+  const routes = useStore((s) => routesOf(s, backendOf(repo.id)));
+  const extraProfiles = profileNames(routes).filter((n) => n !== "default");
+  const launch = useStore((s) => launchFor(s, repo));
+  // The launcher runs on the backend host; a headless backend (a container)
+  // cannot, so it is hidden there. The desktop openers are what this browser
+  // can open: the backend's own desktop when it is a Mac this browser runs
+  // on, else a helper on this machine, else none. Without a `code` opener
+  // VS Code is kept as a client-side Remote-SSH link the browser opens itself.
+  // all of it the repo's own backend's: another machine's checkout opens
+  // through that machine's openers and helpers, never this page's
+  const backend = useStore((s) => connOf(s, backendOf(repo.id)).backend);
+  const client = useStore(useShallow((s) => capsFor(s, backendOf(repo.id))));
+  const can = (app: OpenerId) => client.openers.includes(app);
+  const apps = OPENERS.filter(can);
+  const active = useStore((s) => activeRunFor(s, repo.id));
+  const workflows = useStore((s) => s.workflows[repo.id]);
+  const loadWorkflows = useStore((s) => s.loadWorkflows);
+  const planFlow = useStore((s) => s.planFlow);
+  const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
+  const showFlow = useStore((s) => s.showFlow);
+  const archiveRepo = useStore((s) => s.archiveRepo);
+  const favoriteRepo = useStore((s) => s.favoriteRepo);
+  const harnessRepo = useStore((s) => s.harnessRepo);
+  const favorite = useStore((s) => isFavorite(s, repo.id));
+  const harness = useStore((s) => isHarness(s, repo.id));
+  const hideArchived = useStore((s) => s.settings.hideArchived);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!repo.host && !repo.forge) void loadWorkflows(repo.id);
+  }, [repo.id, repo.host, repo.forge, loadWorkflows]);
+
+  const openIn = async (app: OpenerId) => {
+    onDone();
+    try {
+      await openApp(repo.id, app);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
+  // a seed's agents run through the incubator alone: no shell here starts one
+  const seed = isSeedId(repo.id);
+
+  const agentShell = (pick: { harness: (typeof HARNESSES)[number] } | { profile: string }) => {
+    onDone();
+    openTerm(repo.id, undefined, "agent", undefined, pick);
+  };
+
+  const choose = (action: RunAction) => {
+    onDone();
+    plan(repo.id, action);
+  };
+
+  const chat = async () => {
+    onDone();
+    try {
+      await openChat(repo.id);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
+  const forge = repo.forge;
+
+  const archive = async () => {
+    onDone();
+    try {
+      await archiveRepo(repo.id, repo.archived !== "canopy");
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
+  const star = async () => {
+    onDone();
+    try {
+      await favoriteRepo(repo.id, !favorite);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
+  const markHarness = async () => {
+    onDone();
+    try {
+      await harnessRepo(repo.id, !harness);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+
+  const copyClone = async () => {
+    if (!forge || forge.empty) return;
+    try {
+      await copyText(forge.clone, { from: "clone line" });
+      setCopied(true);
+    } catch (err) {
+      const msg = String(err instanceof Error ? err.message : err);
+      if (onError) onError(msg);
+      else console.error(msg);
+    }
+  };
+  return (
+    <>
+      {forge ? (
+        <>
+          <div className="menu-label">on the forge</div>
+          <a
+            role="menuitem"
+            className="menu-item"
+            href={repo.path}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={linkLabel(repo.path)}
+            onClick={() => onDone()}
+          >
+            <span className="menu-text">{forge.slug}</span>
+            <span className="menu-fact">browser ↗</span>
+          </a>
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            aria-disabled={forge.empty}
+            title={forge.empty ? "nothing pushed to it yet" : forge.clone}
+            onClick={() => void copyClone()}
+          >
+            <span className="menu-text">copy the clone url</span>
+            <span className="menu-fact">{copied ? "copied" : "ssh"}</span>
+          </button>
+          {forge.clonedAs !== undefined && (
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title="Open the clone already on this machine"
+              onClick={() => {
+                onDone();
+                openRepo(forge.clonedAs ?? "");
+              }}
+            >
+              <span className="menu-text">the clone here</span>
+              <span className="menu-fact">{forge.clonedAs}</span>
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+        <div className="menu-label">with an agent</div>
+        {active && (
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item live"
+            onClick={() => {
+              onDone();
+              showRun(active.id);
+            }}
+          >
+            <span className="dot sky" />
+            <span className="menu-text">
+              {active.status === "waiting"
+                ? `${active.verb} needs you`
+                : active.status === "idle"
+                  ? "chat open, your turn"
+                  : `${active.verb} in progress`}
+            </span>
+            <span className="menu-fact">show</span>
+          </button>
+        )}
+        {activeFlow && (
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item live"
+            onClick={() => {
+              onDone();
+              showFlow(activeFlow.id);
+            }}
+          >
+            <span className="dot sky" />
+            <span className="menu-text">{flowWord(activeFlow, true)}</span>
+            <span className="menu-fact">show</span>
+          </button>
+        )}
+        {!repo.host && (() => {
+          // a live run is shown whatever it runs on; a new chat needs
+          // its harness on the repo's backend
+          const missing = !active && !has.includes(chatAgent.harness);
+          const off = !!activeFlow || missing;
+          return (
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              aria-disabled={off}
+              tabIndex={off ? -1 : 0}
+              title={
+                activeFlow
+                  ? "workflow running"
+                  : missing
+                    ? `${HARNESS[chatAgent.harness].label} is not installed on ${backendOf(repo.id)}`
+                    : `Talk with ${AGENT_NAME[chatAgent.harness]} about this repo, here in canopy (the repo's chat route)`
+              }
+              onClick={() => {
+                if (!off) void chat();
+              }}
+            >
+              <span className="menu-text">
+                <span className={`harness-glyph h-${chatAgent.harness}`} aria-hidden="true">
+                  {HARNESS[chatAgent.harness].glyph}
+                </span>{" "}
+                {ACTIONS.chat.label}
+              </span>
+              <span className="menu-fact">
+                {activeFlow ? "workflow running" : active ? "show" : missing ? "not installed" : "in canopy"}
+              </span>
+            </button>
+          );
+        })()}
+        {!repo.host && !seed && (coordHere || coordinator) && (() => {
+          // a coordinator holds no repo, so nothing else going here stops one
+          const off = !coordinator && coordAgent.harness !== "claude";
+          return (
+            <button
+              type="button"
+              role="menuitem"
+              className={coordinator ? "menu-item live" : "menu-item"}
+              aria-disabled={off}
+              tabIndex={off ? -1 : 0}
+              title={
+                coordinator
+                  ? "Show the coordinator going at this repo"
+                  : off
+                    ? "the coordinator needs Claude Code"
+                    : "A chat that splits your goal into branch runs across repos, proposed as cards you edit before anything starts"
+              }
+              onClick={() => {
+                if (off) return;
+                onDone();
+                plan(repo.id, "coordinate");
+              }}
+            >
+              {coordinator && <span className="dot sky" />}
+              <span className="menu-text">
+                {coordinator ? (
+                  coordinator.status === "waiting" ? "coordinator needs you" : "coordinator going"
+                ) : (
+                  <>
+                    <span className={`harness-glyph h-${coordAgent.harness}`} aria-hidden="true">
+                      {HARNESS[coordAgent.harness].glyph}
+                    </span>{" "}
+                    {ACTIONS.coordinate.label}
+                  </>
+                )}
+              </span>
+              <span className="menu-fact">{coordinator ? "show" : off ? "needs Claude Code" : "in a sandbox"}</span>
+            </button>
+          );
+        })()}
+        {JOBS.map((action) => {
+          const check = activeFlow
+            ? { ok: false as const, why: "workflow running" }
+            : active
+              ? { ok: false as const, why: "wait for the current run" }
+              : action === "propose" && jobAgent.harness !== "claude"
+                ? { ok: false as const, why: "plan, then build needs Claude Code" }
+                : !has.includes(jobAgent.harness)
+                  ? { ok: false as const, why: `${HARNESS[jobAgent.harness].label} not installed` }
+                  : checkWhen(repo, "any");
+          return (
+            <button
+              key={action}
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              aria-disabled={!check.ok}
+              title={check.ok ? `A job on ${AGENT_NAME[jobAgent.harness]} (the repo's job route)` : check.why}
+              tabIndex={check.ok ? 0 : -1}
+              onClick={() => {
+                if (check.ok) choose(action);
+              }}
+            >
+              <span className="menu-text">
+                <span className={`harness-glyph h-${jobAgent.harness}`} aria-hidden="true">
+                  {HARNESS[jobAgent.harness].glyph}
+                </span>{" "}
+                {ACTIONS[action].label}
+              </span>
+              <span className="menu-fact">{check.ok ? "" : check.why}</span>
+            </button>
+          );
+        })}
+        {!repo.host && (workflows ?? []).map((e) => {
+          if (!e.ok) {
+            return (
+              <button key={`wf-${e.name}`} type="button" role="menuitem" className="menu-item" aria-disabled title={e.error} tabIndex={-1}>
+                <span className="menu-text">{e.name}</span>
+                <span className="menu-fact">will not parse</span>
+              </button>
+            );
+          }
+          const w = e.workflow;
+          const check = active || activeFlow ? { ok: false as const, why: "wait for the current run" } : checkWhen(repo, w.when);
+          return (
+            <button
+              key={`wf-${w.name}`}
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              aria-disabled={!check.ok}
+              title={check.ok ? w.blurb : check.why}
+              tabIndex={check.ok ? 0 : -1}
+              onClick={() => {
+                if (!check.ok) return;
+                onDone();
+                planFlow(repo.id, w.name);
+              }}
+            >
+              <span className="menu-text">{w.label}</span>
+              <span className="menu-fact">
+                {check.ok ? (w.steps.length === 1 ? "" : `${w.steps.length} steps`) : check.why}
+              </span>
+            </button>
+          );
+        })}
+        {!seed && HARNESSES.map((h) => {
+          const here = shellHas.includes(h);
+          const routed = agent.harness === h;
+          return (
+            <button
+              key={`shell-${h}`}
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              aria-disabled={!here}
+              tabIndex={here ? 0 : -1}
+              title={
+                here
+                  ? `A shell at this repo with ${HARNESS[h].label} started in it${routed ? ", the way its route says" : ", in place of its route for this one start"}`
+                  : `${HARNESS[h].label} is not installed on ${backendOf(repo.id)}`
+              }
+              onClick={() => {
+                if (here) agentShell({ harness: h });
+              }}
+            >
+              <span className="menu-text">
+                <span className={`harness-glyph h-${h}`} aria-hidden="true">
+                  {HARNESS[h].glyph}
+                </span>{" "}
+                new {HARNESS[h].label} shell
+              </span>
+              <span className="menu-fact">{here ? (routed ? describeAgent(agent, false) : "") : "not installed"}</span>
+            </button>
+          );
+        })}
+        {!seed && extraProfiles.length > 0 && (
+          <div className="menu-row" aria-label="A shell with a profile">
+            {extraProfiles.map((name) => {
+              const p = routes.profiles[name]!;
+              const here = shellHas.includes(p.harness);
+              return (
+                <button
+                  key={`profile-${name}`}
+                  type="button"
+                  role="menuitem"
+                  className="mini"
+                  disabled={!here}
+                  title={here ? `A shell with profile ${name}: ${HARNESS[p.harness].label} · ${describeAgent(p, false)}` : `${HARNESS[p.harness].label} is not installed here`}
+                  onClick={() => agentShell({ profile: name })}
+                >
+                  {HARNESS[p.harness].glyph} {name}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {!seed && can("agent") && (
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            title="Start the repo's agent in a terminal at this repo"
+            onClick={() => void openIn("agent")}
+          >
+            <span className="menu-text">agent</span>
+            <span className="menu-fact">interactive, in a terminal</span>
+          </button>
+        )}
+        {!seed && can("herdr") && (
+          <button
+            type="button"
+            role="menuitem"
+            className="menu-item"
+            title="Open this repo as a herdr workspace with its agent running in it"
+            onClick={() => void openIn("herdr")}
+          >
+            <span className="menu-text">herdr</span>
+            <span className="menu-fact">a workspace in herdr</span>
+          </button>
+        )}
+        <button
+          type="button"
+          role="menuitem"
+          className="menu-item"
+          title="Which agent this repo starts, whole or per role, and how"
+          onClick={() => {
+            onDone();
+            editAgent(repo.id);
+          }}
+        >
+          <span className="menu-text">agent routing…</span>
+          <span className="menu-fact">
+            {HARNESS[agent.harness].glyph} {describeAgent(agent, false)}
+          </span>
+        </button>
+        {backend.openers && (
+          <>
+            <div className="menu-label">launch</div>
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title="Released builds installed here, pull requests built here, and this checkout, each launched with a click"
+              onClick={() => {
+                onDone();
+                showLaunch(repo.id);
+              }}
+            >
+              <span className="menu-text">builds & releases</span>
+              <span className="menu-fact">in the panel</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-item"
+              title="Build and run lines, and which release asset is for this machine"
+              onClick={() => {
+                onDone();
+                editLaunch(repo.id);
+              }}
+            >
+              <span className="menu-text">launch settings…</span>
+              <span className="menu-fact">{describeLaunch(launch)}</span>
+            </button>
+          </>
+        )}
+        <div className="menu-label">open in</div>
+        <button
+          type="button"
+          role="menuitem"
+          className="menu-item"
+          title="A shell at this repo, where the shell setting puts it"
+          onClick={() => {
+            onDone();
+            openTerm(repo.id);
+          }}
+        >
+          <span className="menu-text">shell</span>
+          <span className="menu-fact">in canopy</span>
+        </button>
+        {repo.link && (
+          <a
+            role="menuitem"
+            className="menu-item"
+            href={repo.link}
+            target="_blank"
+            rel="noreferrer noopener"
+            title={linkLabel(repo.link)}
+            onClick={() => onDone()}
+          >
+            <span className="menu-text">git remote</span>
+            <span className="menu-fact">browser ↗</span>
+          </a>
+        )}
+        {apps.length > 0 && (
+          <div className="menu-row">
+            {apps.map((app) => (
+              <button
+                key={app}
+                type="button"
+                role="menuitem"
+                className="mini"
+                onClick={() => void openIn(app)}
+              >
+                {app}
+              </button>
+            ))}
+          </div>
+        )}
+        {!can("code") && !repo.host && backend.sshHost && (
+          <a
+            role="menuitem"
+            className="menu-item"
+            href={`vscode-remote://ssh-remote+${backend.sshHost}${repo.path}`}
+            title="Open this repo in VS Code over Remote-SSH on your own machine"
+            onClick={() => onDone()}
+          >
+            <span className="menu-text">VS Code</span>
+            <span className="menu-fact">remote ↗</span>
+          </a>
+        )}
+        </>
+      )}
+      <div className="menu-label">in canopy</div>
+      <button
+        type="button"
+        role="menuitem"
+        className="menu-item"
+        title={
+          favorite
+            ? "Take the star off; the favorites filter and grouping leave it out again"
+            : "Star this repo; the filters menu can show favorites only, and the ★ grouping puts them first"
+        }
+        onClick={() => void star()}
+      >
+        <span className="menu-text">{favorite ? "unstar" : "star"}</span>
+        <span className="menu-fact">{favorite ? "★ favorite" : "☆"}</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="menu-item"
+        title={
+          harness
+            ? "Stop counting this repo as tooling"
+            : "Count this repo as tooling, work on canopy itself rather than on your projects: the costs view then says what share of the spend and the sessions went into it"
+        }
+        onClick={() => void markHarness()}
+      >
+        <span className="menu-text">{harness ? "not tooling" : "counts as tooling"}</span>
+        {harness && <span className="menu-fact">tooling</span>}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="menu-item"
+        title={
+          repo.archived === "canopy"
+            ? "Put this repo back on the board"
+            : repo.archived === "github"
+              ? "GitHub has this repo archived, which already hides it; this marks it in canopy as well"
+              : "Keep scanning this repo but leave it off the board; the filters menu can show archived repos again"
+        }
+        onClick={() => void archive()}
+      >
+        <span className="menu-text">{repo.archived === "canopy" ? "unarchive" : "archive"}</span>
+        <span className="menu-fact">
+          {repo.archived === "canopy"
+            ? "archived"
+            : repo.archived === "github"
+              ? "archived on GitHub"
+              : hideArchived
+                ? "hides it"
+                : "marks it"}
+        </span>
+      </button>
     </>
   );
 }

@@ -50,7 +50,7 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!", reminder: "◷" };
+export const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!", reminder: "◷" };
 const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", group: "comparison", trigger: "trigger", note: "note" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.

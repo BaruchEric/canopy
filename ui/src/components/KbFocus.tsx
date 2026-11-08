@@ -11,7 +11,7 @@ import { useEffect } from "react";
 import type { PrWatch } from "../../../src/core/types";
 import type { InboxItem } from "../inbox";
 import { copyOf, copyableOfOrigin, copyableOfRepo, copyableOfRun, type Copyable } from "../kbcopy";
-import { KB_ZONES, homeZone, keepKb, ringOf, stepKb, triggerOf, uniqueKeys, type KbTarget, type KbZone } from "../kbfocus";
+import { KB_ZONES, homeZone, keepKb, parseKb, ringOf, stepKb, triggerOf, uniqueKeys, type KbTarget, type KbZone } from "../kbfocus";
 import { backendOf, qual } from "../registry";
 import { say } from "../said";
 import { copyText } from "../share";
@@ -349,11 +349,32 @@ export function kbCopy(key: CopyKey, solo: string | null = null): void {
     say(`${found.from} has no ${name}`);
     return;
   }
+  copyPart(key, text);
+}
+
+/** Copies one part an item has, and says so as y does: a run's id as its
+ *  backend knows it, the backend named when it is not home. */
+export function copyPart(key: CopyKey, text: string): void {
+  const { name } = copyOf({ branch: text, pr: text, run: text }, key);
   const { plain, backend } = key === "r" ? idLabel(text) : { plain: text, backend: null };
   copyText(plain, { from: name }).then(
     () => say(`copied ${name}: ${plain}${backend ? ` on ${backend}` : ""}`),
     (e: unknown) => say(`could not copy: ${e instanceof Error ? e.message : String(e)}`, true),
   );
+}
+
+/** What an item with a ring key (`repo:…`, `trigger:…`, `inbox:…`) has
+ *  for the copy keys, ringed or not: a right-click's copy rows (FR-056). */
+export function copyableOfKey(key: string): Copyable | null {
+  const t = parseKb(key);
+  if (!t) return null;
+  const s = useStore.getState();
+  return ringCopyable(s, t, prsAll(s));
+}
+
+/** A trigger row's event by its ring id, with its backend. */
+export function triggerEventOf(id: string) {
+  return eventOf(useStore.getState(), id);
 }
 
 /** Hides the ring and keeps the place, for Escape with nothing else to close. */
