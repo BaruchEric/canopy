@@ -1922,6 +1922,9 @@ export interface BranchTree {
   sync: boolean;
   /** the base's commit the last sync, by hand or by itself, was tried at */
   syncedTo?: string;
+  /** what is at work in the tree ("bun test") that its following waits on:
+   *  the base moved, and the rebase is put off until the tree is quiet */
+  waiting?: string;
   /** HEAD, short */
   head: string;
   /** commits the branch has that its base lacks, and the reverse */

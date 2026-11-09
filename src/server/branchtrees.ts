@@ -64,6 +64,10 @@ export interface TreesDeps {
   shellsIn: (dir: string) => number;
   /** ends the tasks running in a tree before its folder goes */
   stopTree?: (dir: string) => Promise<unknown>;
+  /** of these tree folders, the ones something is at work in, each with
+   *  what in words ("bun test"); a tree that follows waits on it. Left out,
+   *  or failing, nothing is taken to be at work. */
+  working?: (dirs: readonly string[]) => Promise<ReadonlyMap<string, string>>;
   broadcast: (ev: ServerEvent) => void;
   /** the port range, in place of `CANOPY_TREE_PORTS` */
   ports?: number[];
@@ -114,6 +118,9 @@ export class BranchTrees {
   /** the preparations and merges running in the background */
   private readonly jobs = new Set<Promise<void>>();
   private readonly touches = new Map<string, ReturnType<typeof setTimeout>>();
+  /** what each tree's following waits on, by the tree's folder; in memory
+   *  only, since the next pass asks again */
+  private readonly waits = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private publishing: Promise<void> = Promise.resolve();
 
@@ -234,7 +241,8 @@ export class BranchTrees {
   private async tree(path: string, t: BranchTreeRecord): Promise<BranchTree> {
     const dir = treeDir(path, t.slug, this.root);
     const st = existsSync(dir) ? await treeStatus(dir, t.base) : { head: "", ahead: 0, behind: 0, files: 0 };
-    return { ...t, dir, ...st, shells: this.deps.shellsIn(dir) };
+    const waiting = this.waits.get(dir);
+    return { ...t, dir, ...st, shells: this.deps.shellsIn(dir), ...(waiting ? { waiting } : {}) };
   }
 
   async info(): Promise<BranchTreesInfo> {
@@ -416,6 +424,7 @@ export class BranchTrees {
    *  a note of what stopped it; a merge's note stays until a sync went */
   private async syncOne(repoPath: string, t: BranchTreeRecord): Promise<BranchTreeRecord> {
     const at = await revOf(repoPath, t.base);
+    this.waits.delete(treeDir(repoPath, t.slug, this.root));
     const outcome = await syncTree(treeDir(repoPath, t.slug, this.root), t.base);
     const { stopped, ...rest } = t;
     const note = "stopped" in outcome ? { stopped: tail(`${SYNC_NOTE}${outcome.stopped}`) } : stopped && !stopped.startsWith(SYNC_NOTE) ? { stopped } : {};
@@ -429,6 +438,7 @@ export class BranchTrees {
       const t = rec.trees.find((x) => x.slug === name || x.branch === name);
       if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
       const after: BranchTreeRecord = { ...t, sync };
+      if (!sync) this.waits.delete(treeDir(repo.path, t.slug, this.root));
       await this.save(repo.path, { trees: rec.trees.map((x) => (x === t ? after : x)) });
       void this.publish();
       return this.tree(repo.path, after);
@@ -438,17 +448,34 @@ export class BranchTrees {
   /** The trees that follow their base, each rebased onto it when it has
    *  moved since the tree's last sync: run when the main checkout changed
    *  (`touched`) and each tick. A base that stopped a sync is not tried
-   *  again until it moves, so a conflict is reported once. */
+   *  again until it moves, so a conflict is reported once. A tree with
+   *  something at work in it (`deps.working`: a test run, a build) is left
+   *  for a later pass, since a rebase swaps the files under what runs
+   *  there; its `waiting` says what it waits on until a pass finds it quiet. */
   async autoSync(repoPath: string): Promise<void> {
     if (!this.record(repoPath).trees.some((t) => t.sync)) return;
     await this.serial(repoPath, async () => {
       const rec = this.record(repoPath);
+      // the trees whose base moved since their last sync
+      const due = new Set<BranchTreeRecord>();
+      for (const t of rec.trees) {
+        const dir = treeDir(repoPath, t.slug, this.root);
+        const follows = t.sync && (t.state === "ready" || t.state === "failed") && existsSync(dir);
+        const at = follows ? await revOf(repoPath, t.base) : null;
+        if (at !== null && at !== t.syncedTo) due.add(t);
+        else this.waits.delete(dir);
+      }
+      if (due.size === 0) return;
+      const dirs = [...due].map((t) => treeDir(repoPath, t.slug, this.root));
+      // what runs there could not be read: the trees follow as if nothing did
+      const busy = (await this.deps.working?.(dirs).catch(() => null)) ?? new Map<string, string>();
       let changed = false;
       const trees: BranchTreeRecord[] = [];
       for (const t of rec.trees) {
-        const follows = t.sync && (t.state === "ready" || t.state === "failed") && existsSync(treeDir(repoPath, t.slug, this.root));
-        const at = follows ? await revOf(repoPath, t.base) : null;
-        if (at === null || at === t.syncedTo) {
+        const dir = treeDir(repoPath, t.slug, this.root);
+        const work = due.has(t) ? busy.get(dir) : undefined;
+        if (work !== undefined) this.waits.set(dir, work);
+        if (!due.has(t) || work !== undefined) {
           trees.push(t);
           continue;
         }
@@ -511,6 +538,7 @@ export class BranchTrees {
       }
       await this.deps.stopTree?.(treeDir(repo.path, t.slug, this.root));
       await removeBranchTree(repo.path, treeDir(repo.path, t.slug, this.root), t.branch, deleteBranch);
+      this.waits.delete(treeDir(repo.path, t.slug, this.root));
       await this.save(repo.path, { trees: rec.trees.filter((x) => x !== t) });
       void this.publish();
       return t.slug;

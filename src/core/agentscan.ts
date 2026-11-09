@@ -260,7 +260,8 @@ export const inContainer = (exists: (p: string) => boolean = existsSync): boolea
  *  half line never reads as a different pid or folder */
 const whole = (text: string): string => text.slice(0, text.lastIndexOf("\n") + 1);
 
-async function macProcs(): Promise<Proc[]> {
+/** every process a Mac's `ps` shows, with its start, CPU time and comm */
+export async function macProcs(): Promise<Proc[]> {
   const env = { LC_ALL: "C", LANG: "C" };
   const [long, comm] = await Promise.all([
     exec(["ps", "-axww", "-o", "pid=,ppid=,lstart=,time=,args="], { timeoutMs: 5_000, env }),

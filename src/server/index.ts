@@ -245,6 +245,7 @@ import { BranchTrees } from "./branchtrees";
 import { isCanopyStack, realCompose } from "./stacks";
 import { treesRoot, treesSource } from "../core/branchtrees";
 import { TREES_SOURCE } from "../core/treewords";
+import { treesAtWork } from "../core/treework";
 import { GroupHub } from "./groups";
 import { GROUP_MAX, memberProfiles, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
@@ -6387,6 +6388,7 @@ export async function startServer(opts: {
         return count;
       },
       stopTree: (dir) => state.tasks.endTree(dir),
+      working: (dirs) => treesAtWork(dirs),
       broadcast: (ev) => broadcast(state, ev),
     }),
     collisions: new CollisionHub({

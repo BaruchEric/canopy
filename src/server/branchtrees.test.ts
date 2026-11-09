@@ -424,6 +424,81 @@ test("sync rebases a tree onto its base with its uncommitted work put back, and 
   expect(await sh(tree.dir, "log", "--format=%s", "-3")).toBe("c t.txt\nc c.txt\nc m.txt");
 });
 
+test("a tree that follows waits while something is at work in it, says what, and goes once it is quiet; a sync by hand does not wait", async () => {
+  const work = new Map<string, string>();
+  const asked: string[][] = [];
+  const w = await world(
+    {
+      working: async (dirs) => {
+        asked.push([...dirs]);
+        return new Map([...work].filter(([dir]) => dirs.includes(dir)));
+      },
+    },
+    "",
+  );
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  const other = (await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "quiet", caches: false }))).tree;
+  await w.trees.idle();
+  // nothing moved: nobody is asked what runs where
+  await w.trees.autoSync(w.repo.path);
+  expect(asked).toEqual([]);
+
+  await writeFile(join(tree.dir, "wip.txt"), "wip\n");
+  const moved = await commit(w.repo.path, "m.txt", "m\n");
+  work.set(tree.dir, "bun test");
+  await w.trees.autoSync(w.repo.path);
+  expect(asked).toEqual([[tree.dir, other.dir]]);
+  let trees = (await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees ?? [];
+  // the busy tree stays where it was and says why; the quiet one went
+  expect(trees.find((t) => t.slug === "feat")).toMatchObject({ behind: 1, waiting: "bun test" });
+  expect(trees.find((t) => t.slug === "feat")?.syncedTo).not.toBe(moved);
+  expect(existsSync(join(tree.dir, "m.txt"))).toBe(false);
+  expect(trees.find((t) => t.slug === "quiet")).toMatchObject({ behind: 0, syncedTo: moved });
+  expect(trees.find((t) => t.slug === "quiet")?.waiting).toBeUndefined();
+  // the wait is not kept in the record: a backend started now has yet to ask
+  const second = new BranchTrees(w.deps);
+  await second.adopt();
+  expect((await body<BranchTreesInfo>(await get(second))).repos[0]?.trees.find((t) => t.slug === "feat")?.waiting).toBeUndefined();
+
+  // the next pass asks about the one still behind, and it is quiet now
+  work.clear();
+  await w.trees.autoSync(w.repo.path);
+  expect(asked[1]).toEqual([tree.dir]);
+  trees = (await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees ?? [];
+  expect(trees.find((t) => t.slug === "feat")).toMatchObject({ behind: 0, files: 1, syncedTo: moved });
+  expect(trees.find((t) => t.slug === "feat")?.waiting).toBeUndefined();
+  expect(await readFile(join(tree.dir, "wip.txt"), "utf8")).toBe("wip\n");
+
+  // by hand: the work is whoever asked's to judge, and the wait's note goes with the sync
+  await commit(w.repo.path, "n.txt", "n\n");
+  work.set(tree.dir, "vitest");
+  await w.trees.autoSync(w.repo.path);
+  expect((await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees.find((t) => t.slug === "feat")?.waiting).toBe("vitest");
+  const res = await post(w.trees, "/api/trees/sync", { repo: w.repo.id, tree: "feat" });
+  expect(res.status).toBe(200);
+  const synced = (await body<{ tree: BranchTree }>(res)).tree;
+  expect(synced.behind).toBe(0);
+  expect(synced.waiting).toBeUndefined();
+});
+
+test("a tree that follows goes ahead when what runs in it cannot be read", async () => {
+  const w = await world(
+    {
+      working: async () => {
+        throw new Error("the process table could not be read");
+      },
+    },
+    "",
+  );
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  await w.trees.idle();
+  const moved = await commit(w.repo.path, "m.txt", "m\n");
+  await w.trees.autoSync(w.repo.path);
+  const t = (await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees[0];
+  expect(t).toMatchObject({ behind: 0, syncedTo: moved });
+  expect(existsSync(join(tree.dir, "m.txt"))).toBe(true);
+});
+
 test("a tree told not to follow stays behind, the main checkout's touch syncs the ones that do, and auto turns it on or off", async () => {
   const w = await world({}, "");
   const a = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "a", caches: false, sync: false }));

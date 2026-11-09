@@ -24,10 +24,10 @@ export function treeAge(at: number | undefined, now: number): string {
 export type TreeTone = "" | "rust" | "lichen";
 
 /** one row: the tree's words, its age, and a tone for a tree that failed
- *  or whose merge or sync stopped (rust), or that is being prepared or merged
- *  (lichen) */
+ *  or whose merge or sync stopped (rust), or that is being prepared or
+ *  merged, or whose following waits on what runs in it (lichen) */
 export function treeRow(t: BranchTree, now: number): { words: string; age: string; tone: TreeTone } {
-  const tone: TreeTone = t.state === "failed" || t.stopped ? "rust" : t.state === "preparing" || t.state === "merging" ? "lichen" : "";
+  const tone: TreeTone = t.state === "failed" || t.stopped ? "rust" : t.state === "preparing" || t.state === "merging" || t.waiting ? "lichen" : "";
   return { words: treeWords(t), age: treeAge(t.at, now), tone };
 }
 

@@ -39,6 +39,8 @@ test("a row's words, age and tone", () => {
   expect(treeRow(tree(), 1000)).toEqual({ words: "clean :7912", age: "2h", tone: "" });
   expect(treeRow(tree({ ahead: 2, files: 1, shells: 1, state: "preparing" }), 1000)).toEqual({ words: "preparing ↑2 ●1 :7912 1 shell", age: "2h", tone: "lichen" });
   expect(treeRow(tree({ state: "failed", why: "bun install exited 1", at: undefined }), 1000)).toEqual({ words: "setup failed: bun install exited 1 :7912", age: "", tone: "rust" });
+  // held, not broken: a tree whose following waits on what runs in it
+  expect(treeRow(tree({ behind: 1, waiting: "bun test" }), 1000)).toEqual({ words: "sync waits on bun test ↓1 :7912", age: "2h", tone: "lichen" });
 });
 
 test("the head counts the trees and the ones not ready", () => {

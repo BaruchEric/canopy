@@ -245,6 +245,8 @@ describe("words", () => {
     expect(treeWords({ ahead: 1, behind: 0, files: 0, port: 7900, state: "merging", shells: 0 })).toBe("merging ↑1 :7900");
     expect(treeWords({ ahead: 1, behind: 0, files: 0, port: null, state: "ready", stopped: "merge stopped: gate test exited 1\nnope", shells: 0 })).toBe("merge stopped: gate test exited 1 ↑1");
     expect(treeWords({ ahead: 0, behind: 2, files: 0, port: null, state: "ready", stopped: "sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree", sync: false, shells: 0 })).toBe("sync stopped: the rebase onto main stopped on a.txt and was aborted; rebase by hand in the tree ↓2 sync off");
+    // a tree whose following waits says what on, ahead of its counts
+    expect(treeWords({ ahead: 1, behind: 2, files: 4, port: 7900, state: "ready", waiting: "bun test", shells: 0 })).toBe("sync waits on bun test ↑1 ↓2 ●4 :7900");
   });
   test("clean-up takes a ready tree its base holds whole, with nothing changed or open", () => {
     expect(cleanable({ state: "ready", files: 0, ahead: 0, shells: 0 })).toBe(true);
