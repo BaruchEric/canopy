@@ -28,7 +28,7 @@ import { createServer, type Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { sweepCodexTrust } from "../core/codextrust";
 import { exec } from "../core/exec";
-import { parseLsofCwd } from "../core/ports";
+import { lsofBin, parseLsofCwd } from "../core/ports";
 import { SEED_GIT_FLAGS } from "../core/seedgit";
 import { allProcs, descendants, procCwd, type Proc } from "../core/procs";
 import {
@@ -343,7 +343,7 @@ async function cwdsNow(env: Record<string, string | undefined>): Promise<Map<num
     );
     return out;
   }
-  const r = await exec(["lsof", "-a", "-d", "cwd", "-Fpn"], { timeoutMs: 5_000, base: env });
+  const r = await exec([lsofBin(env["PATH"] ?? ""), "-a", "-d", "cwd", "-Fpn"], { timeoutMs: 5_000, base: env });
   return parseLsofCwd(r.stdout);
 }
 

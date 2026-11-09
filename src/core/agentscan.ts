@@ -24,7 +24,7 @@
 import { existsSync } from "node:fs";
 import { exec } from "./exec";
 import { argvAgent } from "./keep";
-import { parseLsofCwd, repoOfCwd } from "./ports";
+import { lsofBin, parseLsofCwd, repoOfCwd } from "./ports";
 import { linuxProcs, procCwd, type Proc } from "./procs";
 import type { Harness, Repo, ScanBody, ScanProc } from "./types";
 
@@ -276,7 +276,7 @@ export async function macProcs(): Promise<Proc[]> {
 
 async function macCwds(pids: number[]): Promise<Map<number, string>> {
   if (pids.length === 0) return new Map();
-  const r = await exec(["lsof", "-a", "-d", "cwd", "-p", pids.join(","), "-Fpn"], { timeoutMs: 2_000 });
+  const r = await exec([lsofBin(), "-a", "-d", "cwd", "-p", pids.join(","), "-Fpn"], { timeoutMs: 2_000 });
   return parseLsofCwd(whole(r.stdout));
 }
 

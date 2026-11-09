@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mayServeHttp, mergeListeners, parseLsofCwd, parseLsofListen, parseProcNet, repoOfCwd, portUnder, treeOfPort } from "./ports";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { lsofBin, mayServeHttp, mergeListeners, parseLsofCwd, parseLsofListen, parseProcNet, repoOfCwd, portUnder, treeOfPort } from "./ports";
 
 const HEAD = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode";
 const row = (addr: string, st: string, inode: string) =>
@@ -49,6 +52,18 @@ describe("lsof", () => {
         [77, "/tmp"],
       ]),
     );
+  });
+
+  test("the program by its path: where PATH finds it, else a Mac's own /usr/sbin, which a short PATH leaves out", async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "canopy-lsof-"));
+    try {
+      await writeFile(join(scratch, "lsof"), "#!/bin/sh\n", { mode: 0o755 });
+      expect(lsofBin(`/nowhere-at-all:${scratch}`)).toBe(join(scratch, "lsof"));
+      expect(lsofBin("/nowhere-at-all")).toBe("/usr/sbin/lsof");
+      expect(lsofBin("")).toBe("/usr/sbin/lsof");
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
+    }
   });
 });
 

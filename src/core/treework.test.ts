@@ -186,3 +186,22 @@ test("on this machine: a busy process with no name for a job is found by its CPU
     await busy.exited;
   }
 }, 20_000);
+
+// a server under `env -i` or a bare launchd job has no /usr/sbin on its PATH, which is where a Mac keeps lsof
+test.skipIf(process.platform !== "darwin")("on a Mac: a backend whose PATH leaves /usr/sbin out still reads where each process sits", async () => {
+  const busy = Bun.spawn(["sh", "-c", "while :; do :; done"], { cwd: dir, stdout: "ignore", stderr: "ignore" });
+  try {
+    const script = `
+      import { treesAtWork } from ${JSON.stringify(join(import.meta.dir, "treework.ts"))};
+      console.log(JSON.stringify([...(await treesAtWork([${JSON.stringify(dir)}], { windowMs: 600 }))]));
+    `;
+    const probe = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe", env: { ...process.env, PATH: "/usr/bin:/bin" } });
+    const [code, stdout, stderr] = await Promise.all([probe.exited, probe.stdout.text(), probe.stderr.text()]);
+    expect(stderr).toBe("");
+    expect(code).toBe(0);
+    expect(JSON.parse(stdout)).toEqual([[dir, "sh"]]);
+  } finally {
+    busy.kill();
+    await busy.exited;
+  }
+}, 20_000);

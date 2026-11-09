@@ -31,7 +31,7 @@
 import { realpath } from "node:fs/promises";
 import { macProcs } from "./agentscan";
 import { exec } from "./exec";
-import { parseLsofCwd } from "./ports";
+import { lsofBin, parseLsofCwd } from "./ports";
 import { linuxProcs, procCwd, type Proc } from "./procs";
 
 /** the share of one core the work in a folder uses from which it is busy */
@@ -215,7 +215,7 @@ async function folders(procs: readonly Proc[], platform: NodeJS.Platform): Promi
     return new Map(read.filter((e): e is readonly [number, string] => e[1] !== undefined));
   }
   if (platform !== "darwin") return new Map();
-  const r = await exec(["lsof", "-a", "-d", "cwd", "-Fpn"], { timeoutMs: 5_000 }).catch(() => null);
+  const r = await exec([lsofBin(), "-a", "-d", "cwd", "-Fpn"], { timeoutMs: 5_000 }).catch(() => null);
   // a timed-out read cut back to whole lines, so half a line names no pid or folder
   return r ? parseLsofCwd(r.stdout.slice(0, r.stdout.lastIndexOf("\n") + 1)) : new Map();
 }

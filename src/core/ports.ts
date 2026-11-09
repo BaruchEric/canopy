@@ -96,6 +96,14 @@ export function parseLsofListen(text: string): Listener[] {
   return out;
 }
 
+/** lsof by its path: where `path` (this process's PATH) finds it, else a
+ *  Mac's own `/usr/sbin`. A server started under `env -i` or by a bare
+ *  launchd job has no `/usr/sbin` on its PATH, and a bare `lsof` there is
+ *  not found, which every caller reads as "nothing to see". */
+export function lsofBin(path: string = process.env["PATH"] ?? ""): string {
+  return Bun.which("lsof", { PATH: path }) ?? "/usr/sbin/lsof";
+}
+
 /** `lsof -a -d cwd -p <pids> -Fpn` output: each process's working folder by pid */
 export function parseLsofCwd(text: string): Map<number, string> {
   const out = new Map<number, string>();
@@ -241,7 +249,7 @@ async function lsofListeners(): Promise<Listener[]> {
   const run = async (args: string[]) => {
     // A host tool may block on an unrelated filesystem. Keep the API
     // responsive and retain whatever listener data arrived before timeout.
-    const result = await exec(["lsof", ...args], { timeoutMs: 2_000 });
+    const result = await exec([lsofBin(), ...args], { timeoutMs: 2_000 });
     // a line cut off by the timeout would read as a different port or folder
     return result.stdout.slice(0, result.stdout.lastIndexOf("\n") + 1);
   };
