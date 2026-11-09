@@ -8,6 +8,7 @@ import { ElsewhereChips, PeerChips, Pulls, RemoteTipChip, whenTitle } from "./Re
 import { pickCount, pickState } from "../select";
 import {
   activeFlowFor,
+  agentsOn,
   boardChangedAt,
   boardFavorite,
   cardOf,
@@ -38,6 +39,8 @@ import { LandingChip, PrChip } from "./Landing";
 import { isTreeCard } from "../../../src/core/treewords";
 import { TreeRows, TreesChip } from "./Trees";
 import { AgentChip } from "./Registry";
+import { CardLive } from "./CardLive";
+import { liveEdge } from "../cardlive";
 import { historyFor, type Repo } from "../../../src/core/types";
 import { onBox } from "../front";
 import { kbKey } from "../kbfocus";
@@ -132,6 +135,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const run = useStore((s) => runFor(s, repo.id));
   const flow = useStore((s) => flowFor(s, repo.id));
   const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
+  // what the leaf edge does about the agents here, with no run of canopy's to say
+  const agentEdge = useStore((s) => liveEdge(agentsOn(s, repo.id)));
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
   const selecting = useStore((s) => s.selecting);
@@ -170,6 +175,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const st = repo.status;
   const forge = repo.forge;
   const state = stateOf(repo);
+  // every checkout the card stands for: its live row counts all of them
+  const checkouts = useMemo(() => card?.checkouts.map((c) => c.id) ?? [repo.id], [card, repo.id]);
   // The time is the last change of any kind, what "recent" sorts on; the
   // tooltip says which kind when it is not the commit.
   const title = forge ? "last push to the forge" : whenTitle(st, newestEdit(repo));
@@ -179,7 +186,11 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
       : " run-waiting"
     : run?.status === "working" || run?.status === "waiting"
       ? ` run-${run.status}`
-      : "";
+      : agentEdge === "waiting"
+        ? " agents-waiting"
+        : agentEdge === "working"
+          ? " run-working"
+          : "";
   return (
     <article
       className={`card s-${state}${pulse ? " pulse" : ""}${live}${selecting && picked ? " picked" : ""}${selecting && !canPick ? " unpickable" : ""}${away ? " away" : ""}${repo.archived ? " archived" : ""}`}
@@ -333,6 +344,8 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
           </span>
         </span>
       </div>
+      {/* what runs here right now, a mark each, at cozy density (FR-057) */}
+      <CardLive repo={repo} checkouts={checkouts} selecting={selecting} />
       {/* the kept worktrees, a row each, at cozy density (FR-051) */}
       <TreeRows repo={repo} selecting={selecting} />
       {history && overview?.available && (

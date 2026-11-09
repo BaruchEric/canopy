@@ -15781,6 +15781,223 @@ button.card-tree-more:hover {
   display: none;
 }
 
+/* the live row on a card (FR-057): a mark for each agent, task and shell
+   running on the repo right now, then the branch line out to one line of
+   words about the most pressing of them. A mark's colour is its state and
+   so is its motion, so nothing moves that is not doing something. Cozy
+   density draws the row, where the ✦ and ▶ chips give way to it; compact
+   keeps the chips alone. */
+.card-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 6px;
+  font-size: var(--t-sm);
+  line-height: 17px;
+  color: var(--ink-faint);
+}
+.card-live-group {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin: 0 -3px;
+  padding: 0 3px;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  border-radius: var(--r);
+}
+button.card-live-group {
+  cursor: pointer;
+}
+button.card-live-group:hover {
+  background: var(--wash);
+}
+.card-live-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--tone);
+}
+/* one width whatever the glyph, so a mark that turns from ✦ to ⚑ stays put */
+.card-live-glyph {
+  flex: none;
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+}
+/* a shell is a terminal's cursor, drawn so every font shows the same block */
+.card-live-cursor {
+  flex: none;
+  display: block;
+  width: 5px;
+  height: 11px;
+  border-radius: 1px;
+  background: currentColor;
+}
+.card-live-name {
+  min-width: 0;
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+.card-live-port {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+}
+.card-live-more {
+  flex: none;
+  font-size: var(--t-xs);
+}
+/* the branch line, as a group heading's: from the marks to the words */
+.card-live-line {
+  flex: 1 1 16px;
+  min-width: 8px;
+  height: 1px;
+  border-radius: 1px;
+  background: var(--hair2);
+}
+.card-live-head {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tone, var(--ink-faint));
+}
+/* sap for work, rust for what needs you or broke, lichen for a restart,
+   moss for what is up; an idle agent and a shell on no screen sit back */
+.card-live-mark.is-working,
+.card-live-head.h-work {
+  --tone: var(--sky);
+}
+.card-live-mark:is(.is-waiting, .is-failed),
+.card-live-head:is(.h-ask, .h-bad) {
+  --tone: var(--rust);
+}
+.card-live-mark.is-restarting,
+.card-live-head.h-hold {
+  --tone: var(--lichen);
+}
+.card-live-mark.is-running {
+  --tone: var(--moss);
+}
+.card-live-mark.is-idle {
+  --tone: color-mix(in srgb, var(--moss) 55%, transparent);
+}
+.card-live-mark.is-watched {
+  --tone: var(--ink-dim);
+}
+.card-live-mark.is-held {
+  --tone: color-mix(in srgb, var(--ink-faint) 70%, transparent);
+}
+/* one that just ended, for the moment it is still shown */
+.card-live-mark.gone {
+  --tone: var(--ink-faint);
+  opacity: 0.45;
+}
+/* an agent works here: the branch line carries sap, as the leaf edge does */
+.card-live.flow .card-live-line {
+  --sap-low: color-mix(in srgb, var(--sky) 16%, transparent);
+  height: 2px;
+  background: color-mix(in srgb, var(--sky) 55%, transparent);
+}
+/* an agent waits on you and no run of canopy's says so: the leaf edge asks
+   in the rust its ⚑ wears */
+.card.agents-waiting::before {
+  opacity: 1;
+  background: var(--rust);
+}
+:root[data-density="compact"] .card-live {
+  display: none;
+}
+:root:not([data-density="compact"]) .card-state :is(.agent-chip, .task-chip) {
+  display: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  /* a mark grows in when its thing starts */
+  .card-live-mark {
+    animation: live-in 320ms var(--ease) backwards;
+  }
+  @keyframes live-in {
+    from {
+      opacity: 0;
+      transform: scale(0.3);
+    }
+  }
+  /* and when it ends it hangs a beat, then drops off like a leaf let go */
+  .card-live-mark.gone {
+    opacity: 1;
+    animation: live-out 850ms ease-in forwards;
+  }
+  .card-live-mark.gone :is(.card-live-glyph, .card-live-cursor) {
+    animation: none;
+  }
+  @keyframes live-out {
+    25% {
+      opacity: 0.8;
+      transform: none;
+    }
+    to {
+      opacity: 0;
+      transform: translateY(9px) rotate(32deg);
+    }
+  }
+  /* an agent at work turns over and back, a ✦ catching the light */
+  .is-working .card-live-glyph {
+    animation: live-work 1.8s ease-in-out infinite;
+  }
+  @keyframes live-work {
+    50% {
+      opacity: 0.5;
+      transform: scale(0.72) rotate(45deg);
+    }
+  }
+  /* what waits on you or on a restart asks, as a waiting run's dot does */
+  .is-waiting .card-live-glyph,
+  .is-restarting .card-live-glyph,
+  .card.agents-waiting::before {
+    animation: needs 1s ease-in-out infinite alternate;
+  }
+  /* a task that is up: slow and even, a pilot light */
+  .is-running .card-live-glyph {
+    animation: live-up 2.8s ease-in-out infinite;
+  }
+  @keyframes live-up {
+    50% {
+      opacity: 0.4;
+    }
+  }
+  /* a shell on someone's screen: its cursor blinks; one on no screen is still */
+  .is-watched .card-live-cursor {
+    animation: live-cursor 1.06s steps(1, end) infinite;
+  }
+  @keyframes live-cursor {
+    50% {
+      opacity: 0.2;
+    }
+  }
+  /* sap along the branch line: each run of it swells toward its head and
+     the next follows after a gap, so it reads as moving the way it moves */
+  .card-live.flow .card-live-line {
+    background: linear-gradient(90deg, var(--sap-low) 0%, var(--sky) 62%, var(--sap-low) 62%) 0 0 / 40px 100% repeat-x;
+    animation: live-sap 1.5s linear infinite;
+  }
+  @keyframes live-sap {
+    to {
+      background-position: 40px 0;
+    }
+  }
+}
+
 /* the work view (FR-037): items by state, the ones that need you first,
    with a search and a repo filter; the sheet's notes; the run sheet's block */
 .work-view {

@@ -22,6 +22,11 @@ One long-lived agent per component (the mini's compose stack, peer sync, tailcha
 
 ## In Progress
 
+### FR-057 · A live row on every card
+P2 · added 2026-11-09 · source: Eric ("show animated activity in repo cards(session, agents, tasks, etc)", 2026-11-09)
+A card with anything running on its repo carries a row under its git line: a mark for each agent (working, waiting on you, idle), each task (up, being restarted, failed) and each shell (on a screen or not), then one line of words about the most pressing of them and how long it has been so. A mark moves only while its thing does something, sap runs along the row while an agent works, and a mark is seen to arrive and to go. The card's edge asks while an agent waits. Compact density keeps the old chips.
+Built 2026-11-09 on the branch `card-activity`, in a kept worktree; not merged into main.
+
 ### FR-037 · A durable work ledger
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
 A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
