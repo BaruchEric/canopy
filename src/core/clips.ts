@@ -36,6 +36,8 @@ export const CLIP_SOURCE_WHAT: Readonly<Record<ClipSource, string>> = {
 
 /** the most characters a clip keeps; past it the text is cut and the clip says so */
 export const CLIP_CHARS = 16_000;
+/** how far past the cut a backend's secret check reads, so a key the cut would split is refused whole */
+export const CLIP_SECRET_PAST = 4096;
 /** how many unpinned clips a backend keeps, newest first */
 export const CLIP_KEEP = 200;
 /** how long an unpinned clip is kept after it was last copied */

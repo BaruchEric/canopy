@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Clip } from "../core/clips";
+import { CLIP_CHARS, type Clip } from "../core/clips";
 import type { ServerEvent } from "../core/types";
 import { attachment, ClipsHub, SECRET_REFUSED } from "./clips";
 
@@ -81,6 +81,19 @@ describe("ClipsHub routes", () => {
     expect(secret).toEqual({ status: 422, body: { error: SECRET_REFUSED } });
     expect(t.events).toEqual([]);
     expect((await t.call("GET", "/api/clips")).body).toEqual({ clips: [] });
+  });
+
+  test("the secret check reads what would be kept and a little past it, not the whole request", async () => {
+    const t = hub();
+    const secret = "GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    // far past the cut: the text is kept, cut, and the secret is not in it
+    const far = await t.call("POST", "/api/clips", { text: `${"a ".repeat(CLIP_CHARS)}\n${secret}`, source: "shell" });
+    expect(far.status).toBe(200);
+    expect(far.body).toMatchObject({ cut: true, text: "a ".repeat(CLIP_CHARS / 2) });
+    // split by the cut: six characters of the token would be kept, so the copy is refused whole
+    const split = await t.call("POST", "/api/clips", { text: `${"b".repeat(CLIP_CHARS - 20)}\n${secret}`, source: "shell" });
+    expect(split).toEqual({ status: 422, body: { error: SECRET_REFUSED } });
+    expect(((await t.call("GET", "/api/clips")).body["clips"] as unknown[]).length).toBe(1);
   });
 
   test("use moves a clip up with its source kept; pin, delete and clear", async () => {

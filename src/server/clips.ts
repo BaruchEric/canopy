@@ -39,7 +39,9 @@ import {
   sourceOf,
   takeClip,
   textHead,
+  CLIP_CHARS,
   CLIP_FILE_MAX,
+  CLIP_SECRET_PAST,
   CLIP_SOURCES,
   type Clip,
   type ClipIn,
@@ -227,7 +229,10 @@ export class ClipsHub {
     if (typeof body["text"] !== "string" || !clipText(body["text"]).text) throw new ClipRefusal(400, "text is required");
     const source = sourceOf(body["source"]);
     if (!source) throw new ClipRefusal(400, `source must be one of ${CLIP_SOURCES.join(", ")}`);
-    if (looksSecret(body["text"])) throw new ClipRefusal(422, SECRET_REFUSED);
+    // what would be kept and a little past it, not the whole request: a
+    // pattern tries again from every place in the text, so the check's cost
+    // must not grow with a body of any size
+    if (looksSecret(body["text"].slice(0, CLIP_CHARS + CLIP_SECRET_PAST))) throw new ClipRefusal(422, SECRET_REFUSED);
     const incoming: ClipIn = { text: body["text"], source };
     if (typeof body["from"] === "string") incoming.from = body["from"];
     const device = parseDevice(body["device"]);
