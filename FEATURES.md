@@ -2,10 +2,6 @@
 
 ## Open
 
-### FR-059 · What just happened, on a card's live row
-P3 · added 2026-11-09 · source: Claude (follow-up to FR-057; Eric said to act on it, 2026-11-09)
-After the live row's headline, a short trace of the last thing that ended or changed on the repo: "tests passed 2m ago", "an agent finished". The row today says what runs now and forgets what just stopped. Held on purpose: look again after a week of using FR-057 (from 2026-11-16), and build it only if the row reads as too quiet.
-
 ### FR-046 · Paseo interop study
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo)
 Paseo (getpaseo/paseo, Apache-2.0) has canopy's daemon-plus-clients shape, multi-host model, voice and worktrees, and the native phone apps canopy lacks. A two-half-day study with written thresholds decides between an adapter that speaks its protocol, a landing-queue plugin contributed upstream, or no, which is the default while FR-042 covers the phone.
@@ -51,6 +47,10 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. The mini runs the fix, and librarySync went back on for the Mac on 2026-11-03.
 
 ## Shipped
+
+### FR-059 · What just happened, on a card's live row
+P3 · added 2026-11-09 · source: Claude (follow-up to FR-057); Eric ("do Recommendations FR-059 now", 2026-11-09) · shipped 2026-11-09
+After the live row's headline, past a dotted run of its line, the row keeps the last thing that left it for half an hour: "agent ended 3m ago", "agent lost 12m ago", "test passed just now", "build finished 2m ago", "dev stopped 12m ago". It is read off what the backends hold (a registry card's end, a task's exit), so a reload and another device say the same. On a card where nothing runs any more the trace is the whole row, and a row with no room for it shows only what runs now. A click opens the panel's agents or tasks. A failed task has no trace, since its mark stays, and a closed shell leaves none.
 
 ### FR-058 · A tree that follows its base waits for what runs in it
 P2 · added 2026-11-09 · source: Eric ("do Recommendations", on Claude's note after FR-057, 2026-11-09) · shipped 2026-11-09

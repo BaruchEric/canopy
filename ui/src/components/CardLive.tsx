@@ -1,8 +1,25 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { isLiveAgent, type Repo } from "../../../src/core/types";
 import { durationWord, type TrailMark } from "../agentcards";
-import { LINGER_MS, departed, liveFlow, liveGlyph, liveGroups, liveHead, liveMarks, type Gone, type LiveGroup, type LiveMark, type ShownMark } from "../cardlive";
+import {
+  LINGER_MS,
+  departed,
+  lastEnded,
+  liveFlow,
+  liveGlyph,
+  liveGroups,
+  liveHead,
+  liveMarks,
+  traceFits,
+  traceUntil,
+  traceWords,
+  type Gone,
+  type LiveGroup,
+  type LiveMark,
+  type LiveTrace,
+  type ShownMark,
+} from "../cardlive";
 import { backendOf, plainOf } from "../registry";
 import { agentsOn, useStore } from "../store";
 import { keepKeys } from "../surface";
@@ -33,6 +50,49 @@ function useDeparted(marks: readonly LiveMark[]): LiveMark[] {
   return useMemo(() => gone.map((g) => g.item), [gone]);
 }
 
+/** Whether `until` is still ahead. One timer set for that moment renders
+ *  the row again, so a quiet card runs no clock of its own. */
+function useUntil(until: number | null): boolean {
+  const [, again] = useState(0);
+  useEffect(() => {
+    if (until === null) return;
+    const left = until - Date.now();
+    if (left <= 0) return;
+    const t = setTimeout(() => again((n) => n + 1), left + 20);
+    return () => clearTimeout(t);
+  }, [until]);
+  return until !== null && Date.now() < until;
+}
+
+/**
+ * Marks a row that has no room for its trace (`data-tight`, which hides
+ * it), so the trace shows whole or not at all and never cuts the words
+ * about what runs now. Read before each paint and when the row's width
+ * moves: the trace is drawn, and `traceFits` reads the branch line. A row
+ * that is its trace alone has no line and is never tight.
+ */
+function useRoom(row: RefObject<HTMLDivElement | null>, watch: boolean): void {
+  // no deps: the marks, the words and the trace all move the room
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!el || !watch || typeof ResizeObserver === "undefined") return;
+    const mark = () => {
+      el.removeAttribute("data-tight");
+      const line = el.querySelector<HTMLElement>(":scope > .card-live-line");
+      if (!line) return;
+      const basis = Number.parseFloat(getComputedStyle(line).flexBasis);
+      el.toggleAttribute("data-tight", Number.isFinite(basis) && !traceFits(line.getBoundingClientRect().width, basis));
+    };
+    mark();
+    const seen = new ResizeObserver(mark);
+    seen.observe(el);
+    return () => {
+      seen.disconnect();
+      el.removeAttribute("data-tight");
+    };
+  });
+}
+
 /** what a click on a group does, for its tooltip */
 const OPENS: Record<LiveGroup["kind"], string> = {
   agent: "Show the agents on this repo",
@@ -52,13 +112,52 @@ function Mark({ shown, now }: { shown: ShownMark; now: number }) {
   );
 }
 
-function Row({ name, marks, gone, selecting }: { name: string; marks: readonly LiveMark[]; gone: readonly LiveMark[]; selecting: boolean }) {
+/** The trace: a dotted run of the branch line, then the last thing that
+ *  left the row and how long ago. A click opens where it is listed. */
+function Trace({ trace, name, now, selecting }: { trace: LiveTrace; name: string; now: number; selecting: boolean }) {
+  const showAgents = useStore((s) => s.showAgents);
+  const showTasks = useStore((s) => s.showTasks);
+  const words = traceWords(trace, now);
+  return (
+    <>
+      <span className="card-live-trail" aria-hidden="true" />
+      {selecting ? (
+        <span className="card-live-trace" title={trace.title}>
+          {words}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className="card-live-trace"
+          title={trace.title}
+          aria-label={`${words}, on ${name}`}
+          onClick={(e) => {
+            stop(e);
+            if (trace.kind === "agent") showAgents(trace.repoId);
+            else showTasks(trace.repoId);
+          }}
+          onAuxClick={stop}
+          onPointerDown={stop}
+          onKeyDown={keepKeys}
+        >
+          {words}
+        </button>
+      )}
+    </>
+  );
+}
+
+function Row({ name, marks, gone, trace, selecting }: { name: string; marks: readonly LiveMark[]; gone: readonly LiveMark[]; trace: LiveTrace | null; selecting: boolean }) {
   const now = useNow();
   const showAgents = useStore((s) => s.showAgents);
   const showTasks = useStore((s) => s.showTasks);
   const bringTerm = useStore((s) => s.bringTerm);
   const groups = liveGroups(marks, gone);
   const head = liveHead(marks, now);
+  // nothing runs and no mark is still falling: the trace is the whole row
+  const live = groups.length > 0;
+  const row = useRef<HTMLDivElement>(null);
+  useRoom(row, live && trace !== null);
   const open = (m: LiveMark) => {
     switch (m.kind) {
       case "agent":
@@ -77,7 +176,7 @@ function Row({ name, marks, gone, selecting }: { name: string; marks: readonly L
     }
   };
   return (
-    <div className={`card-live${liveFlow(marks) ? " flow" : ""}`} role="group" aria-label={`Running on ${name}`}>
+    <div ref={row} className={`card-live${liveFlow(marks) ? " flow" : ""}`} role="group" aria-label={`${live ? "Running" : "Just ended"} on ${name}`}>
       {groups.map((g) => {
         const first = g.first;
         const inner = (
@@ -116,8 +215,10 @@ function Row({ name, marks, gone, selecting }: { name: string; marks: readonly L
           </button>
         );
       })}
-      <span className="card-live-line" aria-hidden="true" />
+      {live && <span className="card-live-line" aria-hidden="true" />}
       {head && <span className={`card-live-head h-${head.tone}${head.tone === "work" ? " shimmer" : ""}`}>{head.text}</span>}
+      {/* keyed by what it speaks of, so a new one comes in afresh */}
+      {trace && <Trace key={trace.id} trace={trace} name={name} now={now} selecting={selecting} />}
     </div>
   );
 }
@@ -128,8 +229,12 @@ function Row({ name, marks, gone, selecting }: { name: string; marks: readonly L
  * to one line of words about the most pressing of them. The colour of a
  * mark is its state and so is its motion; sap runs along the line while an
  * agent works. A mark grows in when its thing starts and drops off when it
- * ends. Nothing at all on a quiet repo. Cozy density only: compact keeps
- * the ✦ and ▶ chips, which the row replaces here.
+ * ends. After the words comes the trace (FR-059): the last thing that left
+ * the row, an agent that ended or a task that finished, and how long ago,
+ * kept for `TRACE_MS`, shown only where the row has room for all of it,
+ * and alone on the row once nothing else runs. Nothing at all on a repo
+ * that has been quiet that long. Cozy density only: compact keeps the ✦
+ * and ▶ chips, which the row replaces here.
  */
 export function CardLive({ repo, checkouts, selecting }: { repo: Repo; checkouts: readonly string[]; selecting: boolean }) {
   const agents = useStore((s) => agentsOn(s, repo.id));
@@ -144,6 +249,8 @@ export function CardLive({ repo, checkouts, selecting }: { repo: Repo; checkouts
   const shells = useStore(useShallow((s) => s.shells.filter((t) => checkouts.includes(t.repoId))));
   const marks = useMemo(() => liveMarks({ lead: repo.id, agents, trail, tasks, shells, split }), [repo.id, agents, trail, tasks, shells]);
   const gone = useDeparted(marks);
-  if (marks.length === 0 && gone.length === 0) return null;
-  return <Row name={repo.name} marks={marks} gone={gone} selecting={selecting} />;
+  const last = useMemo(() => lastEnded({ lead: repo.id, agents, tasks, split }), [repo.id, agents, tasks]);
+  const trace = useUntil(last ? traceUntil(last) : null) ? last : null;
+  if (marks.length === 0 && gone.length === 0 && !trace) return null;
+  return <Row name={repo.name} marks={marks} gone={gone} trace={trace} selecting={selecting} />;
 }

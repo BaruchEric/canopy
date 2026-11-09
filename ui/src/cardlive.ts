@@ -1,10 +1,11 @@
 /** A repo card's live row: one mark for each thing running on the repo right
  *  now (its agents, its tasks, its shells), the groups they are drawn in, the
- *  row's headline, and what the branch line and the card's leaf edge do
- *  about it. Pure; tested in cardlive.test.ts. The row is `CardLive.tsx`. */
+ *  row's headline, what the branch line and the card's leaf edge do about
+ *  it, and the trace of the last thing that left the row. Pure; tested in
+ *  cardlive.test.ts. The row is `CardLive.tsx`. */
 
 import { isLiveAgent, type AgentCard, type TaskInfo, type TaskStatus, type TermInfo } from "../../src/core/types";
-import { cardName, stateSince, stateWord, whereWord, type TrailMark } from "./agentcards";
+import { cardName, durationWord, runEnd, stateSince, stateWord, whereWord, type TrailMark } from "./agentcards";
 import { AGENT_GLYPH } from "./agentpanel";
 import { WAITING_GLYPH } from "./waiting";
 
@@ -78,6 +79,15 @@ const TASK_SHOWN: Partial<Record<TaskStatus, { state: TaskMark["state"]; word: s
 
 const agentState = (c: AgentCard): AgentMark["state"] => (c.state === "waiting" ? "waiting" : c.state === "working" ? "working" : "idle");
 
+/** " on mini" for a checkout on another backend than the card's lead, nothing for one at home */
+function elsewhere(lead: string, split: LiveInput["split"]): (id: string) => string {
+  const home = split(lead)[0];
+  return (id) => {
+    const b = split(id)[0];
+    return b === home ? "" : ` on ${b}`;
+  };
+}
+
 /**
  * The card's marks, the most pressing first in each kind: agents (waiting,
  * working, idle), tasks (failed, restarting, running), shells (on a screen,
@@ -85,11 +95,7 @@ const agentState = (c: AgentCard): AgentMark["state"] => (c.state === "waiting" 
  * no shell's; a task's session and the ranger's are never shells.
  */
 export function liveMarks({ lead, agents, trail, tasks, shells, split }: LiveInput): LiveMark[] {
-  const home = split(lead)[0];
-  const away = (id: string): string => {
-    const b = split(id)[0];
-    return b === home ? "" : ` on ${b}`;
-  };
+  const away = elsewhere(lead, split);
   const out: LiveMark[] = [];
 
   const live = agents.filter(isLiveAgent);
@@ -309,6 +315,80 @@ export function liveEdge(agents: readonly Pick<AgentCard, "state">[]): "waiting"
   }
   return working ? "working" : null;
 }
+
+/** how long the row remembers the last thing that left it, in ms */
+export const TRACE_MS = 30 * 60_000;
+
+/** The last thing to leave the row: an agent that ended or that the broker
+ *  lost, a task that ran to its end or was stopped. */
+export interface LiveTrace {
+  /** the thing and when it ended, so the next one is told from this one */
+  id: string;
+  kind: "agent" | "task";
+  /** what happened, before how long ago: "test passed", "agent ended" */
+  text: string;
+  /** who or what it was, for its tooltip */
+  title: string;
+  /** when, unix ms */
+  at: number;
+  /** the checkout a click on it opens */
+  repoId: string;
+}
+
+/** a task named for a check: one of these that exits clean passed */
+const CHECK = /^(tests?|lint|typecheck|check|e2e|verify|ci)([:._-]|$)/;
+
+/**
+ * The last thing that left the row, however long ago: the newest of the
+ * agents that ended or were lost and the tasks that finished or were
+ * stopped. All of it is read off what the backends hold (a card's end, a
+ * task's exit), so a reload and another device say the same. A failed task
+ * is no trace, since its mark stays on the row, and a shell that closed
+ * leaves nothing to read.
+ */
+export function lastEnded({ lead, agents, tasks, split }: Pick<LiveInput, "lead" | "agents" | "tasks" | "split">): LiveTrace | null {
+  const away = elsewhere(lead, split);
+  const ended: LiveTrace[] = [];
+  for (const c of agents) {
+    if (isLiveAgent(c)) continue;
+    const at = runEnd(c, c.seenAt);
+    ended.push({
+      id: `agent:${c.id}:${at}`,
+      kind: "agent",
+      text: c.state === "lost" ? "agent lost" : "agent ended",
+      title: `${cardName(c)}, ${whereWord(c)}, ran ${durationWord(at - c.startedAt)}`,
+      at,
+      repoId: lead,
+    });
+  }
+  for (const t of tasks) {
+    if (t.exitedAt === undefined) continue;
+    const word = t.status === "exited" ? (CHECK.test(t.name) ? "passed" : "finished") : t.status === "stopped" ? "stopped" : null;
+    if (word === null) continue;
+    const text = `${t.name} ${word}`;
+    ended.push({ id: `task:${t.repoId}:${t.name}:${t.exitedAt}`, kind: "task", text, title: `${text}${away(t.repoId)}`, at: t.exitedAt, repoId: t.repoId });
+  }
+  return ended.reduce<LiveTrace | null>((last, t) => (last && last.at >= t.at ? last : t), null);
+}
+
+/** until when the row shows a trace, unix ms */
+export const traceUntil = (t: LiveTrace): number => t.at + TRACE_MS;
+
+/** "test passed 4m ago"; "just now" inside the first minute, and when the
+ *  backend's clock runs a little ahead of the page's */
+export function traceWords(t: LiveTrace, now: number): string {
+  const w = short(now - t.at);
+  return `${t.text} ${w ? `${w} ago` : "just now"}`;
+}
+
+/**
+ * Whether a row has room for its trace, from the branch line's width with
+ * the trace drawn and the width the line starts from (its flex basis). The
+ * line is the first thing on a row to give room up, so one shorter than
+ * its basis means the trace took room from what runs now, and the trace
+ * goes instead: it shows whole or not at all.
+ */
+export const traceFits = (line: number, basis: number): boolean => line > basis - 1 / 64;
 
 /** how long a mark stays on the row after its thing ended, in ms */
 export const LINGER_MS = 900;

@@ -15857,9 +15857,11 @@ button.card-live-group:hover {
   flex: none;
   font-size: var(--t-xs);
 }
-/* the branch line, as a group heading's: from the marks to the words */
+/* the branch line, as a group heading's: from the marks to the words. It
+   gives room up before anything else on the row does, which is also how
+   the row knows it has none left for a trace (`traceFits`) */
 .card-live-line {
-  flex: 1 1 16px;
+  flex: 1 100000 16px;
   min-width: 8px;
   height: 1px;
   border-radius: 1px;
@@ -15872,6 +15874,51 @@ button.card-live-group:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--tone, var(--ink-faint));
+}
+/* the trace (FR-059): the last thing that left the row and how long ago.
+   The branch line is solid out to what is so now and dotted on to what
+   was; on a card where nothing runs any more the dotted run is the whole
+   line. The words sit back behind the headline's, and they show whole or
+   not at all: a row with no room for them (`data-tight`, set by
+   `useRoom`) keeps to what runs now. */
+.card-live-trail {
+  flex: none;
+  width: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--hair2) 50%, transparent 50%) 0 0 / 4px 100% repeat-x;
+}
+.card-live-trail:first-child {
+  flex: 1 1 16px;
+  width: auto;
+  min-width: 8px;
+}
+.card-live-trace {
+  flex: none;
+  min-width: 0;
+  margin: 0 -3px;
+  padding: 0 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: inherit;
+  color: color-mix(in srgb, var(--ink-faint) 80%, transparent);
+  background: none;
+  border: 0;
+  border-radius: var(--r);
+}
+/* alone on the row it may be cut, since nothing else is there to keep */
+.card-live-trail:first-child + .card-live-trace {
+  flex: 0 1 auto;
+}
+.card-live[data-tight] :is(.card-live-trail, .card-live-trace) {
+  display: none;
+}
+button.card-live-trace {
+  cursor: pointer;
+}
+button.card-live-trace:hover {
+  color: var(--ink-dim);
+  background: var(--wash);
 }
 /* sap for work, rust for what needs you or broke, lichen for a restart,
    moss for what is up; an idle agent and a shell on no screen sit back */
@@ -15949,6 +15996,17 @@ button.card-live-group:hover {
     to {
       opacity: 0;
       transform: translateY(9px) rotate(32deg);
+    }
+  }
+  /* the trace comes in as the mark it speaks of lets go */
+  .card-live-trail,
+  .card-live-trace {
+    animation: live-trace 420ms var(--ease) 380ms backwards;
+  }
+  @keyframes live-trace {
+    from {
+      opacity: 0;
+      transform: translateX(-4px);
     }
   }
   /* an agent at work turns over and back, a ✦ catching the light */

@@ -1,6 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, TaskInfo, TermInfo } from "../../src/core/types";
-import { LIVE_CAP, departed, liveEdge, liveFlow, liveGlyph, liveGroups, liveHead, liveMarks, type LiveInput, type LiveMark, type ShellMark, type TaskMark } from "./cardlive";
+import {
+  LIVE_CAP,
+  TRACE_MS,
+  departed,
+  lastEnded,
+  liveEdge,
+  liveFlow,
+  liveGlyph,
+  liveGroups,
+  liveHead,
+  liveMarks,
+  traceFits,
+  traceUntil,
+  traceWords,
+  type LiveInput,
+  type LiveMark,
+  type LiveTrace,
+  type ShellMark,
+  type TaskMark,
+} from "./cardlive";
 
 const M = 60_000;
 const H = 60 * M;
@@ -237,6 +256,101 @@ describe("sap and the leaf edge", () => {
     expect(liveEdge([agent({ state: "idle" }), agent({ state: "ended" })])).toBeNull();
     expect(liveEdge([agent({ state: "idle" }), agent({ state: "working" })])).toBe("working");
     expect(liveEdge([agent({ state: "working" }), agent({ state: "waiting" })])).toBe("waiting");
+  });
+});
+
+describe("the trace", () => {
+  const last = (over: Partial<LiveInput>) => lastEnded(input(over));
+
+  test("nothing ended, nothing remembered: what still runs, and what failed, is on the row", () => {
+    expect(last({})).toBeNull();
+    expect(
+      last({
+        agents: [agent(), agent({ state: "idle" }), agent({ state: "waiting" })],
+        tasks: [
+          task({}),
+          task({ name: "a", status: "failed", exitedAt: 5 }),
+          task({ name: "b", status: "gave-up", exitedAt: 5 }),
+          task({ name: "c", status: "backoff", exitedAt: 5 }),
+          task({ name: "d", status: "idle" }),
+        ],
+      }),
+    ).toBeNull();
+  });
+
+  test("an agent that ended, or one the broker lost", () => {
+    const ended = agent({ state: "ended", handle: "app-main", startedAt: H, seenAt: 2 * H, endedAt: 2 * H + 5 * M });
+    expect(last({ agents: [ended] })).toEqual({
+      id: `agent:${ended.id}:${2 * H + 5 * M}`,
+      kind: "agent",
+      text: "agent ended",
+      title: "app-main, kitty on ericmac, ran 1h 5m",
+      at: 2 * H + 5 * M,
+      repoId: "app",
+    });
+    const lost = agent({ state: "lost", startedAt: H, seenAt: 3 * H });
+    expect(last({ agents: [lost] })).toMatchObject({ text: "agent lost", at: 3 * H });
+    // an end that carries no time of its own happened at the last beat
+    expect(last({ agents: [agent({ state: "ended", seenAt: 4 * H })] })?.at).toBe(4 * H);
+  });
+
+  test("a task that ran to its end or was stopped; a check that came back clean passed", () => {
+    expect(last({ tasks: [task({ name: "build", status: "exited", exitedAt: 9, exitCode: 0 })] })).toEqual({
+      id: "task:app:build:9",
+      kind: "task",
+      text: "build finished",
+      title: "build finished",
+      at: 9,
+      repoId: "app",
+    });
+    for (const name of ["test", "tests", "test:e2e", "lint", "typecheck", "check", "e2e", "verify", "ci"]) {
+      expect(last({ tasks: [task({ name, status: "exited", exitedAt: 9 })] })?.text).toBe(`${name} passed`);
+    }
+    // a name that only starts like a check is not one
+    expect(last({ tasks: [task({ name: "testbed", status: "exited", exitedAt: 9 })] })?.text).toBe("testbed finished");
+    expect(last({ tasks: [task({ name: "dev", status: "stopped", exitedAt: 9 })] })?.text).toBe("dev stopped");
+    // no time, no trace: the row cannot say how long ago
+    expect(last({ tasks: [task({ name: "build", status: "exited" })] })).toBeNull();
+  });
+
+  test("a task on another machine's checkout says where, and opens there", () => {
+    expect(last({ tasks: [task({ name: "test", repoId: "mini|app", status: "exited", exitedAt: 9 })] })).toMatchObject({
+      id: "task:mini|app:test:9",
+      title: "test passed on mini",
+      repoId: "mini|app",
+    });
+  });
+
+  test("the newest of them, whatever its kind", () => {
+    const agents = [agent({ state: "ended", endedAt: 2 * H }), agent({ state: "lost", seenAt: 3 * H }), agent({ state: "ended", endedAt: H })];
+    const tasks = [task({ name: "test", status: "exited", exitedAt: 2 * H + M }), task({ name: "dev", status: "stopped", exitedAt: H })];
+    expect(last({ agents, tasks })?.text).toBe("agent lost");
+    expect(last({ agents: agents.slice(0, 1), tasks })?.text).toBe("test passed");
+    expect(last({ agents: agents.slice(2), tasks: tasks.slice(1) })?.kind).toBe("agent");
+  });
+
+  test("in words: how long ago, once that is a minute", () => {
+    const t: LiveTrace = { id: "x", kind: "task", text: "test passed", title: "test passed", at: 10 * H, repoId: "app" };
+    expect(traceWords(t, 10 * H + 20_000)).toBe("test passed just now");
+    expect(traceWords(t, 10 * H + 4 * M + 5_000)).toBe("test passed 4m ago");
+    expect(traceWords(t, 12 * H)).toBe("test passed 2h ago");
+    // the backend's clock a little ahead of the page's
+    expect(traceWords(t, 10 * H - 5_000)).toBe("test passed just now");
+  });
+
+  test("it has room while the branch line keeps its own length: a line cut short gave the room up", () => {
+    expect(traceFits(16, 16)).toBe(true);
+    expect(traceFits(140.5, 16)).toBe(true);
+    expect(traceFits(15.9, 16)).toBe(false);
+    expect(traceFits(8, 16)).toBe(false);
+    // a browser lays out in 64ths of a pixel, and less than one is no cut
+    expect(traceFits(16 - 1 / 128, 16)).toBe(true);
+  });
+
+  test("the row remembers it for half an hour", () => {
+    const t: LiveTrace = { id: "x", kind: "agent", text: "agent ended", title: "", at: 10 * H, repoId: "app" };
+    expect(TRACE_MS).toBe(30 * M);
+    expect(traceUntil(t)).toBe(10 * H + 30 * M);
   });
 });
 
