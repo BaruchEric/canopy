@@ -10,7 +10,7 @@ import { basename } from "node:path";
 import { hostname } from "node:os";
 import { agoWord, clipKey, clipLine, kindOf, looksSecret, looksSecretFile, sizeWord, sniffType, sortClips, textHead, CLIP_FILE_MAX, type Clip, type ClipsInfo } from "../core/clips";
 import { callerHeaders } from "./api";
-import { ask, backendTargets, errText, has, take, type Target } from "./health";
+import { ask, backendTargets, errText, has, take, Unreachable, type Target } from "./health";
 
 export const CLIP_USAGE = [
   'usage: canopy clip "<text>"            keep text on the clipboard; with no text, what stdin holds (a picture piped in goes as a file)',
@@ -23,6 +23,17 @@ export const CLIP_USAGE = [
 ].join("\n");
 
 const SUBS = new Set(["put", "list", "ls", "get", "pin", "unpin", "rm", "delete", "clear"]);
+
+/** The words of `canopy clip <text…>` and `canopy clip put <text…>` as they
+ *  were typed, once --backend and --on are out: a text that has begun owns
+ *  every word after it, so `canopy clip git log -n 5` keeps "-n 5" and never
+ *  reads it as clip's own -n. Null for every other form: a sub-command, a
+ *  flag first, or `put --file <path>`, whose flags are clip's. */
+export function clipWords(args: readonly string[]): string[] | null {
+  const [first, ...rest] = args;
+  if (first === "put") return rest[0] === "--file" || rest[0] === "-f" ? null : rest;
+  return first !== undefined && !SUBS.has(first) && !first.startsWith("-") ? [...args] : null;
+}
 
 /** a clip with the backend that keeps it */
 export interface HeldClip {
@@ -108,15 +119,17 @@ export async function clipCommand(argv: string[], { fail }: { fail: (msg: string
   const args = [...argv];
   const given = take(args, "--backend");
   const on = take(args, "--on");
-  const n = take(args, "-n");
-  const filePath = take(args, "--file") ?? take(args, "-f");
-  const outPath = take(args, "-o");
-  const asJson = has(args, "--json");
-  const home = (given ?? process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
+  // a text's own words are never clip's flags
+  const typed = clipWords(args);
+  const n = typed ? undefined : take(args, "-n");
+  const filePath = typed ? undefined : (take(args, "--file") ?? take(args, "-f"));
+  const outPath = typed ? undefined : take(args, "-o");
+  const asJson = typed ? false : has(args, "--json");
+  const home = (given ??process.env["CANOPY_API"] ?? "http://127.0.0.1:7850").replace(/\/+$/, "");
   if (!/^https?:\/\/[^/\s]+$/.test(home)) return fail(`--backend must be an http(s) origin, got ${home}`);
   const homeTarget: Target = { name: "home", urls: [home] };
   const failed = (err: unknown): never => fail(errText(err));
-  const sub = args[0] !== undefined && SUBS.has(args[0]) ? args.shift() : undefined;
+  const sub = typed ? "put" : args[0] !== undefined && SUBS.has(args[0]) ? args.shift() : undefined;
   const piped = !process.stdin.isTTY;
 
   const put = async (text: string) => {
@@ -145,7 +158,8 @@ export async function clipCommand(argv: string[], { fail }: { fail: (msg: string
   // `canopy clip words…`, `canopy clip put words…`, or what stdin holds:
   // text as text, anything else (a picture piped in) as a file
   if (sub === "put" || (sub === undefined && (args.length > 0 || piped))) {
-    if (args.length > 0) return put(args.join(" "));
+    const words = typed ?? args;
+    if (words.length > 0) return put(words.join(" "));
     const bytes = new Uint8Array(await Bun.stdin.arrayBuffer());
     if (textHead(bytes) !== null) return put(new TextDecoder().decode(bytes));
     const sniffed = sniffType(bytes);
@@ -216,6 +230,8 @@ export async function clipCommand(argv: string[], { fail }: { fail: (msg: string
   const [id, ...more] = args;
   if (!id || more.length > 0) return fail(CLIP_USAGE);
   const targets = await backendTargets(home, { given, on }, fail);
+  const without: string[] = [];
+  const trouble: string[] = [];
   for (const t of targets) {
     try {
       if (sub === "rm" || sub === "delete") {
@@ -227,9 +243,12 @@ export async function clipCommand(argv: string[], { fail }: { fail: (msg: string
       }
       return;
     } catch (err) {
-      // a backend without the id says so; the next may keep it
-      if (!/no clip by that id/.test(errText(err))) return failed(err);
+      // a backend without the id says so; the next may keep it. So may the
+      // next after one that does not answer or has no clipboard: what went
+      // wrong there is said once every backend was asked
+      if (/no clip by that id/.test(errText(err))) without.push(t.name);
+      else trouble.push(err instanceof Unreachable ? `${t.name} did not answer: ${err.message}` : `${t.name}: ${errText(err)}`);
     }
   }
-  return fail(`no clip ${id} on ${targets.map((t) => t.name).join(", ")}`);
+  return fail([...(without.length > 0 ? [`no clip ${id} on ${without.join(", ")}`] : []), ...trouble].join("; "));
 }

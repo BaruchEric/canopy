@@ -35,6 +35,16 @@ describe("verbHelp", () => {
     expect(health).toContain("canopy health lint [dir]");
     expect(health).not.toContain("canopy spec");
   });
+  test("run's flag lines stay under run, and runs has its own", () => {
+    const run = verbHelp("run") ?? "";
+    expect(run).toContain("--priority interactive|normal|low");
+    expect(run).toContain("--backend URL | --on NAME");
+    expect(run).not.toContain("canopy runs child");
+    const runs = verbHelp("runs") ?? "";
+    expect(runs).toContain("canopy runs child <repo>");
+    expect(runs).toContain("--backend URL | --on NAME");
+    expect(runs).not.toContain("--priority");
+  });
   test("another word for a command gets that command's lines", () => {
     expect(verbHelp("notes")).toBe(verbHelp("note"));
     expect(verbHelp("clips")).toBe(verbHelp("clip"));

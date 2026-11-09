@@ -119,8 +119,9 @@ usage:
   canopy mcp tools                   the tools that token holds, one per line
   canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr]   start one branch run or a group to compare
   canopy run <repo> <action> --tools|--no-tools   canopy's tools on or off for this run, over its settings
-  canopy runs child <repo> --note text --parent <run>   start a child of a live run, as its canopy_run_start would
     --priority interactive|normal|low  who goes first when the plan's window runs low; a group is low unless raised
+    --backend URL | --on NAME       select the backend that owns the repo
+  canopy runs child <repo> --note text --parent <run> [--action ask|propose]   start a child of a live run, as its canopy_run_start would
     --backend URL | --on NAME       select the backend that owns the repo
   canopy groups [repo]              list best-of-N groups and each member's branch, state and profile
   canopy groups pick <group> <run>  choose a green member as the winner

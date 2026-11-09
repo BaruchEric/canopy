@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Clip } from "../core/clips";
-import { cliFrom, clipLines, mergeHeld, pickHeld } from "./clips";
+import { cliFrom, clipLines, clipWords, mergeHeld, pickHeld } from "./clips";
 
 const clip = (id: string, over: Partial<Clip> = {}): Clip => ({ id, text: id, source: "cli", createdAt: 1, at: 1, count: 1, ...over });
 
@@ -50,5 +50,24 @@ describe("files in the CLI's list", () => {
     ]);
     expect(held.map((h) => h.clip.id)).toEqual(["c-bbbbbbbb", "c-cccccccc"]);
     expect(clipLines(held, 9, false)[0]).toBe("  1  c-bbbbbbbb  now  cli       image   copy.png  2.3 MB");
+  });
+});
+
+describe("clipWords", () => {
+  test("a text that has begun owns every word after it, clip's own flags included", () => {
+    expect(clipWords(["git", "log", "-n", "5"])).toEqual(["git", "log", "-n", "5"]);
+    expect(clipWords(["put", "tar", "-f", "x.tar", "-o", "out", "--json"])).toEqual(["tar", "-f", "x.tar", "-o", "out", "--json"]);
+    expect(clipWords(["put", "list"])).toEqual(["list"]);
+    // put alone reads stdin
+    expect(clipWords(["put"])).toEqual([]);
+  });
+  test("a sub-command, a flag first, put --file and no words at all keep clip's flags", () => {
+    expect(clipWords(["list", "-n", "5"])).toBeNull();
+    expect(clipWords(["get", "2", "-o", "out.png"])).toBeNull();
+    expect(clipWords(["-n", "5"])).toBeNull();
+    expect(clipWords(["--file", "shot.png"])).toBeNull();
+    expect(clipWords(["put", "--file", "shot.png"])).toBeNull();
+    expect(clipWords(["put", "-f", "shot.png"])).toBeNull();
+    expect(clipWords([])).toBeNull();
   });
 });

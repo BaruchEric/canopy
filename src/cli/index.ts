@@ -125,6 +125,7 @@ export const COMMANDS = new Set([
   "clips",
   "awake",
   "run",
+  "runs",
   "groups",
   "health",
   "costs",
@@ -181,7 +182,7 @@ export async function main(argv: string[]): Promise<void> {
   }
   // --token is every command's, except `source add --forgejo --token`, which
   // carries a Forgejo token and not a caller's
-  if (cmd !== "source") setTokenFlag(opt(args, "--token"));
+  if (cmd !== "source" && cmd !== "sources") setTokenFlag(opt(args, "--token"));
   // the flag and $CANOPY_TOKEN belong to the backend this command was pointed at
   const pointed = args.indexOf("--backend");
   setHomeBase(pointed !== -1 ? args[pointed + 1] : undefined);
