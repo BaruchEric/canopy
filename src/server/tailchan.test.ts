@@ -210,6 +210,22 @@ describe("routes", () => {
     expect(blob.headers.get("content-disposition")).toContain("note.txt");
   });
 
+  test("a blob goes out behind the clipboard's sandbox: a download, and a type a browser runs as plain bytes", async () => {
+    const plain = await fetch(api(`/api/tailchan/blob?id=${"ab".repeat(16)}`));
+    expect(plain.headers.get("content-type")).toBe("text/plain");
+    expect(plain.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(plain.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    await plain.arrayBuffer();
+    // whoever posts a blob chooses its type, and its address is on canopy's own origin
+    const put = await fetch(api("/api/tailchan/put?target=%23drop&name=page.html"), { method: "POST", headers: { "content-type": "text/html; charset=utf-8" }, body: "<script>alert(1)</script>" });
+    const m = (await put.json()) as ChanMessage;
+    const html = await fetch(api(`/api/tailchan/blob?id=${String(m.meta.blob)}`));
+    expect(html.headers.get("content-type")).toBe("application/octet-stream");
+    expect(html.headers.get("content-disposition")).toStartWith("attachment");
+    expect(html.headers.get("content-security-policy")).toBe("sandbox; default-src 'none'");
+    expect(await html.text()).toBe("<script>alert(1)</script>");
+  });
+
   test("the notify switch persists", async () => {
     await fetch(api("/api/tailchan/notify"), { method: "POST", body: JSON.stringify({ on: true }) });
     const info = (await (await fetch(api("/api/tailchan"))).json()) as TailchanInfo;

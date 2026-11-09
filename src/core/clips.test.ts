@@ -3,6 +3,7 @@ import {
   CLIP_CHARS,
   CLIP_DAYS,
   CLIP_KEEP,
+  CLIP_NAME_CHARS,
   agoWord,
   applyClips,
   clipKind,
@@ -88,6 +89,23 @@ describe("looksSecret", () => {
     ]) {
       expect(looksSecret(s)).toBe(false);
     }
+  });
+  test("an env line whose whole name is the word is one too, alone on its line", () => {
+    for (const s of ["TOKEN=abcdefgh12345678", "PASSWORD=hunter22hunter22", "export API_KEY='abcdefgh1234'", "  SECRET_KEY = abcdefgh1234"]) {
+      expect(looksSecret(s)).toBe(true);
+    }
+    // a value shorter than a secret, and a name with its = on the next line
+    expect(looksSecret("TOKEN=$(cat f) run")).toBe(false);
+    expect(looksSecret("GITHUB_TOKEN\n=ghx1234567890abcd")).toBe(false);
+  });
+  test("a long run of blank lines, capitals or dashes is read once, not from every place in it", () => {
+    const started = performance.now();
+    expect(looksSecret("\n".repeat(200_000))).toBe(false);
+    expect(looksSecret(` \n`.repeat(100_000))).toBe(false);
+    expect(looksSecret(`${"A_TOKEN".repeat(20_000)} x`)).toBe(false);
+    expect(looksSecret("eyJ-".repeat(50_000))).toBe(false);
+    // milliseconds now; the blank lines alone took half a minute before
+    expect(performance.now() - started).toBeLessThan(5_000);
   });
 });
 
@@ -253,6 +271,15 @@ describe("files on the clipboard", () => {
     expect(clipKey(again.clip)).toBe(`file:${"a".repeat(64)}`);
     expect(clipKey({ text: "shot.png" })).toBe("shot.png");
   });
+  test("a text that reads as a file's key is its own clip and leaves the file alone", () => {
+    const kept = putClip([], { text: "shot.png", source: "device", file: file("a") }, 1_000, "c-aaaaaaaa").clips;
+    const r = putClip(kept, { text: `file:${"a".repeat(64)}`, source: "cli" }, 2_000, "c-bbbbbbbb");
+    expect(r.clip.id).toBe("c-bbbbbbbb");
+    expect(r.clip.file).toBeUndefined();
+    expect(r.clips.map((c) => [c.id, c.file?.name])).toEqual([["c-bbbbbbbb", undefined], ["c-aaaaaaaa", "shot.png"]]);
+    // and the file kept again is still the file's clip, not the text's
+    expect(putClip(r.clips, { text: "shot.png", source: "device", file: file("a") }, 3_000, "c-cccccccc").clip).toMatchObject({ id: "c-aaaaaaaa", count: 2 });
+  });
   test("past the byte budget the oldest unpinned files go, the text and the pinned stay", () => {
     const now = 10_000;
     const clips = [
@@ -277,6 +304,9 @@ describe("files on the clipboard", () => {
     expect(fileName("a\u0000b\nc")).toBe("abc");
     expect(fileName("..")).toBe("file");
     expect(fileName(undefined)).toBe("file");
+    // the cap never leaves half of a two-unit character at the end
+    expect(fileName(`${"a".repeat(CLIP_NAME_CHARS - 1)}\u{1F600}.png`)).toBe("a".repeat(CLIP_NAME_CHARS - 1));
+    expect(fileName(`${"a".repeat(CLIP_NAME_CHARS - 2)}\u{1F600}.png`)).toBe(`${"a".repeat(CLIP_NAME_CHARS - 2)}\u{1F600}`);
     expect(mediaType("IMAGE/PNG")).toBe("image/png");
     expect(mediaType("text/html; charset=utf-8")).toBe("text/html");
     expect(mediaType("nonsense")).toBe("application/octet-stream");

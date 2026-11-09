@@ -6,6 +6,7 @@
  * none, every route answers 503 and nothing else runs.
  */
 import { Chan, ChanError, type ChanConfig } from "../core/chan";
+import { mediaType, servedType } from "../core/clips";
 import { loadConfig, setTailchanNotify } from "../core/store";
 import { chanTarget, fleetNotice, flowNotice, retroNotice, runNotice, sproutNotice, type Notice } from "../core/tailchan";
 import type { ChanMessage, Fleet, Flow, HealthCheck, RetroState, Run, ServerEvent, Sprout, SproutStatus, TailchanInfo } from "../core/types";
@@ -218,11 +219,20 @@ export class ChanHub {
         const id = url.searchParams.get("id") ?? "";
         if (!/^[0-9a-f]{32}$/.test(id)) return json({ error: "id must be a blob id" }, 400);
         const res = await chan.getBlob(cfg.as, id);
-        const headers = new Headers();
-        for (const h of ["content-type", "content-length", "content-disposition"]) {
-          const v = res.headers.get(h);
-          if (v) headers.set(h, v);
-        }
+        // Whoever posted the blob chose its type, and it goes out on canopy's
+        // own origin: behind the same sandbox as a kept clip's file, so an
+        // HTML or SVG blob opened by its address never runs here. Always a
+        // download, and a type a browser would run goes as plain bytes.
+        const headers = new Headers({
+          "content-type": servedType(mediaType(res.headers.get("content-type"))),
+          "content-disposition": "attachment",
+          "x-content-type-options": "nosniff",
+          "content-security-policy": "sandbox; default-src 'none'",
+        });
+        const length = res.headers.get("content-length");
+        if (length) headers.set("content-length", length);
+        const named = res.headers.get("content-disposition");
+        if (named && /^\s*attachment\b/i.test(named)) headers.set("content-disposition", named);
         return new Response(res.body, { headers });
       }
       if (path === "/api/tailchan/notify" && method === "POST") {

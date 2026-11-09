@@ -4113,7 +4113,9 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (isShown(get(), b)) set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [clip] }) }, clipsSeen: Math.max(s.clipsSeen, clip.at) }));
       return true;
     } catch {
-      // an older backend has no clipboard: the copy itself still happened
+      // an older backend has no clipboard: the copy itself still happened.
+      // It was not kept, so the same text a moment later is tried again
+      if (lastKept?.text === c.text) lastKept = null;
       return false;
     }
   },
@@ -4139,7 +4141,9 @@ export const useStore = create<CanopyState>((set, get) => ({
   pinClip: async (id, pinned) => {
     const c = await api.pinClip(id, pinned);
     const b = backendOf(id);
-    set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: [c] }) } }));
+    // an unpinned clip past the cap or the age is dropped by the same call,
+    // and its event can land before this answer: it stays gone
+    set((s) => ({ clips: { ...s.clips, [b]: applyClips(s.clips[b] ?? [], { put: freshClips(b, [c]) }) } }));
   },
   deleteClip: async (id) => {
     await api.deleteClip(id);

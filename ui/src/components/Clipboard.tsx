@@ -455,10 +455,11 @@ export function ClipsPopBody({ onDone: _onDone }: { onDone?: () => void } = {}) 
     });
 
   /** a text kept as one from this device, the way a paste or a take-in does */
-  const keepText = (text: string, from: string) => {
+  const keepText = async (text: string, from: string) => {
     if (!text.trim()) throw new Error("this device's clipboard holds no text");
     if (looksSecret(text)) throw new Error("that looks like a key or a password, so it is not kept");
-    return useStore.getState().keepClip({ text, source: "device", from });
+    // false is a keep the backend refused or never answered; say so
+    if (!(await useStore.getState().keepClip({ text, source: "device", from }))) throw new Error("the clipboard did not keep that text");
   };
 
   const takeIn = () =>

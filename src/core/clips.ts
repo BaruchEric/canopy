@@ -126,7 +126,9 @@ export const mintClipId = (random?: (n: number) => Uint8Array): string => `c-${m
 const SECRET_SHAPES: readonly RegExp[] = [
   /AGE-SECRET-KEY-1[0-9A-Z]{20,}/,
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/,
-  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
+  // the header is capped: every dash in a long run starts a new try, and
+  // each one read to the end of the run before the cap
+  /\beyJ[A-Za-z0-9_-]{8,1024}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
   /\bgh[pousr]_[A-Za-z0-9]{30,}/,
   /\bgithub_pat_[A-Za-z0-9_]{30,}/,
   /\bsk-ant-[A-Za-z0-9_-]{20,}/,
@@ -138,7 +140,12 @@ const SECRET_SHAPES: readonly RegExp[] = [
   /\bnpm_[A-Za-z0-9]{36}\b/,
   /\b[rs]k_live_[A-Za-z0-9]{20,}/,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/,
-  /^\s*(?:export\s+)?[A-Z][A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_KEY)[A-Z0-9_]*\s*=\s*["']?[^\s"']{8,}/m,
+  // Blanks here never cross a line and a name is at most 80 characters each
+  // side of its word: with \s and no cap, a run of blank lines or one long
+  // line of capitals is tried again from every place in it, which took a
+  // minute on a 256 KB file of newlines. The word may be the whole name:
+  // TOKEN=, PASSWORD= and API_KEY= are env lines too.
+  /^[^\S\n]*(?:export[^\S\n]+)?[A-Z0-9_]{0,80}(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|PRIVATE_KEY)[A-Z0-9_]{0,80}[^\S\n]*=[^\S\n]*["']?[^\s"']{8,}/m,
 ];
 
 /** whether text carries something shaped like a key or a password, which is never kept */
@@ -168,7 +175,10 @@ export function fileName(v: unknown): string {
   const raw = typeof v === "string" ? v : "";
   const base = raw.split(/[/\\]/).pop() ?? "";
   // eslint-disable-next-line no-control-regex
-  const clean = base.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, CLIP_NAME_CHARS);
+  const cut = base.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, CLIP_NAME_CHARS);
+  // the cap can land inside a character made of two code units (an emoji);
+  // half of one is no character, and a header cannot carry it
+  const clean = cut.replace(/[\uD800-\uDBFF]$/, "");
   return clean && clean !== "." && clean !== ".." ? clean : "file";
 }
 
@@ -318,7 +328,9 @@ export function pruneClips(clips: readonly Clip[], now: number, budget = CLIP_FI
 export function putClip(clips: readonly Clip[], incoming: ClipIn, now: number, id: string): { clips: Clip[]; clip: Clip; gone: string[] } {
   const { text, cut } = incoming.file ? { text: incoming.file.name, cut: false } : clipText(incoming.text);
   const key = clipKey({ text, ...(incoming.file ? { file: incoming.file } : {}) });
-  const old = clips.find((c) => clipKey(c) === key);
+  // a text is only ever the same as a text and a file as a file: a text that
+  // reads "file:<sha>" is not the file with that hash
+  const old = clips.find((c) => clipKey(c) === key && !c.file === !incoming.file);
   const clip: Clip = {
     id: old?.id ?? id,
     text,

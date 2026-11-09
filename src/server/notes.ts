@@ -59,11 +59,21 @@ export class NotesHub {
   }
 
   private async read(): Promise<readonly QuickNote[]> {
+    let raw: string;
     try {
-      const v: unknown = JSON.parse(await readFile(this.file, "utf8"));
+      raw = await readFile(this.file, "utf8");
+    } catch (err) {
+      // no file yet: no notes. Any other failure (too many open files, a
+      // disk error) is not an empty list: the write after this read would
+      // put one note over all the others
+      if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") return [];
+      throw err;
+    }
+    try {
+      const v: unknown = JSON.parse(raw);
       return parseNotes(v);
     } catch {
-      // no file yet, or one that is not JSON: no notes
+      // a file that is not JSON: no notes
       return [];
     }
   }
@@ -71,7 +81,8 @@ export class NotesHub {
   private async write(notes: readonly QuickNote[]): Promise<void> {
     const dir = this.deps.dir ?? configDir();
     await mkdir(dir, { recursive: true });
-    const tmp = `${this.file}.tmp-${process.pid}`;
+    // two servers on one config dir can be two containers with the same pid
+    const tmp = `${this.file}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
     try {
       await writeFile(tmp, `${JSON.stringify(notes, null, 2)}\n`, "utf8");
       await rename(tmp, this.file);

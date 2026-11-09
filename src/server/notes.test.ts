@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { QuickNote } from "../core/notes";
@@ -111,6 +111,19 @@ describe("NotesHub routes", () => {
     await writeFile(join(t.dir, "notes.json"), JSON.stringify([...mine, theirs]));
     await t.call("POST", "/api/notes", { text: "mine too" });
     expect(notesIn(t.events).map((x) => x.id)).toEqual(["n-testaaaa", "n-elsewher", "n-testbbbb"]);
+  });
+
+  test("a file that cannot be read is not an empty list: the note is refused and the file is left alone", async () => {
+    const t = hub();
+    await mkdir(t.dir, { recursive: true });
+    const file = join(t.dir, "notes.json");
+    // a link to itself: reading it fails (ELOOP) on macOS and Linux alike, as root too
+    await symlink("notes.json", file);
+    expect((await t.call("POST", "/api/notes", { text: "fresh" })).status).toBe(500);
+    expect((await lstat(file)).isSymbolicLink()).toBe(true);
+    expect(t.events).toEqual([]);
+    await rm(file);
+    expect((await t.call("POST", "/api/notes", { text: "fresh" })).status).toBe(200);
   });
 
   test("a file that is not JSON is read as no notes and overwritten by the next write", async () => {

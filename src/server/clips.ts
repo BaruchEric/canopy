@@ -85,7 +85,10 @@ export const SECRET_FILE_REFUSED = "a file that looks like a key or a password i
 /** the Content-Disposition for a download of `name`: an ASCII stand-in for
  *  old clients and the name itself as RFC 5987 says */
 export function attachment(name: string): string {
-  const flat = name.replace(/[\r\n"\\]/g, "_");
+  // half of a two-unit character (a name cut inside an emoji) is not text:
+  // encodeURIComponent throws on one, and the download would answer 500
+  const whole = name.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "_");
+  const flat = whole.replace(/[\r\n"\\]/g, "_");
   const ascii = flat.replace(/[^\x20-\x7e]/g, "_");
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(flat)}`;
 }
@@ -118,11 +121,22 @@ export class ClipsHub {
   }
 
   private async read(): Promise<readonly Clip[]> {
+    let raw: string;
     try {
-      const v: unknown = JSON.parse(await readFile(this.file, "utf8"));
+      raw = await readFile(this.file, "utf8");
+    } catch (err) {
+      // no file yet: no clips. Any other failure (too many open files, a
+      // disk error) is not an empty clipboard: the write after this read
+      // would put one clip over all the others, and the sweep would take
+      // their files
+      if (typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT") return [];
+      throw err;
+    }
+    try {
+      const v: unknown = JSON.parse(raw);
       return parseClips(v);
     } catch {
-      // no file yet, or one that is not JSON: no clips
+      // a file that is not JSON: no clips
       return [];
     }
   }
@@ -130,7 +144,8 @@ export class ClipsHub {
   private async write(clips: readonly Clip[]): Promise<void> {
     const dir = this.deps.dir ?? configDir();
     await mkdir(dir, { recursive: true });
-    const tmp = `${this.file}.tmp-${process.pid}`;
+    // two servers on one config dir can be two containers with the same pid
+    const tmp = `${this.file}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
     try {
       // 0600: a clipboard holds whatever was copied
       await writeFile(tmp, `${JSON.stringify(clips, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
@@ -254,7 +269,7 @@ export class ClipsHub {
     await mkdir(this.blobs, { recursive: true, mode: 0o700 });
     const id = (this.deps.mintId ?? mintClipId)();
     const path = this.blobPath(id);
-    const tmp = `${path}.tmp-${process.pid}`;
+    const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
     try {
       await writeFile(tmp, bytes, { mode: 0o600 });
       await rename(tmp, path);

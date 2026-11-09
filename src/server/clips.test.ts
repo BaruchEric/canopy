@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Clip } from "../core/clips";
 import type { ServerEvent } from "../core/types";
-import { ClipsHub, SECRET_REFUSED } from "./clips";
+import { attachment, ClipsHub, SECRET_REFUSED } from "./clips";
 
 let root = "";
 let n = 0;
@@ -120,6 +120,21 @@ describe("ClipsHub routes", () => {
     expect(list.map((c) => c.id)).toEqual(["c-theirsaa", "c-testbbbb", "c-testaaaa"]);
   });
 
+  test("a file that cannot be read is not an empty clipboard: the copy is refused and the file is left alone", async () => {
+    const t = hub();
+    await mkdir(t.dir, { recursive: true });
+    const file = join(t.dir, "clips.json");
+    // a link to itself: reading it fails (ELOOP) on macOS and Linux alike, as root too
+    await symlink("clips.json", file);
+    expect((await t.call("POST", "/api/clips", { text: "next", source: "page" })).status).toBe(500);
+    expect((await t.call("GET", "/api/clips")).status).toBe(500);
+    expect((await lstat(file)).isSymbolicLink()).toBe(true);
+    expect(t.events).toEqual([]);
+    // readable again, the clipboard goes on
+    await rm(file);
+    expect((await t.call("POST", "/api/clips", { text: "next", source: "page" })).status).toBe(200);
+  });
+
   test("a path that is not the clipboard's is not answered", async () => {
     const t = hub();
     expect(await t.h.handle(new Request("http://x/api/clipsy"), new URL("http://x/api/clipsy"))).toBeNull();
@@ -167,6 +182,17 @@ describe("ClipsHub files", () => {
     const res = await download(t, "c-testaaaa");
     expect(res.headers.get("content-type")).toBe("application/octet-stream");
     expect(res.headers.get("content-disposition")).toBe(`attachment; filename="a_bc.html"; filename*=UTF-8''a_bc.html`);
+  });
+
+  test("a name cut inside an emoji still downloads", async () => {
+    // half of a two-unit character, as a record written before the cap minded it could hold
+    expect(attachment("shot \uD83D")).toBe(`attachment; filename="shot _"; filename*=UTF-8''shot%20_`);
+    expect(attachment("\uDE00 shot \u{1F600}.png")).toBe(`attachment; filename="_ shot __.png"; filename*=UTF-8''_%20shot%20%F0%9F%98%80.png`);
+    const t = hub();
+    await upload(t, PNG, `name=${encodeURIComponent(`${"a".repeat(159)}\u{1F600}.png`)}&source=device`);
+    const res = await download(t, "c-testaaaa");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe(`attachment; filename="${"a".repeat(159)}"; filename*=UTF-8''${"a".repeat(159)}`);
   });
 
   test("the same bytes kept again are the same clip, under any name; a text clip of the name is another", async () => {
