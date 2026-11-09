@@ -134,9 +134,15 @@ function withState<T>(dir: string, fn: (s: RepoState) => T): Promise<T> {
     await mkdir(dir, { recursive: true });
     const s = await readState(dir);
     const out = fn(s);
-    const tmp = `${statePath(dir)}.tmp-${process.pid}`;
-    await writeFile(tmp, JSON.stringify(s, null, 2) + "\n");
-    await rename(tmp, statePath(dir));
+    // a random word beside the pid: two containers on one folder can share a pid
+    const tmp = `${statePath(dir)}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+    try {
+      await writeFile(tmp, JSON.stringify(s, null, 2) + "\n");
+      await rename(tmp, statePath(dir));
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw err;
+    }
     return out;
   });
   stateQueue = run.catch(() => {});

@@ -217,6 +217,15 @@ describe("pulling", () => {
   });
 });
 
+test("a config write that fails leaves no temp file beside it", async () => {
+  const folder = join(dir, "blocked");
+  const path = join(folder, "config.json");
+  // a folder where the file goes: the rename fails on macOS and Linux alike
+  await mkdir(join(path, "kept"), { recursive: true });
+  await expect(writeLocalConfig(path, { pin: null, remote: null })).rejects.toThrow();
+  expect(await readdir(folder)).toEqual(["config.json"]);
+});
+
 describe("the Mac's key", () => {
   test("create, lock, wrong passphrases cost two more seconds each, then unlock", async () => {
     await publish(await base(), signer);

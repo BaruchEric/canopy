@@ -11,7 +11,7 @@
  * their own (gpd, phase 3), through `RemoteSinks`.
  */
 
-import { chmod, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { identityToRecipient } from "age-encryption";
 import { readApplied, writeApplied } from "./applied";
@@ -53,9 +53,15 @@ export async function readLocalConfig(path: string): Promise<LocalConfig> {
 }
 
 export async function writeLocalConfig(path: string, c: LocalConfig): Promise<void> {
-  const tmp = `${path}.tmp-${process.pid}`;
-  await writeFile(tmp, `${JSON.stringify(c, null, 2)}\n`, { mode: 0o600 });
-  await rename(tmp, path);
+  // a random word beside the pid: two containers on one folder can share a pid
+  const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(c, null, 2)}\n`, { mode: 0o600 });
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw err;
+  }
 }
 
 export interface ReaderOptions {
@@ -236,10 +242,16 @@ export class SecretsReader {
     if (this.hasKey && !replace) return { error: "this machine has a key; replace it only when its passphrase is lost" };
     const { identity, recipient } = await newIdentity();
     const wrapped = await wrapIdentity(identity, passphrase, this.o.scryptLogN ?? 18);
-    const tmp = `${this.o.paths.identity}.tmp-${process.pid}`;
-    await writeFile(tmp, wrapped, { mode: 0o600 });
-    await chmod(tmp, 0o600);
-    await rename(tmp, this.o.paths.identity);
+    // a random word beside the pid: two containers on one folder can share a pid
+    const tmp = `${this.o.paths.identity}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+    try {
+      await writeFile(tmp, wrapped, { mode: 0o600 });
+      await chmod(tmp, 0o600);
+      await rename(tmp, this.o.paths.identity);
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => undefined);
+      throw err;
+    }
     this.hasKey = true;
     this.ident = identity;
     this.recip = recipient;

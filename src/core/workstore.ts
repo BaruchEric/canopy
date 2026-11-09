@@ -104,7 +104,8 @@ export async function writeWorkItem(dir: string, item: WorkItem): Promise<void> 
   if (!isWorkId(item.id)) throw new Error(`invalid work id: ${item.id}`);
   await mkdir(dir, { recursive: true });
   const path = join(dir, `${item.id}.json`);
-  const temporary = `${path}.tmp-${process.pid}`;
+  // a random word beside the pid: two containers on one folder can share a pid
+  const temporary = `${path}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
   try {
     await writeFile(temporary, `${JSON.stringify(item, null, 2)}\n`, "utf8");
     await rename(temporary, path);

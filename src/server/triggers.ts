@@ -14,7 +14,7 @@
  *  lock holder only, for the same reason. */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { nextFire, parseCron } from "../core/cron";
 import { DIGEST_CRON, digestIds, digestLine, rangerDigest, type TriggerDigest } from "../core/digest";
@@ -444,9 +444,15 @@ export class TriggerHub {
     this.writing = this.writing
       .then(async () => {
         await mkdir(this.dir, { recursive: true });
-        const tmp = `${path}.tmp-${process.pid}`;
-        await writeFile(tmp, data);
-        await rename(tmp, path);
+        // a random word beside the pid: two containers on one folder can share a pid
+        const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+        try {
+          await writeFile(tmp, data);
+          await rename(tmp, path);
+        } catch (err) {
+          await rm(tmp, { force: true }).catch(() => undefined);
+          throw err;
+        }
       })
       .catch((err) => console.error(`triggers: ${errText(err)}`));
   }
@@ -563,9 +569,15 @@ export class TriggerHub {
     const data = JSON.stringify({ digested: this.digested, ...(this.digest ? { digest: this.digest } : {}) }, null, 2);
     try {
       await mkdir(this.dir, { recursive: true });
-      const tmp = `${path}.tmp-${process.pid}`;
-      await writeFile(tmp, data);
-      await rename(tmp, path);
+      // a random word beside the pid: two containers on one folder can share a pid
+      const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+      try {
+        await writeFile(tmp, data);
+        await rename(tmp, path);
+      } catch (err) {
+        await rm(tmp, { force: true }).catch(() => undefined);
+        throw err;
+      }
     } catch (err) {
       console.error(`triggers: ${errText(err)}`);
     }

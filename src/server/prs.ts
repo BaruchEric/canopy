@@ -303,9 +303,15 @@ export class PrHub {
         return;
       }
       await mkdir(this.dir, { recursive: true });
-      const tmp = `${path}.tmp-${process.pid}`;
-      await writeFile(tmp, JSON.stringify(data, null, 2));
-      await rename(tmp, path);
+      // a random word beside the pid: two containers on one folder can share a pid
+      const tmp = `${path}.tmp-${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
+      try {
+        await writeFile(tmp, JSON.stringify(data, null, 2));
+        await rename(tmp, path);
+      } catch (err) {
+        await rm(tmp, { force: true }).catch(() => undefined);
+        throw err;
+      }
     };
     const next = (this.chains.get(path) ?? Promise.resolve()).then(write).catch((err) => console.error(`prs: ${errText(err)}`));
     this.chains.set(path, next);
