@@ -152,6 +152,10 @@ export async function linuxProcs(): Promise<Proc[]> {
  *  read (another user's, or gone). Shared by the ports list and the scan. */
 export const procCwd = (pid: number | string): Promise<string | undefined> => readlink(`/proc/${pid}/cwd`).catch(() => undefined);
 
+/** A process's environment off `/proc`, as `NAME=value` words; none when
+ *  it cannot be read (another user's, or gone). */
+export const procEnviron = (pid: number | string): Promise<string[]> => readFile(`/proc/${pid}/environ`, "utf8").then(parseCmdline, () => []);
+
 /** a process's comm off `/proc`, trimmed */
 export const procComm = (pid: number | string): Promise<string | undefined> =>
   readFile(`/proc/${pid}/comm`, "utf8")

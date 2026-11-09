@@ -1,6 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { BUSY_SHARE, classify, inContainer, parseCpuTime, parseLstart, parsePsComm, parsePsLong, pickAgents, scanBody, scanStates, treeCpu, type AgentProc } from "./agentscan";
-import { parseBootTime, parseCmdline, parseStat, tickTime, type Proc } from "./procs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  BUSY_SHARE,
+  classify,
+  inContainer,
+  macProcs,
+  parseCpuTime,
+  parseLstart,
+  parsePsComm,
+  parsePsLong,
+  pickAgents,
+  psUnderTest,
+  scanBody,
+  scanProcs,
+  scanStates,
+  treeCpu,
+  underTest,
+  type AgentProc,
+} from "./agentscan";
+import { linuxProcs, parseBootTime, parseCmdline, parseStat, tickTime, type Proc } from "./procs";
 import type { Repo } from "./types";
 
 /* A slice of a Linux box's /proc, as the shells container shows it: a
@@ -145,6 +165,56 @@ describe("classify", () => {
       { pid: 13, ppid: 10, comm: "claude bg-spare", argv: ["claude", "bg-spare", "--bg-spare", "/tmp/b.sock"], state: "S" },
     ];
     expect(pickAgents(procs).map((p) => p.pid)).toEqual([12]);
+  });
+});
+
+describe("an agent a test started", () => {
+  test("is told by NODE_ENV=test among its environment's words, and by nothing near it", () => {
+    expect(underTest(["HOME=/home/bun", "NODE_ENV=test", "TZ=Etc/UTC"])).toBe(true);
+    expect(underTest(["HOME=/home/bun", "NODE_ENV=production"])).toBe(false);
+    expect(underTest(["NODE_ENV=testing", "MY_NODE_ENV=test", "NODE_ENV="])).toBe(false);
+    expect(underTest([])).toBe(false);
+    // /proc/<pid>/environ reads as a cmdline does
+    expect(underTest(parseCmdline("HOME=/home/bun\0NODE_ENV=test\0"))).toBe(true);
+    expect(underTest(parseCmdline(""))).toBe(false);
+  });
+
+  test("a Mac's ps -E writes the environment after the args: the pids whose line carries it", () => {
+    const text = [
+      "  880 claude --model opus HOME=/Users/eric TERM=xterm-256color",
+      "  881 claude --dangerously-skip-permissions --continue HOME=/Users/eric NODE_ENV=test TZ=Etc/UTC",
+      "  882 /Users/eric/.bun/bin/bun /private/var/folders/s5/x/T/canopy-keepsweep-a1/bin/claude 300 TZ=Etc/UTC NODE_ENV=test",
+      "  883 node /opt/homebrew/bin/codex NODE_ENV=testing",
+      // one of the system's own binaries: ps shows its args and no environment
+      "  884 /bin/sh -i",
+      "not a line NODE_ENV=test",
+      "",
+    ].join("\n");
+    expect([...psUnderTest(text)]).toEqual([881, 882]);
+    expect(psUnderTest("").size).toBe(0);
+  });
+
+  const reads = process.platform === "darwin" || process.platform === "linux";
+  test.skipIf(!reads)("the scan passes it over: a stand-in claude this suite starts is an agent by its argv, and no agent of the machine's", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-scan-"));
+    const fake = join(dir, "claude");
+    await writeFile(fake, `#!${process.execPath}\nsetTimeout(() => {}, 60_000);\n`, { mode: 0o755 });
+    // the environment a test's child gets: this suite's own, NODE_ENV=test in it
+    const proc = Bun.spawn([process.execPath, fake], { cwd: dir, env: { ...process.env, NODE_ENV: "test" }, stdout: "ignore", stderr: "ignore" });
+    try {
+      const table = () => (process.platform === "linux" ? linuxProcs() : macProcs());
+      let seen = false;
+      for (let i = 0; i < 50 && !seen; i++) {
+        seen = pickAgents(await table()).some((p) => p.pid === proc.pid && p.harness === "claude");
+        if (!seen) await Bun.sleep(100);
+      }
+      expect(seen).toBe(true);
+      expect((await scanProcs()).some((p) => p.pid === proc.pid)).toBe(false);
+    } finally {
+      proc.kill();
+      await proc.exited;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

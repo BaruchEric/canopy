@@ -5,6 +5,12 @@
  * card already names, so the scan is what shows an agent started without
  * the hooks.
  *
+ * One kind it passes over: a process a test run started (`underTest`,
+ * `NODE_ENV=test` in its environment). canopy's own suite types `claude`
+ * into shells and runs stand-ins named `claude`, in folders that are gone
+ * a minute later, and a backend on the same machine listed each as an
+ * agent: 79 of the registry's 350 cards on 2026-11-09.
+ *
  * Linux reads `/proc` through procs.ts's walk (pid, ppid, argv, and comm,
  * state and start off the one stat read), then each agent's cwd. A Mac asks
  * `ps` twice, the long columns with the args last and then the comm alone,
@@ -25,7 +31,7 @@ import { existsSync } from "node:fs";
 import { exec } from "./exec";
 import { argvAgent } from "./keep";
 import { lsofBin, parseLsofCwd, repoOfCwd } from "./ports";
-import { linuxProcs, procCwd, type Proc } from "./procs";
+import { linuxProcs, procCwd, procEnviron, type Proc } from "./procs";
 import type { Harness, Repo, ScanBody, ScanProc } from "./types";
 
 /** how often a backend scans its machine */
@@ -150,6 +156,29 @@ export function pickAgents(procs: readonly Proc[]): (Proc & { harness: Harness }
     if (harness) hits.set(p.pid, { ...p, harness });
   }
   return [...hits.values()].filter((p) => hits.get(p.ppid)?.harness !== p.harness).sort((a, b) => a.pid - b.pid);
+}
+
+/** What a process a test run started carries in its environment: `bun
+ *  test` sets it, as jest and vitest do, and it passes down to every shell
+ *  and stand-in agent the test starts. */
+export const TEST_ENV = "NODE_ENV=test";
+
+/** whether a process's environment, as `NAME=value` words, says a test
+ *  started it */
+export const underTest = (env: readonly string[]): boolean => env.includes(TEST_ENV);
+
+/** `ps -Eww -o pid=,command=`: the pids a test started. A Mac's `ps` writes
+ *  the environment after the args, as more words of the one line, so an arg
+ *  that reads as `TEST_ENV` counts too. It shows none for another user's
+ *  process or for one of the system's own binaries (`/bin/sh`, `perl`),
+ *  which therefore never reads as a test's. */
+export function psUnderTest(text: string): Set<number> {
+  const out = new Set<number>();
+  for (const l of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(l);
+    if (m && underTest((m[2] ?? "").split(/\s+/))) out.add(Number(m[1]));
+  }
+  return out;
 }
 
 /** The CPU time a process and each one under it has used, in ms by pid,
@@ -280,7 +309,17 @@ async function macCwds(pids: number[]): Promise<Map<number, string>> {
   return parseLsofCwd(whole(r.stdout));
 }
 
-/** Every agent on this machine, best effort: an unreadable table is none. */
+/** which of `pids` a test started, on a Mac. Only the pids come back: the
+ *  environments `ps` printed, tokens and all, are read here and dropped. */
+async function macUnderTest(pids: number[]): Promise<Set<number>> {
+  if (pids.length === 0) return new Set();
+  const r = await exec(["ps", "-Eww", "-o", "pid=,command=", "-p", pids.join(",")], { timeoutMs: 2_000, env: { LC_ALL: "C", LANG: "C" } });
+  return psUnderTest(whole(r.stdout));
+}
+
+/** Every agent on this machine but the ones a test started, best effort:
+ *  an unreadable table is none, and an agent whose environment cannot be
+ *  read counts. */
 export async function scanProcs(platform: NodeJS.Platform = process.platform): Promise<AgentProc[]> {
   const now = Date.now();
   const agent = (table: readonly Proc[], p: Proc & { harness: Harness }, cwd: string): AgentProc => {
@@ -289,13 +328,23 @@ export async function scanProcs(platform: NodeJS.Platform = process.platform): P
   };
   if (platform === "linux") {
     const table = await linuxProcs();
-    return Promise.all(pickAgents(table).map(async (p) => agent(table, p, (await procCwd(p.pid)) ?? "")));
+    const read = await Promise.all(
+      pickAgents(table).map(async (p) => {
+        const [cwd, env] = await Promise.all([procCwd(p.pid), procEnviron(p.pid)]);
+        return underTest(env) ? null : agent(table, p, cwd ?? "");
+      }),
+    );
+    return read.filter((p): p is AgentProc => p !== null);
   }
   if (platform === "darwin") {
     const table = await macProcs().catch(() => []);
     const hits = pickAgents(table);
-    const cwds = await macCwds(hits.map((p) => p.pid)).catch(() => new Map<number, string>());
-    return hits.map((p) => agent(table, p, cwds.get(p.pid) ?? ""));
+    const pids = hits.map((p) => p.pid);
+    const [cwds, tested] = await Promise.all([
+      macCwds(pids).catch(() => new Map<number, string>()),
+      macUnderTest(pids).catch(() => new Set<number>()),
+    ]);
+    return hits.filter((p) => !tested.has(p.pid)).map((p) => agent(table, p, cwds.get(p.pid) ?? ""));
   }
   return [];
 }
