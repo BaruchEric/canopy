@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { escapeCloses } from "../surface";
-import { chanBlobUrl } from "../api";
+import { api } from "../api";
+import { saveBytes } from "../clipfiles";
 import { convName, convOf, convOrder, latestClip, messageText } from "../chan";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
@@ -34,9 +35,21 @@ function Message({ m, me, now, onError }: { m: ChanMessage; me: string; now: num
         <span className="chan-when">{ago(m.ts, now)}</span>
       </span>
       {m.kind === "object" && blob ? (
-        <a className="chan-text" href={chanBlobUrl(blob)} download>
+        // fetched with this page's token and then saved: a plain link's
+        // navigation carries no token, and the file is a hand's to read
+        <button
+          type="button"
+          className="chan-text chan-clip chan-file"
+          title="Save this file"
+          onClick={() =>
+            void api
+              .chanBlob(blob)
+              .then((bytes) => saveBytes(bytes, typeof m.meta["name"] === "string" && m.meta["name"] ? m.meta["name"] : "file"))
+              .catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))
+          }
+        >
           {messageText(m)}
-        </a>
+        </button>
       ) : m.kind === "clip" ? (
         <button type="button" className="chan-text chan-clip" title="Copy to this device's clipboard" onClick={() => void copyText(m.body, { from: "tailchan" }).catch((e: unknown) => onError(e instanceof Error ? e.message : String(e)))}>
           {messageText(m)} · copy

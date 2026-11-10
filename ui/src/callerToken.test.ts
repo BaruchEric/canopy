@@ -105,19 +105,20 @@ describe("which calls carry the token", () => {
     for (const [m, p] of [["POST", "/api/rescan"], ["DELETE", "/api/terms?term=t"], ["PUT", "/api/guards"], ["PATCH", "/api/workspaces"]] as const) expect({ p, carries: carriesToken(other, m, p) }).toEqual({ p, carries: true });
   });
 
-  test("to another origin a read does where the backend asks more than read for it, and /api/auth, which says who this page is", () => {
-    const keyed = ["/api/auth", "/api/clips?ids=c-1", "/api/clips/file?id=c-1", "/api/terms/screen?term=t", "/api/terms/text?term=t", "/api/terms/transcript?term=t", "/api/terms/move/plan?term=t", "/api/terms/move/transcript?term=t&session=s&move=m", "/api/scenarios?repo=r", "/api/repos/raw?id=app&path=.env", "/api/repos/diff?id=app", "/api/repos/log?id=app", "/api/landing/diff?id=app&path=a.ts", "/api/browse?path=~", "/api/runs/ab12cd34", "/api/runs/ab12cd34/replay"];
+  test("to another origin every read the backend wants a token for does, and /api/auth, which says who this page is", () => {
+    const keyed = ["/api/auth", "/api/tree", "/api/runs", "/api/runs?kept=1", "/api/landing", "/api/notes", "/api/work", "/api/terms", "/api/terms/agent?term=t", "/api/push/key", "/api/backends", "/api/clips?ids=c-1", "/api/clips/file?id=c-1", "/api/terms/screen?term=t", "/api/terms/text?term=t", "/api/terms/transcript?term=t", "/api/terms/move/plan?term=t", "/api/terms/move/transcript?term=t&session=s&move=m", "/api/scenarios?repo=r", "/api/repos/raw?id=app&path=.env", "/api/repos/diff?id=app", "/api/repos/log?id=app", "/api/landing/diff?id=app&path=a.ts", "/api/browse?path=~", "/api/runs/ab12cd34", "/api/runs/ab12cd34/replay", "/api/tailchan", "/api/tailchan/blob?id=b", "/api/a-read-nobody-wrote-yet"];
     for (const p of keyed) expect({ p, carries: carriesToken(other, "GET", p) }).toEqual({ p, carries: true });
   });
 
-  test("any other read to another origin goes bare, so it stays a simple request with no preflight", () => {
-    for (const p of ["/api/tree", "/api/runs", "/api/about", "/api/landing", "/api/terms", "/api/terms/agent?term=t", "/api/push/key"]) expect({ p, carries: carriesToken(other, "GET", p) }).toEqual({ p, carries: false });
+  test("a read the backend files open goes bare to another origin, so it stays a simple request with no preflight", () => {
+    for (const p of ["/api/about", "/api/going", "/api/terms/watched?term=t"]) expect({ p, carries: carriesToken(other, "GET", p) }).toEqual({ p, carries: false });
   });
 
   test("a HEAD is a GET, and the method's case does not matter", () => {
-    expect(carriesToken(other, "HEAD", "/api/tree")).toBe(false);
+    expect(carriesToken(other, "HEAD", "/api/about")).toBe(false);
     expect(carriesToken(other, "head", "/api/clips")).toBe(true);
-    expect(carriesToken(other, "get", "/api/tree")).toBe(false);
+    expect(carriesToken(other, "get", "/api/about")).toBe(false);
+    expect(carriesToken(other, "get", "/api/tree")).toBe(true);
     expect(carriesToken(other, "post", "/api/grep")).toBe(true);
   });
 });

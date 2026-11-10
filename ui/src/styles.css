@@ -2717,9 +2717,6 @@ div.waiting-row {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-a.chan-text {
-  color: var(--sky);
-}
 .chan-clip {
   justify-self: start;
   padding: 0;
@@ -2729,6 +2726,10 @@ a.chan-text {
   border: 0;
   cursor: pointer;
   text-align: left;
+}
+/* a file's line, which saves it: the colour its link had */
+.chan-file {
+  color: var(--sky);
 }
 .chan-draft {
   resize: vertical;
@@ -13710,6 +13711,19 @@ span.effective-flag:not(:first-child) {
 }
 .signin-err {
   color: var(--rust);
+}
+/* the page's first screen when its backend wants a sign-in before anything:
+   the strip is in a column there, so it wraps where the top bar's would cut */
+.signin-first .signin-strip {
+  flex-wrap: wrap;
+  justify-content: center;
+  white-space: normal;
+  padding: 6px 10px;
+}
+/* and it keeps its words on a phone: there is nothing else on the screen */
+.signin-first .signin-strip .signin-hint {
+  display: inline;
+  overflow: visible;
 }
 .pair-admin {
   color: var(--rust);

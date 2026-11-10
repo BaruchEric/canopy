@@ -120,6 +120,37 @@ the container and VS Code Remote-SSH on the mini both see
 `/home/eric/dev/<repo>`. Keep that parity; a different in-container mount path
 breaks the VS Code link.
 
+### Where `.env` lives
+
+`DEV_ROOT` is a folder canopy scans and this checkout sits inside it, so a
+`.env` kept in the checkout is a file in a repo canopy serves. `GET
+/api/repos/raw` hands it to any caller with `operate` (a page, the CLI, a
+shell's or a ranger's token), and a shell or a run in the container reads it
+by path. On the mini and on De Soto the file is kept outside every folder the
+canopy and shells containers mount, and the checkout holds a link to it:
+
+```
+mkdir -m 700 ~/.config/canopy-deploy
+mv .env ~/.config/canopy-deploy/env
+ln -s ~/.config/canopy-deploy/env .env
+```
+
+compose on the host follows the link, for its own settings and for the secrets
+container's read-only import mount, and the move recreates no container. In
+the canopy and shells containers the link leads nowhere: a repo read of `.env`
+answers 404, and `cat .env` in a shell finds no file. A link whose target a
+container could see would be refused as well, since a raw read resolves links
+and answers 403 for one that leaves its repo. What each container holds in its
+own environment is unchanged, because compose still passes every service the
+values its entry names.
+
+Edit the file where it lives. An editor that follows links works through the
+checkout's link, but `sed -i` on the link replaces it with a plain file. Keep
+backups beside the real file, never in the checkout. A canopy shell cannot
+read `.env` any more, so `bun run redeploy` there takes the host's address
+from `~/.ssh/canopy_deploy_host`, a line `scripts/redeploy-setup.sh` writes.
+Run that script again after changing `CANOPY_LISTEN`.
+
 ## Run
 
 ```
@@ -144,16 +175,19 @@ the `mac` peer remote and deploys there. In a canopy shell on the mini it
 deploys the mini's own checkout (`--pull` takes the Mac's first) over ssh to
 the host, with a key whose `authorized_keys` line runs only
 `scripts/redeploy.sh --gate`; `scripts/redeploy-setup.sh` on the mini makes
-that key once. The compose run is detached and logged under
+that key once and writes where a shell dials the host. The compose run is detached and logged under
 `~/.cache/canopy-deploy/` (`bun run redeploy log`), `bun run redeploy status`
 says what is running, and a deploy that would recreate the shells container
 stops unless given `--shells`. A deploy of the commit already running changes
 nothing, so compose leaves every container up; `--restart` recreates the
 canopy container anyway, and the shells stay. Before an `up` that may recreate
 the canopy container, the host asks canopy on its published port what it has
-going: a run working or waiting on a prompt (`/api/runs`), a flow working or
-waiting (`/api/flows`), a fleet working (`/api/fleets`), and a landing entry
-rebasing, in setup, at its gate or landing (`/api/landing`). Any of those stops
+going (`GET /api/going`, which answers a caller with no token, as the host
+is): a run working or waiting on a prompt, a coordinator between turns with a
+card queued or running, a flow working or waiting, a fleet working, and a
+landing entry rebasing, in setup, at its gate or landing. A canopy from before
+that route answers 404 and is asked through its four lists (`/api/runs`,
+`/api/flows`, `/api/fleets`, `/api/landing`) instead. Any of those stops
 the deploy with exit 4 and a line for each (its id, repo and what it is doing);
 wait for them to finish, or rerun with `--force` to cut them off. `--force`
 does not stand in for `--shells`. The check is skipped when the dry run shows
@@ -1030,11 +1064,10 @@ coordinator's lane: canopy opens a second listener on that port inside the
 container, and the shells publish 10.250.14.1:7850 onto it, so a call from
 `coord` lands there and nowhere else. `CANOPY_COORD_API` keeps the address
 the coordinator dials, 10.250.14.1:7850; only the container port behind it
-changes. A GET is the `read` right unless the table files it higher (the
-clipboard, a shell's screen, the sweep, anything read out of a repo), and a
-caller with no token holds it, so without the lane anything in `coord` could
-read every live run's steps through `GET /api/runs` and the event stream
-with no token at all. On the coordinator's listener a
+changes. A GET is the `read` right unless the table files it otherwise, and
+a coordinator's token holds `read`, so without the lane the agent in `coord`
+could read everything any token reads: every live run's steps through
+`GET /api/runs`, the notes, the event stream. On the coordinator's listener a
 call must carry a coordinator's token and may only `GET /api/about`,
 `/api/tree`, `/api/runs` and `/api/landing` and `POST
 /api/coordinator/plan`, the reads the brief names and the plan. Anything
@@ -1113,7 +1146,8 @@ it recreates the shells container and ends every shell; `bun run redeploy`
 stops with exit 3 without `--shells`. The deploy that moves the
 10.250.14.1:7850 mapping from container port 7850 to the coordinator's
 listener recreates the shells the same way, and until it does, `coord`
-still reaches canopy's main listener, where its tokenless reads go through. When nothing needs the
+still reaches canopy's main listener, where a call with no token gets what
+the main listener gives one. When nothing needs the
 shells:
 
 ```
@@ -1498,7 +1532,9 @@ Every call to the API carries a caller token (`docs/architecture.md`, "Callers a
 - The mini: `CANOPY_CALLERS=enforce` in `.env`. `docker-compose.yml` passes it to the canopy container; `bun run redeploy --restart` picks up a change.
 - The Mac: an `EnvironmentVariables` entry `CANOPY_CALLERS` in the launchd plist `ca.beric.canopy-server`, then reload the agent (kill the bun pid, as for any change there).
 
-Rollback is `log`, or `off`. The `canopy:callers` health check always reads ok, with the refused count in its detail. `GET /api/auth` (or `canopy auth status`) lists the newest 20 refusals by kind, route, Origin and user agent, which is how to find a caller outside this repo that writes, such as a Claude hook or a script in `~/dev`.
+Rollback is `log`, or `off`. The `canopy:callers` health check always reads ok, with the refused count in its detail. `GET /api/auth` with a page's or the CLI's token (or `canopy auth status`) lists the newest 20 refusals by kind, route, Origin and user agent, which is how to find a caller outside this repo that calls with no token, such as a Claude hook or a script in `~/dev`. Without an admin's token it answers the mode, who the caller is and the count.
+
+**What a caller with no token gets** under `enforce`: the page's own files, `GET /api/auth`, `/api/about`, `/api/going`, `/api/terms/watched`, the pairing routes, `POST /api/remembered/check`, the trigger hooks, Linear's install navigation and the Library's frame. Every other call is a 401 that names the right it wanted, the tree and the lists included, so a script that reads the board sends `X-Canopy-Token` (a shell's `$CANOPY_TOKEN`, or the CLI's token file). `scripts/redeploy.sh` needs none: it asks `GET /api/going`. A page opens its event stream with a one-use ticket, so after a deploy that brings this in, reload every open page: one loaded before it dials the stream bare and is refused until reloaded.
 
 **Where the first code prints.** While a backend holds no live page or CLI session (one unused for 30 days has expired and does not count) it logs `canopy: first sign-in code XXXXXX` at start, and logs a new one when a pair request is made after the old code was spent. On the Mac that is `~/Library/Logs/canopy-server.log`; on the mini, `docker compose logs canopy` (from a canopy shell, `ssh mini-host` first). A page's sign-in strip or `canopy auth login --code XXXXXX` spends it, once. After the first session exists, a signed-in page approves new pairs from its inbox.
 
@@ -1507,7 +1543,7 @@ Rollback is `log`, or `off`. The `canopy:callers` health check always reads ok, 
 - The Mac: `launchctl bootout gui/$(id -u)/ca.beric.canopy-server`, then `mv ~/.config/canopy/callers.json ~/.config/canopy/callers.json.aside`, then `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ca.beric.canopy-server.plist`. Killing the bun pid is not enough here, since launchd restarts it at once and it would read the old file.
 - The mini (on the host, in the canopy checkout): `docker compose stop canopy`, then `docker compose run --rm --no-deps --entrypoint mv canopy /config/callers.json /config/callers.json.aside`, then `docker compose start canopy`. The book lives in the `canopy-config` volume, not on the host's disk.
 
-A stream of pair requests blocks the first code too: it approves a waiting request, and at most three wait at once. To find the asker, read the address on the inbox cards, or in `GET /api/auth` (`pending`, each with its label, address and kind). On the mini, docker-proxy gives every client one address, so the label is the only other clue. A signed-in page frees a slot by denying a request; without one, the requests expire after 10 minutes.
+A stream of pair requests blocks the first code too: it approves a waiting request, and at most three wait at once. To find the asker, read the address on the inbox cards, or in `GET /api/auth` with an admin's token (`pending`, each with its label, address and kind). On the mini, docker-proxy gives every client one address, so the label is the only other clue. A signed-in page frees a slot by denying a request; without one, the requests expire after 10 minutes.
 
 Run `canopy ranger fresh` afterwards, once a CLI has signed in again, so the ranger's session carries a token the new book knows.
 

@@ -589,7 +589,10 @@ export function SignInChips() {
 
 const OWN_CODE = "that is this request's code; the first code is a different one, printed in the server's log";
 
-function SignInChip({ backend }: { backend: string }) {
+/** One backend's sign-in: the button that asks, then the code to match and
+ *  the box for the first code. Also the whole of the page's first screen
+ *  when its own backend told it nothing until it signs in (App). */
+export function SignInChip({ backend }: { backend: string }) {
   const signIn = useStore((s) => s.signIns[backend]);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);

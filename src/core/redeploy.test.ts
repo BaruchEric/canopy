@@ -139,9 +139,32 @@ const busy = {
   },
 };
 const idle = { runs: [busy.runs[2], busy.runs[4]], flows: [busy.flows[1]], fleets: [busy.fleets[1]], landing: { ...busy.landing, entries: [busy.landing.entries[2]] } };
+/** what the four lists of a canopy from before /api/going come to */
+const fromLists = [
+  "  run r1  web/app  fix, editing",
+  "  run r2  web/site  ask, waiting on a prompt",
+  "  run r4  web/app  coordinate, idle with 2 cards queued or running",
+  "  flow f1  tools/cli  ship, at step Gates",
+  "  fleet fl1  a, b, c and 2 more  bump",
+  "  landing l1  web/app  gate (typecheck), run/x",
+];
+/** GET /api/going, which canopy fills itself (core/going.ts) */
+const going = {
+  going: [
+    { kind: "run", id: "r1", repo: "web/app", doing: "fix, working" },
+    { kind: "flow", id: "f1", repo: "tools/cli", doing: "ship, at step 2 of 2" },
+    { kind: "fleet", id: "fl1", repo: "a, b, c and 2 more", doing: "bump" },
+    { kind: "landing", id: "l1", repo: "web/app", doing: "gate (typecheck)" },
+  ],
+};
+const fromGoing = ["  run r1  web/app  fix, working", "  flow f1  tools/cli  ship, at step 2 of 2", "  fleet fl1  a, b, c and 2 more  bump", "  landing l1  web/app  gate (typecheck)"];
+const justGoing = ["curl http://100.64.0.1:7850/api/going"];
 
 for (const [name, opts, expected] of [
-  ["stops with exit 4 naming the work a recreate cuts off", { plan: recreate, api: busy }, { code: 4, asked: true, up: false }],
+  ["stops with exit 4 naming what canopy says it has going, and asks it nothing else", { plan: recreate, api: { going, ...idle } }, { code: 4, asked: true, up: false, says: fromGoing, curls: justGoing }],
+  ["carries on when canopy says nothing is going, whatever its lists hold", { plan: recreate, api: { going: { going: [] }, ...busy } }, { code: 0, asked: true, up: true, curls: justGoing }],
+  ["stops when what canopy says it has going cannot be read", { plan: recreate, api: { going: { runs: [] } } }, { code: 1, asked: true, up: false, curls: justGoing }],
+  ["asks a canopy from before /api/going its four lists, and stops with exit 4 naming the work", { plan: recreate, api: busy }, { code: 4, asked: true, up: false, says: fromLists }],
   ["skips the work check with --force", { plan: recreate, api: busy, force: "1" }, { code: 0, asked: false, up: true }],
   ["carries on when canopy is not answering", { plan: recreate, down: true }, { code: 0, asked: true, up: true }],
   ["carries on when nothing is going", { plan: recreate, api: idle }, { code: 0, asked: true, up: true }],
@@ -199,13 +222,9 @@ job
       const lines = (await readFile(calls, "utf8")).split("\n");
       expect(lines.some((l) => l.startsWith("curl "))).toBe(expected.asked);
       expect(lines.includes("compose up -d")).toBe(expected.up);
+      if ("curls" in expected) expect(lines.filter((l) => l.startsWith("curl "))).toEqual([...expected.curls]);
       if (expected.code === 4) {
-        expect(stdout).toContain("  run r1  web/app  fix, editing");
-        expect(stdout).toContain("  run r2  web/site  ask, waiting on a prompt");
-        expect(stdout).toContain("  run r4  web/app  coordinate, idle with 2 cards queued or running");
-        expect(stdout).toContain("  flow f1  tools/cli  ship, at step Gates");
-        expect(stdout).toContain("  fleet fl1  a, b, c and 2 more  bump");
-        expect(stdout).toContain("  landing l1  web/app  gate (typecheck), run/x");
+        for (const line of "says" in expected ? expected.says : fromLists) expect(stdout).toContain(line);
         expect(stdout).toContain("--force");
         for (const quiet of ["r3", "r5", "f2", "fl2", "l2", "l3"]) expect(stdout).not.toContain(` ${quiet} `);
       }
@@ -245,7 +264,7 @@ job
     expect(code).toBe(0);
     expect(await Bun.file(join(logs, "deployed")).text()).toContain("fixture revision on 100.64.0.1:7850");
     const calls = await readFile(probed, "utf8");
-    expect(calls).toContain("http://100.64.0.1:7850/api/runs");
+    expect(calls).toContain("http://100.64.0.1:7850/api/going");
     expect(calls).not.toContain("10.250.14.1");
   } finally {
     await rm(logs, { recursive: true, force: true });

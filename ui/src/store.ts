@@ -899,6 +899,9 @@ export interface CanopyState {
   loaded: boolean;
   /** why the initial load failed, if it did */
   loadError: string | null;
+  /** the home backend checks who calls it and told this page nothing: the
+   *  page shows its sign-in before anything else, and loads once signed in */
+  signInFirst: boolean;
   filter: string;
   dirtyOnly: boolean;
   /** leaves only the starred repos on the board */
@@ -2059,6 +2062,14 @@ function openSavedPanels(
  *  sheet reads it on open whatever, where a refusal is the right answer. */
 const signedIn = (b: string): boolean => readToken(originOf(baseOf(b))) !== null;
 
+/** Whether a call failed because the backend's caller check refused it: a
+ *  401 or 403 that names the right it wanted. The edge gate's own sign-in
+ *  carries a login and no status here, so it is not one. */
+export const wasRefused = (err: unknown): boolean => {
+  const e = err as { status?: unknown; body?: { need?: unknown } } | null;
+  return (e?.status === 401 || e?.status === 403) && typeof e.body?.need === "string";
+};
+
 /** A sweep read after its event. A close the page has not seen is one feed
  *  line and ends agents: their dock panels close here, and an agent window
  *  showing one closes itself on sweepEnded. The hub pings on a resume or a
@@ -2405,6 +2416,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   workspaces: [],
   screenProfiles: [],
   loaded: false,
+  signInFirst: false,
   loadError: null,
   filter: "",
   dirtyOnly: false,
@@ -2490,7 +2502,13 @@ export const useStore = create<CanopyState>((set, get) => ({
   init: async () => {
     // Which backends there are comes first: every id and URL hangs off it.
     // A server from before there were several has no list, and is home alone.
-    const reply = await api.backends().catch(() => null);
+    // A backend that refuses this first read refuses the rest of the load
+    // too: asking for it anyway would only bury what its refused list is for.
+    let refusedFirst = false;
+    const reply = await api.backends().catch((err: unknown) => {
+      refusedFirst = wasRefused(err);
+      return null;
+    });
     const home = reply?.self ?? "home";
     const entries = reply?.backends ?? [];
     registryEntries = entries;
@@ -2510,6 +2528,21 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (sig.kind === "refused") refusedHere(set, name, sig.status === 401 ? sig.token : null);
     });
     const e = ++epoch;
+    // A backend that checks who calls it tells nobody its board, so there is
+    // nothing to show yet but the sign-in. What it says of itself (its mode,
+    // who this page is) is read for that, and a sign-in this tab left waiting
+    // before a reload goes on. The page loads once it is in.
+    const askFirst = async (): Promise<() => void> => {
+      await get().loadAuth(home);
+      if (dead.has(e) || epoch !== e) return () => {};
+      set({ loadError: null, signInFirst: true });
+      void get().signIn(home, true);
+      return () => {
+        if (epoch === e) onBackendSignal(() => {});
+        dead.add(e);
+      };
+    };
+    if (refusedFirst) return askFirst();
     try {
       const [tree, workspaces, runs, agents, flows, fleets, verdict, launchers, jobs, held, client, helpers, devices, kept] = await Promise.all([
         api.tree(),
@@ -2592,11 +2625,14 @@ export const useStore = create<CanopyState>((set, get) => ({
         closedSections,
         loaded: true,
         loadError: null,
+        signInFirst: false,
       });
     } catch (err) {
+      // a token dropped between the first read and these
+      if (wasRefused(err)) return askFirst();
       // Without this the app sits on the loading screen forever with no
       // message and no way back.
-      set({ loadError: String(err instanceof Error ? err.message : err) });
+      set({ loadError: String(err instanceof Error ? err.message : err), signInFirst: false });
       return () => {};
     }
     // The archive is not in the way of first paint: it lands when it lands,
@@ -2644,6 +2680,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       (ev) => get().applyEvent(ev, home),
       () => resync(get, set, home),
       identity(get().settings.device),
+      () => get().authByBackend[home],
     );
     // A helper attaching between the first read and the stream opening
     // sent a `helpers` event no one heard; one more read closes that gap.
@@ -2722,6 +2759,19 @@ export const useStore = create<CanopyState>((set, get) => ({
       };
       if (held === "denied") return;
     }
+    // With no token for it, the backend is asked who it takes this page for
+    // before anything else: one that checks callers would refuse every read
+    // below, a dozen entries in its refused list for each load of this page.
+    // It answered, so it shows online, and it loads when the sign-in lands.
+    if (!signedIn(name)) {
+      await get().loadAuth(name);
+      if (!live()) return;
+      const auth = get().authByBackend[name];
+      if (auth?.mode === "enforce" && auth.you === "none") {
+        void get().signIn(name, true);
+        return;
+      }
+    }
     let got;
     try {
       got = await Promise.all([
@@ -2739,10 +2789,20 @@ export const useStore = create<CanopyState>((set, get) => ({
         api.devices(name).catch((): Device[] => []),
       ]);
     } catch (err) {
+      if (!live()) return;
+      // A backend that no longer knows this page's token told it nothing.
+      // It answered, so the signal hook has it online already; trying again
+      // on a timer would only be refused again, so it waits for the sign-in,
+      // which the top bar offers once the backend's mode is read, and loads
+      // when that lands (signIn).
+      if (wasRefused(err)) {
+        await get().loadAuth(name);
+        if (live()) void get().signIn(name, true);
+        return;
+      }
       // the signal hook has said offline or sign-in already; an answer that
       // was an error still leaves the backend unloaded, which says so too
       const reason = String(err instanceof Error ? err.message : err);
-      if (!live()) return;
       set((s) => ({ conns: withConn(s, name, { status: backendState(connOf(s, name).status, { kind: "unreachable", reason }) }) }));
       again();
       return;
@@ -2797,6 +2857,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       (ev) => get().applyEvent(ev, name),
       () => resync(get, set, name),
       identity(get().settings.device),
+      () => get().authByBackend[name],
     );
     streams.set(name, { epoch: e, off });
     void get().loadHistory(false, name);
@@ -4278,6 +4339,9 @@ export const useStore = create<CanopyState>((set, get) => ({
           // the sweep is read only with a home token, so the page that just
           // got one reads it now: its inbox item and Settings tab need no reload
           if (backend === get().home) void get().loadSweep();
+          // another backend that told this page nothing until it signed in
+          // loads now; home's own load goes again from the sign-in screen
+          else if (!streams.has(backend)) void get().connect(backend);
           return;
         }
         if (Date.now() >= until) throw new Error("no one approved it within ten minutes");

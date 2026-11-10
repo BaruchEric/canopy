@@ -146,12 +146,53 @@ describe("enforce", () => {
     }
   });
 
-  test("a stream with no token hears that the sweep changed, never the plan its routes guard", async () => {
+  /** a one-use ticket for the event stream, asked with `token` */
+  const eventsTicket = async (token: string): Promise<string> => {
+    const res = await post(s, "/api/auth/ticket", { for: "events" }, token);
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { ticket: string }).ticket;
+  };
+
+  /** whether a GET of the stream opens; closed again at once if it does */
+  const streams = async (path: string, token?: string): Promise<number> => {
+    const cut = new AbortController();
+    const res = await call(s, path, { signal: cut.signal, ...(token ? { token } : {}) });
+    cut.abort();
+    return res.status;
+  };
+
+  test("the event stream takes a token, or a one-use ticket where a browser can send no header", async () => {
+    const bare = await call(s, "/api/events");
+    expect(bare.status).toBe(401);
+    expect(((await bare.json()) as Refusal).need).toBe("read");
+    expect(await streams("/api/events?ticket=not-one")).toBe(401);
+    // a header's token opens it for any kind that reads
+    for (const token of [shell, page]) expect(await streams("/api/events", token)).toBe(200);
+    // a ticket opens it once
+    const ticket = await eventsTicket(page);
+    expect(await streams(`/api/events?ticket=${ticket}`)).toBe(200);
+    expect(await streams(`/api/events?ticket=${ticket}`)).toBe(401);
+    // a shell's token reads, so it may ask for one too
+    expect(await streams(`/api/events?ticket=${await eventsTicket(shell)}`)).toBe(200);
+  });
+
+  test("a ticket opens only what it was asked for", async () => {
+    const q = new URLSearchParams({ id: "app", term: "00112233445566778899aabbccddeeff", place: "strip", cols: "80", rows: "24", ticket: await eventsTicket(page) });
+    expect(await opens(s, `/api/term?${q}`)).toBe(false);
+    const term = ((await (await post(s, "/api/auth/ticket", { for: "term" }, page)).json()) as { ticket: string }).ticket;
+    expect(await streams(`/api/events?ticket=${term}`)).toBe(401);
+    // and a ticket is no token: it opens no other read
+    expect((await call(s, `/api/tree?ticket=${await eventsTicket(page)}`)).status).toBe(401);
+    expect((await post(s, "/api/auth/ticket", { for: "events" })).status).toBe(401);
+    expect((await post(s, "/api/auth/ticket", { for: "everything" }, page)).status).toBe(400);
+  });
+
+  test("a stream hears that the sweep changed, never the plan its routes guard", async () => {
     const events = new AbortController();
-    const stream = await call(s, "/api/events", { signal: events.signal });
+    const stream = await call(s, `/api/events?ticket=${await eventsTicket(shell)}`, { signal: events.signal });
     if (!stream.body) throw new Error("the event stream has no body");
     const reader = stream.body.getReader();
-    expect((await call(s, "/api/sweep")).status).toBe(401);
+    expect((await call(s, "/api/sweep", { token: shell })).status).toBe(403);
     const saved = await post(s, "/api/sweep/settings", { spans: { shell: 2 * 3_600_000 } }, page);
     expect(saved.status).toBe(200);
     let seen = "";
@@ -173,11 +214,53 @@ describe("enforce", () => {
     expect(frame).toBe(`data: {"type":"sweep"}`);
   });
 
-  test("reads stay open", async () => {
-    expect((await call(s, "/api/runs")).status).toBe(200);
-    const auth = (await (await call(s, "/api/auth", { token: page })).json()) as AuthInfo;
-    expect(auth.mode).toBe("enforce");
-    expect(auth.you).toBe("page");
+  test("the board takes a token: the tree, the lists, the notes and the work items are refused bare", async () => {
+    for (const path of ["/api/tree", "/api/runs", "/api/runs?kept=1", "/api/flows", "/api/fleets", "/api/landing", "/api/notes", "/api/work", "/api/tasks", "/api/terms", "/api/backends", "/api/health"]) {
+      const bare = await call(s, path);
+      expect({ path, status: bare.status, need: ((await bare.json()) as Refusal).need }).toEqual({ path, status: 401, need: "read" });
+    }
+    for (const token of [shell, page]) {
+      for (const path of ["/api/tree", "/api/runs", "/api/flows", "/api/fleets", "/api/landing", "/api/notes"]) {
+        expect({ path, status: (await call(s, path, { token })).status }).toEqual({ path, status: 200 });
+      }
+    }
+  });
+
+  test("a caller with no token still gets the page, the build, what is going and who it is", async () => {
+    // the page's own files, so there is something to sign in from
+    expect((await call(s, "/")).status).toBe(200);
+    const about = await call(s, "/api/about");
+    expect(about.status).toBe(200);
+    expect(typeof ((await about.json()) as { hostname: unknown }).hostname).toBe("string");
+    const going = await call(s, "/api/going");
+    expect(going.status).toBe(200);
+    expect(await going.json()).toEqual({ going: [] });
+    expect((await call(s, `/api/terms/watched?term=${TERM}`)).status).toBe(200);
+    expect([401, 403]).not.toContain((await post(s, "/api/remembered/check", { tool: "Bash", input: { command: "ls" }, cwd: "/" })).status);
+  });
+
+  test("/api/auth tells everyone the mode and who they are, and only an admin the callers, the pairs and the refused calls", async () => {
+    type Whole = AuthInfo & { callers: { id: string }[]; youId: string | null };
+    const read = async (token?: string): Promise<Whole> => (await (await call(s, "/api/auth", token ? { token } : {})).json()) as Whole;
+    const asked = (await (await post(s, "/api/auth/pair", { label: "a waiting page" })).json()) as { id: string };
+    try {
+      const none = await read();
+      expect({ mode: none.mode, you: none.you, youId: none.youId }).toEqual({ mode: "enforce", you: "none", youId: null });
+      expect({ callers: none.callers, pending: none.pending, recent: none.refused.recent }).toEqual({ callers: [], pending: [], recent: [] });
+      expect(none.refused.count).toBeGreaterThan(0);
+      // a shell's token holds no admin: it learns who it is and no more
+      const hand = await read(shell);
+      expect(hand.you).toBe("ranger");
+      expect(typeof hand.youId).toBe("string");
+      expect({ callers: hand.callers, pending: hand.pending, recent: hand.refused.recent }).toEqual({ callers: [], pending: [], recent: [] });
+      const admin = await read(page);
+      expect(admin.you).toBe("page");
+      expect(admin.callers.length).toBeGreaterThanOrEqual(2);
+      expect(admin.pending.map((p) => p.id)).toContain(asked.id);
+      expect(admin.refused.recent.length).toBeGreaterThan(0);
+    } finally {
+      await post(s, "/api/auth/deny", { id: asked.id }, page);
+    }
   });
 
   test("what is in a repo takes a token: a file's bytes, a diff and a search are refused bare, and pass with a shell's or a page's", async () => {
@@ -194,8 +277,8 @@ describe("enforce", () => {
       expect(res.status).toBe(200);
       expect(await res.text()).toBe("KEY=not-a-real-one\n");
     }
-    // the tree still says which repos there are, to anyone
-    expect((await call(s, "/api/tree")).status).toBe(200);
+    // the tree says which repos there are to any token, a run's included
+    expect((await call(s, "/api/tree", { token: shell })).status).toBe(200);
   });
 
   test("a shell socket needs a ticket, and a page token gets one", async () => {
@@ -252,7 +335,7 @@ describe("enforce", () => {
     try {
       const res = await post(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, shell);
       expect(res.status).toBe(503);
-      const runs = (await (await call(s, "/api/runs")).json()) as { action: string }[];
+      const runs = (await (await call(s, "/api/runs", { token: shell })).json()) as { action: string }[];
       expect(runs.filter((r) => r.action === "coordinate")).toEqual([]);
       // the run's folder made for it goes with the refusal
       expect(await readdir(seeds)).toEqual([]);
@@ -272,7 +355,7 @@ describe("enforce", () => {
   });
 
   test("the health check says enforce", async () => {
-    const checks = ((await (await call(s, "/api/health")).json()) as { checks: HealthCheck[] }).checks;
+    const checks = ((await (await call(s, "/api/health", { token: shell })).json()) as { checks: HealthCheck[] }).checks;
     const c = checks.find((x) => x.id === "canopy:callers");
     expect(c?.state).toBe("ok");
     expect(c?.detail).toContain("enforce mode");
@@ -305,11 +388,14 @@ describe("revoking a caller", () => {
   let s: Up;
   let holder = { token: "", id: "" };
   let helper = { token: "", id: "" };
+  let listener = { token: "", id: "" };
   let admin = "";
   beforeAll(async () => {
     s = await up("revoke", "enforce", (book) => {
       const a = book.mint("page", { label: "a page with a shell open" });
       holder = { token: a.token, id: a.caller.id };
+      const l = book.mint("page", { label: "a page with a stream open" });
+      listener = { token: l.token, id: l.caller.id };
       const h = book.mint("helper", { label: "helper mbp" });
       helper = { token: h.token, id: h.caller.id };
       admin = book.mint("page", { label: "the page that revokes" }).token;
@@ -319,7 +405,7 @@ describe("revoking a caller", () => {
     await s.stop();
   });
 
-  const ticket = async (token: string, what: "term" | "helper"): Promise<string> => {
+  const ticket = async (token: string, what: "term" | "helper" | "events"): Promise<string> => {
     const res = await post(s, "/api/auth/ticket", { for: what }, token);
     expect(res.status).toBe(200);
     return ((await res.json()) as { ticket: string }).ticket;
@@ -351,6 +437,39 @@ describe("revoking a caller", () => {
     // 1008, which the dock reads as a drop and rejoins, so its tabs stay
     expect(await mine.closed(2_000)).toEqual({ code: 1008 });
     expect(await theirs.closed(200)).toBe("still open");
+  });
+
+  test("ends the event stream it opened, by ticket or by header, and leaves another caller's open", async () => {
+    /** a stream and whether it ended within `ms` */
+    const stream = async (path: string, token?: string): Promise<{ ended: (ms: number) => Promise<boolean>; stop: () => void }> => {
+      const cut = new AbortController();
+      const res = await call(s, path, { signal: cut.signal, ...(token ? { token } : {}) });
+      expect(res.status).toBe(200);
+      if (!res.body) throw new Error("the event stream has no body");
+      const reader = res.body.getReader();
+      const done = (async (): Promise<boolean> => {
+        try {
+          for (;;) if ((await reader.read()).done) return true;
+        } catch {
+          // cut by the test, not ended by the server
+          return false;
+        }
+      })();
+      return { ended: (ms) => Promise.race([done, Bun.sleep(ms).then(() => false)]), stop: () => cut.abort() };
+    };
+    const byTicket = await stream(`/api/events?ticket=${await ticket(listener.token, "events")}`);
+    const byHeader = await stream("/api/events", listener.token);
+    const theirs = await stream(`/api/events?ticket=${await ticket(admin, "events")}`);
+    try {
+      expect((await post(s, "/api/auth/revoke", { id: listener.id }, admin)).status).toBe(200);
+      expect(await byTicket.ended(2_000)).toBe(true);
+      expect(await byHeader.ended(2_000)).toBe(true);
+      expect(await theirs.ended(300)).toBe(false);
+      // and its token asks for no new one
+      expect((await post(s, "/api/auth/ticket", { for: "events" }, listener.token)).status).toBe(401);
+    } finally {
+      for (const x of [byTicket, byHeader, theirs]) x.stop();
+    }
   });
 
   test("closes a helper's socket", async () => {
@@ -455,7 +574,7 @@ describe("pairing over HTTP", () => {
 
   test("a pair is approved by the first code, and its claim is a page token with admin", async () => {
     const events = new AbortController();
-    const stream = await call(s, "/api/events", { signal: events.signal });
+    const stream = await call(s, "/api/events", { signal: events.signal, token: shell });
     if (!stream.body) throw new Error("the event stream has no body");
     const reader = stream.body.getReader();
 
@@ -538,7 +657,7 @@ describe("the pair request names its kind", () => {
   });
 
   const pending = async (): Promise<{ id: string; label: string; kind: string }[]> =>
-    ((await (await call(s, "/api/auth")).json()) as { pending: { id: string; label: string; kind: string }[] }).pending;
+    ((await (await call(s, "/api/auth", { token: admin })).json()) as { pending: { id: string; label: string; kind: string }[] }).pending;
   const asked = async (body: unknown): Promise<{ id: string; secret: string }> => {
     const res = await post(s, "/api/auth/pair", body);
     expect(res.status).toBe(200);

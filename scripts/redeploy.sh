@@ -37,7 +37,10 @@ LOGS="$HOME/.cache/canopy-deploy"
 
 die() { printf 'redeploy: %s\n' "$*" >&2; exit 1; }
 
-# a value from the checkout's .env, which the container mounts too
+# a value from the checkout's .env. On a host that keeps the file outside
+# every folder canopy's containers mount (docs/deploy.md, "Where .env
+# lives"), the checkout's .env is a link that leads nowhere in a canopy
+# shell, and this reads as empty there.
 envval() { [ -f "$HERE/.env" ] && sed -n "s/^$1=//p" "$HERE/.env" | tail -1 | tr -d '"' || true; }
 
 # ---------- the forced command: only this script's own words get through
@@ -78,10 +81,18 @@ if [ -z "${CANOPY_DEPLOY_HOST_SIDE:-}" ] && ! command -v docker >/dev/null 2>&1;
   [ -f /.dockerenv ] || die "no docker here and not in a canopy container"
   key="$HOME/.ssh/canopy_deploy"
   [ -f "$key" ] || die "no deploy key at $key; run scripts/redeploy-setup.sh on the mini once"
+  # where the host answers ssh: the environment, then the checkout's .env,
+  # then what redeploy-setup.sh wrote beside the key for a shell that
+  # cannot read .env
   host=${CANOPY_DEPLOY_HOST:-$(envval CANOPY_LISTEN)}
-  [ -n "$host" ] || die "no host to reach: set CANOPY_DEPLOY_HOST or CANOPY_LISTEN in $HERE/.env"
   home=$(envval HOST_HOME)
   user=${CANOPY_DEPLOY_USER:-${home##*/}}
+  if [ -z "$host" ] && [ -f "${key}_host" ]; then
+    at=$(head -1 "${key}_host")
+    host=${at#*@}
+    case $at in *@*) user=${CANOPY_DEPLOY_USER:-${at%@*}} ;; esac
+  fi
+  [ -n "$host" ] || die "no host to reach: set CANOPY_DEPLOY_HOST, or run scripts/redeploy-setup.sh on the mini again"
   exec ssh -i "$key" -o IdentitiesOnly=yes -o BatchMode=yes \
     -o HostKeyAlias=canopy-deploy-host -o UserKnownHostsFile="$HOME/.ssh/canopy_deploy_known_hosts" \
     -o StrictHostKeyChecking=yes "${user:-eric}@$host" redeploy "$@"
@@ -265,13 +276,24 @@ job() {
     # go to canopy's own address
     addr=$(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)
     got=0
+    older=0
     if [ -n "$addr" ]; then
-      runs=$(curl -fsS -m 10 "http://$addr/api/runs" 2>/dev/null) || got=$?
+      # /api/going is what canopy has going, and it answers a caller with no
+      # token, which this host is. A canopy from before that route (a 404)
+      # is asked the old way, through the four lists it still tells anyone.
+      # Once every backend has been deployed from a canopy with /api/going,
+      # the older branch below can go.
+      going=$(curl -fsS -m 10 "http://$addr/api/going" 2>/dev/null) || got=$?
+      if [ "$got" = 22 ]; then
+        got=0
+        older=1
+        runs=$(curl -fsS -m 10 "http://$addr/api/runs" 2>/dev/null) || got=$?
+      fi
     fi
     if [ -z "$addr" ] || { [ "$got" != 0 ] && [ "$got" != 22 ]; }; then
       echo "canopy is not answering${addr:+ on $addr}, so nothing there is cut off"
     elif [ "$got" = 22 ]; then
-      echo "canopy answers on $addr but would not list its runs, so this cannot tell what it has going."
+      echo "canopy answers on $addr but would not say what it has going, so this cannot tell what a restart cuts off."
       echo "check canopy, or run it again with --force."
       return 1
     elif ! command -v jq >/dev/null 2>&1; then
@@ -279,24 +301,36 @@ job() {
       echo "install jq, or run it again with --force."
       return 1
     else
-      # a route that does not answer (an older backend) has nothing going
-      # a coordinator between turns still has work going while any of its
-      # cards is queued or running: recreating canopy drops its queue
-      work=$(
-        jq -r '.[] | ([.tasks[]? | select(.state == "queued" or .state == "running")] | length) as $cards
-          | select(.status == "working" or .status == "waiting" or (.action == "coordinate" and .status == "idle" and $cards > 0))
-          | "  run \(.id)  \(.repoId)  \(.verb), \(if .status == "waiting" then "waiting on a prompt"
-            elif .status == "idle" then "idle with \($cards) card\(if $cards == 1 then "" else "s" end) queued or running"
-            elif (.progress // "") != "" then .progress else "working" end)"' <<<"$runs"
-        curl -fsS -m 10 "http://$addr/api/flows" 2>/dev/null | jq -r '.[] | select(.status == "working" or .status == "waiting")
-          | "  flow \(.id)  \(.repoId)  \(.verb), at step \(.steps[.current].name // .current)\(if .status == "waiting" then ", waiting on a prompt" else "" end)"'
-        curl -fsS -m 10 "http://$addr/api/fleets" 2>/dev/null | jq -r '.[] | select(.status == "working")
-          | [.repos[].repoId] as $r
-          | "  fleet \(.id)  \($r[:3] | join(", "))\(if ($r | length) > 3 then " and \(($r | length) - 3) more" else "" end)  \(.verb)"'
-        curl -fsS -m 10 "http://$addr/api/landing" 2>/dev/null | jq -r '.entries[]?
-          | select(.state == "rebasing" or .state == "setup" or .state == "gate" or .state == "landing")
-          | "  landing \(.id)  \(.repoId)  \(.state)\(if .gate then " (\(.gate))" else "" end), \(.branch)"'
-      )
+      if [ "$older" = 1 ]; then
+        # a route that does not answer (an older backend) has nothing going
+        # a coordinator between turns still has work going while any of its
+        # cards is queued or running: recreating canopy drops its queue
+        work=$(
+          jq -r '.[] | ([.tasks[]? | select(.state == "queued" or .state == "running")] | length) as $cards
+            | select(.status == "working" or .status == "waiting" or (.action == "coordinate" and .status == "idle" and $cards > 0))
+            | "  run \(.id)  \(.repoId)  \(.verb), \(if .status == "waiting" then "waiting on a prompt"
+              elif .status == "idle" then "idle with \($cards) card\(if $cards == 1 then "" else "s" end) queued or running"
+              elif (.progress // "") != "" then .progress else "working" end)"' <<<"$runs"
+          curl -fsS -m 10 "http://$addr/api/flows" 2>/dev/null | jq -r '.[] | select(.status == "working" or .status == "waiting")
+            | "  flow \(.id)  \(.repoId)  \(.verb), at step \(.steps[.current].name // .current)\(if .status == "waiting" then ", waiting on a prompt" else "" end)"'
+          curl -fsS -m 10 "http://$addr/api/fleets" 2>/dev/null | jq -r '.[] | select(.status == "working")
+            | [.repos[].repoId] as $r
+            | "  fleet \(.id)  \($r[:3] | join(", "))\(if ($r | length) > 3 then " and \(($r | length) - 3) more" else "" end)  \(.verb)"'
+          curl -fsS -m 10 "http://$addr/api/landing" 2>/dev/null | jq -r '.entries[]?
+            | select(.state == "rebasing" or .state == "setup" or .state == "gate" or .state == "landing")
+            | "  landing \(.id)  \(.repoId)  \(.state)\(if .gate then " (\(.gate))" else "" end), \(.branch)"'
+        )
+      else
+        # canopy picks what counts (src/core/going.ts): a run working or
+        # waiting on a prompt, a coordinator between turns with a card queued
+        # or running, a flow working or waiting, a fleet working, a landing
+        # entry rebasing, in setup, at its gate or landing
+        work=$(jq -r '.going[] | "  \(.kind) \(.id)  \(.repo)  \(.doing)"' <<<"$going" 2>/dev/null) || {
+          echo "canopy answers on $addr, but what it said it has going could not be read."
+          echo "check canopy, or run it again with --force."
+          return 1
+        }
+      fi
       if [ -n "$work" ]; then
         echo "canopy has work going that recreating its container would cut off:"
         printf '%s\n' "$work"

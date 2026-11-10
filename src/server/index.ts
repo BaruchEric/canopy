@@ -272,6 +272,7 @@ import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRe
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
 import { fixPrompt, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
+import { goingOf } from "../core/going";
 import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
 import { RepoHealth } from "./repohealth";
 import { createSecretsHub, type SecretsHub } from "./secrets";
@@ -346,6 +347,10 @@ interface ServerState {
   /** what each event stream said about its browser, for the streams that
    *  said anything; `devicesOf` folds them into the devices list */
   streams: Map<ReadableStreamDefaultController<Uint8Array>, Stream>;
+  /** the caller each event stream was opened as, by id, for the streams a
+   *  known caller holds: one dropped (a revoke, a shell ending) loses its
+   *  streams as it loses its sockets */
+  streamCallers: Map<ReadableStreamDefaultController<Uint8Array>, string>;
   /** the helpers dialled in, by name; a browser opens through the one it
    *  picked (or adopted by address, see `clientCaps` in core/client) */
   helpers: Map<string, Helper>;
@@ -2792,6 +2797,25 @@ async function finding<T>(run: () => Promise<T>): Promise<T> {
   }
 }
 
+/** Ends the event streams the callers `ids` hold: a stream is opened once
+ *  and then only written to, so a caller dropped since would go on reading
+ *  it. The page dials again, which now takes a token that still works. */
+function endStreams(state: ServerState, ids: readonly string[]): void {
+  let told = false;
+  for (const [c, id] of state.streamCallers) {
+    if (!ids.includes(id)) continue;
+    state.streamCallers.delete(c);
+    state.clients.delete(c);
+    told = state.streams.delete(c) || told;
+    try {
+      c.close();
+    } catch {
+      // already closed by its reader
+    }
+  }
+  if (told) tellDevices(state);
+}
+
 /** the events after which the push hub reads its "needs you" list again */
 const PUSH_EVENTS: ReadonlySet<ServerEvent["type"]> = new Set(["run", "run-gone", "flow", "flow-gone", "asks", "landing", "prs", "triggers", "ranger"]);
 
@@ -2806,6 +2830,7 @@ function broadcast(state: ServerState, event: ServerEvent): void {
       c.enqueue(data);
     } catch {
       state.clients.delete(c);
+      state.streamCallers.delete(c);
       state.streams.delete(c);
     }
   }
@@ -3792,6 +3817,11 @@ async function handleApi(
 
   if (path === "/api/tree" && method === "GET") return json(state.result);
   if (path === "/api/about" && method === "GET") return json(state.about);
+  // what a redeploy would cut off, asked by the deploy script on the host,
+  // which holds no token: ids, repos and states, none of an agent's words
+  if (path === "/api/going" && method === "GET") {
+    return json({ going: goingOf(state.runner.list(), state.flows.list(), state.flows.fleets(), state.landing.info().entries) });
+  }
   if (path === "/api/voice" && method === "GET") return json({ model: state.voice?.model ?? null, live: state.live?.model ?? null, dictate: state.dictate !== null } satisfies VoiceInfo);
   if (path === "/api/voice/dictate" && method === "POST") {
     if (!state.dictate) return json({ error: "dictation is off: this backend has no CANOPY_TRANSCRIBE_URL" }, 503);
@@ -5499,12 +5529,15 @@ async function handleApi(
   return json({ error: "not found" }, 404);
 }
 
-function sse(state: ServerState, who: Stream | null): Response {
+/** One event stream. `callerId` is the caller it was opened as, when one is
+ *  known, so the stream ends with that caller (`endStreams`). */
+function sse(state: ServerState, who: Stream | null, callerId: string | null): Response {
   let ctrl: ReadableStreamDefaultController<Uint8Array>;
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       ctrl = c;
       state.clients.add(c);
+      if (callerId !== null) state.streamCallers.set(c, callerId);
       c.enqueue(enc.encode(`: hello\n\n`));
       if (who) {
         state.streams.set(c, who);
@@ -5513,6 +5546,7 @@ function sse(state: ServerState, who: Stream | null): Response {
     },
     cancel() {
       state.clients.delete(ctrl);
+      state.streamCallers.delete(ctrl);
       if (state.streams.delete(ctrl)) tellDevices(state);
     },
   });
@@ -6057,6 +6091,7 @@ export async function startServer(opts: {
     access: new Map(),
     clients: new Set(),
     streams: new Map(),
+    streamCallers: new Map(),
     helpers: new Map(),
     gateway: await defaultGateway(),
     timers: new Map(),
@@ -6743,6 +6778,7 @@ export async function startServer(opts: {
     for (const ws of state.callerSockets) {
       if (ws.data.caller && ids.includes(ws.data.caller.id)) ws.close(1008, "caller revoked");
     }
+    endStreams(state, ids);
   };
   /** where stages run now, for the route and the `stages` event */
   const stagesNow = (): IncubatorStages => ({
@@ -6911,7 +6947,7 @@ export async function startServer(opts: {
     const key = clientKey(srv.requestIP(req)?.address ?? "127.0.0.1");
     const auth = await authRoute(state.callers, state.gate, req, url, caller, key);
     if (auth) return auth;
-    if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key));
+    if (url.pathname === "/api/events") return sse(state, parseStream(url.searchParams, key), caller?.id ?? null);
     if (url.pathname === "/api/helper") {
       // a helper dialling in from a client machine: its registration
       // rides in the query, one helper per name (a newer one wins)
@@ -7409,6 +7445,7 @@ export async function startServer(opts: {
         c.enqueue(enc.encode(`event: ping\ndata: \n\n`));
       } catch {
         state.clients.delete(c);
+        state.streamCallers.delete(c);
         if (state.streams.delete(c)) tellDevices(state);
       }
     }

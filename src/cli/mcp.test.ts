@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LineSplitter } from "../core/codexrpc";
 import { tokenFile } from "./api";
-import { apiOver, mcpToken, runConfigEnv, toolLines } from "./mcp";
+import { apiOver, enforces, mcpToken, runConfigEnv, toolLines } from "./mcp";
 
 const root = join(import.meta.dir, "../..");
 const oldConfig = process.env["CANOPY_CONFIG_DIR"];
@@ -57,11 +57,14 @@ test("the session token wins over the CLI token file", () => {
   expect(mcpToken(base, { CANOPY_RUN: "abcd1234", CANOPY_TOKEN: "run-token" })).toBe("run-token");
 });
 
-test("a read token's tool listing excludes writes", () => {
-  const lines = toolLines("none", "http://x");
+test("a caller with no token is listed the reads where the backend only logs, and how to sign in where it enforces", () => {
+  const lines = toolLines("none", "http://x", false);
   expect(lines[0]).toBe("tools for a none token on http://x");
   expect(lines).toHaveLength(5);
   expect(lines.slice(1).map((line) => line.trim().split(/\s+/)[0])).toEqual(["canopy_status", "canopy_runs", "canopy_queue", "canopy_health"]);
+  expect(toolLines("none", "http://x")).toEqual(["tools for a none token on http://x", "  none: http://x checks who calls it. Sign in with: canopy auth login --backend http://x"]);
+  expect(toolLines("run", "http://x")).toHaveLength(9);
+  expect([enforces("enforce"), enforces("log"), enforces("off"), enforces(undefined)]).toEqual([true, false, false, true]);
 });
 
 test("stdio replies preserve order and the session's token, including an API refusal", async () => {

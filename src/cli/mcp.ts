@@ -47,9 +47,18 @@ export function apiOver(base: string, token: string | null): CanopyApi {
   };
 }
 
-export function toolLines(kind: CallerKind, base: string): string[] {
-  return [`tools for a ${kind} token on ${base}`, ...toolsFor(kind).map((tool) => `  ${tool.name.padEnd(15)}  ${tool.right.padEnd(8)}  ${tool.description}`)];
+export function toolLines(kind: CallerKind, base: string, enforced = true): string[] {
+  const tools = toolsFor(kind, enforced);
+  const head = `tools for a ${kind} token on ${base}`;
+  // nothing to list under enforce means nobody signed in: say how
+  if (tools.length === 0 && kind === "none") return [head, `  none: ${base} checks who calls it. Sign in with: canopy auth login --backend ${base}`];
+  return [head, ...tools.map((tool) => `  ${tool.name.padEnd(15)}  ${tool.right.padEnd(8)}  ${tool.description}`)];
 }
+
+/** Whether a backend's `/api/auth` says it refuses a caller it does not know.
+ *  Only `log` and `off` say otherwise; a mode this build has not heard of
+ *  counts as enforcing, the side that lists less. */
+export const enforces = (mode: unknown): boolean => mode !== "log" && mode !== "off";
 
 export async function mcpCommand(argv: string[], { fail }: { fail: (message: string) => never }): Promise<void> {
   const args = [...argv];
@@ -64,10 +73,11 @@ export async function mcpCommand(argv: string[], { fail }: { fail: (message: str
   const auth = await api.call<unknown>("GET", "/api/auth").catch((err: unknown) => fail(`canopy mcp: ${base} did not answer: ${errText(err)}`));
   if (!isRecord(auth) || !isKind(auth["you"])) return fail(`canopy mcp: ${base} did not answer with a caller kind`);
   const kind = auth["you"];
+  const enforced = enforces(auth["mode"]);
   if (args[0] === "tools") {
-    for (const line of toolLines(kind, base)) console.log(line);
+    for (const line of toolLines(kind, base, enforced)) console.log(line);
     return;
   }
   const writer = Bun.stdout.writer();
-  await serve(Bun.stdin.stream(), { write: async (line: string) => { writer.write(line + "\n"); await writer.flush(); } }, { api, kind, run: env["CANOPY_RUN"] ?? null, version: versionLine(readBuild()) });
+  await serve(Bun.stdin.stream(), { write: async (line: string) => { writer.write(line + "\n"); await writer.flush(); } }, { api, kind, enforced, run: env["CANOPY_RUN"] ?? null, version: versionLine(readBuild()) });
 }

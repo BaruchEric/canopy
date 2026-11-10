@@ -119,19 +119,19 @@ export function tokenHeaders(origin: string, init?: HeadersInit, store: Store | 
 
 /** Whether a call to a backend carries this page's token. On the page's own
  *  origin (`base` is "") every call does. To another origin a write does, and
- *  a read only where the backend asks more than `read` for it (a clip, a
- *  shell's screen, a move's plan) or says who the caller is (`/api/auth`).
- *  Any other read goes bare: a GET with no custom header is a simple request
- *  with no preflight, and a preflight that fails at an edge gate would mark
- *  the whole backend offline. The page reads the table the backend checks
- *  (`needs`), so a read filed above `read` there carries the token here
- *  without a second list to keep in step. */
+ *  so does every read the backend wants a token for, which is all but the
+ *  few it files `open`; `/api/auth` is open and carries it anyway, since its
+ *  answer says who the caller is. An open read goes bare: a GET with no
+ *  custom header is a simple request, so it is never preflighted. The page
+ *  reads the table the backend checks (`needs`), so there is no second list
+ *  to keep in step. A page with no token for a backend sends none, and its
+ *  reads stay simple requests (`tokenHeaders`). */
 export function carriesToken(base: string, method: string, path: string): boolean {
   if (!base) return true;
   const m = method.toUpperCase();
   if (m !== "GET" && m !== "HEAD") return true;
   const bare = path.split("?")[0] ?? "";
-  return bare === "/api/auth" || needs("GET", bare) !== "read";
+  return bare === "/api/auth" || needs("GET", bare) !== "open";
 }
 
 /** A page's pair label. The request names its kind, but a server from before
@@ -188,10 +188,11 @@ export interface BackendAuth extends AuthInfo {
  *  that ended without a token. */
 export type SignIn = { state: "waiting"; id: string; code: string } | { state: "failed"; why: string };
 
-/** How a shell's socket dials: with the ticket it got, bare where the
- *  backend lets a ticketless shell through (log, off, or no caller check at
- *  all), or not until this page signs in. A refused ticket on a backend whose
- *  mode is not read yet counts as enforce, since only a check refuses. */
+/** How a shell's socket and the event stream dial: with the ticket each got,
+ *  bare where the backend lets a ticketless one through (log, off, or no
+ *  caller check at all), or not until this page signs in. A refused ticket on
+ *  a backend whose mode is not read yet counts as enforce, since only a check
+ *  refuses. */
 export type DialPlan = { kind: "ticket"; ticket: string } | { kind: "bare" } | { kind: "wait" };
 
 /** Whether a read of an `admin` route will land on a backend as it last

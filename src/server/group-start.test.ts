@@ -281,12 +281,9 @@ async function world(
   });
   worlds.push({ ...server, dir, previous, tmux, callers });
   const url = (path: string) => `http://127.0.0.1:${server.port}${path}`;
-  const post = (path: string, body: unknown) =>
-    fetch(url(path), {
-      method: "POST",
-      body: JSON.stringify(body),
-      ...(token ? { headers: { "X-Canopy-Token": token } } : {}),
-    });
+  /** what every call here carries: the operator's token where the world enforces */
+  const asked: RequestInit = token ? { headers: { "X-Canopy-Token": token } } : {};
+  const post = (path: string, body: unknown) => fetch(url(path), { method: "POST", body: JSON.stringify(body), ...asked });
   const start = (over: Record<string, unknown> = {}) =>
     post("/api/repos/run?id=app", {
       action: "ask",
@@ -296,7 +293,7 @@ async function world(
       ...over,
     });
   const readRuns = async () => {
-    const value: unknown = await (await fetch(url("/api/runs"))).json();
+    const value: unknown = await (await fetch(url("/api/runs"), asked)).json();
     if (!Array.isArray(value)) throw new Error("runs absent");
     return value.map((run: unknown) => {
       if (!isRecord(run)) throw new Error("bad run");
@@ -314,12 +311,12 @@ async function world(
     });
   };
   const groups = async () => {
-    const value: unknown = await (await fetch(url("/api/groups"))).json();
+    const value: unknown = await (await fetch(url("/api/groups"), asked)).json();
     if (!Array.isArray(value)) throw new Error("groups absent");
     return value.map(groupBody);
   };
   const landing = async () => {
-    const value: unknown = await (await fetch(url("/api/landing"))).json();
+    const value: unknown = await (await fetch(url("/api/landing"), asked)).json();
     if (
       !isRecord(value) ||
       !Array.isArray(value["runs"]) ||
@@ -372,6 +369,7 @@ async function world(
     finish,
     diskGroups,
     url,
+    asked,
     ghCalls,
     limitedToken,
   };
@@ -583,7 +581,7 @@ test("a coordinator's card with times starts one group through the real start an
     expect(group.expectedMembers).toBe(2);
     const members = (await w.readRuns()).filter((r) => r.group === group.id);
     expect(members.map((r) => r.priority)).toEqual(["low", "low"]);
-    const raw: unknown = await (await fetch(w.url("/api/runs"))).json();
+    const raw: unknown = await (await fetch(w.url("/api/runs"), w.asked)).json();
     const list = Array.isArray(raw) ? raw.filter(isRecord) : [];
     expect(list.filter((r) => r["group"] === group.id).map((r) => [r["parent"], r["by"]])).toEqual([[run, "coordinator"], [run, "coordinator"]]);
     await w.finish(1);
@@ -592,7 +590,7 @@ test("a coordinator's card with times starts one group through the real start an
     const branches = (await w.landing()).runs.map((r) => r.branch);
     await w.finish(3, `<<<compare\n${JSON.stringify({ ranking: branches, why: Object.fromEntries(branches.map((branch) => [branch, "Good work."])) })}\n>>>`);
     await until(async () => {
-      const now: unknown = await (await fetch(w.url("/api/runs"))).json();
+      const now: unknown = await (await fetch(w.url("/api/runs"), w.asked)).json();
       const mine = Array.isArray(now) ? now.filter(isRecord).find((r) => r["id"] === run) : undefined;
       const tasks = mine?.["tasks"];
       const first: unknown = Array.isArray(tasks) ? tasks[0] : undefined;

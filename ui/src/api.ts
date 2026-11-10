@@ -129,7 +129,7 @@ import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
 import { keyHeaders } from "./answerKey";
-import { carriesToken, isAuthInfo, originOf, TOKEN_HEADER, tokenHeaders, type AuthInfo } from "./callerToken";
+import { carriesToken, dialPlan, isAuthInfo, originOf, readToken, TOKEN_HEADER, tokenHeaders, type AuthInfo, type DialPlan } from "./callerToken";
 import {
   qDevice,
   qEvent,
@@ -199,10 +199,9 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
   // The backend's own token, when this page signed in to it. To another
-  // origin it rides only where it is needed (carriesToken): a write,
-  // /api/auth, and a read the backend's table files above `read`, such as a
-  // clip (FR-054) or a shell's screen. Any other read is open to anyone and
-  // goes bare, so it is never preflighted.
+  // origin it rides where it is needed (carriesToken), which is every call
+  // but a read the backend files open to anyone: that one goes bare, so it
+  // is never preflighted.
   const keyed = carriesToken(base, init.method ?? "GET", path);
   const headers = keyed ? tokenHeaders(originOf(base), init.headers) : new Headers(init.headers);
   if (typeof init.body === "string" && init.headers === undefined) headers.set("Content-Type", "application/json");
@@ -298,9 +297,7 @@ async function repoReq<T>(id: string, path: (plain: string) => string, init?: Re
 async function blobReq(b: string, path: string): Promise<Blob> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
-  // a read: the token rides on the page's own origin, and to another origin
-  // only where the backend asks more than `read` (a clip's file, a move's
-  // transcript), as in req
+  // a read: the token rides wherever the backend wants one, as in req
   const keyed = carriesToken(base, "GET", path);
   const r = await fetch(base + path, { ...(base ? { credentials: "include" as const } : {}), ...(keyed ? { headers: tokenHeaders(originOf(base)) } : {}) });
   if (!r.ok) {
@@ -1018,8 +1015,8 @@ export const api = {
   approvePair: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/approve", { method: "POST", body: JSON.stringify({ id }) }),
   denyPair: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/deny", { method: "POST", body: JSON.stringify({ id }) }),
   revokeCaller: (b: string, id: string) => req<{ ok: true }>(b, "/api/auth/revoke", { method: "POST", body: JSON.stringify({ id }) }),
-  /** a one-use ticket for a socket the browser cannot put a header on */
-  ticket: async (b: string, what: "term" | "helper") => (await req<{ ticket: string }>(b, "/api/auth/ticket", { method: "POST", body: JSON.stringify({ for: what }) })).ticket,
+  /** a one-use ticket for a socket or a stream the browser cannot put a header on */
+  ticket: async (b: string, what: "term" | "helper" | "events") => (await req<{ ticket: string }>(b, "/api/auth/ticket", { method: "POST", body: JSON.stringify({ for: what }) })).ticket,
   /** one backend's branch runs and landing queue; an older backend has none */
   landing: async (b: string = homeName()) => {
     const r = await req<Partial<LandingInfo> | null>(b, "/api/landing");
@@ -1515,6 +1512,10 @@ const RETRY_MAX = 30_000;
  *  exist where this module is imported (tests). */
 const CONNECTING = 0;
 const OPEN = 1;
+const CLOSED = 2;
+/** how often a stream that waits for this page to sign in looks again; the
+ *  look is at the page's own storage, so it costs the backend nothing */
+const STREAM_SIGNIN_WAIT = 2_000;
 
 /** What to do about the stream on a watchdog tick or when the tab shows
  *  again. An open stream that has gone quiet is half-open (a phone asleep,
@@ -1535,6 +1536,10 @@ export function streamAction(
   return retryPending ? "keep" : "reopen";
 }
 
+/** The stream's address for a dial: with its ticket when it has one. */
+export const streamUrl = (url: string, ticket: string | null): string =>
+  ticket === null ? url : `${url}${url.includes("?") ? "&" : "?"}ticket=${encodeURIComponent(ticket)}`;
+
 export function subscribe(
   b: string,
   onEvent: (ev: ServerEvent) => void,
@@ -1543,6 +1548,9 @@ export function subscribe(
   onReconnect?: () => void,
   /** who this browser is, for the devices list; none for an anonymous stream */
   who: Record<string, string> = {},
+  /** what the backend last said of its caller check and of this page, when
+   *  it has said: the dial goes by it, as a shell's does */
+  auth: () => Pick<AuthInfo, "mode" | "you"> | undefined = () => undefined,
 ): () => void {
   const q = new URLSearchParams(who).toString();
   const base = baseOf(b);
@@ -1552,11 +1560,59 @@ export function subscribe(
   let lastSeen = Date.now();
   let retry: ReturnType<typeof setTimeout> | null = null;
   let wait = RETRY_FIRST;
-  let es = open();
+  /** the stream once it is dialled; none while a dial asks for its ticket
+   *  or waits for this page to sign in */
+  let es: EventSource | null = null;
+  let dialling = false;
+  dial();
 
-  function open(): EventSource {
+  /** An EventSource can send no header, so the stream opens with a one-use
+   *  ticket this page's token asks for, a new one for every dial. With no
+   *  token and nobody the backend takes this page for, there is nothing to
+   *  ask with: a backend that lets a bare stream through (log, off) is
+   *  dialled bare and at once, and one that enforces would only refuse it,
+   *  so the dial waits for a sign-in and asks the backend nothing meanwhile. */
+  function dial(): void {
+    if (stopped || dialling) return;
+    const a = auth();
+    if (!readToken(originOf(base)) && (a === undefined || a.you === "none")) {
+      land(dialPlan(a?.mode, null, false));
+      return;
+    }
+    dialling = true;
+    void api
+      .ticket(b, "events")
+      .then(
+        (ticket): DialPlan => dialPlan(auth()?.mode, ticket || null, false),
+        (err: unknown): DialPlan => {
+          const status = (err as { status?: unknown }).status;
+          // a backend from before stream tickets knows no such ticket (a
+          // 400), and serves its stream to anyone
+          if (status === 400) return { kind: "bare" };
+          return dialPlan(auth()?.mode, null, status === 401 || status === 403);
+        },
+      )
+      .then((plan) => {
+        dialling = false;
+        land(plan);
+      });
+  }
+
+  function land(plan: DialPlan): void {
+    if (stopped) return;
+    if (plan.kind === "wait") {
+      retry ??= setTimeout(() => {
+        retry = null;
+        dial();
+      }, STREAM_SIGNIN_WAIT);
+      return;
+    }
+    es = open(streamUrl(url, plan.kind === "ticket" ? plan.ticket : null), plan.kind === "ticket");
+  }
+
+  function open(at: string, ticketed: boolean): EventSource {
     // another origin: the gate's cookie has to ride along
-    const s = new EventSource(url, { withCredentials: base !== "" });
+    const s = new EventSource(at, { withCredentials: base !== "" });
     lastSeen = Date.now();
     s.onopen = () => {
       signal(b, { kind: "stream-open" });
@@ -1579,10 +1635,14 @@ export function subscribe(
     });
     // The browser retries a dropped stream by itself and only gives up
     // (readyState CLOSED) on an answer that is not one; from there on the
-    // retries are ours, at doubling waits.
+    // retries are ours, at doubling waits. A stream dialled with a ticket is
+    // ours to retry from the first drop: the ticket is spent, so the
+    // browser's own retry of the same address would only be refused.
     s.onerror = () => {
       signal(b, { kind: "stream-lost" });
-      if (s.readyState !== CONNECTING && s === es) schedule();
+      if (s !== es) return;
+      if (ticketed) s.close();
+      if (ticketed || s.readyState !== CONNECTING) schedule();
     };
     return s;
   }
@@ -1598,13 +1658,15 @@ export function subscribe(
 
   function replace(): void {
     if (stopped) return;
-    es.close();
-    es = open();
+    es?.close();
+    es = null;
+    dial();
   }
 
   function check(): void {
     if (stopped) return;
-    const act = streamAction(es.readyState, lastSeen, Date.now(), retry !== null);
+    // with no stream dialled, a dial is out for its ticket or a retry waits
+    const act = streamAction(es ? es.readyState : CLOSED, lastSeen, Date.now(), retry !== null || dialling);
     if (act === "recycle") replace();
     else if (act === "reopen") schedule();
   }
@@ -1622,9 +1684,9 @@ export function subscribe(
     clearInterval(watchdog);
     if (retry) clearTimeout(retry);
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
-    es.close();
+    es?.close();
   };
 }
 
 /** where a tailchan file downloads from, through the backend */
-export const chanBlobUrl = (id: string): string => `/api/tailchan/blob?id=${encodeURIComponent(id)}`;
+const chanBlobUrl = (id: string): string => `/api/tailchan/blob?id=${encodeURIComponent(id)}`;

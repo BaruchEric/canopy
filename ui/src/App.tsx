@@ -20,7 +20,7 @@ import { ContextMenus } from "./components/ContextMenus";
 import { RunSolo } from "./components/RunSolo";
 import { SectionSolo, Solo } from "./components/Solo";
 import { ShellSolo, TermDock } from "./components/TermDock";
-import { Crowns, TopBar } from "./components/TopBar";
+import { Crowns, SignInChip, TopBar } from "./components/TopBar";
 import { NARROW, PHONE, useMedia } from "./media";
 import { PANES_CHANNEL, listenPanes, parsePaneMsg, type PaneMsg } from "./panes";
 import { OVER_PAGE } from "./surface";
@@ -293,6 +293,10 @@ export function App() {
   const init = useStore((s) => s.init);
   const loaded = useStore((s) => s.loaded);
   const loadError = useStore((s) => s.loadError);
+  const signInFirst = useStore((s) => s.signInFirst);
+  const home = useStore((s) => s.home);
+  /** who the home backend takes this page for, once it has said */
+  const homeYou = useStore((s) => s.authByBackend[s.home]?.you);
   const setDirtyOnly = useStore((s) => s.setDirtyOnly);
   const setSetting = useStore((s) => s.setSetting);
   const theme = useStore((s) => s.settings.theme);
@@ -332,6 +336,12 @@ export function App() {
       unsubscribe?.();
     };
   }, [init, attempt]);
+
+  // Signed in from the sign-in screen: the load the backend refused goes
+  // again, now with a token it knows.
+  useEffect(() => {
+    if (signInFirst && homeYou !== undefined && homeYou !== "none") setAttempt((n) => n + 1);
+  }, [signInFirst, homeYou]);
 
   // Theme, palette, contrast and density live on <html> so the solo view
   // and the popover get them too. "system" removes the attribute and lets
@@ -615,6 +625,18 @@ export function App() {
   }, [narrow, setDrawer]);
 
   if (!loaded) {
+    if (signInFirst) {
+      return (
+        <div className="loading grove signin-first">
+          <Crowns size={40} />
+          <p>This canopy asks who is calling before it shows anything. Sign in to load the grove.</p>
+          <SignInChip backend={home} />
+          <button type="button" className="mini" title="Load again, for a sign-in that finished in another tab" onClick={() => setAttempt((n) => n + 1)}>
+            try again
+          </button>
+        </div>
+      );
+    }
     if (loadError) {
       return (
         <div className="loading grove" role="alert">

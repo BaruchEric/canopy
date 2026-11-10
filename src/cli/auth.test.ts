@@ -41,8 +41,10 @@ afterAll(async () => {
 const base = (): string => `http://127.0.0.1:${port}`;
 const clientFile = (): string => join(scratch, "client", `token-127.0.0.1-${port}`);
 
+/** the first code now good: the last one printed, since each sign-out of the
+ *  only session brings a new one */
 const firstCode = (): string => {
-  const m = /first sign-in code (\S+) /.exec(lines.find((l) => l.includes("first sign-in code")) ?? "");
+  const m = /first sign-in code (\S+) /.exec(lines.findLast((l) => l.includes("first sign-in code")) ?? "");
   if (!m?.[1]) throw new Error("the server printed no first code");
   return m[1];
 };
@@ -95,7 +97,12 @@ describe("pairFlow", () => {
 
   test("the request names its kind, whatever the label starts with", async () => {
     await expect(pairFlow({ base: base(), label: "laptop", kind: "cli", poll: 5, window: 40 })).rejects.toThrow("timed out");
-    const auth = (await (await fetch(`${base()}/api/auth`)).json()) as { pending: { label: string; kind: string }[] };
+    // who waits is an admin's to read, and a caller with no token is told nobody does
+    const bare = (await (await fetch(`${base()}/api/auth`)).json()) as { pending: unknown[] };
+    expect(bare.pending).toEqual([]);
+    expect((await cli("auth", "login", "--backend", base(), "--code", firstCode())).code).toBe(0);
+    const token = (await readFile(clientFile(), "utf8")).trim();
+    const auth = (await (await fetch(`${base()}/api/auth`, { headers: { "x-canopy-token": token } })).json()) as { pending: { label: string; kind: string }[] };
     expect(auth.pending.find((p) => p.label === "laptop")?.kind).toBe("cli");
     expect(auth.pending.find((p) => p.label === "helper test")?.kind).toBe("helper");
   });

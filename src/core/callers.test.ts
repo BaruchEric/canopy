@@ -29,7 +29,7 @@ describe("needs", () => {
     expect(allows("shell", needs("POST", "/api/push/test"))).toBe(false);
   });
 
-  test("each read-only Library path is read", () => {
+  test("each read-only Library path is open, since a frame's load carries no token", () => {
     for (const p of [
       "/api/library",
       "/api/library/sync",
@@ -44,7 +44,7 @@ describe("needs", () => {
       "/library/api/ports/state",
       "/library/api/files",
     ]) {
-      expect(needs("GET", p)).toBe("read");
+      expect(needs("GET", p)).toBe("open");
     }
   });
 
@@ -126,9 +126,9 @@ describe("needs", () => {
     expect(needs("DELETE", "/api/terms/kept")).toBe("shell");
   });
 
-  test("POSTs that change nothing need read", () => {
-    expect(needs("POST", "/api/remembered/check")).toBe("read");
+  test("a move's check needs a token; a hook's rule check is open, since a terminal outside canopy has none", () => {
     expect(needs("POST", "/api/repos/movecheck")).toBe("read");
+    expect(needs("POST", "/api/remembered/check")).toBe("open");
   });
 
   test("the ticket route is open to the table because it checks its own right", () => {
@@ -265,10 +265,15 @@ describe("what a shell shows", () => {
     }
   });
 
-  test("the list of shells and the facts about one stay plain reads", () => {
-    for (const p of ["/api/terms", "/api/terms/kept", "/api/terms/agent", "/api/terms/watched"]) {
+  test("the list of shells and the facts about one are plain reads, which take a token", () => {
+    for (const p of ["/api/terms", "/api/terms/kept", "/api/terms/agent"]) {
       expect({ p, right: needs("GET", p) }).toEqual({ p, right: "read" });
+      expect({ p, none: allows("none", needs("GET", p)) }).toEqual({ p, none: false });
     }
+  });
+
+  test("whether someone is at a shell is one boolean, open to the hook that asks from inside it", () => {
+    expect(needs("GET", "/api/terms/watched")).toBe("open");
   });
 });
 
@@ -300,15 +305,75 @@ describe("what is in a repo", () => {
     for (const p of ["/api/runs/r-1a2b3c", "/api/runs/r-1a2b3c/export", "/api/runs/r-1a2b3c/replay"]) closed("GET", p);
   });
 
-  test("the tree, the lists a page loads with and the four the deploy gate asks stay plain reads", () => {
-    const open = ["/api/tree", "/api/runs", "/api/flows", "/api/fleets", "/api/landing", "/api/about", "/api/auth", "/api/events", "/api/workspaces", "/api/agents", "/api/jobs", "/api/tasks", "/api/health"];
-    for (const p of open) expect({ p, right: needs("GET", p) }).toEqual({ p, right: "read" });
+  test("the tree, the lists a page loads with and the event stream are plain reads: any token, and no caller without one", () => {
+    const plain = ["/api/tree", "/api/runs", "/api/flows", "/api/fleets", "/api/landing", "/api/events", "/api/workspaces", "/api/agents", "/api/jobs", "/api/tasks", "/api/health", "/api/notes", "/api/work", "/api/backends", "/api/registry", "/api/asks", "/api/push/key", "/api/a-read-nobody-wrote-yet"];
+    for (const p of plain) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "read" });
+      expect({ p, none: allows("none", needs("GET", p)) }).toEqual({ p, none: false });
+      expect({ p, helper: allows("helper", needs("GET", p)) }).toEqual({ p, helper: false });
+      for (const kind of ["page", "cli", "shell", "ranger", "run", "coordinator"] as const) expect({ p, kind, ok: allows(kind, needs("GET", p)) }).toEqual({ p, kind, ok: true });
+    }
   });
 
   test("no lane names one of them, so a run and a coordinator stay off them on either listener", () => {
     for (const kind of ["run", "coordinator"] as const) {
       const lane = [...(LANES[kind] ?? [])];
       expect({ kind, inside: lane.filter((r) => r.startsWith("GET /api/repos/") || r.startsWith("GET /api/runs/") || r === "POST /api/grep" || r === "GET /api/browse" || r === "GET /api/landing/diff") }).toEqual({ kind, inside: [] });
+    }
+  });
+});
+
+describe("what a caller with no token gets", () => {
+  const bare = (method: string, p: string): boolean => allows("none", needs(method, p));
+
+  test("the page's own files, which hold nothing a sign-in guards", () => {
+    for (const p of ["/", "/index.html", "/assets/index-abc123.js", "/sw.js", "/manifest.webmanifest", "/icons/icon-192.png", "/some/route/the/page/owns"]) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "open" });
+    }
+    // anything but a GET outside the API is nobody's
+    expect(needs("POST", "/")).toBe("admin");
+    expect(needs("DELETE", "/index.html")).toBe("admin");
+  });
+
+  test("what signing in needs: who it is, and the three pairing routes", () => {
+    expect(bare("GET", "/api/auth")).toBe(true);
+    for (const p of ["/api/auth/pair", "/api/auth/claim", "/api/auth/first"]) expect({ p, ok: bare("POST", p) }).toEqual({ p, ok: true });
+    for (const p of ["/api/auth/approve", "/api/auth/deny", "/api/auth/revoke"]) expect({ p, ok: bare("POST", p) }).toEqual({ p, ok: false });
+  });
+
+  test("the answers a script with no token asks for, and Linear's navigation", () => {
+    for (const p of ["/api/about", "/api/going", "/api/terms/watched", "/api/linear/install", "/api/linear/callback"]) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "open" });
+    }
+    expect(needs("POST", "/api/remembered/check")).toBe("open");
+    expect(needs("POST", "/api/hooks/sentry")).toBe("open");
+  });
+
+  test("nothing else: no board, no list, no stream, no note, no work item", () => {
+    const closed = [
+      "/api/tree", "/api/runs", "/api/runs?kept=1", "/api/flows", "/api/fleets", "/api/landing", "/api/events", "/api/notes", "/api/work", "/api/tasks", "/api/jobs",
+      "/api/terms", "/api/terms/kept", "/api/terms/agent", "/api/workspaces", "/api/agents", "/api/backends", "/api/peers", "/api/registry", "/api/asks", "/api/ranger",
+      "/api/health", "/api/history", "/api/costs", "/api/client", "/api/devices", "/api/helpers", "/api/hosts", "/api/ports", "/api/launchers", "/api/remembered",
+      "/api/capacity", "/api/kit", "/api/kit/preview", "/api/secrets", "/api/secrets/audit", "/api/prs", "/api/groups", "/api/incubator", "/api/incubator/one",
+      "/api/layouts", "/api/presence", "/api/guards", "/api/push/key", "/api/push", "/api/scenarios/names", "/api/voice", "/api/verdict", "/api/tailchan",
+      "/api/tailchan/read", "/api/tailchan/blob", "/api/about/more", "/api/going/more", "/api/authx", "/api/a-read-nobody-wrote-yet",
+    ];
+    for (const p of closed) expect({ p, ok: bare("GET", p.split("?")[0] ?? p) }).toEqual({ p, ok: false });
+    expect(bare("POST", "/api/repos/movecheck")).toBe(false);
+    expect(bare("POST", "/api/a-write-nobody-wrote-yet")).toBe(false);
+  });
+
+  test("a helper's token reads nothing either: its right is its socket's alone", () => {
+    for (const p of ["/api/tree", "/api/runs", "/api/events", "/api/notes"]) expect({ p, ok: allows("helper", needs("GET", p)) }).toEqual({ p, ok: false });
+  });
+});
+
+describe("what was said on tailchan", () => {
+  test("reading it and its files is a hand's, as sending is", () => {
+    for (const p of ["/api/tailchan", "/api/tailchan/read", "/api/tailchan/blob"]) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "operate" });
+      for (const kind of ["page", "cli", "shell", "ranger"] as const) expect({ p, kind, ok: allows(kind, needs("GET", p)) }).toEqual({ p, kind, ok: true });
+      for (const kind of ["none", "run", "coordinator", "helper"] as const) expect({ p, kind, ok: allows(kind, needs("GET", p)) }).toEqual({ p, kind, ok: false });
     }
   });
 });
@@ -339,7 +404,7 @@ describe("allows", () => {
     expect(allows("ranger", "operate")).toBe(true);
     expect(allows("coordinator", "plan")).toBe(true);
     expect(allows("coordinator", "operate")).toBe(false);
-    expect(allows("none", "read")).toBe(true);
+    expect(allows("none", "read")).toBe(false);
     expect(allows("none", "operate")).toBe(false);
     expect(allows("helper", "helper")).toBe(true);
     expect(allows("helper", "read")).toBe(false);

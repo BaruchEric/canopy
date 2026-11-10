@@ -46,6 +46,7 @@ import {
   activeFlowFor,
   harnessNoticeOf,
   screenLayoutOf,
+  wantsSignIn,
 } from "./store";
 import { applyQuery } from "./filters";
 import { cellOf, columnOf, panelsOf, type DockLayout } from "./grid";
@@ -2032,6 +2033,145 @@ describe("several backends", () => {
     expect(connOf(useStore.getState(), "a").status.state).toBe("online");
   });
 
+  describe("a backend that enforces and does not know this page", () => {
+    const kept = new Map<string, string>();
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    /** A backend under enforce: who it is and the pairing routes answer
+     *  anyone, a ticket and every other route only the token `mine`. */
+    const enforcing = (mine: string, answers: Answer, claims: () => Response): Answer => (path, init) => {
+      const p = path.split("?")[0] ?? "";
+      const token = new Headers(init?.headers).get("x-canopy-token");
+      if (p === "/api/auth") return { mode: "enforce", refused: { count: 0, recent: [] }, callers: [], pending: [], you: token === mine ? "page" : "none", youId: token === mine ? "c1" : null };
+      if (p === "/api/auth/pair") return { id: "p1", code: "K7QX", secret: "s3" };
+      if (p === "/api/auth/claim") return claims();
+      if (p === "/api/about") return { version: "0", startedAt: 1 };
+      if (token !== mine) return json({ error: "this call needs the read right", need: "read" }, 401);
+      if (p === "/api/auth/ticket") return { ticket: `ticket-${++minted}` };
+      return answers(path, init);
+    };
+    let minted = 0;
+    beforeEach(() => {
+      kept.clear();
+      minted = 0;
+      setClaimEvery(5);
+      g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
+    });
+    const homeAnswers = backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends });
+    const bAnswers = backendAnswers(scanOf("/b", [repo("x")]), []);
+    const open = (): Answer => backendAnswers(scanOf("/b", [repo("x")]), []);
+
+    test("home tells the page nothing: it shows its sign-in first, opens no stream, and loads once signed in", async () => {
+      let claims: Response[] = [];
+      const home = enforcing("cnp_page_a", homeAnswers, () => claims.shift() ?? json({ waiting: true }));
+      await start(home, open());
+      await settle();
+      const s = useStore.getState();
+      expect({ loaded: s.loaded, signInFirst: s.signInFirst, loadError: s.loadError }).toEqual({ loaded: false, signInFirst: true, loadError: null });
+      expect(s.authByBackend[s.home]).toMatchObject({ mode: "enforce", you: "none", hasToken: false });
+      expect(FakeEventSource.opened).toEqual([]);
+      // one refused read was enough: the rest of the load is not asked for
+      const homeReads = calls.filter((u) => u.startsWith("/api/")).map((u) => u.split("?")[0]);
+      expect(homeReads.filter((u) => u !== "/api/auth")).toEqual(["/api/backends"]);
+      // signing in is asked of the home backend by the name the page has for it
+      claims = [json({ token: "cnp_page_a" })];
+      await useStore.getState().signIn(useStore.getState().home);
+      expect(kept.get("canopy.token.")).toBe("cnp_page_a");
+      expect(useStore.getState().authByBackend[useStore.getState().home]?.you).toBe("page");
+      // the app loads again on that (App's effect); here by hand
+      cleanup?.();
+      cleanup = await useStore.getState().init();
+      await settle();
+      const after = useStore.getState();
+      expect({ loaded: after.loaded, signInFirst: after.signInFirst, home: after.home }).toEqual({ loaded: true, signInFirst: false, home: "a" });
+      // and its stream is dialled with a ticket its token asked for
+      const stream = FakeEventSource.opened.find((e) => e.url.startsWith("/api/events"));
+      expect(stream?.url).toContain("ticket=ticket-");
+    });
+
+    test("a token the home backend no longer knows is forgotten, and the page signs in again", async () => {
+      kept.set("canopy.token.", "cnp_page_old");
+      await start(enforcing("cnp_page_a", homeAnswers, () => json({ waiting: true })), open());
+      await settle();
+      expect(useStore.getState().signInFirst).toBe(true);
+      expect(kept.has("canopy.token.")).toBe(false);
+      expect(useStore.getState().authByBackend[useStore.getState().home]).toMatchObject({ you: "none", hasToken: false });
+    });
+
+    test("a home that does not answer is still a load error, not a sign-in", async () => {
+      await start(() => {
+        throw new Error("down");
+      }, open());
+      await settle();
+      const s = useStore.getState();
+      expect(s.signInFirst).toBe(false);
+      expect(s.loadError).not.toBeNull();
+    });
+
+    test("another backend that tells the page nothing waits for its sign-in instead of trying on a timer, and loads when it lands", async () => {
+      setRetryFirst(5);
+      let claims: Response[] = [];
+      const b = enforcing("cnp_page_b", bAnswers, () => claims.shift() ?? json({ waiting: true }));
+      await start(homeAnswers, b);
+      await settle(60);
+      const reads = () => calls.filter((u) => u.startsWith("http://b.test/api/")).map((u) => u.slice("http://b.test".length).split("?")[0]);
+      const treeReads = () => reads().filter((u) => u === "/api/tree").length;
+      // with no token for it the page asks only who it is taken for: a board
+      // read would be refused, and would fill the backend's refused list
+      expect(new Set(reads())).toEqual(new Set(["/api/auth"]));
+      // it answered, so it is online; what is missing is the sign-in
+      expect(connOf(useStore.getState(), "b").status.state).toBe("online");
+      expect(wantsSignIn(useStore.getState().authByBackend["b"])).toBe(true);
+      expect(FakeEventSource.opened.some((e) => e.url.startsWith("http://b.test"))).toBe(false);
+      expect(useStore.getState().repos.some((r) => r.id === "b|x")).toBe(false);
+      claims = [json({ token: "cnp_page_b" })];
+      await useStore.getState().signIn("b");
+      await settle();
+      expect(treeReads()).toBe(1);
+      expect(connOf(useStore.getState(), "b").status.state).toBe("online");
+      expect(useStore.getState().repos.some((r) => r.id === "b|x")).toBe(true);
+      expect(FakeEventSource.opened.find((e) => e.url.startsWith("http://b.test/api/events"))?.url).toContain("ticket=ticket-");
+    });
+
+    test("another backend that no longer knows this page's token is read once, forgets it, and waits for the sign-in", async () => {
+      setRetryFirst(5);
+      kept.set("canopy.token.http://b.test", "cnp_page_old");
+      await start(homeAnswers, enforcing("cnp_page_b", bAnswers, () => json({ waiting: true })));
+      await settle(60);
+      const treeReads = calls.filter((u) => u.split("?")[0] === "http://b.test/api/tree").length;
+      expect(treeReads).toBe(1);
+      expect(kept.has("canopy.token.http://b.test")).toBe(false);
+      expect(connOf(useStore.getState(), "b").status.state).toBe("online");
+      expect(wantsSignIn(useStore.getState().authByBackend["b"])).toBe(true);
+      expect(FakeEventSource.opened.some((e) => e.url.startsWith("http://b.test"))).toBe(false);
+    });
+
+    test("each dial of the stream asks for a ticket of its own, and a ticketed stream that drops is dialled again by the page, not the browser", async () => {
+      kept.set("canopy.token.http://b.test", "cnp_page_b");
+      await start(homeAnswers, enforcing("cnp_page_b", bAnswers, () => json({ waiting: true })));
+      await settle();
+      const streams = () => FakeEventSource.opened.filter((e) => e.url.startsWith("http://b.test/api/events"));
+      expect(streams().map((e) => new URL(e.url).searchParams.get("ticket"))).toEqual(["ticket-1"]);
+      const first = streams()[0];
+      // the browser would retry the same address, whose ticket is spent
+      first?.onerror?.();
+      expect(first?.closed).toBe(true);
+      for (let i = 0; i < 40 && streams().length < 2; i++) await settle(50);
+      expect(streams().map((e) => new URL(e.url).searchParams.get("ticket"))).toEqual(["ticket-1", "ticket-2"]);
+      // home enforces nothing here and holds no token: its stream goes bare
+      expect(FakeEventSource.opened.find((e) => e.url.startsWith("/api/events"))?.url).not.toContain("ticket=");
+    });
+
+    test("a backend from before stream tickets answers 400 to the ask, and its stream is dialled bare", async () => {
+      kept.set("canopy.token.http://b.test", "cnp_page_b");
+      const older: Answer = (path, init) => ((path.split("?")[0] ?? "") === "/api/auth/ticket" ? json({ error: `for is "term" or "helper"` }, 400) : bAnswers(path, init));
+      await start(homeAnswers, older);
+      await settle();
+      const stream = FakeEventSource.opened.find((e) => e.url.startsWith("http://b.test/api/events"));
+      expect(stream).toBeDefined();
+      expect(stream?.url).not.toContain("ticket=");
+    });
+  });
+
   describe("signing in to b", () => {
     const kept = new Map<string, string>();
     const B_TOKEN = "canopy.token.http://b.test";
@@ -2104,7 +2244,7 @@ describe("several backends", () => {
       expect(useStore.getState().sweep).toEqual(sweep);
     });
 
-    test("to another origin the token rides on writes, /api/auth and the reads the backend asks more than read for, so any other read is never preflighted", async () => {
+    test("to another origin the token rides on writes, /api/auth and every read the backend wants one for; a read it files open goes bare and is never preflighted", async () => {
       kept.set(B_TOKEN, "cnp_page_b");
       heard.length = 0;
       await go();
@@ -2115,13 +2255,18 @@ describe("several backends", () => {
       await api.moveTranscript("b|t-1", "s-1", "m-1").catch(() => {});
       await api.rawFile("b|proj", ".env", 1000).catch(() => {});
       const of = (call: string) => heard.filter(([c]) => c === call).map(([, t]) => t);
-      // the table the backend checks is the one the page reads: a read it
-      // files above `read` is refused without the token
-      const keyed = (call: string): boolean => call === "GET /api/auth" || needs("GET", call.slice("GET ".length)) !== "read";
-      expect(of("GET /api/tree").length).toBeGreaterThan(0);
+      // the table the backend checks is the one the page reads: only a read
+      // it files open is answered without the token
+      const keyed = (call: string): boolean => call === "GET /api/auth" || needs("GET", call.slice("GET ".length)) !== "open";
       const reads = heard.filter(([c]) => c.startsWith("GET "));
       expect(reads.filter(([c]) => !keyed(c)).every(([, t]) => t === null)).toBe(true);
       expect(reads.filter(([c]) => keyed(c)).every(([, t]) => t === "cnp_page_b")).toBe(true);
+      // the board it loads with takes the token now, the tree first
+      expect(of("GET /api/tree")).toContain("cnp_page_b");
+      expect(of("GET /api/runs")).toContain("cnp_page_b");
+      // what the build is stays open, so it goes bare
+      expect(of("GET /api/about")).toEqual(of("GET /api/about").map(() => null));
+      expect(of("GET /api/about").length).toBeGreaterThan(0);
       expect(of("GET /api/auth")).toContain("cnp_page_b");
       // reading a clip, or a clip's file, takes the operate right (FR-054)
       expect(of("GET /api/clips")).toContain("cnp_page_b");
@@ -2132,6 +2277,8 @@ describe("several backends", () => {
       // and whatever is read out of a repo, a file's bytes first
       expect(of("GET /api/repos/raw")).toEqual(["cnp_page_b"]);
       expect(of("POST /api/rescan")).toEqual(["cnp_page_b"]);
+      // the stream, which can send no header, asked for its ticket with it
+      expect(of("POST /api/auth/ticket")).toContain("cnp_page_b");
     });
 
     test("a browser that will not keep the token fails the sign-in rather than leave it unkept", async () => {

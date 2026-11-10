@@ -3,7 +3,8 @@
 # redeploy canopy: a key of its own under ~/.ssh (the shells container mounts
 # ~/.ssh read-only), an authorized_keys line that lets that key run
 # scripts/redeploy.sh and nothing else, and a known_hosts file pinning this
-# host's key under the alias redeploy.sh dials it by. Safe to run again.
+# host's key under the alias redeploy.sh dials it by, and a line saying where
+# a shell dials this host. Safe to run again.
 #
 # What the key grants: a canopy shell already runs as this user's uid with
 # write access to ~/dev and ~/.claude, so running this script (which builds
@@ -41,4 +42,15 @@ chmod 600 "$auth"
 hostkey=$(cut -d' ' -f1-2 /etc/ssh/ssh_host_ed25519_key.pub)
 echo "canopy-deploy-host $hostkey" >"$known"
 echo "pinned this host's key in $known"
+
+# where a canopy shell dials this host: this user, at the address compose
+# publishes canopy on. A shell reads it from here when the checkout's .env is
+# a link to a file kept outside every folder its container mounts.
+listen=$(sed -n 's/^CANOPY_LISTEN=//p' "$HERE/.env" 2>/dev/null | tail -1 | tr -d '"' || true)
+if [ -n "$listen" ]; then
+  echo "$(id -un)@$listen" >"${key}_host"
+  echo "wrote where a shell dials this host to ${key}_host"
+else
+  echo "no CANOPY_LISTEN in $HERE/.env: a shell needs CANOPY_DEPLOY_HOST set to reach this host"
+fi
 echo "done: in a canopy shell, bun run redeploy status"

@@ -24,7 +24,9 @@ type Kept = Caller & { hash: string };
  *  lives in memory only (kept out of callers.json) and matches no token,
  *  so it is reachable only through that bypass. */
 const LOOPBACK_ID = "loopback";
-type Ticketed = "shell" | "helper";
+/** what a ticket may stand in for: a shell's socket, a helper's, and the
+ *  event stream, which any caller with a token may read */
+type Ticketed = "shell" | "helper" | "read";
 type Pair = { id: string; label: string; addr: string; kind: PairKind; code: string; secret: string; at: number; state: "waiting" | "approved" | "denied" };
 
 const KINDS: readonly CallerKind[] = ["page", "cli", "shell", "ranger", "coordinator", "run", "helper", "none"];
@@ -243,7 +245,7 @@ export class CallerBook {
     return this.callers.map((c) => this.strip(c));
   }
 
-  /** a one-use ticket, good for 60 s, for a socket that cannot send a header */
+  /** a one-use ticket, good for 60 s, for a socket or a stream that cannot send a header */
   ticket(callerId: string, right: Ticketed): string {
     if (!this.callers.some((c) => c.id === callerId)) throw new Error("no such caller");
     const ticket = b64(32);
@@ -412,13 +414,15 @@ export function loopbackBypass(x: {
   return x.wanted && !x.beyondLoopback && !x.onLane && !x.upgrade && siteOk && isLoopback(x.addr) && isLoopbackHost(x.hostname);
 }
 
-/** The two sockets a browser opens cannot carry a header, so each takes a
- *  ticket in the query instead, for the right it needs. */
-const upgradeRight = (path: string): Ticketed | null => (path === "/api/term" ? "shell" : path === "/api/helper" ? "helper" : null);
+/** The two sockets a browser opens and its event stream cannot carry a
+ *  header, so each takes a ticket in the query instead, for the right it
+ *  needs. */
+const upgradeRight = (path: string): Ticketed | null =>
+  path === "/api/term" ? "shell" : path === "/api/helper" ? "helper" : path === "/api/events" ? "read" : null;
 
 /** Who is calling: the `X-Canopy-Token` header, else a ticket on one of the
- *  two upgrades. Null for nobody known. A ticket is spent here, so this runs
- *  once per request. */
+ *  two upgrades or the event stream. Null for nobody known. A ticket is
+ *  spent here, so this runs once per request. */
 export function callerOf(book: CallerBook, req: Request, url: URL): Caller | null {
   const token = req.headers.get("x-canopy-token");
   if (token) return book.check(token);
@@ -617,7 +621,33 @@ const field = (b: Body, k: string): string | null => {
   return typeof v === "string" && v !== "" ? v : null;
 };
 
-const ticketRight = (v: unknown): Ticketed | null => (v === "term" ? "shell" : v === "helper" ? "helper" : null);
+const ticketRight = (v: unknown): Ticketed | null => (v === "term" ? "shell" : v === "helper" ? "helper" : v === "events" ? "read" : null);
+
+/** What `GET /api/auth` answers. Everyone learns the mode, who they are and
+ *  how many calls were refused, which is all a sign-in needs. The callers,
+ *  the pair requests waiting and the refused calls themselves name devices,
+ *  addresses and routes, so they go to a caller that holds `admin` (a page
+ *  or the CLI) and stay empty for the rest. While nothing is enforced the
+ *  whole answer goes to anyone, as every other read does then. */
+export function authInfo(book: CallerBook, gate: CallerGate, caller: Caller | null): {
+  mode: CallersMode;
+  refused: { count: number; recent: Refused[] };
+  callers: Caller[];
+  pending: PendingPair[];
+  you: CallerKind;
+  youId: string | null;
+} {
+  const kind = caller?.kind ?? "none";
+  const whole = gate.mode !== "enforce" || allows(kind, "admin");
+  return {
+    mode: gate.mode,
+    refused: whole ? gate.refused : { count: gate.refused.count, recent: [] },
+    callers: whole ? book.list() : [],
+    pending: whole ? book.pending() : [],
+    you: kind,
+    youId: caller?.id ?? null,
+  };
+}
 
 /** `/api/auth` and below, after the gate has passed the request; null for
  *  any other path. `addr` is the client's address, which a pair request
@@ -627,7 +657,7 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
   const json = (body: unknown, status = 200): Response => Response.json(body, { status });
   if (url.pathname === "/api/auth") {
     if (req.method !== "GET") return json({ error: "/api/auth only answers a GET" }, 405);
-    return json({ mode: gate.mode, refused: gate.refused, callers: book.list(), pending: book.pending(), you: caller?.kind ?? "none", youId: caller?.id ?? null });
+    return json(authInfo(book, gate, caller));
   }
   if (req.method !== "POST") return json({ error: "the auth routes take a POST" }, 405);
   const raw: unknown = await req.json().catch(() => null);
@@ -700,7 +730,7 @@ export async function authRoute(book: CallerBook, gate: CallerGate, req: Request
     }
     case "ticket": {
       const right = ticketRight(b["for"]);
-      if (!right) return json({ error: `for is "term" or "helper"` }, 400);
+      if (!right) return json({ error: `for is "term", "helper" or "events"` }, 400);
       if (!caller || !allows(caller.kind, right)) return refusal(right, caller);
       try {
         return json({ ticket: book.ticket(caller.id, right) });

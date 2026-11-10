@@ -98,7 +98,12 @@ export const TOOLS: readonly ToolSpec[] = [
   },
 ];
 
-export const toolsFor = (kind: CallerKind): ToolSpec[] => TOOLS.filter((tool) => allows(kind, tool.right));
+/** The tools a caller's kind holds. A backend that only logs its callers
+ *  still answers one with no token, so there (`enforced` false) nobody known
+ *  is listed the read tools; one that enforces answers it nothing, and it is
+ *  listed none. */
+export const toolsFor = (kind: CallerKind, enforced = true): ToolSpec[] =>
+  TOOLS.filter((tool) => allows(kind, tool.right) || (!enforced && kind === "none" && tool.right === "read"));
 
 const namesFor = (kind: CallerKind): ToolName[] => toolsFor(kind).map((tool) => tool.name);
 
@@ -210,6 +215,8 @@ export interface McpContext {
   api: CanopyApi;
   /** the token's kind, from GET /api/auth at start */
   kind: CallerKind;
+  /** false when that backend only logs its callers (toolsFor); absent, it enforces */
+  enforced?: boolean;
   /** CANOPY_RUN when set: the parent `canopy_run_start` names by default */
   run: string | null;
   /** what serverInfo says */
@@ -346,7 +353,7 @@ export async function handleMessage(msg: RpcMessage, ctx: McpContext): Promise<R
       return rpcResult(msg.id, {});
     case "tools/list":
       return rpcResult(msg.id, {
-        tools: toolsFor(ctx.kind).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
+        tools: toolsFor(ctx.kind, ctx.enforced).map(({ name, description, inputSchema }) => ({ name, description, inputSchema })),
       });
     case "tools/call": {
       const params = isRecord(msg.params) ? msg.params : {};
@@ -354,7 +361,7 @@ export async function handleMessage(msg: RpcMessage, ctx: McpContext): Promise<R
       if (typeof rawName !== "string") return rpcError(msg.id, -32602, "tools/call needs a name");
       const tool = TOOLS.find((entry) => entry.name === rawName);
       if (!tool) return rpcError(msg.id, -32602, `no tool named ${rawName}`);
-      if (!toolsFor(ctx.kind).some((entry) => entry.name === tool.name)) {
+      if (!toolsFor(ctx.kind, ctx.enforced).some((entry) => entry.name === tool.name)) {
         return rpcError(msg.id, -32602, `${tool.name} is not a tool this ${ctx.kind} token holds`);
       }
       const result = await callTool(tool.name, params["arguments"], ctx);

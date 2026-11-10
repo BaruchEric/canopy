@@ -18,7 +18,12 @@ describe("the tool table", () => {
     expect(TOOLS_FOR.run).toEqual(ALL.slice(0, 8));
     expect(TOOLS_FOR.run).not.toContain("canopy_land");
     expect(TOOLS_FOR.run).not.toContain("canopy_pr");
-    expect(TOOLS_FOR.none).toEqual(ALL.slice(0, 4));
+    // nobody known holds no tool where the backend enforces; where it only
+    // logs, it answers the reads, so those are listed
+    expect(TOOLS_FOR.none).toEqual([]);
+    expect(toolsFor("none", false).map((t) => t.name)).toEqual(ALL.slice(0, 4));
+    expect(toolsFor("helper", false)).toEqual([]);
+    expect(toolsFor("run", false).map((t) => t.name)).toEqual(ALL.slice(0, 8));
     expect(TOOLS_FOR.helper).toEqual([]);
     expect(toolsFor("shell").map((t) => t.name)).toEqual([...ALL]);
   });
@@ -138,8 +143,12 @@ describe("handleMessage", () => {
 
   test("tools/list is the kind's list", async () => {
     const { api: client } = api({});
-    const reply = await handleMessage(req(5, "tools/list"), ctx(client, "none"));
-    expect(reply).toMatchObject({ result: { tools: [{ name: "canopy_status" }, { name: "canopy_runs" }, { name: "canopy_queue" }, { name: "canopy_health" }] } });
+    const reply = await handleMessage(req(5, "tools/list"), ctx(client, "run"));
+    expect(reply).toMatchObject({ result: { tools: ALL.slice(0, 8).map((name) => ({ name })) } });
+    // a caller with no token: nothing where the backend enforces, the reads where it only logs
+    expect(await handleMessage(req(5, "tools/list"), ctx(client, "none"))).toMatchObject({ result: { tools: [] } });
+    const logged = await handleMessage(req(5, "tools/list"), { ...ctx(client, "none"), enforced: false });
+    expect(logged).toMatchObject({ result: { tools: [{ name: "canopy_status" }, { name: "canopy_runs" }, { name: "canopy_queue" }, { name: "canopy_health" }] } });
   });
 
   test("a tool the kind does not hold, and one that does not exist, are refused before any call", async () => {
