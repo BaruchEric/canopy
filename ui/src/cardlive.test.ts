@@ -12,6 +12,7 @@ import {
   liveHead,
   liveMarks,
   traceFits,
+  traceTip,
   traceUntil,
   traceWords,
   type LiveInput,
@@ -345,6 +346,15 @@ describe("the trace", () => {
     expect(traceFits(8, 16)).toBe(false);
     // a browser lays out in 64ths of a pixel, and less than one is no cut
     expect(traceFits(16 - 1 / 128, 16)).toBe(true);
+  });
+
+  test("a row with no room for it says it in its tooltip: the same words, then who or where", () => {
+    const ended = lastEnded(input({ agents: [agent({ state: "ended", handle: "app-main", startedAt: H, seenAt: 2 * H, endedAt: 2 * H + 5 * M })] }));
+    expect(ended && traceTip(ended, 2 * H + 8 * M)).toBe("agent ended 3m ago: app-main, kitty on ericmac, ran 1h 5m");
+    const here = lastEnded(input({ tasks: [task({ name: "test", status: "exited", exitedAt: 10 * H })] }));
+    expect(here && traceTip(here, 10 * H + 4 * M)).toBe("test passed 4m ago");
+    const away = lastEnded(input({ tasks: [task({ name: "dev", repoId: "mini|app", status: "stopped", exitedAt: 10 * H })] }));
+    expect(away && traceTip(away, 10 * H + 20_000)).toBe("dev stopped just now on mini");
   });
 
   test("the row remembers it for half an hour", () => {

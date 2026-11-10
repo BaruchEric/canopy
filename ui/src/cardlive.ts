@@ -381,6 +381,15 @@ export function traceWords(t: LiveTrace, now: number): string {
   return `${t.text} ${w ? `${w} ago` : "just now"}`;
 }
 
+/** A trace the row has no room for, as the row's tooltip: the words it
+ *  would have shown, then what the trace's own tooltip adds to them. A
+ *  task's says where it ran when that is another backend; an agent's names
+ *  it, where it sat and how long it ran. */
+export function traceTip(t: LiveTrace, now: number): string {
+  const words = traceWords(t, now);
+  return t.kind === "task" ? `${words}${t.title.slice(t.text.length)}` : `${words}: ${t.title}`;
+}
+
 /**
  * Whether a row has room for its trace, from the branch line's width with
  * the trace drawn and the width the line starts from (its flex basis). The

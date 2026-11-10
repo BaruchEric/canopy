@@ -50,7 +50,7 @@ The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: 
 
 ### FR-059 · What just happened, on a card's live row
 P3 · added 2026-11-09 · source: Claude (follow-up to FR-057); Eric ("do Recommendations FR-059 now", 2026-11-09) · shipped 2026-11-09
-After the live row's headline, past a dotted run of its line, the row keeps the last thing that left it for half an hour: "agent ended 3m ago", "agent lost 12m ago", "test passed just now", "build finished 2m ago", "dev stopped 12m ago". It is read off what the backends hold (a registry card's end, a task's exit), so a reload and another device say the same. On a card where nothing runs any more the trace is the whole row, and a row with no room for it shows only what runs now. A click opens the panel's agents or tasks. A failed task has no trace, since its mark stays, and a closed shell leaves none.
+After the live row's headline, past a dotted run of its line, the row keeps the last thing that left it for half an hour: "agent ended 3m ago", "agent lost 12m ago", "test passed just now", "build finished 2m ago", "dev stopped 12m ago". It is read off what the backends hold (a registry card's end, a task's exit), so a reload and another device say the same. On a card where nothing runs any more the trace is the whole row, and a row with no room for it shows only what runs now and says the trace in its tooltip, over the words and the line. A click opens the panel's agents or tasks. A failed task has no trace, since its mark stays, and a closed shell leaves none.
 
 ### FR-058 · A tree that follows its base waits for what runs in it
 P2 · added 2026-11-09 · source: Eric ("do Recommendations", on Claude's note after FR-057, 2026-11-09) · shipped 2026-11-09

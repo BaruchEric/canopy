@@ -12,6 +12,7 @@ import {
   liveHead,
   liveMarks,
   traceFits,
+  traceTip,
   traceUntil,
   traceWords,
   type Gone,
@@ -67,11 +68,13 @@ function useUntil(until: number | null): boolean {
 /**
  * Marks a row that has no room for its trace (`data-tight`, which hides
  * it), so the trace shows whole or not at all and never cuts the words
- * about what runs now. Read before each paint and when the row's width
- * moves: the trace is drawn, and `traceFits` reads the branch line. A row
- * that is its trace alone has no line and is never tight.
+ * about what runs now, and says whether it did, so the row can put the
+ * trace in its tooltip instead. Read before each paint and when the row's
+ * width moves: the trace is drawn, and `traceFits` reads the branch line. A
+ * row that is its trace alone has no line and is never tight.
  */
-function useRoom(row: RefObject<HTMLDivElement | null>, watch: boolean): void {
+function useRoom(row: RefObject<HTMLDivElement | null>, watch: boolean): boolean {
+  const [tight, setTight] = useState(false);
   // no deps: the marks, the words and the trace all move the room
   useLayoutEffect(() => {
     const el = row.current;
@@ -81,7 +84,10 @@ function useRoom(row: RefObject<HTMLDivElement | null>, watch: boolean): void {
       const line = el.querySelector<HTMLElement>(":scope > .card-live-line");
       if (!line) return;
       const basis = Number.parseFloat(getComputedStyle(line).flexBasis);
-      el.toggleAttribute("data-tight", Number.isFinite(basis) && !traceFits(line.getBoundingClientRect().width, basis));
+      const none = Number.isFinite(basis) && !traceFits(line.getBoundingClientRect().width, basis);
+      el.toggleAttribute("data-tight", none);
+      // the same answer again renders nothing again
+      setTight(none);
     };
     mark();
     const seen = new ResizeObserver(mark);
@@ -91,6 +97,7 @@ function useRoom(row: RefObject<HTMLDivElement | null>, watch: boolean): void {
       el.removeAttribute("data-tight");
     };
   });
+  return watch && tight;
 }
 
 /** what a click on a group does, for its tooltip */
@@ -157,7 +164,9 @@ function Row({ name, marks, gone, trace, selecting }: { name: string; marks: rea
   // nothing runs and no mark is still falling: the trace is the whole row
   const live = groups.length > 0;
   const row = useRef<HTMLDivElement>(null);
-  useRoom(row, live && trace !== null);
+  // a trace the row holds back is its tooltip, over the words and the line
+  const held = useRoom(row, live && trace !== null);
+  const tip = held && trace ? traceTip(trace, now) : undefined;
   const open = (m: LiveMark) => {
     switch (m.kind) {
       case "agent":
@@ -176,7 +185,7 @@ function Row({ name, marks, gone, trace, selecting }: { name: string; marks: rea
     }
   };
   return (
-    <div ref={row} className={`card-live${liveFlow(marks) ? " flow" : ""}`} role="group" aria-label={`${live ? "Running" : "Just ended"} on ${name}`}>
+    <div ref={row} className={`card-live${liveFlow(marks) ? " flow" : ""}`} role="group" aria-label={`${live ? "Running" : "Just ended"} on ${name}`} title={tip}>
       {groups.map((g) => {
         const first = g.first;
         const inner = (
@@ -231,8 +240,9 @@ function Row({ name, marks, gone, trace, selecting }: { name: string; marks: rea
  * agent works. A mark grows in when its thing starts and drops off when it
  * ends. After the words comes the trace (FR-059): the last thing that left
  * the row, an agent that ended or a task that finished, and how long ago,
- * kept for `TRACE_MS`, shown only where the row has room for all of it,
- * and alone on the row once nothing else runs. Nothing at all on a repo
+ * kept for `TRACE_MS`, shown only where the row has room for all of it
+ * (a row without the room says it in its tooltip), and alone on the row
+ * once nothing else runs. Nothing at all on a repo
  * that has been quiet that long. Cozy density only: compact keeps the ✦
  * and ▶ chips, which the row replaces here.
  */
