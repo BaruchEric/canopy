@@ -180,6 +180,24 @@ describe("enforce", () => {
     expect(auth.you).toBe("page");
   });
 
+  test("what is in a repo takes a token: a file's bytes, a diff and a search are refused bare, and pass with a shell's or a page's", async () => {
+    await Bun.write(join(scratch, "root", "app", ".env"), "KEY=not-a-real-one\n");
+    const raw = "/api/repos/raw?id=app&path=.env";
+    const bare = await call(s, raw);
+    expect(bare.status).toBe(401);
+    expect(((await bare.json()) as Refusal).need).toBe("operate");
+    const closed = ["/api/repos/diff?id=app", "/api/repos/log?id=app", "/api/repos/ls?id=app", "/api/landing/diff?id=app&path=x", "/api/browse?path=~", "/api/runs/ab12cd34", "/api/runs/ab12cd34/export"];
+    for (const path of closed) expect({ path, status: (await call(s, path)).status }).toEqual({ path, status: 401 });
+    expect((await post(s, "/api/grep", { q: "KEY", ids: ["app"] })).status).toBe(401);
+    for (const token of [shell, page]) {
+      const res = await call(s, raw, { token });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("KEY=not-a-real-one\n");
+    }
+    // the tree still says which repos there are, to anyone
+    expect((await call(s, "/api/tree")).status).toBe(200);
+  });
+
   test("a shell socket needs a ticket, and a page token gets one", async () => {
     const q = new URLSearchParams({ id: "app", term: "fedcba9876543210fedcba9876543210", place: "strip", cols: "80", rows: "24" });
     expect(await opens(s, `/api/term?${q}`)).toBe(false);

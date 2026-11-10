@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { allows, KIND_RIGHTS, needs, PAIR_KINDS } from "./callers";
+import { allows, KIND_RIGHTS, LANES, needs, PAIR_KINDS } from "./callers";
 
 describe("needs", () => {
   test("a GET needs read, bar the two upgrades and the Library", () => {
@@ -127,8 +127,8 @@ describe("needs", () => {
   });
 
   test("POSTs that change nothing need read", () => {
-    expect(needs("POST", "/api/grep")).toBe("read");
     expect(needs("POST", "/api/remembered/check")).toBe("read");
+    expect(needs("POST", "/api/repos/movecheck")).toBe("read");
   });
 
   test("the ticket route is open to the table because it checks its own right", () => {
@@ -272,6 +272,47 @@ describe("what a shell shows", () => {
   });
 });
 
+describe("what is in a repo", () => {
+  const hands = ["page", "cli", "shell", "ranger"] as const;
+  const others = ["none", "run", "coordinator", "helper"] as const;
+  const closed = (method: string, p: string): void => {
+    expect({ p, right: needs(method, p) }).toEqual({ p, right: "operate" });
+    for (const kind of hands) expect({ p, kind, may: allows(kind, needs(method, p)) }).toEqual({ p, kind, may: true });
+    for (const kind of others) expect({ p, kind, may: allows(kind, needs(method, p)) }).toEqual({ p, kind, may: false });
+  };
+
+  test("a file's bytes, a diff, the log and a search are a hand's to read, so a caller with no token never sees them", () => {
+    for (const a of ["raw", "diff", "commit", "log", "ls", "dir", "grep", "search", "mentions", "session", "sessions", "tasks", "tasks/log"]) closed("GET", `/api/repos/${a}`);
+  });
+
+  test("a repo read nobody has written yet is closed too, and a trailing slash opens nothing", () => {
+    closed("GET", "/api/repos/whatever");
+    closed("GET", "/api/repos/raw/");
+  });
+
+  test("a search across repos, a landing's diff and the host's folders go the same way", () => {
+    closed("POST", "/api/grep");
+    closed("GET", "/api/landing/diff");
+    closed("GET", "/api/browse");
+  });
+
+  test("a run read by its id is its transcript, and so are its export and its replay", () => {
+    for (const p of ["/api/runs/r-1a2b3c", "/api/runs/r-1a2b3c/export", "/api/runs/r-1a2b3c/replay"]) closed("GET", p);
+  });
+
+  test("the tree, the lists a page loads with and the four the deploy gate asks stay plain reads", () => {
+    const open = ["/api/tree", "/api/runs", "/api/flows", "/api/fleets", "/api/landing", "/api/about", "/api/auth", "/api/events", "/api/workspaces", "/api/agents", "/api/jobs", "/api/tasks", "/api/health"];
+    for (const p of open) expect({ p, right: needs("GET", p) }).toEqual({ p, right: "read" });
+  });
+
+  test("no lane names one of them, so a run and a coordinator stay off them on either listener", () => {
+    for (const kind of ["run", "coordinator"] as const) {
+      const lane = [...(LANES[kind] ?? [])];
+      expect({ kind, inside: lane.filter((r) => r.startsWith("GET /api/repos/") || r.startsWith("GET /api/runs/") || r === "POST /api/grep" || r === "GET /api/browse" || r === "GET /api/landing/diff") }).toEqual({ kind, inside: [] });
+    }
+  });
+});
+
 describe("the clipboard's routes (FR-054)", () => {
   test("reading and every change operate, so a caller with no token never sees a clip", () => {
     expect(needs("GET", "/api/clips")).toBe("operate");
@@ -333,8 +374,9 @@ test("worktree routes: the listing reads, warm is admin, prune operates", () => 
 });
 
 
-test("kept runs: reading is open, pruning is admin", () => {
-  for (const path of ["/api/runs/ab12cd34", "/api/runs/ab12cd34/export", "/api/runs/ab12cd34/replay", "/api/runs?kept=1"]) expect(needs("GET", path)).toBe("read");
+test("kept runs: the list is open, reading one takes a token, pruning is admin", () => {
+  expect(needs("GET", "/api/runs")).toBe("read");
+  for (const path of ["/api/runs/ab12cd34", "/api/runs/ab12cd34/export", "/api/runs/ab12cd34/replay"]) expect({ path, right: needs("GET", path) }).toEqual({ path, right: "operate" });
   expect(needs("POST", "/api/runs/prune")).toBe("admin");
   expect(allows("shell", needs("POST", "/api/runs/prune"))).toBe(false);
   expect(allows("cli", needs("POST", "/api/runs/prune"))).toBe(true);

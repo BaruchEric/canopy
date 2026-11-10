@@ -2113,6 +2113,7 @@ describe("several backends", () => {
       await api.clipFile("b|c-aaaaaaaa").catch(() => {});
       await api.termScreen("b|t-1").catch(() => {});
       await api.moveTranscript("b|t-1", "s-1", "m-1").catch(() => {});
+      await api.rawFile("b|proj", ".env", 1000).catch(() => {});
       const of = (call: string) => heard.filter(([c]) => c === call).map(([, t]) => t);
       // the table the backend checks is the one the page reads: a read it
       // files above `read` is refused without the token
@@ -2128,6 +2129,8 @@ describe("several backends", () => {
       // and so does a shell's screen; a move's transcript takes the shell right
       expect(of("GET /api/terms/screen")).toEqual(["cnp_page_b"]);
       expect(of("GET /api/terms/move/transcript")).toEqual(["cnp_page_b"]);
+      // and whatever is read out of a repo, a file's bytes first
+      expect(of("GET /api/repos/raw")).toEqual(["cnp_page_b"]);
       expect(of("POST /api/rescan")).toEqual(["cnp_page_b"]);
     });
 

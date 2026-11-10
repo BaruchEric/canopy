@@ -106,7 +106,7 @@ describe("which calls carry the token", () => {
   });
 
   test("to another origin a read does where the backend asks more than read for it, and /api/auth, which says who this page is", () => {
-    const keyed = ["/api/auth", "/api/clips?ids=c-1", "/api/clips/file?id=c-1", "/api/terms/screen?term=t", "/api/terms/text?term=t", "/api/terms/transcript?term=t", "/api/terms/move/plan?term=t", "/api/terms/move/transcript?term=t&session=s&move=m", "/api/scenarios?repo=r"];
+    const keyed = ["/api/auth", "/api/clips?ids=c-1", "/api/clips/file?id=c-1", "/api/terms/screen?term=t", "/api/terms/text?term=t", "/api/terms/transcript?term=t", "/api/terms/move/plan?term=t", "/api/terms/move/transcript?term=t&session=s&move=m", "/api/scenarios?repo=r", "/api/repos/raw?id=app&path=.env", "/api/repos/diff?id=app", "/api/repos/log?id=app", "/api/landing/diff?id=app&path=a.ts", "/api/browse?path=~", "/api/runs/ab12cd34", "/api/runs/ab12cd34/replay"];
     for (const p of keyed) expect({ p, carries: carriesToken(other, "GET", p) }).toEqual({ p, carries: true });
   });
 

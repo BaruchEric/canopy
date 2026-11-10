@@ -4,8 +4,10 @@
  *
  *  The default denies: a route that is not a GET and not in the table needs
  *  `admin`, so a new route is safe until someone files it here. A GET reads
- *  unless the table names it (the sweep's, the clipboard's and a shell's
- *  screen do). */
+ *  unless the table names it: the sweep's, the clipboard's, a shell's screen
+ *  and everything read out of a repo are named. What stays a plain read is
+ *  the state a page loads with (the tree, the lists of runs, flows and
+ *  shells), which a caller with no token still gets. */
 
 export type Right = "read" | "plan" | "operate" | "shell" | "admin" | "helper";
 export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "run" | "helper" | "none";
@@ -65,8 +67,22 @@ const REPO_OPERATE = ["run", "flow", "resume", "stage", "commit", "push", "drops
 
 /** Paths are written without `/api/`. A trailing `/*` matches anything below. */
 const RULES: readonly Rule[] = [
-  // Removing kept transcripts is a hand's job, like the sweep's closes; reading one is a GET and stays read.
+  // Removing kept transcripts is a hand's job, like the sweep's closes.
   { methods: POST, paths: ["runs/prune"], right: "admin" },
+  // a run read by its id is its whole transcript, kept or live, and so are
+  // its export and its replay: an agent reads files aloud there, so it takes
+  // a token. The list of runs stays a plain read, and it still carries a live
+  // run's steps, as the event stream does, until the stream takes a ticket.
+  { methods: ["GET"], paths: ["runs/*"], right: "operate" },
+  // what is in a repo is a hand's to read, as a shell's screen is: a file's
+  // bytes (an .env's among them), a diff, the log, a search, a session's
+  // transcript, a task's output. The tree says which repos there are and how
+  // each stands, and stays a plain read; anything read out of one takes a
+  // token, a repo read nobody has written yet included. A landing's diff and
+  // the host's folders (the picker's listing) go the same way.
+  { methods: ["GET"], paths: ["repos/*", "landing/diff", "browse"], right: "operate" },
+  // a search across repos reads their files
+  { methods: POST, paths: ["grep"], right: "operate" },
   // auth/ticket is open here because its route checks the right the ticket is
   // for (shell or helper); a helper token has no read right to pass this table with
   { methods: POST, paths: ["auth/pair", "auth/claim", "auth/first", "auth/ticket"], right: "open" },
@@ -75,7 +91,7 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["hooks/*"], right: "open" },
   { methods: POST, paths: ["triggers/*"], right: "operate" },
   { methods: DEL, paths: ["triggers/events"], right: "operate" },
-  { methods: POST, paths: ["grep", "remembered/check", "repos/movecheck"], right: "read" },
+  { methods: POST, paths: ["remembered/check", "repos/movecheck"], right: "read" },
   { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork"], right: "operate" },
   // a coordinator's token holds plan alone: it proposes cards, and editing
   // them or starting them is the user's
