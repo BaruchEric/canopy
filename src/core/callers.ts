@@ -129,10 +129,14 @@ const RULES: readonly Rule[] = [
     right: "shell",
   },
   { methods: DEL, paths: ["terms", "terms/kept"], right: "shell" },
+  // a move's reads go with its writes: the plan names the agent's session
+  // and its last prompt, and the transcript is its whole conversation
+  { methods: ["GET"], paths: ["terms/move/plan", "terms/move/transcript"], right: "shell" },
   // what a shell shows can be anything typed or printed there, a key
   // included, so its screen, its text and its agent's transcript are a
   // hand's to read, as the clipboard is: a caller with no token never sees
-  // them. The list of shells and the facts about one stay plain reads.
+  // them. The list of shells and the facts about one (terms/agent,
+  // terms/watched) stay plain reads.
   { methods: ["GET"], paths: ["terms/screen", "terms/text", "terms/transcript"], right: "operate" },
   // Admin is also the default; these are written out so the test can pin them.
   { methods: POST, paths: ["agents/profile", "agents/role", "peers/sync", "repos/peer", "keep", "awake", "worktrees/warm", "health/heal", "remembered/forget", "capacity"], right: "admin" },

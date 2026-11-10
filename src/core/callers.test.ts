@@ -257,8 +257,16 @@ describe("what a shell shows", () => {
     }
   });
 
+  test("a move's plan and transcript go with the move's writes: the page that moves a shell reads them, and no one else", () => {
+    for (const p of ["/api/terms/move/plan", "/api/terms/move/transcript"]) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "shell" });
+      expect({ p, may: allows("page", needs("GET", p)) }).toEqual({ p, may: true });
+      for (const kind of ["none", "cli", "shell", "ranger", "run", "coordinator", "helper"] as const) expect({ p, kind, may: allows(kind, needs("GET", p)) }).toEqual({ p, kind, may: false });
+    }
+  });
+
   test("the list of shells and the facts about one stay plain reads", () => {
-    for (const p of ["/api/terms", "/api/terms/kept", "/api/terms/agent", "/api/terms/watched", "/api/terms/move/plan", "/api/terms/move/transcript"]) {
+    for (const p of ["/api/terms", "/api/terms/kept", "/api/terms/agent", "/api/terms/watched"]) {
       expect({ p, right: needs("GET", p) }).toEqual({ p, right: "read" });
     }
   });
