@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Drives this checkout's built page (dist/web) in the headless shell setup.sh
 # installs: a scratch canopy server on a free port, scanning two throwaway
-# repos (the runs pill's check wants a run in each), with a clean environment
+# repos (the runs pill's check wants a run in each, and the phone's wants one
+# with work in it), with a clean environment
 # (a canopy shell's own CANOPY_ settings would make it refuse the page), then
 # check.ts against it. Everything it starts goes when it ends; the
 # screenshots stay.
@@ -37,6 +38,13 @@ for name in demo twin; do
   git -C "$work/root/$name" -c user.name=check -c user.email=check@localhost add -A
   git -C "$work/root/$name" -c user.name=check -c user.email=check@localhost commit -qm init
 done
+# twin has work in it, so its panel on a phone holds a list of files, the box
+# that filters them and a commit box: the tall column that once squeezed the
+# section tabs to nothing
+for i in 1 2 3 4 5 6 7 8; do
+  printf 'export const part%s = %s;\n' "$i" "$i" >"$work/root/twin/part$i.ts"
+done
+printf 'changed\n' >>"$work/root/twin/README.md"
 
 port="$("$BUN" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);')"
 env -i HOME="$work/home" PATH="$(dirname "$BUN"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \

@@ -1,8 +1,10 @@
 // Drives a running canopy page the way a person would and says what broke:
 // the first load (what comes with the page, what is fetched once it is up),
 // every view from its URL and by switching inside one page, the runs pill's
-// menu with two runs going, a shell that answers, and the two load failures
-// (a view's chunk and xterm's refused).
+// menu with two runs going, a shell that answers, the two load failures
+// (a view's chunk and xterm's refused), and a phone: the top bar's first row
+// on the screen, an open panel's section tabs, and no field small enough for
+// iOS to zoom the page onto.
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
@@ -29,11 +31,15 @@ const check = (ok: boolean, what: string) => {
   if (!ok) failures.push(what);
 };
 
+/** a phone held upright, with a finger for a pointer */
+const PHONE = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, hasTouch: true, isMobile: true };
+
 /** a page of its own; `block` refuses that chunk, with the service worker
  *  off, since a fetch the worker makes passes the page's routes by. `routed`
- *  turns the worker off for a page that sets routes of its own. */
-async function fresh(block?: string, routed = Boolean(block)): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, ...(routed ? { serviceWorkers: "block" as const } : {}) });
+ *  turns the worker off for a page that sets routes of its own, and `phone`
+ *  makes the page a phone's. */
+async function fresh(block?: string, routed = Boolean(block), phone = false): Promise<Page> {
+  const page = await browser.newPage({ ...(phone ? PHONE : { viewport: { width: 1400, height: 900 } }), ...(routed ? { serviceWorkers: "block" as const } : {}) });
   if (block) await page.route(`**/assets/${block}-*.js`, (r) => r.abort());
   page.on("pageerror", (e) => failures.push(`page error: ${e.message}`));
   page.on("console", (m) => {
@@ -111,6 +117,55 @@ try {
       if (text.includes("could not load") || text.includes("Loading…")) seen.push(v);
     }
     check(seen.length === 0, `switching views inside one page${seen.length ? `: stuck on ${seen.join(", ")}` : ""}`);
+    await page.close();
+  }
+
+  {
+    // A phone. Three things broke here unseen until 2026-11-09: the top
+    // bar's first row ran past the right edge, an open panel's section tabs
+    // were squeezed to no height, and fields under 16px made iOS zoom the
+    // page. 344px is a folded phone's cover screen, the narrowest the bar is
+    // fitted to; at 280px the row has more than it can hold, which is the
+    // owner's full row of chips at 390px, and it has to wrap, not run off.
+    // A scratch server has no voice model, so /api/voice is answered here:
+    // the mic is the row's widest button. The panel is twin's, which
+    // check.sh leaves with work in it.
+    const page = await fresh(undefined, true, true);
+    await page.route("**/api/voice", (r) => (r.request().method() === "GET" ? r.fulfill({ json: { model: "check", live: null, dictate: false } }) : r.continue()));
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".topbar.phone", { timeout: 20_000 });
+    for (const width of [390, 344, 280]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.waitForTimeout(500);
+      const row = await page.evaluate(() => {
+        const edge = document.documentElement.clientWidth;
+        const past = [...document.querySelectorAll<HTMLElement>(".topbar.phone > .tb-line:first-child :is(button, a)")]
+          .filter((el) => el.getClientRects().length > 0)
+          .filter((el) => el.getBoundingClientRect().right > edge + 0.5 || el.getBoundingClientRect().left < -0.5)
+          .map((el) => el.getAttribute("aria-label") ?? el.textContent?.trim() ?? el.className);
+        return { past, wider: document.documentElement.scrollWidth - edge, buttons: document.querySelectorAll(".topbar.phone > .tb-line:first-child :is(button, a)").length };
+      });
+      check(
+        row.buttons > 3 && row.past.length === 0 && row.wider <= 0,
+        `at ${width}px the top bar's first row keeps its ${row.buttons} buttons on the screen${row.past.length ? ` (past the edge: ${row.past.join(", ")})` : ""}${row.wider > 0 ? ` (the page is ${row.wider}px wider than the screen)` : ""}`,
+      );
+    }
+    await page.setViewportSize(PHONE.viewport);
+    await page.screenshot({ path: `${shots}/phone.png` });
+    await page.goto(`${base}/?repo=twin`, { waitUntil: "load" });
+    const rail = page.locator(".section-rail").first();
+    const shown = await rail.waitFor({ timeout: 15_000 }).then(() => true, () => false);
+    await page.waitForTimeout(800);
+    const height = shown ? ((await rail.boundingBox())?.height ?? 0) : 0;
+    const tabs = shown ? await rail.locator('[role="tab"]').count() : 0;
+    check(height >= 24 && tabs > 1, `on a phone an open panel shows its section tabs (${tabs} tabs in a rail ${Math.round(height)}px tall)`);
+    const small = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="submit"], [type="button"], [type="color"], [type="hidden"]), textarea, select')]
+        .filter((el) => parseFloat(getComputedStyle(el).fontSize) < 16)
+        .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).trim().split(/\s+/).join(".")}` : ""} ${getComputedStyle(el).fontSize}`),
+    );
+    check(small.length === 0, `with a finger for a pointer no field is under 16px, where iOS zooms the page${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
+    await page.screenshot({ path: `${shots}/phone-panel.png` });
     await page.close();
   }
 

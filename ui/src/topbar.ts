@@ -64,3 +64,15 @@ export function nextTuck(t: Tuck, s: Scroll): Tuck {
 export function scrollEdges(left: number, width: number, client: number): { start: boolean; end: boolean } {
   return { start: left > 1, end: left + client < width - 1 };
 }
+
+/** Whether a row's items, `gap` px apart, need more than `room` px. The
+ *  wide bar asks this of its first row: when the views and the buttons
+ *  beside them cannot share it, the bar lays itself out as three rows on
+ *  purpose (styles.css, ".topbar.split") rather than let each line wrap on
+ *  its own. An item of no width rendered nothing and takes no gap. The
+ *  widths are fractions of a px, so half a px over still fits. */
+export function rowOver(widths: readonly number[], gap: number, room: number): boolean {
+  const shown = widths.filter((w) => w > 0);
+  const need = shown.reduce((n, w) => n + w, 0) + gap * Math.max(0, shown.length - 1);
+  return need > room + 0.5;
+}

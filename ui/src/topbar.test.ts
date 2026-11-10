@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { TUCK_HOLD_MS, TUCK_SLOP, TUCK_START, nextTuck, scrollEdges, type Tuck } from "./topbar";
+import { TUCK_HOLD_MS, TUCK_SLOP, TUCK_START, nextTuck, rowOver, scrollEdges, type Tuck } from "./topbar";
 
 const room = 80;
 const range = 2000;
@@ -70,4 +70,18 @@ test("scrollEdges", () => {
   expect(scrollEdges(150, 600, 300)).toEqual({ start: true, end: true });
   expect(scrollEdges(300, 600, 300)).toEqual({ start: true, end: false });
   expect(scrollEdges(0, 300, 300)).toEqual({ start: false, end: false });
+});
+
+test("a row is over when its items and the gaps between them pass its room", () => {
+  // a tablet upright with the owner's chips: 549px of views, 301px of buttons
+  expect(rowOver([34, 18, 292, 93, 80, 301], 8, 788)).toBe(true);
+  // the same row with no workspace to pick fits
+  expect(rowOver([34, 18, 292, 93, 301], 8, 788)).toBe(false);
+});
+
+test("an item that rendered nothing takes no gap, and half a px over still fits", () => {
+  expect(rowOver([100, 0, 0, 100], 10, 210)).toBe(false);
+  expect(rowOver([100, 100], 10, 209.6)).toBe(false);
+  expect(rowOver([100, 100], 10, 209)).toBe(true);
+  expect(rowOver([], 10, 0)).toBe(false);
 });

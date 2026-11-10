@@ -1,6 +1,6 @@
 import { HealthChip } from "./Health";
 import { CapacityChip } from "./Capacity";
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
@@ -15,7 +15,7 @@ import { isHome } from "../registry";
 import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
 import { PAGE_BUILD } from "../build";
-import { TUCK_START, nextTuck, scrollEdges, type Tuck } from "../topbar";
+import { TUCK_START, nextTuck, rowOver, scrollEdges, type Tuck } from "../topbar";
 import { buildMoved, versionLine } from "../../../src/core/version";
 import { isOwnCode } from "../callerToken";
 import { FilterMenu } from "./Filters";
@@ -787,6 +787,44 @@ function useScrollEdges(row: RefObject<HTMLElement | null>) {
   }, [row]);
 }
 
+/** Whether the wide bar's first row has more than it can hold, measured off
+ *  its items rather than read off the window's width: the views, the scope
+ *  and a finger's larger buttons all change what the row needs. The split
+ *  layout this turns on moves the items without resizing them, so the answer
+ *  cannot flip back and forth. */
+function useSplit(bar: RefObject<HTMLElement | null>): boolean {
+  const [split, setSplit] = useState(false);
+  useLayoutEffect(() => {
+    const el = bar.current;
+    const line = el?.querySelector<HTMLElement>(":scope > .tb-top");
+    if (!el || !line) return;
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      const room = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const gap = parseFloat(getComputedStyle(line).columnGap) || 0;
+      const widths = Array.from(line.children, (c) => c.getBoundingClientRect().width);
+      setSplit(rowOver(widths, gap, room));
+    };
+    const seen = new ResizeObserver(measure);
+    // the row's items come and go (a workspace menu, a folder chip), and
+    // each one's width moves with its words
+    const watch = () => {
+      seen.disconnect();
+      seen.observe(el);
+      for (const c of line.children) seen.observe(c);
+      measure();
+    };
+    watch();
+    const kids = new MutationObserver(watch);
+    kids.observe(line, { childList: true });
+    return () => {
+      seen.disconnect();
+      kids.disconnect();
+    };
+  }, [bar]);
+  return split;
+}
+
 /** The phone's bar: three short rows, the views and the few buttons a thumb
  *  reaches for first, then the filter box, then everything else in one row
  *  that scrolls sideways, faded at whichever end has more. The two lower
@@ -872,16 +910,23 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
  *  then the chips, below. The filter box takes the room the row has spare
  *  and gives it back first, and the words shorten as the window narrows
  *  (styles.css, "the top bar narrowing"); only a row that still cannot fit
- *  wraps. A phone gets `PhoneBar`. The chips come in runs: what wants you,
- *  what is running, and the backend itself, each chip absent when it has
- *  nothing to say. */
+ *  wraps. When it is the first row that cannot fit (a tablet held upright),
+ *  the bar splits into three rows laid out on purpose: the views, then the
+ *  filters with the finders and the makers, then the chips. A phone gets
+ *  `PhoneBar`. The chips come in runs: what wants you, what is running, and
+ *  the backend itself, each chip absent when it has nothing to say. */
 export function TopBar({ nav }: { nav?: ReactNode }) {
   const phone = useMedia(PHONE);
+  return phone ? <PhoneBar nav={nav} /> : <WideBar nav={nav} />;
+}
+
+function WideBar({ nav }: { nav?: ReactNode }) {
   const narrow = useMedia(NARROW);
-  if (phone) return <PhoneBar nav={nav} />;
+  const bar = useRef<HTMLElement>(null);
+  const split = useSplit(bar);
 
   return (
-    <header className="topbar">
+    <header ref={bar} className={split ? "topbar split" : "topbar"}>
       <div className="tb-line tb-top">
         <SideToggle />
         <Wordmark version />

@@ -754,6 +754,40 @@ body.resizing-nesw iframe {
 .tb-line > * {
   margin-block: 4px;
 }
+/* A tablet held upright, or any window where the finders and the makers no
+   longer fit beside the views (TopBar's useSplit measures it): each .tb-line
+   wrapping on its own left four rows, two of them half empty. Split, the two
+   lines flow as one (they lay out as if they were not there) with a break
+   after the views: the views and the scope, then the filters with the
+   finders and the makers at their right, then the chips. Three rows, or two
+   when the chips are few enough to share the second. */
+.topbar.split {
+  flex-flow: row wrap;
+  align-items: center;
+  column-gap: 12px;
+}
+.topbar.split > .tb-line {
+  display: contents;
+}
+/* the break: a full-width item of no height, after the first row's items */
+.topbar.split::before {
+  content: "";
+  order: 1;
+  flex: none;
+  width: 100%;
+  height: 0;
+}
+.topbar.split > .tb-line > .tb-show {
+  order: 2;
+}
+/* the filters grow into the row, which puts these at its right end */
+.topbar.split > .tb-top > .topbar-tail {
+  order: 3;
+  margin-left: 0;
+}
+.topbar.split > .tb-tools > .topbar-tail {
+  order: 4;
+}
 /* the grouping and the filters take what the row has spare, the filter box
    growing into it, and give it back before the row wraps: the run is as
    narrow as its buttons and the box at its least */
@@ -11133,7 +11167,8 @@ button.machine:hover {
   .topbar-group {
     column-gap: 8px;
   }
-  .tb-line {
+  .tb-line,
+  .topbar.split {
     column-gap: 8px;
   }
 }
@@ -11199,11 +11234,24 @@ button.machine:hover {
 
 /* ---------- touch ---------- */
 @media (pointer: coarse) {
-  /* iOS zooms the page onto any focused field under 16px */
+  /* iOS zooms the page onto any focused field under 16px. A field with no
+     size of its own takes the larger step here. */
   input,
   textarea,
   select {
     font-size: var(--t-2xl);
+  }
+  /* A field with a class usually takes a small step of the type scale, and
+     a class outweighs the rule above. So the small steps themselves are
+     raised on a field that is typed into: whichever rule sets its size from
+     one lands on 16px, the ones not written yet too. The few fields that
+     inherit their size or name it in px are listed in the last block of the
+     file. */
+  :is(input, textarea, select):not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="submit"], [type="button"], [type="color"]) {
+    --t-xs: var(--t-xl);
+    --t-sm: var(--t-xl);
+    --t-md: var(--t-xl);
+    --t-lg: var(--t-xl);
   }
   .icon-btn {
     width: 34px;
@@ -15244,6 +15292,11 @@ button.trigger-title:hover {
   .secrets-row {
     grid-template-columns: minmax(0, 1fr);
   }
+  /* a passphrase field takes a row of its own beside a label, so its hint
+     ("12 or more characters") is not cut short at a finger's 16px */
+  .secrets-form input[type="password"] {
+    flex-basis: 15em;
+  }
 }
 .secrets-name,
 .secrets-value,
@@ -16562,6 +16615,19 @@ button.work-link {
   input[type="radio"] {
     width: 18px;
     height: 18px;
+  }
+  /* the fields the raised type scale cannot reach ("touch", above): each
+     inherits its size from the row it sits in or names it in px, so iOS
+     would zoom the page onto it */
+  .term-rename,
+  .signin-input,
+  .trigger-fire input,
+  .secrets-form input:not([type="checkbox"]),
+  .secrets-form select,
+  .secrets-form textarea,
+  .secrets-filter input,
+  .preview-draw-text {
+    font-size: var(--t-xl);
   }
   .head-toggle {
     min-height: 30px;
