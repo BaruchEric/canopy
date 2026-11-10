@@ -217,7 +217,8 @@ export interface Listing {
   path: string;
   /** null at the filesystem root */
   parent: string | null;
-  /** visible subfolders, a to z; `repo` when one holds a .git */
+  /** subfolders a to z, the hidden ones only when asked for; `repo` when
+   *  one holds a .git */
   dirs: { name: string; repo: boolean }[];
 }
 

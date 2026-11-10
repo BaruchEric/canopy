@@ -4023,16 +4023,17 @@ async function handleApi(
     // remote listing goes through the same host check as adding one.
     const dir = url.searchParams.get("path") ?? "~";
     const host = url.searchParams.get("host");
+    const opts = { hidden: url.searchParams.get("hidden") === "1" };
     if (host === null || host === "") {
       try {
-        return json(await browseLocal(dir));
+        return json(await browseLocal(dir, opts));
       } catch (err) {
         throw new HttpError(400, String(err instanceof Error ? err.message : err));
       }
     }
     if (!isSshHost(host)) throw new HttpError(400, "an ssh host alias is needed");
     try {
-      return json(await browseRemote(host, dir));
+      return json(await browseRemote(host, dir, opts));
     } catch (err) {
       const msg = String(err instanceof Error ? err.message : err);
       throw new HttpError(err instanceof SshError ? 502 : 400, msg);

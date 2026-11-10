@@ -3132,6 +3132,10 @@ div.waiting-row {
 .browse-item.up {
   color: var(--ink-faint);
 }
+/* a dot-folder, listed only when asked for, which a scan would pass by */
+.browse-item.dotdir .browse-name {
+  opacity: 0.7;
+}
 .browse-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3139,8 +3143,19 @@ div.waiting-row {
 }
 .browse-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+}
+/* the hint takes a row of its own once the buttons would leave it a sliver */
+.browse-foot > .settings-hint {
+  flex: 1 1 180px;
+}
+.browse-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
 /* a repo that lives on another host, or only on a forge, says so next to

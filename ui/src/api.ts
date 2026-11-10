@@ -338,11 +338,16 @@ export const api = {
   },
   /** aliases from ~/.ssh/config, for the add-a-folder form */
   hosts: (b: string = homeName()) => req<string[]>(b, "/api/hosts"),
-  /** one folder's subfolders, here or on a host, for the folder browser */
-  browse: (path: string, host?: string, b: string = homeName()) =>
+  /** one folder's subfolders, here or on a host, for the folder browser;
+   *  `hidden` adds the dot-folders */
+  browse: (path: string, host?: string, b: string = homeName(), hidden = false) =>
     req<Listing>(
       b,
-      `/api/browse?${new URLSearchParams({ path, ...(host ? { host } : {}) }).toString()}`,
+      `/api/browse?${new URLSearchParams({
+        path,
+        ...(host ? { host } : {}),
+        ...(hidden ? { hidden: "1" } : {}),
+      }).toString()}`,
     ),
   log: (id: string) => repoReq<LogEntry[]>(id, (p) => `/api/repos/log?${rq(p)}`),
   /** a worktree's or a branch's work, for the changes section's drill */

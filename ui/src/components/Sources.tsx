@@ -144,12 +144,14 @@ function FolderBrowser({
   const [listing, setListing] = useState<Listing | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Dot-folders stay off the list until asked for, since a home folder has dozens.
+  const [hidden, setHidden] = useState(false);
 
-  const go = async (path: string) => {
+  const go = async (path: string, withHidden: boolean = hidden) => {
     setLoading(path);
     setError(null);
     try {
-      setListing(await api.browse(path, host, backend));
+      setListing(await api.browse(path, host, backend, withHidden));
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -164,6 +166,7 @@ function FolderBrowser({
   }, [host, backend]);
 
   const repos = listing?.dirs.filter((d) => d.repo).length ?? 0;
+  const isDot = (name: string) => name.startsWith(".");
   return (
     <div className="browser" role="group" aria-label="Folder browser">
       <nav className="crumbs" aria-label="Path">
@@ -206,7 +209,7 @@ function FolderBrowser({
             <li key={d.name}>
               <button
                 type="button"
-                className={d.repo ? "browse-item repo" : "browse-item"}
+                className={`browse-item${d.repo ? " repo" : ""}${isDot(d.name) ? " dotdir" : ""}`}
                 disabled={loading !== null}
                 title={d.repo ? `${d.name} is a git repo` : `open ${d.name}`}
                 onClick={() => void go(`${listing.path === "/" ? "" : listing.path}/${d.name}`)}
@@ -222,25 +225,41 @@ function FolderBrowser({
       <div className="browse-foot">
         <span className="settings-hint">
           {listing
-            ? repos > 0
-              ? `${repos} of ${listing.dirs.length} subfolder${listing.dirs.length === 1 ? "" : "s"} are repos`
-              : "the scan looks a few levels down from here"
+            ? hidden
+              ? "a scan skips hidden folders, so open one and use it"
+              : repos > 0
+                ? `${repos} of ${listing.dirs.length} subfolder${listing.dirs.length === 1 ? "" : "s"} are repos`
+                : "the scan looks a few levels down from here"
             : ""}
         </span>
-        <span className="spacer" />
-        <button type="button" className="mini" onClick={onClose}>
-          cancel
-        </button>
-        <button
-          type="button"
-          className="mini strong"
-          disabled={!listing || loading !== null}
-          onClick={() => {
-            if (listing) onPick(listing.path);
-          }}
-        >
-          use this folder
-        </button>
+        <span className="browse-acts">
+          <button
+            type="button"
+            className={hidden ? "mini on" : "mini"}
+            aria-pressed={hidden}
+            disabled={loading !== null}
+            title={hidden ? "Leave out the folders whose names start with a dot" : "List the folders whose names start with a dot too"}
+            onClick={() => {
+              setHidden(!hidden);
+              void go(listing?.path ?? (start || "~"), !hidden);
+            }}
+          >
+            hidden
+          </button>
+          <button type="button" className="mini" onClick={onClose}>
+            cancel
+          </button>
+          <button
+            type="button"
+            className="mini strong"
+            disabled={!listing || loading !== null}
+            onClick={() => {
+              if (listing) onPick(listing.path);
+            }}
+          >
+            use this folder
+          </button>
+        </span>
       </div>
     </div>
   );

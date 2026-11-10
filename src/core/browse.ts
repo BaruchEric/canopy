@@ -11,16 +11,24 @@ export const expandHome = (p: string): string =>
 
 const parentOf = (p: string): string | null => (p === "/" ? null : dirname(p));
 
-/** The visible subfolders of a local folder, each flagged when it holds a
- *  `.git`. Hidden folders stay out, as they do in the scan. */
-export async function browseLocal(path: string): Promise<Listing> {
+/** What a listing takes in. */
+export interface BrowseOptions {
+  /** list the dot-folders too */
+  hidden?: boolean;
+}
+
+/** The subfolders of a local folder, each flagged when it holds a `.git`.
+ *  Hidden folders stay out, as they do in the scan, unless `hidden` asks
+ *  for them. The scan skips one below a source, so the only way to add a
+ *  hidden folder is to walk into it and pick it. */
+export async function browseLocal(path: string, opts: BrowseOptions = {}): Promise<Listing> {
   const abs = resolve(expandHome(path));
   const st = await stat(abs).catch(() => null);
   if (!st?.isDirectory()) throw new Error(`not a folder: ${abs}`);
   const entries = await readdir(abs, { withFileTypes: true });
   const dirs: Listing["dirs"] = [];
   for (const e of entries) {
-    if (e.name.startsWith(".")) continue;
+    if (!opts.hidden && e.name.startsWith(".")) continue;
     let isDir = e.isDirectory();
     if (!isDir && e.isSymbolicLink()) {
       const target = await stat(join(abs, e.name)).catch(() => null);
@@ -37,10 +45,15 @@ export async function browseLocal(path: string): Promise<Listing> {
 }
 
 /** One ssh round trip: the folder's real path, then one line per visible
- *  subfolder, `r` for one holding a `.git` and `d` otherwise. */
-export function browseCommand(path: string): string[] {
+ *  subfolder, `r` for one holding a `.git` and `d` otherwise. With `hidden`
+ *  a second glob adds the dot-folders; dash expands it to `.` and `..` as
+ *  well, so the loop drops those two by name. */
+export function browseCommand(path: string, opts: BrowseOptions = {}): string[] {
   const loop =
-    'for d in */; do d=${d%/}; [ -d "$d" ] || continue; ' +
+    (opts.hidden
+      ? "for d in */ .*/; do d=${d%/}; case $d in .|..) continue;; esac; "
+      : "for d in */; do d=${d%/}; ") +
+    '[ -d "$d" ] || continue; ' +
     'if [ -e "$d/.git" ]; then printf "r %s\\n" "$d"; else printf "d %s\\n" "$d"; fi; done';
   return ["sh", "-c", `cd ${tildeQuote(path)} && pwd -P && ${loop}`];
 }
@@ -61,8 +74,12 @@ export function parseBrowse(text: string): Listing {
 
 export class SshError extends Error {}
 
-export async function browseRemote(host: string, path: string): Promise<Listing> {
-  const r = await onHost(host, browseCommand(path), { timeoutMs: 20_000 });
+export async function browseRemote(
+  host: string,
+  path: string,
+  opts: BrowseOptions = {},
+): Promise<Listing> {
+  const r = await onHost(host, browseCommand(path, opts), { timeoutMs: 20_000 });
   if (r.code === 255) {
     throw new SshError(`ssh ${host}: ${r.stderr.trim() || "connection failed"}`);
   }
