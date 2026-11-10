@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Drives this checkout's built page (dist/web) in the headless shell setup.sh
-# installs: a scratch canopy server on a free port, scanning one throwaway
-# repo, with a clean environment (a canopy shell's own CANOPY_ settings would
-# make it refuse the page), then check.ts against it. Everything it starts
-# goes when it ends; the screenshots stay.
+# installs: a scratch canopy server on a free port, scanning two throwaway
+# repos (the runs pill's check wants a run in each), with a clean environment
+# (a canopy shell's own CANOPY_ settings would make it refuse the page), then
+# check.ts against it. Everything it starts goes when it ends; the
+# screenshots stay.
 #   scripts/browser/check.sh            after bun run build
 set -euo pipefail
 
@@ -28,11 +29,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$work/root/demo" "$work/config" "$work/home"
-git -C "$work/root/demo" init -q -b main
-printf '# demo\n' >"$work/root/demo/README.md"
-git -C "$work/root/demo" -c user.name=check -c user.email=check@localhost add -A
-git -C "$work/root/demo" -c user.name=check -c user.email=check@localhost commit -qm init
+mkdir -p "$work/config" "$work/home"
+for name in demo twin; do
+  mkdir -p "$work/root/$name"
+  git -C "$work/root/$name" init -q -b main
+  printf '# %s\n' "$name" >"$work/root/$name/README.md"
+  git -C "$work/root/$name" -c user.name=check -c user.email=check@localhost add -A
+  git -C "$work/root/$name" -c user.name=check -c user.email=check@localhost commit -qm init
+done
 
 port="$("$BUN" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);')"
 env -i HOME="$work/home" PATH="$(dirname "$BUN"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \

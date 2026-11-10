@@ -1,7 +1,8 @@
 // Drives a running canopy page the way a person would and says what broke:
 // the first load (what comes with the page, what is fetched once it is up),
-// every view from its URL and by switching inside one page, a shell that
-// answers, and the two load failures (a view's chunk and xterm's refused).
+// every view from its URL and by switching inside one page, the runs pill's
+// menu with two runs going, a shell that answers, and the two load failures
+// (a view's chunk and xterm's refused).
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
@@ -29,9 +30,10 @@ const check = (ok: boolean, what: string) => {
 };
 
 /** a page of its own; `block` refuses that chunk, with the service worker
- *  off, since a fetch the worker makes passes the page's routes by */
-async function fresh(block?: string): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, ...(block ? { serviceWorkers: "block" as const } : {}) });
+ *  off, since a fetch the worker makes passes the page's routes by. `routed`
+ *  turns the worker off for a page that sets routes of its own. */
+async function fresh(block?: string, routed = Boolean(block)): Promise<Page> {
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, ...(routed ? { serviceWorkers: "block" as const } : {}) });
   if (block) await page.route(`**/assets/${block}-*.js`, (r) => r.abort());
   page.on("pageerror", (e) => failures.push(`page error: ${e.message}`));
   page.on("console", (m) => {
@@ -109,6 +111,52 @@ try {
       if (text.includes("could not load") || text.includes("Loading…")) seen.push(v);
     }
     check(seen.length === 0, `switching views inside one page${seen.length ? `: stuck on ${seen.join(", ")}` : ""}`);
+    await page.close();
+  }
+
+  {
+    // The runs pill with two runs going. A scratch server has no agent to
+    // run, so the two are made up, one per repo, and /api/runs is answered
+    // here. The older chat is the one a click on the pill never reached
+    // while it opened the newest run itself.
+    const page = await fresh(undefined, true);
+    const tree = (await (await page.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    const run = (id: string, repo: string, extra: Record<string, unknown>) => ({
+      id,
+      repoId: tree.repos.find((r) => r.name === repo)?.id ?? repo,
+      action: "chat",
+      verb: "chat",
+      progress: "thinking",
+      expectsChange: false,
+      chat: true,
+      harness: "claude",
+      note: "",
+      status: "working",
+      startedAt: Date.now() - 20_000,
+      steps: [],
+      prompt: null,
+      ...extra,
+    });
+    const runs = [run("check-new", "demo", {}), run("check-old", "twin", { status: "idle", startedAt: Date.now() - 12 * 60_000, note: "the older chat" })];
+    await page.route("**/api/runs", (r) => (r.request().method() === "GET" ? r.fulfill({ json: runs }) : r.continue()));
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    await page.waitForSelector(".pill.runs", { timeout: 20_000 });
+    const word = await textOf(page, ".pill.runs");
+    await page.locator(".pill.runs").click();
+    const rows = page.locator('.runs-pick [role="radio"]');
+    await rows.first().waitFor({ timeout: 5000 }).catch(() => undefined);
+    const listed = (await rows.allInnerTexts()).map((t) => t.replace(/\s+/g, " ").trim());
+    check(
+      word === "2 claude runs" && listed.length === 2 && (listed[0]?.startsWith("demo") ?? false) && (listed[1]?.startsWith("twin") ?? false),
+      `the runs pill lists two runs, a row each: "${word}" opens "${listed.join('", "')}"`,
+    );
+    // the menu settles in over 140ms; the picture waits for it
+    await page.waitForTimeout(300);
+    await page.screenshot({ path: `${shots}/runs-pill.png` });
+    const sheet = listed.length === 2
+      ? await rows.nth(1).click().then(() => page.waitForSelector(".sheet-back", { timeout: 5000 })).then((e) => e.innerText(), () => "")
+      : "";
+    check(sheet.includes("twin") && sheet.includes("the older chat"), `a pick opens that run and not the newest: "${sheet.replace(/\s+/g, " ").trim().slice(0, 60)}"`);
     await page.close();
   }
 
