@@ -5,7 +5,7 @@ import { joinTarget } from "../agentcards";
 import { allAgents, runOfCard, shellsToProbe, type Ids } from "../allagents";
 import { ansiLines, trimTail, type AnsiRun } from "../ansi";
 import { api } from "../api";
-import { quickAnswers } from "../board";
+import { peekWait, quickAnswers } from "../board";
 import { backendOf, plainOf, qual } from "../registry";
 import { canAnswer, inboxItems, useStore } from "../store";
 import type { TermTab } from "../term";
@@ -155,6 +155,7 @@ export function Peek({ term }: { term: string }) {
         timer = setTimeout(read, PEEK_EVERY);
         return;
       }
+      let wait = PEEK_EVERY;
       api
         .termScreen(term)
         .then((r) => {
@@ -162,9 +163,12 @@ export function Peek({ term }: { term: string }) {
           setText(r.text);
           setErr(null);
         })
-        .catch((e: unknown) => on && setErr(errText(e)))
+        .catch((e: unknown) => {
+          wait = peekWait(e, PEEK_EVERY);
+          if (on) setErr(errText(e));
+        })
         .finally(() => {
-          if (on) timer = setTimeout(read, PEEK_EVERY);
+          if (on) timer = setTimeout(read, wait);
         });
     };
     read();

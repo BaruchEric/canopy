@@ -1030,7 +1030,8 @@ coordinator's lane: canopy opens a second listener on that port inside the
 container, and the shells publish 10.250.14.1:7850 onto it, so a call from
 `coord` lands there and nowhere else. `CANOPY_COORD_API` keeps the address
 the coordinator dials, 10.250.14.1:7850; only the container port behind it
-changes. Every GET is the `read` right, which a caller with no token holds,
+changes. A GET is the `read` right unless the table files it higher (the
+clipboard, a shell's screen, the sweep), and a caller with no token holds it,
 so without the lane anything in `coord` could read any repo file through
 `GET /api/repos/diff` with no token at all. On the coordinator's listener a
 call must carry a coordinator's token and may only `GET /api/about`,

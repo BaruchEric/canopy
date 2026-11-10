@@ -248,6 +248,22 @@ describe("the notes' routes (FR-020)", () => {
   });
 });
 
+describe("what a shell shows", () => {
+  test("its screen, its text and its agent's transcript are a hand's to read, so a caller with no token never sees them", () => {
+    for (const p of ["/api/terms/screen", "/api/terms/text", "/api/terms/transcript"]) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "operate" });
+      for (const kind of ["page", "cli", "shell", "ranger"] as const) expect({ p, kind, may: allows(kind, needs("GET", p)) }).toEqual({ p, kind, may: true });
+      for (const kind of ["none", "run", "coordinator", "helper"] as const) expect({ p, kind, may: allows(kind, needs("GET", p)) }).toEqual({ p, kind, may: false });
+    }
+  });
+
+  test("the list of shells and the facts about one stay plain reads", () => {
+    for (const p of ["/api/terms", "/api/terms/kept", "/api/terms/agent", "/api/terms/watched", "/api/terms/move/plan", "/api/terms/move/transcript"]) {
+      expect({ p, right: needs("GET", p) }).toEqual({ p, right: "read" });
+    }
+  });
+});
+
 describe("the clipboard's routes (FR-054)", () => {
   test("reading and every change operate, so a caller with no token never sees a clip", () => {
     expect(needs("GET", "/api/clips")).toBe("operate");

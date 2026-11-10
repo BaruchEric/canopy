@@ -14,6 +14,7 @@ import { BOARD_LAYOUTS, isLiveAgent, type Ask, type AgentCard, type AgentState, 
 import { groupCards, runEnd, tierOf, type IsChat, type TrailMark } from "./agentcards";
 import type { InboxAnswer } from "./inbox";
 import { recommendLayout } from "../../src/core/screenlayouts";
+import { statusOf } from "./move";
 
 export { BOARD_LAYOUTS, type BoardLayout };
 
@@ -557,6 +558,20 @@ export function laneSegs(c: AgentCard, marks: readonly TrailMark[] | undefined, 
 export function recommendBoard(w: number, h: number): BoardLayout {
   return recommendLayout(w, h).agents ?? "wall";
 }
+
+/* ---------- a tile's peek at its shell ---------- */
+
+/** how long a peek waits after its backend refused the read */
+export const PEEK_REFUSED_EVERY = 60_000;
+
+/** The wait before a peek's next read, after one that failed with `err`. A
+ *  refusal (401, 403) stands until the page signs in, so it is asked again
+ *  far less often: at the usual pace a page that is not signed in would
+ *  fill the backend's list of refused calls with its peeks. */
+export const peekWait = (err: unknown, every: number): number => {
+  const status = statusOf(err);
+  return status === 401 || status === 403 ? PEEK_REFUSED_EVERY : every;
+};
 
 /* ---------- the focus in a window of its own ---------- */
 

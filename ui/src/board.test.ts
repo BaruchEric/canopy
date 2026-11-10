@@ -10,6 +10,8 @@ import {
   keepShell,
   laneSegs,
   nextWaiting,
+  peekWait,
+  PEEK_REFUSED_EVERY,
   nthCard,
   focusAwayAfter,
   planBoard,
@@ -376,5 +378,15 @@ describe("boardOrder and sessions", () => {
     const order = boardOrder([job, term], trail);
     expect(nextWaiting(order, null)).toBe("term");
     expect(nextWaiting(order, "term")).toBe("job");
+  });
+});
+
+describe("peekWait", () => {
+  test("a refused read is asked again far less often; anything else keeps the pace", () => {
+    expect(peekWait(Object.assign(new Error("sign in"), { status: 401 }), 2000)).toBe(PEEK_REFUSED_EVERY);
+    expect(peekWait(Object.assign(new Error("needs operate"), { status: 403 }), 2000)).toBe(PEEK_REFUSED_EVERY);
+    expect(peekWait(Object.assign(new Error("tmux did not answer"), { status: 502 }), 2000)).toBe(2000);
+    expect(peekWait(new Error("offline"), 2000)).toBe(2000);
+    expect(peekWait(null, 2000)).toBe(2000);
   });
 });

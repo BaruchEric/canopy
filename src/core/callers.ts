@@ -4,7 +4,8 @@
  *
  *  The default denies: a route that is not a GET and not in the table needs
  *  `admin`, so a new route is safe until someone files it here. A GET reads
- *  unless the table names it (the sweep's do). */
+ *  unless the table names it (the sweep's, the clipboard's and a shell's
+ *  screen do). */
 
 export type Right = "read" | "plan" | "operate" | "shell" | "admin" | "helper";
 export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "run" | "helper" | "none";
@@ -128,6 +129,11 @@ const RULES: readonly Rule[] = [
     right: "shell",
   },
   { methods: DEL, paths: ["terms", "terms/kept"], right: "shell" },
+  // what a shell shows can be anything typed or printed there, a key
+  // included, so its screen, its text and its agent's transcript are a
+  // hand's to read, as the clipboard is: a caller with no token never sees
+  // them. The list of shells and the facts about one stay plain reads.
+  { methods: ["GET"], paths: ["terms/screen", "terms/text", "terms/transcript"], right: "operate" },
   // Admin is also the default; these are written out so the test can pin them.
   { methods: POST, paths: ["agents/profile", "agents/role", "peers/sync", "repos/peer", "keep", "awake", "worktrees/warm", "health/heal", "remembered/forget", "capacity"], right: "admin" },
   { methods: POST_DEL, paths: ["sources"], right: "admin" },
