@@ -23,7 +23,8 @@ export function fitShift(left: number, right: number, width: number): number {
  * a chip can land at the left of the window with its popover off-screen.
  * The shift goes on `translate`, not `transform`, which the settle
  * animation owns. `size` is whatever else changes its width (the inbox's
- * zoom), so it fits again when that moves.
+ * zoom), so it fits again when that moves. It also writes the popover's top
+ * edge to `--pop-top`, which the stylesheet reads for Settings' height.
  */
 export function useFitPop(ref: RefObject<HTMLElement | null>, open: boolean, size?: number): void {
   useLayoutEffect(() => {
@@ -35,6 +36,12 @@ export function useFitPop(ref: RefObject<HTMLElement | null>, open: boolean, siz
       const r = pop.getBoundingClientRect();
       const dx = fitShift(r.left, r.right, document.documentElement.clientWidth);
       if (dx !== 0) pop.style.translate = `${Math.round(dx)}px 0`;
+      // where it starts, for a popover as tall as the room under it
+      // (Settings): the bar wraps, so its chip is not always in the first
+      // row. Off the layout, since the settle animation moves the rect.
+      const host = pop.offsetParent;
+      const top = host ? host.getBoundingClientRect().top + host.clientTop + pop.offsetTop : r.top;
+      pop.style.setProperty("--pop-top", `${Math.round(top)}px`);
     };
     fit();
     window.addEventListener("resize", fit);

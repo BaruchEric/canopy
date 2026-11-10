@@ -601,6 +601,11 @@ kbd {
   height: 100vh;
   /* the visible height, which a phone's toolbars and keyboard move */
   height: 100dvh;
+  /* nothing in the app widens the page. A popover is laid out where it
+     hangs before useFitPop pulls it in, and on a touch screen that one
+     layout past the edge left the page 67px wider and panning sideways
+     until the next render. Clipped, it never counts. */
+  overflow-x: clip;
 }
 .app > .topbar {
   flex: none;
@@ -1266,12 +1271,14 @@ body.resizing-nesw iframe {
    small trees, one per place a setting lives: this browser, and the backend
    its picker names. Each tab shows its current value, so the rail reads as a
    summary before anything is opened. A fixed height keeps the box still as
-   the tabs change, and only the open tab scrolls. */
+   the tabs change, and only the open tab scrolls. It stops 8px short of the
+   window's bottom edge from wherever it starts: useFitPop writes its top to
+   --pop-top, since the gear sits in the bar's second row once the bar wraps. */
 .settings-pop.prefs {
   display: grid;
   grid-template-columns: 15em minmax(0, 1fr);
   width: 640px;
-  height: min(640px, calc(100dvh - 64px));
+  height: min(640px, calc(100dvh - var(--pop-top, 56px) - 8px));
   padding: 0;
   overflow: hidden;
 }
@@ -4350,12 +4357,33 @@ body.resizing-rows {
   scrollbar-width: none;
   background: var(--bark1);
   border-bottom: 1px solid var(--hair);
+  /* a row that scrolls has no least height of its own, so a panel body with
+     more than fits would squeeze it to its hairline */
+  flex: none;
 }
 .panel-lede > .section-rail {
   margin-inline: 0;
 }
 .panel-wide > .panel-body > .panel-lede > .section-rail {
   margin: calc(4px * var(--ui)) calc(-1 * var(--gutter)) 0 -8px;
+}
+/* the row scrolls when the tabs outrun the panel, and says so: a fade
+   pinned to its far end, in the row after the last tab so that one scrolls
+   clear of it. Over a row that fits it lies on the ground it is made of. */
+.section-rail::after {
+  content: "";
+  position: sticky;
+  right: 0;
+  /* after every tab, whatever order its section gives it */
+  order: 9999;
+  flex: none;
+  align-self: stretch;
+  width: 24px;
+  background: linear-gradient(to right, transparent, var(--bark1));
+  pointer-events: none;
+}
+.panel-wide .section-rail::after {
+  display: none;
 }
 .section-tab {
   flex: none;
@@ -4476,6 +4504,9 @@ body.resizing-rows {
   display: flex;
   justify-content: center;
   background: var(--bark0);
+  /* a window narrower than the panel's most: the handles straddle the
+     window's own edges, and the 3px past the right one scrolled the page */
+  overflow-x: clip;
 }
 .solo .panel {
   width: 100%;
@@ -8066,6 +8097,28 @@ a.sweep-title:hover {
   font-size: var(--t-md);
   color: var(--ink-faint);
 }
+/* an agent's line ends in its state, the word a glance is for. Cut as one
+   run of text, a long machine name pushed the state off the end; as a row,
+   the machine and the name shorten together, the machine never under a
+   short name's width ("mac", "mini"), and the state stays whole unless it
+   is a sentence. The dots between are the row's gap. */
+.ss-agent .ss-line {
+  display: flex;
+  gap: 0.3em;
+}
+.ss-agent .ss-line > span {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ss-agent .ss-line > span:first-child {
+  min-width: 4ch;
+}
+.ss-agent .ss-line > span:last-child {
+  flex: none;
+  max-width: 60%;
+}
 .ss-answer {
   padding: 0 12px 4px 35px;
 }
@@ -8544,6 +8597,12 @@ body.ss-grabbing * {
   align-items: center;
   gap: 4px 12px;
   min-width: 0;
+}
+/* the keys need a keyboard: on a phone the line took three rows off the shell */
+@media (hover: none) and (pointer: coarse) {
+  .ss-keys > .ss-faint {
+    display: none;
+  }
 }
 .ss-warn {
   padding: 0;
@@ -9069,6 +9128,16 @@ body:has(.focus-grip.se.dragging) {
   }
   .panel-shells > .fold {
     margin-top: 2px;
+  }
+  /* the grip's row has pushed the tabs down, and the fold's word goes down
+     with them: left at the top it lay under the grip, which took its taps */
+  .panel-shells > .fold.open:not(:disabled) {
+    top: 28px;
+    padding-block: 9px;
+  }
+  /* a guided panel has no grip, so its tabs start at the top */
+  .panel.guided-panel > .panel-shells > .fold.open:not(:disabled) {
+    top: 10px;
   }
   .focus-grip {
     --grip: 14px;
@@ -11042,7 +11111,7 @@ button.machine:hover {
 /* the top bar narrowing: as the window does, the words that repeat what a
    glyph or a tooltip already says go first, so each row keeps to one line
    down to a phone's width. The ranger's word goes in TopBar (NARROW). */
-@media (max-width: 1240px) {
+@media (max-width: 1360px) {
   .attention .pill-words,
   .topbar:not(.phone) .quiet-all,
   .topbar:not(.phone) #filters-btn .pill-words,
@@ -11171,6 +11240,23 @@ button.machine:hover {
     flex: none;
     margin-block: 0;
   }
+  /* the first row is the one with no row that scrolls to fall back on, and
+     with the tasks and the voice button in it the buttons ran past a 390px
+     screen. They sit closer, the voice button comes down towards its
+     neighbours, and whatever still has no room takes a second line at the
+     right, so no button is ever past the screen's edge. */
+  .topbar.phone > .tb-line {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px 4px;
+  }
+  .topbar.phone > .tb-line > .tb-cluster:not(:empty) ~ .tb-cluster:not(:empty)::before {
+    margin-right: 4px;
+  }
+  .topbar.phone .voice-btn {
+    width: 36px;
+    height: 36px;
+  }
   /* the two lower rows fold away while the cards scroll down (useTuck):
      the fold's row shrinks to nothing and its box clips what it holds, with
      room around the rows for the focus rings the clip would cut */
@@ -11210,6 +11296,8 @@ button.machine:hover {
   /* the backend menu in the first row is its light alone; the names are
      in its tooltip and its sheet */
   .topbar.phone .backend-btn {
+    min-width: 30px;
+    justify-content: center;
     padding-inline: 6px;
   }
   .topbar.phone .backend-btn > :not(.live-dot) {
@@ -11273,8 +11361,10 @@ button.machine:hover {
   .attention .pill-words {
     display: none;
   }
-  /* a repo open on a phone has the page: the filter rows go with the cards */
-  .app:has(> .body > .dock) .topbar.phone .tb-fold {
+  /* a repo open on a phone has the page: the filter rows go with the cards.
+     The body sits a few boxes down (the feed's column, the view), so the
+     selector says only that a dock is in a body. */
+  .app:has(.body > .dock) .topbar.phone .tb-fold {
     display: none;
   }
 
@@ -11369,6 +11459,19 @@ button.machine:hover {
   .prefs-panel {
     overflow: visible;
   }
+  /* the sheet's own gear lands on the end of the tab row here: it comes
+     down to the row's middle with the sheet's ground behind it, and the row
+     ends short of it, so the last tab scrolls clear */
+  .settings-pop.prefs > .prefs-rail {
+    padding-right: 52px;
+  }
+  .settings-pop.prefs > .pop-gear.corner {
+    top: 14px;
+    right: 0;
+    padding: 2px 10px 2px 4px;
+    background: var(--float);
+    box-shadow: -8px 0 8px var(--float);
+  }
   /* the grabber that says it is a sheet */
   .settings-pop::before,
   .gear-sheet::before {
@@ -11393,6 +11496,32 @@ button.machine:hover {
   }
   .panel-head {
     padding-block: 12px;
+  }
+}
+/* at a phone's usual 390px the first row has a few pixels to spare, so a
+   count reaching two digits would wrap it: the hairline between its runs
+   goes for the room */
+@media (max-width: 400px) {
+  .topbar.phone > .tb-line > .tb-cluster:not(:empty) ~ .tb-cluster:not(:empty)::before {
+    display: none;
+  }
+}
+/* a folded phone's cover, 344 to 360px: the first row keeps to one line by
+   giving up the crowns as well, and its buttons stand a little closer.
+   Every button stays. */
+@media (max-width: 370px) {
+  .topbar.phone > .tb-line {
+    margin-inline: -4px;
+  }
+  .topbar.phone > .tb-line > .wordmark {
+    display: none;
+  }
+  .topbar.phone > .tb-line .icon-btn {
+    width: 30px;
+  }
+  .topbar.phone > .tb-line .voice-btn {
+    width: 32px;
+    height: 34px;
   }
 }
 
@@ -13936,6 +14065,8 @@ span.effective-flag:not(:first-child) {
 .capacity-row {
   display: grid;
   gap: 4px;
+  /* packed at the top: beside a taller row its lines would spread out */
+  align-content: start;
   padding: 6px 0;
   font-size: var(--t-md);
 }
@@ -14023,6 +14154,11 @@ span.effective-flag:not(:first-child) {
 }
 .capacity-block .capacity-rows {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+/* side by side, every row starts under a hairline, the first one too, where
+   stacked rows draw it only between them */
+.capacity-block .capacity-row {
+  border-top: 1px solid var(--hair);
 }
 .capacity-holds summary {
   cursor: pointer;
@@ -14472,12 +14608,13 @@ button.trigger-title:hover {
   color: var(--rust);
   background: var(--wash);
 }
-/* a phone's focus head wraps its tools under the name, not off the edge */
-.board.narrow .bt.focused .bt-head {
+/* the focused tile's head holds the agent's own actions as well: they wrap
+   under the name, not off the edge, on a phone and in a wall's narrow tile */
+.bt.focused > .bt-head {
   flex-wrap: wrap;
   row-gap: 4px;
 }
-.board.narrow .bt.focused .bt-tools {
+.bt.focused .bt-tools {
   flex-wrap: wrap;
 }
 /* six layouts outrun a phone's width: the row scrolls on its own */
@@ -14489,9 +14626,20 @@ button.trigger-title:hover {
 .board-bar .board-layouts button {
   flex: none;
 }
+/* and says so there: its far end fades, over room it keeps after the last
+   layout, so that one scrolls clear */
+.board.narrow .board-bar .board-layouts {
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.board.narrow .board-bar .board-layouts::after {
+  content: "";
+  flex: none;
+  width: 22px;
+}
 /* the keys need a keyboard */
 @media (hover: none) and (pointer: coarse) {
-  .board-keys {
+  .board-keys,
+  .bt-n {
     display: none;
   }
 }
@@ -14633,6 +14781,42 @@ button.trigger-title:hover {
   flex: none;
   font-size: var(--t-2xl);
   line-height: 1;
+}
+/* a head too narrow for all of it. It measures itself, except a lane's,
+   whose column is as wide as its words, and the focused one's, which wraps
+   and whose menus place against the window. Under this width the machine
+   and the branch had shrunk to a letter or two that said nothing and still
+   cost the name its room: they go, and the name's tooltip says the machine. */
+.bt:not(.bt-lane, .focused) > .bt-head {
+  container: bt-head / inline-size;
+}
+@container bt-head (max-width: 23rem) {
+  .bt-machine,
+  .bt-branch {
+    display: none;
+  }
+}
+/* with a pointer, a tile that is not the focus keeps "dock" and "tab" out of
+   the row until the pointer or the focus is on it: they come up over the
+   head's far end, on the tile's ground, and the name has their room. A
+   finger has no hover, so there they stay in the row. */
+@media (hover: hover) {
+  .bt:not(.focused) > .bt-head {
+    position: relative;
+  }
+  .bt:not(.focused) > .bt-head > .bt-tools:last-child:has(> button) {
+    position: absolute;
+    inset: 0 0 0 auto;
+    padding: 0 8px 0 22px;
+    background: linear-gradient(to right, transparent, var(--bark1) 18px);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .bt:not(.focused):hover > .bt-head > .bt-tools:last-child:has(> button),
+  .bt:not(.focused) > .bt-head > .bt-tools:last-child:has(> button):focus-within {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .bt-last {
   flex: none;
@@ -15053,6 +15237,13 @@ button.trigger-title:hover {
 }
 .secrets-row .secrets-meta {
   grid-column: 1 / -1;
+}
+/* a phone: the name has the row to itself and the note sits under it, where
+   a 120px column broke a long name in the middle of a word */
+@media (max-width: 760px) {
+  .secrets-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 .secrets-name,
 .secrets-value,
@@ -16349,4 +16540,87 @@ button.work-link {
 }
 .run-work-word {
   color: var(--ink-dim);
+}
+
+/* ---------- a finger's worth of room ---------- */
+/* Last in the file so it wins over the rules above at the same weight. With
+   a finger for a pointer, a control drawn 11 to 22px tall is a miss as often
+   as a hit. The rows a finger works (a segmented choice, a filter chip, a
+   section's fold, a file) grow to about 30px; the small glyphs on a card and
+   in a table keep their drawn size and take the taps around them instead,
+   through a box laid over and past their own. */
+@media (pointer: coarse) {
+  .seg button {
+    min-height: 30px;
+    padding-inline: 10px;
+  }
+  .chip,
+  .feed-chip {
+    min-height: 30px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 18px;
+    height: 18px;
+  }
+  .head-toggle {
+    min-height: 30px;
+  }
+  .section-head > .fold {
+    padding-block: 6px;
+  }
+  .file-row {
+    padding-block: 5px;
+  }
+  .file-head .file-col {
+    min-height: 28px;
+  }
+  .ss-pane-acts > button {
+    min-width: 30px;
+    min-height: 28px;
+  }
+  .sweep-btn,
+  .health-label,
+  .cost-share > summary,
+  .agents-has .mini {
+    min-height: 28px;
+  }
+  .ss-all {
+    padding-block: 5px;
+  }
+  .tb-scroll .mini {
+    min-width: 30px;
+  }
+  /* a worktree's row on a card: its name and its buttons were 16px lines */
+  .card-tree {
+    line-height: 26px;
+  }
+  .card-tree-tools .mini {
+    padding-inline: 8px;
+    line-height: 24px;
+  }
+  .star,
+  .card-link,
+  .card-live-group,
+  .machine,
+  .kit-cell-button,
+  .feed-x,
+  .run-chip.health-card {
+    position: relative;
+  }
+  .star::after,
+  .card-link::after,
+  .card-live-group::after,
+  .machine::after,
+  .kit-cell-button::after,
+  .feed-x::after,
+  .run-chip.health-card::after {
+    content: "";
+    position: absolute;
+    inset: -6px -5px;
+  }
+  /* a kit cell has a cell above and below it, so its room is to the sides */
+  .kit-cell-button::after {
+    inset: -2px -8px;
+  }
 }

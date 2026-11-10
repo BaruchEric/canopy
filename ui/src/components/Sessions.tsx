@@ -552,7 +552,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
             {!overTabs && visible.length === 0 && pages.length === 0 && (
               <div className="ss-blank">
                 <p>{scope ? `No shells open at ${scopeName(scope, repos)}.` : "No shells open."}</p>
-                <p className="ss-faint">{scope && "repo" in scope ? "Press + or n to open one." : "Pick a repo on the left, or press n and type its name."}</p>
+                <p className="ss-faint">{scope && "repo" in scope ? "Press + or n to open one." : narrow ? "Pick a repo from the list under ☰." : "Pick a repo on the left, or press n and type its name."}</p>
               </div>
             )}
           </div>

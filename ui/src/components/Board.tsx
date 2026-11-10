@@ -461,7 +461,7 @@ function BoardTile({
         <span className={`harness-glyph h-${card.harness}`} title={harnessWord(card)}>
           {glyphOf(card)}
         </span>
-        <button type="button" className="bt-name" title={`${cardName(card)} · ${card.cwd}`} onClick={() => onPick(card.id)}>
+        <button type="button" className="bt-name" title={`${cardName(card)} · ${machineOf(card)} · ${card.cwd}`} onClick={() => onPick(card.id)}>
           {name}
         </button>
         {card.branch && slot.mode !== "chip" && slot.mode !== "lane" && <span className="bt-branch">{card.branch}</span>}
