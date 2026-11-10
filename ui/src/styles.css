@@ -818,10 +818,12 @@ body.resizing-nesw iframe {
   rotate: 180deg;
   opacity: 0.9;
 }
+/* the width is .settings-pop's own 340px, which is declared further down
+   and so decides it; a menu that wants another says so with its parent's
+   class, as the workspace's does */
 .pick-pop {
   left: 0;
   right: auto;
-  width: 360px;
 }
 /* a menu on a chip at the bar's far end hangs off its right edge instead;
    :where keeps this no stronger than .pick-pop, so a phone's sheet still
