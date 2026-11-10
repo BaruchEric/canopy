@@ -42,6 +42,7 @@ test("no press means two things on one view", () => {
 
 test("chordView goes to the view a letter names, and nowhere for a letter it does not", () => {
   expect(chordView("t")).toBe("triggers");
+  expect(chordView("o")).toBe("clock");
   expect(chordView("l")).toBe("library");
   expect(chordView("h")).toBe("health");
   expect(chordView("i")).toBe("incubator");

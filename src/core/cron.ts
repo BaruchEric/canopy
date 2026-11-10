@@ -69,9 +69,12 @@ function field(text: string, lo: number, hi: number, name: string): Set<number> 
   return out;
 }
 
+/** A line with its `@` word written out as five fields; any other line trimmed. */
+export const expandCron = (line: string): string => MACROS[line.trim().toLowerCase()] ?? line.trim();
+
 /** A cron line read into its sets, or why it cannot be read. */
 export function parseCron(line: string): Cron | { error: string } {
-  const text = MACROS[line.trim().toLowerCase()] ?? line.trim();
+  const text = expandCron(line);
   const parts = text.split(/\s+/);
   if (parts.length !== 5) return { error: "a cron line has five fields: minute hour day-of-month month day-of-week" };
   const sets: Set<number>[] = [];

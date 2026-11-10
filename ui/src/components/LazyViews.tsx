@@ -14,6 +14,7 @@ const LOADS = {
   kit: () => import("./Kit"),
   costs: () => import("./Costs"),
   triggers: () => import("./Triggers"),
+  clock: () => import("./Clock"),
   library: () => import("./Library"),
   agents: () => import("./AgentsView"),
   incubator: () => import("./Incubator"),
@@ -50,6 +51,7 @@ export const SecretsView = view(LOADS.secrets, (m) => m.SecretsView);
 export const KitView = view(LOADS.kit, (m) => m.KitView);
 export const CostsView = view(LOADS.costs, (m) => m.CostsView);
 export const TriggersView = view(LOADS.triggers, (m) => m.TriggersView);
+export const ClockView = view(LOADS.clock, (m) => m.ClockView);
 export const Library = view(LOADS.library, (m) => m.Library);
 // its props parameter is optional, which leaves them to be named here
 export const AgentsView = view(LOADS.agents, (m): ((props: { onGit?: () => void }) => ReactNode) => m.AgentsView);

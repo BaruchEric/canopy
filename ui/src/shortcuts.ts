@@ -83,6 +83,7 @@ export const GO: readonly { key: string; view: string; what: string }[] = [
   { key: "b", view: "agents", what: "the agents board" },
   { key: "s", view: "sessions", what: "sessions" },
   { key: "t", view: "triggers", what: "triggers" },
+  { key: "o", view: "clock", what: "the clock" },
   { key: "i", view: "incubator", what: "the incubator" },
   { key: "l", view: "library", what: "the library" },
   { key: "p", view: "ports", what: "ports" },

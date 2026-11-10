@@ -2,6 +2,10 @@
 
 ## Open
 
+### FR-061 · Change a schedule rule's line from the clock
+P3 · added 2026-11-10 · source: Claude (follow-up to FR-060)
+The clock view fires a schedule rule and shows its line, but the line is changed only by editing `triggers.json` on the backend. A route that rewrites one rule's `cron` or `poll` (admin right, the file's other keys and its order kept, the same checks `parseRules` makes) would let the clock's line editor save a rule the way it saves a wake. Decide first whether the file should stay hand-written only: it also names the env vars that hold hook secrets.
+
 ### FR-046 · Paseo interop study
 P3 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Paseo)
 Paseo (getpaseo/paseo, Apache-2.0) has canopy's daemon-plus-clients shape, multi-host model, voice and worktrees, and the native phone apps canopy lacks. A two-half-day study with written thresholds decides between an adapter that speaks its protocol, a landing-queue plugin contributed upstream, or no, which is the default while FR-042 covers the phone.
@@ -47,6 +51,10 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. The mini runs the fix, and librarySync went back on for the Mac on 2026-11-03.
 
 ## Shipped
+
+### FR-060 · A clock view: everything on a schedule, on one axis
+P2 · added 2026-11-10 · source: Eric ("stunning UI for cron managment", 2026-11-10) · shipped 2026-11-10
+The clock view (`?view=clock`, `g` then `o`) lists every job a backend runs by the clock, soonest first: the rangers' wakes, the daily fresh start, schedule rules, issue polls, the sweep and reminders. Each row has a lane on one shared axis of the next 24 hours or 7 days, with a bar where the job fires, a diamond for a one-time job, a hatch where fires run together, the nights shaded and one line for now. A held wake is lichen and a rule that cannot fire is rust, each with its reason. A row opens in place: a wake's prompt and line can be changed, woken now or removed, the sweep's schedule and the fresh start's time set, a reminder marked done, a rule fired or polled. The line editor names the five fields, says the line as a sentence, lists the next fires and steps a number on the arrow keys, and the lane redraws as the line is typed. Lines are read on their backend's clock and shown in the device's time. It adds no route: a schedule rule's line still lives in `triggers.json` (FR-061).
 
 ### FR-059 · What just happened, on a card's live row
 P3 · added 2026-11-09 · source: Claude (follow-up to FR-057); Eric ("do Recommendations FR-059 now", 2026-11-09) · shipped 2026-11-09
