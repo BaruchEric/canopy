@@ -2,7 +2,7 @@ import { groupWord } from "../groups";
 import { landingAll, useStore } from "../store";
 import { keepKeys } from "../surface";
 import { flowWord } from "../flows";
-import { AGENT_NAME, agentWord, harnessOf, progressWord } from "../runs";
+import { AGENT_NAME, harnessOf, ranUnchanged, runWord } from "../runs";
 import type { Flow, Run } from "../../../src/core/types";
 
 /** One word about a repo's run, on the card and in the panel. Clicking it
@@ -11,46 +11,11 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
   const showRun = useStore((s) => s.showRun);
   const group = useStore(s => landingAll(s).groups?.find(g => g.id === (run.group ?? run.branch?.group)));
   const showGroup = useStore(s => s.showGroup);
-  const verb = run.verb;
   const harness = harnessOf(run);
-  // a propose run's "planning" turns to "building" once the plan is approved
-  const progress = progressWord(run);
-  const who = agentWord(harness);
   // A commit or push that left git status exactly as it was is not a
   // success the card can show, so the chip says so instead of "done".
-  const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
-  const text = noChange
-    ? long
-      ? `${verb}: no change`
-      : "no change"
-    :
-    run.status === "working"
-      ? long
-        ? `${who} is ${progress}`
-        : `${progress}…`
-      : run.status === "waiting"
-        ? long
-          ? `${verb}: ${who} needs you`
-          : "needs you"
-        : run.status === "idle"
-          ? long
-            ? "chat open, your turn"
-            : "chat open"
-        : run.status === "done"
-          ? long
-            ? `${verb} done`
-            : "done"
-          : run.status === "limited"
-            ? long
-              ? `${verb} waits for capacity`
-              : "limited"
-          : run.status === "failed"
-            ? long
-              ? `${verb} failed`
-              : "failed"
-            : long
-              ? `${verb} stopped`
-              : "stopped";
+  const noChange = ranUnchanged(run);
+  const text = runWord(run, long);
   return (
     <button
       type="button"

@@ -5,11 +5,12 @@ import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { api } from "../api";
 import { ownRun } from "../flows";
+import { pillLine, pillRuns, pillText } from "../runs";
 import { allRuns, attentionCount, capsFor, homeConn, pickedIds, useStore, waitingCount, wantsSignIn } from "../store";
 import { WAITING_GLYPH, WAITING_PANEL } from "../waiting";
 import { CLI_GLYPH } from "../cli";
 import { NARROW, PHONE, useMedia } from "../media";
-import { effectivePrimary, isRunActive, WS_COLORS, type RunAction, type Workspace } from "../../../src/core/types";
+import { effectivePrimary, isRunActive, WS_COLORS, type Run, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
 import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
@@ -22,6 +23,7 @@ import { PickMenu, type PickGroup, type PickOption } from "./PickMenu";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { SettingsMenu } from "./Settings";
 import { BackendMenu } from "./BackendMenu";
+import { IdLabel } from "./IdLabel";
 import { ChanChip } from "./Chan";
 import { InboxChip } from "./Inbox";
 import { NotesChip } from "./Notes";
@@ -85,30 +87,65 @@ const SORT = [
   { value: "favorites", label: "★ favorites", title: "Favorites first, then everything else, each newest change first" },
 ] as const;
 
-/** Live runs across the grove. Absent when nothing is going; a click opens
- *  the run that needs an answer first, else the newest one. */
+/** a run's dot in the pill's menu, in the tones its chip has on a card */
+const RUN_DOT: Partial<Record<Run["status"], string>> = { waiting: "dot lichen", idle: "dot moss" };
+
+/** Live runs across the grove. Absent when nothing is going. One run opens
+ *  at a click. Several open a menu with a row each, the ones that need an
+ *  answer first: a click that chose one for you left the rest out of reach. */
 function RunsPill() {
-  const runs = useStore(useShallow((s) => allRuns(s).filter((r) => isRunActive(r) && ownRun(s.flowRuns, r))));
+  const runs = useStore(useShallow((s) => pillRuns(allRuns(s).filter((r) => isRunActive(r) && ownRun(s.flowRuns, r)))));
+  // each run's repo by name, in the runs' order: only a name changing draws
+  // the pill again, not every scan
+  const names = useStore(useShallow((s) => runs.map((r) => s.repos.find((x) => x.id === r.repoId)?.name)));
   const showRun = useStore((s) => s.showRun);
-  if (runs.length === 0) return null;
-  const waiting = runs.filter((r) => r.status === "waiting");
-  const target = waiting[0] ?? runs[0];
-  const text =
-    waiting.length > 0
-      ? `${waiting.length} need${waiting.length === 1 ? "s" : ""} you`
-      : `${runs.length} claude run${runs.length === 1 ? "" : "s"}`;
+  // read again as the menu opens: a chat between turns sits unchanged for
+  // hours, so nothing else would move the ages
+  const [now, setNow] = useState(() => Date.now());
+  const [first] = runs;
+  if (!first) return null;
+  const waiting = runs.some((r) => r.status === "waiting");
+  const face = (
+    <>
+      <span className={waiting ? "dot lichen" : "dot sky live"} />
+      {pillText(runs)}
+    </>
+  );
+  if (runs.length === 1) {
+    return (
+      <button type="button" className={waiting ? "pill runs on" : "pill runs"} title="Show the run" onClick={() => showRun(first.id)}>
+        {face}
+      </button>
+    );
+  }
+  const options = runs.map(
+    (r, i): PickOption => ({
+      value: r.id,
+      label: (
+        <>
+          <span className={RUN_DOT[r.status] ?? "dot sky live"} aria-hidden="true" />
+          <span>
+            <IdLabel id={r.repoId} name={names[i]} />
+          </span>
+        </>
+      ),
+      what: pillLine(r, now),
+      title: r.note || undefined,
+    }),
+  );
   return (
-    <button
-      type="button"
-      className={waiting.length > 0 ? "pill runs on" : "pill runs"}
-      title="Show the run"
-      onClick={() => {
-        if (target) showRun(target.id);
-      }}
-    >
-      <span className={waiting.length > 0 ? "dot lichen" : "dot sky live"} />
-      {text}
-    </button>
+    <PickMenu
+      className="runs-pick"
+      btnClass={waiting ? "runs on" : "runs"}
+      hang="right"
+      label="Live runs"
+      value={null}
+      groups={[{ options }]}
+      onPick={showRun}
+      onOpen={() => setNow(Date.now())}
+      title={`${runs.length} runs going; pick the one to show`}
+      trigger={face}
+    />
   );
 }
 

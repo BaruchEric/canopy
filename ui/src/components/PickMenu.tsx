@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { HANGS_LEFT, leavesPop, useFitPop } from "../pop";
+import { HANGS_LEFT, HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { PopGrip } from "./PopGrip";
 import { escapeCloses } from "../surface";
 
@@ -32,7 +32,8 @@ export function Caret() {
  * and the menu lists every choice in its groups, each with what it does. A
  * pick closes it; Escape or a press outside does too, and the arrows step
  * between the choices. On a phone the menu comes up from the bottom edge as
- * a sheet, as every `.settings-pop` does.
+ * a sheet, as every `.settings-pop` does. A list of things to open (the live
+ * runs) is a pick menu too, with no choice in use.
  */
 export function PickMenu({
   label,
@@ -43,6 +44,9 @@ export function PickMenu({
   title,
   hint,
   className = "",
+  btnClass = "",
+  hang = "left",
+  onOpen,
 }: {
   /** what the choices are, for a screen reader: "Group repos by" */
   label: string;
@@ -55,6 +59,13 @@ export function PickMenu({
   /** a line at the foot of the menu */
   hint?: ReactNode;
   className?: string;
+  /** the button's own classes, for a word with a tone of its own */
+  btnClass?: string;
+  /** the edge of the button the menu hangs off: the left for a word at the
+   *  left of the bar, the right for a chip at its far end */
+  hang?: "left" | "right";
+  /** called as the menu opens, for a list that reads the clock */
+  onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -100,17 +111,20 @@ export function PickMenu({
       <button
         ref={button}
         type="button"
-        className={open ? "pill pick-btn open" : "pill pick-btn"}
+        className={["pill pick-btn", btnClass, open ? "open" : ""].filter(Boolean).join(" ")}
         aria-expanded={open}
         aria-haspopup="dialog"
         title={title}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open) onOpen?.();
+          setOpen(!open);
+        }}
       >
         {trigger}
         <Caret />
       </button>
       {open && (
-        <div className="settings-pop pick-pop" role="dialog" aria-label={label} onKeyDown={step}>
+        <div className={hang === "right" ? "settings-pop pick-pop hangs-right" : "settings-pop pick-pop"} role="dialog" aria-label={label} onKeyDown={step}>
           {groups.map((g, i) => (
             <section key={g.label ?? i} className="settings-row">
               {g.label && <h3 className="panel-label">{g.label}</h3>}
@@ -136,7 +150,7 @@ export function PickMenu({
             </section>
           ))}
           {hint && <p className="settings-hint pick-hint">{hint}</p>}
-          <PopGrip name={`pick ${label}`} anchor={HANGS_LEFT} gear />
+          <PopGrip name={`pick ${label}`} anchor={hang === "right" ? HANGS_RIGHT : HANGS_LEFT} gear />
         </div>
       )}
     </div>

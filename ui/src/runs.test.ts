@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { settleNote } from "../../src/core/driver";
-import type { RunStep } from "../../src/core/types";
-import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, progressWord, resultLine, reviseAnswer, settledProposal, tokenCount, tokenTitle } from "./runs";
+import type { Run, RunStep } from "../../src/core/types";
+import { AGENT_NAME, agentWord, clock, harnessOf, hideTodoSteps, nestSteps, pillLine, pillRuns, pillText, progressWord, ranUnchanged, resultLine, reviseAnswer, runWord, settledProposal, tokenCount, tokenTitle } from "./runs";
 
 describe("a run's words", () => {
   test("its harness, and a run from before harnesses was Claude's", () => {
@@ -35,6 +35,78 @@ describe("a run's words", () => {
     expect([950, 1000, 1250, 48_400, 999_000, 1_300_000].map(tokenCount)).toEqual(["950", "1k", "1.3k", "48k", "999k", "1.3M"]);
     expect(clock(61_999)).toBe("1:01");
     expect(clock(-5)).toBe("0:00");
+  });
+});
+
+/** a commit run at work, started at 0 */
+const run = (extra: Partial<Run> = {}): Pick<Run, "id" | "status" | "verb" | "progress" | "expectsChange" | "startedAt" | "note"> & Partial<Run> => ({
+  id: "r",
+  status: "working",
+  verb: "commit",
+  progress: "committing",
+  expectsChange: true,
+  startedAt: 0,
+  note: "",
+  ...extra,
+});
+
+describe("a run in a word", () => {
+  test("the chip's word and the panel's, by status", () => {
+    expect([runWord(run()), runWord(run(), true)]).toEqual(["committing…", "claude is committing"]);
+    expect([runWord(run({ status: "waiting" })), runWord(run({ status: "waiting", harness: "codex" }), true)]).toEqual(["needs you", "commit: codex needs you"]);
+    expect([runWord(run({ status: "idle" })), runWord(run({ status: "idle" }), true)]).toEqual(["chat open", "chat open, your turn"]);
+    expect(["done", "limited", "failed", "stopped"].map((status) => runWord(run({ status: status as Run["status"] }), true))).toEqual([
+      "commit done",
+      "commit waits for capacity",
+      "commit failed",
+      "commit stopped",
+    ]);
+  });
+
+  test("an approved plan is building, whatever the action's word", () => {
+    expect(runWord(run({ progress: "planning", proposalState: "approved" }))).toBe("building…");
+  });
+
+  test("a commit that moved nothing says so, a read that moved nothing is done", () => {
+    const still = run({ status: "done", outcome: "unchanged" });
+    expect(ranUnchanged(still)).toBe(true);
+    expect([runWord(still), runWord(still, true)]).toEqual(["no change", "commit: no change"]);
+    expect(runWord(run({ status: "done", outcome: "unchanged", expectsChange: false }))).toBe("done");
+  });
+});
+
+describe("the top bar's runs pill", () => {
+  const a = run({ id: "a" });
+  const b = run({ id: "b", status: "waiting" });
+  const c = run({ id: "c", status: "idle" });
+  const d = run({ id: "d", status: "waiting" });
+
+  test("the runs that need an answer come first, each lot in the order given", () => {
+    expect(pillRuns([a, b, c, d]).map((r) => r.id)).toEqual(["b", "d", "a", "c"]);
+    expect(pillRuns([a, c]).map((r) => r.id)).toEqual(["a", "c"]);
+    expect(pillRuns([])).toEqual([]);
+  });
+
+  test("its words count the waiting ones, else every run", () => {
+    expect(pillText([a])).toBe("1 claude run");
+    expect(pillText([a, c])).toBe("2 claude runs");
+    expect(pillText([a, b, c])).toBe("1 needs you");
+    expect(pillText([b, d])).toBe("2 need you");
+  });
+
+  test("a row says what the run is at, how long it has gone and what was asked", () => {
+    expect(pillLine(a, 20_000)).toBe("claude is committing · just started");
+    expect(pillLine(run({ status: "idle", note: "fix the pill\nand the menu" }), 12 * 60_000)).toBe("chat open, your turn · 12m · fix the pill");
+    expect(pillLine(run({ status: "waiting" }), 185 * 60_000)).toBe("commit: claude needs you · 3h 05m");
+    // a clock behind the backend's never counts backwards
+    expect(pillLine(run({ startedAt: 5_000 }), 0)).toBe("claude is committing · just started");
+  });
+
+  test("a long note is cut to one short line", () => {
+    expect(pillLine(run({ note: "x".repeat(100) }), 0).split(" · ")[2]).toBe(`${"x".repeat(71)}…`);
+    // a cut that lands after a space leaves none before the ellipsis
+    expect(pillLine(run({ note: `${"x".repeat(70)} and more` }), 0).split(" · ")[2]).toBe(`${"x".repeat(70)}…`);
+    expect(pillLine(run({ note: "x".repeat(72) }), 0).split(" · ")[2]).toBe("x".repeat(72));
   });
 });
 

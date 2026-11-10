@@ -823,6 +823,13 @@ body.resizing-nesw iframe {
   right: auto;
   width: 360px;
 }
+/* a menu on a chip at the bar's far end hangs off its right edge instead;
+   :where keeps this no stronger than .pick-pop, so a phone's sheet still
+   takes the whole bottom edge */
+.pick-pop:where(.hangs-right) {
+  left: auto;
+  right: 0;
+}
 .pick-pop .settings-row + .settings-row {
   padding-top: 6px;
 }
@@ -832,6 +839,16 @@ body.resizing-nesw iframe {
 }
 .pick-hint {
   padding: 4px var(--gutter) 0;
+}
+/* the live runs, when there is more than one to pick from: a row each, its
+   dot in the run's tone, and under the repo what the run is at, set in
+   past the dot */
+.runs-pick .sort-name {
+  gap: 8px;
+}
+.runs-pick .sort-what {
+  padding-left: 15px;
+  overflow-wrap: anywhere;
 }
 .pick-dim {
   color: var(--ink-faint);
