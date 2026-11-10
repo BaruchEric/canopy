@@ -254,6 +254,7 @@ import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
+import { bodyUpTo } from "./body";
 import { ClipsHub } from "./clips";
 import { DiskRunLogger, closeOpen, dropKept, listKept as listKeptRuns, pruneKept, readKeptRun, readWire, runsDir, RUN_ID, type RunLogger } from "../core/runlog";
 import { exportRun } from "../core/export";
@@ -2869,11 +2870,10 @@ function repoById(state: ServerState, id: string): Repo {
 /** the image a paste or a design-mode picture sends, or the refusal to
  *  answer with: empty, or over `PASTE_MAX` */
 async function imageBody(req: Request): Promise<ArrayBuffer | Response> {
-  if (Number(req.headers.get("content-length") ?? 0) > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
-  const bytes = await req.arrayBuffer();
+  const bytes = await bodyUpTo(req, PASTE_MAX);
+  if (!bytes) return json({ error: "the image is over 20 MB" }, 413);
   if (bytes.byteLength === 0) return json({ error: "the image is empty" }, 400);
-  if (bytes.byteLength > PASTE_MAX) return json({ error: "the image is over 20 MB" }, 413);
-  return bytes;
+  return bytes.buffer;
 }
 
 async function refreshAndBroadcast(
@@ -3796,9 +3796,8 @@ async function handleApi(
   if (path === "/api/voice/dictate" && method === "POST") {
     if (!state.dictate) return json({ error: "dictation is off: this backend has no CANOPY_TRANSCRIBE_URL" }, 503);
     const tooBig = { error: `a clip over ${DICTATE_MAX / 1024 / 1024} MB` };
-    if (Number(req.headers.get("content-length") ?? 0) > DICTATE_MAX) return json(tooBig, 413);
-    const data = new Uint8Array(await req.arrayBuffer());
-    if (data.length > DICTATE_MAX) return json(tooBig, 413);
+    const data = await bodyUpTo(req, DICTATE_MAX);
+    if (!data) return json(tooBig, 413);
     if (data.length === 0) return json({ error: "the clip is empty" }, 400);
     const type = req.headers.get("content-type") ?? "audio/webm";
     try {
@@ -3827,9 +3826,9 @@ async function handleApi(
   if (path === "/api/voice/live" && method === "POST") {
     if (!state.live) return json({ error: "GPT-Live is off: this backend has no CANOPY_LIVE_KEY" }, 503);
     const tooBig = { error: `an offer over ${LIVE_OFFER_MAX / 1024} KB` };
-    if (Number(req.headers.get("content-length") ?? 0) > LIVE_OFFER_MAX) return json(tooBig, 413);
-    const text = await req.text();
-    if (text.length > LIVE_OFFER_MAX) return json(tooBig, 413);
+    const offer = await bodyUpTo(req, LIVE_OFFER_MAX);
+    if (!offer) return json(tooBig, 413);
+    const text = new TextDecoder().decode(offer);
     let sdp: unknown;
     let context: VoiceContext | undefined;
     try {

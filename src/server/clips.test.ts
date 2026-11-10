@@ -225,6 +225,29 @@ describe("ClipsHub files", () => {
     expect((await readdir(join(t.dir, "clips"))).sort()).toEqual(["c-testaaaa"]);
   });
 
+  test("a file sent in chunks is read no further than the cap", async () => {
+    const t = hub();
+    const MB = 1024 * 1024;
+    const seen = { sent: 0, cancelled: false };
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (seen.sent >= 90) return c.close();
+        seen.sent++;
+        c.enqueue(new Uint8Array(MB));
+      },
+      cancel() {
+        seen.cancelled = true;
+      },
+    });
+    const path = "/api/clips/file?name=big.bin&source=device";
+    const res = await t.h.handle(new Request(`http://x${path}`, { method: "POST", body, headers: { "content-type": "application/octet-stream" } }), new URL(`http://x${path}`));
+    expect(res?.status).toBe(413);
+    // 25 MB is the cap: the read stops just past it, with 90 MB on offer
+    expect(seen.cancelled).toBe(true);
+    expect(seen.sent).toBeLessThan(30);
+    expect(t.events).toEqual([]);
+  });
+
   test("refusals: empty, too large, a key's name, a key inside, an unknown source", async () => {
     const t = hub();
     expect((await upload(t, new Uint8Array(), "name=a.png&source=device")).status).toBe(400);

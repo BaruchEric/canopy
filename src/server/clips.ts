@@ -49,6 +49,7 @@ import {
 } from "../core/clips";
 import { configDir } from "../core/store";
 import type { ServerEvent } from "../core/types";
+import { bodyUpTo } from "./body";
 
 export const clipsFile = (dir: string = configDir()): string => join(dir, "clips.json");
 /** the folder a clip's file sits in, under the clip's id */
@@ -393,8 +394,11 @@ export class ClipsHub {
       if (req.method === "POST" && path === "/api/clips") return json(await this.add(await this.body(req)));
       if (req.method === "GET" && path === "/api/clips/file") return await this.fileResponse(url.searchParams.get("id"));
       if (req.method === "POST" && path === "/api/clips/file") {
-        // the bytes are the body; what they are rides in the query
-        if (Number(req.headers.get("content-length") ?? 0) > CLIP_FILE_MAX) throw new ClipRefusal(413, `a file on the clipboard is at most ${sizeWord(CLIP_FILE_MAX)}`);
+        // the bytes are the body; what they are rides in the query. Read no
+        // further than the cap: a body sent in chunks names no length to
+        // refuse it by
+        const bytes = await bodyUpTo(req, CLIP_FILE_MAX);
+        if (!bytes) throw new ClipRefusal(413, `a file on the clipboard is at most ${sizeWord(CLIP_FILE_MAX)}`);
         const q = url.searchParams;
         let device: unknown;
         try {
@@ -402,7 +406,6 @@ export class ClipsHub {
         } catch {
           device = null;
         }
-        const bytes = new Uint8Array(await req.arrayBuffer());
         return json(await this.addFile(bytes, { name: q.get("name"), type: req.headers.get("content-type"), source: q.get("source"), from: q.get("from") ?? undefined, device }), 201);
       }
       if (req.method === "POST" && path === "/api/clips/use") return json(await this.use((await this.body(req))["id"]));
