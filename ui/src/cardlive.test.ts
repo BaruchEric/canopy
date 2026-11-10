@@ -295,6 +295,22 @@ describe("the trace", () => {
     expect(last({ agents: [agent({ state: "ended", seenAt: 4 * H })] })?.at).toBe(4 * H);
   });
 
+  test("a scan card a hooked card took over did not end: the scan saw the agent before its hooks spoke", () => {
+    const at = { os: "darwin", container: false, pid: 900, term: "kitty", canopy: null };
+    const scan = agent({ id: "scan:ericmac:h:900", origin: "scan", state: "ended", where: at, startedAt: H, seenAt: H + 31_000, endedAt: H + 31_000 });
+    const hooked = agent({ state: "idle", where: at, startedAt: H + 1_000, seenAt: 2 * H });
+    expect(last({ agents: [scan, hooked] })).toBeNull();
+    // the session's own end is the end
+    expect(last({ agents: [scan, { ...hooked, state: "ended", endedAt: 3 * H }] })).toMatchObject({ text: "agent ended", at: 3 * H });
+    // alone, on another machine, beside a later process with its pid, or beside
+    // another scan card, the scan's agent is one that ended
+    expect(last({ agents: [scan] })?.at).toBe(H + 31_000);
+    expect(last({ agents: [scan, { ...hooked, node: "mini" }] })?.at).toBe(H + 31_000);
+    expect(last({ agents: [scan, { ...hooked, startedAt: 5 * H }] })?.at).toBe(H + 31_000);
+    expect(last({ agents: [scan, { ...hooked, origin: "scan" }] })?.at).toBe(H + 31_000);
+    expect(last({ agents: [{ ...scan, where: { ...at, pid: null } }, { ...hooked, where: { ...at, pid: null } }] })?.at).toBe(H + 31_000);
+  });
+
   test("a task that ran to its end or was stopped; a check that came back clean passed", () => {
     expect(last({ tasks: [task({ name: "build", status: "exited", exitedAt: 9, exitCode: 0 })] })).toEqual({
       id: "task:app:build:9",

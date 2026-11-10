@@ -338,13 +338,30 @@ export interface LiveTrace {
 /** a task named for a check: one of these that exits clean passed */
 const CHECK = /^(tests?|lint|typecheck|check|e2e|verify|ci)([:._-]|$)/;
 
+/** how far apart two machines' clocks may put one start, in ms */
+const CLOCKS = 60_000;
+
+/**
+ * Whether an ended scan card is an agent a hooked card took over, which is
+ * no end. A backend's scan sees a new session before its hooks speak; once
+ * the hooked card names the pid the broker drops the process from the
+ * scan, and the scan's card ends about half a minute into a session that
+ * runs on. Told by a card that is not a scan's, on the same machine, with
+ * the same pid, that started inside the scan card's life.
+ */
+function takenOver(c: AgentCard, cards: readonly AgentCard[], end: number): boolean {
+  if (c.origin !== "scan" || c.where.pid === null) return false;
+  return cards.some((o) => o.origin !== "scan" && o.node === c.node && o.where.pid === c.where.pid && o.startedAt >= c.startedAt - CLOCKS && o.startedAt <= end + CLOCKS);
+}
+
 /**
  * The last thing that left the row, however long ago: the newest of the
  * agents that ended or were lost and the tasks that finished or were
  * stopped. All of it is read off what the backends hold (a card's end, a
  * task's exit), so a reload and another device say the same. A failed task
- * is no trace, since its mark stays on the row, and a shell that closed
- * leaves nothing to read.
+ * is no trace, since its mark stays on the row, a shell that closed leaves
+ * nothing to read, and a scan card a hooked card took over (`takenOver`)
+ * is an agent that runs on.
  */
 export function lastEnded({ lead, agents, tasks, split }: Pick<LiveInput, "lead" | "agents" | "tasks" | "split">): LiveTrace | null {
   const away = elsewhere(lead, split);
@@ -352,6 +369,7 @@ export function lastEnded({ lead, agents, tasks, split }: Pick<LiveInput, "lead"
   for (const c of agents) {
     if (isLiveAgent(c)) continue;
     const at = runEnd(c, c.seenAt);
+    if (takenOver(c, agents, at)) continue;
     ended.push({
       id: `agent:${c.id}:${at}`,
       kind: "agent",
