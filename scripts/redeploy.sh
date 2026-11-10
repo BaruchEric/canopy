@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
-# Redeploy the shared canopy backend (docker compose on the mini) from
-# wherever this runs:
+# Redeploy a shared canopy backend (docker compose on the mini, or on the
+# De Soto box) from wherever this runs:
 #
-#   on the Mac        ssh to the mini, fast-forward its checkout to the Mac's
-#                     main through the peer remote, then deploy there
+#   on the Mac        ssh to the backend, fast-forward its checkout to the
+#                     Mac's main, then deploy there. The mini unless a
+#                     backend is named: mini, desoto, or all for each in turn
 #   in a canopy shell ssh to the host this container runs on, with the
 #                     deploy key whose authorized_keys line only runs this
 #                     script, and deploy the checkout the shell sees
-#   on the mini       deploy directly
+#   on the host       deploy directly
 #
-# Usage: redeploy.sh [--pull] [--shells] [--restart] [--force] [--expect SHA] | status | log
-#   --pull    fast-forward the mini's checkout to the Mac's main first
-#             (always on from the Mac)
+# Usage: redeploy.sh [mini | desoto | all] [--pull] [--shells] [--restart] [--force] [--expect SHA] | status | log
+#   mini, desoto, all  on the Mac only: which backend. After a deploy the
+#             Mac asks each backend it left alone what it runs, and names
+#             the ones on another commit
+#   --pull    fast-forward the checkout to the Mac's main first (always on
+#             from the Mac). The commits come through the mac peer remote
+#             where the checkout has one (the mini), else from its origin
+#             (De Soto clones GitHub, so push before deploying there)
 #   --shells  go ahead when the deploy would recreate the shells container,
 #             which ends every shell, the one running this included
 #   --restart recreate the canopy container even when the deploy changes
@@ -31,8 +37,11 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")/.." && pwd -P)
-MINI=${CANOPY_DEPLOY_MINI:-macmini-2018}
-MINI_CHECKOUT=${CANOPY_DEPLOY_CHECKOUT:-dev/dev-tools/canopy}
+# The backends a Mac deploys to, as name=ssh-destination words, the default
+# first. Each keeps its checkout at the same place under its home.
+TARGETS=${CANOPY_DEPLOY_TARGETS:-"mini=${CANOPY_DEPLOY_MINI:-macmini-2018} desoto=eric@desoto-canopy"}
+CHECKOUT=${CANOPY_DEPLOY_CHECKOUT:-dev/dev-tools/canopy}
+PORT=${CANOPY_DEPLOY_PORT:-7850}
 LOGS="$HOME/.cache/canopy-deploy"
 
 die() { printf 'redeploy: %s\n' "$*" >&2; exit 1; }
@@ -66,14 +75,76 @@ if [ "${1:-}" = "--gate" ]; then
   CANOPY_DEPLOY_HOST_SIDE=1 exec "$0" "${args[@]}"
 fi
 
-# ---------- the Mac: hand over to the mini
+# ---------- the Mac: hand over to a backend
+# Plain strings, no arrays: the Mac's own bash is 3.2, where an empty array
+# is an unbound variable under set -u.
 if [ "$(uname)" = "Darwin" ]; then
-  git -C "$HERE" diff --quiet HEAD -- 2>/dev/null || echo "redeploy: uncommitted changes here do not reach the mini; only commits do" >&2
+  names=""
+  for t in $TARGETS; do names="$names ${t%%=*}"; done
+  names=${names# }
+  dest_of() {
+    local t
+    for t in $TARGETS; do
+      if [ "${t%%=*}" = "$1" ]; then printf '%s' "${t#*=}"; fi
+    done
+  }
+  # a backend's name or "all" picks where this goes; every other word is for
+  # the backend's own copy of this script
+  want="" rest=""
+  for a in "$@"; do
+    case " $names all " in
+      *" $a "*) want="$want $a" ;;
+      *) rest="$rest $a" ;;
+    esac
+  done
+  picked="" count=0
+  for n in $names; do
+    case "$want " in *" $n "* | *" all "*) picked="$picked $n" count=$((count + 1)) ;; esac
+  done
+  if [ $count = 0 ]; then picked=" ${names%% *}" count=1; fi
+
+  git -C "$HERE" diff --quiet HEAD -- 2>/dev/null || echo "redeploy: uncommitted changes here do not reach a backend; only commits do" >&2
   head=$(git -C "$HERE" rev-parse HEAD)
   branch=$(git -C "$HERE" branch --show-current)
-  [ "$branch" = main ] || die "the mini deploys main; this checkout is on $branch"
-  case " $* " in *" status "* | *" log "*) exec ssh "$MINI" "~/$MINI_CHECKOUT/scripts/redeploy.sh $*" ;; esac
-  exec ssh "$MINI" "~/$MINI_CHECKOUT/scripts/redeploy.sh --pull --expect $head $*"
+  [ "$branch" = main ] || die "a backend deploys main; this checkout is on $branch"
+  look=0
+  case "$rest " in *" status "* | *" log "*) look=1 ;; esac
+  if [ $count -gt 1 ]; then
+    case "$rest " in *" --shells "* | *" --force "*)
+      die "--shells and --force end the shells or the work of the backend they are given: name one backend with them" ;;
+    esac
+  fi
+
+  worst=0
+  for n in $picked; do
+    dest=$(dest_of "$n")
+    if [ $count -gt 1 ]; then echo "== $n ($dest)"; fi
+    code=0
+    if [ $look = 1 ]; then
+      ssh "$dest" "~/$CHECKOUT/scripts/redeploy.sh$rest" || code=$?
+    else
+      ssh "$dest" "~/$CHECKOUT/scripts/redeploy.sh --pull --expect $head$rest" || code=$?
+    fi
+    if [ $code -gt $worst ]; then worst=$code; fi
+  done
+
+  # A backend nobody names falls behind without a word, as De Soto did until
+  # 2026-11-10, so after a deploy each one left alone is asked what it runs.
+  # /api/about answers a caller with no token.
+  if [ $look = 0 ] && [ $worst = 0 ]; then
+    for n in $names; do
+      case "$picked " in *" $n "*) continue ;; esac
+      dest=$(dest_of "$n")
+      at="${dest#*@}:$PORT"
+      theirs=$(curl -fsS -m 4 "http://$at/api/about" 2>/dev/null | sed -n 's/.*"commit":"\([0-9a-f]\{7,40\}\)".*/\1/p' || true)
+      if [ -z "$theirs" ]; then
+        echo "redeploy: $n did not say what it runs (http://$at/api/about)"
+      elif [ "$theirs" != "$head" ]; then
+        echo "redeploy: $n runs ${theirs:0:7}, not ${head:0:7}; bun run redeploy $n"
+      fi
+    done
+  fi
+  exit $worst
 fi
 
 # ---------- a canopy shell: ask the host
@@ -143,15 +214,21 @@ fi
 exec 9>"$LOGS/lock"
 flock -n 9 || die "another deploy is running; redeploy.sh log shows it"
 
+from=""
 if [ $pull = 1 ]; then
   self=$(git hash-object "$HERE/scripts/redeploy.sh")
-  git fetch -q mac main || die "could not fetch from the Mac (the mac peer remote)"
-  if git merge-base --is-ancestor mac/main HEAD; then
+  # Where the Mac's commits come from: its own checkout, through the peer
+  # remote, on a host that has one (the mini). A host with no way in to the
+  # Mac (De Soto, a clone of GitHub) takes them from its origin.
+  from=origin whose="origin's"
+  if git remote get-url mac >/dev/null 2>&1; then from=mac whose="the Mac's"; fi
+  git fetch -q "$from" main || die "could not fetch main from the $from remote"
+  if git merge-base --is-ancestor "$from/main" HEAD; then
     :
-  elif git merge-base --is-ancestor HEAD mac/main; then
-    git merge -q --ff-only mac/main || die "could not fast-forward: the checkout has changes in the way"
+  elif git merge-base --is-ancestor HEAD "$from/main"; then
+    git merge -q --ff-only "$from/main" || die "could not fast-forward: the checkout has changes in the way"
   else
-    die "the mini's main and the Mac's have both moved; merge them first"
+    die "main here and $whose have both moved; merge them first"
   fi
   # the pull brought a new copy of this script: run that one, or the deploy
   # it describes waits for the next run
@@ -165,9 +242,12 @@ if [ $pull = 1 ]; then
     exec bash "$HERE/scripts/redeploy.sh" "${again[@]}"
   fi
 fi
-if [ -n "$expect" ]; then
-  [ "$(git rev-parse HEAD)" = "$(git rev-parse "$expect^{commit}" 2>/dev/null)" ] ||
-    die "the checkout is at $(git rev-parse --short HEAD), not ${expect:0:7}"
+if [ -n "$expect" ] && [ "$(git rev-parse HEAD)" != "$(git rev-parse "$expect^{commit}" 2>/dev/null)" ]; then
+  # a host that pulls from origin has only what was pushed there
+  if [ "$from" = origin ] && ! git cat-file -e "$expect^{commit}" 2>/dev/null; then
+    die "the checkout is at $(git rev-parse --short HEAD), and origin does not have ${expect:0:7}; this host pulls from origin, so push first"
+  fi
+  die "the checkout is at $(git rev-parse --short HEAD), not ${expect:0:7}"
 fi
 
 log="$LOGS/$(date +%Y%m%d-%H%M%S).log"

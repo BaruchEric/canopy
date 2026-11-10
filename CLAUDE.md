@@ -20,7 +20,7 @@ bun run build              # vite build of ui/ into dist/web
 - Dev: `bun run dev` (API on :7850, restarts on change) plus `bun run dev:web` (Vite on :7851, proxying `/api` and `/library` to :7850).
 - Production locally: `bun run build && bun link`, then `canopy ui ~/dev`. On the Mac a launchd agent keeps a server on :7850.
 - Browser check where there is no Chrome (canopy's own containers): `bash scripts/browser/setup.sh` installs a headless Chromium under `/tmp/canopy-browser` without root, and `bash scripts/browser/check.sh`, after a build, drives the built page from a scratch server: the first load, every view, a phone (the top bar's first row, a panel's section tabs, field sizes), the runs pill's menu, a shell, and the two load failures. `scripts/browser/run.sh <script.ts>` runs any other Playwright script there.
-- The shared backend on the mini (docker compose) deploys committed `main` with `bun run redeploy` (`status`, `log`, `--pull`, `--shells`, `--restart`, `--force`). See `docs/deploy.md` and the `redeploy` skill.
+- The shared backend on the mini (docker compose) deploys committed `main` with `bun run redeploy` (`status`, `log`, `--pull`, `--shells`, `--restart`, `--force`). From the Mac, `bun run redeploy desoto` does the same for the De Soto backend, which pulls from GitHub, so push first, and `all` does both. See `docs/deploy.md` and the `redeploy` skill.
 
 ## Architecture
 

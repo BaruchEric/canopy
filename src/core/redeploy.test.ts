@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { shellQuote } from "./host";
@@ -268,5 +268,204 @@ job
     expect(calls).not.toContain("10.250.14.1");
   } finally {
     await rm(logs, { recursive: true, force: true });
+  }
+});
+
+// ---------- the Mac's side: which backend a run goes to
+
+const head = "a".repeat(40);
+const other = "b".repeat(40);
+const remote = "~/dev/dev-tools/canopy/scripts/redeploy.sh";
+/** the Mac's own bash is 3.2; on Linux this is the same bash as everywhere */
+const macBash = (await Bun.file("/bin/bash").exists()) ? "/bin/bash" : "bash";
+
+/** stand-ins for what the Mac's side calls: a Mac's uname, a checkout at
+ *  `head` on main, an ssh and a curl that write down what they were asked */
+async function fakeBin(dir: string, files: Record<string, string>): Promise<string> {
+  const bin = join(dir, "bin");
+  for (const [name, body] of Object.entries(files)) {
+    await Bun.write(join(bin, name), `#!/bin/sh\n${body}\n`);
+    await chmod(join(bin, name), 0o755);
+  }
+  return bin;
+}
+
+async function fromMac(args: string[], env: Record<string, string> = {}) {
+  const dir = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
+  try {
+    const calls = join(dir, "calls");
+    const bin = await fakeBin(dir, {
+      uname: "echo Darwin",
+      git: `case "$*" in *"rev-parse HEAD"*) echo ${head} ;; *"branch --show-current"*) echo "\${FAKE_BRANCH:-main}" ;; esac`,
+      ssh: `printf 'ssh %s\\n' "$*" >>"$FAKE_CALLS"\ncase "$1" in *desoto*) exit "\${FAKE_DESOTO:-0}" ;; *) exit "\${FAKE_MINI:-0}" ;; esac`,
+      curl: `for u; do :; done\nprintf 'curl %s\\n' "$u" >>"$FAKE_CALLS"\n[ -n "\${FAKE_ABOUT:-}" ] || exit 7\nprintf '%s' "$FAKE_ABOUT"`,
+    });
+    const child = Bun.spawn([macBash, script, ...args], {
+      stdout: "pipe", stderr: "pipe",
+      env: { PATH: `${bin}:${process.env["PATH"] ?? ""}`, HOME: dir, FAKE_CALLS: calls, ...env },
+    });
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    const lines = (await readFile(calls, "utf8").catch(() => "")).split("\n").filter(Boolean);
+    return { code, stdout, stderr, ssh: lines.filter((l) => l.startsWith("ssh ")), curl: lines.filter((l) => l.startsWith("curl ")) };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const about = (commit: string) => JSON.stringify({ version: "0.2.0", commit, dirty: false });
+
+test("from the Mac, a deploy with no backend named goes to the mini", async () => {
+  const r = await fromMac(["--restart"], { FAKE_ABOUT: about(head) });
+  expect(r.stderr).toBe("");
+  expect(r.code).toBe(0);
+  expect(r.ssh).toEqual([`ssh macmini-2018 ${remote} --pull --expect ${head} --restart`]);
+});
+
+test("from the Mac, a named backend gets the deploy and the mini is left alone", async () => {
+  const r = await fromMac(["desoto", "--restart"], { FAKE_ABOUT: about(head) });
+  expect(r.code).toBe(0);
+  expect(r.ssh).toEqual([`ssh eric@desoto-canopy ${remote} --pull --expect ${head} --restart`]);
+});
+
+test("from the Mac, all deploys each backend in turn and exits with the worst code", async () => {
+  const r = await fromMac(["all"], { FAKE_MINI: "4" });
+  expect(r.code).toBe(4);
+  expect(r.ssh).toEqual([
+    `ssh macmini-2018 ${remote} --pull --expect ${head}`,
+    `ssh eric@desoto-canopy ${remote} --pull --expect ${head}`,
+  ]);
+  expect(r.stdout).toContain("== mini (macmini-2018)");
+  expect(r.stdout).toContain("== desoto (eric@desoto-canopy)");
+  expect(r.curl).toEqual([]);
+});
+
+test("from the Mac, --force and --shells want one backend named", async () => {
+  for (const args of [["all", "--force"], ["mini", "desoto", "--shells"]]) {
+    const r = await fromMac(args);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("name one backend");
+    expect(r.ssh).toEqual([]);
+  }
+  const one = await fromMac(["desoto", "--force"], { FAKE_ABOUT: about(head) });
+  expect(one.code).toBe(0);
+  expect(one.ssh).toEqual([`ssh eric@desoto-canopy ${remote} --pull --expect ${head} --force`]);
+});
+
+test("from the Mac, status and log go to the backend as they are, with no pull", async () => {
+  expect((await fromMac(["status"])).ssh).toEqual([`ssh macmini-2018 ${remote} status`]);
+  const r = await fromMac(["desoto", "log"]);
+  expect(r.ssh).toEqual([`ssh eric@desoto-canopy ${remote} log`]);
+  expect(r.curl).toEqual([]);
+});
+
+test("from the Mac, a deploy names each backend it left alone that runs another commit", async () => {
+  const behind = await fromMac([], { FAKE_ABOUT: about(other) });
+  expect(behind.curl).toEqual(["curl http://desoto-canopy:7850/api/about"]);
+  expect(behind.stdout).toContain("redeploy: desoto runs bbbbbbb, not aaaaaaa; bun run redeploy desoto");
+  const level = await fromMac([], { FAKE_ABOUT: about(head) });
+  expect(level.stdout).not.toContain("desoto");
+  const silent = await fromMac(["desoto"]);
+  expect(silent.curl).toEqual(["curl http://macmini-2018:7850/api/about"]);
+  expect(silent.stdout).toContain("redeploy: mini did not say what it runs");
+  // a deploy that failed has said enough
+  const failed = await fromMac([], { FAKE_MINI: "3", FAKE_ABOUT: about(other) });
+  expect(failed.code).toBe(3);
+  expect(failed.curl).toEqual([]);
+});
+
+test("from the Mac, a checkout off main deploys nowhere", async () => {
+  const r = await fromMac(["desoto"], { FAKE_BRANCH: "run/x" });
+  expect(r.code).toBe(1);
+  expect(r.stderr).toContain("this checkout is on run/x");
+  expect(r.ssh).toEqual([]);
+});
+
+// ---------- the host's side: where --pull takes the Mac's commits from
+
+/** A host checkout one commit behind what it pulls from, with this script in
+ *  it. `withMac` gives it a mac peer remote as the mini has; without, it has
+ *  only the origin it was cloned from, as De Soto has. */
+async function hostCheckout(dir: string, withMac: boolean) {
+  const env = {
+    PATH: process.env["PATH"] ?? "", HOME: dir, GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t",
+  };
+  const git = async (cwd: string, ...args: string[]) => {
+    const p = Bun.spawn(["git", ...args], { cwd, env, stdout: "pipe", stderr: "pipe" });
+    const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    if (code !== 0) throw new Error(`git ${args.join(" ")}: ${err}`);
+    return out.trim();
+  };
+  const commit = async (cwd: string, name: string) => {
+    await Bun.write(join(cwd, name), name);
+    await git(cwd, "add", name);
+    await git(cwd, "commit", "-q", "-m", name);
+    return git(cwd, "rev-parse", "HEAD");
+  };
+  const origin = join(dir, "origin");
+  const host = join(dir, "host");
+  await git(dir, "init", "-q", "-b", "main", origin);
+  const first = await commit(origin, "one");
+  await git(dir, "clone", "-q", origin, host);
+  const onOrigin = await commit(origin, "two");
+  let onMac = "";
+  if (withMac) {
+    const mac = join(dir, "mac");
+    await git(dir, "clone", "-q", host, mac);
+    onMac = await commit(mac, "three");
+    await git(host, "remote", "add", "mac", mac);
+  }
+  await Bun.write(join(host, "scripts/redeploy.sh"), await readFile(script, "utf8"));
+  // a Linux host whatever runs the suite, and a lock macOS has no flock for
+  const bin = await fakeBin(dir, { uname: "echo Linux", flock: "exit 0" });
+  const pull = async (expect: string) => {
+    const p = Bun.spawn(["bash", join(host, "scripts/redeploy.sh"), "--pull", "--expect", expect], {
+      stdout: "pipe", stderr: "pipe",
+      env: { ...env, PATH: `${bin}:${env.PATH}`, CANOPY_DEPLOY_HOST_SIDE: "1" },
+    });
+    const [stderr, code] = await Promise.all([new Response(p.stderr).text(), p.exited]);
+    return { stderr, code, at: await git(host, "rev-parse", "HEAD") };
+  };
+  return { host, first, onOrigin, onMac, commit, pull };
+}
+
+test("--pull takes the commits from origin on a host with no mac remote, and says to push when the commit is not there", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
+  try {
+    const h = await hostCheckout(dir, false);
+    const r = await h.pull("c".repeat(40));
+    expect(r.at).toBe(h.onOrigin);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`the checkout is at ${h.onOrigin.slice(0, 7)}, and origin does not have ccccccc; this host pulls from origin, so push first`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("--pull takes the commits from the mac remote on a host that has one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
+  try {
+    const h = await hostCheckout(dir, true);
+    const r = await h.pull(h.first);
+    expect(r.at).toBe(h.onMac);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`the checkout is at ${h.onMac.slice(0, 7)}, not ${h.first.slice(0, 7)}`);
+    expect(r.stderr).not.toContain("push first");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("--pull stops when the host's main and the one it pulls from have both moved", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
+  try {
+    const h = await hostCheckout(dir, false);
+    const own = await h.commit(h.host, "own");
+    const r = await h.pull(h.onOrigin);
+    expect(r.at).toBe(own);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain("main here and origin's have both moved; merge them first");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 });

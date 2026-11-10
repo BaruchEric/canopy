@@ -171,7 +171,9 @@ a phone the desktop openers are simply absent.
 
 To pick up new canopy code, run `bun run redeploy` in the checkout. On the
 Mac it fast-forwards the mini's checkout to the Mac's committed `main` through
-the `mac` peer remote and deploys there. In a canopy shell on the mini it
+the `mac` peer remote and deploys there. A backend's name sends it elsewhere:
+`bun run redeploy desoto` deploys the De Soto backend, and `all` each in turn
+(see "Deploying the other backends" below). In a canopy shell on the mini it
 deploys the mini's own checkout (`--pull` takes the Mac's first) over ssh to
 the host, with a key whose `authorized_keys` line runs only
 `scripts/redeploy.sh --gate`; `scripts/redeploy-setup.sh` on the mini makes
@@ -1505,6 +1507,43 @@ backend:
 5. Find a repo checked out on both machines: its card should carry two
    machine chips, and clicking the non-home one should open that checkout's
    panel and, from there, a shell on the other machine.
+
+## Deploying the other backends
+
+`scripts/redeploy.sh` keeps a list of the backends a Mac deploys to, as
+`name=ssh-destination` words: `mini=macmini-2018 desoto=eric@desoto-canopy`.
+`CANOPY_DEPLOY_TARGETS` replaces the list, and each backend keeps its checkout
+at `~/dev/dev-tools/canopy` (`CANOPY_DEPLOY_CHECKOUT`). From the Mac:
+
+```
+bun run redeploy                  # the mini, the first in the list
+bun run redeploy desoto           # the De Soto backend
+bun run redeploy all              # each in turn; the exit code is the worst one
+bun run redeploy status desoto    # status and log take a name too
+```
+
+The Mac hands each backend the same words, `--pull --expect <the Mac's HEAD>`,
+and the backend's own copy of the script works out where the commits come
+from. A checkout with a `mac` remote (the mini) fetches from the Mac. One
+without (De Soto, a clone of GitHub with no way in to the Mac) fetches from
+its origin, so the commit has to be pushed first. When it is not there the
+deploy stops with "origin does not have <commit>; this host pulls from origin,
+so push first". `--shells` and `--force` are refused with more than one
+backend named, because each ends the shells or the work of the backend it is
+given.
+
+After a deploy that worked, the Mac asks each backend it left alone for `GET
+/api/about` on port 7850 (`CANOPY_DEPLOY_PORT`) and prints a line for one that
+runs another commit, or that did not answer:
+
+```
+redeploy: desoto runs d1db8db, not e0ea870; bun run redeploy desoto
+```
+
+Until 2026-11-10 the script reached only the mini, and De Soto was updated by
+hand (`ssh eric@desoto-canopy`, `git pull --ff-only`, `bash
+scripts/redeploy.sh`) whenever someone remembered, which is how it fell
+behind.
 
 ## Voice
 
