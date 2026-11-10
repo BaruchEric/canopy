@@ -52,6 +52,13 @@ export function bulkAct(p: SecretProposalInfo): Extract<SecretAct, { a: "approve
   };
 }
 
+/** a scan's values in the batches the store takes, in order */
+export function batches<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += Math.max(1, size)) out.push(items.slice(i, i + Math.max(1, size)));
+  return out;
+}
+
 export type PickKind = "secrets" | "settings" | "none";
 
 /** secrets: what looks secret and can be approved without typing; settings:

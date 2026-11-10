@@ -8,6 +8,7 @@ import { onHost } from "./exec";
 import { sshSinks, type RemoteSinks } from "./sinkssh";
 import { FILE_IO, type SinkIO } from "./sinksync";
 import { localPaths, SecretsReader, writeLocalConfig, type ReaderOptions } from "./secretlocal";
+import { LIMITS } from "./secretwire";
 
 const BREAKGLASS = "age1xtc4cftnu55fn3enurt9jexnrenmru3w0xl93uz5q20e34mefs6stg2vra";
 const STAMP = "2026-10-14T12:00:00.000Z";
@@ -333,6 +334,28 @@ describe("proposals", () => {
     if ("error" in take) throw new Error(take.error);
     expect(take.merges).toBe("cf_token");
     expect(await openProposal(take.sealed, mini.identity, take)).toBe("by-hand");
+  });
+
+  test("a scan returns every value of a long file, up to what the store lets wait, and counts the rest", async () => {
+    const mini = await newIdentity();
+    await publish(emptyFile({ mini: mini.recipient, breakglass: BREAKGLASS }), signer);
+    const lines = (n: number) => Array.from({ length: n }, (_, i) => `KEY_${i}=value-${i}`).join("\n") + "\n";
+    // more than one batch (LIMITS.proposals): the 201st and on went missing without a word
+    await writeFile(join(dir, "long.env"), lines(LIMITS.proposals + 30));
+    const r = await reader([join(dir, "long.env")]);
+    const p = await r.proposals();
+    if ("error" in p) throw new Error(p.error);
+    expect(p.items.length).toBe(LIMITS.proposals + 30);
+    expect(p.left).toBe(0);
+    const last = p.items[p.items.length - 1];
+    if (!last) throw new Error("no proposal");
+    expect(last.key).toBe(`KEY_${LIMITS.proposals + 29}`);
+    expect(await openProposal(last.sealed, mini.identity, last)).toBe(`value-${LIMITS.proposals + 29}`);
+    await writeFile(join(dir, "long.env"), lines(LIMITS.pending + 7));
+    const over = await r.proposals();
+    if ("error" in over) throw new Error(over.error);
+    expect(over.items.length).toBe(LIMITS.pending);
+    expect(over.left).toBe(7);
   });
 });
 

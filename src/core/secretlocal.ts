@@ -335,20 +335,21 @@ export class SecretsReader {
     return (this.o.remotes?.() ?? []).map((r) => r.machine).sort().join(",");
   }
 
-  /** this machine's sources, each value sealed to the mini alone */
-  async proposals(): Promise<{ items: SecretProposalIn[]; missing: string[] } | { error: string }> {
+  /** This machine's sources, each value sealed to the mini alone: as many
+   *  as the store lets wait at once, with `left` counting the values past
+   *  that. A caller posts them a batch at a time (LIMITS.proposals). */
+  async proposals(): Promise<{ items: SecretProposalIn[]; missing: string[]; left: number } | { error: string }> {
     const mini = this.file?.keys["mini"];
     if (!mini) return { error: "no verified secrets.json here yet, so no mini key to seal to" };
     const { found, missing } = await scanFiles(this.o.sources());
+    // a value too large to seal under the proposal cap is left for a hand entry
+    const fits = found.filter((x) => x.value === null || x.value.length <= LIMITS.sealed / 2);
     const items: SecretProposalIn[] = [];
-    for (const x of found) {
-      if (items.length >= LIMITS.proposals) break;
-      // a value too large to seal under the proposal cap is left for a hand entry
-      if (x.value !== null && x.value.length > LIMITS.sealed / 2) continue;
+    for (const x of fits.slice(0, LIMITS.pending)) {
       const ref = { from: this.o.machine, source: x.source, key: x.key };
       items.push({ ...ref, sealed: x.value === null ? "" : await sealProposal(ref, x.value, mini), merges: null });
     }
-    return { items, missing };
+    return { items, missing, left: fits.length - items.length };
   }
 
   /** a drifted sink key's file value, sealed to the mini as an update of its secret */

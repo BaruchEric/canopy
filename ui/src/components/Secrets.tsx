@@ -1,11 +1,11 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { useEffect, useState, type FormEvent } from "react";
-import type { SecretAct } from "../../../src/core/secretwire";
+import { LIMITS, type SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretRestartResult, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
 import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
 import { reachRefusal } from "../../../src/core/secretfile";
-import { bulkAct, pick } from "../secretsbulk";
+import { batches, bulkAct, pick } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
 import { useStore } from "../store";
 import { ago } from "../util";
@@ -783,9 +783,16 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
     setNote(null);
     try {
       const found = await api.secretsScan(home);
-      const r = found.items.length > 0 ? await api.secretsPropose(writer, found.items) : { added: 0, dropped: 0 };
+      // the store takes a batch at a time; one request for a long credentials file would be refused whole
+      const r = { added: 0, dropped: 0 };
+      for (const batch of batches(found.items, LIMITS.proposals)) {
+        const one = await api.secretsPropose(writer, batch);
+        r.added += one.added;
+        r.dropped += one.dropped;
+      }
       const away = found.missing.length > 0 ? `; not on this machine: ${found.missing.join(", ")}` : "";
-      setNote(`${found.items.length} found, ${r.added} sent to the mini${r.dropped > 0 ? `, ${r.dropped} dropped` : ""}${away}. Approve them under import on the gate page.`);
+      const left = (found.left ?? 0) > 0 ? `; ${found.left} more did not fit, so approve or reject these and scan again` : "";
+      setNote(`${found.items.length} found, ${r.added} sent to the mini${r.dropped > 0 ? `, ${r.dropped} dropped` : ""}${away}${left}. Approve them under import on the gate page.`);
     } catch (e) {
       setNote(errorText(e));
     } finally {

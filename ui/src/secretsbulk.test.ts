@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretProposalInfo } from "../../src/core/types";
-import { bulkAct, looksSecret, pick, sinkIdOf } from "./secretsbulk";
+import { batches, bulkAct, looksSecret, pick, sinkIdOf } from "./secretsbulk";
 
 const P = (over: Partial<SecretProposalInfo> = {}): SecretProposalInfo => ({
   id: "p1",
@@ -98,6 +98,14 @@ describe("bulkAct", () => {
     const act = bulkAct(P({ source: "/home/eric/.codex/config.toml", key: "mcp_servers.x.env.API_KEY", suggested: "x_api_key" }));
     expect(act?.sink).toBeNull();
     expect(act?.tags).toEqual(["config"]);
+  });
+});
+
+describe("batches", () => {
+  test("a scan goes to the store in order, a batch at a time, with nothing left out", () => {
+    expect(batches([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
+    expect(batches([1, 2], 2)).toEqual([[1, 2]]);
+    expect(batches([], 2)).toEqual([]);
   });
 });
 
