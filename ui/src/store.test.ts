@@ -58,6 +58,7 @@ import { WAITING_PANEL } from "./waiting";
 import { runPanel } from "./itempanel";
 import { itemTabId } from "./sectiontabs";
 import { DEFAULT_CAPACITY, emptyCapacity } from "../../src/core/capacity";
+import { needs } from "../../src/core/callers";
 import {
   DEFAULT_AGENT,
   type AgentCard,
@@ -2103,21 +2104,30 @@ describe("several backends", () => {
       expect(useStore.getState().sweep).toEqual(sweep);
     });
 
-    test("to another origin the token rides on writes, /api/auth and the clipboard alone, so any other read is never preflighted", async () => {
+    test("to another origin the token rides on writes, /api/auth and the reads the backend asks more than read for, so any other read is never preflighted", async () => {
       kept.set(B_TOKEN, "cnp_page_b");
       heard.length = 0;
       await go();
       await settle();
       await api.rescan("b").catch(() => {});
       await api.clipFile("b|c-aaaaaaaa").catch(() => {});
+      await api.termScreen("b|t-1").catch(() => {});
+      await api.moveTranscript("b|t-1", "s-1", "m-1").catch(() => {});
       const of = (call: string) => heard.filter(([c]) => c === call).map(([, t]) => t);
-      const keyed = new Set(["GET /api/auth", "GET /api/clips", "GET /api/clips/file"]);
+      // the table the backend checks is the one the page reads: a read it
+      // files above `read` is refused without the token
+      const keyed = (call: string): boolean => call === "GET /api/auth" || needs("GET", call.slice("GET ".length)) !== "read";
       expect(of("GET /api/tree").length).toBeGreaterThan(0);
-      expect(heard.filter(([c]) => c.startsWith("GET ") && !keyed.has(c)).every(([, t]) => t === null)).toBe(true);
+      const reads = heard.filter(([c]) => c.startsWith("GET "));
+      expect(reads.filter(([c]) => !keyed(c)).every(([, t]) => t === null)).toBe(true);
+      expect(reads.filter(([c]) => keyed(c)).every(([, t]) => t === "cnp_page_b")).toBe(true);
       expect(of("GET /api/auth")).toContain("cnp_page_b");
       // reading a clip, or a clip's file, takes the operate right (FR-054)
       expect(of("GET /api/clips")).toContain("cnp_page_b");
       expect(of("GET /api/clips/file")).toEqual(["cnp_page_b"]);
+      // and so does a shell's screen; a move's transcript takes the shell right
+      expect(of("GET /api/terms/screen")).toEqual(["cnp_page_b"]);
+      expect(of("GET /api/terms/move/transcript")).toEqual(["cnp_page_b"]);
       expect(of("POST /api/rescan")).toEqual(["cnp_page_b"]);
     });
 

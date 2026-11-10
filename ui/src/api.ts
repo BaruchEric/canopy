@@ -129,7 +129,7 @@ import type { ProfileFields } from "../../src/core/screenlayouts";
 import { pickUrl, split, wsUrl, type BackendSignal } from "./backends";
 import { normalizeRoutes } from "../../src/core/route";
 import { keyHeaders } from "./answerKey";
-import { isAuthInfo, originOf, TOKEN_HEADER, tokenHeaders, type AuthInfo } from "./callerToken";
+import { carriesToken, isAuthInfo, originOf, TOKEN_HEADER, tokenHeaders, type AuthInfo } from "./callerToken";
 import {
   qDevice,
   qEvent,
@@ -194,21 +194,16 @@ export class PartialFleetError extends Error {
   }
 }
 
-/** the reads that carry the page's token to another origin too */
-const KEYED_READS: ReadonlySet<string> = new Set(["/api/auth", "/api/clips", "/api/clips/file"]);
-
 async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<T> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
   const opts: RequestInit = { ...init };
   // The backend's own token, when this page signed in to it. To another
-  // origin it rides only where it is needed: a write, and /api/auth, which
-  // says who this page is, and the clipboard, which only a token may read
-  // (FR-054). Any other read is open to anyone, and a GET with no custom
-  // header and no Content-Type is a simple request with no preflight, whose
-  // failing at an edge gate would mark the whole backend offline.
-  const method = (init.method ?? "GET").toUpperCase();
-  const keyed = !base || (method !== "GET" && method !== "HEAD") || KEYED_READS.has(path.split("?")[0] ?? "");
+  // origin it rides only where it is needed (carriesToken): a write,
+  // /api/auth, and a read the backend's table files above `read`, such as a
+  // clip (FR-054) or a shell's screen. Any other read is open to anyone and
+  // goes bare, so it is never preflighted.
+  const keyed = carriesToken(base, init.method ?? "GET", path);
   const headers = keyed ? tokenHeaders(originOf(base), init.headers) : new Headers(init.headers);
   if (typeof init.body === "string" && init.headers === undefined) headers.set("Content-Type", "application/json");
   const sent = headers.get(TOKEN_HEADER);
@@ -304,8 +299,9 @@ async function blobReq(b: string, path: string): Promise<Blob> {
   if (!reachable(b)) throw new Error(`${b} has not answered yet`);
   const base = baseOf(b);
   // a read: the token rides on the page's own origin, and to another origin
-  // only for the keyed reads (a clipboard file), as in req
-  const keyed = !base || KEYED_READS.has(path.split("?")[0] ?? "");
+  // only where the backend asks more than `read` (a clip's file, a move's
+  // transcript), as in req
+  const keyed = carriesToken(base, "GET", path);
   const r = await fetch(base + path, { ...(base ? { credentials: "include" as const } : {}), ...(keyed ? { headers: tokenHeaders(originOf(base)) } : {}) });
   if (!r.ok) {
     const body = (await r.json().catch(() => null)) as { error?: string } | null;

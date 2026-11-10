@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PendingPair } from "../../src/core/types";
-import { dialPlan, isOwnCode, originOf, pairAsk, pairKey, pairLabel, readPair, readsAdmin, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writePair, writeToken } from "./callerToken";
+import { carriesToken, dialPlan, isOwnCode, originOf, pairAsk, pairKey, pairLabel, readPair, readsAdmin, readToken, TOKEN_HEADER, tokenHeaders, tokenKey, writePair, writeToken } from "./callerToken";
 
 /** a localStorage stand-in, or one that throws the way a blocked one does */
 function storage(blocked = false) {
@@ -91,6 +91,34 @@ describe("this page's caller tokens", () => {
     expect(pairLabel("cli mac")).toBe("page cli mac");
     expect(pairLabel("helper x")).toBe("page helper x");
     expect(pairLabel("  ")).toBe("a browser");
+  });
+});
+
+describe("which calls carry the token", () => {
+  const other = "http://b.test:7850";
+
+  test("on the page's own origin every call does", () => {
+    for (const [m, p] of [["GET", "/api/tree"], ["GET", "/api/terms/screen?term=t"], ["POST", "/api/rescan"]] as const) expect({ p, carries: carriesToken("", m, p) }).toEqual({ p, carries: true });
+  });
+
+  test("to another origin a write does", () => {
+    for (const [m, p] of [["POST", "/api/rescan"], ["DELETE", "/api/terms?term=t"], ["PUT", "/api/guards"], ["PATCH", "/api/workspaces"]] as const) expect({ p, carries: carriesToken(other, m, p) }).toEqual({ p, carries: true });
+  });
+
+  test("to another origin a read does where the backend asks more than read for it, and /api/auth, which says who this page is", () => {
+    const keyed = ["/api/auth", "/api/clips?ids=c-1", "/api/clips/file?id=c-1", "/api/terms/screen?term=t", "/api/terms/text?term=t", "/api/terms/transcript?term=t", "/api/terms/move/plan?term=t", "/api/terms/move/transcript?term=t&session=s&move=m", "/api/scenarios?repo=r"];
+    for (const p of keyed) expect({ p, carries: carriesToken(other, "GET", p) }).toEqual({ p, carries: true });
+  });
+
+  test("any other read to another origin goes bare, so it stays a simple request with no preflight", () => {
+    for (const p of ["/api/tree", "/api/runs", "/api/about", "/api/landing", "/api/terms", "/api/terms/agent?term=t", "/api/push/key"]) expect({ p, carries: carriesToken(other, "GET", p) }).toEqual({ p, carries: false });
+  });
+
+  test("a HEAD is a GET, and the method's case does not matter", () => {
+    expect(carriesToken(other, "HEAD", "/api/tree")).toBe(false);
+    expect(carriesToken(other, "head", "/api/clips")).toBe(true);
+    expect(carriesToken(other, "get", "/api/tree")).toBe(false);
+    expect(carriesToken(other, "post", "/api/grep")).toBe(true);
   });
 });
 

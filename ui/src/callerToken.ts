@@ -7,7 +7,7 @@
    for the storage calls, which take the storage as an argument; tested. */
 
 import type { PendingPair } from "../../src/core/types";
-import { kindOfLabel, KIND_RIGHTS, type CallerKind, type PairKind, type Right } from "../../src/core/callers";
+import { kindOfLabel, KIND_RIGHTS, needs, type CallerKind, type PairKind, type Right } from "../../src/core/callers";
 
 /** the header a token rides in */
 export const TOKEN_HEADER = "X-Canopy-Token";
@@ -115,6 +115,23 @@ export function tokenHeaders(origin: string, init?: HeadersInit, store: Store | 
   const t = readToken(origin, store);
   if (t) h.set(TOKEN_HEADER, t);
   return h;
+}
+
+/** Whether a call to a backend carries this page's token. On the page's own
+ *  origin (`base` is "") every call does. To another origin a write does, and
+ *  a read only where the backend asks more than `read` for it (a clip, a
+ *  shell's screen, a move's plan) or says who the caller is (`/api/auth`).
+ *  Any other read goes bare: a GET with no custom header is a simple request
+ *  with no preflight, and a preflight that fails at an edge gate would mark
+ *  the whole backend offline. The page reads the table the backend checks
+ *  (`needs`), so a read filed above `read` there carries the token here
+ *  without a second list to keep in step. */
+export function carriesToken(base: string, method: string, path: string): boolean {
+  if (!base) return true;
+  const m = method.toUpperCase();
+  if (m !== "GET" && m !== "HEAD") return true;
+  const bare = path.split("?")[0] ?? "";
+  return bare === "/api/auth" || needs("GET", bare) !== "read";
 }
 
 /** A page's pair label. The request names its kind, but a server from before
