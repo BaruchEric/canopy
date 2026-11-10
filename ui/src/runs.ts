@@ -129,11 +129,15 @@ export function pillRuns<R extends Pick<Run, "status">>(runs: readonly R[]): R[]
   return [...runs.filter((r) => r.status === "waiting"), ...runs.filter((r) => r.status !== "waiting")];
 }
 
-/** The pill's own words: how many runs need an answer, else how many go. */
-export function pillText(runs: readonly Pick<Run, "status">[]): string {
+/** The pill's own words: how many runs need an answer, else how many go.
+ *  The agent is named while every run is on the same one; a mix is "runs". */
+export function pillText(runs: readonly (Pick<Run, "status"> & { harness?: Harness })[]): string {
   const waiting = runs.filter((r) => r.status === "waiting").length;
   if (waiting > 0) return `${waiting} need${waiting === 1 ? "s" : ""} you`;
-  return `${runs.length} claude run${runs.length === 1 ? "" : "s"}`;
+  const agents = new Set(runs.map(harnessOf));
+  const [only] = agents;
+  const who = agents.size === 1 && only ? `${agentWord(only)} ` : "";
+  return `${runs.length} ${who}run${runs.length === 1 ? "" : "s"}`;
 }
 
 /** the most of a run's note a row of the pill's menu shows */

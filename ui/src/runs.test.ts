@@ -94,6 +94,17 @@ describe("the top bar's runs pill", () => {
     expect(pillText([b, d])).toBe("2 need you");
   });
 
+  test("it names the agent only while every run is on the same one", () => {
+    const x = run({ id: "x", harness: "codex" });
+    const y = run({ id: "y", harness: "codex", status: "idle" });
+    expect(pillText([x])).toBe("1 codex run");
+    expect(pillText([x, y])).toBe("2 codex runs");
+    expect(pillText([a, x])).toBe("2 runs");
+    expect(pillText([a, c, x])).toBe("3 runs");
+    // a run from before harnesses was Claude's
+    expect(pillText([run({ harness: "claude" }), a])).toBe("2 claude runs");
+  });
+
   test("a row says what the run is at, how long it has gone and what was asked", () => {
     expect(pillLine(a, 20_000)).toBe("claude is committing · just started");
     expect(pillLine(run({ status: "idle", note: "fix the pill\nand the menu" }), 12 * 60_000)).toBe("chat open, your turn · 12m · fix the pill");
