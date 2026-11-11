@@ -33,6 +33,8 @@ import type {
 import { pct, shareTone, weekKey, type HarnessWeek } from "../../src/core/harnessshare";
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
+import { gateWords, type GateWords } from "./flows";
+import { parkWords } from "./sprouts";
 import { chainWords } from "./coord";
 import { handOffText } from "../../src/core/sprout";
 import { SCORE_GATE, sentBack } from "../../src/core/landing";
@@ -100,13 +102,8 @@ export interface InboxItem {
   repoPath?: string;
   /** a flow step's run: its workflow and step, the scopes a remember offers */
   flowStep?: FlowStepName;
-  /** a gate the flow's budget parked: continuing grants one more step */
-  budget?: true;
-  /** a step the stage runner's absence parked: continuing runs it again */
-  stage?: true;
-  /** with `stage`: it was the step's check that found the runner away, so
-   *  continuing runs the check alone */
-  stageCheck?: true;
+  /** a gate's or a park's ways on, as its buttons word them: what each will do */
+  gate?: GateWords;
   /** the retro lessons on offer, the advice item's alone */
   advice?: AdviceOffer[];
   /** a hand-off's: the commit a yes is for */
@@ -281,6 +278,9 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
   const repo = ctx.repos.find((r) => r.id === flow.repoId);
   const backend = ctx.backendOf?.(flow.id) ?? "";
   const run = step?.runId ? runs[step.runId] : undefined;
+  // a stage of the incubator's is worded as its project's park is: going on
+  // past a build's last step deploys it, and the button says so
+  const sprout = ctx.sprouts?.find((s) => s.flows.at(-1)?.flowId === flow.id);
   return {
     key: `flow:${flow.id}`,
     source: "flow",
@@ -295,9 +295,7 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
     at: run?.endedAt ?? flow.startedAt,
     left: null,
     until: null,
-    ...(flow.parkedFor === "budget" ? { budget: true as const } : {}),
-    ...(flow.parkedFor === "stage" ? { stage: true as const } : {}),
-    ...(flow.parkedFor === "stage" && flow.stageCheck ? { stageCheck: true as const } : {}),
+    gate: sprout ? parkWords(sprout, flow) : gateWords(flow),
   };
 }
 
@@ -321,7 +319,7 @@ function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: Inbox
     // a gate behind the park is in the inbox already, as that flow's
     const cur = s.flows.at(-1);
     if (cur && !cur.outcome && flows[cur.flowId]?.status === "gated") return null;
-    return { ...base, kind: "park", who: "incubator", title: "is parked", detail: s.parked ?? "", at: s.updatedAt };
+    return { ...base, kind: "park", who: "incubator", title: "is parked", detail: s.parked ?? "", at: s.updatedAt, gate: parkWords(s, undefined) };
   }
   const n = s.questions?.length ?? 0;
   if (s.status !== "clarifying" || n === 0) return null;

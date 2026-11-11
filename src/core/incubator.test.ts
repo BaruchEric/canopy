@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
-import type { BranchPush, ShipBundle, Shipper, ShipSource } from "./shipper";
+import type { BranchPush, NameClaim, ShipBundle, Shipper, ShipSource } from "./shipper";
 import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows, readFlowModes } from "./workflows";
 import { branchPushRefusal, holdsSlot } from "./sprout";
@@ -44,12 +44,16 @@ class FakeStore implements IncubatorStore {
   async list(): Promise<Sprout[]> {
     return [...this.records.values()].map(clone);
   }
+  /** every save throws this while it is set */
+  failSave: string | null = null;
   async save(s: Sprout): Promise<void> {
+    if (this.failSave) throw new Error(this.failSave);
     this.records.set(s.id, clone(s));
   }
   async writeInput(id: string, name: string, data: Uint8Array | string): Promise<void> {
     const m = this.inputs.get(id) ?? new Map<string, Uint8Array>();
-    if (m.has(name)) throw new Error("exists");
+    // what the real store's exclusive write says of a name already taken
+    if (m.has(name)) throw Object.assign(new Error(`EEXIST: file already exists, open '${name}'`), { code: "EEXIST" });
     if (this.failWrite?.test(name)) throw new Error(`no space left writing ${name}`);
     m.set(name, typeof data === "string" ? new TextEncoder().encode(data) : data);
     this.inputs.set(id, m);
@@ -348,6 +352,38 @@ describe("intake", () => {
     expect(new TextDecoder().decode(w.store.inputs.get(s.id)?.get("002-voice.txt"))).toBe("count the quarters\nand the dimes");
   });
 
+  test("a transcript file left by a try the server did not live to record is written over (incubator review, P1)", async () => {
+    const w = world({ transcribe: async () => "count the quarters" });
+    // a server that stopped between the transcript's write and the record's save left this
+    w.store.inputs.set("sp_000000000001", new Map([["002-voice.txt", new TextEncoder().encode("count the")]]));
+    const s = await w.inc.create(intake({ files: [audio()] }));
+    expect(s.id).toBe("sp_000000000001");
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(after.parked).toBeUndefined();
+    expect(after.status).toBe("clarifying");
+    expect(after.inputs.map((e) => [e.n, e.kind, e.name])).toEqual([
+      [1, "audio", "001-voice.webm"],
+      [2, "transcript", "002-voice.txt"],
+    ]);
+    expect(new TextDecoder().decode(w.store.inputs.get(s.id)?.get("002-voice.txt"))).toBe("count the quarters");
+  });
+
+  test("each transcript is on record before the next memo goes to the speech model (incubator review, P1)", async () => {
+    const onRecord: number[] = [];
+    const store: { at?: FakeStore } = {};
+    const w = world({
+      transcribe: async () => {
+        onRecord.push(store.at?.records.get("sp_000000000001")?.inputs.filter((e) => e.kind === "transcript").length ?? -1);
+        return "words";
+      },
+    });
+    store.at = w.store;
+    await w.inc.create(intake({ files: [audio("a.webm"), audio("b.webm")] }));
+    await w.inc.idle();
+    expect(onRecord).toEqual([0, 1]);
+  });
+
   test("a speech model that fails leaves the audio raw with the reason", async () => {
     const w = world({
       transcribe: async () => {
@@ -604,6 +640,39 @@ describe("clarify's outcome", () => {
     w.flows.move(b.flows[0]?.flowId ?? "", { status: "failed", error: "boom" });
     await w.inc.idle();
     expect(now(w, b.id).parked).toBe("clarify failed: boom");
+  });
+
+  test("a flow parked at a step whose run failed: the park names the step, the error and what a resume does (incubator review, P1)", async () => {
+    const w = world({ failHint: (error) => (error.includes("authenticate") ? "log the stages in again" : null) });
+    const a = await clarifying(w);
+    const id = a.flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "gated", parkedFor: "failed", steps: [{ name: "Clarify", status: "gated", reason: "API Error: 529 overloaded." }] });
+    await w.inc.idle();
+    expect(now(w, a.id)).toMatchObject({
+      status: "parked",
+      parked: "clarify's Clarify step failed: API Error: 529 overloaded. A resume runs that step again, and the steps before it stand",
+    });
+    // the stage's flow is alive behind the park: nothing is recorded as its outcome, and the slot stays taken
+    expect(now(w, a.id).flows[0]?.outcome).toBeUndefined();
+    expect(holdsSlot(now(w, a.id), w.flows.get(id)?.status)).toBe(true);
+    // a resume goes to that flow, which runs the step again; no second flow starts
+    await w.inc.resume(a.id, "retry");
+    await w.inc.idle();
+    expect(w.flows.resumed).toEqual([{ id, choice: "retry" }]);
+    expect(w.flows.started).toHaveLength(1);
+    expect(now(w, a.id).status).toBe("clarifying");
+    expect(now(w, a.id).parked).toBeUndefined();
+
+    const b = await clarifying(w, "second idea");
+    w.flows.move(b.flows[0]?.flowId ?? "", {
+      status: "gated",
+      parkedFor: "failed",
+      steps: [{ name: "Clarify", status: "gated", reason: "Failed to authenticate: OAuth session expired" }],
+    });
+    await w.inc.idle();
+    expect(now(w, b.id).parked).toBe(
+      "clarify's Clarify step failed: Failed to authenticate: OAuth session expired. log the stages in again. A resume runs that step again, and the steps before it stand",
+    );
   });
 
   test("a commit the seed refuses parks the sprout and asks nothing", async () => {
@@ -1499,14 +1568,31 @@ class FakeShip implements Shipper {
   ready(): string | null {
     return this.readyAs;
   }
-  async createRepo(slug: string): Promise<string> {
-    this.calls.push(`create ${slug}`);
-    return `eric/${slug}`;
+  /** a make that throws once its name is asked for and the thing is made,
+   *  as a command that times out with its work done */
+  cut: { repo?: string; project?: string } = {};
+  /** told each name once it is asked for, before the make */
+  onAsk: (name: string) => void = () => {};
+  /** every repo and project made, a second one included */
+  made: string[] = [];
+  /** as the real shipper: a name an earlier try asked for is taken up, any other is asked for and then made */
+  private async named(name: string, cut: string | undefined, claim: NameClaim | undefined): Promise<string> {
+    if (claim?.asked !== undefined && this.made.includes(claim.asked)) return claim.asked;
+    await claim?.ask(name);
+    this.onAsk(name);
+    this.made.push(name);
+    if (cut) throw new Error(cut);
+    return name;
   }
-  async project(slug: string): Promise<string> {
+  async createRepo(slug: string, _description?: string, claim?: NameClaim): Promise<string> {
+    this.calls.push(`create ${slug}`);
+    // a repo already there under the name and not canopy's sends the real shipper to the next name
+    return this.named(this.made.includes(`eric/${slug}`) ? `eric/${slug}-2` : `eric/${slug}`, this.cut.repo, claim);
+  }
+  async project(slug: string, _seedPath?: string, claim?: NameClaim): Promise<string> {
     this.calls.push(`project ${slug}`);
     if (this.failProject) throw new Error(this.failProject);
-    return slug;
+    return this.named(this.made.includes(slug) ? `${slug}-2` : slug, this.cut.project, claim);
   }
   /** the HEAD each bundle names, and every bundle made and let go */
   head = "h1";
@@ -1918,6 +2004,58 @@ describe("scout and build-new", () => {
     expect(now(w, s.id).status).toBe("live");
   });
 
+  test("a repo asked for whose answer never came is taken up on the next try, not made again under the next name (incubator review, P1)", async () => {
+    const ship = new FakeShip();
+    // gh timed out with the repo made
+    ship.cut.repo = "gh repo create eric/coin-counter: timed out";
+    const w = chain(ship);
+    const onRecord: unknown[] = [];
+    ship.onAsk = () => onRecord.push(w.store.records.get("sp_000000000001")?.shipAsked);
+    const s = await shipped(w);
+    expect(s.parked).toBe("deploy: gh repo create eric/coin-counter: timed out");
+    expect(s.privateRepo).toBeUndefined();
+    // the name was in the record's file before gh was asked for it
+    expect(onRecord).toEqual([{ repo: "eric/coin-counter" }]);
+    expect(s.shipAsked).toEqual({ repo: "eric/coin-counter" });
+    ship.cut = {};
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(after.status).toBe("live");
+    expect(after.privateRepo).toBe("eric/coin-counter");
+    expect(ship.made).toEqual(["eric/coin-counter", "coin-counter"]);
+    // answered, so the asked names are off the record
+    expect(after.shipAsked).toBeUndefined();
+    expect(w.store.records.get(s.id)?.shipAsked).toBeUndefined();
+  });
+
+  test("the same for the Vercel project, with the repo already on record", async () => {
+    const ship = new FakeShip();
+    ship.cut.project = "the Vercel API answered 504 making project coin-counter";
+    const w = chain(ship);
+    const s = await shipped(w);
+    expect(s.parked).toBe("deploy: the Vercel API answered 504 making project coin-counter");
+    expect(s.privateRepo).toBe("eric/coin-counter");
+    expect(s.shipAsked).toEqual({ project: "coin-counter" });
+    ship.cut = {};
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id)).toMatchObject({ status: "live", vercelProject: "coin-counter", url: "https://coin-counter.vercel.app" });
+    expect(ship.made).toEqual(["eric/coin-counter", "coin-counter"]);
+    expect(now(w, s.id).shipAsked).toBeUndefined();
+  });
+
+  test("a name that cannot be put on record is never asked for", async () => {
+    const ship = new FakeShip();
+    const w = chain(ship);
+    const s = await scouting(w);
+    await end(w, s.id, { ".canopy/pick.json": PICK });
+    w.store.failSave = "no space left on device";
+    const after = await end(w, s.id, { ".canopy/smoke.md": "status: 200" });
+    expect(after.parked).toBe("deploy: no space left on device");
+    expect(ship.made).toEqual([]);
+  });
+
   test("input that arrives while scout runs drops the pick, and the chain clarifies again", async () => {
     const w = chain();
     const s = await scouting(w);
@@ -2102,6 +2240,17 @@ describe("retro", () => {
     expect(w.flows.get(id)?.status).toBe("stopped");
     expect(now(w, s.id).retro?.reason).toBe("the retro stopped at Retro: out of retries: advice 1: key");
     expect(now(w, s.id).status).toBe("parked");
+    // a seed's failed run leaves its flow waiting at the step; a retro's ends there too, as failed
+    const w2 = retroWorld();
+    const s2 = await parked(w2);
+    clock += RETRO_PARK_WAIT;
+    w2.inc.tick();
+    await w2.inc.idle();
+    const id2 = retroFlow(w2, s2.id).id;
+    w2.flows.move(id2, { status: "gated", parkedFor: "failed", steps: [{ name: "Retro", status: "gated", reason: "API Error: 529 overloaded" }] });
+    await w2.inc.idle();
+    expect(w2.flows.get(id2)?.status).toBe("stopped");
+    expect(now(w2, s2.id).retro).toMatchObject({ state: "failed", reason: "the retro failed: API Error: 529 overloaded" });
   });
 
   test("a park comes due a day on with no flow alive behind it, once; one at a live gate never does", async () => {

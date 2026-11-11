@@ -9,7 +9,7 @@
 import { dirname, join } from "node:path";
 import { isVercelAppUrl } from "./deploy";
 import { networkOrigin } from "./peersync";
-import type { Shipper } from "./shipper";
+import type { NameClaim, Shipper } from "./shipper";
 import type { SeedSource } from "./seedsource";
 import { firebaseProjectId } from "./firebase";
 import { PARKS_KEPT, RETRO_CONCURRENCY, RETRO_FILES, RETRO_TRIES, RETRO_UNATTENDED, RETRO_WAIT_MAX, endRetroDue, flowDigest, parkRetroDue, parseAdvice, retroNote, retroRecord, type KnownAdvice } from "./retro";
@@ -225,6 +225,8 @@ export const incubatorWorkflow = async (name: string): Promise<Workflow | undefi
 export const newSproutId = (): string => `sp_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
 
 const msg = (err: unknown): string => String(err instanceof Error ? err.message : err);
+/** a write refused because a file is at that name already */
+const alreadyThere = (err: unknown): boolean => typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST";
 /** the park reason's start when the seed's HEAD is not the one accepted */
 const SEED_MOVED = "the seed moved after the build was accepted";
 const enc = new TextEncoder();
@@ -382,7 +384,18 @@ export class Incubator {
     // claimed before the write awaits, so an intake running beside this one takes the next number
     s.inputs.push(entry);
     try {
-      await this.deps.store.writeInput(s.id, name, data);
+      try {
+        await this.deps.store.writeInput(s.id, name, data);
+      } catch (err) {
+        // A file already under this number is what a try cut short left
+        // behind: written, and the server gone before the record that names
+        // it was saved. No entry holds the number, so the file is no input
+        // of the project's, and this write takes its place. Left there, it
+        // failed every later try at the same number for good.
+        if (!alreadyThere(err)) throw err;
+        await this.deps.store.removeInput(s.id, name);
+        await this.deps.store.writeInput(s.id, name, data);
+      }
     } catch (err) {
       s.inputs = s.inputs.filter((x) => x !== entry);
       throw err;
@@ -901,6 +914,10 @@ export class Incubator {
       // line says where its words went rather than waiting on a summary
       e.summary = `a voice memo; its words are in [${t.n}]`;
       added += 1;
+      // on record now, not when prepare ends: a server that stops before
+      // then finds this memo done, and does not send it to the speech
+      // model a second time
+      if (!this.detached && !this.gone(s)) await this.deps.store.save(s).catch((err: unknown) => this.log(`could not save ${s.id}: ${msg(err)}`));
     }
     return added;
   }
@@ -1094,9 +1111,11 @@ export class Incubator {
     // the stage runner was away: Flows runs the step again on its hello, as for any stage
     if (flow.status === "gated" && flow.parkedFor === "stage") return;
     if (flow.status === "gated") {
-      // a retro never waits on the user at a gate: out of retries or budget, it ends
+      // a retro never waits on the user at a gate: out of retries or budget,
+      // or after a run that ended in an error, it ends
       this.stopFlow(flow);
-      return this.retroFailed(s, `the retro stopped at ${step?.name ?? "a gate"}: ${step?.reason ?? "a gate"}`);
+      const why = flow.parkedFor === "failed" ? `the retro failed: ${step?.reason ?? "the run failed"}` : `the retro stopped at ${step?.name ?? "a gate"}: ${step?.reason ?? "a gate"}`;
+      return this.retroFailed(s, why);
     }
     if (flow.status !== "done") return this.retroFailed(s, `the retro ${flow.status}${flow.error ? `: ${flow.error}` : ""}`);
     try {
@@ -1256,6 +1275,15 @@ export class Incubator {
       if (entry.workflow === "scout" && step?.judgment?.rejected) {
         return this.reject(s, entry, flow, step.judgment.reason ?? step.reason ?? "the judge turned the idea down");
       }
+      if (flow.parkedFor === "failed") {
+        // A step's run ended in an error and the flow waits at that step.
+        // The reason says which step, what the harness said, and what a
+        // resume does, since the error alone reads as the whole stage lost.
+        const error = step?.reason ?? "the run failed";
+        const hint = this.deps.failHint?.(error) ?? null;
+        const on = "A resume runs that step again, and the steps before it stand";
+        return this.park(s, `${entry.workflow}'s ${step?.name ?? "current"} step failed: ${error.replace(/[.\s]+$/, "")}. ${hint ? `${hint}. ${on}` : on}`, false);
+      }
       // the flow lives on, waiting on the human: the sprout keeps its slot, so nothing is pumped
       return this.park(s, `${entry.workflow} waits${step ? ` after ${step.name}` : ""}: ${step?.reason ?? "a gate"}`, false);
     }
@@ -1382,11 +1410,13 @@ export class Incubator {
     if (ready) return this.park(s, ready);
     try {
       if (!s.privateRepo) {
-        s.privateRepo = await ship.createRepo(s.slug, s.title);
+        s.privateRepo = await ship.createRepo(s.slug, s.title, this.claim(s, "repo"));
+        this.unask(s, "repo");
         await this.changed(s);
       }
       if (!s.vercelProject) {
-        s.vercelProject = await ship.project(s.slug, s.seedPath);
+        s.vercelProject = await ship.project(s.slug, s.seedPath, this.claim(s, "project"));
+        this.unask(s, "project");
         await this.changed(s);
       }
       if (sproutEnded(s)) return;
@@ -1421,6 +1451,31 @@ export class Incubator {
     } catch (err) {
       await this.park(s, `deploy: ${msg(err)}`);
     }
+  }
+
+  /** The claim for one of the two things a ship makes under a name. The
+   *  name goes on the project's record before it is asked for, by a save
+   *  that throws: a name that is not on disk is never asked for, or a
+   *  server that stops next would leave the thing made and nothing saying
+   *  so, and the next try would make a second one. */
+  private claim(s: Sprout, what: "repo" | "project"): NameClaim {
+    const asked = s.shipAsked?.[what];
+    return {
+      ...(asked === undefined ? {} : { asked }),
+      ask: async (name) => {
+        if (this.detached || this.gone(s)) throw new Error("the project is not on this backend any more");
+        s.shipAsked = { ...s.shipAsked, [what]: name };
+        s.updatedAt = this.now();
+        await this.deps.store.save(s);
+      },
+    };
+  }
+
+  /** the asked name is answered and on record as the thing itself */
+  private unask(s: Sprout, what: "repo" | "project"): void {
+    if (!s.shipAsked) return;
+    delete s.shipAsked[what];
+    if (s.shipAsked.repo === undefined && s.shipAsked.project === undefined) delete s.shipAsked;
   }
 
   /** new input means clarify reads again, and a pick made before it no longer stands */

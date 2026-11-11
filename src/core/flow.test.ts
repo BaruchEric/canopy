@@ -1,6 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CapacityHeldError } from "./capacity";
-import { CAPACITY_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { CAPACITY_NOTE, FAILED_RUN_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow, unattendedRefusal, type RecordedWorkflow } from "./workflow";
 import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
@@ -1244,14 +1244,14 @@ describe("the stage runner away", () => {
 
   const seedRepo = (): Repo => ({ ...repo(), id: "_incubator/coin", name: "coin", path: "/tmp/_incubator/coin" });
 
-  test("a seed run whose error names the stage runner, while the runner answered, fails and parks for nothing", async () => {
+  test("a seed run whose error names the stage runner, while the runner answered, is a failed run and never a stage park", async () => {
     const { runner, flows } = setup();
     const f = flows.start(seedRepo(), TWO, "", DEFAULT_AGENT);
     // what a stage could print to its own stderr before it exits
     runner.end("run1", "failed", "", `Claude Code exited (code 1) without a result: ${STAGE_AWAY}`);
     await flush();
-    expect(flows.get(f.id)?.status).toBe("failed");
-    expect(flows.get(f.id)?.parkedFor).toBeUndefined();
+    // it waits for the user, as any failed run on a seed does; no hello runs it again
+    expect(flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "failed" });
     expect(flows.resumeStageParks()).toBe(0);
     expect(runner.specs).toHaveLength(1);
   });
@@ -2694,5 +2694,199 @@ describe("pre-start readiness (Task 6)", () => {
     expect(flow.steps[0]?.status).toBe("checking");
     check.resolve({ exit: 0, output: "done" }); await flush();
     expect(flow.status).toBe("done");
+  });
+});
+
+describe("a seed's step whose run ends in an error (incubator review, P1)", () => {
+  const seed = (): Repo => ({ ...repo(), id: "_incubator/coin", name: "coin", path: "/tmp/_incubator/coin" });
+  const THREE = wf(`---\nblurb: b\n---\n\n## Build\n\nBuild.\n\n## Test\n\nTest.\n\n## Wrap\n\nWrap.\n`);
+
+  test("parks the flow at that step, and a resume runs that step alone on what the earlier ones left", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(seed(), THREE, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    runner.end("run2", "failed", "", "API Error: 529 overloaded");
+    await flush();
+    let now = flows.get(f.id);
+    expect(now).toMatchObject({ status: "gated", parkedFor: "failed", current: 1 });
+    expect(now?.steps[1]).toMatchObject({ status: "gated", reason: "API Error: 529 overloaded" });
+    expect(now?.steps[0]?.status).toBe("passed");
+    expect(now?.backTo).toBeUndefined();
+    flows.resume(f.id, "retry");
+    await flush();
+    now = flows.get(f.id);
+    expect(now).toMatchObject({ status: "working", current: 1 });
+    expect(now?.parkedFor).toBeUndefined();
+    expect(runner.specs).toHaveLength(3);
+    expect(runner.specs[2]?.label).toBe("Test");
+    expect(runner.specs[2]?.task.startsWith(FAILED_RUN_NOTE)).toBe(true);
+    // Build was not run again, and its summary still stands
+    expect(runner.specs[2]?.task).toContain("- Build: built");
+    runner.end("run3", "done", "tested");
+    await flush();
+    runner.end("run4", "done", "wrapped");
+    await flush();
+    expect(flows.get(f.id)?.status).toBe("done");
+  });
+
+  test("continue means the same, and the step's Claude session is taken up with the failed-run note", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(seed(), THREE, "", DEFAULT_AGENT);
+    runner.session("run1", "s1");
+    runner.end("run1", "failed", "half built", "boom");
+    await flush();
+    expect(flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "failed", current: 0 });
+    flows.resume(f.id, "continue");
+    await flush();
+    expect(runner.specs).toHaveLength(2);
+    expect(runner.specs[1]?.resume).toBe("s1");
+    expect(runner.specs[1]?.message).toBe(FAILED_RUN_NOTE);
+    expect(flows.get(f.id)?.steps[0]).toMatchObject({ status: "running", runId: "run2" });
+  });
+
+  test("a session that cannot be taken up starts the step over once, and a second error parks again", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(seed(), THREE, "", DEFAULT_AGENT);
+    runner.session("run1", "s1");
+    runner.end("run1", "failed", "half built", "boom");
+    await flush();
+    flows.resume(f.id, "retry");
+    await flush();
+    // Claude Code's answer to a session it cannot find: a result with no turns
+    runner.end("run2", "failed", "", "No conversation found with session ID: s1");
+    await flush();
+    expect(runner.specs).toHaveLength(3);
+    expect(runner.specs[2]?.resume).toBeUndefined();
+    runner.end("run3", "failed", "", "boom again");
+    await flush();
+    expect(runner.specs).toHaveLength(3);
+    expect(flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "failed" });
+    expect(flows.get(f.id)?.steps[0]?.reason).toBe("boom again");
+  });
+
+  test("stop at the park ends the flow, and the park comes back from a record", async () => {
+    const a = setup();
+    const f = a.flows.start(seed(), THREE, "", DEFAULT_AGENT);
+    a.runner.end("run1", "failed", "", "boom");
+    await flush();
+    const b = setup();
+    b.flows.restore([lastRecord(a.saved, f.id)], () => seed(), sameAgent);
+    expect(b.flows.get(f.id)).toMatchObject({ status: "gated", parkedFor: "failed" });
+    b.flows.resume(f.id, "continue");
+    await flush();
+    expect(b.runner.specs).toHaveLength(1);
+    expect(b.runner.specs[0]?.label).toBe("Build");
+
+    a.flows.resume(f.id, "stop");
+    await flush();
+    expect(a.flows.get(f.id)?.status).toBe("stopped");
+  });
+
+  test("a repo that is no seed still fails its flow on a failed run", async () => {
+    const { runner, flows } = setup();
+    const f = flows.start(repo(), THREE, "", DEFAULT_AGENT);
+    runner.end("run1", "failed", "", "boom");
+    await flush();
+    expect(flows.get(f.id)).toMatchObject({ status: "failed", error: "boom" });
+    expect(flows.get(f.id)?.parkedFor).toBeUndefined();
+  });
+});
+
+describe("a retry by hand at a gate that said no (incubator review, P1)", () => {
+  const partly: JudgeAnswers = { fit: { choice: "partly", probabilities: { partly: 0.9 } }, evidence: { probability: 0.9 }, rules: { probability: 0 } };
+  const J = wf(`---\nblurb: b\n---\n\n## Build\n\nBuild.\n\n## Accept\ngate: judge\nretries: 1\nback: Build\n\nJudge.\n`);
+
+  test("the flow's own rewind carries the judge step's closing words to the builder", async () => {
+    const { runner, flows } = setup({ judge: async () => partly });
+    flows.start(repo(), J, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    runner.end("run2", "done", "the export button\nis missing");
+    await flush();
+    expect(runner.specs[2]?.label).toBe("Build");
+    expect(runner.specs[2]?.task).toContain(
+      "the Accept step did not accept the work: the judge says it only partly meets the intent. Accept's closing words: the export button is missing",
+    );
+  });
+
+  test("out of retries, the park names the step a retry goes back to, and a retry goes there past the count", async () => {
+    const { runner, flows } = setup({ judge: async () => partly });
+    const flow = flows.start(repo(), J, "", DEFAULT_AGENT);
+    for (const [id, said] of [["run1", "built"], ["run2", "no export"], ["run3", "built again"], ["run4", "still no export"]] as const) {
+      runner.end(id, "done", said);
+      await flush();
+    }
+    let f = flows.get(flow.id);
+    expect(f).toMatchObject({ status: "gated", current: 1, backTo: "Build" });
+    flows.resume(flow.id, "retry");
+    await flush();
+    f = flows.get(flow.id);
+    expect(f).toMatchObject({ status: "working", current: 0 });
+    expect(f?.backTo).toBeUndefined();
+    expect(runner.specs).toHaveLength(5);
+    expect(runner.specs[4]?.label).toBe("Build");
+    expect(runner.specs[4]?.task).toContain("the judge says it only partly meets the intent. Accept's closing words: still no export");
+    // by hand: the step's own retries are not spent, and the rewind is on record
+    expect(f?.tries).toEqual({ Accept: 1 });
+    expect(f?.rewinds).toHaveLength(2);
+    expect(f?.rewinds?.[1]).toMatchObject({ from: "Accept", to: "Build" });
+    // the builder's next work is judged again, and a second no parks again
+    runner.end("run5", "done", "built a third time");
+    await flush();
+    runner.end("run6", "done", "export is in");
+    await flush();
+    expect(flows.get(flow.id)).toMatchObject({ status: "gated", current: 1, backTo: "Build" });
+  });
+
+  test("continue at the judge's no is the user's yes: the gate passes", async () => {
+    const { runner, flows } = setup({ judge: async () => partly });
+    const flow = flows.start(repo(), J, "", DEFAULT_AGENT);
+    for (const id of ["run1", "run2", "run3", "run4"]) {
+      runner.end(id, "done", "x");
+      await flush();
+    }
+    flows.resume(flow.id, "continue");
+    await flush();
+    expect(flows.get(flow.id)?.status).toBe("done");
+    expect(runner.specs).toHaveLength(4);
+  });
+
+  test("a judge that could not answer refused nothing: a retry asks it again alone", async () => {
+    let down = true;
+    const { runner, flows } = setup({
+      judge: async () => {
+        if (down) throw new Error("gateway down");
+        return MEETS;
+      },
+    });
+    const flow = flows.start(repo(), J, "", DEFAULT_AGENT);
+    runner.end("run1", "done", "built");
+    await flush();
+    runner.end("run2", "done", "it does");
+    await flush();
+    const f = flows.get(flow.id);
+    expect(f?.steps[1]?.reason).toBe("judgment unavailable: gateway down");
+    expect(f?.backTo).toBeUndefined();
+    down = false;
+    flows.resume(flow.id, "retry");
+    await flush();
+    expect(runner.specs).toHaveLength(3);
+    expect(runner.specs[2]?.label).toBe("Accept");
+  });
+
+  test("a failed check out of retries goes back with its output", async () => {
+    const { runner, flows } = setup({ check: () => ({ exit: 1, output: "2 fail" }) });
+    const flow = flows.start(repo(), CHECKED_RETRY, "", DEFAULT_AGENT);
+    for (const id of ["run1", "run2", "run3"]) {
+      runner.end(id, "done", "x");
+      await flush();
+    }
+    expect(flows.get(flow.id)).toMatchObject({ status: "gated", backTo: "Build" });
+    flows.resume(flow.id, "retry");
+    await flush();
+    expect(runner.specs).toHaveLength(4);
+    expect(runner.specs[3]?.label).toBe("Build");
+    expect(runner.specs[3]?.task).toContain("the Test step did not accept the work: check failed with exit 1:\n2 fail");
   });
 });

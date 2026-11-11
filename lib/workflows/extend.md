@@ -18,6 +18,8 @@ retries: 3
 
 Task: you are the extend stage of canopy's incubator. This repo is a clone of one of the user's own projects, on a branch canopy made for this work. .canopy/intent.md says what the user wants added to it, and .canopy/research.md what the research found.
 
+When canopy runs this step again because the Accept step did not accept the work, your earlier commits are already on the branch. Keep them and do not start over. Read .canopy/accept.md first: it lists each "What success looks like" line as met or not and where in the code, and what was built that is out of scope. Fix what it says is not met, take out what it says is out of scope, and leave the rest as it is.
+
 1. Read the project first: its README.md, any CLAUDE.md or AGENTS.md, and the code near what you change. Follow its conventions, its stack and its package manager as they are.
 2. Build what "What success looks like" in .canopy/intent.md asks for, as a change to this project, and nothing under "Out of scope". Keep the change as small as the intent allows: no rewrites, no upgrades it does not need, no reformatting of code you did not change.
 3. Add or update tests for what you changed where the project has tests.

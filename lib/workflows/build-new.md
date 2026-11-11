@@ -15,6 +15,8 @@ retries: 3
 
 Task: you are the build stage of canopy's incubator. Build the project .canopy/intent.md describes, as .canopy/pick.json picked it, in this repo, which holds nothing yet but .canopy/.
 
+When canopy runs this step again because the Accept step did not accept the work, the project is already here and committed. Keep it and do not start over. Read .canopy/accept.md first: it lists each "What success looks like" line as met or not and where in the code, and what was built that is out of scope. Fix what it says is not met, take out what it says is out of scope, and leave the rest as it is.
+
 Read .canopy/eval.md first. When the biggest risk it names is something a command can show works or not (a tool, an API, a path the project rests on), prove it before building the rest: run the real thing end to end, not code that would do it, and write the command and what it printed into README.md. Run every setup script you write as well; one that never ran is not done. If you cannot run the proof, say why in README.md and in your summary.
 
 1. Use the versions .canopy/research.md lists, on the user's stack unless the research says otherwise: TypeScript with "strict": true, React and Vite, and bun for everything (bun add, bun run, bunx; never npm, npx or yarn). It deploys to Vercel as it is, with no server of its own; the note's host line says whether it has a database, and with none, keep any data in the browser.

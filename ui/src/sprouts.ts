@@ -1,8 +1,9 @@
 /** The incubator's words and arithmetic for the page: the stage strip, the
  *  status words, the order of the cards, and the feed's lines. Pure. */
-import { HAND_OFF, SHIP, isOwnStep, nextWorkflow, sproutEnded } from "../../src/core/sprout";
-import type { IncubatorStages, InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
+import { BUILD_WORKFLOW, HAND_OFF, SHIP, isBuildWorkflow, isOwnStep, nextWorkflow, sproutEnded } from "../../src/core/sprout";
+import type { Flow, IncubatorStages, InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
 import type { FeedLine, FeedSnapshot } from "./feed";
+import { gateWords, type GateWords } from "./flows";
 
 export const STAGES = ["clarify", "research", "eval", "build", "test", "accept", "deploy", "retro"] as const;
 export type Stage = (typeof STAGES)[number];
@@ -105,6 +106,28 @@ export function workLine(s: Sprout): string | null {
   if (s.work?.kind === "extend") return `extends ${s.work.target}, on the branch ${s.work.branch}`;
   if (s.work?.kind === "renovate") return `renovates ${s.work.from}`;
   return null;
+}
+
+/** A parked project's ways on, as its buttons word them. With the stage's
+ *  flow waiting at a gate they are that gate's, in the project's terms:
+ *  past a build's last step canopy deploys the project (an extend goes to
+ *  its hand-off), so going on there says so. A plain "continue" at a build
+ *  the judge refused deployed it. With no flow waiting, continue and retry
+ *  both start the stage again, so there is one button. */
+export function parkWords(s: Sprout, flow: Flow | undefined): GateWords {
+  const cur = s.flows.at(-1);
+  if (!cur || cur.outcome || !flow || flow.id !== cur.flowId || flow.status !== "gated") return { go: "resume", retry: null, lead: "go" };
+  const words = gateWords(flow);
+  const step = flow.steps[flow.current];
+  const last = flow.current + 1 >= flow.steps.length;
+  if (!last || flow.parkedFor || step?.status === "held" || !isBuildWorkflow(cur.workflow)) return words;
+  const extend = cur.workflow === BUILD_WORKFLOW.extend;
+  if (words.lead !== "retry") return { ...words, go: extend ? "accept and hand it off" : "accept and deploy it" };
+  return {
+    ...words,
+    go: extend ? "hand it off anyway" : "deploy it anyway",
+    title: `${step?.name ?? "The last step"} did not accept the work; this ${extend ? "takes the branch to its hand-off" : "deploys the project"} as it is`,
+  };
 }
 
 export const needsYou = (s: Sprout): boolean => s.status === "parked" || (s.status === "clarifying" && (s.questions?.length ?? 0) > 0);

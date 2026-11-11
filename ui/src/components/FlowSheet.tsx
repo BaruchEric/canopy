@@ -5,7 +5,7 @@ import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
 import { graphStep, isChain } from "../../../src/core/flowgraph";
 import { isFlowActive, type Fleet, type Flow, type FlowStep, type GraphStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
-import { budgetWord, continueWord, fleetCounts, flowWord, oldestParked, rewindLines, stepWord } from "../flows";
+import { budgetWord, fleetCounts, flowWord, gateButtons, gateWords, oldestParked, rewindLines, stepWord } from "../flows";
 import { fit, flowGraphSteps, picture, stateWord } from "../flowgraph";
 import { PHONE, useMedia } from "../media";
 import { agentFor, idText, pickedIds, useStore } from "../store";
@@ -296,10 +296,9 @@ function JudgeBars({ judgment }: { judgment: Judgment }) {
 function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: (c: "continue" | "retry" | "stop") => void }) {
   const budget = budgetWord(flow);
   const rewinds = rewindLines(flow);
-  const overBudget = flow.parkedFor === "budget";
-  // the stage runner was away: the one way on is the same step again, or
-  // its check alone when that is what found the runner away
-  const stageAway = flow.parkedFor === "stage";
+  // what each button will do: a park with one way on has no retry, and a
+  // gate that said no to the work leads with the way back
+  const buttons = gateButtons(gateWords(flow));
   return (
     <div className="gate">
       <p className="outcome-lead">{step.reason}</p>
@@ -319,12 +318,11 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
         </ul>
       )}
       <div className="gate-buttons">
-        <button type="button" className="mini strong" onClick={() => onChoose("continue")}>
-          {continueWord(flow)}
-        </button>
-        {!overBudget && !stageAway && (
-          <button type="button" className="mini" onClick={() => onChoose("retry")}>retry this step</button>
-        )}
+        {buttons.map((b) => (
+          <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} title={b.title} onClick={() => onChoose(b.choice)}>
+            {b.word}
+          </button>
+        ))}
         <button type="button" className="mini" onClick={() => onChoose("stop")}>stop here</button>
       </div>
     </div>

@@ -1,6 +1,6 @@
 # Incubator review, 2026-11-11
 
-A review of the incubator's whole path, intake to retro, on the day three new projects in a row failed or stuck. It lists what broke, what the same commit fixed, and what is still open. FR-062 tracks the open list.
+A review of the incubator's whole path, intake to retro, on the day three new projects in a row failed or stuck. It lists what broke, what the same commit fixed, the five P1s fixed later that day, and what is still open. FR-062 tracks the open list.
 
 ## How it was done
 
@@ -25,9 +25,21 @@ One pass read the orchestrator and the live backends by hand. Three more read th
 - A flow that gates again on the step it was resumed from parks the project again. Before, the project read "clarifying" with no reason while its flow sat at a gate. Reproduced with a test.
 - docs/deploy.md no longer tells the coordinator to live on a copy of the stages' login, which lapses with its source. The coordinator's own login lapses on 2026-12-01.
 
+## Fixed later the same day: the five P1s
+
+P1 meant it can lose work or ship the wrong thing. Each fix has a test that fails on the code before it.
+
+- **A crash during prepare no longer strands a voice memo.** The record is saved after each transcript, so a restart finds the memo done. A transcript file left under a number no entry holds is written over, where the exclusive write used to fail every later try (`addEntry` in `src/core/incubator.ts`).
+- **Accept's "no" reaches the builder with its reasons.** The sentence the builder gets now ends with the Accept step's own closing words, and the builder step of `build-new.md`, `renovate.md` and `extend.md` is told to keep what is built and read `.canopy/accept.md` first.
+- **"Retry" at a judge's park goes back to the builder.** A park at a gate that refused the work names the step a retry returns to (`Flow.backTo`), and the retry goes there with the reason, past the step's retry count. "Continue" still passes the gate, since overriding the judge is the user's call. The buttons now say what each does: "send it back to Scaffold" comes first, and going on reads "deploy it anyway", or "hand it off anyway" for an extend (`gateWords` in `ui/src/flows.ts`, `parkWords` in `ui/src/sprouts.ts`).
+- **A ship cut short makes no second repo or project.** The name goes on the project's record before GitHub or Vercel is asked for it (`Sprout.shipAsked`). The next try takes up a repo under that name that is private and empty, or a Vercel project nothing was deployed to. The tests run against fakes: the read of a project's deployments (`GET /v6/deployments?projectId=`) has not run against the live API.
+- **A failed run parks its step.** On a seed, a run that ends in an error leaves the flow waiting at that step. A resume runs that step again, on its Claude session when it has one, and the steps before it stand. The park names the step, the error and what a resume does.
+
+Two things follow from the last one. A project parked this way keeps its slot until someone resumes or stops it, as one parked at a gate does, so two of them hold the whole queue. And a server rolled back past this commit skips such a flow at restore with a log line, so that project's stage starts over on resume, as every failed run did before.
+
 ## Still open
 
-P1 can lose work or ship the wrong thing. P2 misleads or strands a project. P3 is polish.
+P2 misleads or strands a project. P3 is polish.
 
 ### Intake
 
@@ -37,10 +49,6 @@ P1 can lose work or ship the wrong thing. P2 misleads or strands a project. P3 i
 - **P2. The intake clone has no time limit in its words and pulls LFS files.** It also keeps the upstream's notes refs (`src/core/seed.ts:235-257`).
 - **P3. `canopy new` uploads before it asks.** It learns of the 409 only after sending every file. It could read `/api/incubator/stages` first.
 - **P3. `canopy new` prints a link built from the API origin**, which is loopback inside a canopy shell.
-
-### Prepare
-
-- **P1. A stop or a crash during prepare can strand a voice memo.** The transcript is written with `wx` and the record is saved only when prepare ends, so a second try finds the file there and fails.
 
 ### Clarify
 
@@ -54,14 +62,8 @@ P1 can lose work or ship the wrong thing. P2 misleads or strands a project. P3 i
 
 ### Build
 
-- **P1. Accept's "no" tells the builder nothing.** It rewinds the builder with a canned sentence, and none of `build-new.md`, `renovate.md` or `extend.md` mentions `.canopy/accept.md`, where the reasons are.
-- **P1. "Continue" at a judge's park deploys what the judge refused.** It passes the gate. "Retry" reruns only the judge step, on the same work.
 - **P2. Extend's Baseline runs every gate under the 10-minute check cap, with no retries.**
 - **P2. Nothing bounds a stage run that waits on a prompt**, and the job ground rules in `actions.ts:60-62` contradict what the stage prompts ask for.
-
-### Ship
-
-- **P1. A stop during ship can make a second GitHub repo and a second Vercel project** on the next try (`shipper.ts:348-361`).
 
 ### Retro
 
@@ -70,9 +72,9 @@ P1 can lose work or ship the wrong thing. P2 misleads or strands a project. P3 i
 
 ### Parks and resume
 
-- **P1. One failed run fails the whole flow.** The park carries the harness's raw words, and a resume starts the stage again from its first step (`src/core/flow.ts:577-581`). Login refusals now carry a fix. Every other failure still reads raw.
-- **P2. A check out of retries parks with "check failed with exit N"** and none of its output.
-- **P2. "Stop" means two things.** On a gate's inbox item it stops the flow. On the sheet it ends the project. With no gate, "continue" and "retry" do the same thing.
+- **P2. A failed run's park still carries the harness's raw words.** It now says which step failed and what a resume does, and a login refusal carries its fix. Every other error reads as the harness wrote it.
+- **P2. A check out of retries parks with "check failed with exit N"** and none of its output. A retry by hand now sends the output back to the builder, but the park's own line still shows none.
+- **P2. "Stop" means two things.** On a gate's inbox item it stops the flow. On the sheet it ends the project.
 - **P2. `POST /api/incubator/answer` can hang for up to two hours** inside `inQuietSeed` while the seed is busy.
 - **P3. Every park appends a daily line**, even one equal to the last, and a failed vault write is never tried again.
 - **P3. The inbox does not say why a queued project waits.** The card and the sheet now do.
@@ -91,4 +93,4 @@ P1 can lose work or ship the wrong thing. P2 misleads or strands a project. P3 i
 
 ## What to do first
 
-The three P1s in build and ship cost the most when they hit: a refused build that deploys, a builder told "no" with no reason, and a second repo. After them, the stale `_devhub` manifest, because scout reads it on every project.
+With the P1s fixed, the stale `_devhub` manifest comes first, because scout reads it on every project. Then run one ship against the live Vercel API with a project left half-made, since that take-up is the one P1 fix proven only against fakes.

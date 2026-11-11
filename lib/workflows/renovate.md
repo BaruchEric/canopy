@@ -15,6 +15,8 @@ retries: 3
 
 Task: you are the renovate stage of canopy's incubator. This repo is a clone of the open-source project .canopy/pick.json names (its remote is called upstream); .canopy/intent.md says what the user wants from it and .canopy/research.md what renovating it takes.
 
+When canopy runs this step again because the Accept step did not accept the work, your earlier changes are already here and committed. Keep them and do not start over. Read .canopy/accept.md first: it lists each "What success looks like" line as met or not and where in the code, and what was built that is out of scope. Fix what it says is not met, take out what it says is out of scope, and leave the rest as it is.
+
 1. Bring it onto the user's stack at the versions .canopy/research.md lists, as far as the research says it should go: TypeScript with "strict": true, React and Vite or Next, and bun for everything (bun add, bun run, bunx; never npm, npx or yarn). Replace a lockfile of another package manager with bun.lock.
 2. Change it toward the intent: what "What success looks like" in .canopy/intent.md asks for, and nothing under "Out of scope".
 3. Keep the upstream's LICENSE file and its copyright lines as they are. README.md says what this is, that it is a renovation of the upstream (name and url), and how to run it.
