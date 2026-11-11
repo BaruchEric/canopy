@@ -201,15 +201,23 @@ function PasskeyGate({ info, home }: { info: SecretsInfo; home: string }) {
   );
 }
 
-/** a reader's own age key: unlock, lock, or make one */
+/** a reader's own age key: unlock, lock, make one, or make a new one over
+ *  a key whose passphrase is lost */
 function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
   const { busy, error, setError, step } = useStep(home);
   const [pass, setPass] = useState("");
   const [again, setAgain] = useState("");
   const [recipient, setRecipient] = useState<string | null>(null);
+  /** the locked form gave way to a new key's: the passphrase is lost */
+  const [lost, setLost] = useState(false);
   const forget = () => {
     setPass("");
     setAgain("");
+  };
+  const turn = (to: boolean) => {
+    forget();
+    setError(null);
+    setLost(to);
   };
   if (recipient) {
     return (
@@ -237,6 +245,13 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
             </button>
           </>
         )}
+        {info.keyUnlisted && (
+          <span className="rust" role="status">
+            the store does not seal to this key yet, so nothing opens with it. Copy it and set it as machine key {info.backend} under passkeys on{" "}
+            <a href={info.gate}>the gate page</a>.
+          </span>
+        )}
+        {info.kept && <span>its passphrase is kept in the Keychain, so it opens when canopy starts</span>}
         <button type="button" className="mini" disabled={busy} onClick={() => void step(async () => void (await api.secretsLock(home)))}>
           lock
         </button>
@@ -244,7 +259,7 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
       </span>
     );
   }
-  if (info.lock === "locked") {
+  if (info.lock === "locked" && !lost) {
     return (
       <form
         className="secrets-form"
@@ -257,10 +272,15 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
         <button type="submit" className="mini" disabled={busy || pass === ""}>
           unlock
         </button>
+        <button type="button" className="mini" disabled={busy} onClick={() => turn(true)}>
+          lost it?
+        </button>
         <Err text={error} />
       </form>
     );
   }
+  // a new key: the first one here, or one over a key that no longer opens
+  const replace = info.lock === "locked";
   return (
     <form
       className="secrets-form"
@@ -272,17 +292,23 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
           return;
         }
         void step(async () => {
-          const k = await api.secretsKey(home, pass, false);
+          const k = await api.secretsKey(home, pass, replace);
           setRecipient(k.recipient);
+          setLost(false);
         }).then(forget);
       }}
     >
-      <span>No key on this machine.</span>
+      <span>{replace ? "A new key takes this one's place. Nothing opens with it until the gate page has its recipient as this machine's key." : "No key on this machine."}</span>
       <input type="password" aria-label={`New key passphrase, ${LIMITS.passphrase} characters or more`} placeholder={`passphrase, ${LIMITS.passphrase} or more characters`} autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
       <input type="password" aria-label="The passphrase again" placeholder="the same again" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
       <button type="submit" className="mini" disabled={busy || pass === ""}>
-        make a key
+        {replace ? "make a new key" : "make a key"}
       </button>
+      {replace && (
+        <button type="button" className="mini" disabled={busy} onClick={() => turn(false)}>
+          back
+        </button>
+      )}
       <Err text={error} />
     </form>
   );

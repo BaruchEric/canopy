@@ -5,7 +5,7 @@ import { AGE_HEAD } from "../core/secretfile";
 import { LIMITS } from "../core/secretwire";
 import type { SecretProposalIn, SecretsInfo } from "../core/types";
 import type { Target } from "./health";
-import { breakglassIdentity, HIDDEN_START, listLines, makeKey, parsePropose, pickProposals, propose, recoverFile, statusExit, statusLines, typeHidden, unlockRefusal, type ProposeArgs } from "./secrets";
+import { breakglassIdentity, HIDDEN_START, listLines, makeKey, parsePropose, pickProposals, propose, recoverFile, statusExit, statusLines, typeHidden, unlockLines, unlockRefusal, type ProposeArgs } from "./secrets";
 
 const STAMP = "2026-10-14T12:00:00.000Z";
 const V = "fixture-value-0x5eed";
@@ -277,6 +277,34 @@ describe("a hidden line as it is typed", () => {
   });
 });
 
+describe("a key the store does not know, and a kept passphrase", () => {
+  test("status names an open key the store does not seal to, with where to set it, and fails", () => {
+    const unlisted = info({ lock: "open", recipient: "age1example", keyUnlisted: true, sinks: [] });
+    const text = statusLines(unlisted).join("\n");
+    expect(text).toContain("the store does not seal to this key yet");
+    expect(text).toContain("machine key mac");
+    expect(text).toContain("https://canopy.beric.ca/?view=secrets");
+    expect(statusExit(unlisted)).toBe(1);
+    expect(statusLines(info({ lock: "open", recipient: "age1example" })).join("\n")).not.toContain("does not seal");
+  });
+
+  test("status says a kept passphrase opens the key at the start", () => {
+    expect(statusLines(info({ kept: true })).join("\n")).toContain("kept in the login Keychain");
+    expect(statusLines(info()).join("\n")).not.toContain("Keychain");
+  });
+
+  test("an unlock says nothing of keeping unless it was asked, and names the trade when the keychain took it", () => {
+    expect(unlockLines({})).toEqual(["unlocked; this machine's sinks are written now"]);
+    const kept = unlockLines({ kept: true }).join("\n");
+    expect(kept).toContain("kept in the login Keychain");
+    expect(kept).toContain("any process that runs as you can read it there");
+    expect(kept).toContain("canopy secrets forget");
+    const not = unlockLines({ kept: false, why: "the keychain did not answer" }).join("\n");
+    expect(not).toContain("unlocked");
+    expect(not).toContain("the passphrase was not kept: the keychain did not answer");
+  });
+});
+
 describe("a refused unlock", () => {
   test("a wrong passphrase names the way out when it is lost; any other refusal is passed on", () => {
     expect(unlockRefusal("wrong passphrase")).toContain("canopy secrets key --replace");
@@ -290,7 +318,7 @@ describe("a new key for this machine", () => {
   const RECIPIENT = "age1fixturerecipient0x5eed";
   const PASS = "a long enough passphrase";
 
-  function world(o: { lock?: SecretsInfo["lock"]; role?: SecretsInfo["role"]; typed?: string[] } = {}) {
+  function world(o: { lock?: SecretsInfo["lock"]; role?: SecretsInfo["role"]; typed?: string[]; kept?: true } = {}) {
     const lines: string[] = [];
     const prompts: string[] = [];
     const posted: unknown[] = [];
@@ -301,7 +329,7 @@ describe("a new key for this machine", () => {
         return typed.shift() ?? "";
       },
       home: async <T>(method: string, path: string, body?: unknown): Promise<T> => {
-        if (method === "GET" && path === "/api/secrets") return info({ lock: o.lock ?? "locked", role: o.role ?? "reader" }) as T;
+        if (method === "GET" && path === "/api/secrets") return info({ lock: o.lock ?? "locked", role: o.role ?? "reader", ...(o.kept ? { kept: true as const } : {}) }) as T;
         if (method === "POST" && path === "/api/secrets/key") {
           posted.push(body);
           return { recipient: RECIPIENT } as T;
@@ -342,6 +370,10 @@ describe("a new key for this machine", () => {
     await makeKey({ replace: true }, w.deps);
     expect(w.posted).toEqual([{ passphrase: PASS, replace: true }]);
     expect(w.lines.join("\n")).toContain("the old key is gone");
+    expect(w.lines.join("\n")).not.toContain("Keychain");
+    const kept = world({ lock: "locked", kept: true });
+    await makeKey({ replace: true }, kept.deps);
+    expect(kept.lines.join("\n")).toContain("canopy secrets unlock --keep keeps the new one");
   });
 
   test("two passphrases that differ, or one too short, change nothing", async () => {

@@ -12,6 +12,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { macSources } from "../core/secretimport";
+import { localKeeper } from "../core/passkeeper";
 import { localPaths, SecretsReader } from "../core/secretlocal";
 import { askSecrets, SECRETS_AWAY } from "../core/secretsclient";
 import { sshSinks, type RemoteSinks } from "../core/sinkssh";
@@ -237,6 +238,7 @@ export class SecretsHub {
       }
       case "/api/secrets/unlock":
       case "/api/secrets/lock":
+      case "/api/secrets/forget":
       case "/api/secrets/key": {
         if (!sameOriginOk(req)) return json({ error: "this machine's key answers only its own page or its own terminal" }, 403);
         if (path === "/api/secrets/lock") {
@@ -244,11 +246,21 @@ export class SecretsHub {
           await this.announce();
           return json({ ok: true });
         }
+        if (path === "/api/secrets/forget") {
+          const failed = await r.forget().then(
+            () => null,
+            (err: unknown) => (err instanceof Error ? err.message : "the keychain did not answer"),
+          );
+          await this.announce();
+          return failed === null ? json({ ok: true }) : json({ error: failed }, 500);
+        }
         const pass = str(body?.["passphrase"]) ?? "";
         if (path === "/api/secrets/unlock") {
-          const u = await r.unlock(pass);
+          // only this route keeps a passphrase, and only when asked in so many words
+          const u = await r.unlock(pass, body?.["keep"] === true);
           await this.announce();
-          return u.ok ? json({ ok: true }) : json({ error: u.error }, 403);
+          if (!u.ok) return json({ error: u.error }, 403);
+          return json({ ok: true, ...(u.kept === undefined ? {} : { kept: u.kept }), ...(u.why === undefined ? {} : { why: u.why }) });
         }
         const k = await r.createKey(pass, body?.["replace"] === true);
         await this.announce();
@@ -281,16 +293,18 @@ export function createSecretsHub(o: {
   };
   const socket = env["CANOPY_SECRETS_SOCKET"] || null;
   const gateOrigin = env["CANOPY_SECRETS_ORIGIN"] ?? "https://canopy.beric.ca";
+  const paths = localPaths();
   const reader = socket
     ? null
     : new SecretsReader({
-        paths: localPaths(),
+        paths,
         machine: o.backend,
         gateUrl: `${gateOrigin}/?view=secrets`,
         sources: () => macSources(homedir(), o.root),
         repoRoots: () => [...o.repoRoots(), join(homedir(), ".claude")],
         mcpEnvDir: join(homedir(), ".claude", "mcp-env"),
         remotes: () => (o.sshMachines?.() ?? []).map(remoteFor),
+        keeper: localKeeper(o.backend, paths.identity),
         log: (line) => console.log(line),
       });
   return new SecretsHub({

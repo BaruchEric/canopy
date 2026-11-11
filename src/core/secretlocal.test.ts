@@ -7,6 +7,7 @@ import { emptyFile, serializeFile, signFile, type SecretFile } from "./secretfil
 import { onHost } from "./exec";
 import { sshSinks, type RemoteSinks } from "./sinkssh";
 import { FILE_IO, type SinkIO } from "./sinksync";
+import type { PassKeeper } from "./passkeeper";
 import { localPaths, SecretsReader, writeLocalConfig, type ReaderOptions } from "./secretlocal";
 import { LIMITS } from "./secretwire";
 
@@ -251,6 +252,122 @@ describe("the Mac's key", () => {
     const wrapped = await readFile(localPaths(join(dir, "config")).identity, "utf8");
     expect(wrapped).toContain("BEGIN AGE ENCRYPTED FILE");
     expect(wrapped).not.toContain("AGE-SECRET-KEY");
+  });
+
+  /** a keychain in memory, and a way to see and set what it holds */
+  function keychain(o: { broken?: string } = {}) {
+    let held: string | null = null;
+    const keeper: PassKeeper = {
+      read: async () => held,
+      write: async (p) => {
+        if (o.broken) throw new Error(o.broken);
+        held = p;
+      },
+      drop: async () => {
+        held = null;
+      },
+    };
+    return { keeper, held: () => held, put: (p: string | null) => void (held = p) };
+  }
+
+  test("a passphrase kept at an unlock opens the key at the next start, until it is forgotten", async () => {
+    await publish(await base(), signer);
+    const kc = keychain();
+    const r0 = await reader([], [], { keeper: kc.keeper });
+    const made = await r0.createKey("correct horse battery", false);
+    if (!("recipient" in made)) throw new Error(made.error);
+    expect(r0.info("mac").kept).toBeUndefined();
+    r0.lockNow();
+    expect(await r0.unlock("wrong one", true)).toEqual({ ok: false, error: "wrong passphrase" });
+    expect(kc.held()).toBeNull();
+    expect(await r0.unlock("correct horse battery", true)).toEqual({ ok: true, kept: true });
+    expect(kc.held()).toBe("correct horse battery");
+    expect(r0.info("mac").kept).toBe(true);
+
+    const lines: string[] = [];
+    const r1 = await reader([], [], { keeper: kc.keeper, log: (l) => lines.push(l) });
+    expect(r1.lock()).toBe("open");
+    expect(r1.info("mac").recipient).toBe(made.recipient);
+    expect(r1.info("mac").kept).toBe(true);
+    expect(lines).toContain("secrets: this machine's key opened with the passphrase kept in the keychain");
+    expect(lines.join("\n")).not.toContain("correct horse");
+
+    await r1.forget();
+    expect(kc.held()).toBeNull();
+    expect(r1.info("mac").kept).toBeUndefined();
+    expect(r1.lock()).toBe("open");
+    const r2 = await reader([], [], { keeper: kc.keeper });
+    expect(r2.lock()).toBe("locked");
+  });
+
+  test("a kept passphrase that no longer opens the key leaves it locked and says so, and a new key takes it out", async () => {
+    await publish(await base(), signer);
+    const kc = keychain();
+    const r0 = await reader([], [], { keeper: kc.keeper });
+    await r0.createKey("correct horse battery", false);
+    kc.put("the passphrase of a key long gone");
+    const lines: string[] = [];
+    const r1 = await reader([], [], { keeper: kc.keeper, log: (l) => lines.push(l) });
+    expect(r1.lock()).toBe("locked");
+    expect(r1.info("mac").kept).toBe(true);
+    expect(lines.join("\n")).toContain("the passphrase kept in the keychain does not open this machine's key");
+    expect(lines.join("\n")).not.toContain("long gone");
+    // the start's own miss costs the next person no wait
+    waits = [];
+    expect(await r1.unlock("correct horse battery")).toEqual({ ok: true });
+    expect(waits).toEqual([]);
+    const next = await r1.createKey("a brand new passphrase", true);
+    expect("recipient" in next).toBe(true);
+    expect(kc.held()).toBeNull();
+    expect(r1.info("mac").kept).toBeUndefined();
+  });
+
+  test("a machine with no keychain, or one that fails, still opens the key and gives the reason", async () => {
+    await publish(await base(), signer);
+    const bare = await reader();
+    await bare.createKey("correct horse battery", false);
+    bare.lockNow();
+    expect(await bare.unlock("correct horse battery", true)).toEqual({ ok: true, kept: false, why: "this machine has no keychain canopy can keep a passphrase in" });
+    expect(bare.lock()).toBe("open");
+    await expect(bare.forget()).resolves.toBeUndefined();
+
+    const kc = keychain({ broken: "the keychain did not answer" });
+    const r = await reader([], [], { keeper: kc.keeper });
+    r.lockNow();
+    expect(await r.unlock("correct horse battery", true)).toEqual({ ok: true, kept: false, why: "the keychain did not answer" });
+    expect(r.lock()).toBe("open");
+    expect(r.info("mac").kept).toBeUndefined();
+  });
+
+  test("a keychain that does not answer at the start leaves the key locked and the reader running", async () => {
+    await publish(await base(), signer);
+    const r0 = await reader();
+    await r0.createKey("correct horse battery", false);
+    const lines: string[] = [];
+    const deaf: PassKeeper = { read: () => Promise.reject(new Error("the login keychain is locked")), write: async () => {}, drop: async () => {} };
+    const r1 = await reader([], [], { keeper: deaf, log: (l) => lines.push(l) });
+    expect(r1.lock()).toBe("locked");
+    expect(r1.info("mac").ok).toBe(true);
+    expect(lines.join("\n")).toContain("the login keychain is locked");
+  });
+
+  test("an open key the store does not seal to is named, and only then", async () => {
+    const f = await base();
+    await publish(f, signer);
+    const r = await reader();
+    expect(r.info("mac").keyUnlisted).toBeUndefined();
+    const made = await r.createKey("correct horse battery", false);
+    if (!("recipient" in made)) throw new Error(made.error);
+    // a key the gate page has not been told of
+    expect(r.info("mac").keyUnlisted).toBe(true);
+    await publish({ ...f, keys: { ...f.keys, mac: (await newIdentity()).recipient } }, signer, "another key for mac");
+    await r.pull();
+    expect(r.info("mac").keyUnlisted).toBe(true);
+    await publish({ ...f, keys: { ...f.keys, mac: made.recipient } }, signer, "the mac's key");
+    await r.pull();
+    expect(r.info("mac").keyUnlisted).toBeUndefined();
+    r.lockNow();
+    expect(r.info("mac").keyUnlisted).toBeUndefined();
   });
 });
 

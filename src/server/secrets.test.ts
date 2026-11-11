@@ -138,9 +138,14 @@ describe("a reader", () => {
     const calls: string[] = [];
     const stub = {
       info: (b: string) => ({ ok: true, backend: b, role: "reader", secrets: [] }),
-      unlock: async (p: string) => {
-        calls.push(`unlock ${p.length}`);
-        return p === "correct horse battery" ? { ok: true } : { ok: false, error: "wrong passphrase" };
+      unlock: async (p: string, keep?: boolean) => {
+        calls.push(`unlock ${p.length}${keep ? " keep" : ""}`);
+        if (p !== "correct horse battery") return { ok: false, error: "wrong passphrase" };
+        return keep ? { ok: true, kept: false, why: "the keychain did not answer" } : { ok: true };
+      },
+      forget: async () => {
+        calls.push("forget");
+        if (calls.filter((c) => c === "forget").length > 1) throw new Error("the keychain did not answer");
       },
       lockNow: () => void calls.push("lock"),
       createKey: async () => ({ recipient: "age1x" }),
@@ -166,6 +171,32 @@ describe("a reader", () => {
     const w = await call(hub, wrong);
     expect(w.status).toBe(403);
     expect(await w.text()).not.toContain("nope");
+  });
+
+  test("an unlock that asks to keep the passphrase says whether the keychain took it, and a plain one says nothing of it", async () => {
+    const { hub, calls } = reader();
+    const own = (body: unknown) => new Request("http://127.0.0.1:7850/api/secrets/unlock", { method: "POST", body: JSON.stringify(body) });
+    expect(await (await call(hub, own({ passphrase: "correct horse battery" }))).json()).toEqual({ ok: true });
+    const kept = await call(hub, own({ passphrase: "correct horse battery", keep: true }));
+    expect(kept.status).toBe(200);
+    expect(await kept.json()).toEqual({ ok: true, kept: false, why: "the keychain did not answer" });
+    // only a true keeps: a page that sends a word for it keeps nothing
+    await call(hub, own({ passphrase: "correct horse battery", keep: "yes" }));
+    expect(calls).toEqual(["unlock 21", "unlock 21 keep", "unlock 21"]);
+  });
+
+  test("forget answers only this machine's own page or terminal, and a keychain that fails is named", async () => {
+    const { hub, calls } = reader();
+    const foreign = new Request("http://127.0.0.1:7850/api/secrets/forget", { method: "POST", headers: { origin: GATE }, body: "{}" });
+    expect((await call(hub, foreign)).status).toBe(403);
+    expect(calls).toEqual([]);
+    const own = () => new Request("http://127.0.0.1:7850/api/secrets/forget", { method: "POST", body: "{}" });
+    const first = await call(hub, own());
+    expect(first.status).toBe(200);
+    expect(await first.json()).toEqual({ ok: true });
+    const second = await call(hub, own());
+    expect(second.status).toBe(500);
+    expect(await second.json()).toEqual({ error: "the keychain did not answer" });
   });
 
   test("a reader whose start or pull rejects is logged, not left to end the server", async () => {

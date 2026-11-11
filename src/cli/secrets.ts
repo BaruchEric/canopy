@@ -20,13 +20,16 @@ import { bold, dim, lichen, rust } from "./render";
 
 export const SECRETS_USAGE = `usage: canopy secrets [list] [--json]
        canopy secrets status [--json]
-       canopy secrets unlock
+       canopy secrets unlock [--keep]
+       canopy secrets forget
        canopy secrets key [--replace]
        canopy secrets propose (--match TEXT... | --all) [--to NAME] [--dry-run] [--json]
        canopy secrets pin <signing key> [--remote URL]
        canopy secrets recover <checkout> --breakglass FILE --out DIR
   list, status, unlock and propose speak to the home backend ($CANOPY_API, else 127.0.0.1:7850);
-  unlock only from the machine itself
+  unlock only from the machine itself. --keep also puts the passphrase in the Mac's login Keychain, so
+  canopy opens the key itself at every start; any process that runs as you can then read it there.
+  forget takes it out again
   key makes this machine's key under a passphrase typed twice (${LIMITS.passphrase} characters or more) and prints its
   recipient for the gate page; --replace makes a new one over a key whose passphrase is lost
   propose scans this machine's import sources and sends the values whose key or file holds TEXT
@@ -61,6 +64,8 @@ export function statusLines(info: SecretsInfo): string[] {
   if (info.error) out.push(rust(info.error));
   if (info.refused) out.push(rust(`refused: ${info.refused}`));
   out.push(info.lock === "open" && info.recipient ? `${LOCK_WORD.open}, recipient ${info.recipient}` : LOCK_WORD[info.lock]);
+  if (info.keyUnlisted) out.push(rust(`the store does not seal to this key yet: at ${info.gate}, under passkeys, set it as machine key ${info.backend}`));
+  if (info.kept) out.push("its passphrase is kept in the login Keychain: canopy opens the key itself when it starts (canopy secrets forget takes it out)");
   if (info.unpushed > 0) out.push(lichen(`${info.unpushed} commit${info.unpushed === 1 ? "" : "s"} waiting for Forgejo`));
   if (info.firstPasskey) out.push(lichen("no passkey yet: the first-passkey code is in the secrets service's log"));
   for (const s of info.sinks) {
@@ -74,7 +79,7 @@ export function statusLines(info: SecretsInfo): string[] {
 }
 
 export const statusExit = (info: SecretsInfo): number =>
-  !info.ok || info.refused !== null || info.sinks.some((s) => s.error !== null || Object.values(s.state).includes("drift")) ? 1 : 0;
+  !info.ok || info.refused !== null || info.keyUnlisted === true || info.sinks.some((s) => s.error !== null || Object.values(s.state).includes("drift")) ? 1 : 0;
 
 /** the AGE-SECRET-KEY line of an age identity file */
 export function breakglassIdentity(text: string): string | null {
@@ -185,6 +190,19 @@ export function unlockRefusal(error: string): string {
   return error;
 }
 
+/** What an unlock's answer tells the terminal. Keeping is said only when it
+ *  was asked for, and a kept passphrase comes with what it gives up. */
+export function unlockLines(a: { kept?: boolean; why?: string }): string[] {
+  const out = ["unlocked; this machine's sinks are written now"];
+  if (a.kept === true) {
+    out.push("the passphrase is kept in the login Keychain, so canopy opens this key itself when it starts");
+    out.push(lichen("any process that runs as you can read it there, an agent in a shell included; canopy secrets forget takes it out"));
+  } else if (a.kept === false) {
+    out.push(rust(`the passphrase was not kept: ${a.why ?? "the keychain did not take it"}`));
+  }
+  return out;
+}
+
 export interface KeyDeps {
   /** one hidden line from the terminal */
   read: (prompt: string) => Promise<string>;
@@ -212,6 +230,7 @@ export async function makeKey(o: { replace: boolean }, d: KeyDeps): Promise<void
   d.print(`recipient  ${bold(k.recipient)}`);
   d.print(`next: at ${mine.gate}, open a passkey session and, under passkeys, set this recipient as machine key ${mine.backend}`);
   d.print(`until then the store seals nothing to it, and this machine's sinks stay waiting`);
+  if (mine.kept) d.print("the old key's kept passphrase is out of the keychain; canopy secrets unlock --keep keeps the new one");
 }
 
 function take(args: string[], name: string): string | undefined {
@@ -379,9 +398,19 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
       return;
     }
     case "unlock": {
+      const flags = rest.slice(1);
+      const odd = flags.filter((a) => a !== "--keep");
+      if (odd.length > 0) return fail(`not understood: ${odd.join(" ")}\n${SECRETS_USAGE}`);
+      const keep = flags.includes("--keep");
       const pass = await hiddenLines()("passphrase for this machine's secrets key: ");
-      await asking(unlockRefusal)("POST", "/api/secrets/unlock", { passphrase: pass });
-      console.log("unlocked; this machine's sinks are written now");
+      const a = await asking(unlockRefusal)<{ kept?: boolean; why?: string }>("POST", "/api/secrets/unlock", keep ? { passphrase: pass, keep: true } : { passphrase: pass });
+      for (const line of unlockLines(a)) console.log(line);
+      if (a.kept === false) process.exitCode = 1;
+      return;
+    }
+    case "forget": {
+      await ask("POST", "/api/secrets/forget", {});
+      console.log("the kept passphrase is out of the keychain; the key stays as it is, and the next canopy start asks for the passphrase");
       return;
     }
     case "key": {

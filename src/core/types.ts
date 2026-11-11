@@ -4328,6 +4328,13 @@ export interface SecretsInfo {
   lock: "open" | "locked" | "none";
   /** this machine's age recipient while its key is open (reader only); public, so it can be set as a machine key at any time */
   recipient: string | null;
+  /** the open key is not the one the store seals to for this machine: a new
+   *  key the gate page has not been told of, so nothing opens with it yet
+   *  (reader only) */
+  keyUnlisted?: true;
+  /** this machine's passphrase waits in its keychain, so canopy opens the
+   *  key itself at its next start (reader only) */
+  kept?: true;
   secrets: SecretMeta[];
   sinks: SecretSinkInfo[];
   proposals: SecretProposalInfo[];

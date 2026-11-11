@@ -19,6 +19,7 @@ import { exec, firstLine, type ExecResult } from "./exec";
 import { newIdentity, sealProposal, unwrapIdentity, wrapIdentity } from "./secretcrypt";
 import { metaList, parseSecretFile, verifyFile, type SecretFile } from "./secretfile";
 import { scanFiles, type ImportSource, type SkippedLines } from "./secretimport";
+import type { PassKeeper } from "./passkeeper";
 import { LIMITS } from "./secretwire";
 import { readKeys, repoRefusal } from "./sinks";
 import type { RemoteSinks } from "./sinkssh";
@@ -81,6 +82,9 @@ export interface ReaderOptions {
   sleep?: (ms: number) => Promise<void>;
   /** scrypt's work factor for a new key: 18 unless a test lowers it */
   scryptLogN?: number;
+  /** where this machine's passphrase may wait between starts (the Mac's
+   *  login Keychain); none, and `unlock` cannot keep one */
+  keeper?: PassKeeper | null;
   log: (line: string) => void;
 }
 
@@ -97,6 +101,8 @@ export class SecretsReader {
   /** the open identity's public half, kept beside it so info() can stay synchronous */
   private recip: string | null = null;
   private hasKey = false;
+  /** a passphrase waits in the keeper, as far as this run has seen */
+  private kept = false;
   private failures = 0;
   private sinkState: Record<string, SinkState> = {};
   /** an ssh machine was away in the last pass: the next pull passes again even with no news */
@@ -117,6 +123,7 @@ export class SecretsReader {
 
   async start(): Promise<void> {
     this.hasKey = await exists(this.o.paths.identity);
+    if (this.hasKey) await this.openKept();
     await this.pull();
     // a restart on a head with no news runs no pull pass; sinksAt says whether a pass has finished since
     if (this.file && this.sinksAt === null) await this.syncSinks();
@@ -209,7 +216,34 @@ export class SecretsReader {
     return this.hasKey ? "locked" : "none";
   }
 
-  async unlock(passphrase: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** The passphrase a person chose to keep, tried once at the start. A
+   *  keychain that does not answer, or a passphrase that no longer fits,
+   *  leaves the key locked as it would be with nothing kept. */
+  private async openKept(): Promise<void> {
+    const k = this.o.keeper;
+    if (!k) return;
+    let pass: string | null;
+    try {
+      pass = await k.read();
+    } catch (err) {
+      this.o.log(`secrets: the keychain did not give up a kept passphrase, so this machine's key stays locked: ${err instanceof Error ? err.message : "failed"}`);
+      return;
+    }
+    if (pass === null) return;
+    this.kept = true;
+    const u = await this.unlock(pass);
+    if (u.ok) {
+      this.o.log("secrets: this machine's key opened with the passphrase kept in the keychain");
+      return;
+    }
+    // canopy's own try: the next person to type one waits no longer for it
+    this.failures = 0;
+    this.o.log("secrets: the passphrase kept in the keychain does not open this machine's key; canopy secrets forget takes it out");
+  }
+
+  /** Open this machine's key. With `keep`, a passphrase that opened it is
+   *  also handed to the keeper, and the answer says whether it took it. */
+  async unlock(passphrase: string, keep = false): Promise<{ ok: true; kept?: boolean; why?: string } | { ok: false; error: string }> {
     if (this.failures > 0) await this.sleep(this.failures * 2000);
     let armored: string;
     try {
@@ -226,7 +260,22 @@ export class SecretsReader {
     }
     this.failures = 0;
     await this.syncSinks();
-    return { ok: true };
+    if (!keep) return { ok: true };
+    const k = this.o.keeper;
+    if (!k) return { ok: true, kept: false, why: "this machine has no keychain canopy can keep a passphrase in" };
+    try {
+      await k.write(passphrase);
+    } catch (err) {
+      return { ok: true, kept: false, why: err instanceof Error ? err.message : "the keychain did not take it" };
+    }
+    this.kept = true;
+    return { ok: true, kept: true };
+  }
+
+  /** take the kept passphrase out of the keeper; the key stays as it is, open or locked */
+  async forget(): Promise<void> {
+    await this.o.keeper?.drop();
+    this.kept = false;
   }
 
   /** forget the identity; the sinks keep their contents */
@@ -256,6 +305,8 @@ export class SecretsReader {
     this.ident = identity;
     this.recip = recipient;
     this.failures = 0;
+    // a kept passphrase was the old key's
+    await this.forget().catch((err: unknown) => this.o.log(`secrets: the old key's kept passphrase could not be taken out of the keychain: ${err instanceof Error ? err.message : "failed"}`));
     return { recipient };
   }
 
@@ -400,6 +451,8 @@ export class SecretsReader {
       refused: this.refused,
       lock: this.lock(),
       recipient: this.recip,
+      ...(f && this.recip !== null && f.keys[this.o.machine] !== this.recip ? { keyUnlisted: true as const } : {}),
+      ...(this.kept ? { kept: true as const } : {}),
       secrets: f ? metaList(f) : [],
       sinks,
       proposals: [],
