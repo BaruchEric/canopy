@@ -93,7 +93,13 @@ try {
     await page.waitForSelector(".app-view", { timeout: 20_000 });
     await page.waitForTimeout(1000);
     const text = await textOf(page, ".app-view");
-    check(text.length > 0 && !text.includes("could not load") && !text.startsWith("Loading…"), `${v} opens from its URL: "${text.slice(0, 60)}"`);
+    // a view the page does not know shows the board, which has text too; a
+    // view of its own has the plain nav over it, not the board's top bar
+    const own = (await page.locator("header.app-nav").count()) > 0;
+    check(
+      own && text.length > 0 && !text.includes("could not load") && !text.startsWith("Loading…"),
+      `${v} opens from its URL: ${own ? `"${text.slice(0, 60)}"` : "the page shows the board instead"}`,
+    );
     await page.screenshot({ path: `${shots}/${v}.png` });
     await page.close();
   }

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Drives this checkout's built page (dist/web) in the headless shell setup.sh
-# installs: a scratch canopy server on a free port, scanning two throwaway
+# installs, building it first when it is missing or older than the source:
+# a scratch canopy server on a free port, scanning two throwaway
 # repos (the runs pill's check wants a run in each, and the phone's wants one
 # with work in it), with a clean environment
 # (a canopy shell's own CANOPY_ settings would make it refuse the page), then
 # check.ts against it. Everything it starts goes when it ends; the
 # screenshots stay.
-#   scripts/browser/check.sh            after bun run build
+#   scripts/browser/check.sh
 set -euo pipefail
 
 DIR="${CANOPY_BROWSER_DIR:-/tmp/canopy-browser}"
@@ -15,8 +16,26 @@ REPO="$(cd "$HERE/../.." && pwd)"
 SHOTS="${CANOPY_CHECK_SHOTS:-/tmp/canopy-check-shots}"
 BUN="$(command -v bun)"
 
-[ -f "$REPO/dist/web/index.html" ] || { echo "no dist/web; run bun run build first" >&2; exit 1; }
 [ -d "$DIR/node_modules/playwright" ] || { echo "no browser in $DIR; run scripts/browser/setup.sh" >&2; exit 1; }
+
+# The page under test is this checkout's source, so a build older than the
+# source is built again first. A pull or a deploy moves the source and leaves
+# dist/web as it was: on 2026-11-10 a run on the mini drove the day before's
+# build, failed for a chunk that build never had, and passed a view that
+# build showed the board for.
+built="$REPO/dist/web/index.html"
+newer=""
+if [ -f "$built" ]; then
+  newer="$(find "$REPO/ui" "$REPO/src/core" "$REPO/package.json" -type f -newer "$built" -print -quit)"
+fi
+if [ ! -f "$built" ] || [ -n "$newer" ]; then
+  if [ -n "$newer" ]; then echo "dist/web is older than ${newer#"$REPO/"}; building"; else echo "no dist/web; building"; fi
+  if ! log="$(cd "$REPO" && "$BUN" run build 2>&1)"; then
+    printf '%s\n' "$log" | tail -40 >&2
+    echo "the build failed, so there is no page to check" >&2
+    exit 1
+  fi
+fi
 
 work="$(mktemp -d /tmp/canopy-check-XXXXXX)"
 server=""
