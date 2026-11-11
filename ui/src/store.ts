@@ -105,7 +105,7 @@ import { badRepoIds } from "./health";
 import { staleRepos } from "./triggers";
 import { markScreen, putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import { CARDS, SEAM } from "./cardswidth";
-import { paneSizesOf, withPane, type PaneKey, type PaneSizes } from "./panesizes";
+import { paneSizesOf, withPane, type PaneKey, type PaneSizes } from "../../src/core/panesizes";
 import { NARROW } from "./media";
 import { newColumnWidth, type ColumnRoom } from "./columnwidth";
 import {
@@ -2246,7 +2246,7 @@ export function tabCards(s: Pick<CanopyState, "panels" | "repos" | "terms">): Ta
 }
 
 export function screenLayoutOf(
-  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth" | "feedOpen" | "panels" | "repos" | "terms">,
+  s: Pick<CanopyState, "settings" | "dockLayout" | "sidebarOpen" | "sidebarWidth" | "cardsWidth" | "feedOpen" | "paneSizes" | "panels" | "repos" | "terms">,
 ): ScreenLayout {
   return {
     arrange: arrangementOf(s),
@@ -2264,6 +2264,9 @@ export function screenLayoutOf(
     feedOpen: s.feedOpen,
     ...(s.settings.agentsLayout ? { agents: s.settings.agentsLayout } : {}),
     tabs: captureTabs(s.settings, tabCards(s)),
+    // only where a seam has been dragged, like the cards' width: with none
+    // set, a profile that leaves the panes alone gives the same page
+    ...(Object.keys(s.paneSizes).length > 0 ? { paneSizes: { ...s.paneSizes } } : {}),
   };
 }
 
@@ -3184,6 +3187,9 @@ export const useStore = create<CanopyState>((set, get) => ({
         ...(layout.sidebarWidth !== undefined ? { sidebarWidth: clamp(layout.sidebarWidth, SIDEBAR.min, SIDEBAR.max) } : {}),
         ...(layout.cardsWidth !== undefined ? { cardsWidth: clamp(layout.cardsWidth, CARDS.min, CARDS.max) } : {}),
         ...(layout.feedOpen !== undefined ? { feedOpen: layout.feedOpen } : {}),
+        // as a whole: a pane the profile leaves out goes back to the
+        // stylesheet's size, which is what it had when the profile was taken
+        ...(layout.paneSizes !== undefined ? { paneSizes: paneSizesOf(layout.paneSizes) } : {}),
       };
     });
     // The layout subscription saves only what changed, so a value the
@@ -3195,6 +3201,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       ...(layout.sidebarWidth !== undefined ? { sidebarWidth: s.sidebarWidth } : {}),
       ...(layout.cardsWidth !== undefined ? { cardsWidth: s.cardsWidth } : {}),
       ...(layout.feedOpen !== undefined ? { feedOpen: s.feedOpen } : {}),
+      ...(layout.paneSizes !== undefined ? { paneSizes: s.paneSizes } : {}),
     };
     if (Object.keys(named).length > 0) saveLayout(named);
   },

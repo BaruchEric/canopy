@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { PANES, isPane, paneChosen, paneShown, paneSizesOf, paneTop, paneVar, withPane } from "./panesizes";
+import { PANES, isPane, paneChosen, paneShown, paneSizesOf, paneTop, paneVar, paneWords, parsePaneSizes, withPane } from "./panesizes";
 
 test("saved sizes keep the names known here, each rounded and in its bounds", () => {
   expect(paneSizesOf({ lede: 300.6, "finder-list": 20, "prefs-rail": 9000, gone: 400, "clips-list": "wide", "board-rail": Number.NaN })).toEqual({
@@ -61,4 +61,35 @@ test("a drag let go where it began changes nothing, set or not", () => {
 
 test("a key has no start, so it always sets", () => {
   expect(paneChosen("lede", 266, { start: null, room: 2000, chosen: null })).toBe(266);
+});
+
+test("a well's drag stops at the height of what it holds, and the cap it leaves is every well's", () => {
+  // a diff 300px of lines tall, under a cap of 800 set at a longer one
+  expect(paneChosen("diff", 300, { start: 300, room: 300, chosen: 800 })).toBe(800);
+  expect(paneChosen("diff", 220.4, { start: 300, room: 300, chosen: 800 })).toBe(220);
+  expect(paneChosen("diff", 2000, { start: 450, room: 1310, chosen: null })).toBe(1310);
+  expect(paneTop("diff", 40)).toBe(PANES.diff.min);
+});
+
+test("every pane has a word, and no two share one", () => {
+  const words = Object.values(PANES).map((p) => p.word);
+  expect(words.every((w) => w.length > 0)).toBe(true);
+  expect(new Set(words).size).toBe(words.length);
+});
+
+test("a profile's sizes are checked: whole px in bounds, a name unknown here left out", () => {
+  expect(parsePaneSizes({ lede: 320.6, diff: 640, gone: 5 })).toEqual({ paneSizes: { lede: 321, diff: 640 } });
+  expect(parsePaneSizes({})).toEqual({ paneSizes: {} });
+});
+
+test("a size out of its pane's bounds, or no number, is an error that names the pane", () => {
+  expect(parsePaneSizes({ lede: 10 })).toEqual({ error: "paneSizes.lede is a number from 180 to 960" });
+  expect(parsePaneSizes({ "prefs-rail": "wide" })).toEqual({ error: "paneSizes.prefs-rail is a number from 140 to 480" });
+  expect(parsePaneSizes({ diff: Number.NaN })).toEqual({ error: "paneSizes.diff is a number from 72 to 4800" });
+  for (const bad of [null, 4, "lede", [300]]) expect("error" in parsePaneSizes(bad)).toBe(true);
+});
+
+test("a profile's sizes are said in the list's order, and an empty record as the default", () => {
+  expect(paneWords({ diff: 640, lede: 320 })).toBe("summary column 320, diffs 640");
+  expect(paneWords({})).toBe("default sizes");
 });

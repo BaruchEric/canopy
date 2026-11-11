@@ -12,10 +12,20 @@ const noop = () => {};
 
 describe("DiffView", () => {
   test("without a note prop it paints as it always has", () => {
-    expect(renderToStaticMarkup(<DiffView diff={"@@ -1 +1 @@\n-a\n+b"} />)).toBe(
+    expect(renderToStaticMarkup(<DiffView diff={"@@ -1 +1 @@\n-a\n+b"} />)).toContain(
       '<pre class="diff"><span class="dl hunk">@@ -1 +1 @@\n</span><span class="dl del">-a\n</span><span class="dl add">+b\n</span></pre>',
     );
     expect(renderToStaticMarkup(<DiffView diff="  " note={at} />)).toContain("No textual changes.");
+  });
+
+  test("the lines sit in a well, first, with the seam that sets every diff's cap after them", () => {
+    for (const html of [renderToStaticMarkup(<DiffView diff={DIFF} />), renderToStaticMarkup(<DiffView diff={DIFF} note={at} />)]) {
+      expect(html.startsWith('<div class="well diff-well"><pre class="diff')).toBe(true);
+      // the seam reads its scroller as the sibling before it
+      expect(html).toMatch(/<\/pre><div[^>]*class="resizer resizer-y pane-seam well-seam"[^>]*role="separator"[^>]*aria-orientation="horizontal"[^>]*><\/div><\/div>$/);
+    }
+    // nothing to cap, nothing to size
+    expect(renderToStaticMarkup(<DiffView diff="  " />)).not.toContain("well");
   });
 
   test("with one, every numbered line has a gutter button and the headers none", () => {

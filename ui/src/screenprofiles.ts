@@ -9,6 +9,7 @@
 
 import { deviceName } from "../../src/core/presence";
 import { parseProfile, type ProfileFields, type ScreenHere } from "../../src/core/screenlayouts";
+import type { PaneSizes } from "../../src/core/panesizes";
 import type { BoardLayout, ScreenLayout, TabTemplate } from "../../src/core/types";
 
 /** the screen this page is on, in physical px; null where there is none */
@@ -62,6 +63,9 @@ export interface Draft {
   agents: "" | BoardLayout;
   /** the tab template (FR-030); null leaves the tabs as they are */
   tabs: TabTemplate | null;
+  /** the sizes set at the pane seams (FR-063); null leaves them as they
+   *  are, an empty record puts every pane back to its default */
+  paneSizes: PaneSizes | null;
 }
 
 const tri = (v: boolean | undefined): Tri => (v === undefined ? "" : v ? "on" : "off");
@@ -90,6 +94,7 @@ export function draftOf(p: { name?: string; device?: string; model?: string; wid
     feedOpen: tri(l.feedOpen),
     agents: l.agents ?? "",
     tabs: l.tabs ?? null,
+    paneSizes: l.paneSizes ?? null,
   };
 }
 
@@ -113,6 +118,7 @@ export function fieldsOf(d: Draft): { profile: ProfileFields } | { error: string
     feedOpen: b(d.feedOpen),
     agents: d.agents || undefined,
     tabs: d.tabs ?? undefined,
+    paneSizes: d.paneSizes ?? undefined,
   };
   for (const k of Object.keys(layout)) if (layout[k] === undefined) delete layout[k];
   return parseProfile({

@@ -1,11 +1,23 @@
-import { Fragment, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { anchorOf, noteOn, parseDiff, type DiffLine, type Note } from "../reviewnotes";
 import { useStore } from "../store";
 import { useMentions } from "./Mentions";
+import { WellSeam } from "./Well";
 
 /** where a diff's notes belong: the repo, the file, and "working tree" or
  *  the commit it was read from */
 export type NoteAt = { repoId: string; path: string; where: string };
+
+/** A diff's lines in their well: the scroller, and under it the seam that
+ *  sets how much any diff shows before it scrolls (Well.tsx). */
+function DiffWell({ children }: { children: ReactNode }) {
+  return (
+    <div className="well diff-well">
+      {children}
+      <WellSeam pane="diff" label="Height a diff shows before it scrolls" />
+    </div>
+  );
+}
 
 /** Paints a diff. With `note`, each line that has a number takes review
  *  notes (NotedDiff); without it, the plain read-only view. */
@@ -13,7 +25,7 @@ export function DiffView({ diff, note }: { diff: string; note?: NoteAt }) {
   if (!diff.trim()) return <p className="diff-empty">No textual changes.</p>;
   if (note) return <NotedDiff diff={diff} at={note} />;
   const lines = diff.split("\n");
-  return (
+  const body = (
     <pre className="diff">
       {lines.map((line, i) => {
         let cls = "ctx";
@@ -32,6 +44,7 @@ export function DiffView({ diff, note }: { diff: string; note?: NoteAt }) {
       })}
     </pre>
   );
+  return <DiffWell>{body}</DiffWell>;
 }
 
 /** a stable empty list, so the store selector does not hand back a new one each render */
@@ -125,7 +138,7 @@ export function NotedLines({
     }
   };
 
-  return (
+  const body = (
     <pre className="diff noted">
       {lines.map((l, i) => {
         const a = anchorOf(l);
@@ -207,4 +220,5 @@ export function NotedLines({
       )}
     </pre>
   );
+  return <DiffWell>{body}</DiffWell>;
 }

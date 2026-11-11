@@ -6,6 +6,7 @@
  * matches and applies them. Tested in screenlayouts.test.ts.
  */
 
+import { parsePaneSizes } from "./panesizes";
 import { BOARD_LAYOUTS, type ScreenLayout, type ScreenProfile, type TabTemplate, type TabTree } from "./types";
 
 /** The bounds a layout's values are held to, the page's own (SIDEBAR and
@@ -218,6 +219,11 @@ export function parseLayout(raw: unknown): { layout: ScreenLayout } | { error: s
     const got = parseTabs(r["tabs"]);
     if ("error" in got) return got;
     out.tabs = got.tabs;
+  }
+  if (r["paneSizes"] !== undefined) {
+    const got = parsePaneSizes(r["paneSizes"]);
+    if ("error" in got) return got;
+    out.paneSizes = got.paneSizes;
   }
   return { layout: out };
 }

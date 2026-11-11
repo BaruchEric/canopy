@@ -3587,6 +3587,28 @@ describe("the dock as columns of cells", () => {
     expect(useStore.getState().cardsWidth).toBe(900);
     useStore.setState({ cardsWidth: null, sidebarOpen: pristine.sidebarOpen });
   });
+
+  test("a screen layout names the pane sizes only once a seam is set, and applying one lands them as a whole", () => {
+    useStore.setState({ paneSizes: {} });
+    expect("paneSizes" in screenLayoutOf(useStore.getState())).toBe(false);
+    useStore.getState().setPaneSize("lede", 320);
+    useStore.getState().setPaneSize("diff", 640);
+    const taken = screenLayoutOf(useStore.getState());
+    expect(taken.paneSizes).toEqual({ lede: 320, diff: 640 });
+    // the profile's own copy: a later drag does not reach into it
+    useStore.getState().setPaneSize("lede", 400);
+    expect(taken.paneSizes).toEqual({ lede: 320, diff: 640 });
+    // a layout that leaves them out leaves them as they are
+    useStore.getState().applyScreenLayout({ sidebarOpen: true });
+    expect(useStore.getState().paneSizes).toEqual({ lede: 400, diff: 640 });
+    // one that names them replaces every one, held to each pane's bounds
+    useStore.getState().applyScreenLayout({ paneSizes: { "board-rail": 99999, "prefs-rail": 200 } });
+    expect(useStore.getState().paneSizes).toEqual({ "board-rail": 1200, "prefs-rail": 200 });
+    // and an empty record hands every pane back to the stylesheet
+    useStore.getState().applyScreenLayout({ paneSizes: {} });
+    expect(useStore.getState().paneSizes).toEqual({});
+    useStore.setState({ paneSizes: {}, sidebarOpen: pristine.sidebarOpen });
+  });
 });
 
 describe("the ranger in waiting on you", () => {

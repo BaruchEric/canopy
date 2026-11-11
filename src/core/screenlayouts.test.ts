@@ -77,6 +77,14 @@ describe("parseProfile", () => {
     expect(parseLayout({ cardsWidth: 200 })).toEqual({ error: "cardsWidth is a number from 320 to 4800" });
     expect(parseLayout({ cardsWidth: "wide" })).toEqual({ error: "cardsWidth is a number from 320 to 4800" });
   });
+  test("pane sizes are checked by the panes' own bounds, and an empty record is kept as one", () => {
+    expect(parseLayout({ paneSizes: { lede: 320.4, diff: 640, later: 9 } })).toEqual({ layout: { paneSizes: { lede: 320, diff: 640 } } });
+    expect(parseLayout({ paneSizes: {} })).toEqual({ layout: { paneSizes: {} } });
+    expect(parseLayout({ paneSizes: { lede: 10 } })).toEqual({ error: "paneSizes.lede is a number from 180 to 960" });
+    expect("error" in parseLayout({ paneSizes: [320] })).toBe(true);
+    // one that names none leaves them alone
+    expect("paneSizes" in (parseLayout({ carousel: true }) as { layout: object }).layout).toBe(false);
+  });
 });
 
 describe("matchProfile", () => {

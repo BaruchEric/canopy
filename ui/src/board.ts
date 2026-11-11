@@ -10,7 +10,7 @@
  */
 
 import type { PaneMsg } from "./panes";
-import { paneVar, type PaneKey } from "./panesizes";
+import { paneVar, type PaneKey } from "../../src/core/panesizes";
 import { BOARD_LAYOUTS, isLiveAgent, type Ask, type AgentCard, type AgentState, type BoardLayout } from "../../src/core/types";
 import { groupCards, runEnd, tierOf, type IsChat, type TrailMark } from "./agentcards";
 import type { InboxAnswer } from "./inbox";

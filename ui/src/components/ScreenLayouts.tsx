@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { screenLayoutOf, tabCards, useStore } from "../store";
 import { captureTabs, tabsWords } from "../tabtemplates";
+import { paneWords } from "../../../src/core/panesizes";
 import { matchProfile, recommendLayout, type MatchHow } from "../../../src/core/screenlayouts";
 import { BOARD_LAYOUTS, type ScreenProfile } from "../../../src/core/types";
 import { LAYOUT_WORD } from "../board";
@@ -115,6 +116,7 @@ export function ScreenLayoutsRow() {
           {about.length > 0 && <span className="layout-size">{about.join(" · ")}</span>}
           {on && match && <span className="layout-match">fits this screen, {HOW[match.how]}</span>}
           {p.layout.tabs && <span className="layout-size">{tabsWords(p.layout.tabs)}</span>}
+          {p.layout.paneSizes && <span className="layout-size">panes: {paneWords(p.layout.paneSizes)}</span>}
         </div>
         {asking ? (
           <div className="layout-acts">
@@ -296,7 +298,7 @@ function ProfileForm({
         {text("dpr", "pixel ratio", "1")}
       </div>
       <div className="key-row">
-        <button type="button" className="mini" onClick={() => fill(screenLayoutOf(useStore.getState()))} title="This window's arrangement, widths, zoom and font">
+        <button type="button" className="mini" onClick={() => fill(screenLayoutOf(useStore.getState()))} title="This window's arrangement, widths, pane sizes, zoom and font">
           take this window's layout
         </button>
         <button type="button" className="mini" onClick={recommended} title="What a screen this size is recommended">
@@ -366,6 +368,24 @@ function ProfileForm({
           leave
         </button>
       </div>
+      <div className="layout-tabs">
+        <span>pane sizes</span>
+        <span className="layout-tabs-said">{draft.paneSizes ? paneWords(draft.paneSizes) : "leave as they are"}</span>
+        <button
+          type="button"
+          className="mini"
+          title="The sizes set by dragging this window's seams: a summary column, the files list, how tall a diff shows"
+          onClick={() => set("paneSizes", { ...useStore.getState().paneSizes })}
+        >
+          this window's
+        </button>
+        <button type="button" className="mini" title="Applying it puts every pane back to its default size" onClick={() => set("paneSizes", {})}>
+          none
+        </button>
+        <button type="button" className="mini" title="Applying it leaves the pane sizes as they are" onClick={() => set("paneSizes", null)}>
+          leave
+        </button>
+      </div>
       <div className="key-row">
         <button type="submit" className="mini" disabled={busy}>
           {isNew ? "create" : "save"}
@@ -392,4 +412,5 @@ const LAYOUT_FIELDS = [
   "feedOpen",
   "agents",
   "tabs",
+  "paneSizes",
 ] as const satisfies readonly (keyof Draft)[];

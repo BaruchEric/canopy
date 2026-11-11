@@ -16,6 +16,7 @@ import { AgentFix } from "./AgentFix";
 import { Seg } from "./Seg";
 import { Section, SectionWindow, ShellSpotHere, useSectionClosed } from "./Surface";
 import { TermView } from "./TermDock";
+import { WellSeam } from "./Well";
 
 const errText = (err: unknown) => String(err instanceof Error ? err.message : err);
 
@@ -323,23 +324,26 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
     <div className="task-open">
       {error && <p className="note err">{error}</p>}
       <input className="task-search" type="search" placeholder={`search ${task.name}'s log`} value={q} onChange={(e) => setQ(e.target.value)} />
-      <pre
-        className="task-log"
-        ref={pre}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
-        }}
-      >
-        {more && <span className="task-more">{q ? "earlier lines match too" : "earlier lines are in the log"}{"\n"}</span>}
-        {lines?.map((l) => (
-          <span key={l.n} className={l.mark ? "task-mark" : undefined}>
-            {l.mark && l.at !== null ? `── started ${markTime(l.at)} ──` : l.text}
-            {"\n"}
-          </span>
-        ))}
-        {lines?.length === 0 && (q ? "no match" : "nothing logged yet")}
-      </pre>
+      <div className="well log-well">
+        <pre
+          className="task-log"
+          ref={pre}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+          }}
+        >
+          {more && <span className="task-more">{q ? "earlier lines match too" : "earlier lines are in the log"}{"\n"}</span>}
+          {lines?.map((l) => (
+            <span key={l.n} className={l.mark ? "task-mark" : undefined}>
+              {l.mark && l.at !== null ? `── started ${markTime(l.at)} ──` : l.text}
+              {"\n"}
+            </span>
+          ))}
+          {lines?.length === 0 && (q ? "no match" : "nothing logged yet")}
+        </pre>
+        <WellSeam pane="task-log" label="Height a task's log shows before it scrolls" />
+      </div>
     </div>
   );
 }

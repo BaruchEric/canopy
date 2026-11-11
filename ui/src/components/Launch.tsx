@@ -5,6 +5,7 @@ import { jobsFor, launchFor, useStore } from "../store";
 import { Section, useSectionClosed } from "./Surface";
 import { ago } from "../util";
 import { Seg } from "./Seg";
+import { WellSeam } from "./Well";
 import { fmtBytes } from "../../../src/core/launch";
 import { isJobActive, type Build, type Job, type Pull, type Release, type Repo } from "../../../src/core/types";
 
@@ -146,9 +147,12 @@ function JobBlock({ job }: { job: Job }) {
         </div>
       )}
       {job.lines.length > 0 && (
-        <pre ref={tail} className="job-tail">
-          {job.lines.slice(-TAIL).join("\n")}
-        </pre>
+        <div className="well tail-well">
+          <pre ref={tail} className="job-tail">
+            {job.lines.slice(-TAIL).join("\n")}
+          </pre>
+          <WellSeam pane="job-tail" label="Height a job's output shows before it scrolls" />
+        </div>
       )}
     </li>
   );

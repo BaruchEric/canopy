@@ -37,6 +37,16 @@ describe("the Settings form's draft", () => {
     expect("error" in fieldsOf({ ...d, columnWidth: "a lot" })).toBe(true);
     expect("error" in fieldsOf({ ...d, name: "  " })).toBe(true);
   });
+  test("pane sizes go through as a record: none leaves them alone, an empty one clears them", () => {
+    const desk = { name: "desk", width: 2560, height: 1440 };
+    const d = draftOf({ ...desk, layout: { paneSizes: { lede: 320, diff: 640 } } });
+    expect(d.paneSizes).toEqual({ lede: 320, diff: 640 });
+    expect(fieldsOf(d)).toEqual({ profile: { ...desk, device: "", layout: { paneSizes: { lede: 320, diff: 640 } } } });
+    expect(draftOf({ ...desk, layout: {} }).paneSizes).toBeNull();
+    expect(fieldsOf({ ...d, paneSizes: null })).toEqual({ profile: { ...desk, device: "", layout: {} } });
+    expect(fieldsOf({ ...d, paneSizes: {} })).toEqual({ profile: { ...desk, device: "", layout: { paneSizes: {} } } });
+    expect(fieldsOf({ ...d, paneSizes: { lede: 5 } })).toEqual({ error: "paneSizes.lede is a number from 180 to 960" });
+  });
 });
 
 describe("neverArranged", () => {

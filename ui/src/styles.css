@@ -649,7 +649,12 @@ kbd {
 }
 
 /* ---------- resizers ---------- */
-/* The strip carries no hairline of its own: the sidebar's border-right and
+/* Every handle on the page answers in the same two colours, whatever its
+   shape: the faint ink under a pointer, and deep moss once it is held or a
+   key has landed on it. That goes for these strips, the dock's row seams,
+   a shell's edge, the session panes' splits, the bench's seams, a popup's
+   corner and the focused box's edges.
+   The strip carries no hairline of its own: the sidebar's border-right and
    each panel's border-right already draw the seam it straddles. */
 .resizer {
   position: relative;
@@ -727,12 +732,27 @@ body.resizing-rows {
 }
 /* ---------- capped wells (FR-063) ---------- */
 /* A diff, a log or an output scrolls under a cap, so one long one does not
-   push the rest of its section off the screen. Its corner pulls it taller
-   or shorter, as a text box's does. The browser writes the height on the
-   well itself, so it lasts while that well is on the page and no longer. */
-.diff,
-.task-log,
-.job-tail,
+   push the rest of its section off the screen. For a diff, a task's log
+   and a job's output the cap is a pane (Well.tsx): the scroller sits in a
+   .well with a seam along its bottom edge, the seam writes --pane-<name>
+   on the well, and the scroller's max-height reads it, so a cap set at one
+   diff is every diff's, and is kept. The well takes the margins and the
+   grid cell the scroller had. */
+.well {
+  position: relative;
+  min-width: 0;
+}
+.well > .well-seam {
+  position: absolute;
+  inset: auto 0 -3px;
+}
+/* nothing to size: the scroller holds less than the pane's floor */
+.pane-seam[data-idle] {
+  visibility: hidden;
+}
+/* The other outputs keep a corner to pull, as a text box has. The browser
+   writes that height on the well itself, so it lasts while the well is on
+   the page and no longer. */
 .step-out pre,
 .gate-check pre,
 .run-scenarios pre,
@@ -745,7 +765,7 @@ body.resizing-rows {
   resize: vertical;
 }
 /* a height set at the corner stands in for the cap */
-:is(.diff, .task-log, .job-tail, .step-out pre, .gate-check pre, .run-scenarios pre, .landing-out pre, .kit-compare pre, .kit-command, .sprout-doc, .ask-detail, .clip-view)[style*="height"] {
+:is(.step-out pre, .gate-check pre, .run-scenarios pre, .landing-out pre, .kit-compare pre, .kit-command, .sprout-doc, .ask-detail, .clip-view)[style*="height"] {
   max-height: none;
 }
 /* a drag across the preview's page must stay the page's own */
@@ -3810,7 +3830,7 @@ div.waiting-row {
   gap: 8px;
   min-width: 0;
 }
-.worktree-file .diff {
+.worktree-file .diff-well {
   margin: 2px 0 6px;
 }
 p.elsewhere-drilled {
@@ -4738,7 +4758,7 @@ body.resizing-rows {
   gap: 8px;
   padding: 2px 0;
 }
-.file-table .diff,
+.file-table .diff-well,
 .file-table .diff-empty {
   grid-column: 1 / -1;
   min-width: 0;
@@ -4824,16 +4844,20 @@ body.resizing-rows {
   color: var(--sky);
 }
 
-/* diff: a well of the darker ground */
-.diff {
+/* diff: a well of the darker ground, half the window tall at most until
+   its seam says otherwise */
+.diff-well {
   margin: 4px var(--gutter) 10px;
+}
+.diff {
+  margin: 0;
   padding: 8px 10px;
   border-radius: var(--r);
   background: var(--bark0);
   overflow-x: auto;
   font-size: var(--t-md);
   line-height: 1.4;
-  max-height: 50vh;
+  max-height: var(--pane-diff, 50vh);
 }
 .diff-empty {
   color: var(--ink-faint);
@@ -5214,8 +5238,10 @@ button.dl-gut.has {
   font-variant-numeric: tabular-nums;
 }
 /* already in a well: the lines sit on it, no second ground */
-.rev-file .diff {
+.rev-file .diff-well {
   margin: 4px 0 8px;
+}
+.rev-file .diff {
   padding: 4px 0;
   background: none;
 }
@@ -6899,10 +6925,12 @@ a.landing-state {
   font-size: var(--t-sm);
   color: var(--rust);
 }
-.approve-files .diff {
-  max-height: 22em;
-  overflow: auto;
+.approve-files .diff-well {
   margin: 6px 0 0;
+}
+.approve-files .diff {
+  max-height: var(--pane-diff, 22em);
+  overflow: auto;
 }
 .sheet-foot {
   display: flex;
@@ -7930,10 +7958,12 @@ a.sweep-title:hover {
   top: auto;
   bottom: 3px;
 }
-.term-grip:hover::after,
+.term-grip:hover::after {
+  background: var(--ink-faint);
+}
 .term-grip:focus-visible::after,
 .term-grip.dragging::after {
-  background: var(--moss);
+  background: var(--moss-deep);
 }
 .term-grip:focus-visible {
   outline: none;
@@ -8615,10 +8645,12 @@ button.ss-scope:hover {
   top: 4px;
   height: 1px;
 }
-.ss-seam:hover::before,
+.ss-seam:hover::before {
+  background: var(--ink-faint);
+}
 .ss-seam:focus-visible::before,
 .ss-seam.on::before {
-  background: var(--moss);
+  background: var(--moss-deep);
 }
 .ss-seam:focus-visible {
   outline: none;
@@ -9200,15 +9232,20 @@ body.ss-grabbing * {
   cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 55%, var(--hair2) 55%, var(--hair2) 65%, transparent 65%, transparent 75%, var(--hair2) 75%, var(--hair2) 85%, transparent 85%);
 }
-.focus-grip.se:hover,
+.focus-grip.se:hover {
+  background: linear-gradient(135deg, transparent 55%, var(--ink-faint) 55%, var(--ink-faint) 65%, transparent 65%, transparent 75%, var(--ink-faint) 75%, var(--ink-faint) 85%, transparent 85%);
+}
 .focus-grip.se:focus-visible,
 .focus-grip.se.dragging {
-  background: linear-gradient(135deg, transparent 55%, var(--moss) 55%, var(--moss) 65%, transparent 65%, transparent 75%, var(--moss) 75%, var(--moss) 85%, transparent 85%);
+  background: linear-gradient(135deg, transparent 55%, var(--moss-deep) 55%, var(--moss-deep) 65%, transparent 65%, transparent 75%, var(--moss-deep) 75%, var(--moss-deep) 85%, transparent 85%);
 }
-/* an edge lights up along its length while it is the one held */
-.focus-grip:not(.se):hover,
+/* an edge lights up along its length under the pointer, and while it is
+   the one held: a wash of the handles' two colours, since it is 6px wide */
+.focus-grip:not(.se):hover {
+  background: color-mix(in srgb, var(--ink-faint) 45%, transparent);
+}
 .focus-grip:not(.se).dragging {
-  background: color-mix(in srgb, var(--moss) 35%, transparent);
+  background: color-mix(in srgb, var(--moss-deep) 45%, transparent);
 }
 body:has(.focus-grip.dragging) {
   user-select: none;
@@ -10955,9 +10992,12 @@ a.build-label:hover {
   background: var(--sky);
   transition: width 0.2s;
 }
-.job-tail {
+.tail-well {
   margin: 6px 0 0;
-  max-height: 160px;
+}
+.job-tail {
+  margin: 0;
+  max-height: var(--pane-job-tail, 160px);
   overflow: auto;
   font-size: var(--t-sm);
   line-height: 1.4;
@@ -11984,7 +12024,7 @@ button.machine:hover {
   gap: 4px;
 }
 .task-log {
-  max-height: 16rem;
+  max-height: var(--pane-task-log, 16rem);
   overflow: auto;
   margin: 0;
   font-family: var(--mono);
@@ -12063,9 +12103,20 @@ button.machine:hover {
   margin: 0;
   padding: 6px 10px 8px;
 }
+/* the log in front fills what the bench gives it: no cap, so no seam */
+.task-front .log-well {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .task-front .task-log {
   flex: 1;
+  min-height: 0;
   max-height: none;
+}
+.task-front .well-seam {
+  display: none;
 }
 @media (pointer: coarse) {
   .task-tab {
@@ -12283,15 +12334,17 @@ button.machine:hover {
   height: var(--bench-dock);
   left: calc(var(--bench-rail) + (100% - var(--bench-rail)) * (1 - var(--bench-split)) - 4px);
 }
-/* a hairline of moss down the middle while it is grabbed or hovered */
+/* a 2px line down the middle under the pointer, and while it is held */
 .bench-seam::after {
   content: "";
   position: absolute;
   inset: 0;
   margin: auto;
-  background: var(--moss);
+  background: var(--ink-faint);
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease;
 }
 .bench-seam.seam-rail::after,
 .bench-seam.seam-split::after {
@@ -12303,7 +12356,11 @@ button.machine:hover {
 .bench-seam:hover::after,
 .bench-seam:focus-visible::after,
 .bench-seam.dragging::after {
-  opacity: 0.8;
+  opacity: 1;
+}
+.bench-seam:focus-visible::after,
+.bench-seam.dragging::after {
+  background: var(--moss-deep);
 }
 .bench-seam:focus-visible {
   outline: none;
@@ -15937,7 +15994,6 @@ button.trigger-title:hover {
   );
 }
 .pop-grip:hover {
-  color: var(--ink-dim);
   opacity: 1;
 }
 .pop-grip:focus-visible,

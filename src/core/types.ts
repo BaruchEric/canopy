@@ -6,6 +6,7 @@ import type { WorkItem } from "./work";
 import type { QuickNote } from "./notes";
 import type { Collision } from "./touch";
 import type { RunGroup } from "./group";
+import type { PaneSizes } from "./panesizes";
 
 export interface RepoFile {
   /** path relative to the repo root */
@@ -601,6 +602,10 @@ export interface ScreenLayout {
   agents?: BoardLayout;
   /** what the shell windows hold besides shells (FR-030), applied by hand */
   tabs?: TabTemplate;
+  /** the sizes set at the page's pane seams, CSS px by pane (FR-063,
+   *  panesizes.ts). They land as a whole: a pane this leaves out goes back
+   *  to the stylesheet's size, so an empty record clears every one. */
+  paneSizes?: PaneSizes;
 }
 
 /** A split of a card's shell section: a leaf names one of the card's

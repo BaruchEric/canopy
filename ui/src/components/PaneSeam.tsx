@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { PANES, paneChosen, paneShown, paneTop, paneVar, type PaneKey } from "../panesizes";
+import { PANES, paneChosen, paneShown, paneTop, paneVar, type PaneKey } from "../../../src/core/panesizes";
 import { useStore } from "../store";
 import { Resizer } from "./Resizer";
 
@@ -34,6 +34,13 @@ interface PaneSeamProps {
   /** the most the pane may take now, in px on the screen: what its
    *  container has, less what the part across the seam keeps */
   room?: (handle: HTMLElement) => number;
+  /** the most a drag may set now, in px on the screen, where the pane's
+   *  size is a cap on what it holds and not a size it always takes: a diff
+   *  stops at the height of its lines. The setting itself is not held to
+   *  it, since it is every such pane's cap and the next one may hold more.
+   *  A seam whose reach is no more than the pane's floor has nowhere to
+   *  go, and is neither drawn nor reached by a key. */
+  reach?: (handle: HTMLElement) => number;
 }
 
 /**
@@ -46,8 +53,12 @@ interface PaneSeamProps {
  * and again whenever the target or the pane resizes, since a container
  * with less room lowers what shows (`paneShown`). The setting itself is
  * kept and holds again once there is room for it.
+ *
+ * One pane may have many seams on the page at once: every diff has one for
+ * the cap they share. Each writes its own target, and all of them read the
+ * one setting, so a drag at one moves the rest when it is let go.
  */
-export function PaneSeam({ pane, label, className, axis = "x", dir, target, part, size, room }: PaneSeamProps) {
+export function PaneSeam({ pane, label, className, axis = "x", dir, target, part, size, room, reach }: PaneSeamProps) {
   const chosen = useStore((s) => s.paneSizes[pane] ?? null);
   const setPaneSize = useStore((s) => s.setPaneSize);
   const ref = useRef<HTMLDivElement>(null);
@@ -60,8 +71,8 @@ export function PaneSeam({ pane, label, className, axis = "x", dir, target, part
   shownNow.current = shown;
   // the readers are new functions on every render; the effect reads the
   // latest through here, and only runs again when the setting changes
-  const read = useRef({ target, part, size, room });
-  read.current = { target, part, size, room };
+  const read = useRef({ target, part, size, room, reach });
+  read.current = { target, part, size, room, reach };
 
   const partOf = (h: HTMLElement) => (read.current.part ? read.current.part(h) : dir === 1 ? h.previousElementSibling : h.nextElementSibling);
   /** the pane's size in its own px, null while it is not laid out */
@@ -77,6 +88,14 @@ export function PaneSeam({ pane, label, className, axis = "x", dir, target, part
     const px = read.current.room?.(h);
     return px === undefined || !Number.isFinite(px) ? Infinity : px / zoomOf(h);
   };
+  /** the most a drag may set, in the pane's own px; no limit with no `reach` */
+  const reachNow = (h: HTMLElement): number => {
+    const px = read.current.reach?.(h);
+    return px === undefined || !Number.isFinite(px) ? Infinity : px / zoomOf(h);
+  };
+  /** what a drag or a key is held under: the room, or the reach where that
+   *  is less */
+  const limitNow = (h: HTMLElement): number => Math.min(roomNow(h), reachNow(h));
   /** Writes what shows for `px` on the target; nothing set, and the
    *  stylesheet's size stands. A seam that is not laid out (a tab behind
    *  another, the other of two layouts) has no room to read, so the
@@ -99,11 +118,12 @@ export function PaneSeam({ pane, label, className, axis = "x", dir, target, part
       if (start.current === null) hold(h, chosen);
       const px = sizeNow(h);
       if (px !== null && px > 0) setShown(Math.round(px));
+      if (read.current.reach) h.toggleAttribute("data-idle", reachNow(h) <= PANES[pane].min);
     };
     // where the Resizer starts its drag from: the size showing, or the most
-    // that fits now where that is less
+    // a drag may set now where that is less
     const down = (e: PointerEvent) => {
-      if (e.button === 0) start.current = Math.min(shownNow.current, paneTop(pane, roomNow(h)));
+      if (e.button === 0) start.current = Math.min(shownNow.current, paneTop(pane, limitNow(h)));
     };
     settle();
     const seen = new ResizeObserver(settle);
@@ -115,13 +135,13 @@ export function PaneSeam({ pane, label, className, axis = "x", dir, target, part
       h.removeEventListener("pointerdown", down);
       el?.style.removeProperty(paneVar(pane));
     };
-    // the readers come through `read`, and `hold`, `sizeNow` and `partOf` only read it
+    // the readers come through `read`, and `hold`, `sizeNow`, `reachNow` and `partOf` only read it
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pane, chosen, axis, dir]);
 
   const commit = (px: number | null) => {
     const h = ref.current;
-    const next = px === null ? null : paneChosen(pane, px, { start: start.current, room: h ? roomNow(h) : Infinity, chosen: useStore.getState().paneSizes[pane] ?? null });
+    const next = px === null ? null : paneChosen(pane, px, { start: start.current, room: h ? limitNow(h) : Infinity, chosen: useStore.getState().paneSizes[pane] ?? null });
     start.current = null;
     setPaneSize(pane, next);
     // a drag wrote its own value live; put back what shows for the size
@@ -144,7 +164,7 @@ export function PaneSeam({ pane, label, className, axis = "x", dir, target, part
       factor={(h) => 1 / zoomOf(h)}
       cssVar={paneVar(pane)}
       target={target}
-      fit={(h) => paneTop(pane, roomNow(h))}
+      fit={(h) => paneTop(pane, limitNow(h))}
       onCommit={(px) => commit(px)}
     />
   );
