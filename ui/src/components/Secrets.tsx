@@ -1,9 +1,9 @@
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { useEffect, useState, type FormEvent } from "react";
-import { LIMITS, skippedWords, type SecretAct } from "../../../src/core/secretwire";
+import { LIMITS, proposedWords, skippedWords, type ProposeCount, type SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretRestartResult, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
-import { KEY_TONE, OWN_RESTART, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
+import { KEY_TONE, OWN_RESTART, carriedMachineKey, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, machineKeyLink, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type CarriedKey, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
 import { reachRefusal } from "../../../src/core/secretfile";
 import { batches, bulkAct, pick, sinkIdOf } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
@@ -21,6 +21,16 @@ const words = (text: string): string[] =>
     .map((t) => t.trim())
     .filter(Boolean);
 const MACHINES = ["mini", "mac", "gpd"] as const;
+/** the machines whose key the gate page sets: every reader */
+const KEYED: readonly string[] = MACHINES.filter((m) => m !== "mini");
+
+/** Takes a carried machine key off this window's URL once the form has it,
+ *  so a reload does not fill it in again. */
+function dropCarriedKey() {
+  const u = new URL(window.location.href);
+  u.hash = "";
+  window.history.replaceState(null, "", u.toString());
+}
 
 function Err({ text }: { text: string | null }) {
   return text ? (
@@ -93,10 +103,26 @@ export function SecretsView() {
   const home = useStore((s) => s.home);
   const order = useStore((s) => s.backendOrder);
   const load = useStore((s) => s.loadSecrets);
-  const [tab, setTab] = useState<Tab>("secrets");
+  /** a machine's new key, from the link its own page made */
+  const [carried, setCarried] = useState<CarriedKey | null>(() => carriedMachineKey(window.location.hash, KEYED));
+  const [tab, setTab] = useState<Tab>(carried ? "passkeys" : "secrets");
   useEffect(() => {
     for (const b of order) void load(b);
   }, [order, load]);
+  useEffect(() => {
+    if (carried) dropCarriedKey();
+  }, [carried]);
+  useEffect(() => {
+    // the link opened in a tab already on this page: only the fragment moved
+    const arrived = () => {
+      const key = carriedMachineKey(window.location.hash, KEYED);
+      if (!key) return;
+      setCarried(key);
+      setTab("passkeys");
+    };
+    window.addEventListener("hashchange", arrived);
+    return () => window.removeEventListener("hashchange", arrived);
+  }, []);
   const info = all[home];
   if (!info) {
     return (
@@ -148,7 +174,7 @@ export function SecretsView() {
       ) : shown === "import" ? (
         <ImportTab info={info} home={home} writer={writer} here={here} open={open} />
       ) : (
-        <PasskeysTab info={info} home={home} open={open} />
+        <PasskeysTab key={carried?.recipient ?? ""} info={info} home={home} open={open} carried={carried} onSet={() => setCarried(null)} />
       )}
     </main>
   );
@@ -219,10 +245,19 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
     setError(null);
     setLost(to);
   };
+  /** the gate page with this machine's recipient filled into its form */
+  const linkFor = (r: string): string | null => (KEYED.includes(info.backend) ? machineKeyLink(info.gate, info.backend, r) : null);
   if (recipient) {
+    const link = linkFor(recipient);
     return (
       <span className="secrets-gate">
-        Key made. Add it on the gate page under passkeys, machine keys:
+        {link ? (
+          <>
+            Key made. Nothing opens with it until it is machine key {info.backend}. <a href={link}>The gate page</a> opens with it filled in.
+          </>
+        ) : (
+          "Key made. Add it on the gate page under passkeys, machine keys:"
+        )}
         <code className="secrets-recipient">{recipient}</code>
         <button type="button" className="mini" onClick={() => void navigator.clipboard.writeText(recipient)}>
           copy
@@ -234,6 +269,7 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
     );
   }
   if (info.lock === "open") {
+    const link = info.recipient ? linkFor(info.recipient) : null;
     return (
       <span className="secrets-gate">
         <span className="moss">this machine's key is open</span>
@@ -247,8 +283,16 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
         )}
         {info.keyUnlisted && (
           <span className="rust" role="status">
-            the store does not seal to this key yet, so nothing opens with it. Copy it and set it as machine key {info.backend} under passkeys on{" "}
-            <a href={info.gate}>the gate page</a>.
+            the store does not seal to this key yet, so nothing opens with it.{" "}
+            {link ? (
+              <>
+                Set it as machine key {info.backend} on <a href={link}>the gate page</a>, which opens with it filled in.
+              </>
+            ) : (
+              <>
+                Copy it and set it as machine key {info.backend} under passkeys on <a href={info.gate}>the gate page</a>.
+              </>
+            )}
           </span>
         )}
         {info.kept && <span>its passphrase is kept in the Keychain, so it opens when canopy starts</span>}
@@ -807,8 +851,8 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const scanMini = async () => {
     const r = await act.run({ a: "import-scan" });
-    const d = r?.data as { added?: unknown; dropped?: unknown } | null | undefined;
-    if (d && typeof d.added === "number") setNote(`${d.added} waiting for approval${typeof d.dropped === "number" && d.dropped > 0 ? `, ${d.dropped} dropped` : ""}`);
+    const d = r?.data as Partial<ProposeCount> | null | undefined;
+    if (d && typeof d.added === "number") setNote(proposedWords({ added: d.added, dropped: typeof d.dropped === "number" ? d.dropped : 0, inStep: typeof d.inStep === "number" ? d.inStep : 0 }));
   };
   const scanHere = async () => {
     if (!writer) {
@@ -820,16 +864,17 @@ function ImportTab({ info, home, writer, here, open }: { info: SecretsInfo; home
     try {
       const found = await api.secretsScan(home);
       // the store takes a batch at a time; one request for a long credentials file would be refused whole
-      const r = { added: 0, dropped: 0 };
+      const r = { added: 0, dropped: 0, inStep: 0 };
       for (const batch of batches(found.items, LIMITS.proposals)) {
         const one = await api.secretsPropose(writer, batch);
         r.added += one.added;
         r.dropped += one.dropped;
+        r.inStep += one.inStep ?? 0;
       }
       const away = found.missing.length > 0 ? `; not on this machine: ${found.missing.join(", ")}` : "";
       const left = (found.left ?? 0) > 0 ? `; ${found.left} more did not fit, so approve or reject these and scan again` : "";
       const unread = (found.skipped ?? []).map((s) => `; ${skippedWords(s)}`).join("");
-      setNote(`${found.items.length} found, ${r.added} sent to the mini${r.dropped > 0 ? `, ${r.dropped} dropped` : ""}${away}${left}${unread}. Approve them under import on the gate page.`);
+      setNote(`${found.items.length} found and sent to the mini: ${proposedWords(r)}${away}${left}${unread}.${r.added > 0 ? " Approve them under import on the gate page." : ""}`);
     } catch (e) {
       setNote(errorText(e));
     } finally {
@@ -1012,12 +1057,14 @@ function Proposal({ p, home, picked, onPick }: { p: SecretProposalInfo; home: st
   );
 }
 
-function PasskeysTab({ info, home, open }: { info: SecretsInfo; home: string; open: boolean }) {
+function PasskeysTab({ info, home, open, carried, onSet }: { info: SecretsInfo; home: string; open: boolean; carried: CarriedKey | null; onSet: () => void }) {
   const act = useAct(home);
   const { busy, error, step } = useStep(home);
   const [label, setLabel] = useState("");
-  const [machine, setMachine] = useState("mac");
-  const [recipient, setRecipient] = useState("");
+  const [machine, setMachine] = useState(carried?.machine ?? "mac");
+  const [recipient, setRecipient] = useState(carried?.recipient ?? "");
+  /** the form still holds what the link filled in */
+  const filled = carried !== null && machine === carried.machine && recipient === carried.recipient;
   const [renaming, setRenaming] = useState<string | null>(null);
   const [newLabel, setNewLabel] = useState("");
   const [audit, setAudit] = useState<SecretAuditEntry[]>([]);
@@ -1034,7 +1081,9 @@ function PasskeysTab({ info, home, open }: { info: SecretsInfo; home: string; op
   return (
     <section className="secrets-tab">
       {!open ? (
-        <p className="secrets-note">Open a passkey session above to add or remove passkeys and machine keys.</p>
+        <p className="secrets-note">
+          {carried ? `A link filled in a new key for ${carried.machine}. Open a passkey session above to set it.` : "Open a passkey session above to add or remove passkeys and machine keys."}
+        </p>
       ) : (
         <>
           <ul className="secrets-list">
@@ -1105,12 +1154,16 @@ function PasskeysTab({ info, home, open }: { info: SecretsInfo; home: string; op
             className="secrets-form"
             onSubmit={(e) => {
               e.preventDefault();
-              void act.run({ a: "machine-key", machine, recipient: recipient.trim() }).then((r) => r && setRecipient(""));
+              void act.run({ a: "machine-key", machine, recipient: recipient.trim() }).then((r) => {
+                if (!r) return;
+                setRecipient("");
+                onSet();
+              });
             }}
           >
             <span>Machine key</span>
             <select aria-label="Machine" value={machine} onChange={(e) => setMachine(e.target.value)}>
-              {MACHINES.filter((m) => m !== "mini").map((m) => (
+              {KEYED.map((m) => (
                 <option key={m} value={m}>
                   {m}
                 </option>
@@ -1120,6 +1173,11 @@ function PasskeysTab({ info, home, open }: { info: SecretsInfo; home: string; op
             <button type="submit" className="mini" disabled={act.busy || recipient.trim() === ""}>
               set
             </button>
+            {filled && (
+              <span className="lichen" role="status">
+                filled in by a link. Check it against the key {carried.machine}'s own page shows before you set it. The store seals every value {carried.machine} reads to this key.
+              </span>
+            )}
             <Err text={act.error} />
           </form>
         </>

@@ -98,6 +98,8 @@ canopy ui ~/dev
 - 2026-11-10: A machine key's passphrase needs 8 characters, down from 12, by Eric's choice: he types it after every Mac canopy start. scrypt at 2^18 and the key file's 0600 mode are what stand behind it.
 - 2026-11-10: A Mac's key passphrase can wait in the login Keychain between starts, only when its owner runs `canopy secrets unlock --keep`. The 2026-10-14 passphrase exists so an agent running as the same user cannot open the key, and any such process can read that Keychain item with no prompt, so the keep is never a default, says what it gives up, and `canopy secrets forget` undoes it. The Mac's server restarted four times in one session that day, and each restart locked the key.
 - 2026-11-10: A reader says when the store does not seal to its open key (`keyUnlisted`), and `canopy secrets status` exits 1 on it. A key replaced and unlocked read "open" while no sink of the machine could be written.
+- 2026-11-10: A machine's new recipient reaches the gate page in the fragment of a link from the machine's own page, and it only fills the machine-key form. A stored key proposal approved with one tap was dropped, because any holder of the Mac's token could have queued its own key for the store to seal to.
+- 2026-11-10: A scan leaves out a value its file's sink already keeps in step. 149 of the 407 proposals waiting that day were such no-ops.
 - 2026-11-10: The clock view adds no route and no state. It reads the schedules the page already holds and writes through the routes each thing already had, so `triggers.json` stays a file written by hand and a schedule rule can be fired from the view but not changed there. The backend's time zone is worked out from the `next` it already sends, not sent.
 
 ## Out of scope

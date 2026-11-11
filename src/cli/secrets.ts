@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { newIdentity, newSigningKey, openValue, sealValue, signingKey } from "../core/secretcrypt";
 import { parseSecretFile, recipientKeys, recipientsFor, serializeFile, signFile, type SecretFile } from "../core/secretfile";
 import { localPaths, PIN, readLocalConfig, writeLocalConfig } from "../core/secretlocal";
-import { LIMITS, skippedWords } from "../core/secretwire";
+import { LIMITS, proposedWords, skippedWords, type ProposeCount } from "../core/secretwire";
 import type { BackendEntry, SecretProposalIn, SecretsInfo } from "../core/types";
 import { apiBase, callerHeaders } from "./api";
 import { ask as askAt, targetsOf, type Target } from "./health";
@@ -313,7 +313,7 @@ export async function propose(o: ProposeArgs, asJson: boolean, d: ProposeDeps): 
     ...(scan.missing.length > 0 ? [`not on this machine: ${scan.missing.join(", ")}`] : []),
     ...((scan.left ?? 0) > 0 ? [`${scan.left} more values did not fit in one scan; approve or reject what waits, then scan again`] : []),
   ];
-  const say = (sent: { writer: string; added: number; dropped: number } | null): void => {
+  const say = (sent: { writer: string; added: number; dropped: number; inStep: number } | null): void => {
     if (asJson) return d.print(JSON.stringify({ found: scan.items.length, picked: names, sent, notes }, null, 2));
     for (const n of names) d.print(`${dim(n.source)}  ${bold(n.key)}`);
     for (const n of notes) d.print(lichen(n));
@@ -343,17 +343,18 @@ export async function propose(o: ProposeArgs, asJson: boolean, d: ProposeDeps): 
     }
     if (!writer) return d.fail(`none of ${others.map((t) => t.name).join(", ") || "the backends the home one lists"} answered as the store's writer; name it with --to`);
   }
-  const sent = { writer: writer.name, added: 0, dropped: 0 };
+  const sent = { writer: writer.name, added: 0, dropped: 0, inStep: 0 };
   // the store takes a batch at a time and refuses a longer one whole
   for (let i = 0; i < picked.length; i += LIMITS.proposals) {
-    const r = await d.at<{ added: number; dropped: number }>(writer, "POST", "/api/secrets/proposals", { items: picked.slice(i, i + LIMITS.proposals) });
+    const r = await d.at<ProposeCount>(writer, "POST", "/api/secrets/proposals", { items: picked.slice(i, i + LIMITS.proposals) });
     sent.added += r.added;
     sent.dropped += r.dropped;
+    sent.inStep += r.inStep ?? 0;
   }
   say(sent);
   if (!asJson) {
-    d.print(`${picked.length} sent to ${writer.name}: ${sent.added} waiting for approval${sent.dropped > 0 ? `, ${sent.dropped} dropped` : ""}`);
-    d.print(`approve them under import at ${mine.gate}; they wait a day`);
+    d.print(`${picked.length} sent to ${writer.name}: ${proposedWords(sent)}`);
+    if (sent.added > 0) d.print(`approve them under import at ${mine.gate}; they wait a day`);
   }
   return sent.dropped > 0 ? 1 : 0;
 }

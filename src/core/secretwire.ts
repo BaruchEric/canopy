@@ -233,6 +233,22 @@ export function skippedWords(s: { path: string; lines: readonly number[] }): str
   return `${s.path}: line${many ? "s" : ""} ${shown}${more} ${many ? "are" : "is"} not KEY=value, so ${many ? "they were" : "it was"} left out; a sink of this file leaves ${many ? "them" : "it"} as ${many ? "they are" : "it is"}`;
 }
 
+/** what the store did with a batch of proposals; `inStep` is absent from
+ *  a writer older than 2026-11-10 */
+export interface ProposeCount {
+  added: number;
+  dropped: number;
+  inStep?: number;
+}
+
+/** A batch's counts in words, the same on the page and in the CLI. A value
+ *  in step is one a sink of its own file already holds, so it waits for
+ *  nothing; a dropped one could not be opened. */
+export function proposedWords(c: ProposeCount): string {
+  const inStep = c.inStep ?? 0;
+  return `${c.added} waiting for approval${inStep > 0 ? `, ${inStep} already in step` : ""}${c.dropped > 0 ? `, ${c.dropped} dropped` : ""}`;
+}
+
 export function parseRequest(line: string): SecretsRequest | { error: string } {
   if (line.length > LIMITS.line) return { error: "the request is too long" };
   let v: unknown;

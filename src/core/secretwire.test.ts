@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AGE_HEAD } from "./secretfile";
-import { ACT_KINDS, LIMITS, encodeLine, parseAct, parseProposals, parseReply, parseRequest, skippedWords, type ActKind } from "./secretwire";
+import { ACT_KINDS, LIMITS, encodeLine, parseAct, parseProposals, parseReply, parseRequest, proposedWords, skippedWords, type ActKind } from "./secretwire";
 import { SAMPLES } from "./secretwire.samples";
 
 describe("parseAct", () => {
@@ -42,6 +42,14 @@ describe("parseRequest and parseReply", () => {
   test("a reply carries the passkey gate through", () => {
     expect(parseReply('{"ok":false,"error":"open the gate","gate":"passkey"}')).toEqual({ ok: false, error: "open the gate", gate: "passkey" });
     expect(parseReply("nope")).toBeNull();
+  });
+});
+
+describe("proposedWords", () => {
+  test("a batch's counts read the same on the page and in the CLI, and an older writer's answer has no in-step count", () => {
+    expect(proposedWords({ added: 3, dropped: 0 })).toBe("3 waiting for approval");
+    expect(proposedWords({ added: 1, dropped: 2, inStep: 140 })).toBe("1 waiting for approval, 140 already in step, 2 dropped");
+    expect(proposedWords({ added: 0, dropped: 0, inStep: 5 })).toBe("0 waiting for approval, 5 already in step");
   });
 });
 

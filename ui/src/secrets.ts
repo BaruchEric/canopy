@@ -2,7 +2,7 @@
    the gate, the list's filter, and the sinks with their owners' states.
    Nothing here ever sees a value. */
 
-import { DOTENV_KEY, JSON_PATH, SECRET_NAME, joinList, reachList } from "../../src/core/secretfile";
+import { AGE_RECIPIENT, DOTENV_KEY, JSON_PATH, SECRET_NAME, joinList, reachList } from "../../src/core/secretfile";
 import type { SecretKeyState, SecretMeta, SecretSinkFormat, SecretSinkInfo, SecretsInfo, SecretStack } from "../../src/core/types";
 
 /** the backend whose info comes from the mini's service, in page order */
@@ -208,4 +208,63 @@ export function passedOver(mark: WriteMark | null, owner: string | null, info: S
   const done = info.sinksAt;
   if (done === null) return false;
   return done.startsWith(mark.head) || mark.head.startsWith(done) || done !== mark.at[owner];
+}
+
+/** A broadcast is the same for every page, so it carries nobody's session:
+ *  `session` is false in it and no waiting proposal says what holds the
+ *  same value. Both are in what this page last read with its own session
+ *  (`read`), and a proposal's `same` is fixed when it is admitted, so
+ *  `base` (the newer info) takes the session from the read and each
+ *  proposal's `same` from the read's proposal of that id. A read with no
+ *  session leaves none: the page forgets with the session. */
+export function withSession(base: SecretsInfo, read: SecretsInfo | undefined): SecretsInfo {
+  const session = read?.session ?? false;
+  if (!read || !session) return { ...base, session, proposals: base.proposals.map((p) => (p.same === null ? p : { ...p, same: null })) };
+  const same = new Map(read.proposals.map((p) => [p.id, p.same]));
+  return { ...base, session, proposals: base.proposals.map((p) => (p.same === null && same.get(p.id) ? { ...p, same: same.get(p.id) ?? null } : p)) };
+}
+
+/** A page with a session heard of a proposal its last read never held: only
+ *  a read of its own says what that one's value is the same as. */
+export function unreadProposals(base: SecretsInfo, read: SecretsInfo | undefined): boolean {
+  if (!read?.session) return false;
+  const held = new Set(read.proposals.map((p) => p.id));
+  return base.proposals.some((p) => !held.has(p.id));
+}
+
+const CARRIED = "machine-key=";
+
+/** The gate page's address with a machine's new recipient in its fragment,
+ *  so the machine-key form there comes filled in. A fragment never leaves
+ *  the browser, and a recipient is public. Null when there is no gate page
+ *  to link or the recipient is not one. */
+export function machineKeyLink(gate: string, machine: string, recipient: string): string | null {
+  if (!AGE_RECIPIENT.test(recipient) || machine.includes(":")) return null;
+  try {
+    const u = new URL(gate);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    u.hash = `${CARRIED}${machine}:${recipient}`;
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+export interface CarriedKey {
+  machine: string;
+  recipient: string;
+}
+
+/** What a `machineKeyLink` carried, from the page's fragment: a machine the
+ *  form offers and an age recipient, or null. It only fills the form in:
+ *  setting the key still takes the passkey session and the form's button. */
+export function carriedMachineKey(hash: string, machines: readonly string[]): CarriedKey | null {
+  const body = hash.startsWith("#") ? hash.slice(1) : hash;
+  if (!body.startsWith(CARRIED)) return null;
+  const rest = body.slice(CARRIED.length);
+  const at = rest.indexOf(":");
+  if (at < 1) return null;
+  const machine = rest.slice(0, at);
+  const recipient = rest.slice(at + 1);
+  return machines.includes(machine) && AGE_RECIPIENT.test(recipient) ? { machine, recipient } : null;
 }

@@ -131,7 +131,7 @@ describe("propose", () => {
   });
 
   /** a home backend that reads, a registry of two others, and whatever the writer was posted */
-  function world(o: { scan?: SecretProposalIn[]; role?: SecretsInfo["role"]; writerAway?: boolean } = {}) {
+  function world(o: { scan?: SecretProposalIn[]; role?: SecretsInfo["role"]; writerAway?: boolean; inStep?: number } = {}) {
     const lines: string[] = [];
     const posted: SecretProposalIn[][] = [];
     const asked: string[] = [];
@@ -154,7 +154,8 @@ describe("propose", () => {
         if (path === "/api/secrets/proposals" && t.name === "mini") {
           const batch = (body as { items: SecretProposalIn[] }).items;
           posted.push(batch);
-          return { added: batch.length, dropped: 0 } as T;
+          // a writer from before 2026-11-10 answers without inStep
+          return (o.inStep === undefined ? { added: batch.length, dropped: 0 } : { added: batch.length - o.inStep, dropped: 0, inStep: o.inStep }) as T;
         }
         throw new Error(`unexpected ${t.name} ${path}`);
       },
@@ -184,11 +185,22 @@ describe("propose", () => {
     const w = world();
     await propose(args({ match: ["openai"] }), true, w.deps);
     expect(w.posted[0]?.[0]?.partial).toBe(true);
-    const out = JSON.parse(w.lines.join("\n")) as { found: number; picked: { from: string; source: string; key: string; partial: boolean }[]; sent: { writer: string; added: number; dropped: number } };
+    const out = JSON.parse(w.lines.join("\n")) as { found: number; picked: { from: string; source: string; key: string; partial: boolean }[]; sent: { writer: string; added: number; dropped: number; inStep: number } };
     expect(out.found).toBe(4);
     expect(out.picked).toEqual([{ from: "mac", source: NOTES, key: "OPENAI_API_KEY", partial: true }]);
-    expect(out.sent).toEqual({ writer: "mini", added: 1, dropped: 0 });
+    expect(out.sent).toEqual({ writer: "mini", added: 1, dropped: 0, inStep: 0 });
     expect(w.lines.join("\n")).not.toContain("sealed-fixture");
+  });
+
+  test("what a sink already holds is counted apart, and a send that leaves nothing waiting names no next step", async () => {
+    const some = world({ inStep: 1 });
+    expect(await propose(args({ match: ["CANOPY_"] }), false, some.deps)).toBe(0);
+    expect(some.lines.join("\n")).toContain("2 sent to mini: 1 waiting for approval, 1 already in step");
+    expect(some.lines.join("\n")).toContain("approve them under import");
+    const all = world({ inStep: 2 });
+    expect(await propose(args({ match: ["CANOPY_"] }), false, all.deps)).toBe(0);
+    expect(all.lines.join("\n")).toContain("2 sent to mini: 0 waiting for approval, 2 already in step");
+    expect(all.lines.join("\n")).not.toContain("approve them under import");
   });
 
   test("--dry-run lists what would go and asks no other backend", async () => {

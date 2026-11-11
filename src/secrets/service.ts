@@ -489,44 +489,61 @@ export class SecretsService {
     return out;
   }
 
-  /** One proposal into the waiting list, or false when this key cannot
-   *  open its value or the secret it would update is gone. `known` grows
-   *  by its value, so a later one can name it as the same. */
-  private async admit(pid: string, p: SecretProposalIn, expires: number, known: [string, string][]): Promise<boolean> {
+  /** A scan finds every value in a file, also the ones a sink already keeps
+   *  in step there. Such a value is the one the store holds for that key of
+   *  that file, so there is nothing to approve. A names-only source and a
+   *  reader's drift (`merges`) are never in step. */
+  private inStep(p: SecretProposalIn, value: string | null, known: readonly [string, string][]): boolean {
+    if (value === null || p.merges) return false;
+    for (const sink of Object.values(this.d.store.file.sinks)) {
+      if (sink.machine !== p.from || sink.path !== p.source) continue;
+      const name = sink.keys[p.key];
+      if (name === undefined) continue;
+      const held = known.find(([n]) => n === name)?.[1];
+      return held !== undefined && sameValue(held, value);
+    }
+    return false;
+  }
+
+  /** One proposal into the waiting list. "dropped" when this key cannot
+   *  open its value or the secret it would update is gone, "instep" when a
+   *  sink already holds this value for this key of this file. `known`
+   *  grows by an added value, so a later one can name it as the same. */
+  private async admit(pid: string, p: SecretProposalIn, expires: number, known: [string, string][]): Promise<"added" | "dropped" | "instep"> {
     let value: string | null = null;
     if (p.sealed) {
       try {
         value = await openProposal(p.sealed, this.d.store.identity(), p);
       } catch {
-        return false;
+        return "dropped";
       }
     }
-    if (p.merges && !this.d.store.file.secrets[p.merges]) return false;
+    if (p.merges && !this.d.store.file.secrets[p.merges]) return "dropped";
+    if (this.inStep(p, value, known)) return "instep";
     const v = value;
     const same = v === null ? null : (known.find(([, k]) => sameValue(k, v))?.[0] ?? null);
     this.proposals.set(pid, { id: pid, p, expires, suggested: suggestName(p.source, p.key), same });
     this.dirty = true;
     if (v !== null) known.push([`${p.key} from ${p.source}`, v]);
-    return true;
+    return "added";
   }
 
   private async propose(items: SecretProposalIn[]): Promise<SecretsReply> {
     this.expire();
     if (this.proposals.size + items.length > LIMITS.pending) return fail(`at most ${LIMITS.pending} proposals wait at once; approve or reject some first`);
     const known = await this.known();
-    let added = 0;
-    let dropped = 0;
+    const count = { added: 0, dropped: 0, instep: 0 };
     for (const p of items) {
       for (const [pid, q] of this.proposals) if (q.p.from === p.from && q.p.source === p.source && q.p.key === p.key) this.drop(pid);
-      if (await this.admit(randomBytes(9).toString("base64url"), p, this.now() + LIMITS.proposalTtlMs, known)) added += 1;
-      else dropped += 1;
+      count[await this.admit(randomBytes(9).toString("base64url"), p, this.now() + LIMITS.proposalTtlMs, known)] += 1;
     }
-    return { ok: true, data: { added, dropped } };
+    return { ok: true, data: { added: count.added, dropped: count.dropped, inStep: count.instep } };
   }
 
   /** The proposals a run before this one left waiting, taken back once at
    *  start. Each passes the intake again: one this key cannot open, one
-   *  past its time and one whose secret is gone are left out. An expiry is
+   *  past its time, one whose secret is gone and one a sink has come to
+   *  keep in step are left out. An expiry is
    *  never later than a new proposal's would be. The file is written again
    *  when that left something out of it; one that could not be read at all
    *  stays as it is until the list next changes. */
@@ -539,16 +556,22 @@ export class SecretsService {
     const known = list.length > 0 ? await this.known() : [];
     let lost = dropped;
     let expired = 0;
+    let settled = 0;
     let moved = false;
     for (const e of list) {
       const until = Math.min(e.expires, t + LIMITS.proposalTtlMs);
       if (e.expires < t) expired += 1;
-      else if (this.proposals.size >= LIMITS.pending || this.proposals.has(e.id) || !(await this.admit(e.id, e.p, until, known))) lost += 1;
-      else if (until !== e.expires) moved = true;
+      else if (this.proposals.size >= LIMITS.pending || this.proposals.has(e.id)) lost += 1;
+      else {
+        const took = await this.admit(e.id, e.p, until, known);
+        if (took === "dropped") lost += 1;
+        else if (took === "instep") settled += 1;
+        else if (until !== e.expires) moved = true;
+      }
     }
-    this.dirty = list.length > 0 && (lost > 0 || expired > 0 || moved);
-    if (this.proposals.size + lost + expired > 0) {
-      this.d.log(`secrets: ${this.proposals.size} waiting proposals kept across the restart${expired > 0 ? `, ${expired} past their time` : ""}${lost > 0 ? `, ${lost} that could not be read left out` : ""}`);
+    this.dirty = list.length > 0 && (lost > 0 || expired > 0 || settled > 0 || moved);
+    if (this.proposals.size + lost + expired + settled > 0) {
+      this.d.log(`secrets: ${this.proposals.size} waiting proposals kept across the restart${expired > 0 ? `, ${expired} past their time` : ""}${settled > 0 ? `, ${settled} a sink keeps in step now` : ""}${lost > 0 ? `, ${lost} that could not be read left out` : ""}`);
     }
     await this.flush();
   }

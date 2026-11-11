@@ -121,7 +121,7 @@ import type {
   EmulatorOpened,
   Priority,
 } from "../../src/core/types";
-import type { SecretAct } from "../../src/core/secretwire";
+import type { ProposeCount, SecretAct } from "../../src/core/secretwire";
 import { isStaleOffer, newestStale, type StaleOffer } from "../../src/core/stalecopy";
 import type { Delivery, TriggerEvent, TriggersInfo } from "../../src/core/trigger";
 import type { WorkInfo, WorkItem } from "../../src/core/work";
@@ -746,7 +746,7 @@ export const api = {
   secretsLogout: (b: string) => req<{ ok: true }>(b, "/api/secrets/logout", { method: "POST", body: "{}" }),
   secretsAct: (b: string, act: SecretAct) => req<unknown>(b, "/api/secrets/act", { method: "POST", body: JSON.stringify({ act }) }),
   secretsPropose: (b: string, items: SecretProposalIn[]) =>
-    req<{ added: number; dropped: number }>(b, "/api/secrets/proposals", { method: "POST", body: JSON.stringify({ items }) }),
+    req<ProposeCount>(b, "/api/secrets/proposals", { method: "POST", body: JSON.stringify({ items }) }),
   secretsPull: (b: string) => req<SecretsInfo>(b, "/api/secrets/pull", { method: "POST", body: "{}" }),
   // left: the values past what the store lets wait at once; a backend from before 2026-11-10 stops at 200 and does not say.
   // skipped: the lines of a dotenv file that are not pairs, by number; an older backend reads no such file and sends none

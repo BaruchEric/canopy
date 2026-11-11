@@ -304,7 +304,7 @@ describe("proposals", () => {
         { ...q, key: "WRONG", sealed: await sealProposal(q, "x", store.recipient), merges: null },
       ],
     });
-    expect(r).toEqual({ ok: true, data: { added: 2, dropped: 1 } });
+    expect(r).toEqual({ ok: true, data: { added: 2, dropped: 1, inStep: 0 } });
     const list = (await info(token)).proposals;
     expect(list.find((x) => x.key === "CF_TOKEN")?.same).toBe("cf_token");
     const openai = list.find((x) => x.key === "OPENAI_API_KEY");
@@ -465,7 +465,7 @@ describe("proposals", () => {
   test("a proposal past its day leaves the file at the next tick; a write that fails is logged and tried again", async () => {
     const p = { from: "mac", source: "/Users/e/dev/.env", key: "A" };
     keptFails = true;
-    expect(await svc.handle({ t: "propose", items: [{ ...p, sealed: await sealProposal(p, "1", store.recipient), merges: null }] })).toEqual({ ok: true, data: { added: 1, dropped: 0 } });
+    expect(await svc.handle({ t: "propose", items: [{ ...p, sealed: await sealProposal(p, "1", store.recipient), merges: null }] })).toEqual({ ok: true, data: { added: 1, dropped: 0, inStep: 0 } });
     expect((await info()).proposals.map((x) => x.key)).toEqual(["A"]);
     expect(kept).toEqual([]);
     expect(logs.join("\n")).toContain("the waiting proposals could not be kept for a restart: ENOSPC");
@@ -489,6 +489,48 @@ describe("proposals", () => {
     await ok(approve);
     expect((await info()).proposals).toEqual([]);
     expect(await ok({ a: "reveal", name: "a_key" })).toMatchObject({ value: "1" });
+  });
+
+  test("a scan leaves out a value its file's sink already keeps in step, and proposes it again once the file moves", async () => {
+    const env = join(stacks, "app", ".env");
+    await mkdir(join(stacks, "app"), { recursive: true });
+    await writeFile(env, "API_KEY=k1\nPORT=8080\n");
+    found = [{ source: env, key: "API_KEY", value: "k1" }];
+    await ok({ a: "import-scan" });
+    const first = (await info()).proposals[0];
+    await ok({ a: "approve", proposal: first?.id ?? "", name: "app_api_key", description: "", tags: [], value: null, sink: { id: "app" } });
+    // the next scan finds the whole file again: only what no sink holds waits
+    found = [
+      { source: env, key: "API_KEY", value: "k1" },
+      { source: env, key: "PORT", value: "8080" },
+    ];
+    expect(await ok({ a: "import-scan" })).toEqual({ added: 1, dropped: 0, inStep: 1 });
+    expect((await info()).proposals.map((x) => x.key)).toEqual(["PORT"]);
+    // the same value in another machine's file is that file's to propose
+    const m = { from: "mac", source: "/Users/e/dev/.env", key: "API_KEY" };
+    expect(await svc.handle({ t: "propose", items: [{ ...m, sealed: await sealProposal(m, "k1", store.recipient), merges: null }] })).toEqual({ ok: true, data: { added: 1, dropped: 0, inStep: 0 } });
+    expect((await info(token)).proposals.find((x) => x.from === "mac")?.same).toBe("app_api_key");
+    // a file edited by hand no longer holds the store's value, so the scan says so
+    found = [{ source: env, key: "API_KEY", value: "k2" }];
+    expect(await ok({ a: "import-scan" })).toEqual({ added: 1, dropped: 0, inStep: 0 });
+    expect((await info()).proposals.filter((x) => x.from === "mini").map((x) => x.key).sort()).toEqual(["API_KEY", "PORT"]);
+  });
+
+  test("a restart leaves out a waiting proposal that a sink came to hold meanwhile", async () => {
+    const env = join(stacks, "app", ".env");
+    await mkdir(join(stacks, "app"), { recursive: true });
+    await writeFile(env, "API_KEY=k1\n");
+    found = [{ source: env, key: "API_KEY", value: "k1" }];
+    await ok({ a: "import-scan" });
+    expect(kept.map((k) => k.p.key)).toEqual(["API_KEY"]);
+    // the same value reaches the store and the file's sink by hand
+    await ok({ a: "add", name: "app_api_key", value: "k1", description: "", tags: [] });
+    await ok({ a: "sink-set", id: "app", machine: "mini", path: env, format: "dotenv", keys: { API_KEY: "app_api_key" } });
+    svc = service();
+    await svc.restore();
+    expect((await info()).proposals).toEqual([]);
+    expect(kept).toEqual([]);
+    expect(logs.join("\n")).toContain("0 waiting proposals kept across the restart, 1 a sink keeps in step now");
   });
 
   test("at most 500 wait at once", async () => {

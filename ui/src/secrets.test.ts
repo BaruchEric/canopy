@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { SecretMeta, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
-import { OWN_RESTART, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, markOf, passedOver, reachRows, readersOf, restartLine, sinkRows, stateTone, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
+import type { SecretMeta, SecretProposalInfo, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
+import { OWN_RESTART, carriedMachineKey, filterSecrets, gateHere, hostOf, isGateClosed, keysText, machineKeyLink, parseKeysText, markOf, passedOver, reachRows, readersOf, restartLine, sinkRows, stateTone, tagsOf, unreadProposals, usedByText, withSession, writerOf, type SinkRow } from "./secrets";
 
 const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   ok: true,
@@ -244,5 +244,91 @@ describe("whether an owner has passed over a write", () => {
     expect(passedOver({ head: "b", at: {} }, null, at("a"))).toBe(true);
     expect(passedOver({ head: "b", at: {} }, "mac", at(undefined))).toBe(true);
     expect(passedOver({ head: "b", at: {} }, "mac", undefined)).toBe(true);
+  });
+});
+
+const waiting = (id: string, same: string | null = null): SecretProposalInfo => ({
+  id,
+  from: "mac",
+  source: "/x/.env",
+  key: id.toUpperCase(),
+  suggested: id,
+  merges: null,
+  same,
+  namesOnly: false,
+  sinkable: true,
+  expires: 1,
+});
+
+describe("what only a session says, across a broadcast", () => {
+  test("a broadcast keeps the session and each waiting proposal's same-value hint from the page's last read", () => {
+    const read = info({ session: true, head: "aaa1111", proposals: [waiting("a", "vercel_token"), waiting("b")] });
+    const heard = info({ head: "bbb2222", proposals: [waiting("a"), waiting("b")] });
+    const now = withSession(heard, read);
+    expect(now.session).toBe(true);
+    expect(now.head).toBe("bbb2222");
+    expect(now.proposals.map((p) => p.same)).toEqual(["vercel_token", null]);
+  });
+
+  test("a proposal that left the queue takes its hint with it, and a new one has none until the page reads", () => {
+    const read = info({ session: true, proposals: [waiting("a", "vercel_token"), waiting("b", "fal_api_key")] });
+    const heard = info({ proposals: [waiting("b"), waiting("c")] });
+    expect(withSession(heard, read).proposals.map((p) => [p.id, p.same])).toEqual([
+      ["b", "fal_api_key"],
+      ["c", null],
+    ]);
+    expect(unreadProposals(heard, read)).toBe(true);
+    expect(unreadProposals(info({ proposals: [waiting("b")] }), read)).toBe(false);
+  });
+
+  test("a page with no session keeps none, asks for no read, and forgets the hints it held", () => {
+    const heard = info({ proposals: [waiting("a"), waiting("c")] });
+    expect(withSession(heard, undefined).session).toBe(false);
+    expect(unreadProposals(heard, undefined)).toBe(false);
+    expect(unreadProposals(heard, info({ proposals: [waiting("a")] }))).toBe(false);
+    // the read that came back says the session ended; what the page still shows drops its hints
+    const shown = info({ session: true, proposals: [waiting("a", "vercel_token")] });
+    const ended = withSession(shown, info({ session: false, proposals: [waiting("a")] }));
+    expect(ended.session).toBe(false);
+    expect(ended.proposals.map((p) => p.same)).toEqual([null]);
+  });
+
+  test("a read that an event overtook gives the newer info its session and hints", () => {
+    const heard = info({ head: "bbb2222", proposals: [waiting("a"), waiting("b")] });
+    const read = info({ session: true, head: "aaa1111", proposals: [waiting("a", "vercel_token")] });
+    const now = withSession(heard, read);
+    expect(now.head).toBe("bbb2222");
+    expect(now.proposals.map((p) => p.same)).toEqual(["vercel_token", null]);
+  });
+});
+
+describe("a new key's way to the gate page", () => {
+  const KEY = `age1${"q".repeat(58)}`;
+  const GATE = "https://canopy.beric.ca/?view=secrets";
+
+  test("the link is the gate page with the machine and its recipient in the fragment", () => {
+    expect(machineKeyLink(GATE, "mac", KEY)).toBe(`${GATE}#machine-key=mac:${KEY}`);
+  });
+
+  test("no link without a gate page, or for what is not a recipient", () => {
+    expect(machineKeyLink("", "mac", KEY)).toBeNull();
+    expect(machineKeyLink("javascript:alert(1)", "mac", KEY)).toBeNull();
+    expect(machineKeyLink(GATE, "mac", "age1short")).toBeNull();
+    expect(machineKeyLink(GATE, "m:ac", KEY)).toBeNull();
+  });
+
+  test("the gate page reads back what the link carried", () => {
+    const link = machineKeyLink(GATE, "gpd", KEY) ?? "";
+    expect(carriedMachineKey(new URL(link).hash, ["mac", "gpd"])).toEqual({ machine: "gpd", recipient: KEY });
+  });
+
+  test("a fragment for a machine the form does not offer, a bad recipient or anything else carries nothing", () => {
+    expect(carriedMachineKey(`#machine-key=mini:${KEY}`, ["mac", "gpd"])).toBeNull();
+    expect(carriedMachineKey(`#machine-key=mac:${KEY}x`, ["mac", "gpd"])).toBeNull();
+    expect(carriedMachineKey(`#machine-key=mac:AGE-SECRET-KEY-1${"Q".repeat(58)}`, ["mac", "gpd"])).toBeNull();
+    expect(carriedMachineKey(`#machine-key=:${KEY}`, ["mac", "gpd"])).toBeNull();
+    expect(carriedMachineKey("#machine-key=mac", ["mac", "gpd"])).toBeNull();
+    expect(carriedMachineKey("#top", ["mac", "gpd"])).toBeNull();
+    expect(carriedMachineKey("", ["mac", "gpd"])).toBeNull();
   });
 });

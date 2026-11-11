@@ -58,6 +58,7 @@ export type { TermTab } from "./term";
 import { clamp, needsAttention } from "./util";
 import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
+import { unreadProposals, withSession } from "./secrets";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
 import { appendFeed, describeEvent, feedOnSide, feedPlaceOf, feedPlaceShown, sweepLine, DEFAULT_FEED_PLACE, type FeedEntry, type FeedPlace, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
@@ -3569,8 +3570,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     if (ev.type === "secrets") {
       secretsEvents.set(b, (secretsEvents.get(b) ?? 0) + 1);
-      // a broadcast carries nobody's session; keep what this page last read
-      set((st) => ({ secrets: { ...st.secrets, [b]: { ...ev.info, session: st.secrets[b]?.session ?? false } } }));
+      // a broadcast carries nobody's session; keep what this page last read,
+      // and read again when it brings a proposal that read never held
+      const fresh = unreadProposals(ev.info, get().secrets[b]);
+      set((st) => ({ secrets: { ...st.secrets, [b]: withSession(ev.info, st.secrets[b]) } }));
+      if (fresh) void get().loadSecrets(b);
       return;
     }
     if (ev.type === "health") {
@@ -4381,12 +4385,12 @@ export const useStore = create<CanopyState>((set, get) => ({
     try {
       const info = await api.secrets(b);
       // a read carries this page's session, so it wins over any event that
-      // came in meanwhile on that one field
+      // came in meanwhile on what only a session says
       if ((secretsEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ secrets: { ...s.secrets, [b]: info } }));
       else if (isShown(get(), b))
         set((s) => {
           const cur = s.secrets[b];
-          return cur ? { secrets: { ...s.secrets, [b]: { ...cur, session: info.session } } } : {};
+          return cur ? { secrets: { ...s.secrets, [b]: withSession(cur, info) } } : {};
         });
     } catch {
       // an older backend has no secret store; nothing shows for it
