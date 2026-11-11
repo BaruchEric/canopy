@@ -278,7 +278,7 @@ function MachineKey({ info, home }: { info: SecretsInfo; home: string }) {
       }}
     >
       <span>No key on this machine.</span>
-      <input type="password" aria-label="New key passphrase, 12 characters or more" placeholder="passphrase, 12 or more characters" autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
+      <input type="password" aria-label={`New key passphrase, ${LIMITS.passphrase} characters or more`} placeholder={`passphrase, ${LIMITS.passphrase} or more characters`} autoComplete="new-password" value={pass} onChange={(e) => setPass(e.target.value)} />
       <input type="password" aria-label="The passphrase again" placeholder="the same again" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} />
       <button type="submit" className="mini" disabled={busy || pass === ""}>
         make a key

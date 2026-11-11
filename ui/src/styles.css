@@ -15308,7 +15308,7 @@ button.trigger-title:hover {
     grid-template-columns: minmax(0, 1fr);
   }
   /* a passphrase field takes a row of its own beside a label, so its hint
-     ("12 or more characters") is not cut short at a finger's 16px */
+     ("8 or more characters") is not cut short at a finger's 16px */
   .secrets-form input[type="password"] {
     flex-basis: 15em;
   }

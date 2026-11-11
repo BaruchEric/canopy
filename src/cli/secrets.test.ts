@@ -5,7 +5,7 @@ import { AGE_HEAD } from "../core/secretfile";
 import { LIMITS } from "../core/secretwire";
 import type { SecretProposalIn, SecretsInfo } from "../core/types";
 import type { Target } from "./health";
-import { breakglassIdentity, listLines, parsePropose, pickProposals, propose, recoverFile, statusExit, statusLines, type ProposeArgs } from "./secrets";
+import { breakglassIdentity, HIDDEN_START, listLines, makeKey, parsePropose, pickProposals, propose, recoverFile, statusExit, statusLines, typeHidden, unlockRefusal, type ProposeArgs } from "./secrets";
 
 const STAMP = "2026-10-14T12:00:00.000Z";
 const V = "fixture-value-0x5eed";
@@ -229,5 +229,137 @@ describe("propose", () => {
     expect(await propose(args({ match: ["voice"], to: "mini" }), false, w.deps)).toBe(0);
     expect(w.asked.filter((a) => a.endsWith("GET /api/secrets") && !a.startsWith("home "))).toEqual([]);
     expect(w.posted.length).toBe(1);
+  });
+});
+
+describe("a hidden line as it is typed", () => {
+  const type = (...chunks: string[]) => chunks.reduce(typeHidden, HIDDEN_START);
+  const ESC = "\u001b";
+
+  test("enter ends the line, and what follows it in the same chunk is not taken", () => {
+    expect(type("correct horse", "\r")).toEqual({ text: "correct horse", esc: "", done: "line" });
+    expect(type("abc\nrest").text).toBe("abc");
+    expect(type("abc").done).toBeNull();
+  });
+
+  test("ctrl-c cancels", () => {
+    expect(type("abc\u0003").done).toBe("cancel");
+  });
+
+  test("spaces, symbols and letters outside ascii are kept as typed", () => {
+    const pass = " With Spaces & Symbols! #$%^*()\u0027\"\\ pässwörd-日本語 ";
+    expect(type(pass, "\r").text).toBe(pass);
+  });
+
+  test("backspace takes one whole character", () => {
+    expect(type("abX\u007fc\r").text).toBe("abc");
+    expect(type("ab\b\b\b\bc\r").text).toBe("c");
+    expect(type("a🌲\u007fb\r").text).toBe("ab");
+  });
+
+  test("ctrl-u starts the line over and ctrl-w takes the last word", () => {
+    expect(type("oops-wrong\u0015right one\r").text).toBe("right one");
+    expect(type("right one junk\u0017\r").text).toBe("right one ");
+    expect(type("right one  \u0017two\r").text).toBe("right two");
+  });
+
+  test("an arrow, the delete key and a paste\u0027s markers add nothing, even split across chunks", () => {
+    expect(type(`pass-0${ESC}[D1\r`).text).toBe("pass-01");
+    expect(type(`pass-01${ESC}[3~\r`).text).toBe("pass-01");
+    expect(type(`${ESC}OApass-01\r`).text).toBe("pass-01");
+    expect(type(`${ESC}[200~pasted text${ESC}[201~`, "\r").text).toBe("pasted text");
+    expect(type("pass", ESC, "[", "1;5", "C", "-01\r").text).toBe("pass-01");
+  });
+
+  test("other control keys add nothing, and enter still ends a line after a stray escape", () => {
+    expect(type("pa\tss\u0001\u0004-01\r").text).toBe("pass-01");
+    expect(type(`pass-01${ESC}\r`)).toEqual({ text: "pass-01", esc: "", done: "line" });
+  });
+});
+
+describe("a refused unlock", () => {
+  test("a wrong passphrase names the way out when it is lost; any other refusal is passed on", () => {
+    expect(unlockRefusal("wrong passphrase")).toContain("canopy secrets key --replace");
+    expect(unlockRefusal("wrong passphrase").split("\n")[0]).toBe("wrong passphrase");
+    expect(unlockRefusal("no key for this machine yet; create one first")).toBe("no key for this machine yet; create one first\nmake one with canopy secrets key");
+    expect(unlockRefusal("this call needs the admin right")).toBe("this call needs the admin right");
+  });
+});
+
+describe("a new key for this machine", () => {
+  const RECIPIENT = "age1fixturerecipient0x5eed";
+  const PASS = "a long enough passphrase";
+
+  function world(o: { lock?: SecretsInfo["lock"]; role?: SecretsInfo["role"]; typed?: string[] } = {}) {
+    const lines: string[] = [];
+    const prompts: string[] = [];
+    const posted: unknown[] = [];
+    const typed = [...(o.typed ?? [PASS, PASS])];
+    const deps = {
+      read: async (prompt: string) => {
+        prompts.push(prompt);
+        return typed.shift() ?? "";
+      },
+      home: async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+        if (method === "GET" && path === "/api/secrets") return info({ lock: o.lock ?? "locked", role: o.role ?? "reader" }) as T;
+        if (method === "POST" && path === "/api/secrets/key") {
+          posted.push(body);
+          return { recipient: RECIPIENT } as T;
+        }
+        throw new Error(`unexpected ${method} ${path}`);
+      },
+      print: (line: string) => void lines.push(line),
+      fail: (msg: string): never => {
+        throw new Error(msg);
+      },
+    };
+    return { lines, prompts, posted, deps };
+  }
+
+  test("a machine with no key gets one: the passphrase is asked twice and the recipient and the next step are printed", async () => {
+    const w = world({ lock: "none" });
+    await makeKey({ replace: false }, w.deps);
+    expect(w.prompts.length).toBe(2);
+    expect(w.posted).toEqual([{ passphrase: PASS, replace: false }]);
+    const out = w.lines.join("\n");
+    expect(out).toContain(RECIPIENT);
+    expect(out).toContain("machine key mac");
+    expect(out).toContain("https://canopy.beric.ca/?view=secrets");
+    expect(out).not.toContain(PASS);
+  });
+
+  test("a machine that has a key keeps it unless --replace is given, and nothing is asked", async () => {
+    for (const lock of ["locked", "open"] as const) {
+      const w = world({ lock });
+      await expect(makeKey({ replace: false }, w.deps)).rejects.toThrow("canopy secrets key --replace");
+      expect(w.prompts).toEqual([]);
+      expect(w.posted).toEqual([]);
+    }
+  });
+
+  test("--replace makes a new key over a locked one and says the old one no longer opens anything here", async () => {
+    const w = world({ lock: "locked" });
+    await makeKey({ replace: true }, w.deps);
+    expect(w.posted).toEqual([{ passphrase: PASS, replace: true }]);
+    expect(w.lines.join("\n")).toContain("the old key is gone");
+  });
+
+  test("two passphrases that differ, or one too short, change nothing", async () => {
+    const differ = world({ lock: "none", typed: [PASS, `${PASS}x`] });
+    await expect(makeKey({ replace: false }, differ.deps)).rejects.toThrow("differ");
+    expect(differ.posted).toEqual([]);
+    const short = world({ lock: "none", typed: ["seven77", "seven77"] });
+    await expect(makeKey({ replace: false }, short.deps)).rejects.toThrow("at least 8 characters");
+    expect(short.posted).toEqual([]);
+    const eight = world({ lock: "none", typed: ["eight888", "eight888"] });
+    await makeKey({ replace: false }, eight.deps);
+    expect(eight.posted).toEqual([{ passphrase: "eight888", replace: false }]);
+    expect(eight.prompts[0]).toContain("8 characters or more");
+  });
+
+  test("the store\u0027s writer has no key under a passphrase", async () => {
+    const w = world({ role: "writer" });
+    await expect(makeKey({ replace: true }, w.deps)).rejects.toThrow("is the store\u0027s writer");
+    expect(w.posted).toEqual([]);
   });
 });

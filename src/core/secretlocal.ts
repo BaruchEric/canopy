@@ -238,7 +238,7 @@ export class SecretsReader {
   }
 
   async createKey(passphrase: string, replace: boolean): Promise<{ recipient: string } | { error: string }> {
-    if (passphrase.length < 12) return { error: "use a passphrase of at least 12 characters" };
+    if (passphrase.length < LIMITS.passphrase) return { error: `use a passphrase of at least ${LIMITS.passphrase} characters` };
     if (this.hasKey && !replace) return { error: "this machine has a key; replace it only when its passphrase is lost" };
     const { identity, recipient } = await newIdentity();
     const wrapped = await wrapIdentity(identity, passphrase, this.o.scryptLogN ?? 18);

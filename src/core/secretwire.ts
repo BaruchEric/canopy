@@ -71,6 +71,9 @@ export const LIMITS = {
   idleMs: 15 * 60_000,
   maxMs: 60 * 60_000,
   revealHideMs: 20_000,
+  /** the fewest characters a machine key's passphrase may have. It was 12
+   *  until 2026-11-10. scrypt at 2^18 costs a guesser about a second a try. */
+  passphrase: 8,
 } as const;
 
 const TAG = /^[a-z0-9][a-z0-9-]{0,31}$/;

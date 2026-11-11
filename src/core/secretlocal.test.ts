@@ -232,7 +232,8 @@ describe("the Mac's key", () => {
     await publish(await base(), signer);
     const r = await reader();
     expect(r.lock()).toBe("none");
-    expect(await r.createKey("short", false)).toMatchObject({ error: expect.stringContaining("12") });
+    expect(await r.createKey("short", false)).toMatchObject({ error: "use a passphrase of at least 8 characters" });
+    expect(await r.createKey("seven77", false)).toMatchObject({ error: expect.stringContaining("at least 8") });
     const made = await r.createKey("correct horse battery", false);
     if (!("recipient" in made)) throw new Error(made.error);
     expect(r.lock()).toBe("open");

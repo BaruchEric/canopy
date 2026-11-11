@@ -21,11 +21,14 @@ import { bold, dim, lichen, rust } from "./render";
 export const SECRETS_USAGE = `usage: canopy secrets [list] [--json]
        canopy secrets status [--json]
        canopy secrets unlock
+       canopy secrets key [--replace]
        canopy secrets propose (--match TEXT... | --all) [--to NAME] [--dry-run] [--json]
        canopy secrets pin <signing key> [--remote URL]
        canopy secrets recover <checkout> --breakglass FILE --out DIR
   list, status, unlock and propose speak to the home backend ($CANOPY_API, else 127.0.0.1:7850);
   unlock only from the machine itself
+  key makes this machine's key under a passphrase typed twice (${LIMITS.passphrase} characters or more) and prints its
+  recipient for the gate page; --replace makes a new one over a key whose passphrase is lost
   propose scans this machine's import sources and sends the values whose key or file holds TEXT
   (any case, any of several --match) to the store's writer, each sealed to the mini's key; they wait
   there for an approval on its gate page. --all sends every value found, --dry-run sends none,
@@ -105,39 +108,110 @@ export async function recoverFile(
   return { file: await signFile(next, await signingKey(signing.privateB64), "mini"), identity: mini.identity, recipient: mini.recipient, signing };
 }
 
-/** a line from the terminal with no echo, or stdin's first line when piped */
-async function readHidden(prompt: string): Promise<string> {
+/** A hidden line as it is typed: its text so far, whether an escape
+ *  sequence is under way, and how it ended. */
+export interface HiddenLine {
+  text: string;
+  /** after ESC, inside a CSI sequence, or before the one byte an SS3 carries */
+  esc: "" | "esc" | "csi" | "one";
+  done: "line" | "cancel" | null;
+}
+
+export const HIDDEN_START: HiddenLine = { text: "", esc: "", done: null };
+
+/** One chunk of keys added to a hidden line. The editing keys work as they
+ *  do at a shell's own password prompt: backspace, ctrl-u for the whole line,
+ *  ctrl-w for the last word. A key that sends an escape sequence (an arrow,
+ *  delete, the markers around a paste) and any other control key add nothing.
+ *  Taken as characters, they made a right passphrase read as a wrong one. */
+export function typeHidden(line: HiddenLine, chunk: string): HiddenLine {
+  let { text, esc } = line;
+  for (const c of chunk) {
+    if (c === "\r" || c === "\n") return { text, esc: "", done: "line" };
+    if (c === "\u0003") return { text, esc: "", done: "cancel" };
+    const code = c.codePointAt(0) ?? 0;
+    if (esc === "esc") esc = c === "[" ? "csi" : c === "O" ? "one" : "";
+    else if (esc === "one") esc = "";
+    else if (esc === "csi") esc = code >= 0x40 && code <= 0x7e ? "" : "csi";
+    else if (c === "\u001b") esc = "esc";
+    else if (c === "\u007f" || c === "\b") text = [...text].slice(0, -1).join("");
+    else if (c === "\u0015") text = "";
+    else if (c === "\u0017") text = text.replace(/\S*\s*$/, "");
+    else if (code >= 0x20) text += c;
+  }
+  return { text, esc, done: null };
+}
+
+/** a line typed at the terminal with no echo */
+function readHidden(prompt: string): Promise<string> {
   const stdin = process.stdin;
-  if (!stdin.isTTY) return ((await Bun.stdin.text()).split("\n")[0] ?? "").replace(/\r$/, "");
   process.stderr.write(prompt);
   stdin.setRawMode(true);
   stdin.resume();
   stdin.setEncoding("utf8");
   return new Promise((resolve, reject) => {
-    let buf = "";
-    const done = (): void => {
+    let line = HIDDEN_START;
+    const onData = (chunk: string): void => {
+      line = typeHidden(line, chunk);
+      if (line.done === null) return;
       stdin.setRawMode(false);
       stdin.pause();
       stdin.off("data", onData);
       process.stderr.write("\n");
-    };
-    const onData = (chunk: string): void => {
-      for (const c of chunk) {
-        if (c === "\r" || c === "\n") {
-          done();
-          resolve(buf);
-          return;
-        }
-        if (c === "\u0003") {
-          done();
-          reject(new Error("cancelled"));
-          return;
-        }
-        buf = c === "\u007f" || c === "\b" ? buf.slice(0, -1) : buf + c;
-      }
+      if (line.done === "cancel") reject(new Error("cancelled"));
+      else resolve(line.text);
     };
     stdin.on("data", onData);
   });
+}
+
+/** Hidden lines from the terminal, one for each prompt. Piped, stdin is read
+ *  once and its lines are handed out in order with no prompt. */
+function hiddenLines(): (prompt: string) => Promise<string> {
+  let piped: string[] | null = null;
+  return async (prompt) => {
+    if (process.stdin.isTTY) return readHidden(prompt);
+    piped ??= (await Bun.stdin.text()).split("\n").map((l) => l.replace(/\r$/, ""));
+    return piped.shift() ?? "";
+  };
+}
+
+/** What a refused unlock tells the terminal. The reader says "wrong
+ *  passphrase" for anything that does not open the key, and nothing else on
+ *  the machine says what to do when the passphrase is gone for good. */
+export function unlockRefusal(error: string): string {
+  if (error === "wrong passphrase") return `${error}\nif the passphrase is lost, canopy secrets key --replace makes a new key`;
+  if (error.startsWith("no key for this machine")) return `${error}\nmake one with canopy secrets key`;
+  return error;
+}
+
+export interface KeyDeps {
+  /** one hidden line from the terminal */
+  read: (prompt: string) => Promise<string>;
+  /** one call to the home backend; it fails the command on a refusal */
+  home: <T>(method: string, path: string, body?: unknown) => Promise<T>;
+  print: (line: string) => void;
+  fail: (msg: string) => never;
+}
+
+/** Make this machine's key under a passphrase typed twice, or with
+ *  `replace` a new one over a key that no longer opens. The store has to
+ *  hear of the new recipient before it seals anything to it, and only the
+ *  gate page can tell it, so the recipient and that step are what it prints. */
+export async function makeKey(o: { replace: boolean }, d: KeyDeps): Promise<void> {
+  const mine = await d.home<SecretsInfo>("GET", "/api/secrets");
+  if (mine.role === "writer") return d.fail(`${mine.backend} is the store's writer: its keys sit in its data volume with no passphrase, and canopy secrets recover replaces them`);
+  const had = mine.lock !== "none";
+  if (had && !o.replace) return d.fail("this machine has a key: canopy secrets unlock opens it. If its passphrase is lost, canopy secrets key --replace makes a new one");
+  const pass = await d.read(`${had ? "new " : ""}passphrase for this machine's secrets key, ${LIMITS.passphrase} characters or more: `);
+  const again = await d.read("the same again: ");
+  if (pass !== again) return d.fail("the two passphrases differ; nothing was changed");
+  if (pass.length < LIMITS.passphrase) return d.fail(`use a passphrase of at least ${LIMITS.passphrase} characters; nothing was changed`);
+  const k = await d.home<{ recipient: string }>("POST", "/api/secrets/key", { passphrase: pass, replace: o.replace });
+  d.print(`${had ? "a new key is made and open; the old key is gone" : "the key is made and open"}`);
+  d.print(`recipient  ${bold(k.recipient)}`);
+  d.print(`next: at ${mine.gate}, open a passkey session and, under passkeys, set this recipient as machine key ${mine.backend}`);
+  d.print(`until then the store seals nothing to it, and this machine's sinks stay waiting`);
 }
 
 function take(args: string[], name: string): string | undefined {
@@ -275,7 +349,8 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
   const asJson = args.includes("--json");
   const rest = args.filter((a) => a !== "--json");
   const sub = rest[0] ?? "list";
-  const ask = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+  /** one call to the home backend, with what a refusal's words become */
+  const asking = (refusal: (error: string) => string) => async <T>(method: string, path: string, body?: unknown): Promise<T> => {
     let r: Response;
     try {
       r = await fetch(home + path, { method, redirect: "manual", headers: callerHeaders(home, undefined, body === undefined ? undefined : { "content-type": "application/json" }), ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -289,9 +364,10 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
     } catch {
       return fail(`${home} answered ${r.status} with something other than JSON`);
     }
-    if (!r.ok) return fail((v as { error?: string }).error ?? `${home} answered ${r.status}`);
+    if (!r.ok) return fail(refusal((v as { error?: string }).error ?? `${home} answered ${r.status}`));
     return v as T;
   };
+  const ask = asking((error) => error);
 
   switch (sub) {
     case "list":
@@ -303,9 +379,16 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
       return;
     }
     case "unlock": {
-      const pass = await readHidden("passphrase for this machine's secrets key: ");
-      await ask("POST", "/api/secrets/unlock", { passphrase: pass });
+      const pass = await hiddenLines()("passphrase for this machine's secrets key: ");
+      await asking(unlockRefusal)("POST", "/api/secrets/unlock", { passphrase: pass });
       console.log("unlocked; this machine's sinks are written now");
+      return;
+    }
+    case "key": {
+      const flags = rest.slice(1);
+      const odd = flags.filter((a) => a !== "--replace");
+      if (odd.length > 0) return fail(`not understood: ${odd.join(" ")}\n${SECRETS_USAGE}`);
+      await makeKey({ replace: flags.includes("--replace") }, { read: hiddenLines(), home: ask, print: (line) => console.log(line), fail });
       return;
     }
     case "propose": {
