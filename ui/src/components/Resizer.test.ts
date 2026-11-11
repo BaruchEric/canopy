@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { followBy, keyedWidth, lentLeft, pulledIn } from "./Resizer";
+import { SIZE_KEYS, followBy, keyedWidth, lentLeft, pulledIn } from "./Resizer";
 
 const at = (key: string, value: number, shift = false) => keyedWidth({ key, shiftKey: shift }, { value, min: 240, top: 1200, dir: -1 });
 
@@ -8,6 +8,22 @@ test("the arrows step the width, the way the seam faces", () => {
   expect(at("ArrowRight", 440)).toBe(428);
   expect(at("ArrowLeft", 440)).toBe(452);
   expect(at("ArrowLeft", 440, true)).toBe(488);
+});
+
+test("a seam lying down steps on the arrows that cross it: down moves it on, up moves it back", () => {
+  // a pane over its seam (dir 1) grows as the seam goes down
+  const over = (key: string) => keyedWidth({ key, shiftKey: false }, { value: 300, min: 72, top: 900, dir: 1 });
+  expect(over("ArrowDown")).toBe(312);
+  expect(over("ArrowUp")).toBe(288);
+  // a pane under its seam (dir -1) shrinks as the seam goes down
+  const under = (key: string) => keyedWidth({ key, shiftKey: false }, { value: 300, min: 72, top: 900, dir: -1 });
+  expect(under("ArrowDown")).toBe(288);
+  expect(under("ArrowUp")).toBe(312);
+});
+
+test("a seam takes the two arrows across its axis and leaves the other two to the page", () => {
+  expect([...SIZE_KEYS.x].sort()).toEqual(["ArrowLeft", "ArrowRight", "End", "Home"]);
+  expect([...SIZE_KEYS.y].sort()).toEqual(["ArrowDown", "ArrowUp", "End", "Home"]);
 });
 
 test("Home and End go to the limits, End to what fits now", () => {

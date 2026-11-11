@@ -41,6 +41,7 @@ import {
   useShellZoom,
 } from "./Surface";
 import { clamp } from "../util";
+import { pxWord, seamTag } from "../seamtag";
 import { clientId, myPlatform } from "../client";
 import { BAR_KEYS, NO_MODS, keyBytes, shortcutOf, withMods, type BarKey, type Mods } from "../keys";
 import { osc52Text } from "../osc52";
@@ -974,15 +975,25 @@ export function TermGrip({
   };
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
     if (!start.current) return;
-    apply(sized(e));
+    const h = sized(e);
+    apply(h);
+    seamTag(pxWord(h), e);
   };
   const onUp = (e: PointerEvent<HTMLDivElement>) => {
     if (!start.current) return;
     const h = sized(e);
     start.current = null;
     setDragging(false);
+    seamTag(null);
     setHeight(h);
   };
+  // a grip unmounted mid-drag never sees pointerup, and its label would stay
+  useEffect(
+    () => () => {
+      if (start.current) seamTag(null);
+    },
+    [],
+  );
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const step = e.shiftKey ? 64 : 16;
     const top = ceiling();

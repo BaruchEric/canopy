@@ -13,6 +13,7 @@ import {
   type BenchPane,
 } from "../front";
 import { clamp } from "../util";
+import { pxWord, seamTag, shareWord } from "../seamtag";
 import { useBenchOne } from "../media";
 import { Seg } from "./Seg";
 
@@ -143,8 +144,14 @@ export function BenchSeams() {
   const setSetting = useStore((s) => s.setSetting);
   const [dragging, setDragging] = useState<SeamKind | null>(null);
   // a seam that goes mid-drag (the bench left, a part picked) must not leave
-  // the page unselectable with a resize cursor
-  useEffect(() => () => document.body.classList.remove("resizing", "resizing-rows"), []);
+  // the page unselectable with a resize cursor, or its size label up
+  useEffect(
+    () => () => {
+      document.body.classList.remove("resizing", "resizing-rows");
+      seamTag(null);
+    },
+    [],
+  );
 
   const commit = (kind: SeamKind, v: number | null) => {
     if (kind === "rail") setSetting("benchRail", v);
@@ -175,11 +182,14 @@ export function BenchSeams() {
     const move = (ev: globalThis.PointerEvent) => {
       live = valueAt(kind, panel, ev);
       panel.style.setProperty(cssVar, cssOf(kind, live));
+      // the rail is a width; the other two are shares of what they split
+      seamTag(kind === "rail" ? pxWord(live) : shareWord(live), ev);
     };
     const up = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
+      seamTag(null);
       setDragging(null);
       document.body.classList.remove("resizing", "resizing-rows");
       if (live !== null) commit(kind, live);

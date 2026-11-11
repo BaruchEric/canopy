@@ -5,6 +5,7 @@ import { capsFor, connOf, multi, routesOf, useStore } from "../store";
 import { HANGS_RIGHT, leavesPop, useFitPop } from "../pop";
 import { Routing } from "./Routing";
 import { harnessesOf, hasRouting } from "../agents";
+import { PaneSeam } from "./PaneSeam";
 import { PopGrip } from "./PopGrip";
 import { deviceName } from "../../../src/core/presence";
 import { sameBuild, shortCommit, versionLine } from "../../../src/core/version";
@@ -23,6 +24,9 @@ import { SweepRow } from "./Sweep";
 import { NotifyRow } from "./NotifyRow";
 import { InstallRow } from "./InstallRow";
 import { HARNESS_SHARE, harnessShareMaxOf, type Palette } from "../settings";
+
+/** what a drag of the rail's seam leaves the section open beside it, in px */
+const PANEL_KEEPS = 240;
 
 const LEVEL = [
   { value: "intermediate", label: "intermediate", title: "Agent first: run your app, save your work, and the rest one click away" },
@@ -679,6 +683,14 @@ export function SettingsMenu() {
               </p>
             )}
           </nav>
+          <PaneSeam
+            pane="prefs-rail"
+            className="prefs-seam"
+            label="Width of the list of settings sections"
+            dir={1}
+            target={(h) => h.parentElement}
+            room={(h) => (h.parentElement?.getBoundingClientRect().width ?? Infinity) - PANEL_KEEPS}
+          />
           <div
             key={found ? "find" : current}
             className="prefs-panel"

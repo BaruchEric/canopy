@@ -73,6 +73,7 @@ import { DropStale } from "./DropStale";
 import { fixMove, type FixMove } from "../fixit";
 import type { StaleOffer } from "../../../src/core/stalecopy";
 import { ago, GLYPH, lockedIndex, stateOf } from "../util";
+import { seamTag, shareWord } from "../seamtag";
 import { ClaudeSection } from "./Claude";
 import { LaunchSection } from "./Launch";
 import { TasksSection } from "./Tasks";
@@ -90,6 +91,7 @@ import { ElsewhereChips, PeerChips, Pulls, RemoteTipChip } from "./RemoteTip";
 import { RepoLink } from "./RepoLink";
 import { Star } from "./Star";
 import { RepoMenu } from "./RepoMenu";
+import { PaneSeam } from "./PaneSeam";
 import { Resizer } from "./Resizer";
 import { FlowChip, RunChip } from "./RunChip";
 import { TaskChip } from "./Tasks";
@@ -2820,6 +2822,9 @@ function headLine(parts: readonly HeadPart[]): ReactNode {
  *  beside its sections. In ems so a bigger screen class or zoom moves the
  *  line with the words. */
 const WIDE_PANEL_EMS = 58;
+/** px on the screen the sections keep, however wide a wide panel's summary
+ *  column is dragged */
+const LEDE_LEAVES = 360;
 
 /** Whether the panel body has room for two columns. A class set from here
  *  and not a container query, since a size container traps the fixed boxes
@@ -3360,6 +3365,17 @@ export function RepoPanel({
 
             {rail && !repo.error && <div className="section-rail" role="tablist" aria-orientation={wide ? "vertical" : "horizontal"} aria-label={`Sections of ${repo.name}`} ref={setRailEl} />}
           </div>
+          {wide && (
+            <PaneSeam
+              pane="lede"
+              className="lede-seam"
+              label={`Width of the summary column of ${repo.name}`}
+              dir={1}
+              target={(h) => h.parentElement}
+              // the section showing keeps LEDE_LEAVES of the body
+              room={(h) => (h.parentElement?.getBoundingClientRect().width ?? Infinity) - LEDE_LEAVES}
+            />
+          )}
 
           {repo.error ? (
             <p className="panel-error">Could not read this repo: {repo.error}</p>
@@ -3801,6 +3817,7 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       moved = true;
       at = seamDrag(start, ev.clientY - y0, height);
       paintGrid(dock, gridOf(resizeSeam(layout, column, index, at)));
+      seamTag(shareWord(at), ev);
     };
     const end = () => {
       ending.current = null;
@@ -3811,6 +3828,7 @@ function RowSeam({ seam, layout }: { seam: GridPlan["rowSeams"][number]; layout:
       if (handle.isConnected && handle.hasPointerCapture(pointerId)) handle.releasePointerCapture(pointerId);
       setDragging(false);
       document.body.classList.remove("resizing-rows");
+      seamTag(null);
     };
     // a click that moved nothing saves nothing
     const up = () => {

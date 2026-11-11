@@ -15,6 +15,7 @@ import { LABEL_MAX, viewKey, type TermTab } from "../term";
 import { AgentScreen, QuickAnswer, useAllAgents, useShellProbe } from "./AgentFocus";
 import { useIsChat } from "./Registry";
 import { PaneHead, Seams, SectionPaneHead, TabMenu, boxStyle, moveTo, openedSince, takes, termIds, usePaneDrag, useSplits } from "./SessionPanes";
+import { PaneSeam } from "./PaneSeam";
 import { PageTabView } from "./SectionTab";
 import { ShellSpotHere } from "./Surface";
 import { SweepButton } from "./Sweep";
@@ -48,6 +49,11 @@ const refocus = (box: Element | null) =>
  */
 /** the strip, as the place a card's tab moves to (FR-031) */
 const STRIP = { place: "strip" as const };
+
+/** what a drag of the side column's seam leaves the shells, in px */
+const SHELLS_KEEP = 320;
+/** what a drag of the agents list's seam leaves the machines over it, in px */
+const MACHINES_KEEP = 72;
 
 export function SessionsView({ onView }: { onView: (view: string) => void }) {
   useShellProbe();
@@ -327,6 +333,20 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     <aside className={`ss-side${narrow ? " drawer" : ""}`} aria-label="Machines and agents">
       <Machines machines={machines} scope={scope} tabs={strip.length} onRepo={openRepo} onScope={setScope} />
       <NewShell box={newBox} home={home} onRepo={openRepo} />
+      <PaneSeam
+        pane="sessions-agents"
+        axis="y"
+        className="ss-agents-seam"
+        label="Height of the agents list"
+        dir={-1}
+        target={(h) => h.parentElement}
+        room={(h) => {
+          // what the machines and the agents split, less what the machines keep
+          const top = h.parentElement?.querySelector(":scope > .ss-machines");
+          const list = h.nextElementSibling;
+          return top && list ? top.getBoundingClientRect().height + list.getBoundingClientRect().height - MACHINES_KEEP : Infinity;
+        }}
+      />
       <section className="ss-agents" aria-label="Agents">
         <header className="ss-head">
           <span>agents</span>
@@ -358,6 +378,17 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
           ))}
         </ul>
       </section>
+      {!narrow && (
+        <PaneSeam
+          pane="sessions-side"
+          className="ss-side-seam"
+          label="Width of the machines and agents column"
+          dir={1}
+          target={(h) => h.closest<HTMLElement>(".sessions")}
+          part={(h) => h.parentElement}
+          room={(h) => (h.closest(".sessions")?.getBoundingClientRect().width ?? Infinity) - SHELLS_KEEP}
+        />
+      )}
     </aside>
   );
 

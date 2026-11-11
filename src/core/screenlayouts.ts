@@ -16,7 +16,7 @@ import { BOARD_LAYOUTS, type ScreenLayout, type ScreenProfile, type TabTemplate,
 export const LAYOUT_BOUNDS = {
   sidebarWidth: { min: 180, max: 560 },
   cardsWidth: { min: 320, max: 4800 },
-  columnWidth: { min: 240, max: 2400 },
+  columnWidth: { min: 240, max: 4800 },
   panelZoom: { min: 0.5, max: 2 },
   termFont: { min: 8, max: 24 },
 } as const;

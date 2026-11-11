@@ -3149,7 +3149,7 @@ describe("the dock as columns of cells", () => {
   test("a resize writes the layout, clamped, and the old width maps are left alone", () => {
     useStore.setState({ panels: ["a"], activePanel: "a" });
     useStore.getState().resizeColumn(column("a"), 99999);
-    expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(2400);
+    expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(4800);
     useStore.getState().resizeColumn(column("a"), 500);
     expect(columnOf(useStore.getState().dockLayout, "a")?.width).toBe(500);
     expect(useStore.getState().panelWidths).toEqual({});
@@ -3170,7 +3170,7 @@ describe("the dock as columns of cells", () => {
     };
     const l = loadDock(saved, ["a", "b", "c"], "a", { c: 300 }, 600, "columns");
     expect(cols(l)).toEqual([[["b"], ["a"]], [["c"]]]);
-    expect(l.columns.map((c) => c.width)).toEqual([2400, 300]);
+    expect(l.columns.map((c) => c.width)).toEqual([4800, 300]);
   });
 
   test("a layout that changes alone (another screen's) leads, placed over the open panels", () => {
@@ -3250,7 +3250,7 @@ describe("the dock as columns of cells", () => {
       heard++;
     });
     useStore.getState().resizeColumn(column("a"), 99999);
-    useStore.getState().resizeColumn(column("a"), 2400);
+    useStore.getState().resizeColumn(column("a"), 4800);
     off();
     expect(heard).toBe(0);
     expect(useStore.getState()).toBe(before);
@@ -3533,6 +3533,45 @@ describe("the dock as columns of cells", () => {
     } finally {
       delete l.localStorage;
       useStore.setState({ cardsWidth: null });
+    }
+  });
+
+  test("a pane's size is kept per kind of screen, in its bounds, and a reset leaves no entry", () => {
+    const l = globalThis as unknown as { localStorage?: unknown };
+    const kept = new Map<string, string>();
+    l.localStorage = {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    };
+    const at = (width: number, height: number) => {
+      g.window = { screen: { width, height }, location: { href: "http://a.test/", search: "" } };
+    };
+    try {
+      // nothing stored: every pane keeps the stylesheet's size
+      at(2560, 1440);
+      expect(loadLayout().paneSizes).toEqual({});
+      kept.set("canopy.layout", JSON.stringify({ screens: { desktop: { paneSizes: { lede: 99999, gone: 300, "prefs-rail": "wide" } }, laptop: { paneSizes: { lede: 300 } } } }));
+      expect(loadLayout().paneSizes).toEqual({ lede: 960 });
+      at(1440, 900);
+      expect(loadLayout().paneSizes).toEqual({ lede: 300 });
+      // a drag writes this screen's slot; a double-click takes the entry out
+      at(2560, 1440);
+      kept.clear();
+      const stored = (): { screens?: Record<string, { paneSizes?: unknown }> } => JSON.parse(kept.get("canopy.layout") ?? "{}");
+      useStore.getState().setPaneSize("lede", 412.4);
+      useStore.getState().setPaneSize("sessions-side", 10);
+      expect(useStore.getState().paneSizes).toEqual({ lede: 412, "sessions-side": 200 });
+      expect(stored().screens?.desktop?.paneSizes).toEqual({ lede: 412, "sessions-side": 200 });
+      const before = useStore.getState().paneSizes;
+      useStore.getState().setPaneSize("lede", 412);
+      expect(useStore.getState().paneSizes).toBe(before);
+      useStore.getState().setPaneSize("lede", null);
+      expect(useStore.getState().paneSizes).toEqual({ "sessions-side": 200 });
+      expect(stored().screens?.desktop?.paneSizes).toEqual({ "sessions-side": 200 });
+    } finally {
+      delete l.localStorage;
+      useStore.setState({ paneSizes: {} });
     }
   });
 

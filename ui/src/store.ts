@@ -105,6 +105,7 @@ import { badRepoIds } from "./health";
 import { staleRepos } from "./triggers";
 import { markScreen, putScreen, screenNow, slotsNow, withScreen, writesFlat } from "./screens";
 import { CARDS, SEAM } from "./cardswidth";
+import { paneSizesOf, withPane, type PaneKey, type PaneSizes } from "./panesizes";
 import { NARROW } from "./media";
 import { newColumnWidth, type ColumnRoom } from "./columnwidth";
 import {
@@ -159,10 +160,12 @@ import {
 
 /** drag limits for the two resizable panes, in px */
 export const SIDEBAR = { min: 180, max: 560, initial: 264 };
-/** a dock column; the room the cards leave caps it before max does (`dockRoom`) */
-export const PANEL = { min: 240, max: 2400, initial: COLUMN_WIDTH };
+/** a dock column; the room the cards leave caps it before max does
+ *  (`dockRoom`), so max only has to clear the widest window. It was 2400,
+ *  which a column on a 2853px window had already reached (FR-063). */
+export const PANEL = { min: 240, max: 4800, initial: COLUMN_WIDTH };
 /** the solo view's centered panel; the window caps it before max does */
-export const SOLO = { min: 420, max: 2400, initial: 980 };
+export const SOLO = { min: 420, max: 4800, initial: 980 };
 /** the terminal strip along the bottom, in px of height */
 export const TERM = { min: 120, max: 1200, initial: 300 };
 /** a shell living in a repo's panel: the bounds of its body's height, and the
@@ -295,6 +298,7 @@ export const SCREEN_LAYOUT = [
   "feedHeight",
   "feedPlace",
   "feedWidth",
+  "paneSizes",
 ] as const satisfies readonly (keyof Layout)[];
 
 /** how often a window re-reads the archive overview on its own */
@@ -349,6 +353,9 @@ interface Layout {
   feedPlace: FeedPlace;
   /** px width of the event feed on a side */
   feedWidth: number;
+  /** the sizes set at the seams with no field of their own here, by pane
+   *  (panesizes.ts); a pane with no entry keeps the stylesheet's size */
+  paneSizes: PaneSizes;
   /** the repos open in the dock, in order, so a reload shows the same ones */
   panels: string[];
   /** the dock's showing tab */
@@ -382,6 +389,7 @@ export function loadLayout(): Layout {
     feedHeight: FEED.initial,
     feedPlace: DEFAULT_FEED_PLACE,
     feedWidth: FEED_W.initial,
+    paneSizes: {},
     panels: [],
     activePanel: null,
     popped: {},
@@ -414,6 +422,7 @@ export function loadLayout(): Layout {
       feedHeight?: unknown;
       feedPlace?: unknown;
       feedWidth?: unknown;
+      paneSizes?: unknown;
       panels?: unknown;
       activePanel?: unknown;
       popped?: unknown;
@@ -487,6 +496,7 @@ export function loadLayout(): Layout {
           : FEED.initial,
       feedPlace: feedPlaceOf(saved.feedPlace),
       feedWidth: typeof fw === "number" && Number.isFinite(fw) ? clamp(fw, FEED_W.min, FEED_W.max) : FEED_W.initial,
+      paneSizes: paneSizesOf(saved.paneSizes),
       // the open set is the window's, the layout the screen's: a layout
       // saved on another kind of screen is placed over this window's panels
       panels: panelsOf(dockLayout),
@@ -607,6 +617,7 @@ export const layoutOf = (s: CanopyState): Omit<Layout, "knownSections"> => ({
   feedHeight: s.feedHeight,
   feedPlace: s.feedPlace,
   feedWidth: s.feedWidth,
+  paneSizes: s.paneSizes,
   panels: s.panels,
   activePanel: s.activePanel,
   popped: s.popped,
@@ -1061,6 +1072,8 @@ export interface CanopyState {
   feedPlace: FeedPlace;
   /** px width of the feed on a side, dragged by its inner edge */
   feedWidth: number;
+  /** the sizes set at the page's other seams, by pane (panesizes.ts) */
+  paneSizes: PaneSizes;
   /** the source the feed is narrowed to; null is every source */
   feedSource: string | null;
   /** whether the feed shows lines that only say nothing changed */
@@ -1071,6 +1084,9 @@ export interface CanopyState {
   setFeedHeight: (px: number) => void;
   setFeedPlace: (place: FeedPlace) => void;
   setFeedWidth: (px: number) => void;
+  /** sets one pane's size, held in its bounds; null hands the pane back to
+   *  the stylesheet */
+  setPaneSize: (pane: PaneKey, px: number | null) => void;
   setFeedSource: (id: string | null) => void;
   setFeedQuiet: (on: boolean) => void;
 
@@ -2489,6 +2505,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   feedHeight: layout.feedHeight,
   feedPlace: layout.feedPlace,
   feedWidth: layout.feedWidth,
+  paneSizes: layout.paneSizes,
   feedSource: null,
   feedQuiet: false,
 
@@ -2497,6 +2514,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   setFeedHeight: (px) => set({ feedHeight: clamp(px, FEED.min, FEED.max) }),
   setFeedPlace: (feedPlace) => set({ feedPlace }),
   setFeedWidth: (px) => set({ feedWidth: clamp(px, FEED_W.min, FEED_W.max) }),
+  setPaneSize: (pane, px) => set((s) => ({ paneSizes: withPane(s.paneSizes, pane, px) })),
   setFeedSource: (feedSource) => set({ feedSource }),
   setFeedQuiet: (feedQuiet) => set({ feedQuiet }),
 

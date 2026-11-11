@@ -3,6 +3,7 @@ import type { CSSProperties, KeyboardEvent, PointerEvent, ReactNode, RefObject }
 import { createPortal } from "react-dom";
 import { openSectionElsewhere } from "../routes";
 import { closedIn, idText, useStore } from "../store";
+import { boxWord, seamTag } from "../seamtag";
 import {
   SECTION_WORD,
   flipMode,
@@ -287,15 +288,26 @@ function FocusGrip({ box, edge }: { box: RefObject<HTMLElement | null>; edge: Fo
     setDragging(true);
   };
   const onMove = (e: PointerEvent<HTMLDivElement>) => {
-    if (start.current) apply(sized(e));
+    if (!start.current) return;
+    const size = sized(e);
+    apply(size);
+    seamTag(boxWord(size.w, size.h), e);
   };
   const onUp = (e: PointerEvent<HTMLDivElement>) => {
     if (!start.current) return;
     const size = sized(e);
     start.current = null;
     setDragging(false);
+    seamTag(null);
     setFocusSize(size);
   };
+  // a grip unmounted mid-drag (Escape closes the box) never sees pointerup
+  useEffect(
+    () => () => {
+      if (start.current) seamTag(null);
+    },
+    [],
+  );
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (edge !== "se") return;
     const step = e.shiftKey ? 32 : 8;

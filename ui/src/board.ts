@@ -10,6 +10,7 @@
  */
 
 import type { PaneMsg } from "./panes";
+import { paneVar, type PaneKey } from "./panesizes";
 import { BOARD_LAYOUTS, isLiveAgent, type Ask, type AgentCard, type AgentState, type BoardLayout } from "../../src/core/types";
 import { groupCards, runEnd, tierOf, type IsChat, type TrailMark } from "./agentcards";
 import type { InboxAnswer } from "./inbox";
@@ -73,6 +74,9 @@ export interface BoardPlan {
   rows: string;
   slots: Slot[];
   furn: Furn[];
+  /** the pane a seam of this plan sizes (panesizes.ts): the rail, while it
+   *  has the focus beside it. A plan of one column has none. */
+  seam?: PaneKey;
 }
 
 export interface BoardGroup {
@@ -233,7 +237,9 @@ function planRail(groups: readonly BoardGroup[], grouped: boolean, focus: string
   }
   rows.push("1fr");
   if (focus) slots.push({ id: focus, area: area(1, 2, rows.length + 1, 3), mode: "term", acts: false });
-  return { columns: "minmax(14rem, 26%) minmax(0, 1fr)", rows: rows.join(" "), slots, furn };
+  // the rail's width is the share below until its seam is dragged, then
+  // the px the drag left in `--pane-board-rail` on the stage (PaneSeam.tsx)
+  return { columns: `var(${paneVar("board-rail")}, minmax(14rem, 26%)) minmax(0, 1fr)`, rows: rows.join(" "), slots, furn, ...(focus ? { seam: "board-rail" as const } : {}) };
 }
 
 /** how many columns a wall of `n` tiles takes in `width` px */

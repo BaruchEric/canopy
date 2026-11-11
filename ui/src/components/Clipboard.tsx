@@ -28,6 +28,7 @@ import { canReadClipboard, copyText, readText } from "../share";
 import { useStore, type CanopyState } from "../store";
 import { escapeCloses, keepKeys } from "../surface";
 import { useNow } from "./Inbox";
+import { PaneSeam } from "./PaneSeam";
 import { PopGrip, type PopSpec } from "./PopGrip";
 
 /** its mark, on the chip, a dock card's head and a tab */
@@ -135,6 +136,9 @@ function FileView({ name, type, kind, bytes, error, onSize }: { name: string; ty
 
 /** the most lines a well draws before it says how many more there are */
 const WELL_LINES = 400;
+
+/** what a drag of the list's seam leaves the clip beside it, in px */
+const CLIP_KEEPS = 240;
 
 let shownIn: { clips: CanopyState["clips"]; chan: ChanMessage[] | undefined } | null = null;
 let shownOut: ShownClip[] = [];
@@ -646,6 +650,17 @@ export function ClipsPopBody({ onDone: _onDone }: { onDone?: () => void } = {}) 
                 );
               })}
             </ol>
+          )}
+          {shown.length > 0 && (
+            <PaneSeam
+              pane="clips-list"
+              className="clips-seam"
+              label="Width of the list of clips"
+              dir={1}
+              target={(h) => h.parentElement}
+              part={(h) => h.previousElementSibling}
+              room={(h) => (h.parentElement?.getBoundingClientRect().width ?? Infinity) - CLIP_KEEPS}
+            />
           )}
         </div>
       )}

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent, Ref } from "react";
+import { pxWord, seamTag } from "../seamtag";
 import { clamp } from "../util";
 
 interface ResizerProps {
@@ -8,6 +9,10 @@ interface ResizerProps {
   className?: string;
   /** inline style on the handle: the dock sets its CSS order beside its panel */
   style?: CSSProperties;
+  /** what the pane is sized along: "x" its width, at a seam between a left
+   *  and a right part (the default); "y" its height, between an upper and a
+   *  lower one. The arrows that step it and the pointer's travel follow. */
+  axis?: "x" | "y";
   value: number;
   min: number;
   max: number;
@@ -18,11 +23,13 @@ interface ResizerProps {
   onReset?: () => void;
   /** the handle's element, for a seam that reads the page around it */
   ref?: Ref<HTMLDivElement>;
-  /** 1 when the pane sits left of the handle, -1 when it sits right of it */
+  /** 1 when the pane sits left of the handle (over it, on "y"), -1 when it
+   *  sits right of it (under it) */
   dir: 1 | -1;
-  /** px of width per px of pointer travel: 2 for a centered pane, whose far
-   *  edge moves as much as the dragged one (default 1) */
-  factor?: number;
+  /** px of size per px of pointer travel: 2 for a centered pane, whose far
+   *  edge moves as much as the dragged one (default 1). A function is read
+   *  off the handle as a drag starts, for a pane drawn under a zoom. */
+  factor?: number | ((handle: HTMLElement) => number);
   /** custom property the live width is written to */
   cssVar: string;
   /** element that property lives on, resolved from the handle itself */
@@ -55,20 +62,27 @@ interface ResizerProps {
   onCommit: (px: number, left?: number, trail?: number) => void;
 }
 
-const SIZE_KEYS = new Set(["ArrowLeft", "ArrowRight", "Home", "End"]);
+/** the keys a seam takes, by the axis it sizes along: the two arrows that
+ *  lie across it, and Home and End. The other two arrows stay the page's. */
+export const SIZE_KEYS = {
+  x: new Set(["ArrowLeft", "ArrowRight", "Home", "End"]),
+  y: new Set(["ArrowUp", "ArrowDown", "Home", "End"]),
+};
 
-/** The width a key sizes a pane to: the arrows step it the way the handle
- *  faces, Home and End go to `min` and to `top` (the most that fits now),
- *  as `aria-valuemin` and `aria-valuemax` say. Null for any other key and
- *  for a press that changes nothing, so a key at a limit saves nothing. */
+/** The size a key sets a pane to: the arrows step it the way the handle
+ *  faces (right and down move the seam on, left and up move it back), Home
+ *  and End go to `min` and to `top` (the most that fits now), as
+ *  `aria-valuemin` and `aria-valuemax` say. Null for any other key and for
+ *  a press that changes nothing, so a key at a limit saves nothing. */
 export function keyedWidth(
   e: { key: string; shiftKey: boolean },
   { value, min, top, dir }: { value: number; min: number; top: number; dir: 1 | -1 },
 ): number | null {
   const from = Math.min(value, top);
-  const step = (e.shiftKey ? 48 : 12) * (e.key === "ArrowRight" ? 1 : -1);
-  const next =
-    e.key === "Home" ? min : e.key === "End" ? top : e.key === "ArrowLeft" || e.key === "ArrowRight" ? clamp(from + step * dir, min, top) : null;
+  const on = e.key === "ArrowRight" || e.key === "ArrowDown";
+  const back = e.key === "ArrowLeft" || e.key === "ArrowUp";
+  const step = (e.shiftKey ? 48 : 12) * (on ? 1 : -1);
+  const next = e.key === "Home" ? min : e.key === "End" ? top : on || back ? clamp(from + step * dir, min, top) : null;
   return next === null || next === value ? null : next;
 }
 
@@ -124,12 +138,14 @@ export function pulledIn({
 /**
  * A drag strip between two panes. The drag writes `cssVar` straight to the DOM
  * and only calls `onCommit` on release — routing every pointermove through the
- * store would re-render every open dock panel on each frame.
+ * store would re-render every open dock panel on each frame. While it is
+ * held, the size it is at is said beside the pointer (seamtag.ts).
  */
 export function Resizer({
   label,
   className,
   style,
+  axis = "x",
   value,
   min,
   max,
@@ -163,6 +179,7 @@ export function Resizer({
     },
     [],
   );
+  const rows = axis === "y";
 
   const ceiling = (handle: HTMLElement) => {
     const room = fit?.(handle);
@@ -173,7 +190,10 @@ export function Resizer({
     if (e.button !== 0) return;
     e.preventDefault();
     const handle = e.currentTarget;
-    const startX = e.clientX;
+    /** where the pointer is along the axis the pane is sized on */
+    const along = (ev: { clientX: number; clientY: number }) => (rows ? ev.clientY : ev.clientX);
+    const startX = along(e);
+    const scale = typeof factor === "function" ? factor(handle) : factor;
     const top = ceiling(handle);
     const startValue = Math.min(value, top);
     live.current = startValue;
@@ -199,10 +219,11 @@ export function Resizer({
     handle.setPointerCapture(pointerId);
     setDragging(true);
     document.body.classList.add("resizing");
+    if (rows) document.body.classList.add("resizing-rows");
 
     const move = (ev: globalThis.PointerEvent) => {
       const next = clamp(
-        startValue + (ev.clientX - startX) * dir * factor,
+        startValue + (along(ev) - startX) * dir * scale,
         min,
         top,
       );
@@ -220,7 +241,8 @@ export function Resizer({
         lent = lentLeft({ startValue, next, scrolled, hidden, room });
         el?.style.setProperty(lender.cssVar, `${lender.value + lent}px`);
       }
-      if (follow && el) el.scrollLeft += followBy(handle.getBoundingClientRect().left, { startLeft, startValue, next, dir, factor });
+      if (follow && el) el.scrollLeft += followBy(handle.getBoundingClientRect().left, { startLeft, startValue, next, dir, factor: scale });
+      seamTag(pxWord(live.current), ev);
     };
     let release = () => {};
     const end = () => {
@@ -231,6 +253,8 @@ export function Resizer({
       handle.removeEventListener("pointercancel", up);
       setDragging(false);
       document.body.classList.remove("resizing");
+      if (rows) document.body.classList.remove("resizing-rows");
+      seamTag(null);
     };
     const up = () => {
       end();
@@ -256,7 +280,7 @@ export function Resizer({
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!SIZE_KEYS.has(e.key)) return;
+    if (!SIZE_KEYS[axis].has(e.key)) return;
     e.preventDefault();
     const next = keyedWidth(e, { value, min, top: ceiling(e.currentTarget), dir });
     if (next !== null) onCommit(next);
@@ -265,11 +289,13 @@ export function Resizer({
   return (
     <div
       ref={ref}
-      className={`resizer${className ? ` ${className}` : ""}${dragging ? " dragging" : ""}`}
+      className={`resizer${rows ? " resizer-y" : ""}${className ? ` ${className}` : ""}${dragging ? " dragging" : ""}`}
       style={style}
       role="separator"
-      aria-orientation="vertical"
+      // a separator is named for the line it draws, which lies across the axis it moves on
+      aria-orientation={rows ? "horizontal" : "vertical"}
       aria-label={label}
+      title="Drag to resize, double-click to reset"
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
       aria-valuemax={max}

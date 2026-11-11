@@ -40,8 +40,12 @@ import { useStore } from "../store";
 import { OVER_PAGE } from "../surface";
 import { AgentScreen, AskHere, QuickAnswer, pageIds, useAllAgents, useShellProbe } from "./AgentFocus";
 import { AgentActions, Summary, glyphOf, harnessWord, useIsChat, useNow } from "./Registry";
+import { PaneSeam } from "./PaneSeam";
 import { Seg } from "./Seg";
 import { SweepButton } from "./Sweep";
+
+/** what a drag of the rail's seam leaves the agent in focus, in px */
+const FOCUS_KEEPS = 320;
 
 const LAYOUT_OPTIONS = BOARD_LAYOUTS.map((l) => ({ value: l, label: LAYOUT_WORD[l], title: LAYOUT_TITLE[l] }));
 
@@ -354,6 +358,19 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
           {plan.furn.map((f) => (
             <BoardFurn key={f.key} f={f} cards={all} timeline={timeline} now={now} />
           ))}
+          {plan.seam && (
+            <PaneSeam
+              pane={plan.seam}
+              className="board-seam"
+              label="Width of the rail of agents"
+              dir={1}
+              target={(h) => h.parentElement}
+              // the rail is a column of tiles, not one element: the seam sits
+              // in the gap after it, so its own left edge is the rail's width
+              size={(h) => h.getBoundingClientRect().left - (h.parentElement?.getBoundingClientRect().left ?? 0) + (h.parentElement?.scrollLeft ?? 0)}
+              room={(h) => (h.parentElement?.getBoundingClientRect().width ?? Infinity) - FOCUS_KEEPS}
+            />
+          )}
         </div>
       )}
       <p className="board-keys">

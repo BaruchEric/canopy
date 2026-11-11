@@ -7,6 +7,7 @@ import { backendOf } from "../registry";
 import { canMove, movableOf, movedId, movePage, type Spot } from "../panemove";
 import { atFrom, dropBox, edgeAt, leaveGroup, pruneGroups, setAt, seamsOf, splitIn, type Box, type Edge, type PaneTree, type Seam } from "../splitpanes";
 import { connOf, dockless, useStore } from "../store";
+import { seamTag, shareWord } from "../seamtag";
 import { openView } from "../clirun";
 import type { TermTab } from "../term";
 import { isItemTab, itemTabsAt, sectionTabsAt, type ItemTab, type PageTab, type SectionPlace, type SectionTab } from "../sectiontabs";
@@ -454,6 +455,8 @@ export function Seams({
   onCommit: (path: string, at: number) => void;
 }) {
   const [held, setHeld] = useState<string | null>(null);
+  // seams that go mid-drag (their tab closed) never see pointerup
+  useEffect(() => () => seamTag(null), []);
   const seams = seamsOf(tree);
   const place = (s: Seam): CSSProperties => {
     const at = s.dir === "row" ? s.box.x + s.box.w * s.at : s.box.y + s.box.h * s.at;
@@ -474,11 +477,13 @@ export function Seams({
       const r = el.getBoundingClientRect();
       at = s.dir === "row" ? atFrom(s, ev.clientX, r.left, r.width) : atFrom(s, ev.clientY, r.top, r.height);
       onDraft(setAt(tree, s.path, at));
+      seamTag(shareWord(at), ev);
     };
     const up = () => {
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
+      seamTag(null);
       setHeld(null);
       onDraft(null);
       if (at !== s.at) onCommit(s.path, at);

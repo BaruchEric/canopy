@@ -32,6 +32,7 @@ import { Section } from "./Surface";
 import { fileKind, type FileKind } from "../../../src/core/filekind";
 import type { DirEntry, Repo, RepoFiles } from "../../../src/core/types";
 import { CENTERED } from "../pop";
+import { PaneSeam } from "./PaneSeam";
 import { PopGear, PopGrip } from "./PopGrip";
 
 /** the file viewer as a popup, for its grip and its gear */
@@ -41,6 +42,11 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
 
 /** the most the download button asks for, the server's own cap */
 const DOWNLOAD_MAX = 200 * 1024 * 1024;
+
+/** what a drag of the list's seam leaves the file beside or under it, in px */
+const LOOK_KEEPS = { width: 160, height: 96 };
+/** the list a seam of the split sizes, whichever side of it the seam sits */
+const listOf = (seam: HTMLElement) => seam.parentElement?.querySelector(":scope > .finder-list") ?? null;
 
 const KIND_GLYPH: Record<FileKind, string> = {
   text: "≡",
@@ -599,6 +605,28 @@ export function FinderSection({ repo }: { repo: Repo }) {
           {listing && entries.length === 0 && <li className="panel-clean finder-note">{searching ? "No file by that name." : "Nothing here."}</li>}
           {searching && found.more && <li className="panel-clean finder-note">More files match than shown. Narrow the search.</li>}
         </ul>
+        {/* one seam per way the two parts lie: abreast, or the list over
+            the file in a panel too narrow for both. The stylesheet shows
+            the one that fits, and each keeps a size of its own. */}
+        <PaneSeam
+          pane="finder-list"
+          className="finder-seam across"
+          label={`Width of the file list of ${repo.name}`}
+          dir={1}
+          target={(h) => h.parentElement}
+          part={listOf}
+          room={(h) => (h.parentElement?.getBoundingClientRect().width ?? Infinity) - LOOK_KEEPS.width}
+        />
+        <PaneSeam
+          pane="finder-rows"
+          axis="y"
+          className="finder-seam down"
+          label={`Height of the file list of ${repo.name}`}
+          dir={1}
+          target={(h) => h.parentElement}
+          part={listOf}
+          room={(h) => (h.parentElement?.getBoundingClientRect().height ?? Infinity) - LOOK_KEEPS.height}
+        />
         <div className="finder-look">
           {picked ? (
             <>

@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useLayoutEffect, useRef } from "r
 import type { KeyboardEvent, PointerEvent } from "react";
 import { PHONE, useMedia } from "../media";
 import { useStore } from "../store";
+import { boxWord, seamTag } from "../seamtag";
 import { type PopAnchor, type PopSize, gripSize, popRoom } from "../pop";
 import { ZOOM_MAX, ZOOM_MIN, zoomStep, zoomWord } from "../surface";
 import { Gear, type GearEntry } from "./Gear";
@@ -181,6 +182,7 @@ export function PopGrip({ name, anchor, gap = 8, gear = false, tab }: PopSpec & 
     const move = (ev: globalThis.PointerEvent) => {
       live = gripSize(start, ev.clientX - x0, ev.clientY - y0, anchor, room);
       paint(pop, live);
+      seamTag(boxWord(live.w, live.h), ev);
     };
     const end = () => {
       ending.current = null;
@@ -188,6 +190,7 @@ export function PopGrip({ name, anchor, gap = 8, gear = false, tab }: PopSpec & 
       grip.removeEventListener("pointerup", up);
       grip.removeEventListener("pointercancel", up);
       document.body.classList.remove(cursor);
+      seamTag(null);
     };
     const up = () => {
       end();

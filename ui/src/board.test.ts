@@ -111,6 +111,17 @@ describe("planBoard", () => {
     expect(plan.rows).toBe("max-content max-content max-content max-content 1fr");
   });
 
+  test("rail: the rail's width is the share until its seam sets one, and the seam is there with the focus", () => {
+    const cs = cards();
+    const plan = planBoard("rail", one(cs), opts({ focus: cs[1]!.id }));
+    expect(plan.columns).toBe("var(--pane-board-rail, minmax(14rem, 26%)) minmax(0, 1fr)");
+    expect(plan.seam).toBe("board-rail");
+    // one column, or no rail at all: nothing for a seam to part
+    expect(planBoard("rail", one(cs), opts({ focusAway: true })).seam).toBeUndefined();
+    expect(planBoard("rail", one(cs), opts({ narrow: true, focus: cs[1]!.id })).seam).toBeUndefined();
+    expect(planBoard("wall", one(cs), opts()).seam).toBeUndefined();
+  });
+
   test("every layout places every card exactly once", () => {
     const cs = cards();
     for (const l of ["rail", "wall", "spotlight", "dashboard", "triage", "lanes"] as const) {

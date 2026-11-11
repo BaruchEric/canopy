@@ -676,12 +676,77 @@ kbd {
 .resizer:focus-visible {
   outline: none;
 }
+/* a seam between an upper and a lower part: the same strip, lying down */
+.resizer.resizer-y {
+  width: auto;
+  height: 6px;
+  cursor: row-resize;
+}
+.resizer.resizer-y::before {
+  inset: 2px 0;
+}
 body.resizing {
   cursor: col-resize;
   user-select: none;
 }
 body.resizing-rows {
   cursor: row-resize;
+}
+/* the size a seam is being dragged to, by the pointer (seamtag.ts): the
+   one thing a drag adds to the page, in the mono a figure is read in */
+.seam-tag {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 99;
+  pointer-events: none;
+  padding: 1px 7px;
+  border-radius: 5px;
+  font: var(--t-sm) / 1.6 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--float);
+  border: 1px solid var(--float-edge);
+  box-shadow: 0 2px 6px -2px var(--float-shadow);
+}
+/* ---------- pane seams (FR-063, PaneSeam.tsx) ---------- */
+/* The edges between two parts that the layout keeps no field for. Each is a
+   resizer laid over the hairline it moves, and its pane reads its size from
+   --pane-<name>, which stands only once a drag has set it; until then the
+   size written here does. A finger gets more than the 6px a pointer does. */
+@media (pointer: coarse) {
+  .pane-seam::after {
+    content: "";
+    position: absolute;
+    inset: 0 -8px;
+  }
+  .pane-seam.resizer-y::after {
+    inset: -8px 0;
+  }
+}
+/* ---------- capped wells (FR-063) ---------- */
+/* A diff, a log or an output scrolls under a cap, so one long one does not
+   push the rest of its section off the screen. Its corner pulls it taller
+   or shorter, as a text box's does. The browser writes the height on the
+   well itself, so it lasts while that well is on the page and no longer. */
+.diff,
+.task-log,
+.job-tail,
+.step-out pre,
+.gate-check pre,
+.run-scenarios pre,
+.landing-out pre,
+.kit-compare pre,
+.kit-command,
+.sprout-doc,
+.ask-detail,
+.clip-view {
+  resize: vertical;
+}
+/* a height set at the corner stands in for the cap */
+:is(.diff, .task-log, .job-tail, .step-out pre, .gate-check pre, .run-scenarios pre, .landing-out pre, .kit-compare pre, .kit-command, .sprout-doc, .ask-detail, .clip-view)[style*="height"] {
+  max-height: none;
 }
 /* a drag across the preview's page must stay the page's own */
 body.resizing iframe,
@@ -1310,13 +1375,15 @@ body.resizing-nesw iframe {
    --pop-top, since the gear sits in the bar's second row once the bar wraps. */
 .settings-pop.prefs {
   display: grid;
-  grid-template-columns: 15em minmax(0, 1fr);
+  grid-template-columns: var(--pane-prefs-rail, 15em) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   width: 640px;
   height: min(640px, calc(100dvh - var(--pop-top, 56px) - 8px));
   padding: 0;
   overflow: hidden;
 }
 .prefs-rail {
+  grid-area: 1 / 1;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1324,6 +1391,12 @@ body.resizing-nesw iframe {
   overflow-y: auto;
   padding: 12px 8px 12px 12px;
   border-right: 1px solid var(--hair);
+}
+/* the rail's seam, on its right border */
+.settings-pop.prefs > .prefs-seam {
+  grid-area: 1 / 2;
+  justify-self: start;
+  margin-left: -4px;
 }
 .prefs-group {
   display: flex;
@@ -1446,6 +1519,7 @@ body.resizing-nesw iframe {
   color: var(--rust);
 }
 .prefs-panel {
+  grid-area: 1 / 2;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2247,6 +2321,10 @@ div.waiting-row {
 .clips-none {
   padding: 6px var(--gutter);
 }
+/* the list's seam shows once the list has the clip beside it */
+.clips-main > .clips-seam {
+  display: none;
+}
 .clips-empty {
   display: grid;
   gap: 6px;
@@ -2621,7 +2699,14 @@ div.waiting-row {
 @container clips (min-width: 44em) {
   .clips-main {
     display: grid;
-    grid-template-columns: minmax(16em, 2fr) minmax(0, 3fr);
+    grid-template-columns: var(--pane-clips-list, minmax(16em, 2fr)) minmax(0, 3fr);
+  }
+  .clips-main > .clips-seam {
+    display: block;
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: start;
+    margin-left: -3px;
   }
   .clips-main > .clip-list {
     grid-column: 1;
@@ -3981,11 +4066,15 @@ p.elsewhere-drilled {
 /* a panel with room for it (Dock.tsx, useWideBody): the head across the
    top, the summary and the section tabs in a column down the left on the
    ground's colour, and the one section showing in a clearing to their
-   right. The showing tab takes the clearing's colour and runs into it. */
+   right. The showing tab takes the clearing's colour and runs into it.
+   The column's width is the seam's to set (--pane-lede, FR-063). The rows
+   are the head's, forty for the sections stacked under it, and one that
+   takes what they leave, so the seam runs to the foot of a short panel. */
 .panel-wide > .panel-body {
-  --lede-w: calc(19 * var(--t-lg));
+  --lede-w: var(--pane-lede, calc(19 * var(--t-lg)));
   display: grid;
   grid-template-columns: var(--lede-w) minmax(0, 1fr);
+  grid-template-rows: repeat(41, min-content) 1fr;
   grid-auto-rows: min-content;
   align-content: start;
   padding-bottom: 0;
@@ -4027,6 +4116,15 @@ p.elsewhere-drilled {
 }
 .panel-wide.panel-tabbed > .panel-body > .panel-lede {
   grid-row: 2 / span 2;
+}
+/* the seam down the column's right edge, from under the head to the foot;
+   under the head's layer, so scrolled beneath it the head's buttons win */
+.panel-wide > .panel-body > .lede-seam {
+  grid-column: 1;
+  grid-row: 2 / -1;
+  justify-self: end;
+  margin-right: -3px;
+  z-index: 1;
 }
 .panel-wide > .panel-body > .surface {
   padding-bottom: 20px;
@@ -7979,18 +8077,26 @@ a.sweep-title:hover {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: var(--pane-sessions-side, 280px) minmax(0, 1fr);
   background: var(--bark0);
 }
 .sessions.narrow {
   grid-template-columns: minmax(0, 1fr);
 }
 .ss-side {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
   border-right: 1px solid var(--hair);
   background: var(--bark0);
+}
+/* the column's seam lies on its right border, out of the column's flow */
+.ss-side > .ss-side-seam {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
 }
 .ss-side.drawer {
   position: fixed;
@@ -8008,11 +8114,18 @@ a.sweep-title:hover {
   overflow-y: auto;
   padding-bottom: 6px;
 }
+/* half the column until its seam is dragged; a height set there holds
+   exactly, and the machines take what is left over it */
 .ss-agents {
-  flex: 1 1 50%;
-  min-height: 0;
+  flex: 1 1 var(--pane-sessions-agents, 50%);
+  min-height: var(--pane-sessions-agents, 0px);
+  max-height: var(--pane-sessions-agents, none);
   overflow-y: auto;
   border-top: 1px solid var(--hair);
+}
+/* on the agents' top border, taking no height of its own */
+.ss-side > .ss-agents-seam {
+  margin-block: -3px;
 }
 .ss-head {
   position: sticky;
@@ -9404,22 +9517,48 @@ body:has(.focus-grip.se.dragging) {
 }
 .finder-split {
   display: grid;
-  grid-template-columns: minmax(160px, 2fr) minmax(0, 3fr);
+  grid-template-columns: var(--pane-finder-list, minmax(160px, 2fr)) minmax(0, 3fr);
   height: 380px;
   margin: 0 var(--gutter) 10px;
   border: 1px solid var(--hair);
   border-radius: var(--r);
   overflow: hidden;
 }
+/* the list, the file it shows, and a seam on the line between them: each
+   part is placed by name, since the seams are children of the grid too */
+.finder-split > .finder-list {
+  grid-area: 1 / 1;
+}
+.finder-split > .finder-look {
+  grid-area: 1 / 2;
+}
+.finder-split > .finder-seam.across {
+  grid-area: 1 / 2;
+  justify-self: start;
+  margin-left: -3px;
+}
+.finder-split > .finder-seam.down {
+  display: none;
+}
 @container (max-width: 480px) {
   .finder-split {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1.2fr);
+    grid-template-rows: var(--pane-finder-rows, minmax(0, 1fr)) minmax(0, 1.2fr);
     height: 520px;
   }
-  .finder-look {
+  .finder-split > .finder-look {
+    grid-area: 2 / 1;
     border-left: 0;
     border-top: 1px solid var(--hair);
+  }
+  .finder-split > .finder-seam.across {
+    display: none;
+  }
+  .finder-split > .finder-seam.down {
+    display: block;
+    grid-area: 2 / 1;
+    align-self: start;
+    margin-top: -3px;
   }
 }
 .finder-list {
@@ -11466,6 +11605,9 @@ button.machine:hover {
     height: auto;
     padding-top: 0;
     overflow-y: auto;
+  }
+  .settings-pop.prefs > .prefs-seam {
+    display: none;
   }
   .prefs-rail {
     position: sticky;
@@ -14724,6 +14866,13 @@ button.trigger-title:hover {
 .board.bl-lanes .board-stage {
   row-gap: 0;
   column-gap: 0;
+}
+/* the rail's seam: the whole height of the stage, in the gap between the
+   rail and the agent in focus */
+.board-stage > .board-seam {
+  grid-area: 1 / 1 / -1 / 2;
+  justify-self: end;
+  margin-right: -6px;
 }
 
 .bt {
