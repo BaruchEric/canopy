@@ -10,9 +10,9 @@ import { randomBytes } from "node:crypto";
 import type { Applied } from "../core/applied";
 import { mcpHash } from "../core/kit";
 import { openProposal, openValue, resealValue, sameValue, sealProposal, sealValue } from "../core/secretcrypt";
-import { DOTENV_KEY, JSON_PATH, metaList, impactOf, mcpEnvPath, nowStamp, reachRefusal, recipientKeys, recipientsFor, stackFor, usedBy, type SecretFile, type SinkDef, type StackOf } from "../core/secretfile";
+import { DOTENV_KEY, formatOf, JSON_PATH, metaList, impactOf, mcpEnvPath, nowStamp, reachRefusal, recipientKeys, recipientsFor, stackFor, usedBy, type SecretFile, type SinkDef, type StackOf } from "../core/secretfile";
 import { mcpAllowFile, mcpRevokeFile } from "../core/secretmcp";
-import { formatOf, suggestName, type Found } from "../core/secretimport";
+import { suggestName, type Found } from "../core/secretimport";
 import { LIMITS, PASSKEY, type SecretAct, type SecretsReply, type SecretsRequest } from "../core/secretwire";
 import { applyKeys, readKeys } from "../core/sinks";
 import { FILE_IO, mcpEnvKeep, pruneMcpEnv, syncSink, type SinkIO, type SinkState } from "../core/sinksync";
@@ -234,7 +234,7 @@ export class SecretsService {
         const items: SecretProposalIn[] = [];
         for (const x of found) {
           const ref = { from: this.d.machine, source: x.source, key: x.key };
-          items.push({ ...ref, sealed: x.value === null ? "" : await sealProposal(ref, x.value, this.d.store.recipient), merges: null });
+          items.push({ ...ref, sealed: x.value === null ? "" : await sealProposal(ref, x.value, this.d.store.recipient), merges: null, ...(x.partial ? { partial: true } : {}) });
         }
         return this.propose(items);
       }
@@ -506,6 +506,7 @@ export class SecretsService {
       next = await this.withValue(f, target, value, { description: act.description, tags: act.tags });
     }
     if (act.sink) {
+      if (q.p.partial) return fail(`${q.p.source} has lines canopy cannot read, so it cannot be a sink; approve this without one`);
       const format = formatOf(q.p.source);
       if (!format) return fail(`${q.p.source} cannot be a sink; only dotenv and json files can`);
       if (!(format === "dotenv" ? DOTENV_KEY : JSON_PATH).test(q.p.key)) return fail(`${q.p.key} cannot be a ${format} sink key`);
@@ -599,7 +600,8 @@ export class SecretsService {
         merges: q.p.merges,
         same: session ? q.same : null,
         namesOnly: q.p.sealed === "",
-        sinkable: formatOf(q.p.source) !== null && (q.p.from !== this.d.machine || this.rootRefusal(q.p.source) === null),
+        sinkable: !q.p.partial && formatOf(q.p.source) !== null && (q.p.from !== this.d.machine || this.rootRefusal(q.p.source) === null),
+        ...(q.p.partial ? { partial: true } : {}),
         expires: q.expires,
       })),
       passkeys: this.d.gate.passkeys(),

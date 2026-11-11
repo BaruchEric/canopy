@@ -135,8 +135,10 @@ mv .env ~/.config/canopy-deploy/env
 ln -s ~/.config/canopy-deploy/env .env
 ```
 
-compose on the host follows the link, for its own settings and for the secrets
-container's read-only import mount, and the move recreates no container. In
+compose on the host follows the link for its own settings, and the move
+recreates no container. The secrets container mounts the folder itself, at
+the same path, to import the file's keys and keep them as a sink ("Secrets"
+below, "canopy's own `.env`"); no other container does. In
 the canopy and shells containers the link leads nowhere: a repo read of `.env`
 answers 404, and `cat .env` in a shell finds no file. A link whose target a
 container could see would be refused as well, since a raw read resolves links
@@ -1613,6 +1615,10 @@ Recovery when the mini's keys are gone: `canopy secrets recover <checkout of eri
 Rollback: `docker compose stop secrets`. canopy shows the store as away; sinks keep what was last written. `docker compose rm secrets` and dropping the two volumes removes it for good, keys included, so take a copy of `secrets-data` first.
 
 Nothing secret goes into canopy's environment: canopy shares the shells' pid namespace, and a shell can read `/proc/<canopy>/environ`. Host control (above) goes further: an agent in a shell can `ssh mini-host` and read the `secrets-data` volume, which holds the mini's age identity and signing key, and `docker compose logs secrets`, which prints the first-passkey code. On the mini the store keeps its values away from the API and out of every container's environment, but not away from an agent that sets out to read them. Eric chose that on 2026-10-14 so canopy would control the mini as a native install would. The store's keys stay in `secrets-data` with no passphrase, also by choice (2026-10-14): a passphrase unlocked after each start would keep them from an agent, but the store would stay shut after every restart until someone unlocked it.
+
+**canopy's own `.env`.** The `secrets` service mounts `${HOST_HOME}/.config/canopy-deploy` at that host path, lists it in `CANOPY_SECRETS_SINK_ROOTS` and names the file in it as `CANOPY_SECRETS_IMPORT`, so the backend's own keys (`GH_TOKEN`, the voice keys and the rest) are an import source and can be a sink. `redeploy` makes the folder 0700 before `up`. To bring a key under the store, open a passkey session on the gate page, press "scan the mini's sources" under import, and approve the key with "keep this file in step as a sink"; the sink's id comes filled in as `canopy-deploy`. From then on a rotation writes the new value into the file, and `bun run redeploy --restart` hands it to canopy. The store never restarts canopy itself: `scripts/canopy-restart` refuses canopy's own project, since a restart from inside would end the session that asked for it. A key the shells container reads (`GH_TOKEN`) makes that deploy stop with exit 3 until `--shells`, as any change to it does. A host that still keeps a plain `.env` in its checkout has an empty folder here and no import of it; move the file first ("Where `.env` lives"). The same key on the Mac lives in the credentials bundle: `canopy secrets propose --match CANOPY_` there sends the Mac's copies for approval, and approving one under the name the mini's copy got, with a sink, makes the bundle a sink of the same secret.
+
+**Notes files.** A dotenv source with lines that are not `KEY=value` (the Mac's `~/dev/.env` holds notes beside its keys) is read for the pairs it does hold. The scan says which line numbers it left out, and the values from that file can be stored but the file cannot be a sink, since canopy never rewrites a file it cannot read back whole. Clean the file up first if it should be one.
 
 **MCP env files.** The `secrets` service mounts `${HOST_HOME}/.claude/mcp-env` at that host path and lists it in `CANOPY_SECRETS_SINK_ROOTS` beside `/opt/stacks`. `redeploy` makes the folder 0700 before `up`; the service runs as root and chowns each file to the folder's owner. dotclaude's `.gitignore` must ignore `mcp-env/` on every machine before the first `mcp-allow`, and canopy's relay refuses the act until it does. A rotation reaches a server only when a new agent session starts it; sessions already running keep the old value.
 

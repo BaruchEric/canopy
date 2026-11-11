@@ -276,9 +276,13 @@ services:
       - CANOPY_SECRETS_REMOTE=${CANOPY_SECRETS_REMOTE:-}
       # the page passkeys are bound to; changing it orphans every passkey
       - CANOPY_SECRETS_ORIGIN=${CANOPY_SECRETS_ORIGIN:-https://canopy.beric.ca}
-      # where the service may write sinks: the stacks, and the MCP env files
-      # the kit's servers read (mcp-allow writes them at the host path)
-      - CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${HOST_HOME:-/home/eric}/.claude/mcp-env
+      # where the service may write sinks: the stacks, the MCP env files the
+      # kit's servers read (mcp-allow writes them at the host path), and the
+      # folder that holds canopy's own .env
+      - CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${HOST_HOME:-/home/eric}/.claude/mcp-env:${HOST_HOME:-/home/eric}/.config/canopy-deploy
+      # canopy's own .env where it really lives (docs/deploy.md "Where .env
+      # lives"): an import source beside the stacks' files
+      - CANOPY_SECRETS_IMPORT=${HOST_HOME:-/home/eric}/.config/canopy-deploy/env
       - LANG=C.UTF-8
     volumes:
       - secrets-data:/data
@@ -287,9 +291,15 @@ services:
       # the MCP env files only, at the host path the sinks name; redeploy
       # makes the folder 0700 first, or docker would make it as root
       - ${HOST_HOME:-/home/eric}/.claude/mcp-env:${HOST_HOME:-/home/eric}/.claude/mcp-env
-      # canopy's own .env, an import source only; read-only, so never a sink.
-      # It must exist before `up`, or docker makes a folder in its place.
-      - ./.env:/import/canopy.env:ro
+      # the folder of canopy's own .env, at its host path: an import source,
+      # and a sink once a key of it is approved with one. The folder and not
+      # the file, since a sink write renames a new file over the old one and
+      # a one-file mount would go on showing the old. The checkout's .env is
+      # a link to the file here; a host that still keeps a plain .env in the
+      # checkout has an empty folder and no import of it. redeploy makes the
+      # folder 0700 first, or docker would make it as root. A value written
+      # here reaches canopy at its next `bun run redeploy --restart`.
+      - ${HOST_HOME:-/home/eric}/.config/canopy-deploy:${HOST_HOME:-/home/eric}/.config/canopy-deploy
       - secrets-sock:/run/canopy-secrets
       # the canopy-restart key and the host key it trusts
       # (scripts/restart-setup.sh); redeploy makes the folder first, or

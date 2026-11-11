@@ -36,6 +36,7 @@ export interface ServiceEnv {
   breakglass: string;
   sinkRoots: string[];
   stacks: string;
+  /** dotenv files to import beside the stacks': the backend's own settings, named by compose */
   extra: string[];
   /** the folder restart-setup.sh fills on the host, mounted read-only */
   restartDir: string;
@@ -73,7 +74,7 @@ export function serviceEnv(env: Record<string, string | undefined>): ServiceEnv 
     breakglass,
     sinkRoots,
     stacks: env["CANOPY_SECRETS_STACKS"] ?? "/opt/stacks",
-    extra: paths(env["CANOPY_SECRETS_IMPORT"] ?? "/import/canopy.env"),
+    extra: paths(env["CANOPY_SECRETS_IMPORT"] ?? ""),
     restartDir: env["CANOPY_RESTART_DIR"] ?? "/restart",
     restartHost: env["CANOPY_RESTART_HOST"] ?? "192.168.48.1",
     restartUser: env["CANOPY_RESTART_USER"] ?? "eric",

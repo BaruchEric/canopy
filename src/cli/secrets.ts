@@ -1,8 +1,10 @@
 /**
  * `canopy secrets`: the list, the status, unlocking this machine's key,
+ * sending chosen values of this machine's files to the store for approval,
  * pinning the mini's signing key, and the break-glass recovery. There is no
  * `get`: a value leaves the store through the mini's page or a sink. The
- * lines and the recovery are pure enough to test (secrets.test.ts).
+ * lines, the propose and the recovery are pure enough to test
+ * (secrets.test.ts).
  */
 
 import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
@@ -10,17 +12,24 @@ import { dirname, join } from "node:path";
 import { newIdentity, newSigningKey, openValue, sealValue, signingKey } from "../core/secretcrypt";
 import { parseSecretFile, recipientKeys, recipientsFor, serializeFile, signFile, type SecretFile } from "../core/secretfile";
 import { localPaths, PIN, readLocalConfig, writeLocalConfig } from "../core/secretlocal";
-import type { SecretsInfo } from "../core/types";
+import { LIMITS, skippedWords } from "../core/secretwire";
+import type { BackendEntry, SecretProposalIn, SecretsInfo } from "../core/types";
 import { apiBase, callerHeaders } from "./api";
+import { ask as askAt, targetsOf, type Target } from "./health";
 import { bold, dim, lichen, rust } from "./render";
 
 export const SECRETS_USAGE = `usage: canopy secrets [list] [--json]
        canopy secrets status [--json]
        canopy secrets unlock
+       canopy secrets propose (--match TEXT... | --all) [--to NAME] [--dry-run] [--json]
        canopy secrets pin <signing key> [--remote URL]
        canopy secrets recover <checkout> --breakglass FILE --out DIR
-  list, status and unlock speak to the home backend ($CANOPY_API, else 127.0.0.1:7850);
+  list, status, unlock and propose speak to the home backend ($CANOPY_API, else 127.0.0.1:7850);
   unlock only from the machine itself
+  propose scans this machine's import sources and sends the values whose key or file holds TEXT
+  (any case, any of several --match) to the store's writer, each sealed to the mini's key; they wait
+  there for an approval on its gate page. --all sends every value found, --dry-run sends none,
+  --to names the writer among the backends the home one lists. It prints names, never a value
   pin keeps the mini's public signing key (and Forgejo's URL) in this machine's canopy config
   recover opens every value with the break-glass identity, puts a new mini key and signing key in DIR,
   reseals and signs secrets.json in the checkout, and prints the new public halves; it commits nothing
@@ -138,6 +147,124 @@ function take(args: string[], name: string): string | undefined {
   return value;
 }
 
+export interface ProposeArgs {
+  /** texts a key or a file's path may hold, in any case */
+  match: string[];
+  all: boolean;
+  /** the writer's name in the home backend's list */
+  to: string | null;
+  dry: boolean;
+}
+
+/** `propose`'s flags, or what is wrong with them */
+export function parsePropose(flags: readonly string[]): ProposeArgs | string {
+  const args = [...flags];
+  const match: string[] = [];
+  while (args.includes("--match")) {
+    const text = take(args, "--match");
+    if (!text || text.startsWith("--")) return "--match needs a text";
+    match.push(text);
+  }
+  const flag = (name: string): boolean => {
+    const i = args.indexOf(name);
+    if (i !== -1) args.splice(i, 1);
+    return i !== -1;
+  };
+  const all = flag("--all");
+  const dry = flag("--dry-run");
+  const hasTo = args.includes("--to");
+  const to = take(args, "--to") ?? null;
+  if (hasTo && (!to || to.startsWith("--"))) return "--to needs a backend's name";
+  if (args.length > 0) return `not understood: ${args.join(" ")}`;
+  if (all === (match.length > 0)) return "name what to send: --match TEXT (as often as needed), or --all for every value found";
+  return { match, all, to, dry };
+}
+
+/** the scanned values a propose keeps: all of them, or those whose key or file holds one of the texts */
+export function pickProposals(items: readonly SecretProposalIn[], o: Pick<ProposeArgs, "match" | "all">): SecretProposalIn[] {
+  if (o.all) return [...items];
+  const want = o.match.map((t) => t.toLowerCase());
+  return items.filter((p) => want.some((t) => p.key.toLowerCase().includes(t) || p.source.toLowerCase().includes(t)));
+}
+
+interface ScanAnswer {
+  items: SecretProposalIn[];
+  missing: string[];
+  left?: number;
+  skipped?: { path: string; lines: number[] }[];
+}
+
+export interface ProposeDeps {
+  /** the home backend's address, as the CLI reached it */
+  homeUrl: string;
+  /** one call to the home backend; it fails the command on a refusal */
+  home: <T>(method: string, path: string, body?: unknown) => Promise<T>;
+  /** one call to another backend the home one lists */
+  at: <T>(t: Target, method: string, path: string, body?: unknown) => Promise<T>;
+  print: (line: string) => void;
+  fail: (msg: string) => never;
+}
+
+/** Scan the home backend's sources, keep what was asked for, and post it
+ *  to the writer a batch at a time. Every line it prints is a name, a count
+ *  or an address: the sealed values go from one answer into the next
+ *  request and nowhere else. Returns the exit code. */
+export async function propose(o: ProposeArgs, asJson: boolean, d: ProposeDeps): Promise<number> {
+  const mine = await d.home<SecretsInfo>("GET", "/api/secrets");
+  if (mine.role === "writer") return d.fail(`${mine.backend} is the store's writer: it scans its own sources from the gate page, ${mine.gate}`);
+  const scan = await d.home<ScanAnswer>("POST", "/api/secrets/scan", {});
+  const picked = pickProposals(scan.items, o);
+  const names = picked.map((p) => ({ from: p.from, source: p.source, key: p.key, partial: p.partial === true }));
+  const notes = [
+    ...(scan.skipped ?? []).map(skippedWords),
+    ...(scan.missing.length > 0 ? [`not on this machine: ${scan.missing.join(", ")}`] : []),
+    ...((scan.left ?? 0) > 0 ? [`${scan.left} more values did not fit in one scan; approve or reject what waits, then scan again`] : []),
+  ];
+  const say = (sent: { writer: string; added: number; dropped: number } | null): void => {
+    if (asJson) return d.print(JSON.stringify({ found: scan.items.length, picked: names, sent, notes }, null, 2));
+    for (const n of names) d.print(`${dim(n.source)}  ${bold(n.key)}`);
+    for (const n of notes) d.print(lichen(n));
+  };
+  if (picked.length === 0) {
+    say(null);
+    if (!asJson) d.print(`nothing to send: ${scan.items.length} value${scan.items.length === 1 ? "" : "s"} found, none ${o.all ? "at all" : `with ${o.match.join(" or ")} in its key or file`}`);
+    return 1;
+  }
+  if (o.dry) {
+    say(null);
+    if (!asJson) d.print(`${picked.length} of ${scan.items.length} would be sent; nothing was`);
+    return 0;
+  }
+  const listed = await d.home<{ self?: string; backends?: BackendEntry[] }>("GET", "/api/backends");
+  const others = targetsOf(d.homeUrl, listed.self ?? mine.backend, listed.backends ?? []).slice(1);
+  let writer: Target | undefined;
+  if (o.to !== null) {
+    writer = others.find((t) => t.name === o.to);
+    if (!writer) return d.fail(`no backend named ${o.to}; the home backend lists ${others.map((t) => t.name).join(", ") || "none"}`);
+  } else {
+    for (const t of others) {
+      const info = await d.at<SecretsInfo>(t, "GET", "/api/secrets").catch(() => null);
+      if (info?.role !== "writer") continue;
+      writer = t;
+      break;
+    }
+    if (!writer) return d.fail(`none of ${others.map((t) => t.name).join(", ") || "the backends the home one lists"} answered as the store's writer; name it with --to`);
+  }
+  const sent = { writer: writer.name, added: 0, dropped: 0 };
+  // the store takes a batch at a time and refuses a longer one whole
+  for (let i = 0; i < picked.length; i += LIMITS.proposals) {
+    const r = await d.at<{ added: number; dropped: number }>(writer, "POST", "/api/secrets/proposals", { items: picked.slice(i, i + LIMITS.proposals) });
+    sent.added += r.added;
+    sent.dropped += r.dropped;
+  }
+  say(sent);
+  if (!asJson) {
+    d.print(`${picked.length} sent to ${writer.name}: ${sent.added} waiting for approval${sent.dropped > 0 ? `, ${sent.dropped} dropped` : ""}`);
+    d.print(`approve them under import at ${mine.gate}; they wait a day`);
+  }
+  return sent.dropped > 0 ? 1 : 0;
+}
+
 export interface SecretsDeps {
   fail: (msg: string) => never;
 }
@@ -179,6 +306,12 @@ export async function secretsCommand(argv: string[], { fail }: SecretsDeps): Pro
       const pass = await readHidden("passphrase for this machine's secrets key: ");
       await ask("POST", "/api/secrets/unlock", { passphrase: pass });
       console.log("unlocked; this machine's sinks are written now");
+      return;
+    }
+    case "propose": {
+      const o = parsePropose(rest.slice(1));
+      if (typeof o === "string") return fail(`${o}\n${SECRETS_USAGE}`);
+      process.exitCode = await propose(o, asJson, { homeUrl: home, home: ask, at: askAt, print: (line) => console.log(line), fail });
       return;
     }
     case "pin": {

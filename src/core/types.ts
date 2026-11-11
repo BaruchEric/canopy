@@ -4265,6 +4265,9 @@ export interface SecretProposalIn {
   sealed: string;
   /** the secret this would update, when it is a "take this value" */
   merges: string | null;
+  /** its file has lines the reader could not read (a notes file kept by
+   *  hand), so canopy cannot write that file and it never becomes a sink */
+  partial?: boolean;
 }
 
 export interface SecretProposalInfo {
@@ -4278,8 +4281,10 @@ export interface SecretProposalInfo {
   /** another pending proposal or a secret that holds the same value */
   same: string | null;
   namesOnly: boolean;
-  /** its file can become a sink: dotenv or json, and inside the writer's sink roots when it is the writer's own file */
+  /** its file can become a sink: dotenv or json, every line of it readable, and inside the writer's sink roots when it is the writer's own file */
   sinkable: boolean;
+  /** why not, when the file is a dotenv file with lines canopy could not read; absent from a writer older than the field */
+  partial?: boolean;
   /** epoch ms */
   expires: number;
 }

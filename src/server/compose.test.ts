@@ -257,6 +257,7 @@ describe("the secrets service", () => {
    *  HOST_HOME mounts compare by path and not by the text "${HOST_HOME" */
   const named = (v: string): string => v.replace(/\$\{HOST_HOME:-([^}]*)\}/g, "$1").split(":")[0] ?? v;
   const MCP_ENV = "${HOST_HOME:-/home/eric}/.claude/mcp-env";
+  const OWN_ENV = "${HOST_HOME:-/home/eric}/.config/canopy-deploy";
   const HOST_CLAUDE = "${HOST_HOME:-/home/eric}/.claude:${HOST_HOME:-/home/eric}/.claude";
 
   test("exists in a network and process namespace of its own", () => {
@@ -282,11 +283,11 @@ describe("the secrets service", () => {
     }
     expect(envOf(secrets ?? {})).toContain("CANOPY_SECRETS_CALLER_GID=${SECRETSCALLER_GID:-7851}");
   });
-  test("mounts its data, the stacks, canopy's .env read-only and the socket, and nothing the shells mount", () => {
+  test("mounts its data, the stacks, the folder of canopy's own .env and the socket, and nothing the shells mount", () => {
     const vols = secrets?.volumes ?? [];
     expect(vols).toContain("secrets-data:/data");
     expect(vols).toContain("/opt/stacks:/opt/stacks");
-    expect(vols).toContain("./.env:/import/canopy.env:ro");
+    expect(vols).toContain(`${OWN_ENV}:${OWN_ENV}`);
     expect(vols).toContain("secrets-sock:/run/canopy-secrets");
     const shells = (compose.services["shells"]?.volumes ?? []).map(named);
     for (const v of vols) expect(shells).not.toContain(named(v));
@@ -302,13 +303,23 @@ describe("the secrets service", () => {
   });
   test("writes the MCP env files at their host path, a sink root, and nothing else of ~/.claude", () => {
     expect(secrets?.volumes).toContain(`${MCP_ENV}:${MCP_ENV}`);
-    expect(envOf(secrets ?? {})).toContain(`CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${MCP_ENV}`);
+    expect(envOf(secrets ?? {})).toContain(`CANOPY_SECRETS_SINK_ROOTS=/opt/stacks:${MCP_ENV}:${OWN_ENV}`);
     expect((secrets?.volumes ?? []).filter((v) => v.includes(".claude"))).toEqual([`${MCP_ENV}:${MCP_ENV}`]);
+  });
+  test("keeps canopy's own .env as a sink: its folder at the host path, writable, a sink root, and the file an import source", () => {
+    // the folder, never the one file: a sink write renames a new file over the old, which a one-file mount would not show
+    expect((secrets?.volumes ?? []).filter((v) => v.includes(".env"))).toEqual([]);
+    expect(envOf(secrets ?? {})).toContain(`CANOPY_SECRETS_IMPORT=${OWN_ENV}/env`);
+    // the canopy and shells containers must never see that folder (docs/deploy.md "Where .env lives")
+    for (const [name, s] of Object.entries(compose.services)) {
+      if (name === "secrets") continue;
+      expect((s.volumes ?? []).filter((v) => v.includes("canopy-deploy"))).toEqual([]);
+    }
   });
   test("reads the restart key's folder and nothing else of the host's home config, read-only", () => {
     const restart = "${HOST_HOME:-/home/eric}/.config/canopy-restart:/restart:ro";
     expect(secrets?.volumes).toContain(restart);
-    expect((secrets?.volumes ?? []).filter((v) => v.includes(".config") || v.includes(".ssh"))).toEqual([restart]);
+    expect((secrets?.volumes ?? []).filter((v) => v.includes(".config") || v.includes(".ssh"))).toEqual([`${OWN_ENV}:${OWN_ENV}`, restart]);
     for (const name of ["canopy", "shells", "stages"]) expect(compose.services[name]?.volumes ?? []).not.toContain(restart);
   });
   test("canopy and the shells see ~/.claude at its host path too, so the wrapper's path runs in both", () => {

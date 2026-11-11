@@ -8,6 +8,16 @@
 import type { SecretImpact, SecretMeta, SecretSinkFormat, SecretStack } from "./types";
 
 export const AGE_HEAD = "-----BEGIN AGE ENCRYPTED FILE-----";
+
+/** The sink format a file would have, by its name, null when it cannot be
+ *  a sink: `.env`, `x.env` and a bare `env` (a backend's own settings,
+ *  docs/deploy.md "Where .env lives") are dotenv, `x.json` is json. */
+export function formatOf(path: string): SecretSinkFormat | null {
+  const file = path.slice(path.lastIndexOf("/") + 1);
+  if (file === "env" || file.endsWith(".env")) return "dotenv";
+  if (file.endsWith(".json")) return "json";
+  return null;
+}
 /** a letter first, so no name is an integer-like key that JSON reorders */
 export const SECRET_NAME = /^[A-Za-z][A-Za-z0-9_.-]{0,99}$/;
 export const SINK_ID = /^[a-z][a-z0-9-]{0,62}$/;

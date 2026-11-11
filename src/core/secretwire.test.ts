@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { AGE_HEAD } from "./secretfile";
-import { ACT_KINDS, LIMITS, encodeLine, parseAct, parseProposals, parseReply, parseRequest, type ActKind } from "./secretwire";
+import { ACT_KINDS, LIMITS, encodeLine, parseAct, parseProposals, parseReply, parseRequest, skippedWords, type ActKind } from "./secretwire";
 import { SAMPLES } from "./secretwire.samples";
 
 describe("parseAct", () => {
@@ -45,11 +45,26 @@ describe("parseRequest and parseReply", () => {
   });
 });
 
+describe("skippedWords", () => {
+  test("names a file's unread lines by number, one or many, and stops listing after twelve", () => {
+    expect(skippedWords({ path: "/d/.env", lines: [8] })).toBe("/d/.env: line 8 is not KEY=value, so it was left out and the file cannot be a sink");
+    expect(skippedWords({ path: "/d/.env", lines: [8, 11] })).toBe("/d/.env: lines 8, 11 are not KEY=value, so they were left out and the file cannot be a sink");
+    const long = skippedWords({ path: "/d/.env", lines: Array.from({ length: 15 }, (_, i) => i + 1) });
+    expect(long).toContain("lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 and 3 more are not KEY=value");
+  });
+});
+
 describe("parseProposals", () => {
   const one = { from: "mac", source: "/Users/e/dev/.env", key: "CF_TOKEN", sealed: `${AGE_HEAD}\nx\n`, merges: null };
 
   test("takes a batch within the limits", () => {
     expect(parseProposals([one])).toEqual([one]);
+  });
+
+  test("keeps the partial mark of a file with unread lines, and nothing else a caller adds", () => {
+    expect(parseProposals([{ ...one, partial: true, extra: "x" }])).toEqual([{ ...one, partial: true }]);
+    expect(parseProposals([{ ...one, partial: false }])).toEqual([one]);
+    expect("error" in (parseProposals([{ ...one, partial: "yes" }]) as object)).toBe(true);
   });
 
   test("refuses too many, too large, or a sealed field that is not age", () => {

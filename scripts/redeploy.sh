@@ -326,6 +326,11 @@ job() {
   # keeps every other user out
   mkdir -p "$STAGE_HOST_HOME/.claude/mcp-env" && chmod 700 "$STAGE_HOST_HOME/.claude/mcp-env" ||
     { echo "could not make $STAGE_HOST_HOME/.claude/mcp-env; up would make it as root"; return 1; }
+  # the folder of canopy's own .env (docs/deploy.md "Where .env lives"); the
+  # secrets service mounts it to keep that file as a sink. A host that keeps
+  # .env in the checkout has none yet, and docker would make it as root
+  mkdir -p "$STAGE_HOST_HOME/.config/canopy-deploy" && chmod 700 "$STAGE_HOST_HOME/.config/canopy-deploy" ||
+    { echo "could not make $STAGE_HOST_HOME/.config/canopy-deploy; up would make it as root"; return 1; }
   # the restart key's folder (scripts/restart-setup.sh fills it); the
   # secrets service mounts it read-only, so a root-made one would stay empty
   mkdir -p "$STAGE_HOST_HOME/.config/canopy-restart" && chmod 700 "$STAGE_HOST_HOME/.config/canopy-restart" ||

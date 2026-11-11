@@ -336,6 +336,24 @@ describe("proposals", () => {
     expect(await openProposal(take.sealed, mini.identity, take)).toBe("by-hand");
   });
 
+  test("a notes file gives its pairs, marked partial, and the numbers of its other lines", async () => {
+    const mini = await newIdentity();
+    await publish(emptyFile({ mini: mini.recipient, breakglass: BREAKGLASS }), signer);
+    await writeFile(join(dir, "notes.env"), "OPENAI_API_KEY=sk-1\nWi-Fi-pass=hunter2\nrouter : admin\n");
+    await writeFile(join(dir, "clean.env"), "GROQ_API_KEY=gk-1\n");
+    const r = await reader([join(dir, "notes.env"), join(dir, "clean.env")]);
+    const p = await r.proposals();
+    if ("error" in p) throw new Error(p.error);
+    expect(p.items.map((x) => [x.key, x.partial ?? false])).toEqual([
+      ["OPENAI_API_KEY", true],
+      ["GROQ_API_KEY", false],
+    ]);
+    expect(p.skipped).toEqual([{ path: join(dir, "notes.env"), lines: [2, 3] }]);
+    // the answer names lines by number: no word of a line canopy could not read
+    expect(JSON.stringify(p)).not.toContain("hunter2");
+    expect(JSON.stringify(p)).not.toContain("admin");
+  });
+
   test("a scan returns every value of a long file, up to what the store lets wait, and counts the rest", async () => {
     const mini = await newIdentity();
     await publish(emptyFile({ mini: mini.recipient, breakglass: BREAKGLASS }), signer);

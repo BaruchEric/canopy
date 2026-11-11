@@ -2,7 +2,7 @@
    their key name alone, and the approve act each one gets when many go at
    once. Names only; nothing here sees a value. */
 
-import { DOTENV_KEY, JSON_PATH, SINK_ID } from "../../src/core/secretfile";
+import { DOTENV_KEY, formatOf, JSON_PATH, SINK_ID } from "../../src/core/secretfile";
 import type { SecretAct } from "../../src/core/secretwire";
 import type { SecretProposalInfo } from "../../src/core/types";
 
@@ -17,21 +17,34 @@ export function looksSecret(key: string): boolean {
   return SECRETY.test(last) && !SETTING.test(last);
 }
 
-/** a stack's env file is named for the stack, any other dotenv or json file
- *  for the file; null when the file cannot be a sink */
+const fold = (word: string): string => word.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+
+/** A bare `env` or `.env` says nothing by its own name, so the folder it
+ *  sits in names it (`canopy-deploy` for a backend's own settings); null
+ *  for any other file. */
+function folderOf(source: string): string | null {
+  const parts = source.split("/");
+  const file = parts.pop() ?? "";
+  return file === "env" || file === ".env" ? fold(parts.pop() ?? "") || null : null;
+}
+
+/** a stack's env file is named for the stack, a bare env file for its
+ *  folder, any other dotenv or json file for the file; null when the file
+ *  cannot be a sink */
 export function sinkIdOf(source: string): string | null {
-  if (!source.endsWith(".env") && !source.endsWith(".json")) return null;
+  if (formatOf(source) === null) return null;
   const stack = /^\/opt\/stacks\/([^/]+)\//.exec(source)?.[1];
   const file = (source.split("/").pop() ?? "").replace(/\.(env|json)$/, "").replace(/^\.+/, "");
-  const id = (stack ?? file).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  const id = fold(stack ?? folderOf(source) ?? file);
   return SINK_ID.test(id) ? id : null;
 }
 
-/** the tag and description word: the stack, else the file's stem */
+/** the tag and description word: the stack, a bare env file's folder, else
+ *  the file's stem */
 function placeOf(source: string): string {
   const stack = /^\/opt\/stacks\/([^/]+)\//.exec(source)?.[1];
   if (stack) return stack;
-  return (source.split("/").pop() ?? source).replace(/^\.+/, "").replace(/\..*$/, "") || source;
+  return folderOf(source) ?? ((source.split("/").pop() ?? source).replace(/^\.+/, "").replace(/\..*$/, "") || source);
 }
 
 /** the act a bulk approve sends, null for a source that only lists names;
@@ -40,7 +53,7 @@ export function bulkAct(p: SecretProposalInfo): Extract<SecretAct, { a: "approve
   if (p.namesOnly) return null;
   const place = placeOf(p.source);
   const id = sinkIdOf(p.source);
-  const fits = p.source.endsWith(".env") ? DOTENV_KEY.test(p.key) : JSON_PATH.test(p.key);
+  const fits = formatOf(p.source) === "dotenv" ? DOTENV_KEY.test(p.key) : JSON_PATH.test(p.key);
   return {
     a: "approve",
     proposal: p.id,

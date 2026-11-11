@@ -211,13 +211,23 @@ export function parseProposals(v: unknown): SecretProposalIn[] | { error: string
   const out: SecretProposalIn[] = [];
   for (const p of v) {
     if (!isObj(p)) return { error: "a proposal is an object" };
-    const { from, source, key, sealed, merges } = p;
+    const { from, source, key, sealed, merges, partial } = p;
     if (!str(from, MACHINE) || !absPath(source) || typeof key !== "string" || key.length === 0 || key.length > LIMITS.field) return { error: "a proposal needs from, an absolute source and a key" };
     if (typeof sealed !== "string" || sealed.length > LIMITS.sealed || (sealed !== "" && !sealed.startsWith(AGE_HEAD))) return { error: "a proposal's value is sealed with age, at most 16 KiB" };
     if (merges !== null && !str(merges, SECRET_NAME)) return { error: "merges is a secret name or null" };
-    out.push({ from, source, key, sealed, merges });
+    if (partial !== undefined && typeof partial !== "boolean") return { error: "partial is true, false or left out" };
+    out.push({ from, source, key, sealed, merges, ...(partial ? { partial: true } : {}) });
   }
   return out;
+}
+
+/** What a scan says of one dotenv file's unread lines: their numbers,
+ *  never a word of them. The page and the CLI print the same sentence. */
+export function skippedWords(s: { path: string; lines: readonly number[] }): string {
+  const shown = s.lines.slice(0, 12).join(", ");
+  const more = s.lines.length > 12 ? ` and ${s.lines.length - 12} more` : "";
+  const many = s.lines.length !== 1;
+  return `${s.path}: line${many ? "s" : ""} ${shown}${more} ${many ? "are" : "is"} not KEY=value, so ${many ? "they were" : "it was"} left out and the file cannot be a sink`;
 }
 
 export function parseRequest(line: string): SecretsRequest | { error: string } {

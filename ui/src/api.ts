@@ -748,8 +748,10 @@ export const api = {
   secretsPropose: (b: string, items: SecretProposalIn[]) =>
     req<{ added: number; dropped: number }>(b, "/api/secrets/proposals", { method: "POST", body: JSON.stringify({ items }) }),
   secretsPull: (b: string) => req<SecretsInfo>(b, "/api/secrets/pull", { method: "POST", body: "{}" }),
-  // left: the values past what the store lets wait at once; a backend from before 2026-11-10 stops at 200 and does not say
-  secretsScan: (b: string) => req<{ items: SecretProposalIn[]; missing: string[]; left?: number }>(b, "/api/secrets/scan", { method: "POST", body: "{}" }),
+  // left: the values past what the store lets wait at once; a backend from before 2026-11-10 stops at 200 and does not say.
+  // skipped: the lines of a dotenv file that are not pairs, by number; an older backend reads no such file and sends none
+  secretsScan: (b: string) =>
+    req<{ items: SecretProposalIn[]; missing: string[]; left?: number; skipped?: { path: string; lines: number[] }[] }>(b, "/api/secrets/scan", { method: "POST", body: "{}" }),
   secretsTake: (b: string, id: string, key: string) => req<SecretProposalIn>(b, "/api/secrets/take", { method: "POST", body: JSON.stringify({ id, key }) }),
   secretsUnlock: (b: string, passphrase: string) => req<{ ok: true }>(b, "/api/secrets/unlock", { method: "POST", body: JSON.stringify({ passphrase }) }),
   secretsLock: (b: string) => req<{ ok: true }>(b, "/api/secrets/lock", { method: "POST", body: "{}" }),

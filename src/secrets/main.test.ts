@@ -20,11 +20,19 @@ describe("serviceEnv", () => {
       gateUrl: "https://canopy.beric.ca/?view=secrets",
       breakglass: DEFAULT_BREAKGLASS,
       sinkRoots: ["/opt/stacks"],
-      extra: ["/import/canopy.env"],
+      extra: [],
       restartDir: "/restart",
       restartHost: "192.168.48.1",
       restartUser: "eric",
     });
+  });
+
+  test("the sink roots and the extra import files are lists split on a colon", () => {
+    const own = "/home/eric/.config/canopy-deploy";
+    const e = serviceEnv({ CANOPY_SECRETS_CALLER_GID: "7851", CANOPY_SECRETS_SINK_ROOTS: `/opt/stacks:${own}`, CANOPY_SECRETS_IMPORT: `${own}/env` });
+    if ("refused" in e) throw new Error(e.refused);
+    expect(e.sinkRoots).toEqual(["/opt/stacks", own]);
+    expect(e.extra).toEqual([`${own}/env`]);
   });
 
   test.each([

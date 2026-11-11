@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatOf, fromClaudeJson, fromCodexToml, fromCredentials, fromDotenv, macSources, miniSources, scanFiles, sopsNames, suggestName } from "./secretimport";
+import { formatOf } from "./secretfile";
+import { fromClaudeJson, fromCodexToml, fromCredentials, fromDotenv, macSources, miniSources, readDotenv, scanFiles, sopsNames, suggestName } from "./secretimport";
 
 describe("readers", () => {
   test("dotenv: every pair with a value", () => {
@@ -11,6 +12,45 @@ describe("readers", () => {
       { source: "/a/.env", key: "C", value: "x y" },
     ]);
     expect(fromDotenv("/a/.env", "not a pair\n")).toEqual([]);
+  });
+
+  test("dotenv: a key written twice is found once, with its last value", () => {
+    expect(fromDotenv("/a/.env", "A=1\nB=2\nA=3\n")).toEqual([
+      { source: "/a/.env", key: "A", value: "3" },
+      { source: "/a/.env", key: "B", value: "2" },
+    ]);
+  });
+
+  test("dotenv: a notes file gives up its pairs, marked partial, and the numbers of the lines that are not pairs", () => {
+    const text = ["# keys", "OPENAI_API_KEY=k1", "Wi-Fi-pass=hunter2", "router : admin / letmein", "GROQ_API_KEY = k2", "eric@10.0.0.2 pw", ""].join("\n");
+    const r = readDotenv("/d/.env", text);
+    expect(r.found).toEqual([
+      { source: "/d/.env", key: "OPENAI_API_KEY", value: "k1", partial: true },
+      { source: "/d/.env", key: "GROQ_API_KEY", value: "k2", partial: true },
+    ]);
+    expect(r.skipped).toEqual([3, 4, 6]);
+  });
+
+  test("dotenv: the later lines of a value that runs over several are skipped, never read as pairs", () => {
+    const text = ['CERT="-----BEGIN', "Qw==", 'tail"', "AFTER=1", ""].join("\n");
+    const r = readDotenv("/d/.env", text);
+    expect(r.found.map((f) => f.key)).toEqual(["AFTER"]);
+    expect(r.skipped).toEqual([1, 2, 3]);
+  });
+
+  test("dotenv: a closed quote with words after it is one bad line, and the next line is read", () => {
+    const r = readDotenv("/d/.env", 'A="x" and more\nB=2\n');
+    expect(r.found.map((f) => f.key)).toEqual(["B"]);
+    expect(r.skipped).toEqual([1]);
+  });
+
+  test("dotenv: a file of pairs only is not partial", () => {
+    const r = readDotenv("/d/.env", "A=1\n\n# c\nB=2\n");
+    expect(r.found).toEqual([
+      { source: "/d/.env", key: "A", value: "1" },
+      { source: "/d/.env", key: "B", value: "2" },
+    ]);
+    expect(r.skipped).toEqual([]);
   });
 
   test("credentials: string leaves as dotted keys", () => {
@@ -58,8 +98,13 @@ describe("suggestName", () => {
 test("formatOf: only dotenv and json sources can become sinks", () => {
   expect(formatOf("/opt/stacks/x/.env")).toBe("dotenv");
   expect(formatOf("/import/canopy.env")).toBe("dotenv");
+  // a backend's own settings, kept outside its checkout under a bare name
+  expect(formatOf("/home/eric/.config/canopy-deploy/env")).toBe("dotenv");
   expect(formatOf("/h/.claude/credentials/.credentials.json")).toBe("json");
   expect(formatOf("/h/.codex/config.toml")).toBeNull();
+  expect(formatOf("/opt/stacks/memory/env.sops.yaml")).toBeNull();
+  expect(formatOf("/h/.env/notes")).toBeNull();
+  expect(formatOf("/h/myenv")).toBeNull();
 });
 
 describe("scanFiles and the source lists", () => {
@@ -79,6 +124,21 @@ describe("scanFiles and the source lists", () => {
     ]);
     expect(r.found).toEqual([{ source: join(dir, ".env"), key: "A", value: "1" }]);
     expect(r.missing).toEqual([join(dir, "gone.json")]);
+    expect(r.skipped).toEqual([]);
+  });
+
+  test("names the lines of a dotenv file it could not read, by number", async () => {
+    await writeFile(join(dir, ".env"), "A=1\na note\n");
+    await writeFile(join(dir, "c.json"), '{"k": "v"}');
+    const r = await scanFiles([
+      { path: join(dir, ".env"), kind: "dotenv" },
+      { path: join(dir, "c.json"), kind: "credentials" },
+    ]);
+    expect(r.found).toEqual([
+      { source: join(dir, ".env"), key: "A", value: "1", partial: true },
+      { source: join(dir, "c.json"), key: "k", value: "v" },
+    ]);
+    expect(r.skipped).toEqual([{ path: join(dir, ".env"), lines: [2] }]);
   });
 
   test("the mini's list: each stack's .env, the two sops files, and the extra files", async () => {

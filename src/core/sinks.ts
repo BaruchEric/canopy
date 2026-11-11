@@ -44,6 +44,15 @@ function parseValue(v: string): string | null {
   return v.replace(/\s+#.*$/, "").trimEnd();
 }
 
+/** one line as a pair, a comment or a blank; null for anything else */
+function parseLine(raw: string): EnvLine | null {
+  const t = raw.trim();
+  if (t === "" || t.startsWith("#")) return { kind: "other", raw };
+  const m = PAIR.exec(raw);
+  const value = m ? parseValue((m[3] ?? "").replace(/\r$/, "")) : null;
+  return m && value !== null ? { kind: "pair", key: m[2] ?? "", value, exported: !!m[1], raw } : null;
+}
+
 /** `newline`: the text ends in one (an empty file counts, so a first key
  *  gets one) */
 export function parseDotenv(text: string): { lines: EnvLine[]; newline: boolean } | { error: string } {
@@ -53,17 +62,48 @@ export function parseDotenv(text: string): { lines: EnvLine[]; newline: boolean 
   if (newline) parts.pop();
   const lines: EnvLine[] = [];
   for (const [i, raw] of parts.entries()) {
-    const t = raw.trim();
-    if (t === "" || t.startsWith("#")) {
-      lines.push({ kind: "other", raw });
-      continue;
-    }
-    const m = PAIR.exec(raw);
-    const value = m ? parseValue((m[3] ?? "").replace(/\r$/, "")) : null;
-    if (!m || value === null) return { error: `line ${i + 1} is not KEY=value, a comment or blank` };
-    lines.push({ kind: "pair", key: m[2] ?? "", value, exported: !!m[1], raw });
+    const line = parseLine(raw);
+    if (!line) return { error: `line ${i + 1} is not KEY=value, a comment or blank` };
+    lines.push(line);
   }
   return { lines, newline };
+}
+
+/** The pairs of a dotenv file somebody keeps by hand, and the numbers of
+ *  the lines that are none of KEY=value, a comment or blank (a note, a
+ *  label with a hyphen, a value that runs over several lines). For the
+ *  import's reading only: a write goes through parseDotenv, which refuses
+ *  such a file, so canopy never rewrites a line it could not read. */
+export function looseDotenv(text: string): { pairs: { key: string; value: string }[]; skipped: number[] } {
+  const pairs: { key: string; value: string }[] = [];
+  const skipped: number[] = [];
+  // the quote a value opened and has not closed yet: its later lines are part of it, never pairs
+  let open: string | null = null;
+  for (const [i, raw] of text.split("\n").entries()) {
+    if (open !== null) {
+      skipped.push(i + 1);
+      if (closes(raw, 0, open)) open = null;
+      continue;
+    }
+    const line = parseLine(raw);
+    if (line?.kind === "pair") pairs.push({ key: line.key, value: line.value });
+    if (line) continue;
+    skipped.push(i + 1);
+    const v = PAIR.exec(raw)?.[3] ?? "";
+    const q = v.charAt(0);
+    if ((q === '"' || q === "'") && !closes(v, 1, q)) open = q;
+  }
+  return { pairs, skipped };
+}
+
+/** whether `v`, read from `from`, holds the quote that ends a value; a
+ *  backslash guards the next character inside double quotes */
+function closes(v: string, from: number, quote: string): boolean {
+  for (let i = from; i < v.length; i++) {
+    if (quote === '"' && v[i] === "\\") i++;
+    else if (v[i] === quote) return true;
+  }
+  return false;
 }
 
 /** A value as one dotenv line keeps it: bare when safe, single quotes when

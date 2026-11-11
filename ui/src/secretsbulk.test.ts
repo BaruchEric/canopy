@@ -59,6 +59,11 @@ describe("sinkIdOf", () => {
     expect(sinkIdOf("/import/canopy.env")).toBe("canopy");
     expect(sinkIdOf("/home/eric/.claude/credentials/.credentials.json")).toBe("credentials");
   });
+  test("a bare env file is named for the folder it sits in", () => {
+    expect(sinkIdOf("/home/eric/.config/canopy-deploy/env")).toBe("canopy-deploy");
+    expect(sinkIdOf("/Users/e/dev/.env")).toBe("dev");
+    expect(sinkIdOf("/Users/e/My Stuff/.env")).toBe("my-stuff");
+  });
   test("a file that cannot be a sink gets none", () => {
     expect(sinkIdOf("/home/eric/.codex/config.toml")).toBeNull();
     expect(sinkIdOf("/opt/stacks/memory/env.sops.yaml")).toBeNull();
@@ -93,6 +98,18 @@ describe("bulkAct", () => {
     const act = bulkAct(P({ source: "/import/canopy.env", key: "GH_TOKEN", suggested: "gh_token", sinkable: false }));
     expect(act?.sink).toBeNull();
     expect(act?.tags).toEqual(["canopy"]);
+  });
+  test("a backend's own settings are described, tagged and kept as a sink under their folder's name", () => {
+    expect(bulkAct(P({ source: "/home/eric/.config/canopy-deploy/env", key: "GH_TOKEN", suggested: "gh_token" }))).toMatchObject({
+      description: "GH_TOKEN in canopy-deploy",
+      tags: ["canopy-deploy"],
+      sink: { id: "canopy-deploy" },
+    });
+  });
+  test("a value from a file with unread lines is approved without a sink", () => {
+    const act = bulkAct(P({ source: "/Users/e/dev/.env", key: "OPENAI_API_KEY", suggested: "openai_api_key", sinkable: false, partial: true }));
+    expect(act?.sink).toBeNull();
+    expect(act?.tags).toEqual(["dev"]);
   });
   test("a toml source is approved without a sink", () => {
     const act = bulkAct(P({ source: "/home/eric/.codex/config.toml", key: "mcp_servers.x.env.API_KEY", suggested: "x_api_key" }));

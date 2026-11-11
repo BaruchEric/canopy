@@ -8,14 +8,22 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SECRET_NAME } from "./secretfile";
-import { parseDotenv } from "./sinks";
-import type { SecretSinkFormat } from "./types";
+import { looseDotenv } from "./sinks";
 
 /** `value` null: a source canopy can list but not read (sops) */
 export interface Found {
   source: string;
   key: string;
   value: string | null;
+  /** its file has lines canopy cannot read, so the file cannot become a sink */
+  partial?: true;
+}
+
+/** a dotenv file's lines that are none of KEY=value, a comment or blank */
+export interface SkippedLines {
+  path: string;
+  /** 1-based */
+  lines: number[];
 }
 
 export type ImportKind = "dotenv" | "credentials" | "claude" | "codex" | "sops";
@@ -30,11 +38,20 @@ const REF = /^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/;
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
-export function fromDotenv(source: string, text: string): Found[] {
-  const p = parseDotenv(text);
-  if ("error" in p) return [];
-  return p.lines.flatMap((l) => (l.kind === "pair" && l.value !== "" && !REF.test(l.value) ? [{ source, key: l.key, value: l.value }] : []));
+/** Every pair with a value, and the lines that are not pairs. A file with
+ *  such lines is read for what it does hold (a notes file somebody keeps by
+ *  hand has keys worth storing), and each value from it is marked partial. */
+export function readDotenv(source: string, text: string): { found: Found[]; skipped: number[] } {
+  const { pairs, skipped } = looseDotenv(text);
+  const mark = skipped.length > 0 ? { partial: true as const } : {};
+  // the last line of a key wins, as compose reads it
+  const last = new Map<string, string>();
+  for (const p of pairs) last.set(p.key, p.value);
+  const found = [...last].flatMap(([key, value]) => (value !== "" && !REF.test(value) ? [{ source, key, value, ...mark }] : []));
+  return { found, skipped };
 }
+
+export const fromDotenv = (source: string, text: string): Found[] => readDotenv(source, text).found;
 
 function leaves(source: string, v: unknown, path: string[]): Found[] {
   if (typeof v === "string") return v !== "" && !REF.test(v) ? [{ source, key: path.join("."), value: v }] : [];
@@ -108,13 +125,6 @@ export function suggestName(source: string, key: string): string {
   return SECRET_NAME.test(raw) ? raw : `s_${raw}`.slice(0, 100);
 }
 
-/** the sink format a source file would have, null when it cannot be one */
-export function formatOf(path: string): SecretSinkFormat | null {
-  if (path.endsWith(".env")) return "dotenv";
-  if (path.endsWith(".json")) return "json";
-  return null;
-}
-
 const READERS: Record<ImportKind, (source: string, text: string) => Found[]> = {
   dotenv: fromDotenv,
   credentials: fromCredentials,
@@ -123,9 +133,10 @@ const READERS: Record<ImportKind, (source: string, text: string) => Found[]> = {
   sops: sopsNames,
 };
 
-export async function scanFiles(list: readonly ImportSource[]): Promise<{ found: Found[]; missing: string[] }> {
+export async function scanFiles(list: readonly ImportSource[]): Promise<{ found: Found[]; missing: string[]; skipped: SkippedLines[] }> {
   const found: Found[] = [];
   const missing: string[] = [];
+  const skipped: SkippedLines[] = [];
   for (const s of list) {
     let text: string;
     try {
@@ -134,9 +145,15 @@ export async function scanFiles(list: readonly ImportSource[]): Promise<{ found:
       missing.push(s.path);
       continue;
     }
-    found.push(...READERS[s.kind](s.path, text));
+    if (s.kind !== "dotenv") {
+      found.push(...READERS[s.kind](s.path, text));
+      continue;
+    }
+    const r = readDotenv(s.path, text);
+    found.push(...r.found);
+    if (r.skipped.length > 0) skipped.push({ path: s.path, lines: r.skipped });
   }
-  return { found, missing };
+  return { found, missing, skipped };
 }
 
 export const macSources = (home: string, dev: string): ImportSource[] => [

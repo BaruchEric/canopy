@@ -313,6 +313,31 @@ describe("proposals", () => {
     expect(by).toEqual({ A: true, B: false, C: false, D: true });
   });
 
+  test("a backend's own settings under a bare name can be a sink once their folder is a root", async () => {
+    found = [{ source: join(stacks, "canopy-deploy", "env"), key: "GH_TOKEN", value: "g1" }];
+    await ok({ a: "import-scan" });
+    expect((await info()).proposals.map((x) => [x.key, x.sinkable])).toEqual([["GH_TOKEN", true]]);
+  });
+
+  test("a value from a file with unread lines is stored, and its file is never a sink", async () => {
+    found = [{ source: join(stacks, "app", ".env"), key: "A", value: "1", partial: true }];
+    await ok({ a: "import-scan" });
+    const m = { from: "mac", source: "/Users/e/dev/.env", key: "D" };
+    await svc.handle({ t: "propose", items: [{ ...m, sealed: await sealProposal(m, "4", store.recipient), merges: null, partial: true }] });
+    const list = (await info()).proposals;
+    expect(list.map((x) => [x.key, x.sinkable, x.partial])).toEqual([
+      ["A", false, true],
+      ["D", false, true],
+    ]);
+    const d = list.find((x) => x.key === "D");
+    const refused = await act({ a: "approve", proposal: d?.id ?? "", name: "d_key", description: "", tags: [], value: null, sink: { id: "dev" } });
+    expect(refused).toMatchObject({ ok: false });
+    expect(refused.ok ? "" : refused.error).toContain("cannot be a sink");
+    expect((await info()).sinks.map((s) => s.id)).not.toContain("dev");
+    await ok({ a: "approve", proposal: d?.id ?? "", name: "d_key", description: "", tags: [], value: null, sink: null });
+    expect(await ok({ a: "reveal", name: "d_key" })).toMatchObject({ value: "4" });
+  });
+
   test("at most 500 wait at once", async () => {
     const batch = (n: number) => Array.from({ length: 200 }, (_, i) => ({ from: "mac", source: "/Users/e/dev/.env", key: `K${n}_${i}`, sealed: "", merges: null }));
     expect((await svc.handle({ t: "propose", items: batch(1) })).ok).toBe(true);
