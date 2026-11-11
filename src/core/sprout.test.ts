@@ -9,6 +9,7 @@ import {
   branchPushRefusal,
   extendBranch,
   githubRepo,
+  repoPage,
   hostLine,
   workRefusal,
   NOTE_FILES,
@@ -521,6 +522,41 @@ describe("the pick", () => {
     expect(githubRepo("ssh://git@github.com/eric/clms")).toEqual({ owner: "eric", name: "clms" });
     for (const bad of ["https://gitlab.com/eric/clms", "https://github.com/eric", "https://github.com/eric/clms/tree/main", "https://github.com.evil.io/eric/clms", "http://github.com/eric/clms", "/home/eric/dev/clms", "https://github.com/-x/clms", "https://github.com/eric/..", ""]) {
       expect(githubRepo(bad)).toBe(null);
+    }
+  });
+
+  test("repoPage reads a page inside a GitHub repo as the repo to clone and the page to keep", () => {
+    const repo = "https://github.com/drowzeys/Imagination-Studio";
+    for (const rest of ["/blob/main/TUTORIAL.md", "/tree/main/docs", "/issues/12", "/pull/3/files", "/releases/tag/v1", "?tab=readme-ov-file", "#readme", "/blob/main/a%20b.md?plain=1#L3"]) {
+      expect(repoPage(`${repo}${rest}`)).toEqual({ repo, page: `${repo}${rest}` });
+    }
+    // .git, www and http are still the same repo; the clone goes over https
+    expect(repoPage("http://www.github.com/eric/clms.git/blob/main/README.md")).toEqual({ repo: "https://github.com/eric/clms", page: "http://www.github.com/eric/clms.git/blob/main/README.md" });
+    // a private repo's token stays on the clone url, as it does for a plain repo url
+    expect(repoPage("https://x:tok@github.com/eric/clms/tree/main")).toEqual({ repo: "https://x:tok@github.com/eric/clms", page: "https://x:tok@github.com/eric/clms/tree/main" });
+    // the raw host names the repo too
+    expect(repoPage("https://raw.githubusercontent.com/eric/clms/main/README.md")).toEqual({ repo: "https://github.com/eric/clms", page: "https://raw.githubusercontent.com/eric/clms/main/README.md" });
+  });
+
+  test("repoPage leaves a plain repo url, another host and GitHub's own pages alone", () => {
+    for (const plain of [
+      "https://github.com/eric/clms",
+      "https://github.com/eric/clms/",
+      "https://github.com/eric/clms.git",
+      "git@github.com:eric/clms.git",
+      "https://github.com/eric",
+      // a longer path on another host may be a repo in a subgroup
+      "https://gitlab.com/group/sub/repo/-/blob/main/x.md",
+      "https://git.beric.ca/eric/canopy/src/branch/main/README.md",
+      "https://github.com.evil.io/eric/clms/blob/main/x",
+      // not an owner: GitHub's own sections
+      "https://github.com/orgs/acme/repositories",
+      "https://github.com/settings/tokens/new",
+      "https://github.com/-x/clms/blob/main/x",
+      "https://github.com/eric/../blob/main/x",
+      "",
+    ]) {
+      expect(repoPage(plain)).toBe(null);
     }
   });
 

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { startStageRunner } from "../stage/runner";
 import { StageClient } from "./stageclient";
+import type { StageLogin } from "./stagewire";
 
 let dir = "";
 let root = "";
@@ -20,6 +21,8 @@ const runner = async (socket: string): Promise<() => Promise<void>> => {
     probe: async () => ({ result: "blocked" }),
     // the git on this Mac's PATH may sit in a folder its user owns
     writable: async () => false,
+    // no file under this temp home is a login on Linux and nothing on a Mac
+    login: async () => undefined,
   });
   return stop;
 };
@@ -306,5 +309,39 @@ describe("the fence, as the client reads it", () => {
     const c = new StageClient(join(dir, "none.sock"));
     expect(await c.hello(300)).toBe(null);
     expect(c.fenceNow()).toBe(null);
+  });
+});
+
+describe("the claude login, as the client reads it", () => {
+  test("the hello's word of the login is kept, and follows each hello", async () => {
+    const sock = join(dir, "login.sock");
+    let login: StageLogin | undefined = { how: "expired", until: 5 };
+    const { stop } = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir }, login: async () => login });
+    try {
+      const c = new StageClient(sock);
+      expect(c.claudeNow()).toBe(null);
+      await c.hello();
+      expect(c.claudeNow()).toEqual({ how: "expired", until: 5 });
+      login = { how: "token" };
+      await c.hello();
+      expect(c.claudeNow()).toEqual({ how: "token" });
+      // a runner that says nothing of it (an older image, a Mac) leaves no word
+      login = undefined;
+      await c.hello();
+      expect(c.claudeNow()).toBe(null);
+    } finally {
+      await stop();
+    }
+  });
+
+  test("a runner that stops answering leaves no word of a login", async () => {
+    const sock = join(dir, "login-gone.sock");
+    const { stop } = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir }, login: async () => ({ how: "none" }) });
+    const c = new StageClient(sock);
+    await c.hello();
+    expect(c.claudeNow()).toEqual({ how: "none" });
+    await stop();
+    expect(await c.hello(300)).toBe(null);
+    expect(c.claudeNow()).toBe(null);
   });
 });

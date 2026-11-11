@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { childEnv, chunkB64, encodeFrame, fromB64, gitEnv, lineSplitter, parseFrame, passEnvNames, proxyEnv, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
+import { childEnv, chunkB64, COORD_LOGIN, encodeFrame, fromB64, gitEnv, lineSplitter, loginEnv, loginRefusal, loginRefusedHint, loginWord, parseFrame, passEnvNames, proxyEnv, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
 
 describe("stage wire", () => {
   test("frames round-trip one per line", () => {
@@ -29,6 +29,63 @@ describe("stage wire", () => {
     const own = { PATH: "/usr/bin", HOME: "/home/bun", CLAUDE_CONFIG_DIR: "/c", SECRET: "no", GH_TOKEN: "no" };
     const asked = { CANOPY_RUN: "r1", CANOPY_REPO: "_incubator/coin", GH_TOKEN: "ghp_x", VERCEL_TOKEN: "v", PATH: "/evil", LD_PRELOAD: "/x.so" };
     expect(childEnv(own, asked)).toEqual({ PATH: "/usr/bin", HOME: "/home/bun", CLAUDE_CONFIG_DIR: "/c", CANOPY_RUN: "r1", CANOPY_REPO: "_incubator/coin" });
+  });
+  test("claude alone is handed the runner's own token, as the name claude reads; canopy cannot send one", () => {
+    const own = { PATH: "/usr/bin", HOME: "/home/bun" };
+    expect(loginEnv("sk-ant-oat01-x", "claude")).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" });
+    // a check's sh and codex never see it
+    expect(loginEnv("sk-ant-oat01-x", "sh")).toEqual({});
+    expect(loginEnv("sk-ant-oat01-x", "codex")).toEqual({});
+    expect(loginEnv(null, "claude")).toEqual({});
+    // a token canopy sends is dropped like any other name; only the runner's own is set
+    const asked = { CANOPY_RUN: "r1", CLAUDE_CODE_OAUTH_TOKEN: "from-canopy" };
+    expect(childEnv(own, asked, [], {}, loginEnv("sk-ant-oat01-x", "claude"))).toEqual({ PATH: "/usr/bin", HOME: "/home/bun", CANOPY_RUN: "r1", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-x" });
+    expect(childEnv(own, asked, [], {}, loginEnv("sk-ant-oat01-x", "sh"))).toEqual({ PATH: "/usr/bin", HOME: "/home/bun", CANOPY_RUN: "r1" });
+  });
+  test("a hello's claude login is one of four states, and anything else is left out", () => {
+    const hello = (claude: unknown) => parseFrame(JSON.stringify({ t: "hello", harnesses: ["claude"], fenced: true, claude }));
+    expect(hello({ how: "token" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, claude: { how: "token" } });
+    expect(hello({ how: "login", until: 1_800_000_000_000 })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, claude: { how: "login", until: 1_800_000_000_000 } });
+    expect(hello({ how: "login" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, claude: { how: "login" } });
+    expect(hello({ how: "expired", until: 5 })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, claude: { how: "expired", until: 5 } });
+    expect(hello({ how: "none" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, claude: { how: "none" } });
+    // an older runner says nothing, and a newer one's word this canopy does not know is not guessed at
+    for (const odd of [undefined, null, "token", { how: "revoked" }, { until: 5 }, []]) expect(hello(odd)).toEqual({ t: "hello", harnesses: ["claude"], fenced: true });
+    // a time that is not a number is dropped, the state kept; nothing else rides along
+    expect(hello({ how: "expired", until: "soon", accessToken: "sk-x" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, claude: { how: "expired" } });
+  });
+  test("the login's words say what is wrong and what to do, or nothing when it is good", () => {
+    expect(loginRefusal(undefined)).toBe(null);
+    expect(loginRefusal({ how: "token" })).toBe(null);
+    expect(loginRefusal({ how: "login", until: Date.UTC(2026, 11, 1) })).toBe(null);
+    expect(loginRefusal({ how: "expired", until: Date.UTC(2026, 10, 1, 14, 31) })).toBe(
+      "the stages' claude login expired on 2026-11-01: save a token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7)",
+    );
+    expect(loginRefusal({ how: "expired" })).toBe(
+      "the stages' claude login expired: save a token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7)",
+    );
+    expect(loginRefusal({ how: "none" })).toBe(
+      "the stages have no claude login: save a token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in in the stages container (docs/deploy.md, Stages, step 7)",
+    );
+    // the coordinator's runner is the same program over another folder
+    expect(loginRefusal({ how: "expired", until: Date.UTC(2026, 11, 1, 14, 51) }, COORD_LOGIN)).toBe(
+      "the coordinator's claude login expired on 2026-12-01: save a token from claude setup-token as ~/.config/canopy-coord/claude/oauth-token.txt on the host, or log in again in the coord container (docs/deploy.md, The coordinator, step 2)",
+    );
+    expect(loginRefusal({ how: "none" }, COORD_LOGIN)).toStartWith("the coordinator has no claude login: save a token from claude setup-token as ~/.config/canopy-coord/claude/oauth-token.txt");
+    expect(loginWord({ how: "token" })).toBe("signed in with a token");
+    expect(loginWord({ how: "login", until: Date.UTC(2026, 11, 1, 14, 51) })).toBe("logged in until 2026-12-01");
+    expect(loginWord({ how: "login" })).toBe("logged in");
+    expect(loginWord(undefined)).toBe(null);
+  });
+  test("claude's words for a login it could not use get the fix, and no other error does", () => {
+    const fix =
+      "Anthropic refused the stages' claude login: save a fresh token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7), then retry";
+    expect(loginRefusedHint("Failed to authenticate: OAuth session expired and could not be refreshed")).toBe(fix);
+    expect(loginRefusedHint('API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has been revoked"}}')).toBe(fix);
+    expect(loginRefusedHint("Invalid API key · Please run /login")).toBe(fix);
+    expect(loginRefusedHint("Invalid bearer token", COORD_LOGIN)).toStartWith("Anthropic refused the coordinator's claude login: save a fresh token from claude setup-token as ~/.config/canopy-coord/claude/oauth-token.txt");
+    expect(loginRefusedHint("the repo is not in the scan any more")).toBe(null);
+    expect(loginRefusedHint("the session expired on the build host")).toBe(null);
   });
   test("a runner told to pass more names lets those through as well, and only those", () => {
     const own = { PATH: "/usr/bin", HOME: "/home/bun", CANOPY_TOKEN: "own" };

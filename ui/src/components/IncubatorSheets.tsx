@@ -11,7 +11,7 @@ import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { backendOf, plainOf } from "../registry";
-import { INPUT_GLYPH, STAGES, branchHref, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
+import { INPUT_GLYPH, STAGES, branchHref, cannotStart, queuedWhy, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
 import { isOnline, multi, useStore } from "../store";
 import { recorderBlocked, useRecorder } from "../recorder";
 import { Questions } from "./Prompts";
@@ -111,6 +111,7 @@ function IntakeForm({
   initial,
   busy,
   error,
+  blocked = null,
   submitLabel,
   onSubmit,
   onCancel,
@@ -123,6 +124,8 @@ function IntakeForm({
   initial?: SproutDraft;
   busy: boolean;
   error: string | null;
+  /** why this cannot be sent as it stands, shown and held to; null to go */
+  blocked?: string | null;
   submitLabel: string;
   onSubmit: (form: FormData) => void;
   onCancel: () => void;
@@ -147,7 +150,7 @@ function IntakeForm({
     setRefused(bad.length ? bad.join("; ") : null);
   };
   const urls = links.split(/\s+/).filter(Boolean);
-  const ready = !busy && !recording && (text.trim().length > 0 || urls.length > 0 || files.length > 0 || (allowRepo && repo.trim().length > 0));
+  const ready = !busy && !recording && blocked === null && (text.trim().length > 0 || urls.length > 0 || files.length > 0 || (allowRepo && repo.trim().length > 0));
   const submit = () => {
     if (!ready) return;
     const form = new FormData();
@@ -228,6 +231,7 @@ function IntakeForm({
           />
         )}
         {tail}
+        {blocked && <p className="note err">{blocked}</p>}
         {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
@@ -345,6 +349,8 @@ export function NewSproutSheet({ draft }: { draft?: SproutDraft }) {
   const fallback = useStore((s) => sproutBackend(s.backendOrder, s.home, s.stages, (b) => isOnline(s, b)));
   const [picked, setPicked] = useState<string | null>(null);
   const backend = picked ?? fallback;
+  // a backend with stages off would hold the project queued for good
+  const blocked = useStore((s) => cannotStart(backend, Object.hasOwn(s.stages, backend) ? s.stages[backend] : undefined));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submit = (form: FormData) => {
@@ -368,6 +374,7 @@ export function NewSproutSheet({ draft }: { draft?: SproutDraft }) {
         initial={draft}
         busy={busy}
         error={error}
+        blocked={blocked}
         submitLabel="start"
         onSubmit={submit}
         onCancel={close}
@@ -387,6 +394,11 @@ export function SproutSheet({ id }: { id: string }) {
   const handOffSprout = useStore((s) => s.handOffSprout);
   const dismissSprout = useStore((s) => s.dismissSprout);
   const many = useStore(multi);
+  // why a queued project is not starting, in its backend's own words
+  const held = useStore((s) => {
+    const sp = s.sprouts[id];
+    return sp ? queuedWhy(sp, Object.hasOwn(s.stages, backendOf(id)) ? s.stages[backendOf(id)] : undefined) : null;
+  });
   const [detail, setDetail] = useState<SproutDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -459,6 +471,20 @@ export function SproutSheet({ id }: { id: string }) {
       <SheetHead eyebrow={`incubator · ${sproutWord(sprout)}`} title={sprout.title} sub={`${plainOf(sprout.repoId)}${many ? ` on ${backendOf(sprout.id)}` : ""}`} />
       <div className="sheet-body plan sprout-sheet">
         <StageStrip id={sprout.id} />
+        {/* up here, beside the buttons that can fail: the foot of a long sheet is out of sight */}
+        {error && <p className="note err">{error}</p>}
+        {held && (
+          <div className="ask">
+            <div className="eyebrow">waiting</div>
+            <p>{held}</p>
+          </div>
+        )}
+        {sprout.status === "rejected" && sprout.parked && (
+          <div className="ask">
+            <div className="eyebrow">rejected</div>
+            <p>{sprout.parked}</p>
+          </div>
+        )}
         {sprout.status === "parked" && (
           <div className="ask">
             <div className="eyebrow">parked</div>
@@ -596,7 +622,6 @@ export function SproutSheet({ id }: { id: string }) {
         <p className="dim">
           {sprout.spent.runs} {sprout.spent.runs === 1 ? "run" : "runs"}, {minutes} {minutes === 1 ? "minute" : "minutes"} of agent work so far
         </p>
-        {error && <p className="note err">{error}</p>}
       </div>
       <footer className="sheet-foot">
         {ended ? (

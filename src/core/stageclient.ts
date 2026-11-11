@@ -24,6 +24,7 @@ import {
   STAGE_AWAY,
   type Fenced,
   type StageFrame,
+  type StageLogin,
   type StageRequest,
 } from "./stagewire";
 
@@ -117,6 +118,8 @@ export class StageClient {
   /** the fence as the last hello said it, or a fence refusal since; null
    *  while the runner has not answered */
   private fence: FenceNow | null = null;
+  /** the claude login as the last hello said it, or null for none said */
+  private claude: StageLogin | null = null;
   /** the processes the runner refused for its fence, with its words: by
    *  the refusal's own field, never by what the stage printed */
   private readonly unfenced = new WeakMap<RpcProc, string>();
@@ -211,6 +214,12 @@ export class StageClient {
     return this.fence;
   }
 
+  /** the runner's claude login as its last hello said it; null while it has
+   *  not answered or says nothing of one (an older image, a Mac's runner) */
+  claudeNow(): StageLogin | null {
+    return this.claude;
+  }
+
   /** a check: the command to its end or the timeout, then code, stdout and
    *  stderr; 126 for a refusal and 127 when the runner is not answering;
    *  `unfenced` holds the runner's words when it refused for its fence */
@@ -293,11 +302,12 @@ export class StageClient {
   async hello(timeoutMs = HELLO_TIMEOUT): Promise<string[] | null> {
     const answer = await this.ask(
       { t: "hello" },
-      (f) => (f.t === "hello" && "harnesses" in f ? { harnesses: f.harnesses, fence: { fenced: f.fenced, reason: f.reason ?? null } } : undefined),
+      (f) => (f.t === "hello" && "harnesses" in f ? { harnesses: f.harnesses, fence: { fenced: f.fenced, reason: f.reason ?? null }, claude: f.claude ?? null } : undefined),
       timeoutMs,
     );
     this.last = answer?.harnesses ?? null;
     this.fence = answer?.fence ?? null;
+    this.claude = answer?.claude ?? null;
     this.tell(answer !== null);
     return this.last;
   }

@@ -90,6 +90,8 @@ beforeAll(async () => {
     probe: async () => ({ result: "blocked" }),
     // the git on this Mac's PATH may sit in a folder its user owns
     writable: async () => false,
+    // a temp home holds no claude login, which on Linux would read as none at all
+    login: async () => undefined,
   });
   stopRunner = runner.stop;
   client = new CountingClient(socket);

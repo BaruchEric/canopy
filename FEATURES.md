@@ -2,6 +2,11 @@
 
 ## Open
 
+### FR-062 · The incubator review's open findings
+P1 · added 2026-11-11 · source: Eric ("incubator review full PROCCES", 2026-11-11)
+The 2026-11-11 review fixed the dead stage login, the GitHub page url taken as a repo and the project that queued for good on a backend with no stages. It left 30 findings open, five of them P1: "continue" at a judge's park deploys what the judge refused, Accept's "no" reaches the builder with no reason, a stop during ship can make a second GitHub repo and Vercel project, a crash during prepare can strand a voice memo, and one failed run fails a whole stage. Most are read from the code and not yet reproduced, so each needs a failing test first.
+Spec: docs/superpowers/specs/2026-11-11-incubator-review.md (2026-11-11).
+
 ### FR-061 · Change a schedule rule's line from the clock
 P3 · added 2026-11-10 · source: Claude (follow-up to FR-060)
 The clock view fires a schedule rule and shows its line, but the line is changed only by editing `triggers.json` on the backend. A route that rewrites one rule's `cron` or `poll` (admin right, the file's other keys and its order kept, the same checks `parseRules` makes) would let the clock's line editor save a rule the way it saves a wake. Decide first whether the file should stay hand-written only: it also names the env vars that hold hook secrets.

@@ -39,15 +39,18 @@ import {
   encodeFrame,
   fromB64,
   lineSplitter,
+  loginEnv,
   parseFrame,
   passEnvNames,
   proxyEnv,
   requestRefusal,
   STAGE_PROGRAMS,
   type StageFrame,
+  type StageLogin,
   type StageRequest,
 } from "../core/stagewire";
 import { reach, type ProbeResult } from "./fencecheck";
+import { claudeLogin, stageToken } from "./logincheck";
 import { stageSettingsRefusal } from "./settingscheck";
 
 export interface RunnerOptions {
@@ -82,6 +85,9 @@ export interface RunnerOptions {
    *  which the chores before a spawn run under as the stage user
    *  (`--stage-chores`, `stageChores`). */
   as?: { uid: number; gid: number; setpriv: string; self: string[] };
+  /** what a hello says of the stages' claude login, from the runner's env:
+   *  `claudeLogin` unless a test hands in its own */
+  login?: (env: Record<string, string | undefined>) => Promise<StageLogin | undefined>;
 }
 
 /** Whether `uid` with only `gid` as its group could write a file or folder
@@ -403,6 +409,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   }
   const identity = Object.fromEntries(STAGE_PROGRAMS.map((p) => [p, p]));
   const programs: Record<string, string> = { ...identity, git: "git", ...opts.programs };
+  const readLogin = opts.login ?? claudeLogin;
   await rm(opts.socket, { force: true });
   const live = new Set<Socket>();
   const runs = new Set<Live>();
@@ -555,7 +562,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       for (const h of HARNESSES) {
         if ("program" in (await resolveProgram(h, programs[h] ?? h, own["PATH"], opts.root, writable))) harnesses.push(h);
       }
-      finish({ t: "hello", harnesses, fenced: fence.fenced, ...(fence.reason ? { reason: fence.reason } : {}) });
+      // the claude login as it stands now; a reader that fails says nothing
+      const claude = await readLogin(own).catch(() => undefined);
+      finish({ t: "hello", harnesses, fenced: fence.fenced, ...(fence.reason ? { reason: fence.reason } : {}), ...(claude ? { claude } : {}) });
     };
 
     const busy = async (path: string): Promise<void> => {
@@ -590,7 +599,10 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       const seeds = [...new Set([opts.root, where.root])];
       const unsettled = as ? await choresAs(as, seeds) : await stageChores(own, seeds);
       if (unsettled) return finish({ t: "refused", reason: unsettled });
-      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env, pass.names, net.env), false, sh.program);
+      // the runner's own claude token, read at each start so a new one on
+      // file needs no restart; claude alone is handed it (loginEnv)
+      const token = name === "claude" ? await stageToken(own).catch(() => null) : null;
+      launch(name, [program, ...req.argv.slice(1)], where.seed, childEnv(own, req.env, pass.names, net.env, loginEnv(token, name)), false, sh.program);
     };
 
     /** canopy's own git in a seed: the seed's top folder only, behind the

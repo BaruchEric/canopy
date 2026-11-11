@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { IncubatorStages, Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { branchHref, needsYou, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
+import { branchHref, cannotStart, needsYou, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -201,6 +201,16 @@ describe("stagesWord", () => {
     expect(w.title).toContain("CANOPY_FENCE_PROBE");
   });
 
+  test("a fenced runner whose claude login is dead says the stages need one, and the title says what to do", () => {
+    const why = "the stages' claude login expired on 2026-11-01: save a token";
+    const w = stagesWord({ isolated: true, mode: "runner", waiting: why, unfenced: null, login: why });
+    expect(w).toMatchObject({ word: "stages need a login", warn: true });
+    expect(w.title).toContain(why);
+    expect(w.title).toContain("start on their own");
+    // a backend older than the check says nothing of a login, and reads as before
+    expect(stagesWord({ isolated: true, mode: "runner", waiting: null, unfenced: null }).word).toBe("stages isolated");
+  });
+
   test("unisolated says stages run here with canopy's tokens", () => {
     const w = stagesWord({ isolated: false, mode: "unisolated", waiting: null });
     expect(w).toMatchObject({ word: "stages unisolated", warn: true });
@@ -240,6 +250,24 @@ describe("where a new project goes", () => {
     expect(sproutBackend(order, "mac", { mac: off, mini: isolated }, (b) => b !== "mini")).toBe("mac");
     expect(sproutBackend(order, "mac", { mac: off }, all)).toBe("mac");
     expect(sproutBackend(["mac"], "mac", {}, all)).toBe("mac");
+  });
+  test("a backend with stages off is named as one a project would never start on; any other holds nothing back", () => {
+    expect(cannotStart("mac", off)).toBe("mac has nowhere to run a stage, so a project started there would never start. Pick another backend, or set CANOPY_INCUBATOR_UNISOLATED=1 on mac and restart it.");
+    // a runner away starts its projects once it answers, and a backend that has not said is asked by the server
+    for (const st of [isolated, unisolated, away, undefined]) expect(cannotStart("mini", st)).toBe(null);
+  });
+});
+
+describe("why a queued project waits", () => {
+  const held: IncubatorStages = { isolated: false, mode: "runner", waiting: "the stage runner is not answering", unfenced: null };
+  test("a queued, prepared project on a backend whose stages wait says the backend's reason", () => {
+    expect(queuedWhy(sprout({ status: "queued", prepared: true }), held)).toBe("the stage runner is not answering");
+  });
+  test("nothing for a project not queued, one still being prepared, or a backend that holds nothing back", () => {
+    expect(queuedWhy(sprout({ status: "parked", parked: "x" }), held)).toBe(null);
+    expect(queuedWhy(sprout({ status: "queued", prepared: false }), held)).toBe(null);
+    expect(queuedWhy(sprout({ status: "queued", prepared: true }), { ...held, waiting: null })).toBe(null);
+    expect(queuedWhy(sprout({ status: "queued", prepared: true }), undefined)).toBe(null);
   });
 });
 

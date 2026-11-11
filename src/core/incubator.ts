@@ -41,7 +41,9 @@ import {
   briefText,
   briefTitle,
   firstLine,
+  githubRepo,
   holdsSlot,
+  repoPage,
   inputKindOf,
   inputType,
   inputsIndex,
@@ -190,6 +192,11 @@ export interface IncubatorDeps {
    *  queued sprout stays queued and holds no slot; canopy's own ship still
    *  goes. The server calls `pump` again once the runner answers. */
   isolation?: () => string | null;
+  /** What to do about a stage flow's error, in a sentence the park carries
+   *  after the error itself, or null for an error it has no word on. The
+   *  server gives the stages' login fix for claude's words for a login it
+   *  could not use. */
+  failHint?: (error: string) => string | null;
   /** True when every stage runs behind the stage runner's fence: a build
    *  stage's steps then run any command without asking (`withShell`).
    *  Unisolated, a stage runs as canopy and keeps its workflow's list. */
@@ -257,6 +264,11 @@ export class Incubator {
     return this.held;
   }
 
+  /** whether the queue starts what it holds; false on a server told to keep every sprout queued */
+  starts(): boolean {
+    return this.deps.autostart !== false;
+  }
+
   private now(): number {
     return (this.deps.now ?? Date.now)();
   }
@@ -322,11 +334,20 @@ export class Incubator {
    *  file's type normalized, the size caps applied on top of `already` */
   private checkIntake(intake: Intake, already: number, allowRepo: boolean): { clean: Intake; cloneFrom: string | undefined } {
     const given = intake.urls.map((u) => u.trim()).filter(Boolean);
+    let cloneFrom = intake.repo?.trim() || undefined;
+    if (cloneFrom && !allowRepo) throw new IncubatorError(400, "a repo is given when a project starts, not later");
+    // A page inside a GitHub repo pasted as the repo (a file's url, a
+    // folder's): git answers "repository not found" for it. The repo it sits
+    // in is the one to clone, and the page stays a link, so clarify reads
+    // what the user pointed at.
+    const page = cloneFrom ? repoPage(cloneFrom) : null;
+    if (page) {
+      cloneFrom = page.repo;
+      if (!given.some((u) => urlWithoutSecret(u) === urlWithoutSecret(page.page))) given.push(page.page);
+    }
     for (const u of given) if (!/^https?:\/\/\S+$/i.test(u)) throw new IncubatorError(400, `not a web link: ${urlWithoutSecret(u)}`);
     // a token in a link is never stored or shown
     const urls = given.map(urlWithoutSecret);
-    const cloneFrom = intake.repo?.trim() || undefined;
-    if (cloneFrom && !allowRepo) throw new IncubatorError(400, "a repo is given when a project starts, not later");
     if (cloneFrom && !networkOrigin(cloneFrom)) throw new IncubatorError(400, `not a git url canopy can clone: ${urlWithoutSecret(cloneFrom)}`);
     const repo = cloneFrom ? urlWithoutSecret(cloneFrom) : undefined;
     let total = already + bytesOf(intake.text);
@@ -391,6 +412,9 @@ export class Incubator {
     const id = (this.deps.newId ?? newSproutId)();
     const repoName = clean.repo?.replace(/\.git$/, "").split(/[/:]/).pop() ?? "";
     const first = clean.text.trim() || repoName || clean.urls[0] || "";
+    // with no words of the user's, a GitHub repo is titled as people say it, until clarify names the project
+    const gh = clean.repo ? githubRepo(clean.repo) : null;
+    const repoWord = gh ? `${gh.owner}/${gh.name}` : clean.repo;
     const taken = (slug: string) =>
       this.reserved.has(slug) || this.deps.seeds.exists(join(this.deps.root, SEEDS_DIR, slug)) || this.list().some((x) => x.slug === slug);
     // claimed before the first await, and given back once the sprout holds it or the intake failed
@@ -400,7 +424,7 @@ export class Incubator {
     const s: Sprout = {
       id,
       slug,
-      title: sproutTitle(clean.text, clean.repo ?? clean.urls[0] ?? clean.files[0]?.label ?? ""),
+      title: sproutTitle(clean.text, repoWord ?? clean.urls[0] ?? clean.files[0]?.label ?? ""),
       status: "queued",
       repoId: `${SEEDS_DIR}/${slug}`,
       seedPath: join(this.deps.root, SEEDS_DIR, slug),
@@ -689,9 +713,15 @@ export class Incubator {
       s.status = WORKFLOW_STATUS[cur.workflow] ?? "researching";
       delete s.parked;
       if (f.status === "gated") {
+        // whatever the flow says next is news: a check run again alone goes
+        // from this gate back to the same gate with nothing said in
+        // between, and that park has to reach the sprout
+        const was = this.seen.get(f.id);
+        this.seen.delete(f.id);
         try {
           this.deps.flows.resume(f.id, choice);
         } catch (err) {
+          if (was !== undefined) this.seen.set(f.id, was);
           s.status = "parked";
           if (reason !== undefined) s.parked = reason;
           throw new IncubatorError(409, msg(err));
@@ -894,7 +924,13 @@ export class Incubator {
       if (this.deps.seeds.exists(s.seedPath)) return;
       const t = s.inputs.find((e) => e.kind === "text");
       const text = t ? dec.decode(await this.deps.store.readInput(s.id, t.name)) : "";
-      await this.deps.seeds.make(s.seedPath, { ".canopy/brief.md": briefText(s.title, text), ".canopy/inputs.md": index }, this.cloneFrom.get(s.id) ?? s.repo, s.id);
+      // a project taken in before intake split a repo's page from its repo
+      // (`repoPage`) still holds the page as its repo, and its clone parked
+      // on "repository not found": a retry clones the repo the page sits in
+      const from = this.cloneFrom.get(s.id) ?? s.repo;
+      const page = from ? repoPage(from) : null;
+      if (page && s.repo) s.repo = urlWithoutSecret(page.repo);
+      await this.deps.seeds.make(s.seedPath, { ".canopy/brief.md": briefText(s.title, text), ".canopy/inputs.md": index }, page?.repo ?? from, s.id);
     });
     if (!made) return;
     // the token, if there was one, is not needed again; a failed clone keeps it for the retry
@@ -1235,7 +1271,10 @@ export class Incubator {
     entry.outcome = flow.status;
     entry.digest = flowDigest(flow);
     s.spent = { runs: s.spent.runs + (flow.spent?.runs ?? 0), workMs: s.spent.workMs + (flow.spent?.workMs ?? 0) };
-    if (flow.status !== "done") return this.park(s, `${entry.workflow} ${flow.status}${flow.error ? `: ${flow.error}` : ""}`);
+    if (flow.status !== "done") {
+      const hint = flow.error ? (this.deps.failHint?.(flow.error) ?? null) : null;
+      return this.park(s, `${entry.workflow} ${flow.status}${flow.error ? `: ${flow.error}` : ""}${hint ? `. ${hint}` : ""}`);
+    }
     try {
       if (entry.workflow === "clarify") await this.clarified(s);
       else if (entry.workflow === "scout") await this.scouted(s);

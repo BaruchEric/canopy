@@ -441,6 +441,8 @@ export const BUILD_WORKFLOW: Readonly<Record<PickKind, string>> = { new: "build-
 
 /** whether a workflow is one of the builds a pick runs */
 export const isBuildWorkflow = (name: string): boolean => Object.values(BUILD_WORKFLOW).includes(name);
+/** every workflow a stage runs as a flow in the seed: what a backend's stages need a harness for */
+export const STAGE_WORKFLOWS: readonly string[] = ["clarify", "scout", ...Object.values(BUILD_WORKFLOW), "retro"];
 
 /** the status a sprout shows while a workflow runs for it */
 export const WORKFLOW_STATUS: Readonly<Record<string, SproutStatus>> = {
@@ -519,6 +521,31 @@ export function githubRepo(remote: string): GithubRepo | null {
 
 /** the https remote canopy clones and pushes a github.com repo through */
 export const githubUrl = (r: GithubRepo): string => `https://github.com/${r.owner}/${r.name}.git`;
+
+/** GitHub's own sections, which sit where an owner's name would */
+const GH_SECTIONS: ReadonlySet<string> = new Set(["orgs", "users", "settings", "marketplace", "features", "topics", "collections", "sponsors", "apps", "search", "explore", "notifications", "login", "join"]);
+const GH_PAGE = /^https?:\/\/([^@/\s]+@)?(?:www\.)?github\.com\/([^/\s?#]+)\/([^/\s?#]+)([/?#]\S*)?$/i;
+const GH_RAW = /^https?:\/\/raw\.githubusercontent\.com\/([^/\s?#]+)\/([^/\s?#]+)\/\S+$/i;
+
+/** A page inside a github.com repo (a file, a folder, an issue, a pull
+ *  request, the repo's page with a query or a fragment), as the repo git
+ *  clones and the page itself: pasted where a repo url goes, `git clone` of
+ *  it answers "repository not found". A token in the url stays on the clone
+ *  url, as it does for a plain repo url. Null for a url that already names a
+ *  repo and nothing more, and for any other host: only GitHub's layout is
+ *  known here, and elsewhere a longer path may be a repo in a subgroup. */
+export function repoPage(url: string): { repo: string; page: string } | null {
+  const page = url.trim();
+  const raw = GH_RAW.exec(page);
+  const m = raw ? null : GH_PAGE.exec(page);
+  const owner = (raw ? raw[1] : m?.[2]) ?? "";
+  const name = ((raw ? raw[2] : m?.[3]) ?? "").replace(/\.git$/i, "");
+  if (!GH_OWNER.test(owner) || !GH_NAME.test(name) || name === "." || name === ".." || GH_SECTIONS.has(owner.toLowerCase())) return null;
+  // a repo url and nothing after it is not a page
+  const rest = raw ? "/" : (m?.[4] ?? "");
+  if (!raw && (rest === "" || rest === "/")) return null;
+  return { repo: `https://${m?.[1] ?? ""}github.com/${owner}/${name}`, page };
+}
 
 /** Why a path a hand-off's commits touch is shown first, or null: a push to
  *  the user's repo runs its CI and preview builds with the repo's secrets

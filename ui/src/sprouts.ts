@@ -1,6 +1,6 @@
 /** The incubator's words and arithmetic for the page: the stage strip, the
  *  status words, the order of the cards, and the feed's lines. Pure. */
-import { HAND_OFF, SHIP, nextWorkflow, sproutEnded } from "../../src/core/sprout";
+import { HAND_OFF, SHIP, isOwnStep, nextWorkflow, sproutEnded } from "../../src/core/sprout";
 import type { IncubatorStages, InputKind, ServerEvent, Sprout, SproutStatus } from "../../src/core/types";
 import type { FeedLine, FeedSnapshot } from "./feed";
 
@@ -219,6 +219,13 @@ export function stagesWord(st: IncubatorStages): { word: string; title: string; 
           warn: true,
         };
       }
+      if (st.isolated && st.login) {
+        return {
+          word: "stages need a login",
+          title: `The stage runner answers behind its fence, but ${st.login}. Stages wait, and start on their own once the login is back.`,
+          warn: true,
+        };
+      }
       return st.isolated
         ? {
             word: "stages isolated",
@@ -243,6 +250,24 @@ export function stagesWord(st: IncubatorStages): { word: string; title: string; 
         warn: true,
       };
   }
+}
+
+/** Why a project started on this backend would never start: its stages are
+ *  off, with no runner and no unisolated switch. Null for any other mode
+ *  (a runner away starts its projects once it answers) and for a backend
+ *  that has not said, which the server answers for. */
+export function cannotStart(backend: string, st: IncubatorStages | undefined): string | null {
+  if (st?.mode !== "off") return null;
+  return `${backend} has nowhere to run a stage, so a project started there would never start. Pick another backend, or set CANOPY_INCUBATOR_UNISOLATED=1 on ${backend} and restart it.`;
+}
+
+/** Why a queued project is not starting, in its backend's words (the
+ *  runner away, its fence unconfirmed, stages off), or null: not queued,
+ *  still being prepared, bound for canopy's own deploy or hand-off (which
+ *  go without a stage), or a backend that holds nothing back. */
+export function queuedWhy(s: Sprout, st: IncubatorStages | undefined): string | null {
+  if (s.status !== "queued" || !s.prepared || isOwnStep(nextWorkflow(s))) return null;
+  return st?.waiting ?? null;
 }
 
 /** Where a new project goes unless the user picks: home while its stages

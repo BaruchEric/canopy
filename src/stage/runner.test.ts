@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encodeFrame, fromB64, lineSplitter, parseFrame, type StageFrame, type StageRequest } from "../core/stagewire";
 import { allProcs, type Proc } from "../core/procs";
+import { claudeLogin } from "./logincheck";
 import { enterSeed, killTree, orphansOf, ownPidNamespace, rootStart, socketModes, stageChores, startStageRunner, writableBy, type RunnerOptions } from "./runner";
 
 let dir = "";
@@ -20,6 +21,10 @@ const FENCE = { CANOPY_FENCE_PROBE: PROBE };
 const blocked: NonNullable<RunnerOptions["probe"]> = async () => ({ result: "blocked" });
 /** stand-ins live in a temp dir the tests own: only the writability tests ask */
 const notWritable: NonNullable<RunnerOptions["writable"]> = async () => false;
+/** no word of a claude login, on a Mac or on Linux: only the login's own test reads a file */
+const noLogin: NonNullable<RunnerOptions["login"]> = async () => undefined;
+/** shaped like what claude setup-token prints; not a real one */
+const STAGE_TOKEN = `sk-ant-oat01-${"a1B2_c3-".repeat(8)}`;
 
 beforeAll(async () => {
   // the realpath, since a Mac's tmpdir sits behind /var -> /private/var and
@@ -33,7 +38,7 @@ beforeAll(async () => {
   await symlink("/", join(root, "escape"));
   await writeFile(join(dir, "escape.ts"), ESCAPE);
   sock = join(dir, "s.sock");
-  const r = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir, GH_TOKEN: "own-secret", ...FENCE }, probe: blocked });
+  const r = await startStageRunner({ socket: sock, root, env: { PATH: process.env["PATH"], HOME: dir, GH_TOKEN: "own-secret", ...FENCE }, probe: blocked, login: noLogin });
   stops.push(r.stop);
 });
 afterAll(async () => {
@@ -44,7 +49,7 @@ afterAll(async () => {
 /** a runner of its own on another socket, stopped in afterAll */
 async function extra(name: string, opts: Omit<RunnerOptions, "socket" | "root">): Promise<string> {
   const path = join(dir, `${name}.sock`);
-  const r = await startStageRunner({ socket: path, root, probe: blocked, writable: notWritable, ...opts, env: { PATH: process.env["PATH"], HOME: dir, ...FENCE, ...opts.env } });
+  const r = await startStageRunner({ socket: path, root, probe: blocked, writable: notWritable, login: noLogin, ...opts, env: { PATH: process.env["PATH"], HOME: dir, ...FENCE, ...opts.env } });
   stops.push(r.stop);
   return path;
 }
@@ -147,6 +152,45 @@ describe("the stage runner", () => {
     });
     const [f] = await talk({ t: "hello" }, [], 5000, path);
     expect(f).toEqual({ t: "hello", harnesses: ["claude"], fenced: true });
+  });
+
+  test("hello says the stages' claude login: the runner's own token, else what is on file, never a token itself", async () => {
+    const cfg = join(dir, "login-cfg");
+    await mkdir(cfg, { recursive: true });
+    const until = Date.UTC(2026, 10, 1, 14, 31, 59);
+    // the file claude leaves once a refresh has failed
+    await writeFile(join(cfg, ".credentials.json"), JSON.stringify({ claudeAiOauth: { accessToken: "", refreshToken: "", expiresAt: 0, refreshTokenExpiresAt: until } }));
+    const onFile = await extra("login-file", { login: claudeLogin, env: { CLAUDE_CONFIG_DIR: cfg } });
+    expect((await talk({ t: "hello" }, [], 5000, onFile))[0]).toMatchObject({ t: "hello", claude: { how: "expired", until } });
+    // a token saved beside it: the same runner says so at its next hello, with no restart
+    await writeFile(join(cfg, "oauth-token.txt"), `${STAGE_TOKEN}\n`);
+    const [hello] = await talk({ t: "hello" }, [], 5000, onFile);
+    expect(hello).toMatchObject({ t: "hello", claude: { how: "token" } });
+    expect(JSON.stringify(hello)).not.toContain(STAGE_TOKEN);
+    // a reader that throws says nothing, and the hello still answers
+    const broken = await extra("login-broken", { login: async () => Promise.reject(new Error("no")) });
+    expect((await talk({ t: "hello" }, [], 5000, broken))[0]).toEqual({ t: "hello", harnesses: expect.any(Array), fenced: true });
+  });
+
+  test("the runner's claude token goes to claude alone, under the name claude reads", async () => {
+    const fake = join(dir, "env-claude");
+    await writeFile(fake, "#!/bin/sh\nenv\n");
+    await chmod(fake, 0o755);
+    const cfg = join(dir, "token-cfg");
+    await mkdir(cfg, { recursive: true });
+    const path = await extra("token-env", { env: { CLAUDE_CONFIG_DIR: cfg }, programs: { claude: fake } });
+    const spawnClaude = async () => text(await talk({ t: "spawn", argv: ["claude"], cwd: join(root, "coin"), env: { CLAUDE_CODE_OAUTH_TOKEN: "sent", CANOPY_RUN: "r1" } }, [], 5000, path), "out");
+    // no token on file: claude signs in with its own login, and one canopy sends is dropped
+    expect(await spawnClaude()).not.toContain("CLAUDE_CODE_OAUTH_TOKEN");
+    // saved beside the login, it reaches the next claude with no restart
+    await writeFile(join(cfg, "oauth-token.txt"), `${STAGE_TOKEN}\n`);
+    const asClaude = await spawnClaude();
+    expect(asClaude).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${STAGE_TOKEN}\n`);
+    expect(asClaude).toContain("CANOPY_RUN=r1");
+    expect(asClaude).not.toContain("sent");
+    // a check's sh, which runs what a stage wrote, is handed none
+    const asSh = text(await talk({ t: "spawn", argv: ["sh", "-c", "env"], cwd: join(root, "coin"), env: {} }, [], 5000, path), "out");
+    expect(asSh).not.toContain(STAGE_TOKEN);
   });
 
   test("a program that resolves inside the stage root is neither listed nor started", async () => {

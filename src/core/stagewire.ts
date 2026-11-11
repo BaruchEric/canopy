@@ -10,6 +10,14 @@
  *  says nothing, which reads as "unchecked". */
 export type Fenced = true | false | "unchecked";
 
+/** The stages' claude login as the runner reads it, never a token: `token`
+ *  while the runner holds one of its own to hand claude
+ *  (`LOGIN_TOKEN_FILE`), `login` for a `/login` on file, `expired` for one
+ *  whose tokens are gone or whose refresh token's time has passed, `none`
+ *  for nothing on file. `until` is when the refresh token lapses, ms: a
+ *  `/login` lasts about 30 days from the day it was made, used or not. */
+export type StageLogin = { how: "token" } | { how: "login"; until?: number } | { how: "expired"; until?: number } | { how: "none" };
+
 export type StageRequest =
   | { t: "hello" }
   | { t: "spawn"; argv: string[]; cwd: string; env: Record<string, string> }
@@ -28,7 +36,9 @@ export type StageFrame =
   /** `fenced` is there only on a refusal for the fence: a spawn the runner
    *  would start once its fence is confirmed */
   | { t: "refused"; reason: string; fenced?: false | "unchecked" }
-  | { t: "hello"; harnesses: string[]; fenced: Fenced; reason?: string }
+  /** `claude` is there from a runner that reads its login; an older one
+   *  says nothing, which no one takes for a good or a bad login */
+  | { t: "hello"; harnesses: string[]; fenced: Fenced; reason?: string; claude?: StageLogin }
   | { t: "busy"; busy: boolean };
 
 export const STAGE_PROGRAMS: readonly string[] = ["claude", "codex", "sh"];
@@ -43,8 +53,72 @@ const CHUNK = 64 * 1024;
 export const encodeFrame = (f: StageFrame | StageRequest): string => `${JSON.stringify(f)}\n`;
 
 const isStr = (v: unknown): v is string => typeof v === "string";
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const isStrMap = (v: unknown): v is Record<string, string> =>
   typeof v === "object" && v !== null && !Array.isArray(v) && Object.values(v).every(isStr);
+
+/** a hello's `claude`, held to the four states and a time; anything else is no word at all */
+function parseLogin(v: unknown): StageLogin | null {
+  if (!isRecord(v)) return null;
+  const how = v["how"];
+  if (how === "token" || how === "none") return { how };
+  if (how !== "login" && how !== "expired") return null;
+  const until = v["until"];
+  return typeof until === "number" && Number.isFinite(until) ? { how, until } : { how };
+}
+
+/** the day a time falls on, UTC, for a line a person reads */
+const day = (at: number): string => new Date(at).toISOString().slice(0, 10);
+
+/** The file a runner reads its own claude token from, in its claude config
+ *  folder beside `.credentials.json`: what `claude setup-token` prints, on
+ *  one line. A file and not the container's env, which holds no token
+ *  (compose.test.ts), and so a new one needs no redeploy. */
+export const LOGIN_TOKEN_FILE = "oauth-token.txt";
+
+/** Whose login a runner's hello speaks of, and where to mend it: the host
+ *  folder compose mounts as its claude config, and the container to log in
+ *  in. */
+export interface LoginSite {
+  /** "the stages" or "the coordinator" */
+  whose: string;
+  /** the host folder mounted as the runner's claude config */
+  folder: string;
+  where: string;
+}
+export const STAGES_LOGIN: LoginSite = { whose: "the stages", folder: "~/.config/canopy-stages/claude", where: "in the stages container (docs/deploy.md, Stages, step 7)" };
+export const COORD_LOGIN: LoginSite = { whose: "the coordinator", folder: "~/.config/canopy-coord/claude", where: "in the coord container (docs/deploy.md, The coordinator, step 2)" };
+
+/** Why no claude can run on what a runner says of its login, with what to
+ *  do, or null: a good login, a token, or a runner that says nothing. Pure. */
+export function loginRefusal(login: StageLogin | undefined, site: LoginSite = STAGES_LOGIN): string | null {
+  const fix = `save a token from claude setup-token as ${site.folder}/${LOGIN_TOKEN_FILE} on the host, or log in`;
+  if (login?.how === "expired") {
+    const has = site.whose.endsWith("s") ? `${site.whose}'` : `${site.whose}'s`;
+    return `${has} claude login expired${login.until !== undefined ? ` on ${day(login.until)}` : ""}: ${fix} again ${site.where}`;
+  }
+  if (login?.how === "none") return `${site.whose} ${site.whose.endsWith("s") ? "have" : "has"} no claude login: ${fix} ${site.where}`;
+  return null;
+}
+
+/** claude's own words for a login it could not sign in with */
+const LOGIN_REFUSED = /failed to authenticate|oauth (?:session|token)[^.\n]*(?:expired|revoked)|authentication_error|invalid (?:api key|bearer token)/i;
+
+/** What to do when a run ended on claude's words for a login it could not
+ *  use, or null for any other error. The hello reads what is on file, so a
+ *  token revoked at claude.ai, or a copied login whose source refreshed
+ *  first, reads well there and fails here. Pure. */
+export function loginRefusedHint(error: string, site: LoginSite = STAGES_LOGIN): string | null {
+  if (!LOGIN_REFUSED.test(error)) return null;
+  return `Anthropic refused ${site.whose.endsWith("s") ? `${site.whose}'` : `${site.whose}'s`} claude login: save a fresh token from claude setup-token as ${site.folder}/${LOGIN_TOKEN_FILE} on the host, or log in again ${site.where}, then retry`;
+}
+
+/** a good login in a few words, for the health page; null for a bad one or none said */
+export function loginWord(login: StageLogin | undefined): string | null {
+  if (login?.how === "token") return "signed in with a token";
+  if (login?.how === "login") return login.until !== undefined ? `logged in until ${day(login.until)}` : "logged in";
+  return null;
+}
 
 export function parseFrame(line: string): StageFrame | StageRequest | null {
   let v: unknown;
@@ -65,7 +139,8 @@ export function parseFrame(line: string): StageFrame | StageRequest | null {
     if (!Array.isArray(h) || !h.every(isStr)) return null;
     const f = o["fenced"];
     const reason = o["reason"];
-    return { t, harnesses: h, fenced: f === true || f === false ? f : "unchecked", ...(isStr(reason) ? { reason } : {}) };
+    const claude = parseLogin(o["claude"]);
+    return { t, harnesses: h, fenced: f === true || f === false ? f : "unchecked", ...(isStr(reason) ? { reason } : {}), ...(claude ? { claude } : {}) };
   }
   if (t === "busy") {
     const seed = o["seed"];
@@ -172,14 +247,27 @@ export function proxyEnv(raw: string | undefined): { env: Record<string, string>
   };
 }
 
+/** What a program is handed to sign in with: claude alone gets the runner's
+ *  token (`LOGIN_TOKEN_FILE`, read by the runner), under the name claude
+ *  reads, which wins over a login on file. A check's sh and codex never get
+ *  it. A stage that runs code can still read it, from the file or from the
+ *  claude beside it, as it can read a login on file: the stages' own
+ *  credential is theirs to see (the spec's residual), which is why it is a
+ *  token of their own, for inference and nothing else. Pure. */
+export function loginEnv(token: string | null, program: string): Record<string, string> {
+  return program === "claude" && token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : {};
+}
+
 /** A spawn's env: the runner's own base, then `STAGE_PASSED_ENV` and any
  *  `extra` names (from `passEnvNames`) out of what canopy sent, then the
- *  runner's `net` (from `proxyEnv`), last so nothing canopy sent sets it. */
+ *  runner's own `login` (from `loginEnv`) and `net` (from `proxyEnv`), last
+ *  so nothing canopy sent sets either. */
 export function childEnv(
   own: Record<string, string | undefined>,
   asked: Record<string, string>,
   extra: readonly string[] = [],
   net: Record<string, string> = {},
+  login: Record<string, string> = {},
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const k of STAGE_BASE_ENV) {
@@ -190,7 +278,7 @@ export function childEnv(
     const v = Object.hasOwn(asked, k) ? asked[k] : undefined;
     if (v !== undefined) out[k] = v;
   }
-  return Object.assign(out, net);
+  return Object.assign(out, login, net);
 }
 
 /** A git request's env: the runner's PATH and locale, no home, no global or

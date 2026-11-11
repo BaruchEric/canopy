@@ -16,7 +16,8 @@ import { git } from "../core/exec";
 import type { Harness } from "../core/harness";
 import { SEED_BUSY, seedBusy } from "../core/seedgit";
 import { StageClient, type FenceNow } from "../core/stageclient";
-import type { Flow, IncubatorStages, Run, ScanResult, ServerEvent, Sprout } from "../core/types";
+import type { StageLogin } from "../core/stagewire";
+import type { Flow, HealthCheck, IncubatorStages, Run, ScanResult, ServerEvent, Sprout } from "../core/types";
 import { startStageRunner } from "../stage/runner";
 import { startServer } from "./index";
 
@@ -25,6 +26,8 @@ const NO_RUNNER = "stages need the stage runner (CANOPY_STAGE_SOCKET), or CANOPY
 const PROBE = "http://probe.test/";
 const FENCE = { CANOPY_FENCE_PROBE: PROBE };
 const blocked = async () => ({ result: "blocked" as const });
+/** a runner that says nothing of a claude login: a temp home holds none, which on Linux would read as no login at all */
+const noLogin = async () => undefined;
 
 /** a harness that never finishes on its own; a stop ends it */
 class HoldingDriver implements RunDriver {
@@ -148,6 +151,11 @@ afterAll(() => {
 describe("with no stage runner and no unisolated switch", () => {
   beforeAll(async () => {
     await fresh();
+    // a seed made by hand: no project can be started here to make one
+    const coin = join(root, "_incubator", "coin");
+    await Bun.$`mkdir -p ${coin} && git -C ${coin} init -q -b main`.quiet();
+    await Bun.write(join(coin, "a.txt"), "a\n");
+    await Bun.$`git -C ${coin} add a.txt && git -C ${coin} -c user.name=a -c user.email=a@b commit -qm one`.quiet();
     await mkdir(join(scratch, "config", "workflows"), { recursive: true });
     await writeFile(join(scratch, "config", "workflows", "held.md"), "---\nname: held\nblurb: b\n---\n\n## Do\n\nDo it.\n");
     await writeFile(join(scratch, "config", "workflows", "checkonly.md"), "---\nname: checkonly\nblurb: b\n---\n\n## Test\ncheck: true\n");
@@ -162,30 +170,26 @@ describe("with no stage runner and no unisolated switch", () => {
   });
   afterAll(done);
 
-  test("stages are not isolated, a new idea stays queued, and the reason is in the API", async () => {
+  test("stages are not isolated, and a new idea is refused with why: it would wait here for good", async () => {
     expect(await stages()).toMatchObject({ isolated: false, mode: "off" });
     const res = await intake("a coin counter");
-    expect(res.status).toBe(201);
-    const s = (await res.json()) as Sprout;
-    await until(async () => (await stages()).waiting === NO_RUNNER, "the reason");
-    const now = (await sprouts()).find((x) => x.id === s.id);
-    expect(now?.status).toBe("queued");
-    expect(now?.flows).toEqual([]);
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toBe(
+      "this backend has nowhere to run a stage, so a project started here would never start: start it on a backend whose incubator says stages isolated, or set CANOPY_INCUBATOR_UNISOLATED=1 here and restart canopy",
+    );
+    expect(await sprouts()).toEqual([]);
     expect((await (await fetch(url("/api/flows"))).json()) as Flow[]).toEqual([]);
   });
 
   test("a run started on a seed by hand is refused rather than run here", async () => {
-    await until(async () => (await sprouts()).some((s) => s.prepared), "the seed");
-    const s = (await sprouts())[0];
-    const res = await postJson(`/api/repos/run?id=${encodeURIComponent(s?.repoId ?? "")}`, { action: "ask", note: "hi" });
+    const res = await postJson(`/api/repos/run?id=${encodeURIComponent("_incubator/coin")}`, { action: "ask", note: "hi" });
     expect(res.status).toBe(503);
     // no runner is set up here, so the answer names the env, not a runner to wait for
     expect(((await res.json()) as { error: string }).error).toBe(NO_RUNNER);
   });
 
   test("a flow on a seed parks with the env words, at a step's start and at a check alike", async () => {
-    const s = (await sprouts())[0];
-    const id = encodeURIComponent(s?.repoId ?? "");
+    const id = encodeURIComponent("_incubator/coin");
     const flowOf = async (fid: string) => ((await (await fetch(url("/api/flows"))).json()) as Flow[]).find((f) => f.id === fid);
     for (const workflow of ["checkonly", "held"]) {
       const res = await postJson(`/api/repos/flow?id=${id}`, { workflow, note: "" });
@@ -208,6 +212,7 @@ describe("through a stage runner that comes and goes", () => {
       root: join(root, "_incubator"),
       env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
       probe: blocked,
+      login: noLogin,
       programs: { claude: "/usr/bin/true", codex: "/nonexistent/codex" },
     });
     stopRunner = stop;
@@ -230,7 +235,7 @@ describe("through a stage runner that comes and goes", () => {
   });
 
   test("a queued idea waits while the runner is away and starts on its own when it answers", async () => {
-    expect(await stages()).toEqual({ isolated: false, mode: "runner", waiting: null, unfenced: null });
+    expect(await stages()).toEqual({ isolated: false, mode: "runner", waiting: null, unfenced: null, login: null });
     const res = await intake("a tip jar");
     const s = (await res.json()) as Sprout;
     await until(async () => (await stages()).waiting === "the stage runner is not answering", "the runner's absence");
@@ -239,7 +244,7 @@ describe("through a stage runner that comes and goes", () => {
     await heard.ready;
     await startRunner();
     await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "clarify to start");
-    expect(await stages()).toEqual({ isolated: true, mode: "runner", waiting: null, unfenced: null });
+    expect(await stages()).toEqual({ isolated: true, mode: "runner", waiting: null, unfenced: null, login: null });
     await until(() => heard.events.some((e) => e.type === "stages" && e.stages.isolated && e.stages.waiting === null), "the stages event");
     // the runner going away is said too, with nothing queued behind it
     await stopRunner?.();
@@ -260,6 +265,7 @@ describe("a runner that blinks between two beats", () => {
       root: join(root, "_incubator"),
       env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
       probe: blocked,
+      login: noLogin,
       programs: { claude: "/usr/bin/true", codex: "/nonexistent/codex" },
     });
     stopRunner = stop;
@@ -340,6 +346,7 @@ describe("a runner whose fence is not confirmed", () => {
       root: join(root, "_incubator"),
       env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
       probe: async () => ({ result: target }),
+      login: noLogin,
       fenceEvery: 50,
       programs: { claude: "/usr/bin/true", codex: "/nonexistent/codex" },
     });
@@ -384,6 +391,70 @@ describe("a runner whose fence is not confirmed", () => {
   }, 30_000);
 });
 
+describe("a runner whose claude login is dead", () => {
+  let sock = "";
+  let stopRunner: (() => Promise<void>) | null = null;
+  /** what the runner's hello says of its claude login */
+  let login: StageLogin | undefined = { how: "expired", until: Date.UTC(2026, 10, 1, 14, 31, 59) };
+  const EXPIRED =
+    "the stages' claude login expired on 2026-11-01: save a token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7)";
+  const check = async (): Promise<HealthCheck | undefined> =>
+    ((await (await fetch(url("/api/health"))).json()) as { checks: HealthCheck[] }).checks.find((c) => c.id === "canopy:stage-login");
+  beforeAll(async () => {
+    await fresh();
+    sock = join(scratch, "s.sock");
+    const { stop } = await startStageRunner({
+      socket: sock,
+      root: join(root, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
+      probe: blocked,
+      programs: { claude: "/usr/bin/true", codex: "/nonexistent/codex" },
+      login: async () => login,
+    });
+    stopRunner = stop;
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      incubator: { autostart: true, transcribe: null, notes: null, ship: null, stage: new StageClient(sock), stageEvery: 50 },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+  });
+  afterAll(async () => {
+    await stopRunner?.();
+    await done();
+  });
+
+  test("health says so, a project waits with what to do and spends nothing, and it starts on its own once the login is back", async () => {
+    await until(async () => (await check())?.state === "down", "the login check to go down");
+    expect((await check())?.why).toBe(EXPIRED);
+    // the runner itself answers behind its fence: only the login is wrong
+    expect(await stages()).toMatchObject({ isolated: true, mode: "runner", unfenced: null, login: EXPIRED });
+    const s = (await (await intake("a tip jar")).json()) as Sprout;
+    const now = async () => (await sprouts()).find((x) => x.id === s.id);
+    await until(async () => (await stages()).waiting === EXPIRED, "the queue to say why it waits");
+    // held, not parked: no flow, no run, and nothing for anyone to resume
+    expect((await now())?.status).toBe("queued");
+    expect((await now())?.parked).toBeUndefined();
+    expect((await now())?.flows).toEqual([]);
+    expect((await (await fetch(url("/api/flows"))).json()) as Flow[]).toEqual([]);
+    // a token beside the login: the next hello says so, and the stage starts with nobody asking
+    login = { how: "token" };
+    await until(async () => (await now())?.status === "clarifying", "clarify to start");
+    expect((await check())?.state).toBe("ok");
+    expect((await check())?.detail).toBe("signed in with a token");
+    expect(await stages()).toMatchObject({ isolated: true, waiting: null, login: null });
+  }, 30_000);
+
+  test("a runner that says nothing of its login holds nothing back, and the check does not call it well", async () => {
+    login = undefined;
+    await until(async () => (await check())?.state === "off", "the check to say the runner is silent");
+    expect((await check())?.why).toBe("the runner does not say");
+    expect(await stages()).toMatchObject({ isolated: true, login: null });
+  }, 30_000);
+});
+
 describe("a stage process alive after its run ended", () => {
   const seed = () => join(root, "_incubator", "coin");
   beforeAll(async () => {
@@ -405,7 +476,7 @@ describe("a stage process alive after its run ended", () => {
   afterAll(done);
 
   test("the stages say they run here, unisolated", async () => {
-    expect(await stages()).toEqual({ isolated: false, mode: "unisolated", waiting: null, unfenced: null });
+    expect(await stages()).toEqual({ isolated: false, mode: "unisolated", waiting: null, unfenced: null, login: null });
   });
 
   test("keeps the seed busy once the run is done, until the process is gone", async () => {

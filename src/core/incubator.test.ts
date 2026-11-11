@@ -166,9 +166,16 @@ class FakeFlows implements IncubatorFlows {
     this.listener(f);
     return f;
   }
+  /** resume says nothing, as Flows does when it runs a waiting check again alone */
+  quietResume = false;
   resume(id: string, choice: FlowChoice): Flow {
     this.resumed.push({ id, choice });
-    return this.move(id, { status: "working" });
+    if (!this.quietResume) return this.move(id, { status: "working" });
+    const was = this.flows.get(id);
+    if (!was) throw new Error(`no flow ${id}`);
+    const f: Flow = { ...was, status: "working" };
+    this.flows.set(id, f);
+    return f;
   }
   stop(id: string): Flow {
     return this.move(id, { status: "stopped" });
@@ -360,6 +367,61 @@ describe("intake", () => {
     expect(w.seeds.made[0]?.clone).toBe("https://github.com/someone/coins.git");
   });
 
+  test("a page inside a GitHub repo, given as the repo, clones the repo and stays a link", async () => {
+    const w = world();
+    const page = "https://github.com/drowzeys/Imagination-Studio/blob/main/TUTORIAL.md";
+    const s = await w.inc.create(intake({ repo: page, urls: ["https://github.com/drowzeys/Imagination-Studio"] }));
+    // named for the repo, never for the file
+    expect(s.slug).toBe("imagination-studio");
+    expect(s.title).toBe("drowzeys/Imagination-Studio");
+    expect(s.repo).toBe("https://github.com/drowzeys/Imagination-Studio");
+    expect(s.inputs.map((e) => [e.name, e.label, e.summary])).toEqual([
+      ["001-link.url", "https://github.com/drowzeys/Imagination-Studio", ""],
+      ["002-link.url", page, ""],
+      ["003-repo.url", "https://github.com/drowzeys/Imagination-Studio", "the repo to start from, cloned into the seed"],
+    ]);
+    await w.inc.idle();
+    expect(w.seeds.made[0]?.clone).toBe("https://github.com/drowzeys/Imagination-Studio");
+    expect(now(w, s.id).status).toBe("clarifying");
+  });
+
+  test("a project parked before the split, whose repo is still a page, clones the repo on a retry", async () => {
+    const w = world();
+    w.seeds.failMake = "git clone failed: fatal: repository not found";
+    const s = await w.inc.create(intake({ repo: "https://github.com/drowzeys/Imagination-Studio" }));
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    // as an older canopy stored it
+    now(w, s.id).repo = "https://github.com/drowzeys/Imagination-Studio/blob/main/TUTORIAL.md";
+    w.seeds.failMake = null;
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(w.seeds.made[0]?.clone).toBe("https://github.com/drowzeys/Imagination-Studio");
+    expect(now(w, s.id).repo).toBe("https://github.com/drowzeys/Imagination-Studio");
+    expect(now(w, s.id).status).toBe("clarifying");
+  });
+
+  test("a page given as the repo and as a link too is one link, and its token goes to the clone alone", async () => {
+    const w = world();
+    const page = "https://x:tok3n@github.com/eric/clms/tree/main/docs";
+    const s = await w.inc.create(intake({ repo: page, urls: ["https://github.com/eric/clms/tree/main/docs"] }));
+    await w.inc.idle();
+    expect(w.seeds.made[0]?.clone).toBe("https://x:tok3n@github.com/eric/clms");
+    const after = now(w, s.id);
+    expect(after.repo).toBe("https://github.com/eric/clms");
+    expect(after.inputs.map((e) => e.label)).toEqual(["https://github.com/eric/clms/tree/main/docs", "https://github.com/eric/clms"]);
+    expect(JSON.stringify([after, ...w.notes.puts.map((p) => p.text)])).not.toContain("tok3n");
+  });
+
+  test("a repo with no text is titled by its owner and name, not its url", async () => {
+    const w = world();
+    expect((await w.inc.create(intake({ repo: "https://github.com/someone/coins.git" }))).title).toBe("someone/coins");
+    // another host keeps its url: only GitHub's layout is known
+    expect((await w.inc.create(intake({ repo: "https://git.example.com/a/b/c.git" }))).title).toBe("https://git.example.com/a/b/c.git");
+    // the user's own words win
+    expect((await w.inc.create(intake({ text: "Coins, again", repo: "https://github.com/someone/coins2" }))).title).toBe("Coins, again");
+  });
+
   test("a token in a repo url or a link is cloned with but never stored or shown", async () => {
     const w = world();
     const s = await w.inc.create(intake({ repo: "https://x:tok3n@github.com/someone/coins.git", urls: ["https://u:pa55@example.com/spec"] }));
@@ -530,6 +592,18 @@ describe("clarify's outcome", () => {
     w.flows.move(id, { status: "failed", error: "the repo is not in the scan any more" });
     await w.inc.idle();
     expect(now(w, s.id).parked).toBe("clarify failed: the repo is not in the scan any more");
+  });
+
+  test("a failed stage's park carries what to do after the error, when the backend has a word on it", async () => {
+    const w = world({ failHint: (error) => (error.includes("authenticate") ? "log the stages in again" : null) });
+    const a = await clarifying(w);
+    w.flows.move(a.flows[0]?.flowId ?? "", { status: "failed", error: "Failed to authenticate: OAuth session expired" });
+    await w.inc.idle();
+    expect(now(w, a.id).parked).toBe("clarify failed: Failed to authenticate: OAuth session expired. log the stages in again");
+    const b = await clarifying(w);
+    w.flows.move(b.flows[0]?.flowId ?? "", { status: "failed", error: "boom" });
+    await w.inc.idle();
+    expect(now(w, b.id).parked).toBe("clarify failed: boom");
   });
 
   test("a commit the seed refuses parks the sprout and asks nothing", async () => {
@@ -1103,6 +1177,24 @@ describe("stop, resume and dismiss", () => {
     await w.inc.idle();
     expect(now(w, s.id).status).toBe("stopped");
     expect(w.flows.get("flow1")?.status).toBe("stopped");
+  });
+
+  test("a flow that gates again on the same step after a resume parks the sprout again, with the new reason", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "gated", parkedFor: "stage", steps: [{ name: "Clarify", status: "gated", reason: "the stage runner is not answering" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    w.flows.quietResume = true;
+    await w.inc.resume(s.id, "retry");
+    expect(now(w, s.id).status).toBe("clarifying");
+    // the runner is still away: the flow parks on the step it was on, with nothing broadcast in between
+    w.flows.move(id, { status: "gated", parkedFor: "stage", steps: [{ name: "Clarify", status: "gated", reason: "the stage runner is still not answering" }] });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    expect(now(w, s.id).parked).toBe("clarify waits after Clarify: the stage runner is still not answering");
   });
 
   test("resume continues a gated flow, or queues a sprout canopy parked itself", async () => {

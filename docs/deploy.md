@@ -788,9 +788,42 @@ Mac's address as well: its line there has to say `BAD` (the Mac answering),
 or the `ok` in stages proves nothing.
 
 **7. The logins**, in a real terminal on the mini (they are interactive).
+
+claude signs in one of two ways. Prefer the token.
+
+- **A token** (lasts a year). Run `claude setup-token` in a real terminal on
+  any machine, approve it in the browser, and save the one line it prints as
+  `~/.config/canopy-stages/claude/oauth-token.txt` on the host, mode 600,
+  owned by you. Nothing restarts: the runner reads the file at each hello
+  (every 15 seconds) and each time it starts claude. It hands the token to a
+  stage's claude as `CLAUDE_CODE_OAUTH_TOKEN` and to nothing else it starts,
+  and a token wins over any `/login` in the same folder, a good one too, so
+  a token that Anthropic stops taking fails every stage until the file is
+  replaced or deleted. The file must
+  be a plain file with one name: the runner will not follow a link. It is
+  not in `.env` and not in compose, which name no secret for stages. A
+  stage's own commands can still read it, as they can read a login file, so
+  mint one for the stages alone: it can then be revoked at claude.ai without
+  touching the host's login. Never copy the host's token in.
+- **A `/login`** in the container, as below. It lapses about 30 days after
+  it is made, used or not: a refresh renews the access token and leaves the
+  login's own end date where it was. When it lapses claude empties both
+  tokens in `.credentials.json` and every stage answers "OAuth session
+  expired".
+
+The runner's hello says which one it holds and whether it still does, never
+the token. The health page's "stages' claude login" check reads "signed in
+with a token" or "logged in until <day>", and goes down on the day a login
+lapses with what to do. While it is down, a queued project whose stages run
+claude waits with the same words on its card and on the incubator's bar,
+spends no run, and starts on its own at the first hello that says the login
+is back. The check reads what is on file, not whether Anthropic still takes
+it: a token revoked at claude.ai still reads "signed in with a token", and
+the stage that meets it parks with claude's own words.
+
 The stages container runs as root (the stage runner drops each stage to
-`bun`), so every exec that acts as a stage names the user. First claude,
-then check where it put its account file:
+`bun`), so every exec that acts as a stage names the user. For a `/login`,
+first claude, then check where it put its account file:
 
 ```
 docker compose exec -u bun -it stages claude              # then /login
@@ -1028,9 +1061,20 @@ chmod 700 ~/.local/share/canopy-coord/seeds
 stat -c '%U %n' ~/.local/share/canopy-coord/seeds ~/.config/canopy-coord/claude ~/.config/canopy-coord/codex   # all yours, none root
 ```
 
-**2. The claude login.** Seed it from the stages' login, copying only the
+**2. The claude login.** Prefer a token of the coordinator's own: run
+`claude setup-token` in a real terminal and save the one line it prints as
+`~/.config/canopy-coord/claude/oauth-token.txt` on the host, mode 600. The
+coordinator's runner reads it the way the stages' runner reads theirs
+(Stages, step 7), so nothing restarts. It lasts a year, it is not the
+stages' token (a stage's commands can read theirs), and nothing has to be
+copied. The health page's "coordinator's claude login" check says which
+login the runner holds and when a `/login` lapses.
+
+Without a token, seed a login from the stages' `/login`, copying only the
 account files, never the whole folder: a stage can write the stages' folder,
-and a hook planted there would run inside the coordinator.
+and a hook planted there would run inside the coordinator. A copy lapses on
+the same day as the login it was copied from, about 30 days after that one
+was made.
 
 ```
 install -m 0600 ~/.config/canopy-stages/claude/.credentials.json ~/.config/canopy-coord/claude/.credentials.json

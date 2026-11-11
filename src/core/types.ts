@@ -2834,6 +2834,12 @@ export interface IncubatorStages {
    *  wait as they do for a runner away. Absent from a backend older than
    *  the fence. */
   unfenced?: string | null;
+  /** the runner answers behind its fence, but the stages' claude login is
+   *  dead (lapsed, or never made) and a stage runs claude: why, with what
+   *  to do. Stages wait and start on their own once a hello says the login
+   *  is back. Null for a good login; absent from a backend older than the
+   *  check. */
+  login?: string | null;
 }
 
 /* ---------- flows: one workflow running on one repo ---------- */

@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { dropSproutHere, sproutHere } from "../routes";
 import { backendOf } from "../registry";
-import { sortSprouts, sproutActivity, sproutWord, stagesWord } from "../sprouts";
+import { queuedWhy, sortSprouts, sproutActivity, sproutWord, stagesWord } from "../sprouts";
 import { multi, useStore } from "../store";
 import { ago } from "../util";
 import { InboxChip } from "./Inbox";
@@ -20,6 +20,8 @@ function SproutCard({ id, i }: { id: string; i: number }) {
   const s = useStore((st) => st.sprouts[id]);
   const show = useStore((st) => st.showSprout);
   const many = useStore(multi);
+  // why it is not starting, in its backend's own words
+  const held = useStore((st) => (s ? queuedWhy(s, Object.hasOwn(st.stages, backendOf(id)) ? st.stages[backendOf(id)] : undefined) : null));
   const updatedAt = s?.updatedAt;
   const [pulse, setPulse] = useState(false);
   const first = useRef(true);
@@ -53,6 +55,7 @@ function SproutCard({ id, i }: { id: string; i: number }) {
       </span>
       <StageStrip id={s.id} />
       {s.parked && <span className="sprout-parked">{s.parked}</span>}
+      {held && <span className="sprout-parked">waits: {held}</span>}
       <span className="sprout-meta">
         {s.inputs.length} {s.inputs.length === 1 ? "input" : "inputs"} · {s.spent.runs} {s.spent.runs === 1 ? "run" : "runs"} · {ago(s.updatedAt / 1000)}
       </span>

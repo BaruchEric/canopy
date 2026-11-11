@@ -103,6 +103,10 @@ export async function canopyRepoOf(repos: readonly Repo[], own: string, homepage
   return local.find((r) => (r.remotes ?? []).some((u) => githubSlug(u) === slug));
 }
 
+/** what a new project is told on a backend with stages off and its queue live */
+export const NO_STAGES =
+  "this backend has nowhere to run a stage, so a project started here would never start: start it on a backend whose incubator says stages isolated, or set CANOPY_INCUBATOR_UNISOLATED=1 here and restart canopy";
+
 /** The improvements list's routes: the list, and the user's answer on a key. */
 export interface AdviceRoutes {
   files: AdviceFiles;
@@ -180,7 +184,14 @@ export class IncubatorHub {
     if (this.keeping.kind !== "owner") return this.readOnly(path, method, id);
     try {
       if (path === "/api/incubator" && method === "GET") return json(this.inc.list());
-      if (path === "/api/incubator" && method === "POST") return json(await this.inc.create(await readIntake(req)), 201);
+      if (path === "/api/incubator" && method === "POST") {
+        // Stages off and the queue live: the project would sit queued for
+        // good, with one line on the incubator view saying why. Refused
+        // here so the page and `canopy new` both hear it. A server that
+        // holds its queue (autostart off) starts nothing anyway and takes it.
+        if (this.stages().mode === "off" && this.inc.starts()) return json({ error: NO_STAGES }, 409);
+        return json(await this.inc.create(await readIntake(req)), 201);
+      }
       if (path === "/api/incubator" && method === "DELETE") {
         // waits for the sprout's own work under way (a memo transcribing), and only this request
         await this.inc.dismiss(id);
