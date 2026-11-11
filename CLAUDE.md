@@ -21,6 +21,7 @@ bun run build              # vite build of ui/ into dist/web
 - Production locally: `bun run build && bun link`, then `canopy ui ~/dev`. On the Mac a launchd agent keeps a server on :7850.
 - Browser check where there is no Chrome (canopy's own containers): `bash scripts/browser/setup.sh` installs a headless Chromium under `/tmp/canopy-browser` without root, and `bash scripts/browser/check.sh` drives the built page from a scratch server, building it first when `dist/web` is missing or older than the source: the first load, every view, a phone (the top bar's first row, a panel's section tabs, field sizes), the runs pill's menu, a shell, and the two load failures. `scripts/browser/run.sh <script.ts>` runs any other Playwright script there.
 - The shared backend on the mini (docker compose) deploys committed `main` with `bun run redeploy` (`status`, `log`, `--pull`, `--shells`, `--restart`, `--force`). From the Mac, `bun run redeploy desoto` does the same for the De Soto backend, which pulls from GitHub, so push first, and `all` does both. See `docs/deploy.md` and the `redeploy` skill.
+- A backend's stage runner signs in to claude with a year-long token: `bun run stage-token [mini | desoto | here] [stages | coord | all]` mints one and saves it on the host. It needs a real terminal and a person to click "Authorize" in the browser. The health checks "stages' claude login" and "coordinator's claude login" say when one is due.
 
 ## Architecture
 

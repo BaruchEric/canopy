@@ -18,7 +18,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p ui/tsconfig.json && tsc --noEmit -p ui/tsconfig.sw.json",
     "lint": "oxlint src ui/src ui/sw.ts bin scripts",
     "test": "bun test",
-    "redeploy": "bash scripts/redeploy.sh"
+    "redeploy": "bash scripts/redeploy.sh",
+    "stage-token": "bun scripts/stage-token.ts"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.126",

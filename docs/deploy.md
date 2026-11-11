@@ -791,10 +791,20 @@ or the `ok` in stages proves nothing.
 
 claude signs in one of two ways. Prefer the token.
 
-- **A token** (lasts a year). Run `claude setup-token` in a real terminal on
-  any machine, approve it in the browser, and save the one line it prints as
-  `~/.config/canopy-stages/claude/oauth-token.txt` on the host, mode 600,
-  owned by you. Nothing restarts: the runner reads the file at each hello
+- **A token** (lasts a year). `bun run stage-token` in a real terminal does
+  it in one command. It runs `claude setup-token`, waits for "Authorize" in
+  the browser, shows a placeholder where claude prints the token, checks the
+  token with one `claude -p` turn, and saves it over ssh as
+  `~/.config/canopy-stages/claude/oauth-token.txt` on the host, mode 600. It
+  takes a backend (`mini`, `desoto`, or `here` on the host itself) and a
+  login (`stages`, `coord`, or `all`), in either order. With neither it is
+  the mini's stages from a Mac and this host's anywhere else. The backends
+  are the redeploy script's (`CANOPY_DEPLOY_TARGETS`). A host with no such
+  folder is refused before any token is made, and a token Anthropic does not
+  take is never saved. By hand it is the same three steps: run
+  `claude setup-token`, approve it, and save the one line it prints as that
+  file, owned by you. `claude setup-token` alone saves nothing; it only
+  prints. Nothing restarts: the runner reads the file at each hello
   (every 15 seconds) and each time it starts claude. It hands the token to a
   stage's claude as `CLAUDE_CODE_OAUTH_TOKEN` and to nothing else it starts,
   and a token wins over any `/login` in the same folder, a good one too, so
@@ -1061,9 +1071,11 @@ chmod 700 ~/.local/share/canopy-coord/seeds
 stat -c '%U %n' ~/.local/share/canopy-coord/seeds ~/.config/canopy-coord/claude ~/.config/canopy-coord/codex   # all yours, none root
 ```
 
-**2. The claude login.** Prefer a token of the coordinator's own: run
-`claude setup-token` in a real terminal and save the one line it prints as
-`~/.config/canopy-coord/claude/oauth-token.txt` on the host, mode 600. The
+**2. The claude login.** Prefer a token of the coordinator's own:
+`bun run stage-token mini coord` from the Mac (`here coord` on the host)
+mints one and saves it as `~/.config/canopy-coord/claude/oauth-token.txt` on
+the host, mode 600. By hand, run `claude setup-token` in a real terminal and
+save the one line it prints as that file. The
 coordinator's runner reads it the way the stages' runner reads theirs
 (Stages, step 7), so nothing restarts. It lasts a year, it is not the
 stages' token (a stage's commands can read theirs), and nothing has to be
