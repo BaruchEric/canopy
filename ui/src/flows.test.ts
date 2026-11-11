@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { budgetWord, continueWord, fleetCounts, flowWord, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
+import { budgetWord, continueWord, fleetCounts, flowWord, gateButtons, gateWords, oldestParked, ownRun, rewindLines, selectable, stepWord } from "./flows";
 import type { Fleet, Flow, FlowStep, Repo, Run } from "../../src/core/types";
 
 const flow = (o: Partial<Flow> = {}): Flow => ({
@@ -107,5 +107,45 @@ describe("continueWord", () => {
     expect(continueWord(flow({ status: "gated", parkedFor: "budget" }))).toBe("allow one more step");
     expect(continueWord(flow({ status: "gated", parkedFor: "stage" }))).toBe("run the step again");
     expect(continueWord(flow({ status: "gated", parkedFor: "stage", stageCheck: true }))).toBe("run the check again");
+  });
+});
+
+describe("gateWords and gateButtons (incubator review, P1)", () => {
+  const judged = (go: boolean): FlowStep => ({
+    name: "Accept",
+    status: "gated",
+    reason: go ? "a gate" : "the judge says it only partly meets the intent",
+    judgment: { answers: { fit: { choice: go ? "meets" : "partly", probabilities: {} }, evidence: { probability: 0.9 }, rules: { probability: 0 } }, go, rejected: false, reason: go ? null : "only partly" },
+  });
+  const at = (step: FlowStep, o: Partial<Flow> = {}): Flow =>
+    flow({ status: "gated", steps: [{ name: "Scaffold", status: "passed" }, { name: "Test", status: "passed" }, step], current: 2, ...o });
+  const drawn = (f: Flow): string[] => gateButtons(gateWords(f)).map((b) => `${b.strong ? "*" : ""}${b.choice}: ${b.word}`);
+
+  test("a gate that asks for a go leads with going on, and its retry is the step again", () => {
+    expect(drawn(flow({ status: "gated" }))).toEqual(["*continue: continue to Push", "retry: retry this step"]);
+    expect(drawn(at(judged(true)))).toEqual(["*continue: accept and finish", "retry: retry this step"]);
+  });
+
+  test("a judge's no: going on says anyway and comes second, and the retry goes back to the step that made the work", () => {
+    const f = at(judged(false), { backTo: "Scaffold" });
+    expect(drawn(f)).toEqual(["*retry: send it back to Scaffold", "continue: accept and finish anyway"]);
+    expect(gateWords(f).title).toBe("Accept did not accept the work; this goes on with the work as it is");
+  });
+
+  test("a failed check and a verdict's no are refusals too; with no step to go back to, the retry is the step again", () => {
+    const check: FlowStep = { name: "Gates", status: "gated", reason: "check failed with exit 1", check: { command: "bun test", exit: 1, output: "2 fail" } };
+    expect(drawn(flow({ status: "gated", steps: [check, { name: "Commit", status: "pending" }], current: 0 }))).toEqual(["*retry: retry this step", "continue: continue to Commit anyway"]);
+    const passed: FlowStep = { ...check, reason: "a gate", check: { command: "bun test", exit: 0, output: "" } };
+    expect(drawn(flow({ status: "gated", steps: [passed, { name: "Commit", status: "pending" }], current: 0 }))).toEqual(["*continue: continue to Commit", "retry: retry this step"]);
+  });
+
+  test("a park with one way on has one button: the budget, the runner away, a failed run, the usage limit", () => {
+    expect(drawn(flow({ status: "gated", parkedFor: "budget" }))).toEqual(["*continue: allow one more step"]);
+    expect(drawn(flow({ status: "gated", parkedFor: "stage" }))).toEqual(["*continue: run the step again"]);
+    expect(drawn(flow({ status: "gated", parkedFor: "failed" }))).toEqual(["*continue: run the step again"]);
+    expect(drawn(flow({ status: "gated", parkedFor: "capacity" }))).toEqual(["*continue: start anyway"]);
+    expect(gateWords(flow({ status: "gated", parkedFor: "failed" })).title).toContain("the steps before it stand");
+    // a failed run at a step whose earlier try was refused is still one way on
+    expect(drawn(at(judged(false), { parkedFor: "failed", backTo: "Scaffold" }))).toEqual(["*continue: run the step again"]);
   });
 });

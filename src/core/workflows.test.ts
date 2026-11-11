@@ -350,6 +350,18 @@ describe("the bundled renovate and extend", () => {
     }
   });
 
+  test("the step Accept sends the work back to is told where Accept's reasons are (incubator review, P1)", async () => {
+    for (const name of ["build-new", "renovate", "extend"]) {
+      const wf = await load(name);
+      const accept = wf?.steps.find((s) => s.name === "Accept");
+      const back = wf?.steps.find((s) => s.name === accept?.back);
+      expect(back?.name).not.toBe("Accept");
+      expect(back?.body).toContain("Read .canopy/accept.md first");
+      // and Accept is the step that writes it
+      expect(accept?.body).toContain("write .canopy/accept.md");
+    }
+  });
+
   test("no step holds push, gh, a deploy CLI or a whole-disk read", async () => {
     for (const name of ["renovate", "extend"]) {
       const tools = ((await load(name))?.steps ?? []).flatMap((s) => s.tools);

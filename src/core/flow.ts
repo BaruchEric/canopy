@@ -123,6 +123,8 @@ type ParkCause =
   | { kind: "gate" }
   | { kind: "budget" }
   | { kind: "capacity" }
+  /** a seed's step whose run ended in an error: the step waits to run again */
+  | { kind: "failed" }
   | { kind: "stage"; check: boolean };
 
 type PendingEnd = { end: "failed" | "stopped"; error?: string };
@@ -147,7 +149,7 @@ function restoredParks(value: unknown, count: number): Map<number, ParkCause> {
       typeof entry.cause !== "object" || entry.cause === null || !("kind" in entry.cause)) throw new Error("invalid flow park");
     const cause = entry.cause;
     if (cause.kind === "stage" && "check" in cause && typeof cause.check === "boolean") parks.set(entry.step, { kind: "stage", check: cause.check });
-    else if (cause.kind === "gate" || cause.kind === "budget" || cause.kind === "capacity") parks.set(entry.step, { kind: cause.kind });
+    else if (cause.kind === "gate" || cause.kind === "budget" || cause.kind === "capacity" || cause.kind === "failed") parks.set(entry.step, { kind: cause.kind });
     else throw new Error("invalid flow park cause");
   }
   return parks;
@@ -183,6 +185,12 @@ export const RESUME_NOTE =
  *  plan's usage window has reset after the step's run hit it (FR-036). */
 export const CAPACITY_NOTE =
   "Your last turn on this step stopped at the plan's usage limit, which has now reset. Read the repo's state and finish the step.";
+
+/** What a step is told when it runs again after its last run ended in an
+ *  error: the whole message to a session taken up again, and the first
+ *  line of a fresh run's task. */
+export const FAILED_RUN_NOTE =
+  "Your last run of this step ended in an error before the step was finished. Read the repo's state and finish the step.";
 
 export const PICKED_UP_NOTE =
   "You were stopped partway through this step, and are now picked up again on the same branch. Read the repo's state and finish the step.";
@@ -256,6 +264,8 @@ const errText = (err: unknown): string => String(err instanceof Error ? err.mess
 
 /** The end of a check's output, which is where a failure says what failed. */
 const tailOf = (s: string, n = 2000): string => (s.length > n ? s.slice(-n) : s);
+/** how much of a refusing step's closing words go back with its no */
+const SAID_MAX = 600;
 
 interface StepStart {
   done: Promise<void>;
@@ -304,6 +314,9 @@ interface LiveFlow {
   /** set by a capacity park's go until its step's run starts: the resumed
    *  session is told the window reset (FR-036) */
   capacityResumed?: boolean;
+  /** set by a failed-run park's go until its step's run starts: the step is
+   *  told its last run ended in an error, not that canopy restarted */
+  failedResumed?: boolean;
   /** Eric continued a capacity park by hand: the next step start goes as
    *  interactive, once */
   released?: boolean;
@@ -331,7 +344,8 @@ export function stepSpec(
   index: number,
   summaries: { name: string; summary: string }[],
   retryReason?: string,
-  restarted = false,
+  /** true after a restart; a string is the note to open with in its place */
+  restarted: boolean | string = false,
 ): ActionSpec {
   const step = wf.steps[index];
   if (!step) throw new Error(`${wf.name} has no step ${index}`);
@@ -354,7 +368,7 @@ export function stepSpec(
     progress: `${wf.verb}: ${step.name}`,
     // the flow judges the outcome over all its steps
     expectsChange: false,
-    task: [restarted ? RESTART_NOTE : "", earlier, retry, step.body].filter(Boolean).join("\n\n"),
+    task: [typeof restarted === "string" ? restarted : restarted ? RESTART_NOTE : "", earlier, retry, step.body].filter(Boolean).join("\n\n"),
     ...(wf.unattended ? { unattended: wf.unattended } : {}),
     flowStep: { workflow: wf.name, step: step.name, source: wf.source },
     mode: "job",
@@ -575,8 +589,17 @@ export class Flows {
     }
     delete step.limited;
     if (run.status === "failed") {
+      const why = run.error ?? "the run failed";
+      if (isSeedId(live.repo.id) && !(live.pending && "end" in live.pending)) {
+        // A stage's run that ended in an error (the API, the harness, the
+        // turn limit) leaves the flow waiting at its step. A retry runs that
+        // step again on what the steps before it left; a failed flow would
+        // have the incubator start the whole stage over from its first step.
+        this.park(live, i, why, "gated", { kind: "failed" });
+        return;
+      }
       step.status = "failed";
-      step.reason = run.error ?? "the run failed";
+      step.reason = why;
       this.fail(live, i, step.reason);
       return;
     }
@@ -599,7 +622,22 @@ export class Flows {
     const i = live.flow.current;
     const step = live.flow.steps[i];
     if (!step) throw new Error("no current step");
+    // read before anything below resets the step: where a retry by hand goes
+    const back = choice === "retry" ? this.backOf(live, i) : null;
     live.parks.delete(i);
+    delete live.flow.backTo;
+    if (live.flow.parkedFor === "failed" && choice !== "stop") {
+      // continue and retry both mean: run the step again. Its Claude session,
+      // when it has one, is taken up where the error cut it, as after a
+      // restart; one that cannot be taken up starts the step over, once.
+      delete live.flow.parkedFor;
+      this.resetStep(live, i, step.session !== undefined);
+      live.restarting.add(i);
+      live.flow.restarted = true;
+      live.failedResumed = true;
+      this.resumeReady(live, i);
+      return live.flow;
+    }
     if (live.flow.parkedFor === "budget" && choice !== "stop") {
       // continue and retry both mean: allow one more step, and run the one that was waiting
       delete live.flow.parkedFor;
@@ -648,7 +686,16 @@ export class Flows {
       return live.flow;
     }
     if (choice === "retry") {
-      if (step.reason) live.flow.retryReason = step.reason;
+      // a failed check's output goes with the reason: the park kept it off its one line
+      const why = step.check && step.check.exit !== 0 && step.reason ? `${step.reason}:\n${tailOf(step.check.output)}` : step.reason;
+      if (back !== null) {
+        // The gate said no to the work, so this step alone would be asked
+        // about the same work again. Back to the step that made it, as the
+        // flow's own retries go, by the user's hand and past their count.
+        this.goBack(live, i, back, why ?? "the gate said no");
+        return live.flow;
+      }
+      if (why) live.flow.retryReason = why;
       this.resetStep(live, i);
       void this.runStep(live, i);
       return live.flow;
@@ -1203,7 +1250,20 @@ export class Flows {
     if (used >= def.retries) return false;
     tries[def.name] = used + 1;
     const found = workflow.steps.findIndex((s) => s.name === def.back);
-    const to = found === -1 || found > i ? i : found;
+    this.goBack(live, i, found === -1 || found > i ? i : found, reason);
+    return true;
+  }
+
+  /** Steps `to` through `i` run again, the reason carried into the first
+   *  one's prompt. A verdict's or a judge's no is one canned line, so the
+   *  refusing step's own closing words go with it: they are the only part
+   *  of the reason written by something that read the work. */
+  private goBack(live: LiveFlow, i: number, to: number, reason: string): void {
+    const { flow, workflow } = live;
+    const def = workflow.steps[i];
+    if (!def) return;
+    const was = flow.steps[i];
+    const said = was?.verdict?.go === false || was?.judgment?.go === false ? (was.summary ?? "").replace(/\s+/g, " ").trim() : "";
     for (let n = to; n <= i; n++) {
       if (n === i || !this.liveSteps(live).includes(n)) {
         this.resetStep(live, n);
@@ -1211,10 +1271,24 @@ export class Flows {
     }
     const toName = workflow.steps[to]?.name ?? def.name;
     (flow.rewinds ??= []).push({ from: def.name, to: toName, reason, at: this.now() });
-    flow.retryReason = to === i ? reason : `the ${def.name} step did not accept the work: ${reason}`;
+    const words = said ? `${reason}. ${def.name}'s closing words: ${said.length > SAID_MAX ? `${said.slice(0, SAID_MAX)}…` : said}` : reason;
+    flow.retryReason = to === i ? words : `the ${def.name} step did not accept the work: ${words}`;
     flow.current = to;
     this.advance(live);
-    return true;
+  }
+
+  /** The step a retry by hand goes back to: the gate at `i` said no to the
+   *  work (its check failed, or its verdict or its judge said no) and the
+   *  step names an earlier one as its `back`. Null when a retry is the
+   *  step alone: nothing was refused, or there is nowhere to go back to. */
+  private backOf(live: LiveFlow, i: number): number | null {
+    const def = live.workflow.steps[i];
+    const step = live.flow.steps[i];
+    if (!def || !step || step.status !== "gated" || live.parks.get(i)?.kind !== "gate") return null;
+    const refused = (step.check !== undefined && step.check.exit !== 0) || step.verdict?.go === false || step.judgment?.go === false;
+    if (!refused) return null;
+    const found = live.workflow.steps.findIndex((s) => s.name === def.back);
+    return found >= 0 && found < i ? found : null;
   }
 
   private summaries(live: LiveFlow): { name: string; summary: string }[] {
@@ -1276,8 +1350,8 @@ export class Flows {
     // A restart resumes the step's Claude session, which holds the prompt
     // and the work so far; anything else starts fresh with the restart note.
     const resume = restarted && step.session && step.harness === "claude" && agent.harness === "claude" ? step.session : undefined;
-    let spec = stepSpec(workflow, i, this.summaries(live), flow.retryReason, restarted);
-    if (resume) spec = { ...spec, resume, message: live.capacityResumed ? CAPACITY_NOTE : live.pickedUp ? PICKED_UP_NOTE : RESUME_NOTE };
+    let spec = stepSpec(workflow, i, this.summaries(live), flow.retryReason, restarted && live.failedResumed ? FAILED_RUN_NOTE : restarted);
+    if (resume) spec = { ...spec, resume, message: live.capacityResumed ? CAPACITY_NOTE : live.failedResumed ? FAILED_RUN_NOTE : live.pickedUp ? PICKED_UP_NOTE : RESUME_NOTE };
     const tools = def.check ? this.hooks.checkTools?.(live.repo, def.check) : null;
     if (tools) {
       const extra = await tools.catch(() => []);
@@ -1342,7 +1416,7 @@ export class Flows {
       return;
     }
     live.restarting.delete(i);
-    if (!live.restarting.size) { delete flow.restarted; delete live.pickedUp; delete live.capacityResumed; }
+    if (!live.restarting.size) { delete flow.restarted; delete live.pickedUp; delete live.capacityResumed; delete live.failedResumed; }
     if (resume) live.resuming.add(run.id);
     step.status = "running";
     step.runId = run.id;
@@ -1529,8 +1603,12 @@ export class Flows {
     const cause = live.parks.get(i);
     delete live.flow.parkedFor;
     delete live.flow.stageCheck;
+    delete live.flow.backTo;
     if (cause && cause.kind !== "gate") live.flow.parkedFor = cause.kind;
     if (cause?.kind === "stage" && cause.check) live.flow.stageCheck = true;
+    const back = this.backOf(live, i);
+    const to = back === null ? undefined : live.workflow.steps[back]?.name;
+    if (to) live.flow.backTo = to;
   }
 
   private fail(live: LiveFlow, i: number, reason: string): void {

@@ -897,9 +897,10 @@ export function parseSproutRecord(text: string): Sprout | null {
   const { questions, questionsAt, repo, parked, noteRev } = raw;
   if (questions !== undefined && !(Array.isArray(questions) && questions.every(isQuestion))) return null;
   if (!optNum(questionsAt) || !optStr(repo) || !optStr(parked) || !optStr(noteRev)) return null;
-  const { pick, privateRepo, vercelProject, url } = raw;
+  const { pick, privateRepo, vercelProject, url, shipAsked } = raw;
   if (pick !== undefined && !isPick(pick)) return null;
   if (!optStr(privateRepo) || !optStr(vercelProject) || !optStr(url)) return null;
+  if (shipAsked !== undefined && !(isObj(shipAsked) && optStr(shipAsked["repo"]) && optStr(shipAsked["project"]))) return null;
   const { parkedAt, parks, retro } = raw;
   if (!optNum(parkedAt) || (parks !== undefined && !(Array.isArray(parks) && parks.every(isPark)))) return null;
   if (retro !== undefined && !isRetro(retro)) return null;

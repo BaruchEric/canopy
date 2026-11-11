@@ -11,7 +11,8 @@ import { isVercelAppUrl } from "../../../src/core/deploy";
 import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { backendOf, plainOf } from "../registry";
-import { INPUT_GLYPH, STAGES, branchHref, cannotStart, queuedWhy, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
+import { gateButtons } from "../flows";
+import { INPUT_GLYPH, STAGES, branchHref, cannotStart, parkWords, queuedWhy, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
 import { isOnline, multi, useStore } from "../store";
 import { recorderBlocked, useRecorder } from "../recorder";
 import { Questions } from "./Prompts";
@@ -399,6 +400,11 @@ export function SproutSheet({ id }: { id: string }) {
     const sp = s.sprouts[id];
     return sp ? queuedWhy(sp, Object.hasOwn(s.stages, backendOf(id)) ? s.stages[backendOf(id)] : undefined) : null;
   });
+  // the stage's flow: a park's buttons answer its gate when it waits at one
+  const stageFlow = useStore((s) => {
+    const cur = s.sprouts[id]?.flows.at(-1);
+    return cur ? s.flows[cur.flowId] : undefined;
+  });
   const [detail, setDetail] = useState<SproutDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -490,12 +496,11 @@ export function SproutSheet({ id }: { id: string }) {
             <div className="eyebrow">parked</div>
             <p>{sprout.parked}</p>
             <div className="ask-row">
-              <button type="button" className="mini strong" disabled={busy} onClick={() => act(() => resumeSprout(id, "continue"))}>
-                continue
-              </button>
-              <button type="button" className="mini" disabled={busy} onClick={() => act(() => resumeSprout(id, "retry"))}>
-                retry
-              </button>
+              {gateButtons(parkWords(sprout, stageFlow)).map((b) => (
+                <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} disabled={busy} title={b.title} onClick={() => act(() => resumeSprout(id, b.choice))}>
+                  {b.word}
+                </button>
+              ))}
               <span className="spacer" />
               <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
                 stop

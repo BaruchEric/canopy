@@ -9,6 +9,7 @@ import { rememberOffer } from "../../../src/core/offer";
 import { ruleWords, scopeWords } from "../../../src/core/shellwords";
 import { askWord, detailText, endingWord, inboxTick, inboxTitle, leftWord, recentAsks, scopeOffers, type InboxAnswer, type InboxItem } from "../inbox";
 import { durationWord } from "../agentcards";
+import { gateButtons, PLAIN_GATE } from "../flows";
 import { askCloses, pickKeys } from "../sweep";
 import { dueWord } from "../../../src/core/notes";
 import { openView } from "../clirun";
@@ -356,26 +357,11 @@ export function InboxRow({
               <div className="eyebrow">{item.who} {item.title}</div>
               {detail && <pre className="ask-detail">{detail}</pre>}
               <div className="ask-row">
-                <button
-                  type="button"
-                  className="mini strong"
-                  disabled={busy}
-                  title={
-                    item.budget
-                      ? "The budget is spent; this lets one more step run, then it parks again"
-                      : item.stage
-                        ? `The stage runner was not answering; this runs the ${item.stageCheck ? "check" : "step"} again, and it parks again if the runner is still away`
-                        : undefined
-                  }
-                  onClick={() => answer({ choice: "continue" })}
-                >
-                  {item.budget ? "allow one more step" : item.stage ? (item.stageCheck ? "run the check again" : "run the step again") : "continue"}
-                </button>
-                {!item.budget && !item.stage && (
-                  <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "retry" })}>
-                    retry the step
+                {gateButtons(item.gate ?? PLAIN_GATE).map((b) => (
+                  <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} disabled={busy} title={b.title} onClick={() => answer({ choice: b.choice })}>
+                    {b.word}
                   </button>
-                )}
+                ))}
                 <span className="spacer" />
                 <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "stop" })}>
                   stop

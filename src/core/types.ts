@@ -2746,6 +2746,13 @@ export interface Sprout {
   privateRepo?: string;
   /** the Vercel project canopy deploys it as, chosen once */
   vercelProject?: string;
+  /** A name the ship asked GitHub (`repo`, "owner/name") or Vercel
+   *  (`project`) for, on record before the asking and dropped once the
+   *  answer is (`privateRepo`, `vercelProject`). A name still here on a
+   *  later try is one whose answer never reached the record: the server
+   *  stopped, or the command timed out, between the two. That try takes up
+   *  what was made under the name and makes nothing under the next one. */
+  shipAsked?: { repo?: string; project?: string };
   /** the seed's HEAD once canopy committed the build's notes after accept:
    *  the commit the ship sends, which parks if the seed moved since */
   builtHead?: string;
@@ -2916,10 +2923,16 @@ export interface Flow {
   /** agent step runs started and working time so far */
   spent?: { runs: number; workMs: number };
   /** set while the flow is parked because its budget is spent, the stage
-   *  runner was not answering, or the governor held its step or the step's
-   *  run ended `limited` (FR-036); continuing runs the step again, and a
-   *  capacity park goes on by itself once the governor says go */
-  parkedFor?: "budget" | "stage" | "capacity";
+   *  runner was not answering, the governor held its step or the step's
+   *  run ended `limited` (FR-036), or a seed's step's run ended in an error
+   *  (`failed`); continuing runs the step again, and a capacity park goes
+   *  on by itself once the governor says go */
+  parkedFor?: "budget" | "stage" | "capacity" | "failed";
+  /** set while the flow waits at a gate that said no to the work (a failed
+   *  check, a verdict's or a judge's no) on a step that names an earlier
+   *  one as its `back`: the step a retry goes back to. Absent, a retry
+   *  runs the gated step alone. */
+  backTo?: string;
   /** who started the flow, for the governor (FR-036): its first agent step
    *  starts at this, the steps after it at `laterPriority`; absent is
    *  interactive */

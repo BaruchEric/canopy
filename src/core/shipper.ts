@@ -29,14 +29,32 @@ import { bundleSeed } from "./seedmirror";
 import { NOTE_FILES, branchPushRefusal, extendBranch, githubRepo, handOffFlag, scriptsFlag, showPath } from "./sprout";
 import type { HandOffReview, HostId } from "./types";
 
+/** How a ship step that makes something under a name keeps a second try
+ *  from making it twice. Between asking GitHub or Vercel for a name and
+ *  the answer reaching the project's record, a server can stop or a
+ *  command can time out with the thing made. Without a note of the name,
+ *  the next try finds it taken and makes a second one under the next. */
+export interface NameClaim {
+  /** the name a try before this one asked for, when its answer never reached the record */
+  asked?: string;
+  /** Called with a name before it is asked for. The name is on the
+   *  project's record when this returns, and a throw stops the step with
+   *  nothing made. */
+  ask(name: string): Promise<void>;
+}
+
 export interface Shipper {
   /** null when the host can be deployed to from here, else the park reason */
   ready(host: HostId): string | null;
-  /** a new private repo under the gh login, "owner/name" */
-  createRepo(slug: string, description: string): Promise<string>;
-  /** a Vercel project of its own, made under a name the account did not
-   *  have, with the framework the seed's package.json makes clear */
-  project(slug: string, seedPath: string): Promise<string>;
+  /** A new private repo under the gh login, "owner/name". With a claim, a
+   *  repo an earlier try asked for is taken up when it is there, private
+   *  and empty, which is how that try left it. */
+  createRepo(slug: string, description: string, claim?: NameClaim): Promise<string>;
+  /** A Vercel project of its own, made under a name the account did not
+   *  have, with the framework the seed's package.json makes clear. With a
+   *  claim, a project an earlier try asked for is taken up when it is
+   *  there and nothing was deployed to it. */
+  project(slug: string, seedPath: string, claim?: NameClaim): Promise<string>;
   /** a bundle of the seed in a scratch folder canopy owns, and its HEAD
    *  commit; `done` removes it. One ship makes one, so the push and the
    *  deploy send the same commit. */
@@ -163,6 +181,18 @@ const tail = (r: ExecResult, secret: string | null = null): string => {
   return secret ? text.split(secret).join("***") : text;
 };
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** whether a command's JSON answer says true for every one of `keys` */
+const allTrue = (json: string, ...keys: string[]): boolean => {
+  let v: unknown;
+  try {
+    v = JSON.parse(json);
+  } catch {
+    return false;
+  }
+  return isObj(v) && keys.every((k) => v[k] === true);
+};
+/** gh's answer for a repo that is not there, as GitHub's API words it */
+const NO_REPO = /could not resolve to a repository|not found/i;
 
 /** the first symlink under `dir` (its .git aside) that leads outside it, by its path in `dir`, or null */
 async function linkOut(dir: string): Promise<string | null> {
@@ -197,6 +227,16 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
   const needToken = (): string => {
     if (!cfg.vercelToken) throw new Error(`add VERCEL_TOKEN to ${cfg.backend}'s .env`);
     return cfg.vercelToken;
+  };
+  /** whether nothing was ever deployed to a Vercel project. An answer that
+   *  cannot be read throws: a guess either way could make a second project
+   *  or take up one that is in use. */
+  const undeployed = async (id: string): Promise<boolean> => {
+    const res = await api(`/v6/deployments?projectId=${encodeURIComponent(id)}&limit=1`);
+    const body: unknown = res.ok ? await res.json().catch(() => null) : null;
+    const list = isObj(body) ? body["deployments"] : undefined;
+    if (!Array.isArray(list)) throw new Error(`the Vercel API answered ${res.status} for project ${id}'s deployments`);
+    return list.length === 0;
   };
   /** A GET of a deployed page. Redirects are followed by hand and only
    *  within its host, over https, at most 5, so an app cannot make this
@@ -345,14 +385,29 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       });
     },
 
-    async createRepo(slug, description) {
+    async createRepo(slug, description, claim) {
       const who = await deps.exec(["gh", "api", "user", "--jq", ".login"], { timeoutMs: 30_000 });
       const owner = who.stdout.trim();
       if (who.code !== 0 || !/^[A-Za-z0-9-]+$/.test(owner)) throw new Error(`gh cannot say who it is logged in as: ${tail(who)}`);
-      for (const name of repoCandidates(slug)) {
-        const full = `${owner}/${name}`;
+      const names = repoCandidates(slug).map((name) => `${owner}/${name}`);
+      const asked = claim?.asked;
+      if (asked !== undefined && names.includes(asked)) {
+        // An earlier try asked for this name and its answer never reached
+        // the record. A repo there now, private and with nothing pushed, is
+        // as that try left it: the push comes only after the repo is on
+        // record. Anything else under the name is not canopy's to take.
+        const seen = await deps.exec(["gh", "repo", "view", asked, "--json", "isPrivate,isEmpty"], { timeoutMs: 30_000 });
+        if (seen.code === 0) {
+          if (allTrue(seen.stdout, "isPrivate", "isEmpty")) return asked;
+        } else if (!NO_REPO.test(seen.stderr || seen.stdout)) {
+          // not a plain "no such repo": going on to the next name here could make the second repo
+          throw new Error(`gh repo view ${asked}: ${tail(seen)}`);
+        }
+      }
+      for (const full of names) {
         const seen = await deps.exec(["gh", "repo", "view", full, "--json", "name"], { timeoutMs: 30_000 });
         if (seen.code === 0) continue;
+        await claim?.ask(full);
         const made = await deps.exec(["gh", "repo", "create", full, "--private", "--disable-wiki", "--description", description.slice(0, 300)], { timeoutMs: 60_000 });
         if (made.code !== 0) throw new Error(`gh repo create ${full}: ${tail(made)}`);
         return full;
@@ -360,13 +415,29 @@ export function shipper(cfg: ShipConfig, deps: ShipDeps = { exec: realExec, fetc
       throw new Error(`every name from ${slug} to ${slug}-9 is taken on GitHub`);
     },
 
-    async project(slug, seedPath) {
+    async project(slug, seedPath, claim) {
       needToken();
       const framework = frameworkOf(await readSeed(seedPath, "package.json").catch(() => null));
-      for (const name of repoCandidates(slug).map(vercelProject)) {
+      const names = repoCandidates(slug).map(vercelProject);
+      const asked = claim?.asked;
+      if (asked !== undefined && names.includes(asked)) {
+        // The same as the repo: a project under the asked name that nothing
+        // was deployed to is the one an earlier try made, since the deploy
+        // comes only after the project is on record.
+        const res = await api(`/v9/projects/${encodeURIComponent(asked)}`);
+        if (res.ok) {
+          const body: unknown = await res.json().catch(() => null);
+          const id = isObj(body) ? body["id"] : undefined;
+          if (typeof id === "string" && id && (await undeployed(id))) return asked;
+        } else if (res.status !== 404) {
+          throw new Error(`the Vercel API answered ${res.status} for project ${asked}`);
+        }
+      }
+      for (const name of names) {
         const res = await api(`/v9/projects/${encodeURIComponent(name)}`);
         if (res.ok) continue;
         if (res.status !== 404) throw new Error(`the Vercel API answered ${res.status} for project ${name}`);
+        await claim?.ask(name);
         // made here, so the link never has to make it: vercel link only
         // promises a non-interactive link to a project that exists. With no
         // framework Vercel serves the repo's root as it is, so a Vite or Next

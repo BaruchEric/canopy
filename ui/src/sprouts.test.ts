@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import type { IncubatorStages, Sprout } from "../../src/core/types";
+import type { Flow, FlowStep, IncubatorStages, Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
-import { branchHref, cannotStart, needsYou, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
+import { gateButtons } from "./flows";
+import { branchHref, cannotStart, needsYou, parkWords, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -288,5 +289,54 @@ describe("a card's activity", () => {
     expect(sproutActivity(sprout({ status: "live" }))).toBe("still");
     expect(sproutActivity(sprout({ status: "queued" }))).toBe("still");
     expect(sproutActivity(sprout({ status: "stopped" }))).toBe("still");
+  });
+});
+
+describe("parkWords (incubator review, P1)", () => {
+  const accept = (go: boolean): FlowStep => ({
+    name: "Accept",
+    status: "gated",
+    reason: go ? "a gate" : "the judge says it only partly meets the intent",
+    judgment: { answers: { fit: { choice: go ? "meets" : "partly", probabilities: {} }, evidence: { probability: 0.9 }, rules: { probability: 0 } }, go, rejected: false, reason: go ? null : "only partly" },
+  });
+  const built = (workflow: string, first: string, last: FlowStep, o: Partial<Flow> = {}): Flow => ({
+    id: "f9", repoId: "_incubator/coins", workflow, verb: "build", note: "", status: "gated",
+    steps: [{ name: first, status: "passed" }, { name: "Test", status: "passed" }, last],
+    current: 2, startedAt: 0, ...o,
+  });
+  const parked = (workflow: string): Sprout => sprout({ status: "parked", parked: "x", clarified: true, flows: [{ workflow, flowId: "f9" }] });
+  const drawn = (s: Sprout, f: Flow | undefined): string[] => gateButtons(parkWords(s, f)).map((b) => `${b.strong ? "*" : ""}${b.choice}: ${b.word}`);
+
+  test("a build the judge refused: the way back leads, and going on says it deploys anyway", () => {
+    const f = built("build-new", "Scaffold", accept(false), { backTo: "Scaffold" });
+    expect(drawn(parked("build-new"), f)).toEqual(["*retry: send it back to Scaffold", "continue: deploy it anyway"]);
+    expect(parkWords(parked("build-new"), f).title).toBe("Accept did not accept the work; this deploys the project as it is");
+    expect(drawn(parked("renovate"), built("renovate", "Renovate", accept(false), { backTo: "Renovate" }))).toEqual(["*retry: send it back to Renovate", "continue: deploy it anyway"]);
+  });
+
+  test("an extend goes to its hand-off, not a deploy", () => {
+    const f = built("extend", "Build", accept(false), { backTo: "Build" });
+    expect(drawn(parked("extend"), f)).toEqual(["*retry: send it back to Build", "continue: hand it off anyway"]);
+    expect(parkWords(parked("extend"), f).title).toBe("Accept did not accept the work; this takes the branch to its hand-off as it is");
+  });
+
+  test("a build's last gate that asks for a go says what going on does", () => {
+    expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(true)))).toEqual(["*continue: accept and deploy it", "retry: retry this step"]);
+  });
+
+  test("a gate before the last step, a stage that is no build, and a park with one way on keep the gate's own words", () => {
+    const mid = built("build-new", "Scaffold", { name: "Accept", status: "pending" }, { current: 1 });
+    expect(drawn(parked("build-new"), mid)).toEqual(["*continue: continue to Accept", "retry: retry this step"]);
+    expect(drawn(parked("scout"), built("scout", "Research", accept(false)))).toEqual(["*retry: retry this step", "continue: accept and finish anyway"]);
+    expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(false), { parkedFor: "failed" }))).toEqual(["*continue: run the step again"]);
+  });
+
+  test("with no flow waiting at a gate there is one button", () => {
+    const failed = sprout({ status: "parked", parked: "deploy: no scope", flows: [{ workflow: "build-new", flowId: "f9", outcome: "done" }] });
+    expect(drawn(failed, built("build-new", "Scaffold", accept(false)))).toEqual(["*continue: resume"]);
+    expect(drawn(parked("build-new"), undefined)).toEqual(["*continue: resume"]);
+    // another flow's gate is not this park's
+    expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(false), { id: "other" }))).toEqual(["*continue: resume"]);
+    expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(false), { status: "working" }))).toEqual(["*continue: resume"]);
   });
 });

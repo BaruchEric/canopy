@@ -384,6 +384,14 @@ describe("parseSproutRecord", () => {
     expect(bad({ flows: [{ workflow: "clarify", flowId: "a", digest: { status: "done" } }] })).toBeNull();
   });
 
+  test("the names a ship asked for come back from the record, and a malformed note of them is null", () => {
+    const asked = { ...full, shipAsked: { repo: "eric/coins", project: "coins" } };
+    expect(parseSproutRecord(JSON.stringify(asked))?.shipAsked).toEqual({ repo: "eric/coins", project: "coins" });
+    expect(parseSproutRecord(JSON.stringify({ ...full, shipAsked: { repo: "eric/coins" } }))?.shipAsked).toEqual({ repo: "eric/coins" });
+    expect(parseSproutRecord(JSON.stringify({ ...full, shipAsked: "eric/coins" }))).toBeNull();
+    expect(parseSproutRecord(JSON.stringify({ ...full, shipAsked: { repo: 1 } }))).toBeNull();
+  });
+
   test("a record whose parts restore reads are malformed is null", () => {
     const bad = (patch: Record<string, unknown>) => parseSproutRecord(JSON.stringify({ ...full, ...patch }));
     const input = full.inputs[0];

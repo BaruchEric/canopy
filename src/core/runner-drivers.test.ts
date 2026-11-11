@@ -935,7 +935,7 @@ describe("a stage run goes through the stage runner", () => {
     }
   }, 20_000);
 
-  test("a step the stage runner refuses for its claude settings fails with the file and key, never parked as the runner away", async () => {
+  test("a step the stage runner refuses for its claude settings is a failed run with the file and key, never parked as the runner away", async () => {
     const dir = await realpath(await mkdtemp(join(tmpdir(), "canopy-runner-settings-")));
     scratch.push(dir);
     const root = join(dir, "_incubator");
@@ -975,9 +975,13 @@ describe("a stage run goes through the stage runner", () => {
       const parsed = parseWorkflow("---\nname: one\nverb: do one\nblurb: b\n---\n\n## Only\n\nDo it.\n", { name: "one", source: "bundled", file: "/one.md" });
       if (!parsed.ok) throw new Error(parsed.error);
       const f = flows.start(repo("_incubator/coin", seedPath), parsed.workflow, "", { ...DEFAULT_AGENT, yolo: false });
-      await waitFor(() => flows.get(f.id)?.status === "failed", "the flow to fail");
+      // a seed's failed run leaves its flow waiting at the step; the park is
+      // the failed run's, which nothing resumes on its own, and not the
+      // runner-away one, which the next good hello would
+      await waitFor(() => flows.get(f.id)?.status === "gated", "the flow to park at the step");
       const failed = flows.get(f.id);
-      expect(failed?.parkedFor).toBeUndefined();
+      expect(failed?.parkedFor).toBe("failed");
+      expect(failed?.steps[0]?.reason).toContain(`${join(cfg, "settings.json")} holds "hooks"`);
       const run = runner.get(failed?.steps[0]?.runId ?? "");
       expect(run?.status).toBe("failed");
       expect(run?.away).toBeUndefined();

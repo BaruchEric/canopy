@@ -390,17 +390,37 @@ describe("the incubator in the inbox", () => {
     expect(toRunAnswer({ handOff: true })).toBeNull();
     expect(toAskAnswer({ handOff: true })).toBeNull();
   });
-  test("a gate a budget parked says so", () => {
+  test("a gate a budget parked has one way on, and says what it does", () => {
     const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "budget" }) }, 30_000, ctx);
-    expect(items[0]?.budget).toBe(true);
+    expect(items[0]?.gate).toMatchObject({ go: "allow one more step", retry: null });
   });
-  test("a gate the stage runner's absence parked says so, and is no budget", () => {
+  test("a gate the stage runner's absence parked runs its step again, or its check alone", () => {
     const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "stage" }) }, 30_000, ctx);
-    expect(items[0]?.stage).toBe(true);
-    expect(items[0]?.budget).toBeUndefined();
-    expect(items[0]?.stageCheck).toBeUndefined();
+    expect(items[0]?.gate).toMatchObject({ go: "run the step again", retry: null });
     const check = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "stage", stageCheck: true }) }, 30_000, ctx);
-    expect(check[0]).toMatchObject({ stage: true, stageCheck: true });
+    expect(check[0]?.gate).toMatchObject({ go: "run the check again", retry: null });
+  });
+  test("a gate after a run that failed runs that step again (incubator review, P1)", () => {
+    const items = mergeInbox([], {}, { f: flow({ id: "f", parkedFor: "failed" }) }, 30_000, ctx);
+    expect(items[0]?.gate).toMatchObject({ go: "run the step again", retry: null, lead: "go" });
+  });
+  test("a gate that refused the work leads with the way back to the step that made it (incubator review, P1)", () => {
+    const refused = flow({ id: "f", backTo: "Scaffold", steps: [{ name: "test", status: "gated", reason: "check failed with exit 1", check: { command: "bun test", exit: 1, output: "2 fail" } }] });
+    const items = mergeInbox([], {}, { f: refused }, 30_000, ctx);
+    expect(items[0]?.gate).toMatchObject({ retry: "send it back to Scaffold", lead: "retry" });
+    expect(items[0]?.gate?.go.endsWith(" anyway")).toBe(true);
+  });
+  test("a gate behind a parked project is worded as the project's: past a build's last step is a deploy", () => {
+    const refused = flow({ id: "f", workflow: "build-new", backTo: "Scaffold", steps: [{ name: "Accept", status: "gated", reason: "check failed with exit 1", check: { command: "true", exit: 1, output: "" } }] });
+    const parked: Sprout = { ...sprout, status: "parked", questions: [], parked: "x", flows: [{ workflow: "build-new", flowId: "f" }] };
+    const items = mergeInbox([], {}, { f: refused }, 30_000, { ...ctx, sprouts: [parked] });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.gate).toMatchObject({ go: "deploy it anyway", retry: "send it back to Scaffold", lead: "retry" });
+  });
+  test("a parked project with no gate behind it has one button", () => {
+    const parked: Sprout = { ...sprout, status: "parked", questions: [], parked: "deploy: no scope" };
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [parked] });
+    expect(items[0]?.gate).toEqual({ go: "resume", retry: null, lead: "go" });
   });
   test("going on assumptions is no answer to a run or an ask", () => {
     expect(toRunAnswer({ skip: true })).toBeNull();

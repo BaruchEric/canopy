@@ -56,6 +56,76 @@ describe("createRepo", () => {
     const f = fakes(() => no("HTTP 401"));
     await expect(shipper(cfg, f.deps).createRepo("x", "x")).rejects.toThrow("gh cannot say who it is logged in as: HTTP 401");
   });
+
+  /** gh with these repos there, each answering `--json isPrivate,isEmpty` as given */
+  const gh = (there: Record<string, { isPrivate: boolean; isEmpty: boolean }>) =>
+    fakes((c) => {
+      if (c.cmd.join(" ") === "gh api user --jq .login") return ok("eric\n");
+      if (c.cmd[1] === "repo" && c.cmd[2] === "view") {
+        const repo = there[c.cmd[3] ?? ""];
+        return repo ? ok(JSON.stringify(repo)) : no("GraphQL: Could not resolve to a Repository with the name 'x'. (repository)");
+      }
+      return ok();
+    });
+  const created = (f: ReturnType<typeof fakes>): string[] => f.calls.filter((c) => c.cmd[2] === "create").map((c) => c.cmd[3] ?? "");
+
+  test("a name is on the claim before gh is asked to make it", async () => {
+    const f = gh({ "eric/coin-counter": { isPrivate: false, isEmpty: false } });
+    const order: string[] = [];
+    const repo = await shipper(cfg, {
+      ...f.deps,
+      exec: async (cmd, opts) => {
+        if (cmd[2] === "create") order.push(`create ${cmd[3]}`);
+        return f.deps.exec(cmd, opts);
+      },
+    }).createRepo("coin-counter", "Coin counter", { ask: async (name) => void order.push(`ask ${name}`) });
+    expect(repo).toBe("eric/coin-counter-2");
+    // the taken name is passed over without a claim on it
+    expect(order).toEqual(["ask eric/coin-counter-2", "create eric/coin-counter-2"]);
+  });
+
+  test("a repo an earlier try asked for, there now, private and empty, is taken up and nothing is made", async () => {
+    const f = gh({ "eric/coin-counter": { isPrivate: true, isEmpty: true } });
+    const asks: string[] = [];
+    const repo = await shipper(cfg, f.deps).createRepo("coin-counter", "Coin counter", { asked: "eric/coin-counter", ask: async (name) => void asks.push(name) });
+    expect(repo).toBe("eric/coin-counter");
+    expect(created(f)).toEqual([]);
+    expect(asks).toEqual([]);
+  });
+
+  test("an asked name that was never made is made under that name", async () => {
+    const f = gh({});
+    expect(await shipper(cfg, f.deps).createRepo("coin-counter", "Coin counter", { asked: "eric/coin-counter", ask: async () => {} })).toBe("eric/coin-counter");
+    expect(created(f)).toEqual(["eric/coin-counter"]);
+  });
+
+  test("an asked name that is someone's repo by now, public or pushed to, is left alone for the next name", async () => {
+    for (const theirs of [{ isPrivate: false, isEmpty: true }, { isPrivate: true, isEmpty: false }]) {
+      const f = gh({ "eric/coin-counter": theirs });
+      const asks: string[] = [];
+      const repo = await shipper(cfg, f.deps).createRepo("coin-counter", "Coin counter", { asked: "eric/coin-counter", ask: async (name) => void asks.push(name) });
+      expect(repo).toBe("eric/coin-counter-2");
+      expect(asks).toEqual(["eric/coin-counter-2"]);
+    }
+  });
+
+  test("an asked name gh cannot answer for stops the step: the next name could be the second repo", async () => {
+    const f = fakes((c) => {
+      if (c.cmd.join(" ") === "gh api user --jq .login") return ok("eric\n");
+      if (c.cmd[2] === "view") return no("error connecting to api.github.com");
+      return ok();
+    });
+    await expect(shipper(cfg, f.deps).createRepo("coin-counter", "Coin counter", { asked: "eric/coin-counter", ask: async () => {} })).rejects.toThrow(
+      "gh repo view eric/coin-counter: error connecting to api.github.com",
+    );
+    expect(created(f)).toEqual([]);
+  });
+
+  test("an asked name that is no candidate of this slug under this login is ignored", async () => {
+    const f = gh({ "someone/coin-counter": { isPrivate: true, isEmpty: true } });
+    expect(await shipper(cfg, f.deps).createRepo("coin-counter", "Coin counter", { asked: "someone/coin-counter", ask: async () => {} })).toBe("eric/coin-counter");
+    expect(f.calls.some((c) => c.cmd[3] === "someone/coin-counter")).toBe(false);
+  });
 });
 
 /** a real seed: a git repo with these files committed */
@@ -107,6 +177,74 @@ describe("project", () => {
     expect(await make({ devDependencies: { vite: "^7.0.0" } })).toEqual({ name: "app", framework: "vite" });
     expect(await make({ dependencies: { next: "16.0.0", react: "19" } })).toEqual({ name: "app", framework: "nextjs" });
     expect(await make({ dependencies: { express: "5" } })).toEqual({ name: "app" });
+  });
+
+  /** Vercel with these projects there, each with this many deployments; `deploys` is the status its deployments list answers with */
+  const vercel = (there: Record<string, number>, deploys = 200) =>
+    fakes(
+      () => ok(),
+      (url, method) => {
+        const u = new URL(url);
+        if (method === "POST") return new Response("{}", { status: 200 });
+        if (u.pathname === "/v6/deployments") {
+          const n = there[(u.searchParams.get("projectId") ?? "").replace(/^prj_/, "")] ?? 0;
+          return new Response(JSON.stringify({ deployments: n > 0 ? [{ uid: "dpl_1" }] : [] }), { status: deploys });
+        }
+        const name = decodeURIComponent(u.pathname.split("/").pop() ?? "");
+        return name in there ? new Response(JSON.stringify({ id: `prj_${name}`, name }), { status: 200 }) : new Response("{}", { status: 404 });
+      },
+    );
+  const posted = (f: ReturnType<typeof fakes>): unknown[] => f.fetched.filter((x) => x.method === "POST").map((x) => JSON.parse(x.body ?? "null"));
+
+  test("a name is on the claim before Vercel is asked to make it", async () => {
+    const f = vercel({ "coin-counter": 3 });
+    const order: string[] = [];
+    const s = shipper(cfg, {
+      ...f.deps,
+      fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === "POST") order.push("post");
+        return f.deps.fetch(input, init);
+      }) as typeof fetch,
+    });
+    expect(await s.project("coin-counter", await seedWith({}), { ask: async (name) => void order.push(`ask ${name}`) })).toBe("coin-counter-2");
+    expect(order).toEqual(["ask coin-counter-2", "post"]);
+  });
+
+  test("a project an earlier try asked for, there now with nothing deployed, is taken up and nothing is made", async () => {
+    const f = vercel({ "coin-counter": 0 });
+    const asks: string[] = [];
+    expect(await shipper(cfg, f.deps).project("coin-counter", await seedWith({}), { asked: "coin-counter", ask: async (name) => void asks.push(name) })).toBe("coin-counter");
+    expect(posted(f)).toEqual([]);
+    expect(asks).toEqual([]);
+    expect(f.fetched.map((x) => x.url)).toEqual(["https://api.vercel.com/v9/projects/coin-counter", "https://api.vercel.com/v6/deployments?projectId=prj_coin-counter&limit=1"]);
+  });
+
+  test("an asked project that was never made is made under that name", async () => {
+    const f = vercel({});
+    expect(await shipper(cfg, f.deps).project("coin-counter", await seedWith({}), { asked: "coin-counter", ask: async () => {} })).toBe("coin-counter");
+    expect(posted(f)).toEqual([{ name: "coin-counter" }]);
+  });
+
+  test("an asked project something was deployed to is in use, and the next name is made", async () => {
+    const f = vercel({ "coin-counter": 1 });
+    const asks: string[] = [];
+    expect(await shipper(cfg, f.deps).project("coin-counter", await seedWith({}), { asked: "coin-counter", ask: async (name) => void asks.push(name) })).toBe("coin-counter-2");
+    expect(asks).toEqual(["coin-counter-2"]);
+    expect(posted(f)).toEqual([{ name: "coin-counter-2" }]);
+  });
+
+  test("an asked project whose deployments cannot be read stops the step, and nothing is made", async () => {
+    const f = vercel({ "coin-counter": 0 }, 500);
+    await expect(shipper(cfg, f.deps).project("coin-counter", await seedWith({}), { asked: "coin-counter", ask: async () => {} })).rejects.toThrow(
+      "the Vercel API answered 500 for project prj_coin-counter's deployments",
+    );
+    expect(posted(f)).toEqual([]);
+  });
+
+  test("the deployments read carries the team's scope", async () => {
+    const f = vercel({ "coin-counter": 0 });
+    await shipper(shipConfig({ VERCEL_TOKEN: "tok_secret", VERCEL_SCOPE: "rio" }, "mini"), f.deps).project("coin-counter", await seedWith({}), { asked: "coin-counter", ask: async () => {} });
+    expect(f.fetched.at(-1)?.url).toBe("https://api.vercel.com/v6/deployments?projectId=prj_coin-counter&limit=1&slug=rio");
   });
 });
 

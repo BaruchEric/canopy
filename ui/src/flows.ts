@@ -40,13 +40,68 @@ export function flowWord(flow: Flow, long: boolean): string {
   }
 }
 
-/** The action a gate's continue button will actually take. */
-export function continueWord(flow: Flow): string {
-  if (flow.parkedFor === "budget") return "allow one more step";
-  if (flow.parkedFor === "stage") return flow.stageCheck ? "run the check again" : "run the step again";
+/** A gate's ways on, as its buttons word them: what each will do. */
+export interface GateWords {
+  /** the continue button */
+  go: string;
+  /** the retry button; null when the park has one way on and both choices mean it */
+  retry: string | null;
+  /** The button to lead with. It is the retry when the gate said no to the
+   *  work (its check failed, or its verdict or its judge refused), since
+   *  going on then overrides that no. */
+  lead: "go" | "retry";
+  /** what going on does, for a tooltip, where the word leaves it out */
+  title?: string;
+}
+
+/** whether the step a flow is parked at said no to the work */
+const refusedAt = (step: FlowStep | undefined): boolean =>
+  step !== undefined && ((step.check !== undefined && step.check.exit !== 0) || step.verdict?.go === false || step.judgment?.go === false);
+
+export function gateWords(flow: Flow): GateWords {
+  const one = (go: string, title: string): GateWords => ({ go, retry: null, lead: "go", title });
+  if (flow.parkedFor === "budget") return one("allow one more step", "The budget is spent; this lets one more step run, then it parks again");
+  if (flow.parkedFor === "stage") {
+    const what = flow.stageCheck ? "check" : "step";
+    return one(`run the ${what} again`, `The stage runner was not answering; this runs the ${what} again, and it parks again if the runner is still away`);
+  }
+  if (flow.parkedFor === "failed") return one("run the step again", "The step's run ended in an error; this runs that step again, and the steps before it stand");
+  if (flow.parkedFor === "capacity") return one("start anyway", "Held for Claude's usage limit; this starts the step now");
   const step = flow.steps[flow.current];
-  if (step?.status === "held") return `start ${step.name}`;
-  return flow.current + 1 >= flow.steps.length ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`;
+  if (step?.status === "held") return { go: `start ${step.name}`, retry: "retry this step", lead: "go" };
+  const on = flow.current + 1 >= flow.steps.length ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`;
+  if (!refusedAt(step)) return { go: on, retry: "retry this step", lead: "go" };
+  // A retry of the refusing step alone would ask it about the same work, so
+  // it goes back to the step that made the work when the workflow names one.
+  return {
+    go: `${on} anyway`,
+    retry: flow.backTo ? `send it back to ${flow.backTo}` : "retry this step",
+    lead: "retry",
+    title: `${step?.name ?? "This step"} did not accept the work; this goes on with the work as it is`,
+  };
+}
+
+/** a gate nothing more is known about: go on, or the step again */
+export const PLAIN_GATE: GateWords = { go: "continue", retry: "retry this step", lead: "go" };
+
+/** The action a gate's continue button will actually take. */
+export const continueWord = (flow: Flow): string => gateWords(flow).go;
+
+export interface GateButton {
+  choice: "continue" | "retry";
+  word: string;
+  title?: string;
+  /** the one to lead with, drawn strong */
+  strong: boolean;
+}
+
+/** A gate's buttons in the order they are drawn: the one to lead with
+ *  first, since the first button is the one a hurried hand takes. */
+export function gateButtons(words: GateWords): GateButton[] {
+  const go: GateButton = { choice: "continue", word: words.go, ...(words.title ? { title: words.title } : {}), strong: words.lead === "go" };
+  if (words.retry === null) return [{ ...go, strong: true }];
+  const retry: GateButton = { choice: "retry", word: words.retry, strong: words.lead === "retry" };
+  return words.lead === "retry" ? [retry, go] : [go, retry];
 }
 
 export interface FleetCounts {
