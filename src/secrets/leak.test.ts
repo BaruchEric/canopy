@@ -14,6 +14,7 @@ import { KitHub } from "../server/kit";
 import { SecretsHub } from "../server/secrets";
 import { Audit } from "./audit";
 import { Gate, type WebAuthn } from "./gate";
+import { readPending, writePending } from "./pending";
 import { SecretsService, type StoreLike } from "./service";
 
 const GATE = "https://canopy.beric.ca";
@@ -88,6 +89,8 @@ beforeEach(async () => {
     sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
     applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
     scan: async () => found,
+    // the file a restart reads the waiting proposals back from
+    kept: { read: () => readPending(join(dir, "proposals.json")), write: (list) => writePending(join(dir, "proposals.json"), list) },
     // the host's answer as the restart key's script gives it: names and states only
     stacks: {
       list: async () => ({ stacks: [{ name: "dns-prod", files: ["/opt/stacks/dns/compose.yml"] }] }),
@@ -192,7 +195,10 @@ test("no value, its sha256 or its base64 leaves the service but through a reveal
   token = saved;
 
   const audit = await readFile(join(dir, "audit.jsonl"), "utf8");
-  const everything = [...seen, JSON.stringify(events), logs.join("\n"), audit, JSON.stringify(after.sinks)].join("\n");
+  // what waits for an approval is on disk for the next start, sealed as it came
+  const waiting = await readFile(join(dir, "proposals.json"), "utf8");
+  expect(waiting).toContain("OTHER_KEY");
+  const everything = [...seen, JSON.stringify(events), logs.join("\n"), audit, JSON.stringify(after.sinks), waiting].join("\n");
   expect(events.length).toBeGreaterThan(0);
   expect(audit).toContain("sink-write");
   expect(audit).toContain("stack-restart");

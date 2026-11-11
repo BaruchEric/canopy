@@ -47,8 +47,8 @@ describe("parseRequest and parseReply", () => {
 
 describe("skippedWords", () => {
   test("names a file's unread lines by number, one or many, and stops listing after twelve", () => {
-    expect(skippedWords({ path: "/d/.env", lines: [8] })).toBe("/d/.env: line 8 is not KEY=value, so it was left out and the file cannot be a sink");
-    expect(skippedWords({ path: "/d/.env", lines: [8, 11] })).toBe("/d/.env: lines 8, 11 are not KEY=value, so they were left out and the file cannot be a sink");
+    expect(skippedWords({ path: "/d/.env", lines: [8] })).toBe("/d/.env: line 8 is not KEY=value, so it was left out; a sink of this file leaves it as it is");
+    expect(skippedWords({ path: "/d/.env", lines: [8, 11] })).toBe("/d/.env: lines 8, 11 are not KEY=value, so they were left out; a sink of this file leaves them as they are");
     const long = skippedWords({ path: "/d/.env", lines: Array.from({ length: 15 }, (_, i) => i + 1) });
     expect(long).toContain("lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12 and 3 more are not KEY=value");
   });

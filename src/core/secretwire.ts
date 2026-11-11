@@ -227,7 +227,7 @@ export function skippedWords(s: { path: string; lines: readonly number[] }): str
   const shown = s.lines.slice(0, 12).join(", ");
   const more = s.lines.length > 12 ? ` and ${s.lines.length - 12} more` : "";
   const many = s.lines.length !== 1;
-  return `${s.path}: line${many ? "s" : ""} ${shown}${more} ${many ? "are" : "is"} not KEY=value, so ${many ? "they were" : "it was"} left out and the file cannot be a sink`;
+  return `${s.path}: line${many ? "s" : ""} ${shown}${more} ${many ? "are" : "is"} not KEY=value, so ${many ? "they were" : "it was"} left out; a sink of this file leaves ${many ? "them" : "it"} as ${many ? "they are" : "it is"}`;
 }
 
 export function parseRequest(line: string): SecretsRequest | { error: string } {

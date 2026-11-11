@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta, SecretSinkInfo, SecretsInfo } from "../../src/core/types";
-import { filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, markOf, passedOver, reachRows, readersOf, restartLine, sinkRows, stateTone, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
+import { OWN_RESTART, filterSecrets, gateHere, hostOf, isGateClosed, keysText, parseKeysText, markOf, passedOver, reachRows, readersOf, restartLine, sinkRows, stateTone, tagsOf, usedByText, writerOf, type SinkRow } from "./secrets";
 
 const info = (over: Partial<SecretsInfo> = {}): SecretsInfo => ({
   ok: true,
@@ -155,6 +155,23 @@ describe("a rotation's reach", () => {
       { kind: "stack", name: "dev", machine: "mini", detail: "docker compose -p dev -f /opt/stacks/dev/compose.yml -f /opt/stacks/dev/compose.mini.yml up -d", state: null, ready: true },
     ]);
     expect(reachRows(meta(), [sink("dev-env", {}, "cannot write")])[0]?.state).toBe("cannot write");
+  });
+
+  test("a sink of the backend's own settings adds canopy itself, with the deploy that restarts it", () => {
+    const own: SecretMeta = meta({
+      usedBy: ["canopy-deploy", "dev-env"],
+      impact: {
+        sinks: [{ id: "canopy-deploy", machine: "mini", path: "/home/eric/.config/canopy-deploy/env", keys: ["GH_TOKEN"] }, { id: "dev-env", machine: "mini", path: "/opt/stacks/dev/.env", keys: ["GH_TOKEN"] }],
+        servers: [],
+        stacks: [],
+      },
+    });
+    const ownSink: SinkRow = { sink: { id: "canopy-deploy", machine: "mini", path: "/home/eric/.config/canopy-deploy/env", format: "dotenv", keys: { GH_TOKEN: "gh_token" }, state: { GH_TOKEN: "same" }, error: null, stack: null, backendEnv: true }, owner: "mini" };
+    const r = reachRows(own, [ownSink, sink("dev-env", { GH_TOKEN: "same" })], undefined, STACKS);
+    expect(r.filter((x) => x.kind === "backend")).toEqual([{ kind: "backend", name: "canopy", machine: "mini", detail: OWN_RESTART, state: null }]);
+    expect(OWN_RESTART).toBe("bun run redeploy --restart");
+    // an older writer, or any other sink, names no such row
+    expect(reachRows(own, [{ ...ownSink, sink: { ...ownSink.sink, backendEnv: undefined } }, sink("dev-env", { GH_TOKEN: "same" })]).some((x) => x.kind === "backend")).toBe(false);
   });
 
   test("a stack is ready only once its own sinks have written, and only when the mini lists it", () => {

@@ -4,7 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "./exec";
-import { applyKeys, decideKey, parseDotenv, readKeys, mcpIgnoreRefusal, readSinkFile, repoRefusal, writeSinkFile } from "./sinks";
+import { applyKeys, decideKey, looseDotenv, parseDotenv, readKeys, mcpIgnoreRefusal, readSinkFile, repoRefusal, writeSinkFile } from "./sinks";
 
 describe("dotenv", () => {
   const FILE = "# the dns stack\nexport CF_TOKEN=old # rotated by hand\n\nKEEP_ME='as is'\nPLAIN=x\n";
@@ -45,6 +45,63 @@ describe("dotenv", () => {
   test("keeps a file without a final newline that way", () => {
     const r = applyKeys("A=1", "dotenv", { A: "2" });
     expect("text" in r ? r.text : "").toBe("A=2");
+  });
+});
+
+describe("a dotenv file somebody keeps by hand (notes)", () => {
+  // a label line another tool reads by its words, a key with a hyphen, a login line, and pairs between them
+  const NOTES = "# keys\nOPENAI_API_KEY=sk-old\nCloudflare Global API Key: 0123abcd\nx-api-key=zzz\nme@example.com hunter2\n\nexport GROQ_API_KEY='gq old'  # mine\n";
+
+  test("a strict read and a strict write refuse it, as for a compose file", () => {
+    expect("error" in readKeys(NOTES, "dotenv", ["OPENAI_API_KEY"])).toBe(true);
+    const w = applyKeys(NOTES, "dotenv", { OPENAI_API_KEY: "sk-new" });
+    expect("error" in w ? w.error : "").toContain("line 3");
+  });
+
+  test("with notes its pairs are read around the lines that are not pairs", () => {
+    const r = readKeys(NOTES, "dotenv", ["OPENAI_API_KEY", "GROQ_API_KEY", "ABSENT"], true);
+    if ("error" in r) throw new Error(r.error);
+    expect(r.values).toEqual({ OPENAI_API_KEY: "sk-old", GROQ_API_KEY: "gq old", ABSENT: undefined });
+  });
+
+  test("with notes a write changes its own lines and every other line goes back byte for byte", () => {
+    const w = applyKeys(NOTES, "dotenv", { OPENAI_API_KEY: "sk-new", ADDED: "y" }, true);
+    if ("error" in w) throw new Error(w.error);
+    expect(w.text).toBe("# keys\nOPENAI_API_KEY=sk-new\nCloudflare Global API Key: 0123abcd\nx-api-key=zzz\nme@example.com hunter2\n\nexport GROQ_API_KEY='gq old'  # mine\nADDED=y\n");
+    // a missing last newline stays missing
+    const bare = applyKeys("Note: one\nA=1\nNote: two", "dotenv", { A: "2" }, true);
+    expect("text" in bare ? bare.text : "").toBe("Note: one\nA=2\nNote: two");
+  });
+
+  test("a value over several lines is carried whole, and a line inside it is never taken for a pair", () => {
+    const text = 'CERT="-----BEGIN\nB=inside\n-----END"\nB=real\n';
+    expect(looseDotenv(text)).toEqual({ pairs: [{ key: "B", value: "real" }], skipped: [1, 2, 3] });
+    const w = applyKeys(text, "dotenv", { B: "new" }, true);
+    expect("text" in w ? w.text : "").toBe('CERT="-----BEGIN\nB=inside\n-----END"\nB=new\n');
+  });
+
+  test("with notes it is still refused where a write could go wrong", () => {
+    // a managed key set on a line canopy cannot read: a new line would leave two answers
+    const twice = applyKeys('A="x" junk\nB=1\n', "dotenv", { A: "2" }, true);
+    expect("error" in twice ? twice.error : "").toBe("line 1 sets A in a form canopy cannot read");
+    expect("error" in readKeys('A="x" junk\nB=1\n', "dotenv", ["A"], true)).toBe(true);
+    // the same file is fine for a key it does read
+    expect(readKeys('A="x" junk\nB=1\n', "dotenv", ["B"], true)).toEqual({ values: { B: "1" } });
+    // a label with a colon and a CRLF line set their key for some other reader
+    const label = applyKeys("Resend: re_old\nB=1\n", "dotenv", { Resend: "re_new" }, true);
+    expect("error" in label ? label.error : "").toBe("line 1 sets Resend in a form canopy cannot read");
+    const crlf = applyKeys("Note: one\r\nA=1\r\n", "dotenv", { A: "2" }, true);
+    expect("error" in crlf ? crlf.error : "").toBe("line 2 sets A in a form canopy cannot read");
+    // a quote that never closes swallows the rest of the file for a real reader
+    const open = applyKeys("A=1\nNOTE='never closed\nB=2\n", "dotenv", { B: "3" }, true);
+    expect("error" in open ? open.error : "").toBe("line 2 opens a quote that never closes");
+  });
+
+  test("the import's numbers stop at the last line, with or without a final newline", () => {
+    expect(looseDotenv("A=1\nnote\n").skipped).toEqual([2]);
+    expect(looseDotenv("A=1\nnote").skipped).toEqual([2]);
+    expect(looseDotenv("A='open\n").skipped).toEqual([1]);
+    expect(looseDotenv("")).toEqual({ pairs: [], skipped: [] });
   });
 });
 

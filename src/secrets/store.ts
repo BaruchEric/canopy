@@ -25,6 +25,7 @@ export const storePaths = (data: string) => ({
   audit: join(data, "audit.jsonl"),
   passkeys: join(data, "passkeys.json"),
   applied: join(data, "applied.json"),
+  proposals: join(data, "proposals.json"),
 });
 
 export interface StoreOptions {

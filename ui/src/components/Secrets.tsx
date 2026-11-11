@@ -3,7 +3,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { LIMITS, skippedWords, type SecretAct } from "../../../src/core/secretwire";
 import type { SecretAuditEntry, SecretMeta, SecretProposalInfo, SecretRestartResult, SecretSinkFormat, SecretSinkInfo, SecretsInfo } from "../../../src/core/types";
 import { api } from "../api";
-import { KEY_TONE, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
+import { KEY_TONE, OWN_RESTART, errorText, filterSecrets, gateHere, hostOf, isGateClosed, keysText, markOf, parseKeysText, passedOver, reachRows, sinkRows, stateTone, tagsOf, usedByText, writerOf, type ReachRow, type SinkRow, type WriteMark } from "../secrets";
 import { reachRefusal } from "../../../src/core/secretfile";
 import { batches, bulkAct, pick, sinkIdOf } from "../secretsbulk";
 import { newKeyProblem } from "../secretsform";
@@ -413,6 +413,15 @@ function ReachList({ rows, restartOn }: { rows: ReachRow[]; restartOn?: string }
                 </span>
               )}
             </>
+          ) : r.kind === "backend" ? (
+            <>
+              {" "}
+              <code>{r.detail}</code>{" "}
+              <button type="button" className="mini" onClick={() => void navigator.clipboard.writeText(r.detail)}>
+                copy
+              </button>
+              <span className="secrets-note"> · canopy reads this file only when it starts, and the store never restarts canopy. Run this for the backend once the sink has written.</span>
+            </>
           ) : r.detail ? (
             <span className="secrets-note"> · {r.detail}</span>
           ) : null}
@@ -650,6 +659,7 @@ function SinksTab({ rows, home, writer, open }: { rows: SinkRow[]; home: string;
               <span className="secrets-meta">
                 {sink.machine} · {sink.path} · {sink.format}
                 {sink.stack ? ` · restarts ${sink.stack}${sink.restart === undefined ? " (from its folder)" : ""}` : sink.restart === "none" ? " · restarts nothing" : ""}
+                {sink.backendEnv ? ` · canopy's own settings: a write reaches it at the next ${OWN_RESTART}` : ""}
                 {owner === null ? " · no backend reports it" : ""}
               </span>
               {open && (
@@ -929,7 +939,7 @@ function Proposal({ p, home, picked, onPick }: { p: SecretProposalInfo; home: st
           {p.merges ? ` · updates ${p.merges}` : ""}
           {p.same ? ` · same value as ${p.same}` : ""}
           {p.namesOnly ? " · names only" : ""}
-          {p.partial ? " · its file has lines canopy cannot read, so no sink" : ""}
+          {p.partial ? (p.sinkable ? " · its file has lines canopy cannot read; a sink leaves them as they are" : " · its file has lines canopy cannot read, so no sink") : ""}
         </span>
       </div>
       <form

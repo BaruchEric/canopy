@@ -2,8 +2,10 @@
  * One sink's sync, shared by the secrets service (the mini's sinks) and a
  * reader backend with an unlocked key (the Mac's): read the file, open each
  * mapped value, and write the keys `decideKey` says to write. A refused
- * path or a file that does not parse is left alone and named. No state or
- * error here holds a value.
+ * path or a file that does not parse is left alone and named. A reader
+ * passes `notes`: its files are kept by hand, and a dotenv line canopy
+ * cannot read there is carried as it is (sinks.ts). No state or error here
+ * holds a value.
  */
 
 import { lstat, readdir, rm } from "node:fs/promises";
@@ -37,7 +39,8 @@ export const waitingState = (sink: SinkDef): SinkState => ({
   writes: [],
 });
 
-/** Sync one sink. `applied` is updated in place for this sink's id. */
+/** Sync one sink. `applied` is updated in place for this sink's id.
+ *  `notes` is for a file kept by hand: see readKeys and applyKeys. */
 export async function syncSink(
   f: SecretFile,
   id: string,
@@ -46,12 +49,13 @@ export async function syncSink(
   applied: Applied,
   io: SinkIO,
   refusal: string | null,
+  notes = false,
 ): Promise<SinkState> {
   if (refusal) return { state: {}, error: refusal, writes: [] };
   const read = await io.read(sink.path);
   if ("error" in read) return { state: {}, error: read.error, writes: [] };
   const keys = Object.keys(sink.keys);
-  const have = read.text === null ? { values: {} as Record<string, string | undefined> } : readKeys(read.text, sink.format, keys);
+  const have = read.text === null ? { values: {} as Record<string, string | undefined> } : readKeys(read.text, sink.format, keys, notes);
   if ("error" in have) return { state: {}, error: `${sink.path}: ${have.error}; left as it is`, writes: [] };
   const stamps = { ...applied[id] };
   const state: Record<string, SecretKeyState> = {};
@@ -78,7 +82,7 @@ export async function syncSink(
     state[key] = d === "drift" ? "drift" : d === "same" ? "same" : have.values[key] === undefined ? "missing" : "waiting";
   }
   if (Object.keys(updates).length > 0) {
-    const next = applyKeys(read.text, sink.format, updates);
+    const next = applyKeys(read.text, sink.format, updates, notes);
     if ("error" in next) return { state, error: `${sink.path}: ${next.error}`, writes };
     writes = Object.keys(updates).map((key) => ({ key, ok: false }));
     try {

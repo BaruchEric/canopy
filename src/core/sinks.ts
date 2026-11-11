@@ -2,7 +2,9 @@
  * Sink files: the dotenv and JSON files a secret is written into on the
  * machine that owns them. A write touches only the keys it manages, goes
  * through a temp file in the same folder, and refuses what it cannot read
- * back. No error here holds a value.
+ * back. A file somebody keeps by hand is the one exception (`notes`): its
+ * lines canopy cannot read go back byte for byte. No error here holds a
+ * value.
  */
 
 import { chmod, chown, lstat, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -15,6 +17,9 @@ import type { SecretSinkFormat } from "./types";
 export type EnvLine = { kind: "pair"; key: string; value: string; exported: boolean; raw: string } | { kind: "other"; raw: string };
 
 const PAIR = /^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/;
+/** a line that seems to set a key in a form parseLine does not read: a
+ *  label with a colon, a value with words after its quote, a CRLF ending */
+const SETS = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*[:=]/;
 const REST = /^\s*(#.*)?$/;
 const RAW_OK = /^[A-Za-z0-9_./:@+,=-]*$/;
 
@@ -69,31 +74,68 @@ export function parseDotenv(text: string): { lines: EnvLine[]; newline: boolean 
   return { lines, newline };
 }
 
-/** The pairs of a dotenv file somebody keeps by hand, and the numbers of
- *  the lines that are none of KEY=value, a comment or blank (a note, a
- *  label with a hyphen, a value that runs over several lines). For the
- *  import's reading only: a write goes through parseDotenv, which refuses
- *  such a file, so canopy never rewrites a line it could not read. */
-export function looseDotenv(text: string): { pairs: { key: string; value: string }[]; skipped: number[] } {
-  const pairs: { key: string; value: string }[] = [];
+/** A dotenv file somebody keeps by hand, line by line. Pairs, comments and
+ *  blanks come back as parseDotenv gives them. A line that is none of those
+ *  (a note, a label with a hyphen, a value that runs over several lines) is
+ *  kept as it is, and `skipped` holds its number. `unread` maps a key to
+ *  the line that seems to set it in a form this cannot read (SETS), and
+ *  `open` is the line of a quote that never closes. */
+function looseLines(text: string): { lines: EnvLine[]; newline: boolean; skipped: number[]; unread: Map<string, number>; open: number | null } {
+  const lines: EnvLine[] = [];
   const skipped: number[] = [];
+  const unread = new Map<string, number>();
+  const newline = text === "" || text.endsWith("\n");
+  const parts = text === "" ? [] : text.split("\n");
+  if (text !== "" && newline) parts.pop();
   // the quote a value opened and has not closed yet: its later lines are part of it, never pairs
-  let open: string | null = null;
-  for (const [i, raw] of text.split("\n").entries()) {
+  let open: { quote: string; line: number } | null = null;
+  for (const [i, raw] of parts.entries()) {
     if (open !== null) {
       skipped.push(i + 1);
-      if (closes(raw, 0, open)) open = null;
+      lines.push({ kind: "other", raw });
+      if (closes(raw, 0, open.quote)) open = null;
       continue;
     }
     const line = parseLine(raw);
-    if (line?.kind === "pair") pairs.push({ key: line.key, value: line.value });
-    if (line) continue;
+    if (line) {
+      lines.push(line);
+      continue;
+    }
     skipped.push(i + 1);
+    lines.push({ kind: "other", raw });
+    const set = SETS.exec(raw)?.[1];
+    if (set !== undefined) unread.set(set, i + 1);
     const v = PAIR.exec(raw)?.[3] ?? "";
     const q = v.charAt(0);
-    if ((q === '"' || q === "'") && !closes(v, 1, q)) open = q;
+    if ((q === '"' || q === "'") && !closes(v, 1, q)) open = { quote: q, line: i + 1 };
   }
-  return { pairs, skipped };
+  return { lines, newline, skipped, unread, open: open?.line ?? null };
+}
+
+/** The pairs of a dotenv file somebody keeps by hand, and the numbers of
+ *  the lines that are none of KEY=value, a comment or blank. The import
+ *  reads through this. */
+export function looseDotenv(text: string): { pairs: { key: string; value: string }[]; skipped: number[] } {
+  const l = looseLines(text);
+  return { pairs: l.lines.flatMap((x) => (x.kind === "pair" ? [{ key: x.key, value: x.value }] : [])), skipped: l.skipped };
+}
+
+/** A sink file's lines. Strict by default: one line that is not KEY=value,
+ *  a comment or blank refuses the file, as compose would. With `notes` (a
+ *  file somebody keeps by hand, on a machine that is not the writer) such a
+ *  line is carried as it is, and the file is refused only where a write
+ *  could go wrong: a quote that never closes, or one of `keys` set on a
+ *  line this cannot read, where a new line for it would leave the file
+ *  with two answers. */
+function sinkLines(text: string, notes: boolean, keys: readonly string[]): { lines: EnvLine[]; newline: boolean } | { error: string } {
+  if (!notes) return parseDotenv(text);
+  const l = looseLines(text);
+  if (l.open !== null) return { error: `line ${l.open} opens a quote that never closes` };
+  for (const k of keys) {
+    const n = l.unread.get(k);
+    if (n !== undefined) return { error: `line ${n} sets ${k} in a form canopy cannot read` };
+  }
+  return { lines: l.lines, newline: l.newline };
 }
 
 /** whether `v`, read from `from`, holds the quote that ends a value; a
@@ -129,11 +171,12 @@ function parseJsonObject(text: string): { obj: Record<string, unknown> } | { err
   }
 }
 
-/** the values at `keys`, undefined where a key is absent */
-export function readKeys(text: string, format: SecretSinkFormat, keys: readonly string[]): { values: Record<string, string | undefined> } | { error: string } {
+/** the values at `keys`, undefined where a key is absent; `notes` reads a
+ *  dotenv file around the lines it cannot read (sinkLines) */
+export function readKeys(text: string, format: SecretSinkFormat, keys: readonly string[], notes = false): { values: Record<string, string | undefined> } | { error: string } {
   const values: Record<string, string | undefined> = {};
   if (format === "dotenv") {
-    const p = parseDotenv(text);
+    const p = sinkLines(text, notes, keys);
     if ("error" in p) return p;
     for (const k of keys) {
       // the last line of a key wins, as compose reads it
@@ -154,10 +197,11 @@ export function readKeys(text: string, format: SecretSinkFormat, keys: readonly 
   return { values };
 }
 
-/** The file with `updates` written in; `text` null is a new file. */
-export function applyKeys(text: string | null, format: SecretSinkFormat, updates: Record<string, string>): { text: string } | { error: string } {
+/** The file with `updates` written in; `text` null is a new file. With
+ *  `notes` a dotenv line this cannot read goes back byte for byte. */
+export function applyKeys(text: string | null, format: SecretSinkFormat, updates: Record<string, string>, notes = false): { text: string } | { error: string } {
   if (format === "dotenv") {
-    const p = parseDotenv(text ?? "");
+    const p = sinkLines(text ?? "", notes, Object.keys(updates));
     if ("error" in p) return p;
     const quoted: Record<string, string> = {};
     for (const [k, v] of Object.entries(updates)) {

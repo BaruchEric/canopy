@@ -4253,6 +4253,11 @@ export interface SecretSinkInfo {
   restart?: string;
   /** the project a write restarts, set or found from the folder (writer only; phase 3) */
   stack?: string | null;
+  /** the file is this backend's own settings (compose names it): canopy
+   *  reads it only when its containers start and the store cannot restart
+   *  canopy, so a write reaches canopy at the next `bun run redeploy
+   *  --restart`. Writer only; absent elsewhere and from an older writer. */
+  backendEnv?: true;
 }
 
 /** A value found in a source file, sealed to the mini alone, on its way to
@@ -4266,7 +4271,8 @@ export interface SecretProposalIn {
   /** the secret this would update, when it is a "take this value" */
   merges: string | null;
   /** its file has lines the reader could not read (a notes file kept by
-   *  hand), so canopy cannot write that file and it never becomes a sink */
+   *  hand). On a reader such a file can still be a sink: its canopy writes
+   *  around those lines. On the writer it never becomes one. */
   partial?: boolean;
 }
 
@@ -4281,9 +4287,9 @@ export interface SecretProposalInfo {
   /** another pending proposal or a secret that holds the same value */
   same: string | null;
   namesOnly: boolean;
-  /** its file can become a sink: dotenv or json, every line of it readable, and inside the writer's sink roots when it is the writer's own file */
+  /** its file can become a sink: dotenv or json, and, when it is the writer's own file, inside its sink roots with every line readable */
   sinkable: boolean;
-  /** why not, when the file is a dotenv file with lines canopy could not read; absent from a writer older than the field */
+  /** its file is a dotenv file with lines canopy could not read: a sink of it on a reader leaves them as they are, and on the writer there is none; absent from a writer older than the field */
   partial?: boolean;
   /** epoch ms */
   expires: number;

@@ -3,7 +3,9 @@
  * for any caller on the socket, the passkey gate, proposals from the Mac,
  * and the gated acts. The only process on the mini that opens a value. It
  * writes the mini's own sinks after each change and on a timer, never over
- * a drifted key. Errors it returns name secrets and paths, never values.
+ * a drifted key. Waiting proposals are kept on disk, still sealed, so a
+ * restart does not lose them. Errors it returns name secrets and paths,
+ * never values.
  */
 
 import { randomBytes } from "node:crypto";
@@ -19,6 +21,7 @@ import { FILE_IO, mcpEnvKeep, pruneMcpEnv, syncSink, type SinkIO, type SinkState
 import type { SecretKeyState, SecretProposalIn, SecretRestartResult, SecretsInfo, SecretStack } from "../core/types";
 import type { Audit } from "./audit";
 import type { Gate } from "./gate";
+import type { KeptProposal } from "./pending";
 import type { StackRunner } from "./stacks";
 
 export interface StoreLike {
@@ -43,6 +46,11 @@ export interface ServiceDeps {
   applied: { read(): Promise<Applied>; write(a: Applied): Promise<void> };
   /** this machine's import sources */
   scan: () => Promise<Found[]>;
+  /** where waiting proposals outlive a restart; without it they live in memory alone */
+  kept?: { read(): Promise<{ list: KeptProposal[]; dropped: number }>; write(list: KeptProposal[]): Promise<void> };
+  /** this backend's own settings files, as compose names them: canopy reads
+   *  one only when its containers start, and nothing here can restart canopy */
+  ownEnv?: readonly string[];
   io?: SinkIO;
   /** the host's compose projects through the canopy-restart key; a string
    *  says why there is none (the key not installed) */
@@ -109,6 +117,8 @@ export class SecretsService {
   private projects: SecretStack[] = [];
   private projectsError: string | null = null;
   private projectsAt = 0;
+  /** the waiting proposals changed since the last write of them */
+  private dirty = false;
 
   constructor(private readonly d: ServiceDeps) {
     this.io = d.io ?? FILE_IO;
@@ -140,7 +150,7 @@ export class SecretsService {
           this.d.gate.logout(req.token);
           return { ok: true, data: null };
         case "propose":
-          return await this.serial(() => this.propose(req.items));
+          return await this.serial(() => this.keeping(() => this.propose(req.items)));
         case "act":
           return await this.act(req.token, req.act);
       }
@@ -161,7 +171,7 @@ export class SecretsService {
     try {
       // a restart waits on compose for up to a minute and changes nothing in
       // the store, so it does not hold the other acts back
-      r = act.a === "stack-restart" ? await this.restart(act.project) : await this.serial(() => this.run(act));
+      r = act.a === "stack-restart" ? await this.restart(act.project) : await this.serial(() => this.keeping(() => this.run(act)));
     } catch (err) {
       r = fail(errText(err));
     }
@@ -241,7 +251,7 @@ export class SecretsService {
       case "approve":
         return this.approve(act);
       case "reject":
-        return this.proposals.delete(act.proposal) ? { ok: true, data: null } : fail("no such proposal; it may have expired");
+        return this.drop(act.proposal) ? { ok: true, data: null } : fail("no such proposal; it may have expired");
       case "machine-key":
         return this.change({ ...f, keys: { ...f.keys, [act.machine]: act.recipient } }, `secrets: key for ${act.machine}`);
       case "passkey-remove":
@@ -424,9 +434,37 @@ export class SecretsService {
     return this.change(await this.withValue(f, name, value, null), `secrets: take ${name} from sink ${id}`);
   }
 
+  private drop(id: string): boolean {
+    const had = this.proposals.delete(id);
+    if (had) this.dirty = true;
+    return had;
+  }
+
   private expire(): void {
     const t = this.now();
-    for (const [id, p] of this.proposals) if (p.expires < t) this.proposals.delete(id);
+    for (const [id, p] of this.proposals) if (p.expires < t) this.drop(id);
+  }
+
+  /** Write the waiting proposals when they changed. A failure is logged and
+   *  tried again at the next change or tick: the list in memory still stands. */
+  private async flush(): Promise<void> {
+    const k = this.d.kept;
+    if (!this.dirty || !k) return;
+    try {
+      await k.write([...this.proposals.values()].map((q) => ({ id: q.id, p: q.p, expires: q.expires })));
+      this.dirty = false;
+    } catch (err) {
+      this.d.log(`secrets: the waiting proposals could not be kept for a restart: ${errText(err)}`);
+    }
+  }
+
+  /** run `fn`, then keep whatever it left waiting, also when it threw */
+  private async keeping<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } finally {
+      await this.flush();
+    }
   }
 
   /** every value this process can open now, labelled, for `same` */
@@ -451,36 +489,68 @@ export class SecretsService {
     return out;
   }
 
+  /** One proposal into the waiting list, or false when this key cannot
+   *  open its value or the secret it would update is gone. `known` grows
+   *  by its value, so a later one can name it as the same. */
+  private async admit(pid: string, p: SecretProposalIn, expires: number, known: [string, string][]): Promise<boolean> {
+    let value: string | null = null;
+    if (p.sealed) {
+      try {
+        value = await openProposal(p.sealed, this.d.store.identity(), p);
+      } catch {
+        return false;
+      }
+    }
+    if (p.merges && !this.d.store.file.secrets[p.merges]) return false;
+    const v = value;
+    const same = v === null ? null : (known.find(([, k]) => sameValue(k, v))?.[0] ?? null);
+    this.proposals.set(pid, { id: pid, p, expires, suggested: suggestName(p.source, p.key), same });
+    this.dirty = true;
+    if (v !== null) known.push([`${p.key} from ${p.source}`, v]);
+    return true;
+  }
+
   private async propose(items: SecretProposalIn[]): Promise<SecretsReply> {
     this.expire();
     if (this.proposals.size + items.length > LIMITS.pending) return fail(`at most ${LIMITS.pending} proposals wait at once; approve or reject some first`);
-    const id = this.d.store.identity();
     const known = await this.known();
     let added = 0;
     let dropped = 0;
     for (const p of items) {
-      for (const [pid, q] of this.proposals) if (q.p.from === p.from && q.p.source === p.source && q.p.key === p.key) this.proposals.delete(pid);
-      let value: string | null = null;
-      if (p.sealed) {
-        try {
-          value = await openProposal(p.sealed, id, p);
-        } catch {
-          dropped += 1;
-          continue;
-        }
-      }
-      if (p.merges && !this.d.store.file.secrets[p.merges]) {
-        dropped += 1;
-        continue;
-      }
-      const v = value;
-      const same = v === null ? null : (known.find(([, k]) => sameValue(k, v))?.[0] ?? null);
-      const pid = randomBytes(9).toString("base64url");
-      this.proposals.set(pid, { id: pid, p, expires: this.now() + LIMITS.proposalTtlMs, suggested: suggestName(p.source, p.key), same });
-      if (v !== null) known.push([`${p.key} from ${p.source}`, v]);
-      added += 1;
+      for (const [pid, q] of this.proposals) if (q.p.from === p.from && q.p.source === p.source && q.p.key === p.key) this.drop(pid);
+      if (await this.admit(randomBytes(9).toString("base64url"), p, this.now() + LIMITS.proposalTtlMs, known)) added += 1;
+      else dropped += 1;
     }
     return { ok: true, data: { added, dropped } };
+  }
+
+  /** The proposals a run before this one left waiting, taken back once at
+   *  start. Each passes the intake again: one this key cannot open, one
+   *  past its time and one whose secret is gone are left out. An expiry is
+   *  never later than a new proposal's would be. The file is written again
+   *  when that left something out of it; one that could not be read at all
+   *  stays as it is until the list next changes. */
+  async restore(): Promise<void> {
+    const k = this.d.kept;
+    if (!k) return;
+    const { list, dropped } = await k.read();
+    const t = this.now();
+    // opening every stored value is only worth it when something came back
+    const known = list.length > 0 ? await this.known() : [];
+    let lost = dropped;
+    let expired = 0;
+    let moved = false;
+    for (const e of list) {
+      const until = Math.min(e.expires, t + LIMITS.proposalTtlMs);
+      if (e.expires < t) expired += 1;
+      else if (this.proposals.size >= LIMITS.pending || this.proposals.has(e.id) || !(await this.admit(e.id, e.p, until, known))) lost += 1;
+      else if (until !== e.expires) moved = true;
+    }
+    this.dirty = list.length > 0 && (lost > 0 || expired > 0 || moved);
+    if (this.proposals.size + lost + expired > 0) {
+      this.d.log(`secrets: ${this.proposals.size} waiting proposals kept across the restart${expired > 0 ? `, ${expired} past their time` : ""}${lost > 0 ? `, ${lost} that could not be read left out` : ""}`);
+    }
+    await this.flush();
   }
 
   private async approve(act: Extract<SecretAct, { a: "approve" }>): Promise<SecretsReply> {
@@ -506,7 +576,8 @@ export class SecretsService {
       next = await this.withValue(f, target, value, { description: act.description, tags: act.tags });
     }
     if (act.sink) {
-      if (q.p.partial) return fail(`${q.p.source} has lines canopy cannot read, so it cannot be a sink; approve this without one`);
+      // a file of the mini's own is a compose env file, where a line canopy cannot read is a fault; a reader's is kept by hand, and its canopy writes around such a line
+      if (q.p.partial && q.p.from === this.d.machine) return fail(`${q.p.source} has lines canopy cannot read, so it cannot be a sink on ${this.d.machine}; approve this without one`);
       const format = formatOf(q.p.source);
       if (!format) return fail(`${q.p.source} cannot be a sink; only dotenv and json files can`);
       if (!(format === "dotenv" ? DOTENV_KEY : JSON_PATH).test(q.p.key)) return fail(`${q.p.key} cannot be a ${format} sink key`);
@@ -514,19 +585,24 @@ export class SecretsService {
       if (old && (old.machine !== q.p.from || old.path !== q.p.source)) return fail(`sink ${act.sink.id} writes another file`);
       const def: SinkDef = { machine: q.p.from, path: q.p.source, format, keys: { ...old?.keys, [q.p.key]: target } };
       const r = await this.setSink(next, act.sink.id, def, `secrets: import ${target} into sink ${act.sink.id}`);
-      if (r.ok) this.proposals.delete(q.id);
+      if (r.ok) this.drop(q.id);
       return r;
     }
-    this.proposals.delete(q.id);
-    if (next === f) return { ok: true, data: { head: this.d.store.head } };
-    return this.change(next, q.p.merges ? `secrets: take ${target} from ${q.p.from}` : `secrets: import ${target}`);
+    // the proposal goes only once its value is in the store: a commit that fails leaves it waiting
+    const r: SecretsReply = next === f ? { ok: true, data: { head: this.d.store.head } } : await this.change(next, q.p.merges ? `secrets: take ${target} from ${q.p.from}` : `secrets: import ${target}`);
+    if (r.ok) this.drop(q.id);
+    return r;
   }
 
   /** the timer's sync, queued behind any act in flight; the project list
    *  is asked for first, outside the queue, since it is an ssh call */
   async tick(): Promise<void> {
     await this.refreshStacks();
-    return this.serial(() => this.syncSinks());
+    return this.serial(async () => {
+      this.expire();
+      await this.flush();
+      await this.syncSinks();
+    });
   }
 
   /** Write the sinks this machine owns where the store changed, and read
@@ -589,6 +665,7 @@ export class SecretsService {
             id, machine: k.machine, path: k.path, format: k.format, keys: { ...k.keys }, state, error: own ? (this.sinkState[id]?.error ?? null) : null,
             ...(k.restart !== undefined ? { restart: k.restart } : {}),
             stack: this.stackOf(id, k),
+            ...(own && this.d.ownEnv?.includes(k.path) ? { backendEnv: true as const } : {}),
           }];
         }),
       proposals: [...this.proposals.values()].map((q) => ({
@@ -600,7 +677,7 @@ export class SecretsService {
         merges: q.p.merges,
         same: session ? q.same : null,
         namesOnly: q.p.sealed === "",
-        sinkable: !q.p.partial && formatOf(q.p.source) !== null && (q.p.from !== this.d.machine || this.rootRefusal(q.p.source) === null),
+        sinkable: formatOf(q.p.source) !== null && (q.p.from !== this.d.machine || (!q.p.partial && this.rootRefusal(q.p.source) === null)),
         ...(q.p.partial ? { partial: true } : {}),
         expires: q.expires,
       })),

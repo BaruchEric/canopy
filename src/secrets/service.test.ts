@@ -12,6 +12,7 @@ import type { Found } from "../core/secretimport";
 import type { SecretsInfo } from "../core/types";
 import { Audit } from "./audit";
 import { Gate, type WebAuthn } from "./gate";
+import type { KeptProposal } from "./pending";
 import { SecretsService, type StoreLike } from "./service";
 import type { StackRunner } from "./stacks";
 
@@ -23,6 +24,8 @@ class MemStore implements StoreLike {
   head = "abc1234";
   unpushed = 0;
   commits: string[] = [];
+  /** the next commit fails with this, once */
+  failNext: string | null = null;
   constructor(
     public recipient: string,
     private readonly ident: string,
@@ -33,6 +36,9 @@ class MemStore implements StoreLike {
     return this.ident;
   }
   async commit(next: SecretFile, message: string): Promise<void> {
+    const why = this.failNext;
+    this.failNext = null;
+    if (why !== null) throw new Error(why);
     this.file = { ...next, signature: null };
     this.commits.push(message);
   }
@@ -54,6 +60,40 @@ let found: Found[] = [];
 let svc: SecretsService;
 let store: MemStore;
 let audit: Audit;
+let gate: Gate;
+let applied: Applied = {};
+/** the proposals file as the service keeps it, what a read of it reports lost, and whether a write fails */
+let kept: KeptProposal[] = [];
+let keptDropped = 0;
+let keptFails = false;
+let keptWrites = 0;
+/** the backend's own settings files, as compose would name them */
+let ownEnv: string[] = [];
+
+/** the service as a start makes it: a second call is the container coming back over the same volume */
+const service = (): SecretsService =>
+  new SecretsService({
+    store,
+    gate,
+    audit,
+    machine: "mini",
+    gateUrl: "https://canopy.beric.ca/?view=secrets",
+    sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
+    applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
+    scan: async () => found,
+    kept: {
+      read: async () => ({ list: structuredClone(kept), dropped: keptDropped }),
+      write: async (list) => {
+        if (keptFails) throw new Error("ENOSPC: no space left on device");
+        keptWrites += 1;
+        kept = structuredClone(list);
+      },
+    },
+    ownEnv,
+    stacks: fakeStacks,
+    now: () => t,
+    log: (l) => logs.push(l),
+  });
 /** the host's projects as the restart key would list them, and the restarts asked for */
 let projects: { name: string; files: string[] }[] = [];
 let restarts: string[] = [];
@@ -81,22 +121,15 @@ beforeEach(async () => {
   restartThrows = null;
   const mini = await newIdentity();
   store = new MemStore(mini.recipient, mini.identity);
-  const gate = await Gate.open({ file: join(dir, "passkeys.json"), rpID: "canopy.beric.ca", origin: "https://canopy.beric.ca", now: () => t, wa, log: (l) => logs.push(l) });
+  gate = await Gate.open({ file: join(dir, "passkeys.json"), rpID: "canopy.beric.ca", origin: "https://canopy.beric.ca", now: () => t, wa, log: (l) => logs.push(l) });
   audit = new Audit(join(dir, "audit.jsonl"), () => t);
-  let applied: Applied = {};
-  svc = new SecretsService({
-    store,
-    gate,
-    audit,
-    machine: "mini",
-    gateUrl: "https://canopy.beric.ca/?view=secrets",
-    sinkRoots: [stacks, join(dir, "home", ".claude", "mcp-env")],
-    applied: { read: async () => structuredClone(applied), write: async (a) => void (applied = structuredClone(a)) },
-    scan: async () => found,
-    stacks: fakeStacks,
-    now: () => t,
-    log: (l) => logs.push(l),
-  });
+  applied = {};
+  kept = [];
+  keptDropped = 0;
+  keptFails = false;
+  keptWrites = 0;
+  ownEnv = [join(stacks, "canopy-deploy", "env")];
+  svc = service();
   const code = /code ([0-9a-f]{10})/.exec(logs.join("\n"))?.[1] ?? "";
   await gate.begin("register", null, code);
   await gate.finish("register", null, code, { id: "cred1" }, "phone");
@@ -313,13 +346,23 @@ describe("proposals", () => {
     expect(by).toEqual({ A: true, B: false, C: false, D: true });
   });
 
-  test("a backend's own settings under a bare name can be a sink once their folder is a root", async () => {
+  test("a backend's own settings under a bare name can be a sink once their folder is a root, and the sink says whose file it is", async () => {
     found = [{ source: join(stacks, "canopy-deploy", "env"), key: "GH_TOKEN", value: "g1" }];
     await ok({ a: "import-scan" });
-    expect((await info()).proposals.map((x) => [x.key, x.sinkable])).toEqual([["GH_TOKEN", true]]);
+    const list = (await info()).proposals;
+    expect(list.map((x) => [x.key, x.sinkable])).toEqual([["GH_TOKEN", true]]);
+    await mkdir(join(stacks, "canopy-deploy"), { recursive: true });
+    await writeFile(join(stacks, "canopy-deploy", "env"), "GH_TOKEN=g1\n");
+    await ok({ a: "approve", proposal: list[0]?.id ?? "", name: "gh_token", description: "", tags: [], value: null, sink: { id: "canopy-deploy" } });
+    await add();
+    await ok(dnsSink());
+    // canopy reads that file only when it starts, and nothing here restarts canopy: the page says what does
+    const sinks = (await info()).sinks;
+    expect(sinks.find((x) => x.id === "canopy-deploy")).toMatchObject({ backendEnv: true, stack: null, state: { GH_TOKEN: "same" } });
+    expect(sinks.find((x) => x.id === "dns")?.backendEnv).toBeUndefined();
   });
 
-  test("a value from a file with unread lines is stored, and its file is never a sink", async () => {
+  test("a file with unread lines is never a sink on the mini, and can be one on the Mac, which writes around them", async () => {
     found = [{ source: join(stacks, "app", ".env"), key: "A", value: "1", partial: true }];
     await ok({ a: "import-scan" });
     const m = { from: "mac", source: "/Users/e/dev/.env", key: "D" };
@@ -327,15 +370,125 @@ describe("proposals", () => {
     const list = (await info()).proposals;
     expect(list.map((x) => [x.key, x.sinkable, x.partial])).toEqual([
       ["A", false, true],
-      ["D", false, true],
+      ["D", true, true],
     ]);
+    // the mini's own file: compose could not read it either
+    const a = list.find((x) => x.key === "A");
+    const refused = await act({ a: "approve", proposal: a?.id ?? "", name: "a_key", description: "", tags: [], value: null, sink: { id: "app" } });
+    expect(refused.ok ? "" : refused.error).toContain("cannot be a sink on mini");
+    expect((await info()).sinks.map((s) => s.id)).not.toContain("app");
+    await ok({ a: "approve", proposal: a?.id ?? "", name: "a_key", description: "", tags: [], value: null, sink: null });
+    expect(await ok({ a: "reveal", name: "a_key" })).toMatchObject({ value: "1" });
+    // the Mac's notes file: its canopy carries the lines it cannot read
+    const mac = await newIdentity();
+    await ok({ a: "machine-key", machine: "mac", recipient: mac.recipient });
     const d = list.find((x) => x.key === "D");
-    const refused = await act({ a: "approve", proposal: d?.id ?? "", name: "d_key", description: "", tags: [], value: null, sink: { id: "dev" } });
-    expect(refused).toMatchObject({ ok: false });
-    expect(refused.ok ? "" : refused.error).toContain("cannot be a sink");
-    expect((await info()).sinks.map((s) => s.id)).not.toContain("dev");
-    await ok({ a: "approve", proposal: d?.id ?? "", name: "d_key", description: "", tags: [], value: null, sink: null });
-    expect(await ok({ a: "reveal", name: "d_key" })).toMatchObject({ value: "4" });
+    await ok({ a: "approve", proposal: d?.id ?? "", name: "d_key", description: "", tags: [], value: null, sink: { id: "dev" } });
+    expect((await info()).sinks.find((s) => s.id === "dev")).toMatchObject({ machine: "mac", path: "/Users/e/dev/.env", format: "dotenv", keys: { D: "d_key" } });
+    expect(store.file.secrets["d_key"]?.to).toEqual(["breakglass", "mac", "mini"]);
+  });
+
+  test("waiting proposals outlive a restart of the service, still sealed, with their ids and their times", async () => {
+    await add();
+    const p = { from: "mac", source: "/Users/e/dev/.env", key: "CF_TOKEN" };
+    const q = { from: "mac", source: "/Users/e/dev/.env", key: "OPENAI_API_KEY" };
+    await svc.handle({
+      t: "propose",
+      items: [
+        { ...p, sealed: await sealProposal(p, V, store.recipient), merges: null },
+        { ...q, sealed: await sealProposal(q, "sk-other", store.recipient), merges: null, partial: true },
+      ],
+    });
+    const before = (await info(token)).proposals;
+    expect(before.map((x) => [x.key, x.same])).toEqual([["CF_TOKEN", "cf_token"], ["OPENAI_API_KEY", null]]);
+    expect(kept.map((k) => [k.id, k.p.key, k.expires])).toEqual(before.map((x) => [x.id, x.key, x.expires]));
+    expect(JSON.stringify(kept)).not.toContain("sk-other");
+    expect(JSON.stringify(kept)).not.toContain(V);
+
+    // the container comes back over the same volume
+    svc = service();
+    expect((await info(token)).proposals).toEqual([]);
+    await svc.restore();
+    expect((await info(token)).proposals).toEqual(before);
+    expect(logs.join("\n")).toContain("2 waiting proposals kept across the restart");
+
+    const openai = before.find((x) => x.key === "OPENAI_API_KEY");
+    await ok({ a: "approve", proposal: openai?.id ?? "", name: "openai_api_key", description: "", tags: [], value: null, sink: null });
+    expect(await ok({ a: "reveal", name: "openai_api_key" })).toMatchObject({ value: "sk-other" });
+    expect(kept.map((k) => k.p.key)).toEqual(["CF_TOKEN"]);
+    await ok({ a: "reject", proposal: before.find((x) => x.key === "CF_TOKEN")?.id ?? "" });
+    expect(kept).toEqual([]);
+  });
+
+  test("a restart leaves out what is past its time, what this key cannot open, and what the file garbled", async () => {
+    const other = await newIdentity();
+    const ref = (key: string) => ({ from: "mac", source: "/Users/e/dev/.env", key });
+    const sealed = (key: string, to = store.recipient) => sealProposal(ref(key), `value-of-${key}`, to);
+    kept = [
+      { id: "live1", p: { ...ref("A"), sealed: await sealed("A"), merges: null }, expires: t + 1000 },
+      { id: "old1", p: { ...ref("B"), sealed: await sealed("B"), merges: null }, expires: t - 1 },
+      { id: "foreign1", p: { ...ref("C"), sealed: await sealed("C", other.recipient), merges: null }, expires: t + 1000 },
+      { id: "far1", p: { ...ref("D"), sealed: "", merges: null }, expires: t + 10 * LIMITS.proposalTtlMs },
+      { id: "gone1", p: { ...ref("E"), sealed: await sealed("E"), merges: "no_such_secret" }, expires: t + 1000 },
+      { id: "live1", p: { ...ref("F"), sealed: await sealed("F"), merges: null }, expires: t + 1000 },
+    ];
+    keptDropped = 2;
+    svc = service();
+    await svc.restore();
+    // an expiry is never later than a new proposal's would be
+    expect((await info()).proposals.map((x) => [x.id, x.key, x.expires])).toEqual([
+      ["live1", "A", t + 1000],
+      ["far1", "D", t + LIMITS.proposalTtlMs],
+    ]);
+    expect(logs.join("\n")).toContain("2 waiting proposals kept across the restart, 1 past their time, 5 that could not be read left out");
+    // the file now holds what the service holds
+    expect(kept.map((k) => k.id)).toEqual(["live1", "far1"]);
+  });
+
+  test("a restart writes the file only when it left something out of it", async () => {
+    const p = { from: "mac", source: "/Users/e/dev/.env", key: "A" };
+    await svc.handle({ t: "propose", items: [{ ...p, sealed: await sealProposal(p, "1", store.recipient), merges: null }] });
+    expect(keptWrites).toBe(1);
+    svc = service();
+    await svc.restore();
+    expect((await info()).proposals.map((x) => x.key)).toEqual(["A"]);
+    expect(keptWrites).toBe(1);
+    // a file that could not be read at all is not written over by an empty list
+    kept = [];
+    keptDropped = 1;
+    svc = service();
+    await svc.restore();
+    expect(keptWrites).toBe(1);
+    expect(logs.join("\n")).toContain("0 waiting proposals kept across the restart, 1 that could not be read left out");
+  });
+
+  test("a proposal past its day leaves the file at the next tick; a write that fails is logged and tried again", async () => {
+    const p = { from: "mac", source: "/Users/e/dev/.env", key: "A" };
+    keptFails = true;
+    expect(await svc.handle({ t: "propose", items: [{ ...p, sealed: await sealProposal(p, "1", store.recipient), merges: null }] })).toEqual({ ok: true, data: { added: 1, dropped: 0 } });
+    expect((await info()).proposals.map((x) => x.key)).toEqual(["A"]);
+    expect(kept).toEqual([]);
+    expect(logs.join("\n")).toContain("the waiting proposals could not be kept for a restart: ENOSPC");
+    keptFails = false;
+    await svc.tick();
+    expect(kept.map((k) => k.p.key)).toEqual(["A"]);
+    t += LIMITS.proposalTtlMs + 1;
+    await svc.tick();
+    expect(kept).toEqual([]);
+  });
+
+  test("an approval whose commit fails leaves its proposal waiting", async () => {
+    const p = { from: "mac", source: "/Users/e/dev/.env", key: "A" };
+    await svc.handle({ t: "propose", items: [{ ...p, sealed: await sealProposal(p, "1", store.recipient), merges: null }] });
+    const id = (await info()).proposals[0]?.id ?? "";
+    const approve: SecretAct = { a: "approve", proposal: id, name: "a_key", description: "", tags: [], value: null, sink: null };
+    store.failNext = "the push key is gone";
+    expect(await act(approve)).toEqual({ ok: false, error: "the push key is gone" });
+    expect((await info()).proposals.map((x) => x.id)).toEqual([id]);
+    expect(kept.map((k) => k.id)).toEqual([id]);
+    await ok(approve);
+    expect((await info()).proposals).toEqual([]);
+    expect(await ok({ a: "reveal", name: "a_key" })).toMatchObject({ value: "1" });
   });
 
   test("at most 500 wait at once", async () => {

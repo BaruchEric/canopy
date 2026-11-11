@@ -18,6 +18,7 @@ import { askSecrets } from "../core/secretsclient";
 import { encodeLine, LIMITS, parseRequest, type SecretsReply, type SecretsRequest } from "../core/secretwire";
 import { Audit } from "./audit";
 import { Gate } from "./gate";
+import { readPending, writePending } from "./pending";
 import { SecretsService } from "./service";
 import { sshStacks, type StackRunner } from "./stacks";
 import { SecretStore, storePaths } from "./store";
@@ -154,9 +155,12 @@ async function main(): Promise<void> {
     sinkRoots: env.sinkRoots,
     applied: { read: () => readApplied(p.applied), write: (a) => writeApplied(p.applied, a) },
     scan: async () => (await scanFiles(await miniSources(env.stacks, env.extra))).found,
+    kept: { read: () => readPending(p.proposals), write: (list) => writePending(p.proposals, list) },
+    ownEnv: env.extra,
     stacks,
     log,
   });
+  await svc.restore();
   await svc.tick();
   await mkdir(dirname(env.socket), { recursive: true });
   await rm(env.socket, { force: true });

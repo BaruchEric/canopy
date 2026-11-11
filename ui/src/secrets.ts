@@ -115,8 +115,13 @@ export function restartLine(project: string, stacks: readonly SecretStack[] | un
   return p ? `docker compose -p ${project} ${p.files.map((f) => `-f ${f}`).join(" ")} up -d` : null;
 }
 
+/** what brings a value written to a backend's own settings file into the
+ *  running canopy: the store has no restart for canopy itself */
+export const OWN_RESTART = "bun run redeploy --restart";
+
 export interface ReachRow {
-  kind: "sink" | "server" | "stack";
+  /** `backend`: canopy itself, when a reached sink is its own settings file */
+  kind: "sink" | "server" | "stack" | "backend";
   name: string;
   machine: string;
   detail: string;
@@ -160,6 +165,10 @@ export function reachRows(meta: SecretMeta, rows: readonly SinkRow[], awaited: (
       const line = restartLine(st, stacks);
       return { kind: "stack", name: st, machine: "mini", detail: line ?? "not in the mini's list of running projects", state: null, ready: ready && line !== null };
     }),
+    // canopy reads its own settings only when its containers start, and nothing in the store restarts it
+    ...[...new Set(r.sinks.filter((s) => rows.find((x) => x.sink.id === s.id)?.sink.backendEnv).map((s) => s.machine))].map(
+      (machine): ReachRow => ({ kind: "backend", name: "canopy", machine, detail: OWN_RESTART, state: null }),
+    ),
   ];
 }
 

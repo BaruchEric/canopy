@@ -15,7 +15,7 @@ export interface Found {
   source: string;
   key: string;
   value: string | null;
-  /** its file has lines canopy cannot read, so the file cannot become a sink */
+  /** its file has lines canopy cannot read; a sink of it is a reader's alone, written around them */
   partial?: true;
 }
 

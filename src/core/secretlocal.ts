@@ -283,7 +283,8 @@ export class SecretsReader {
         state[id] = waitingState(sink);
         continue;
       }
-      state[id] = await syncSink(f, id, sink, this.ident, applied, this.io, await repoRefusal(sink.path, this.o.repoRoots()));
+      // a reader's files are kept by hand: a line canopy cannot read in one is carried, not a reason to stop
+      state[id] = await syncSink(f, id, sink, this.ident, applied, this.io, await repoRefusal(sink.path, this.o.repoRoots()), true);
     }
     const prunes = await this.passRemotes(f, applied, state);
     if (this.ident) await writeApplied(this.o.paths.applied, Object.fromEntries(Object.entries(applied).filter(([id]) => state[id])));
@@ -319,7 +320,7 @@ export class SecretsReader {
         continue;
       }
       this.remoteSeen.add(r.machine);
-      for (const [id, sink] of sinks) state[id] = await syncSink(f, id, sink, this.ident, applied, r.io, await r.refusal(sink.path));
+      for (const [id, sink] of sinks) state[id] = await syncSink(f, id, sink, this.ident, applied, r.io, await r.refusal(sink.path), true);
       const dir = `${probe.home.replace(/\/+$/, "")}/.claude/mcp-env`;
       prunes.push(async () => {
         const p = await r.prune(dir, mcpEnvKeep(f, r.machine, dir));
@@ -364,7 +365,7 @@ export class SecretsReader {
     const read = await this.io.read(sink.path);
     if ("error" in read) return read;
     if (read.text === null) return { error: `${sink.path} does not exist` };
-    const have = readKeys(read.text, sink.format, [key]);
+    const have = readKeys(read.text, sink.format, [key], true);
     if ("error" in have) return { error: `${sink.path}: ${have.error}` };
     const value = have.values[key];
     if (!value) return { error: `${sink.path} has no ${key}` };

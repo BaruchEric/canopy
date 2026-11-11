@@ -106,10 +106,12 @@ describe("bulkAct", () => {
       sink: { id: "canopy-deploy" },
     });
   });
-  test("a value from a file with unread lines is approved without a sink", () => {
-    const act = bulkAct(P({ source: "/Users/e/dev/.env", key: "OPENAI_API_KEY", suggested: "openai_api_key", sinkable: false, partial: true }));
-    expect(act?.sink).toBeNull();
-    expect(act?.tags).toEqual(["dev"]);
+  test("a notes file with unread lines is a sink where the writer says it can be: on a reader, never on the mini", () => {
+    const notes = { source: "/Users/e/dev/.env", key: "OPENAI_API_KEY", suggested: "openai_api_key", partial: true };
+    const onMac = bulkAct(P({ ...notes, from: "mac", sinkable: true }));
+    expect(onMac?.sink).toEqual({ id: "dev" });
+    expect(onMac?.tags).toEqual(["dev"]);
+    expect(bulkAct(P({ ...notes, sinkable: false }))?.sink).toBeNull();
   });
   test("a toml source is approved without a sink", () => {
     const act = bulkAct(P({ source: "/home/eric/.codex/config.toml", key: "mcp_servers.x.env.API_KEY", suggested: "x_api_key" }));

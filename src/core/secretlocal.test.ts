@@ -282,6 +282,44 @@ describe("the Mac's sinks", () => {
   });
 });
 
+describe("a notes file as the Mac's sink", () => {
+  test("a rotation is written on its own line, and the lines canopy cannot read stay as they were", async () => {
+    const r0 = await reader();
+    const made = await r0.createKey("correct horse battery", false);
+    if (!("recipient" in made)) throw new Error(made.error);
+    const mini = await newIdentity();
+    const seal = (v: string, stamp: string) => sealValue("openai_api_key", v, stamp, [mini.recipient, made.recipient]);
+    const f = emptyFile({ mini: mini.recipient, mac: made.recipient, breakglass: BREAKGLASS });
+    f.secrets["openai_api_key"] = { description: "", tags: [], created: STAMP, rotated: STAMP, to: ["breakglass", "mac", "mini"], allow: ["sink:dev"], value: await seal("sk-old", STAMP) };
+    const notes = join(dir, ".env");
+    f.sinks["dev"] = { machine: "mac", path: notes, format: "dotenv", keys: { OPENAI_API_KEY: "openai_api_key" } };
+    await publish(f, signer);
+    const text = (v: string) => `Github : gh-by-label\nOPENAI_API_KEY=${v}\nCloudflare Global API Key: 0123abcd\nme@example.com hunter2\n`;
+    await writeFile(notes, text("sk-old"));
+
+    const r = await reader();
+    expect(await r.unlock("correct horse battery")).toEqual({ ok: true });
+    // the value the store holds is the file's own: read around the notes, nothing written
+    expect(r.info("mac").sinks.find((s) => s.id === "dev")).toMatchObject({ state: { OPENAI_API_KEY: "same" }, error: null });
+    expect(await readFile(notes, "utf8")).toBe(text("sk-old"));
+
+    const later = "2026-10-15T12:00:00.000Z";
+    f.secrets["openai_api_key"] = { ...f.secrets["openai_api_key"], rotated: later, value: await seal("sk-new", later) };
+    await publish(f, signer, "rotate");
+    await r.pull();
+    expect(r.info("mac").sinks.find((s) => s.id === "dev")).toMatchObject({ state: { OPENAI_API_KEY: "same" }, error: null });
+    expect(await readFile(notes, "utf8")).toBe(text("sk-new"));
+
+    // a hand edit is drift, never written over, and its value can be taken
+    await writeFile(notes, text("sk-by-hand"));
+    await r.syncSinks();
+    expect(r.info("mac").sinks.find((s) => s.id === "dev")?.state).toEqual({ OPENAI_API_KEY: "drift" });
+    const taken = await r.take("dev", "OPENAI_API_KEY");
+    if ("error" in taken) throw new Error(taken.error);
+    expect(await openProposal(taken.sealed, mini.identity, taken)).toBe("sk-by-hand");
+  });
+});
+
 describe("sink passes", () => {
   test("overlapping passes run one after the other", async () => {
     const r0 = await reader();
