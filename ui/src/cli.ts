@@ -151,7 +151,7 @@ export type Command =
   | { kind: "help"; verb: string | null }
   | { kind: "clear" }
   /** `sprout` is `new`'s words, for the new project form to start from */
-  | { kind: "view"; view: "library" | "incubator" | "health" | "kit" | "secrets"; sprout: SproutDraft | null }
+  | { kind: "view"; view: "library" | "incubator" | "health" | "kit" | "plugins" | "secrets"; sprout: SproutDraft | null }
   /** the sweep sheet: what went idle, to pick from and close */
   | { kind: "sweep" }
   /** keep awake on the home backend: where it stands, or a new mode */
@@ -347,6 +347,8 @@ export function parseCommand(input: string[]): Parsed {
       return { kind: "view", view: "health", sprout: null };
     case "kit":
       return { kind: "view", view: "kit", sprout: null };
+    case "plugins":
+      return { kind: "view", view: "plugins", sprout: null };
     case "secrets":
       return { kind: "view", view: "secrets", sprout: null };
     case "new": {

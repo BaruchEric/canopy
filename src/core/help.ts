@@ -115,6 +115,11 @@ usage:
   canopy health rm <repo> <name>     take one of canopy's checks away
   canopy kit [status|apply]          the skills every agent has on every machine, and linking them
     --machine M | --dry-run          one machine only; apply says what it would do and changes nothing
+  canopy plugins [list] [--machine M] [--agent claude|codex]   every agent plugin on every machine, its state and MCP servers
+  canopy plugins install|uninstall|update|enable|disable <name@marketplace> --machine M [--agent claude|codex]
+                                     one plugin op through the agent's CLI there; --accept SHA256 runs a command the marketplace declares
+  canopy plugins search [words] --machine M [--agent claude|codex] [--limit N]   what that machine's marketplaces offer
+  canopy plugins marketplace add <source> | remove <name> | update <name> --machine M [--agent claude|codex]
   canopy mcp                         an MCP server on stdio for the agent that started it: canopy's tools with the rights of $CANOPY_TOKEN
   canopy mcp tools                   the tools that token holds, one per line
   canopy run <repo> <action> [-m note] [--times 1|2|3] [--profiles a,b,c] [--reviewers 2] [--auto-land] [--pr]   start one branch run or a group to compare

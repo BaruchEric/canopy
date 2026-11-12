@@ -1,13 +1,17 @@
 /** The kit's server side: scans, routes and the `kit` event
  *  (docs/superpowers/specs/2026-10-14-kit-design.md). */
+import { rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { onHost } from "../core/exec";
-import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, secretsOf, wantLink, withCanopyServer } from "../core/kit";
+import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, pluginAgentsOn, secretsOf, wantLink, withCanopyServer } from "../core/kit";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp, seeTools } from "../core/kitscan";
+import { catalogOf, isPluginAgent, isPluginOp, jsonOf, movedInstallPaths, opArgs, outcomeOf, PLUGIN_ID, refusal, searchCatalog } from "../core/plugins";
+import { CATALOG_TIMEOUT, OP_TIMEOUT, plain, runCli, seePlugins } from "../core/pluginscan";
 import type {
-  KitAction, KitApplyResult, KitInfo, KitInstallResult, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen, SecretsInfo, ServerEvent,
+  KitAction, KitApplyResult, KitInfo, KitInstallResult, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen,
+  PluginAgent, PluginCatalog, PluginCatalogEntry, PluginMachineSeen, PluginOpRequest, PluginOpResult, SecretsInfo, ServerEvent,
 } from "../core/types";
 
 export const KIT_EVERY = 10 * 60_000;
@@ -20,6 +24,9 @@ exec "$ls" -lc "$1" </dev/null 2>&1`;
 
 /** the last lines of an install's output */
 const tail = (text: string, n = 40): string => text.trimEnd().split("\n").slice(-n).join("\n");
+
+/** how long a machine's plugin catalog is kept before it is read again */
+export const CATALOG_TTL = 10 * 60_000;
 
 export const kitPath = (): string => process.env["CANOPY_KIT"] ?? join(homedir(), ".claude", "kit.json");
 
@@ -49,7 +56,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 
 interface Mine { name: string; host: string | null; dev: string }
 
-interface View { seen: KitSeen; dev: string; mcp: KitMcpSeen | null; ssh: boolean; mcpError: string | null }
+interface View { seen: KitSeen; dev: string; mcp: KitMcpSeen | null; ssh: boolean; mcpError: string | null; plugins: PluginMachineSeen | null }
 
 export class KitHub {
   private last: KitInfo = { ok: false, error: "not scanned yet", machines: [], cells: [] };
@@ -68,6 +75,8 @@ export class KitHub {
   /** counts scans begun, and per machine the one its view came from, so a scan that began before a write never lands after the write's rescan */
   private scans = 0;
   private scanOf = new Map<string, number>();
+  /** per machine and agent, the plugins its marketplaces offer, read on demand */
+  private catalogs = new Map<string, { at: number; entries: PluginCatalogEntry[] }>();
 
   constructor(private readonly deps: KitHubDeps) {}
 
@@ -161,13 +170,26 @@ export class KitHub {
       mcpError = err instanceof Error ? err.message : String(err);
       return null;
     });
+    const plugins = await this.seePluginsOf(kit, m, seen);
     // kit.json changed during the read (an apply's rescan racing a scan):
     // this read follows the old manifest, and the new one's scan paints it
     if (kit !== this.kit) return;
     if ((this.scanOf.get(m.name) ?? 0) > n) return;
     this.scanOf.set(m.name, n);
-    this.views.set(m.name, { seen, dev: m.dev, mcp, ssh: m.host !== null, mcpError });
+    this.views.set(m.name, { seen, dev: m.dev, mcp, ssh: m.host !== null, mcpError, plugins });
     await this.publish(kit);
+  }
+
+  /** a machine's plugins (FR-064), when kit.json lists agents for it; a
+   *  machine the skills scan found away reads away here too */
+  private async seePluginsOf(kit: KitManifest, m: Mine, seen: KitSeen): Promise<PluginMachineSeen | null> {
+    const agents = pluginAgentsOn(kit, m.name);
+    if (agents.length === 0) return null;
+    const commits = kit.machines.some((x) => x.name === m.name && x.commits === true);
+    const away = (why: string): PluginMachineSeen => ({ machine: m.name, at: seen.at, away: why, shared: false, settingsDirty: false, commits, agents: [] });
+    if (seen.away) return away(seen.away);
+    return seePlugins(m, agents, commits, { run: this.deps.run, env: this.deps.env, now: this.deps.now })
+      .catch((err: unknown) => away(err instanceof Error ? err.message : String(err)));
   }
 
   /** the store's metadata changed (a `secrets` event): plans and cells
@@ -218,7 +240,8 @@ export class KitHub {
       machines.push({ machine: v.seen.machine, seen: v.seen, plan: planKit(kit, v.seen, v.dev, ctx), home: this.homeOf(v) });
       cellViews.push({ seen: v.seen, dev: v.dev, ctx, mcpError: v.mcpError });
     }
-    this.last = { ok: true, error: null, machines, cells: cellsOf(kit, cellViews), mcp: this.mcpViews(kit) };
+    const plugins = vs.flatMap((v) => (v.plugins ? [v.plugins] : []));
+    this.last = { ok: true, error: null, machines, cells: cellsOf(kit, cellViews), mcp: this.mcpViews(kit), ...((kit.plugins ?? []).length > 0 ? { plugins } : {}) };
     this.deps.broadcast({ type: "kit", kit: this.last });
   }
 
@@ -351,6 +374,88 @@ export class KitHub {
     });
   }
 
+  /** the machines kit.json marks as where dotclaude is committed */
+  private committers(kit: KitManifest): string[] {
+    return kit.machines.filter((m) => m.commits === true).map((m) => m.name);
+  }
+
+  /** a machine's plugins and the agent's CLI there, or why an op cannot run */
+  private pluginsOf(machine: string, agent: PluginAgent): { kit: KitManifest; m: Mine; ps: PluginMachineSeen; path: string } {
+    const { kit, m } = this.reach(machine);
+    const ps = this.views.get(machine)?.plugins;
+    if (!ps) throw new KitError(`the kit reads no plugins on ${machine}; kit.json's plugins names the agents`, 409);
+    const path = ps.agents.find((a) => a.agent === agent)?.path;
+    if (ps.away) throw new KitError(`${machine} is away: ${ps.away}`, 409);
+    if (!path) throw new KitError(`${agent} is not installed on ${machine}, or the kit does not read its plugins there`, 409);
+    return { kit, m, ps, path };
+  }
+
+  /** Install, remove, update, turn on or off a plugin, or add, remove or
+   *  update a marketplace, through the agent's own CLI on that machine.
+   *  Refused on a machine reading dotclaude's shared settings.json when
+   *  the op would edit it there (refusal in core/plugins.ts). One at a
+   *  time per machine, then a rescan of that machine. */
+  pluginOp(req: PluginOpRequest): Promise<PluginOpResult> {
+    return this.serial(req.machine, async () => {
+      const { kit, m, ps, path } = this.pluginsOf(req.machine, req.agent);
+      const args = opArgs(req);
+      if ("error" in args) throw new KitError(args.error, 400);
+      const why = refusal(ps, req, this.committers(kit));
+      if (why) throw new KitError(why, 409);
+      const r = await runCli(m.host, path, args, { run: this.deps.run, env: this.deps.env, timeoutMs: OP_TIMEOUT });
+      const out = outcomeOf(req.agent, r.code, r.stdout, r.stderr);
+      if (out.outcome === "ok" && req.agent === "claude" && (req.op === "install" || req.op === "update") && m.host === null) await this.moveInstallPaths();
+      for (const k of this.catalogs.keys()) if (k.startsWith(`${req.machine}/`)) this.catalogs.delete(k);
+      const now = this.kit ?? kit;
+      await this.scanOne(now, this.mine(now).find((x) => x.name === req.machine) ?? m);
+      return { machine: req.machine, agent: req.agent, op: req.op, ...out };
+    });
+  }
+
+  /** On the mini canopy runs claude as /home/bun, so an install records a
+   *  path the host's own claude cannot find; the host's home is mounted at
+   *  its own path in canopy's containers, so the host path holds in both.
+   *  Only this backend's own machine, and only when the two homes differ. */
+  private async moveInstallPaths(): Promise<void> {
+    const host = this.deps.hostHome;
+    const mine = this.deps.env?.["HOME"] ?? homedir();
+    if (!host || host === mine) return;
+    const file = join(mine, ".claude", "plugins", "installed_plugins.json");
+    const text = await Bun.file(file).text().catch(() => null);
+    const next = text === null ? null : movedInstallPaths(text, join(mine, ".claude"), join(host, ".claude"));
+    if (next === null) return;
+    const tmp = `${file}.canopy-${process.pid}`;
+    await writeFile(tmp, next, { mode: 0o600 });
+    await rename(tmp, file);
+  }
+
+  /** what an agent's marketplaces offer on a machine, searched; read once
+   *  per CATALOG_TTL (it runs to megabytes), `fresh` reads it again */
+  async catalog(machine: string, agent: PluginAgent, q: string, limit: number, fresh = false): Promise<PluginCatalog> {
+    const { m, path } = this.pluginsOf(machine, agent);
+    const key = `${machine}/${agent}`;
+    const now = (this.deps.now ?? Date.now)();
+    let hit = this.catalogs.get(key);
+    if (!hit || fresh || now - hit.at > CATALOG_TTL) {
+      const r = await runCli(m.host, path, ["plugin", "list", "--json", "--available"], { run: this.deps.run, env: this.deps.env, timeoutMs: CATALOG_TIMEOUT });
+      if (r.code !== 0) throw new KitError(`${agent} plugin list on ${machine}: ${(r.stderr.trim().split("\n")[0] ?? "") || `exited ${r.code}`}`, 502);
+      hit = { at: now, entries: catalogOf(agent, jsonOf(r.stdout)) };
+      this.catalogs.set(key, hit);
+    }
+    return { machine, agent, ...searchCatalog(hit.entries, q, limit) };
+  }
+
+  /** claude's own account of a plugin: what it holds and what it costs a session */
+  async details(machine: string, agent: PluginAgent, id: string): Promise<{ text: string }> {
+    if (agent !== "claude") throw new KitError(`${agent} has no plugin details command`, 400);
+    if (!PLUGIN_ID.test(id)) throw new KitError("a plugin is named name@marketplace", 400);
+    const { m, path } = this.pluginsOf(machine, agent);
+    const r = await runCli(m.host, path, ["plugin", "details", id], { run: this.deps.run, env: this.deps.env, timeoutMs: 60_000 });
+    const text = plain(r.stdout).trimEnd();
+    if (!text) throw new KitError(plain(r.stderr).trim().split("\n")[0] || `claude plugin details exited ${r.code}`, 502);
+    return { text };
+  }
+
   /** what adopt would change, both sides masked */
   preview(machine: string, agent: string, name: string): KitMcpPreview {
     this.reach(machine);
@@ -386,6 +491,26 @@ export class KitHub {
         const body = (await req.json().catch(() => ({}))) as { machine?: unknown; tool?: unknown; line?: unknown };
         if (typeof body.machine !== "string" || typeof body.tool !== "string" || typeof body.line !== "string") return json({ error: "machine, tool and line are required" }, 400);
         return json(await this.install(body.machine, body.tool, body.line));
+      }
+      if (path === "/api/kit/plugins" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+        const { machine, agent, op } = body;
+        if (typeof machine !== "string" || !isPluginAgent(agent) || !isPluginOp(op)) return json({ error: "machine, agent (claude or codex) and op are required" }, 400);
+        const opt = (k: string): string | undefined => (typeof body[k] === "string" ? body[k] : undefined);
+        const id = opt("id");
+        const source = opt("source");
+        const name = opt("name");
+        const accept = opt("accept");
+        return json(await this.pluginOp({ machine, agent, op, ...(id ? { id } : {}), ...(source ? { source } : {}), ...(name ? { name } : {}), ...(accept ? { accept } : {}) }));
+      }
+      if ((path === "/api/kit/plugins/catalog" || path === "/api/kit/plugins/details") && req.method === "GET") {
+        const q = url.searchParams;
+        const agent = q.get("agent");
+        const machine = q.get("machine");
+        if (!machine || !isPluginAgent(agent)) return json({ error: "machine and agent (claude or codex) are required" }, 400);
+        if (path === "/api/kit/plugins/details") return json(await this.details(machine, agent, q.get("id") ?? ""));
+        const limit = Math.min(200, Math.max(1, Number(q.get("limit") ?? "50") || 50));
+        return json(await this.catalog(machine, agent, q.get("q") ?? "", limit, q.get("fresh") === "1"));
       }
       if ((path === "/api/kit/adopt" || path === "/api/kit/restore") && req.method === "POST") {
         const body = (await req.json().catch(() => ({}))) as { machine?: unknown; agent?: unknown; name?: unknown; names?: unknown };

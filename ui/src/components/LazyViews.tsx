@@ -12,6 +12,7 @@ const LOADS = {
   sessions: () => import("./Sessions"),
   secrets: () => import("./Secrets"),
   kit: () => import("./Kit"),
+  plugins: () => import("./Plugins"),
   costs: () => import("./Costs"),
   triggers: () => import("./Triggers"),
   clock: () => import("./Clock"),
@@ -49,6 +50,7 @@ function view<M, P extends object>(load: () => Promise<M>, pick: (m: M) => (prop
 export const SessionsView = view(LOADS.sessions, (m) => m.SessionsView);
 export const SecretsView = view(LOADS.secrets, (m) => m.SecretsView);
 export const KitView = view(LOADS.kit, (m) => m.KitView);
+export const PluginsView = view(LOADS.plugins, (m) => m.PluginsView);
 export const CostsView = view(LOADS.costs, (m) => m.CostsView);
 export const TriggersView = view(LOADS.triggers, (m) => m.TriggersView);
 export const ClockView = view(LOADS.clock, (m) => m.ClockView);

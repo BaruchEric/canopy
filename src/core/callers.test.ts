@@ -144,6 +144,10 @@ describe("needs", () => {
     expect(needs("GET", "/api/awake")).toBe("read");
     expect(needs("DELETE", "/api/sources")).toBe("admin");
     expect(needs("POST", "/api/kit/install")).toBe("admin");
+    // a plugin op runs the agent's CLI and can start a marketplace's command; a catalog read runs it too
+    expect(needs("POST", "/api/kit/plugins")).toBe("admin");
+    expect(needs("GET", "/api/kit/plugins/catalog")).toBe("operate");
+    expect(needs("GET", "/api/kit/plugins/details")).toBe("operate");
     expect(needs("POST", "/api/secrets/set")).toBe("admin");
     expect(needs("POST", "/api/ranger/restart")).toBe("admin");
     expect(needs("PUT", "/api/guards")).toBe("admin");

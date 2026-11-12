@@ -21,6 +21,10 @@ import type {
   PrWatch,
   KitInstallResult,
   KitMcpPreview,
+  PluginAgent,
+  PluginCatalog,
+  PluginOpRequest,
+  PluginOpResult,
   HealthInfo,
   CapacityInfo,
   SecretAuditEntry,
@@ -733,6 +737,15 @@ export const api = {
   /** what adopt would change, both sides masked */
   kitPreview: (b: string, machine: string, agent: string, name: string) =>
     req<KitMcpPreview>(b, `/api/kit/preview?${new URLSearchParams({ machine, agent, name }).toString()}`),
+  /** one plugin or marketplace op through the agent's CLI on that machine (FR-064) */
+  kitPluginOp: (b: string, op: PluginOpRequest) =>
+    req<PluginOpResult>(b, "/api/kit/plugins", { method: "POST", body: JSON.stringify(op) }),
+  /** what that machine's marketplaces offer, searched on the backend */
+  kitPluginCatalog: (b: string, machine: string, agent: PluginAgent, q: string, limit: number, fresh = false) =>
+    req<PluginCatalog>(b, `/api/kit/plugins/catalog?${new URLSearchParams({ machine, agent, q, limit: String(limit), ...(fresh ? { fresh: "1" } : {}) }).toString()}`),
+  /** claude's own account of an installed plugin */
+  kitPluginDetails: (b: string, machine: string, agent: PluginAgent, id: string) =>
+    req<{ text: string }>(b, `/api/kit/plugins/details?${new URLSearchParams({ machine, agent, id }).toString()}`),
   /** heal one check now, by its plain id on that backend */
   healCheck: async (b: string, id: string) => from(b, await req<HealthCheck>(b, `/api/health/heal?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }), qCheck),
   /* the secret store (server/secrets.ts); no answer here ever holds a value

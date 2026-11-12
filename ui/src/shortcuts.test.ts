@@ -66,6 +66,7 @@ test("the ring's keys work on git and triggers and nowhere else", () => {
   // J is not j, and g then k is still the kit's chord
   expect(shortcutFor("J", "git")).toBeNull();
   expect(chordView("k")).toBe("kit");
+  expect(chordView("e")).toBe("plugins");
 });
 
 test("keyCaps shows mod as ⌘ on Apple and Ctrl elsewhere", () => {

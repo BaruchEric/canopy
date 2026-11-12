@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildEntry, cellsOf, expandHome, hasSecrets, installLine, maskEntry, mcpCells, mcpDefOf, mcpHash, needsSudo, parseKit, parseMcpValue, planKit, planMcp, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, toolCells, wanted, withCanopyServer } from "./kit";
+import { buildEntry, cellsOf, expandHome, hasSecrets, installLine, maskEntry, mcpCells, mcpDefOf, mcpHash, needsSudo, parseKit, parseMcpValue, planKit, planMcp, pluginAgentsOn, relPath, sameEntry, secretsOf, skillNames, sourcePath, targetsFor, toolCells, wanted, withCanopyServer } from "./kit";
 import { codexTable } from "./kitmcp";
 import { parseMcpScan } from "./kitscan";
 import type { KitAction, KitCell, KitManifest, KitMcpCtx, KitMcpOwned, KitSeen, KitSeenTarget, SecretKeyState, SecretsInfo } from "./types";
@@ -83,6 +83,19 @@ describe("parseKit", () => {
     expect("errors" in parseKit({ ...RAW, machines: { gpd: { ssh: "gpd" } } })).toBe(true);
     expect(parseKit(null)).toEqual({ errors: ["kit.json is not an object"] });
     expect(parseKit({ ...RAW, version: 2 })).toEqual({ errors: ["version: only 1 is known"] });
+  });
+  test("plugins names agents with a target, and their machines follow the target; commits marks where dotclaude is committed (FR-064)", () => {
+    const r = parseKit({ ...RAW, machines: { ...RAW.machines, mac: { backend: "mac", commits: true } }, plugins: ["claude", "codex", "claude"] });
+    if ("errors" in r) throw new Error(r.errors.join("; "));
+    expect(r.kit.plugins).toEqual(["claude", "codex"]);
+    expect(r.kit.machines[0]).toEqual({ name: "mac", backend: "mac", ssh: null, via: null, dev: null, commits: true });
+    expect(pluginAgentsOn(r.kit, "gpd")).toEqual(["claude", "codex"]);
+    expect(kit().plugins).toEqual([]);
+    expect(parseKit({ ...RAW, plugins: ["hermes"] })).toEqual({ errors: ["plugins: hermes has no plugin CLI the kit knows; claude or codex"] });
+    expect(parseKit({ ...RAW, plugins: "claude" })).toEqual({ errors: ["plugins: a list of agents, claude or codex"] });
+    expect(parseKit({ ...RAW, machines: { mac: { backend: "mac", commits: "yes" } } })).toEqual({ errors: ["machines.mac.commits: true or false"] });
+    const onlyClaude = { ...RAW, targets: [RAW.targets[0]], plugins: ["codex"] };
+    expect(parseKit(onlyClaude)).toEqual({ errors: ["plugins: codex has no target, so no machine to read its plugins on"] });
   });
 });
 

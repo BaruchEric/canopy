@@ -93,6 +93,7 @@ describe("parseCommand", () => {
     expect(parse("library doctor")).toEqual({ kind: "view", view: "library", sprout: null });
     expect(parse("health")).toEqual({ kind: "view", view: "health", sprout: null });
     expect(parse("kit")).toEqual({ kind: "view", view: "kit", sprout: null });
+    expect(parse("plugins")).toEqual({ kind: "view", view: "plugins", sprout: null });
     expect(parse("secrets")).toEqual({ kind: "view", view: "secrets", sprout: null });
     expect(parse("sweep")).toEqual({ kind: "sweep" });
     expect(parse("sweep --yes --kind shell")).toEqual({ kind: "sweep" });

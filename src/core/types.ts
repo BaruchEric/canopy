@@ -3904,6 +3904,10 @@ export interface KitMachine {
   via: string | null;
   /** an ssh machine's dev root; a backend's own is its scan root */
   dev: string | null;
+  /** dotclaude is committed on this machine, so a change to the shared
+   *  settings.json (a plugin enabled, disabled, installed or removed) is
+   *  made here and reaches the others by pull */
+  commits?: boolean;
 }
 
 export interface KitTarget {
@@ -3933,6 +3937,9 @@ export interface KitManifest {
   mcp: KitMcpServer[];
   /** the tools each machine should have (phase 3), in manifest order */
   tools: KitTool[];
+  /** the agents whose plugins the kit lists and manages, on the machines
+   *  their target names (FR-064); empty: no plugin scan */
+  plugins?: PluginAgent[];
 }
 
 /** the operating systems an install line can be for: `darwin`, or an
@@ -4100,6 +4107,109 @@ export interface KitInfo {
   cells: KitCell[];
   /** the servers with secrets, for the allow sheet (phase 2) */
   mcp?: KitMcpView[];
+  /** each machine's agent plugins, when kit.json lists `plugins` (FR-064) */
+  plugins?: PluginMachineSeen[];
+}
+
+/* ---------- agent plugins (docs/superpowers/specs/2026-11-11-kit-plugins-design.md) ---------- */
+
+/** an agent whose plugins the kit manages through the agent's own CLI */
+export type PluginAgent = "claude" | "codex";
+
+/** one installed plugin as its agent's CLI lists it on one machine */
+export interface PluginSeen {
+  /** `name@marketplace` */
+  id: string;
+  version: string | null;
+  enabled: boolean;
+  /** claude's scope (user, project, local, managed); null for codex */
+  scope: string | null;
+  /** the MCP servers it brings: name → what runs, a command line or a url, as the plugin writes it */
+  servers: Record<string, string>;
+  errors: string[];
+  notes: string[];
+}
+
+export interface PluginMarketSeen {
+  name: string;
+  /** owner/repo, a git or https url, or a path; "" when the CLI names none */
+  source: string;
+}
+
+export interface PluginAgentSeen {
+  agent: PluginAgent;
+  /** the CLI's absolute path there; null: not found */
+  path: string | null;
+  /** why the list could not be read; null when it was */
+  error: string | null;
+  plugins: PluginSeen[];
+  markets: PluginMarketSeen[];
+  /** claude: settings.json's enabledPlugins. A plugin true here and not
+   *  installed reads wanted: on a machine sharing dotclaude's settings,
+   *  another machine enabled it. Empty for codex. */
+  declared: Record<string, boolean>;
+  /** claude: settings.json's extraKnownMarketplaces, name → source */
+  declaredMarkets: Record<string, string>;
+}
+
+export interface PluginMachineSeen {
+  machine: string;
+  at: number;
+  /** why the plugin scan failed there */
+  away: string | null;
+  /** ~/.claude/settings.json is dotclaude's checked-out file here, so the
+   *  enabled plugins it lists are every such machine's */
+  shared: boolean;
+  /** settings.json holds changes git has not committed */
+  settingsDirty: boolean;
+  /** kit.json names this machine as the one dotclaude is committed on */
+  commits: boolean;
+  agents: PluginAgentSeen[];
+}
+
+export type PluginOp = "install" | "uninstall" | "update" | "enable" | "disable" | "market-add" | "market-remove" | "market-update";
+
+export interface PluginOpRequest {
+  machine: string;
+  agent: PluginAgent;
+  op: PluginOp;
+  /** a plugin's `name@marketplace`, for the plugin ops */
+  id?: string;
+  /** market-add's source */
+  source?: string;
+  /** market-remove's and market-update's marketplace */
+  name?: string;
+  /** the sha256 of a marketplace-declared command a person was shown */
+  accept?: string;
+}
+
+/** what an op came to, in the CLI's own words. `confirm`: the marketplace
+ *  declares a command the CLI runs only once a person has seen it, so the
+ *  page shows it and sends the op again with accept = its sha256. */
+export type PluginOutcome =
+  | { outcome: "ok"; message: string }
+  | { outcome: "failed"; message: string }
+  | { outcome: "confirm"; message: string; command: string; sha256: string };
+
+export type PluginOpResult = { machine: string; agent: PluginAgent; op: PluginOp } & PluginOutcome;
+
+export interface PluginCatalogEntry {
+  id: string;
+  name: string;
+  marketplace: string;
+  description: string;
+  version: string | null;
+  /** claude's install count; null where the CLI gives none */
+  installs: number | null;
+  installed: boolean;
+}
+
+export interface PluginCatalog {
+  machine: string;
+  agent: PluginAgent;
+  /** how many entries matched, before the limit */
+  total: number;
+  entries: PluginCatalogEntry[];
 }
 
 export interface KitApplyResult {

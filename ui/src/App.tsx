@@ -1,5 +1,5 @@
 import { HealthView } from "./components/Health";
-import { AgentsView, ClockView, CostsView, IncubatorView, KitView, Library, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
+import { AgentsView, ClockView, CostsView, IncubatorView, KitView, Library, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Wordmark } from "./components/TopBar";
@@ -74,6 +74,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
       { key: "clock", label: "clock", what: "Everything that runs by the clock, on one axis: the rangers' wakes, schedule rules, issue polls, the sweep and reminders" },
       { key: "work", label: "work", what: "Every piece of branch work: where it stands, what served it, and the lines the hubs and agents left for the next hand" },
       { key: "kit", label: "kit", what: "The skills every agent has on every machine" },
+      { key: "plugins", label: "plugins", what: "Every agent plugin on every machine and the MCP servers it brings: add, update, turn on or off, remove, and the marketplaces" },
     ],
   },
   {
@@ -89,7 +90,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets"];
 
 /** A view tab's live count, or null where its view has nothing waiting. */
 function badgeOf(s: CanopyState, key: string): Badge | null {
@@ -720,6 +721,8 @@ export function App() {
         <WorkView />
       ) : view === "kit" ? (
         <KitView />
+      ) : view === "plugins" ? (
+        <PluginsView />
       ) : view === "secrets" ? (
         <SecretsView />
       ) : (

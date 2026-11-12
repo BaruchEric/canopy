@@ -3,7 +3,7 @@
  *  Browser-safe: no node imports. */
 import type {
   KitAction, KitCell, KitCellState, KitMachine, KitManifest, KitMcpAction, KitMcpCtx, KitMcpDef, KitMcpEntry, KitMcpFormat, KitMcpOption,
-  KitMcpServer, KitMcpTarget, KitMcpValue, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget, KitTool, KitToolOs, SecretsInfo,
+  KitMcpServer, KitMcpTarget, KitMcpValue, KitMode, KitRule, KitSeen, KitSeenTarget, KitTarget, KitTool, KitToolOs, PluginAgent, SecretsInfo,
 } from "./types";
 import { canonical, DOTENV_KEY, HEADER_NAME, MCP_SERVER, MCP_SERVER_SRC, mcpSinkId, parseMcpAllow, SECRET_NAME, SINK_ID } from "./secretfile";
 
@@ -135,6 +135,24 @@ function parseTools(raw: unknown, errors: string[]): KitTool[] {
   return out;
 }
 
+const PLUGIN_AGENTS: readonly PluginAgent[] = ["claude", "codex"];
+
+/** `plugins`: the agents whose plugins the kit manages (FR-064). Each needs
+ *  a target, which names the machines its plugins are read on. */
+function parsePluginAgents(v: unknown, targets: KitTarget[], errors: string[]): PluginAgent[] {
+  if (v === undefined) return [];
+  const list = strs(v);
+  if (!list) { errors.push("plugins: a list of agents, claude or codex"); return []; }
+  const out: PluginAgent[] = [];
+  for (const a of list) {
+    const agent = PLUGIN_AGENTS.find((x) => x === a);
+    if (!agent) errors.push(`plugins: ${a} has no plugin CLI the kit knows; claude or codex`);
+    else if (!targets.some((t) => t.agent === agent)) errors.push(`plugins: ${a} has no target, so no machine to read its plugins on`);
+    else if (!out.includes(agent)) out.push(agent);
+  }
+  return out;
+}
+
 export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[] } {
   if (!isObj(raw)) return { errors: ["kit.json is not an object"] };
   if (raw["version"] !== 1) return { errors: ["version: only 1 is known"] };
@@ -150,7 +168,8 @@ export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[
     const dev = str(m["dev"]);
     if (!backend && !ssh) errors.push(`machines.${name}: needs backend or ssh`);
     if (ssh && (!via || !dev)) errors.push(`machines.${name}: an ssh machine needs via and dev`);
-    machines.push({ name, backend, ssh, via, dev });
+    if (m["commits"] !== undefined && typeof m["commits"] !== "boolean") errors.push(`machines.${name}.commits: true or false`);
+    machines.push({ name, backend, ssh, via, dev, ...(m["commits"] === true ? { commits: true } : {}) });
   }
 
   const targets: KitTarget[] = [];
@@ -204,9 +223,10 @@ export function parseKit(raw: unknown): { kit: KitManifest } | { errors: string[
     if (server) mcp.push(server);
   }
   const tools = parseTools(raw["tools"], errors);
+  const plugins = parsePluginAgents(raw["plugins"], targets, errors);
   if (errors.length) return { errors };
   return {
-    kit: { machines, targets, default: rule(rawSkills["default"], all), only, exclude: strs(rawSkills["exclude"]) ?? [], mcp, tools },
+    kit: { machines, targets, default: rule(rawSkills["default"], all), only, exclude: strs(rawSkills["exclude"]) ?? [], mcp, tools, plugins },
   };
 }
 
@@ -396,6 +416,11 @@ export const isMcpAction = (a: KitAction): a is KitMcpAction => a.kind.startsWit
 
 export const mcpTargets = (kit: KitManifest, machine: string): (KitTarget & { mcp: KitMcpTarget })[] =>
   targetsFor(kit, machine).filter((t): t is KitTarget & { mcp: KitMcpTarget } => t.mcp !== null);
+
+/** the agents whose plugins are read on a machine: those kit.json lists
+ *  under `plugins` whose target is on that machine */
+export const pluginAgentsOn = (kit: KitManifest, machine: string): PluginAgent[] =>
+  (kit.plugins ?? []).filter((a) => targetsFor(kit, machine).some((t) => t.agent === a));
 
 export const mcpWanted = (s: KitMcpServer, agent: string, machine: string): boolean =>
   (s.agents === null || s.agents.includes(agent)) && (s.machines === null || s.machines.includes(machine));

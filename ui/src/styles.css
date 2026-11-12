@@ -17488,3 +17488,26 @@ button.clock-job + .clock-lane {
     inset: -2px -8px;
   }
 }
+
+/* the plugins view: a plugin × machine × agent matrix (components/Plugins.tsx, FR-064) */
+.plugins-grid tbody th { max-width: 22rem; }
+.plugin-name { font-family: var(--mono); text-align: left; overflow-wrap: anywhere; white-space: normal; }
+.plugin-servers { display: block; color: var(--ink-faint); font-size: var(--t-sm); white-space: normal; overflow-wrap: anywhere; }
+.plugin-on { color: var(--moss); }
+.plugin-off, .plugin-none, .plugin-noagent { color: var(--ink-faint); }
+.plugin-legend { margin: 0; }
+.plugin-glyph { min-width: 1em; text-align: center; }
+.plugin-where, .plugin-catalog, .plugin-markets ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.plugin-where > li, .plugin-catalog > li { padding: 6px 0; border-bottom: 1px solid var(--bark2); min-width: 0; }
+.plugin-where p, .plugin-catalog p { margin: 2px 0 0; overflow-wrap: anywhere; }
+.plugin-catalog { max-height: 40vh; overflow: auto; }
+.plugin-markets h5 { margin: 8px 0 4px; font-size: var(--t-md); }
+.plugin-markets code { overflow-wrap: anywhere; }
+.plugin-server { display: contents; }
+.plugin-details summary { cursor: pointer; color: var(--ink-dim); font-size: var(--t-md); }
+.plugin-pending { border-top-color: var(--rust); }
+/* a long away reason (an ssh error with a path) wraps instead of widening a phone's page */
+/* an open sheet on a phone leaves a few rows of the matrix in view */
+.plugins-view .kit-scroll { min-height: 9rem; }
+.plugins-view .kit-machine { min-width: 0; }
+.plugins-view .kit-machine > span { min-width: 0; overflow-wrap: anywhere; }

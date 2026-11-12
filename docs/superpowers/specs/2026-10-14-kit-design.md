@@ -240,6 +240,7 @@ CLI: `canopy kit status [--machine m]`, `canopy kit apply [--machine m]
   config holding a key off its allowlist, and stages read user settings only;
   the kit does not write either.
 - Claude plugins: listed in the view (from `settings.json`), not managed.
+  (Managed since 2026-11-11, FR-064: `2026-11-11-kit-plugins-design.md`.)
 - Agents inside other containers than OpenClaw's, until one is named.
 
 ## Errors

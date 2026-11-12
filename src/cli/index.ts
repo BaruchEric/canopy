@@ -54,6 +54,7 @@ import { healthCommand } from "./health";
 import { costsCommand } from "./costs";
 import { capacityCommand } from "./capacity";
 import { kitCommand } from "./kit";
+import { pluginsCommand } from "./plugins";
 import { mcpCommand } from "./mcp";
 import { apiBase, callerHeaders, helperTokenFile, setHomeBase, setTokenFlag } from "./api";
 import { authCommand, pairFlow, pairLabel, readHelperToken, saveToken } from "./auth";
@@ -131,6 +132,7 @@ export const COMMANDS = new Set([
   "costs",
   "capacity",
   "kit",
+  "plugins",
   "mcp",
   "land",
   "worktrees",
@@ -927,6 +929,8 @@ export async function main(argv: string[]): Promise<void> {
       return capacityCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
+    case "plugins":
+      return pluginsCommand(args, { fail });
     case "mcp":
       return mcpCommand(args, { fail });
     case "auth":
