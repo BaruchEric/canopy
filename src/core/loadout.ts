@@ -1,7 +1,17 @@
 // Loadouts (FR-065): the `loadoutBase` and `loadouts` blocks of kit.json,
 // parsed and checked against the kit's servers. Pure and browser-safe.
 import { takesEffort, takesModel } from "./harness";
-import { isHarness, type Harness, type KitManifest, type Loadout, type LoadoutsInfo } from "./types";
+import {
+  isHarness,
+  type AgentSettings,
+  type Harness,
+  type KitManifest,
+  type KitMcpEntry,
+  type Loadout,
+  type LoadoutsInfo,
+  type Mention,
+  type RunEquip,
+} from "./types";
 
 export const LOADOUT_NAME = /^[a-z0-9][a-z0-9-]{0,39}$/;
 const SKILL_KEY = /^[A-Za-z0-9][\w.-]*(:[A-Za-z0-9][\w.-]*)?$/;
@@ -130,4 +140,88 @@ export function parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsIn
     }
   }
   return { base, loadouts, errors };
+}
+
+/** What a loadout start needs from the route and the machine. */
+export interface LoadoutStartPlan {
+  /** the route's settings with harness, model and effort replaced */
+  agent: AgentSettings;
+  /** empty for a codex loadout */
+  overrides: Record<string, "on" | "off">;
+  /** each loadout server's entry, by name */
+  servers: Record<string, KitMcpEntry>;
+  canopyTools: boolean;
+  equip: RunEquip;
+}
+
+/** The `skillOverrides` for a run: the loadout's skills on, every other user
+ *  and plugin skill off, except those the base covers. A repo's own skill is
+ *  left alone, and so is any user skill that shares its name. */
+export function skillOverridesFor(
+  loadout: Pick<Loadout, "skills">,
+  base: readonly string[],
+  skills: readonly Mention[],
+): { overrides: Record<string, "on" | "off">; off: number } {
+  const repo = new Set(skills.filter((s) => s.kind === "skill" && s.harness === "claude" && s.from === "project").map((s) => s.name));
+  const names = new Set<string>();
+  for (const s of skills) {
+    if (s.kind !== "skill" || s.harness !== "claude") continue;
+    if (s.from !== "user" && !s.from.startsWith("plugin:")) continue;
+    if (!repo.has(s.name)) names.add(s.name);
+  }
+  const overrides: Record<string, "on" | "off"> = {};
+  let off = 0;
+  for (const name of [...names].sort()) {
+    if (loadout.skills.includes(name)) overrides[name] = "on";
+    else if (!baseCovers(base, name)) {
+      overrides[name] = "off";
+      off++;
+    }
+  }
+  return { overrides, off };
+}
+
+/** Plan a run's start from a loadout, or say why it cannot start. */
+export function planLoadoutStart(o: {
+  name: string;
+  info: LoadoutsInfo;
+  agent: AgentSettings;
+  skills: readonly Mention[];
+  /** the kit's own name for this machine, for the refusal */
+  machine: string;
+  entryOf: (server: string) => { entry: KitMcpEntry } | { why: string };
+}): LoadoutStartPlan | { refused: string } {
+  const loadout = o.info.loadouts.find((l) => l.name === o.name);
+  if (!loadout) {
+    const have = o.info.loadouts.length > 0 ? o.info.loadouts.map((l) => l.name).join(", ") : "none";
+    const err = o.info.errors[0];
+    return { refused: `no loadout named ${o.name}; kit.json has ${have}${err ? ` (${err})` : ""}` };
+  }
+  for (const s of loadout.skills) {
+    if (!o.skills.some((k) => k.name === s)) return { refused: `loadout ${loadout.name} names ${s}, which ${o.machine} does not have` };
+  }
+  const servers: Record<string, KitMcpEntry> = {};
+  for (const name of loadout.mcp) {
+    const got = o.entryOf(name);
+    if ("why" in got) return { refused: `loadout ${loadout.name}: ${got.why}` };
+    servers[name] = got.entry;
+  }
+  const codex = loadout.harness === "codex";
+  const { provider: _provider, ...rest } = o.agent;
+  const kept = loadout.harness === o.agent.harness ? o.agent : { ...rest, extra: "" };
+  const agent: AgentSettings = { ...kept, harness: loadout.harness, model: loadout.model, effort: loadout.effort };
+  const { overrides, off } = codex ? { overrides: {}, off: 0 } : skillOverridesFor(loadout, o.info.base, o.skills);
+  return {
+    agent,
+    overrides,
+    servers: codex ? {} : servers,
+    canopyTools: loadout.canopyTools,
+    equip: { loadout: loadout.name, model: loadout.model, effort: loadout.effort, skills: [...loadout.skills], mcp: [...loadout.mcp], off },
+  };
+}
+
+/** A provider's settings file with the skill overrides laid over its own. */
+export function mergeProviderSettings(provider: Record<string, unknown> | null, overrides: Record<string, "on" | "off">): Record<string, unknown> {
+  const own = provider?.["skillOverrides"];
+  return { ...provider, skillOverrides: { ...(isObj(own) ? own : {}), ...overrides } };
 }
