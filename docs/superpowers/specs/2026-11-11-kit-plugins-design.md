@@ -112,7 +112,10 @@ Codex's CLI is `codex plugin add|remove|list|marketplace`, with no switch.
 Its `config.toml` has one: for each local plugin it installs, codex writes a
 `[plugins."id"]` table with `enabled = true`, and `codex plugin list` reports
 `enabled: false` once that line says false (checked on 2026-11-11 in a
-scratch `CODEX_HOME`). So enable and disable for codex are
+scratch `CODEX_HOME`). The Codex desktop app (`/Applications/ChatGPT.app`,
+`com.openai.codex`) leaves the line alone: on the Mac that day,
+visualize@openai-bundled stayed off across the app's start and quit, and
+the file did not change. So enable and disable for codex are
 `CODEX_SWITCH_SCRIPT` (`core/pluginscan.ts`), run through `onHost` like the
 scan, on `${CODEX_HOME:-$HOME/.codex}/config.toml`:
 
