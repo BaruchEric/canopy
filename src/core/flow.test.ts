@@ -2839,6 +2839,25 @@ describe("a retry by hand at a gate that said no (incubator review, P1)", () => 
     expect(flows.get(flow.id)).toMatchObject({ status: "gated", current: 1, backTo: "Build" });
   });
 
+  test("a park kept before backTo existed says where its retry goes once it is taken back", async () => {
+    const a = setup({ judge: async () => partly });
+    const flow = a.flows.start(repo(), J, "", DEFAULT_AGENT);
+    for (const id of ["run1", "run2", "run3", "run4"]) {
+      a.runner.end(id, "done", "x");
+      await flush();
+    }
+    const rec = lastRecord(a.saved, flow.id);
+    // as an engine from before 23e6f223 wrote it
+    delete rec.flow.backTo;
+    const b = setup({ judge: async () => partly });
+    b.flows.restore([rec], () => repo(), sameAgent);
+    expect(b.flows.get(flow.id)).toMatchObject({ status: "gated", current: 1, backTo: "Build" });
+    // and the retry does what the word says
+    b.flows.resume(flow.id, "retry");
+    await flush();
+    expect(b.runner.specs[0]?.label).toBe("Build");
+  });
+
   test("continue at the judge's no is the user's yes: the gate passes", async () => {
     const { runner, flows } = setup({ judge: async () => partly });
     const flow = flows.start(repo(), J, "", DEFAULT_AGENT);

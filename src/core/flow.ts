@@ -884,7 +884,8 @@ export class Flows {
   }
 
   /** Takes back the flows a stopped server left on disk. A gated or finished
-   *  flow comes back as it was, without a change event; one caught mid-step
+   *  flow comes back as it was, without a change event (a gated one's
+   *  `backTo` is read again from its workflow); one caught mid-step
    *  reruns that step, its run having gone with the old process. Fleets are
    *  not kept, so a fleet id is dropped. `resolve` finds a repo by its path
    *  in the current scan (ids are relative to a root, a path is not), and the
@@ -953,6 +954,10 @@ export class Flows {
     }
     if (flow.status === "gated") {
       if (flow.restarted) live.restarting.add(flow.current);
+      // A record written before `backTo` was kept has none: without this
+      // its button reads "retry this step" while the retry goes back to an
+      // earlier one.
+      this.sayBack(live, flow.current);
       return;
     }
     for (const [i, step] of flow.steps.entries()) {
@@ -1606,6 +1611,14 @@ export class Flows {
     delete live.flow.backTo;
     if (cause && cause.kind !== "gate") live.flow.parkedFor = cause.kind;
     if (cause?.kind === "stage" && cause.check) live.flow.stageCheck = true;
+    this.sayBack(live, i);
+  }
+
+  /** Puts on the flow the step a retry at `i` goes back to, read the way
+   *  `resume` reads it, so the page's word for the retry and what the retry
+   *  does cannot differ. */
+  private sayBack(live: LiveFlow, i: number): void {
+    delete live.flow.backTo;
     const back = this.backOf(live, i);
     const to = back === null ? undefined : live.workflow.steps[back]?.name;
     if (to) live.flow.backTo = to;

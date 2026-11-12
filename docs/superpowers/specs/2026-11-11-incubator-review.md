@@ -37,6 +37,8 @@ P1 meant it can lose work or ship the wrong thing. Each fix has a test that fail
 
 Two things follow from the last one. A project parked this way keeps its slot until someone resumes or stops it, as one parked at a gate does, so two of them hold the whole queue. And a server rolled back past this commit skips such a flow at restore with a log line, so that project's stage starts over on resume, as every failed run did before.
 
+The first live park after the deploy, a scout the judge was not sure of on the mini, showed two more things, fixed the same evening. A park kept by the engine from before the fix came back with no `backTo`, so its button read "retry this step" while the retry went back to Research; `restore` now reads it again. And going on past scout's last step read "accept and finish anyway", which sounds like the end of the project; it now reads "build it anyway", since canopy takes the pick and queues the build.
+
 ## Still open
 
 P2 misleads or strands a project. P3 is polish.

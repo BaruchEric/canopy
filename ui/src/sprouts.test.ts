@@ -327,8 +327,22 @@ describe("parkWords (incubator review, P1)", () => {
   test("a gate before the last step, a stage that is no build, and a park with one way on keep the gate's own words", () => {
     const mid = built("build-new", "Scaffold", { name: "Accept", status: "pending" }, { current: 1 });
     expect(drawn(parked("build-new"), mid)).toEqual(["*continue: continue to Accept", "retry: retry this step"]);
-    expect(drawn(parked("scout"), built("scout", "Research", accept(false)))).toEqual(["*retry: retry this step", "continue: accept and finish anyway"]);
+    expect(drawn(parked("clarify"), built("clarify", "Clarify", accept(false)))).toEqual(["*retry: retry this step", "continue: accept and finish anyway"]);
     expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(false), { parkedFor: "failed" }))).toEqual(["*continue: run the step again"]);
+  });
+
+  test("past scout's last step the build is next, and the words say so", () => {
+    const scout = (last: FlowStep, o: Partial<Flow> = {}): Flow => ({
+      id: "f9", repoId: "_incubator/coins", workflow: "scout", verb: "scout", note: "", status: "gated",
+      steps: [{ name: "Research", status: "passed" }, { ...last, name: "Eval" }], current: 1, startedAt: 0, ...o,
+    });
+    const refused = scout(accept(false), { backTo: "Research" });
+    expect(drawn(parked("scout"), refused)).toEqual(["*retry: send it back to Research", "continue: build it anyway"]);
+    expect(parkWords(parked("scout"), refused).title).toBe("Eval did not accept the research; this takes the pick as it is and queues the build");
+    // a judge that could not answer refused nothing
+    expect(drawn(parked("scout"), scout(accept(true)))).toEqual(["*continue: accept the pick and build it", "retry: retry this step"]);
+    // Research's own park is mid-flow and keeps the gate's words
+    expect(drawn(parked("scout"), scout(accept(true), { current: 0 }))).toEqual(["*continue: continue to Eval", "retry: retry this step"]);
   });
 
   test("with no flow waiting at a gate there is one button", () => {

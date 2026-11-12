@@ -112,15 +112,22 @@ export function workLine(s: Sprout): string | null {
  *  flow waiting at a gate they are that gate's, in the project's terms:
  *  past a build's last step canopy deploys the project (an extend goes to
  *  its hand-off), so going on there says so. A plain "continue" at a build
- *  the judge refused deployed it. With no flow waiting, continue and retry
- *  both start the stage again, so there is one button. */
+ *  the judge refused deployed it. Past scout's last step canopy takes the
+ *  pick and queues the build, where "accept and finish" read as the end of
+ *  the project. With no flow waiting, continue and retry both start the
+ *  stage again, so there is one button. */
 export function parkWords(s: Sprout, flow: Flow | undefined): GateWords {
   const cur = s.flows.at(-1);
   if (!cur || cur.outcome || !flow || flow.id !== cur.flowId || flow.status !== "gated") return { go: "resume", retry: null, lead: "go" };
   const words = gateWords(flow);
   const step = flow.steps[flow.current];
   const last = flow.current + 1 >= flow.steps.length;
-  if (!last || flow.parkedFor || step?.status === "held" || !isBuildWorkflow(cur.workflow)) return words;
+  if (!last || flow.parkedFor || step?.status === "held") return words;
+  if (cur.workflow === "scout") {
+    if (words.lead !== "retry") return { ...words, go: "accept the pick and build it" };
+    return { ...words, go: "build it anyway", title: `${step?.name ?? "The last step"} did not accept the research; this takes the pick as it is and queues the build` };
+  }
+  if (!isBuildWorkflow(cur.workflow)) return words;
   const extend = cur.workflow === BUILD_WORKFLOW.extend;
   if (words.lead !== "retry") return { ...words, go: extend ? "accept and hand it off" : "accept and deploy it" };
   return {
