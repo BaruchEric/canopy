@@ -1071,3 +1071,14 @@ describe("a person steering a Claude run (FR-066)", () => {
     expect(d.driver.interrupt()).toBe(false);
   });
 });
+
+test("a run's own settings file is the one --settings, provider or not", () => {
+  const argv = cliArgs({ allowedTools: [], maxTurns: 5, settings: "/c/run-tools/r1.settings.json" }, { ...DEFAULT_AGENT, provider: "local" });
+  expect(argv.filter((a) => a === "--settings")).toHaveLength(1);
+  expect(argv[argv.indexOf("--settings") + 1]).toBe("/c/run-tools/r1.settings.json");
+});
+
+test("each loadout server is allowed by its own rule", () => {
+  const argv = cliArgs({ allowedTools: ["Read"], maxTurns: 5, mcpConfig: "/c/m.json", servers: ["pdfcraft", "wiki-memory"] });
+  expect(argv[argv.indexOf("--allowedTools") + 1]).toBe("Read,mcp__canopy__*,mcp__pdfcraft__*,mcp__wiki-memory__*");
+});

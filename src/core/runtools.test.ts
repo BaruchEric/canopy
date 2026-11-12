@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { areKin, childRefusal, mcpConfigJson, RUN_CHILDREN, RUN_DEPTH } from "./runtools";
+import { areKin, childRefusal, mcpConfigJson, mcpRule, RUN_CHILDREN, RUN_DEPTH } from "./runtools";
 
 const run = (over: Partial<{ id: string; status: "working" | "done" | "idle"; depth: number; unattended: true }> = {}) => ({ id: "aaaa1111", status: "working" as const, ...over });
 
@@ -30,7 +30,15 @@ test("kin is a parent and its child, either way round, and nothing wider", () =>
 });
 
 test("mcpConfigJson is the shape Claude's --mcp-config reads", () => {
-  expect(JSON.parse(mcpConfigJson({ command: "/bin/bun", args: ["/c/bin/canopy-mcp.ts", "mcp"], env: { CANOPY_RUN: "r" } }))).toEqual({
+  expect(JSON.parse(mcpConfigJson({ canopy: { command: "/bin/bun", args: ["/c/bin/canopy-mcp.ts", "mcp"], env: { CANOPY_RUN: "r" } } }))).toEqual({
     mcpServers: { canopy: { command: "/bin/bun", args: ["/c/bin/canopy-mcp.ts", "mcp"], env: { CANOPY_RUN: "r" } } },
   });
 });
+
+test("mcp.json holds every server it is given", () => {
+  expect(JSON.parse(mcpConfigJson({ canopy: { command: "bun", args: [], env: {} }, pdfcraft: { type: "stdio", command: "p", args: ["mcp"] } }))).toEqual({
+    mcpServers: { canopy: { command: "bun", args: [], env: {} }, pdfcraft: { type: "stdio", command: "p", args: ["mcp"] } },
+  });
+});
+
+test("a server's rule", () => expect(mcpRule("wiki-memory")).toBe("mcp__wiki-memory__*"));

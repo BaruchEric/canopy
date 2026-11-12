@@ -1310,7 +1310,7 @@ async function runTools(state: ServerState, repo: Repo, extras: StartExtras): Pr
   const { token } = state.callers.mint("run", { label: `run ${repo.id}`, run: id });
   const release = (): Promise<void> => dropRunTools(state, id);
   try {
-    const mcpConfig = await writeMcpConfig(id, { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } });
+    const mcpConfig = await writeMcpConfig(id, { canopy: { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } } });
     return { extras: { ...extras, id, mcpConfig, mcpServer: runConfigLaunch(mcpConfig), brief: await toolsBrief() }, release };
   } catch (err) {
     await release();

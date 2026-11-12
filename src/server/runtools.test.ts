@@ -1,16 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, statSync } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runsDir } from "../core/runlog";
-import { BUNDLED_TOOLS_BRIEF, canopyMcpCommand, mcpConfigPath, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
+import { BUNDLED_TOOLS_BRIEF, canopyMcpCommand, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "canopy-runtools-")); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-const entry = { command: "/bin/bun", args: ["x", "mcp"], env: { CANOPY_TOKEN: "t" } };
+const entry = { canopy: { command: "/bin/bun", args: ["x", "mcp"], env: { CANOPY_TOKEN: "t" } } };
 
 describe("what a run with tools is told", () => {
   test("the bundled brief says where a run stops, and the config dir's copy replaces it", async () => {
@@ -74,4 +74,16 @@ test("the command is this bun and canopy's own MCP entry, on no PATH", async () 
   expect(command).toBe(process.execPath);
   expect(args[1]).toBe("mcp");
   expect(existsSync(args[0] as string)).toBe(true);
+});
+
+test("a run's settings file is 0600 and goes with removeRunSettings and the sweep", async () => {
+  const file = await writeRunSettings("r1", { skillOverrides: { ripe: "off" } }, dir);
+  expect(file).toBe(settingsPath("r1", dir));
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+  expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ skillOverrides: { ripe: "off" } });
+  await removeRunSettings("r1", dir);
+  expect(existsSync(file)).toBe(false);
+  await writeRunSettings("r2", {}, dir);
+  await sweepMcpConfigs(dir);
+  expect(existsSync(settingsPath("r2", dir))).toBe(false);
 });

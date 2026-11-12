@@ -18,7 +18,7 @@ import { normalizeAgent } from "./agent";
 import { absolutePath, claudeFold, foldClaude, isReplay, toolPaths as foldToolPaths, type ClaudeFold } from "./claudefold";
 import { bunSpawn, LineSplitter, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
-import { CANOPY_TOOL_RULE } from "./runtools";
+import { CANOPY_TOOL_RULE, mcpRule } from "./runtools";
 import { agentArgs, withProviderFile } from "./harness";
 import { noteCliCommands } from "./mentions";
 import { providersDir } from "./store";
@@ -138,9 +138,12 @@ export function claudeBinary(): string | null {
 export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, stage = false): string[] {
   // a stage runs in a container without canopy's config dir, so a Claude
   // provider's settings file stays here and the stage keeps its own login
-  const flags = agentArgs(withProviderFile({ ...agent, yolo: false }, stage ? null : providersDir()));
+  // a run's own settings file already holds the provider's, so it replaces
+  // the provider's --settings rather than adding a second one
+  const base = { ...agent, yolo: false };
+  const flags = agentArgs(spec.settings ? base : withProviderFile(base, stage ? null : providersDir()));
   // one flag for the rules: --allowedTools takes every plain word after it
-  const allowed = spec.mcpConfig ? [...spec.allowedTools, CANOPY_TOOL_RULE] : spec.allowedTools;
+  const allowed = [...spec.allowedTools, ...(spec.mcpConfig ? [CANOPY_TOOL_RULE] : []), ...(spec.servers ?? []).map(mcpRule)];
   return [
     "-p",
     "--output-format",
@@ -178,6 +181,7 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     // spec P8: a switch to bypass after the plan is refused without it; a
     // run that starts in bypass needs no switch
     ...(spec.permissionMode === "plan" && agent.yolo ? ["--allow-dangerously-skip-permissions"] : []),
+    ...(spec.settings ? ["--settings", spec.settings] : []),
     ...flags,
   ];
 }

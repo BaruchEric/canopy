@@ -2,15 +2,17 @@
  *  deep, who counts as kin, and what the run's `mcp.json` holds. Pure and
  *  browser-safe; the file itself is `server/runtools.ts`. */
 
-import type { Run, RunAction } from "./types";
+import type { KitMcpEntry, Run, RunAction } from "./types";
 
 /** the live children one run may have */
 export const RUN_CHILDREN = 3;
 /** how deep a chain goes: a run at depth 0 may start a child at depth 1, and
  *  a child may not start one at depth 2 */
 export const RUN_DEPTH = 2;
-/** Claude's permission rule that lets the tools run with no ask (probe P2) */
-export const CANOPY_TOOL_RULE = "mcp__canopy__*";
+/** Claude's permission rule that lets one MCP server's tools run with no ask */
+export const mcpRule = (server: string): string => `mcp__${server}__*`;
+/** the rule for canopy's own tools (probe P2) */
+export const CANOPY_TOOL_RULE = mcpRule("canopy");
 /** A child is a job on a branch. A chat would hold its slot idle until
  *  someone stopped it. */
 export const RUN_CHILD_ACTIONS: readonly RunAction[] = ["ask", "propose"];
@@ -42,5 +44,5 @@ export interface McpEntry {
   env: Record<string, string>;
 }
 
-/** What a run's `mcp.json` holds. */
-export const mcpConfigJson = (entry: McpEntry): string => `${JSON.stringify({ mcpServers: { canopy: entry } }, null, 2)}\n`;
+/** What a run's `mcp.json` holds: every server it is given, canopy's among them. */
+export const mcpConfigJson = (servers: Readonly<Record<string, McpEntry | KitMcpEntry>>): string => `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`;

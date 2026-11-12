@@ -75,6 +75,12 @@ export interface DriveSpec {
   mcpConfig?: string;
   /** the same server for Codex, which takes it as `-c` lines */
   mcpServer?: McpLaunch;
+  /** the run's own settings file, passed as the one `--settings`: a loadout's,
+   *  holding the provider's settings too */
+  settings?: string;
+  /** servers the run's mcp.json holds besides canopy's: each is allowed by its
+   *  `mcp__<name>__*` rule and checked at init */
+  servers?: readonly string[];
 }
 
 /** A prompt before the Runner numbers it. */
