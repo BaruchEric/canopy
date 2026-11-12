@@ -157,6 +157,8 @@ describe("classify", () => {
     expect(classify("claude bg-spare", ["claude", "bg-spare", "--bg-spare", "/tmp/x.sock"])).toBeNull();
     expect(classify("codex", ["/Users/e/.codex/packages/app-server-daemon/releases/0.160.0/bin/codex", "app-server"])).toBeNull();
     expect(classify("codex", ["codex"])).toBe("codex");
+    // the npm codex is node over its script, so the verb is the word after that
+    expect(classify("node", ["node", "/home/bun/.bun/bin/codex", "app-server"])).toBeNull();
     const ver = "/Users/e/.local/share/claude/versions/2.1.290";
     const procs = [
       { pid: 10, ppid: 1, comm: "/Users/e/.local/bin/claude", argv: ["/Users/e/.local/bin/claude", "daemon", "run"], state: "S" },
@@ -165,6 +167,18 @@ describe("classify", () => {
       { pid: 13, ppid: 10, comm: "claude bg-spare", argv: ["claude", "bg-spare", "--bg-spare", "/tmp/b.sock"], state: "S" },
     ];
     expect(pickAgents(procs).map((p) => p.pid)).toEqual([12]);
+  });
+
+  test("a plugin or mcp command is no session, so the kit's plugin scan makes no cards", () => {
+    expect(classify("codex", ["/opt/homebrew/bin/codex", "plugin", "list", "--json"])).toBeNull();
+    expect(classify("codex", ["codex", "plugin", "marketplace", "list", "--json"])).toBeNull();
+    expect(classify("node", ["node", "/home/bun/.bun/bin/codex", "plugin", "list", "--json"])).toBeNull();
+    expect(classify("claude", ["claude", "plugin", "list", "--json"])).toBeNull();
+    expect(classify("2.1.290", ["/Users/e/.local/share/claude/versions/2.1.290", "plugin", "list"])).toBeNull();
+    expect(classify("claude", ["claude", "mcp", "list"])).toBeNull();
+    // only the subcommand's place counts: a prompt that says plugin is a session
+    expect(classify("codex", ["codex", "fix", "the", "plugin"])).toBe("codex");
+    expect(classify("claude", ["claude", "--model", "opus", "plugin"])).toBe("claude");
   });
 });
 

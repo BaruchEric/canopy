@@ -112,14 +112,20 @@ export function parsePsComm(text: string): Map<number, string> {
 const base = (p: string): string => p.slice(p.lastIndexOf("/") + 1);
 const INTERPRETER = /^(node|nodejs|bun|deno)(\d+(\.\d+)*)?$/;
 const VERSION = /^\d+\.\d+\.\d+/;
-/** The harnesses' own helpers, which run the agent's binary but are no
- *  session: Claude Code's Chrome extension host, its background daemon with
- *  the daemon's pty hosts and warm spares, and Codex's shared app server.
- *  The session a pty host runs is its child, the version file, and counts
- *  once the host is passed over; a Codex session counts by its TUI. */
+/** The harnesses' own helpers and one-off commands, which run the agent's
+ *  binary but are no session: Claude Code's Chrome extension host, its
+ *  background daemon with the daemon's pty hosts and warm spares, Codex's
+ *  shared app server, and either CLI's `plugin` and `mcp` commands (the
+ *  kit's plugin scan runs `codex plugin list` on every machine every 10
+ *  minutes, and each one a scan met was a "codex pid N" card). The session a
+ *  pty host runs is its child, the version file, and counts once the host is
+ *  passed over; a Codex session counts by its TUI. */
 const HELPER = new Set(["--chrome-native-host", "--bg-pty-host", "bg-pty-host", "--bg-spare", "bg-spare"]);
-const HELPER_VERB = new Set(["daemon", "app-server"]);
-const isHelper = (argv: readonly string[]): boolean => HELPER_VERB.has(argv[1] ?? "") || argv.some((w) => HELPER.has(w));
+const HELPER_VERB = new Set(["daemon", "app-server", "plugin", "mcp"]);
+/** the subcommand: the word after the program, or after the script when an
+ *  interpreter runs one (the npm codex is `node …/codex app-server`) */
+const verbOf = (argv: readonly string[]): string => argv[INTERPRETER.test(base(argv[0] ?? "").toLowerCase()) ? 2 : 1] ?? "";
+const isHelper = (argv: readonly string[]): boolean => HELPER_VERB.has(verbOf(argv)) || argv.some((w) => HELPER.has(w));
 
 /**
  * The harness a process is, or null. Measured, not assumed: Claude Code's
