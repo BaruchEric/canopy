@@ -168,6 +168,8 @@ describe("a commit of settings.json", () => {
       "changes the source of the marketplace m", "also changes env, hooks",
     ]);
     expect(JSON.stringify(changeLines(c))).not.toContain("new");
+    // other keys alone are "changes", not "also changes"
+    expect(changeLines(settingsChange(JSON.stringify({ model: "a" }), JSON.stringify({ model: "b" })))).toEqual(["changes model"]);
     // HEAD with no settings.json, or a file that does not parse, reads as empty
     expect(settingsChange("", JSON.stringify({ enabledPlugins: { "a@m": true } })).on).toEqual(["a@m"]);
   });

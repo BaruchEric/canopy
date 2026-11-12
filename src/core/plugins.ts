@@ -397,15 +397,15 @@ export function settingsChange(before: string, after: string): SettingsChange {
 /** a change as lines a person reads before the commit */
 export function changeLines(c: SettingsChange): string[] {
   const line = (label: string, xs: string[]): string[] => (xs.length > 0 ? [`${label} ${xs.join(", ")}`] : []);
-  return [
+  const named = [
     ...line("turns on", c.on),
     ...line("turns off", c.off),
     ...line("drops", c.dropped),
     ...line("adds the marketplace", c.marketsAdded),
     ...line("removes the marketplace", c.marketsRemoved),
     ...line("changes the source of the marketplace", c.marketsChanged),
-    ...line("also changes", c.other),
   ];
+  return [...named, ...line(named.length > 0 ? "also changes" : "changes", c.other)];
 }
 
 /** The commit message: one change says itself in the subject, more than
