@@ -116,6 +116,20 @@ export function missingMarket(ms: readonly PluginMachine[], col: PluginColumn, i
   return { name, source: a.declaredMarkets[name] ?? "" };
 }
 
+/** whether an agent knows a marketplace on any machine: lists it or has a plugin from it installed */
+export function marketKnown(ms: readonly PluginMachine[], agent: PluginAgent, name: string): boolean {
+  return ms.some((m) => m.agents.some((a) => a.agent === agent &&
+    (a.markets.some((x) => x.name === name) || a.plugins.some((p) => p.id.split("@")[1] === name))));
+}
+
+/** the columns a plugin's sheet lists: every one but a not-installed cell of
+ *  an agent that knows the plugin's marketplace nowhere (a claude plugin's
+ *  codex cells), which could never install it */
+export function sheetColumns(ms: readonly PluginMachine[], cols: readonly PluginColumn[], id: string): PluginColumn[] {
+  const name = id.split("@")[1] ?? "";
+  return cols.filter((c) => cellOf(ms, c, id).state !== "none" || marketKnown(ms, c.agent, name));
+}
+
 /** the marketplace a not-installed cell's install needs and the machine lacks */
 export function marketGap(ms: readonly PluginMachine[], col: PluginColumn, cell: PluginCell, id: string): { name: string; source: string } | null {
   return cell.state === "wanted" || cell.state === "none" ? missingMarket(ms, col, id) : null;

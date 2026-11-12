@@ -27,6 +27,11 @@ describe("canopy plugins", () => {
     ]);
     expect(pluginLines(mac, "codex")).toEqual(["mac  commits the shared settings.json, settings.json changed and not committed"]);
     expect(pluginLines({ ...mac, away: "no ssh" }, null)).toEqual(["mac  away: no ssh"]);
+    const broken = { ...mac, agents: [{ ...mac.agents[0]!, plugins: [{ id: "v@m", version: "0.1.0", enabled: true, scope: "user", servers: {}, errors: ["skills load failed"], notes: [] }], declared: {}, markets: [] }] };
+    expect(pluginLines(broken, null)).toEqual([
+      "mac  commits the shared settings.json, settings.json changed and not committed",
+      "  claude  v@m  on 0.1.0  fails: skills load failed",
+    ]);
   });
   test("an op's line, and a command to accept", () => {
     expect(opLines({ machine: "mac", agent: "claude", op: "disable", outcome: "ok", message: "Successfully disabled" }, "superpowers@o"))

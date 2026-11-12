@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cellOf, cellOps, declaredOnly, isFolder, marketGap, mergePlugins, missingMarket, pluginColumns, pluginRows, routeOf, serversOf, type PluginMachine } from "./plugins";
+import { cellOf, cellOps, declaredOnly, isFolder, marketGap, mergePlugins, sheetColumns, missingMarket, pluginColumns, pluginRows, routeOf, serversOf, type PluginMachine } from "./plugins";
 import type { KitInfo, PluginAgentSeen, PluginMachineSeen } from "../../src/core/types";
 
 const claude = (over: Partial<PluginAgentSeen> = {}): PluginAgentSeen =>
@@ -76,6 +76,9 @@ describe("where an op runs", () => {
     const mac = { machine: "mac", agent: "claude" as const };
     expect(marketGap(ms, mac, cellOf(ms, mac, "context-mode@cm"), "context-mode@cm")).toBeNull();
     expect(marketGap(ms, mac, cellOf(ms, mac, "other@cm"), "other@cm")).toBeNull();
+    expect(sheetColumns(ms, pluginColumns(ms, { agent: null, machine: null }), "context-mode@cm")).toEqual([
+      { machine: "gpd", agent: "claude" }, { machine: "mac", agent: "claude" }, { machine: "mini", agent: "claude" },
+    ]);
     const codex = { machine: "mac", agent: "codex" as const };
     expect(marketGap(ms, codex, cellOf(ms, codex, "gmail@openai-curated"), "gmail@openai-curated")).toEqual({ name: "openai-curated", source: "" });
   });

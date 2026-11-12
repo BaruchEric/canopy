@@ -16,7 +16,9 @@ export const CATALOG_TIMEOUT = 2 * 60_000;
  *  JSON passes through sh), and for claude G tag dirty: settings.json's
  *  `git ls-files -t` tag in ~/.claude (H: tracked and checked out) and 1
  *  when git sees it changed. Each CLI runs from $HOME, so no project's
- *  plugins mix in. KIT_CLAUDE and KIT_CODEX name the CLIs (the tests). */
+ *  plugins mix in. KIT_CLAUDE and KIT_CODEX name the CLIs (the tests);
+ *  KIT_CLAUDE_HOME is the home claude runs under, when it is not $HOME
+ *  (the mini's container, server/kit.ts claudeHome). */
 export const PLUGIN_SCAN_SCRIPT = String.raw`
 abs() { case $1 in /*) [ -x "$1" ] && printf %s "$1";; esac; }
 b64() { base64 | tr -d '\n'; }
@@ -33,6 +35,7 @@ sec() {
   printf 'S\t%s\t%s\t%s\t%s\n' "$a" "$w" "$rc" "$(printf %s "$out" | b64)"
 }
 cd "$HOME" 2>/dev/null || true
+ch=${"$"}{KIT_CLAUDE_HOME:-$HOME}
 for a in "$@"; do
   case $a in
     claude) c=$(find_cli claude "${"$"}{KIT_CLAUDE:-}") ;;
@@ -41,8 +44,9 @@ for a in "$@"; do
   esac
   printf 'P\t%s\t%s\n' "$a" "$c"
   [ -n "$c" ] || continue
-  sec "$a" list "$c" plugin list --json
-  sec "$a" markets "$c" plugin marketplace list --json
+  h=$HOME; [ "$a" = claude ] && h=$ch
+  sec "$a" list env HOME="$h" "$c" plugin list --json
+  sec "$a" markets env HOME="$h" "$c" plugin marketplace list --json
   if [ "$a" = claude ]; then
     f="$HOME/.claude/settings.json"
     [ -r "$f" ] && printf 'S\tclaude\tsettings\t0\t%s\n' "$(b64 < "$f")"

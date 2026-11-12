@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  catalogOf, editsSettings, jsonOf, lastJsonObject, movedInstallPaths, opArgs, outcomeOf, parseClaudeList, parseClaudeMarkets, parseCodexList, parseCodexMarkets,
+  catalogOf, editsSettings, jsonOf, lastJsonObject, opArgs, outcomeOf, parseClaudeList, parseClaudeMarkets, parseCodexList, parseCodexMarkets,
   parseSettings, refusal, searchCatalog, serverLine, sourceProblem,
 } from "./plugins";
 import type { PluginAgentSeen, PluginMachineSeen } from "./types";
@@ -127,18 +127,5 @@ describe("the catalog", () => {
     expect(searchCatalog(all, "templat", 10).entries.map((e) => e.id)).toEqual(["carbone@o"]);
     expect(searchCatalog(all, "", 1)).toEqual({ total: 3, entries: [all[1]!] });
     expect(searchCatalog(all, "claude code", 10).entries.map((e) => e.id)).toEqual(["asana@o", "remember@o"]);
-  });
-});
-
-describe("the mini's install paths", () => {
-  test("moves each installPath under the container's home to the host's, and leaves the rest", () => {
-    const text = JSON.stringify({ version: 2, plugins: { "a@m": [{ scope: "user", installPath: "/home/bun/.claude/plugins/cache/m/a/1" }], "b@m": [{ installPath: "/home/eric/.claude/plugins/cache/m/b/1" }] } });
-    const next = movedInstallPaths(text, "/home/bun/.claude", "/home/eric/.claude");
-    expect(next).not.toBeNull();
-    const j = JSON.parse(next ?? "{}") as { plugins: Record<string, { installPath: string }[]> };
-    expect(j.plugins["a@m"]![0]!.installPath).toBe("/home/eric/.claude/plugins/cache/m/a/1");
-    expect(j.plugins["b@m"]![0]!.installPath).toBe("/home/eric/.claude/plugins/cache/m/b/1");
-    expect(movedInstallPaths(next ?? "", "/home/bun/.claude", "/home/eric/.claude")).toBeNull();
-    expect(movedInstallPaths("{", "/a", "/b")).toBeNull();
   });
 });

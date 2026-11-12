@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../core/exec";
@@ -175,10 +175,21 @@ describe("the kit's plugins", () => {
     expect((await post(hub, { machine: "mac", agent: "claude", op: "install", id: "-x@y" })).status).toBe(400);
   });
 
-  test("where canopy's home is not the host's (the mini), an install records the host's path", async () => {
-    const { h, hub } = await setup({ commits: true, hostHome: "/home/eric" });
-    await hub.pluginOp({ machine: "mac", agent: "claude", op: "install", id: "fresh@official" });
+  test("where canopy's home is not the host's (the mini), claude runs under the host's home and records its paths", async () => {
+    // the mini mounts the host's ~/.claude at both homes; the fake keeps its state beside it
+    const host = mkdtempSync(join(tmpdir(), "kitplugins-host-"));
+    dirs.push(host);
+    const { h, hub } = await setup({ commits: true, hostHome: host });
+    symlinkSync(join(h, ".claude"), join(host, ".claude"));
+    symlinkSync(join(h, ".fake-claude-plugins.json"), join(host, ".fake-claude-plugins.json"));
+    await hub.scan();
+    const r = await hub.pluginOp({ machine: "mac", agent: "claude", op: "install", id: "fresh@official" });
+    expect(r.outcome).toBe("ok");
     const j = JSON.parse(readFileSync(join(h, ".claude/plugins/installed_plugins.json"), "utf8")) as { plugins: Record<string, { installPath: string }[]> };
-    expect(j.plugins["fresh@official"]![0]!.installPath).toBe("/home/eric/.claude/plugins/cache/official/fresh/1.0.0");
+    expect(j.plugins["fresh@official"]![0]!.installPath).toBe(join(host, ".claude/plugins/cache/official/fresh/1.0.0"));
+    // the scan reads claude under the host's home too, codex under its own
+    const seen = hub.info().plugins?.find((m) => m.machine === "mac");
+    expect(seen?.agents.find((a) => a.agent === "claude")?.plugins.map((p) => p.id)).toContain("fresh@official");
+    expect(seen?.agents.find((a) => a.agent === "codex")?.plugins.map((p) => p.id)).toEqual(["pdf@openai-bundled"]);
   });
 });

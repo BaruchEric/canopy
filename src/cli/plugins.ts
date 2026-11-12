@@ -21,9 +21,9 @@ export function pluginLines(m: PluginMachineSeen, agent: PluginAgent | null): st
     if (agent && a.agent !== agent) continue;
     if (a.error) out.push(`  ${a.agent}  ${a.error}`);
     for (const p of a.plugins) {
-      const state = p.errors.length > 0 ? `fails: ${p.errors[0] ?? ""}` : p.enabled ? "on" : "off";
       const servers = Object.keys(p.servers);
-      out.push(`  ${a.agent}  ${p.id}  ${state}${p.version ? ` ${p.version}` : ""}${servers.length ? `  servers: ${servers.join(", ")}` : ""}`);
+      const fails = p.errors.length > 0 ? `  fails: ${p.errors[0] ?? ""}` : "";
+      out.push(`  ${a.agent}  ${p.id}  ${p.enabled ? "on" : "off"}${p.version ? ` ${p.version}` : ""}${servers.length ? `  servers: ${servers.join(", ")}` : ""}${fails}`);
     }
     for (const [id, on] of Object.entries(a.declared)) {
       if (on && !a.plugins.some((p) => p.id === id)) out.push(`  ${a.agent}  ${id}  wanted: settings.json turns it on, not installed here`);

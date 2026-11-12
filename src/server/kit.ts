@@ -1,13 +1,12 @@
 /** The kit's server side: scans, routes and the `kit` event
  *  (docs/superpowers/specs/2026-10-14-kit-design.md). */
-import { rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { onHost } from "../core/exec";
 import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, pluginAgentsOn, secretsOf, wantLink, withCanopyServer } from "../core/kit";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp, seeTools } from "../core/kitscan";
-import { catalogOf, isPluginAgent, isPluginOp, jsonOf, movedInstallPaths, opArgs, outcomeOf, PLUGIN_ID, refusal, searchCatalog } from "../core/plugins";
+import { catalogOf, isPluginAgent, isPluginOp, jsonOf, opArgs, outcomeOf, PLUGIN_ID, refusal, searchCatalog } from "../core/plugins";
 import { CATALOG_TIMEOUT, OP_TIMEOUT, plain, runCli, seePlugins } from "../core/pluginscan";
 import type {
   KitAction, KitApplyResult, KitInfo, KitInstallResult, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen,
@@ -188,7 +187,8 @@ export class KitHub {
     const commits = kit.machines.some((x) => x.name === m.name && x.commits === true);
     const away = (why: string): PluginMachineSeen => ({ machine: m.name, at: seen.at, away: why, shared: false, settingsDirty: false, commits, agents: [] });
     if (seen.away) return away(seen.away);
-    return seePlugins(m, agents, commits, { run: this.deps.run, env: this.deps.env, now: this.deps.now })
+    const host = this.claudeHome(m);
+    return seePlugins(m, agents, commits, { run: this.deps.run, env: host ? { ...this.deps.env, KIT_CLAUDE_HOME: host } : this.deps.env, now: this.deps.now })
       .catch((err: unknown) => away(err instanceof Error ? err.message : String(err)));
   }
 
@@ -402,9 +402,8 @@ export class KitHub {
       if ("error" in args) throw new KitError(args.error, 400);
       const why = refusal(ps, req, this.committers(kit));
       if (why) throw new KitError(why, 409);
-      const r = await runCli(m.host, path, args, { run: this.deps.run, env: this.deps.env, timeoutMs: OP_TIMEOUT });
+      const r = await runCli(m.host, path, args, { run: this.deps.run, env: this.cliEnv(m, req.agent), timeoutMs: OP_TIMEOUT });
       const out = outcomeOf(req.agent, r.code, r.stdout, r.stderr);
-      if (out.outcome === "ok" && req.agent === "claude" && (req.op === "install" || req.op === "update") && m.host === null) await this.moveInstallPaths();
       for (const k of this.catalogs.keys()) if (k.startsWith(`${req.machine}/`)) this.catalogs.delete(k);
       const now = this.kit ?? kit;
       await this.scanOne(now, this.mine(now).find((x) => x.name === req.machine) ?? m);
@@ -412,21 +411,22 @@ export class KitHub {
     });
   }
 
-  /** On the mini canopy runs claude as /home/bun, so an install records a
-   *  path the host's own claude cannot find; the host's home is mounted at
-   *  its own path in canopy's containers, so the host path holds in both.
-   *  Only this backend's own machine, and only when the two homes differ. */
-  private async moveInstallPaths(): Promise<void> {
+  /** The home claude's plugin CLI runs under on this backend's own
+   *  machine, when it is not this process's: the mini's canopy runs as
+   *  /home/bun with the host's ~/.claude mounted at both homes. claude
+   *  records every marketplace and install path under its own home and
+   *  refuses one outside it, so a call made under /home/bun would break the
+   *  host's claude and the host's paths break it. Run under the host's
+   *  home, both see the same paths. null elsewhere. */
+  private claudeHome(m: Mine): string | null {
     const host = this.deps.hostHome;
     const mine = this.deps.env?.["HOME"] ?? homedir();
-    if (!host || host === mine) return;
-    const file = join(mine, ".claude", "plugins", "installed_plugins.json");
-    const text = await Bun.file(file).text().catch(() => null);
-    const next = text === null ? null : movedInstallPaths(text, join(mine, ".claude"), join(host, ".claude"));
-    if (next === null) return;
-    const tmp = `${file}.canopy-${process.pid}`;
-    await writeFile(tmp, next, { mode: 0o600 });
-    await rename(tmp, file);
+    return m.host === null && host && host !== mine ? host : null;
+  }
+
+  private cliEnv(m: Mine, agent: PluginAgent): Record<string, string> | undefined {
+    const host = agent === "claude" ? this.claudeHome(m) : null;
+    return host ? { ...this.deps.env, HOME: host } : this.deps.env;
   }
 
   /** what an agent's marketplaces offer on a machine, searched; read once
@@ -437,7 +437,7 @@ export class KitHub {
     const now = (this.deps.now ?? Date.now)();
     let hit = this.catalogs.get(key);
     if (!hit || fresh || now - hit.at > CATALOG_TTL) {
-      const r = await runCli(m.host, path, ["plugin", "list", "--json", "--available"], { run: this.deps.run, env: this.deps.env, timeoutMs: CATALOG_TIMEOUT });
+      const r = await runCli(m.host, path, ["plugin", "list", "--json", "--available"], { run: this.deps.run, env: this.cliEnv(m, agent), timeoutMs: CATALOG_TIMEOUT });
       if (r.code !== 0) throw new KitError(`${agent} plugin list on ${machine}: ${(r.stderr.trim().split("\n")[0] ?? "") || `exited ${r.code}`}`, 502);
       hit = { at: now, entries: catalogOf(agent, jsonOf(r.stdout)) };
       this.catalogs.set(key, hit);
@@ -450,7 +450,7 @@ export class KitHub {
     if (agent !== "claude") throw new KitError(`${agent} has no plugin details command`, 400);
     if (!PLUGIN_ID.test(id)) throw new KitError("a plugin is named name@marketplace", 400);
     const { m, path } = this.pluginsOf(machine, agent);
-    const r = await runCli(m.host, path, ["plugin", "details", id], { run: this.deps.run, env: this.deps.env, timeoutMs: 60_000 });
+    const r = await runCli(m.host, path, ["plugin", "details", id], { run: this.deps.run, env: this.cliEnv(m, agent), timeoutMs: 60_000 });
     const text = plain(r.stdout).trimEnd();
     if (!text) throw new KitError(plain(r.stderr).trim().split("\n")[0] || `claude plugin details exited ${r.code}`, 502);
     return { text };

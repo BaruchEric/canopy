@@ -9,7 +9,7 @@ import { errorText } from "../secrets";
 import { opText } from "../../../src/core/plugins";
 import {
   CATALOG_CHIPS, PLUGIN_GLYPH, PLUGIN_PROBLEM, cellOf, cellOps, declaredOnly, isFolder, marketGap, mergePlugins, opLabel, pluginColumns, pluginRows,
-  readsPlugins, routeOf, serversOf, type PluginColumn, type PluginFilter, type PluginMachine,
+  readsPlugins, routeOf, serversOf, sheetColumns, type PluginColumn, type PluginFilter, type PluginMachine,
 } from "../plugins";
 import type { PluginAgent, PluginCatalog, PluginOp, PluginOpRequest } from "../../../src/core/types";
 
@@ -59,7 +59,9 @@ type Ops = ReturnType<typeof useOps>;
 function OpButton({ ops, m, req, what, onOk }: { ops: Ops; m: PluginMachine; req: Omit<PluginOpRequest, "machine">; what: string; onOk?: () => void }) {
   const r = routeOf(ops.ms, m, req);
   if ("why" in r) return null;
-  const label = `${opLabel(req.op)}${r.moved ? ` on ${r.machine.machine}` : ""}`;
+  // "remove…" moved reads "remove on mac…": the ellipsis still says it asks first
+  const base = opLabel(req.op);
+  const label = !r.moved ? base : base.endsWith("…") ? `${base.slice(0, -1)} on ${r.machine.machine}…` : `${base} on ${r.machine.machine}`;
   const title = r.moved ? `${m.machine} reads dotclaude's shared settings.json; this runs on ${r.machine.machine}, and ${m.machine} follows once dotclaude is committed and pulled` : undefined;
   return (
     <button type="button" className="mini" disabled={ops.busy !== null} title={title} onClick={() => ops.run(r.machine, req, what, onOk)}>{label}</button>
@@ -130,7 +132,7 @@ function PluginSheet({ id, ops, cols, onClose }: { id: string; ops: Ops; cols: P
         </dl>
       )}
       <ul className="plugin-where">
-        {cols.map((c) => {
+        {sheetColumns(ops.ms, cols, id).map((c) => {
           const m = ops.ms.find((x) => x.machine === c.machine);
           if (!m) return null;
           const cell = cellOf(ops.ms, c, id);

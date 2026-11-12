@@ -316,36 +316,6 @@ export function searchCatalog(entries: readonly PluginCatalogEntry[], q: string,
   return { total: hit.length, entries: hit.slice(0, Math.max(0, limit)) };
 }
 
-/** installed_plugins.json with each installPath under `from` moved under
- *  `to`; null when nothing moves or the text does not parse. The mini's
- *  canopy runs claude as /home/bun, so an install it makes records a path
- *  the host's claude cannot find; the host home is mounted at its own path
- *  in canopy's containers, so the moved path holds in both. */
-export function movedInstallPaths(text: string, from: string, to: string): string | null {
-  if (from === to) return null;
-  let j: unknown;
-  try {
-    j = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (!isObj(j) || !isObj(j["plugins"])) return null;
-  const prefix = `${from.replace(/\/+$/, "")}/`;
-  let moved = false;
-  for (const list of Object.values(j["plugins"])) {
-    if (!Array.isArray(list)) continue;
-    for (const e of list) {
-      if (!isObj(e)) continue;
-      const p = str(e["installPath"]);
-      if (p?.startsWith(prefix)) {
-        e["installPath"] = `${to.replace(/\/+$/, "")}/${p.slice(prefix.length)}`;
-        moved = true;
-      }
-    }
-  }
-  return moved ? `${JSON.stringify(j, null, 2)}\n` : null;
-}
-
 /** an op in words, for a result line */
 export function opText(op: PluginOp, what: string): string {
   switch (op) {

@@ -34,8 +34,7 @@ The reading of the request:
 ## Non-goals
 
 - Writing plugin files by hand: `settings.json`, `installed_plugins.json`,
-  the plugin cache, `config.toml`. The one exception is the mini's path
-  rewrite below.
+  the plugin cache, `config.toml`.
 - Codex enable, disable and update. Its CLI has no toggle (`codex plugin
   add|remove|list|marketplace` only), and a toggle by editing
   `config.toml` would be the hand edit above.
@@ -111,11 +110,17 @@ mark one.
 
 ### The mini's paths
 
-canopy on the mini runs claude as `/home/bun` with the host's home mounted at
-its own path. A claude install or update there records
-`/home/bun/.claude/plugins/cache/...` in `installed_plugins.json`, which the
-host's claude cannot open, so after one the backend rewrites those paths to
-`CANOPY_HOST_HOME` (only for its own machine, only when the homes differ).
+canopy on the mini runs as `/home/bun`, with the host's `~/.claude` mounted
+at both `/home/bun/.claude` and `/home/eric/.claude`. claude records every
+marketplace's `installLocation` and every plugin's `installPath` under its own
+home and refuses one outside it: on 2026-11-11 a marketplace update from the
+container failed with "corrupted installLocation", because the host's claude
+had written `/home/eric/...`, and an install from the container would have
+written `/home/bun/...` paths the host's claude could not open. So on its own
+machine, when `CANOPY_HOST_HOME` is not its home, the backend runs `claude
+plugin` with `HOME` at the host's home (the scan through `KIT_CLAUDE_HOME`),
+and compose mounts the host's `.claude.json` at its host path too. codex
+keeps the container's home: only `~/.codex` is mounted, at `/home/bun`.
 
 ### Catalog and details
 

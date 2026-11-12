@@ -498,6 +498,10 @@ services:
       # `claude` on the host must have run once so the file exists (a bind
       # mount of a missing file would make it a directory)
       - ${HOST_HOME:-/home/eric}/.claude.json:/home/bun/.claude.json
+      # the same file at its host path: the kit runs `claude plugin` with
+      # HOME at the host's home, so the marketplace and install paths it
+      # records are the host claude's own (FR-064, server/kit.ts claudeHome)
+      - ${HOST_HOME:-/home/eric}/.claude.json:${HOST_HOME:-/home/eric}/.claude.json
       - ${HOST_HOME:-/home/eric}/.codex:/home/bun/.codex
       # Hermes' skills folder, for the kit's links (docs/superpowers/specs/
       # 2026-10-14-kit-design.md); under /home/bun like ~/.claude so a
