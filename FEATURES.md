@@ -2,6 +2,11 @@
 
 ## Open
 
+### FR-065 · A manager that equips its workers, and a top view to steer them
+P2 · added 2026-11-12 · source: Eric ("adapt: https://www.aihero.dev/the-home-repo-pattern to create manager who orchestrate, coordinate etc new canopy worktrees providing them model,skills, tools etc", then "focus on the goal user steering workflows and UI from top view", 2026-11-12)
+The coordinator grows into the manager. A loadout in kit.json names a worker's harness, model, effort, skills and MCP servers, and a run started with it gets exactly that, plus the repo's own skills and Eric's guardrails. Cards carry a loadout, a workflow (run as a flow on the card's branch, so its gates are where Eric steers) and the cards they wait for. A top view (`?view=manager`) shows one goal: a ring per worker with an arc per step, what waits on Eric answered in place, a lane per worker, and the manager's chat, on desktop and phone. The manager keeps its 2026-10-16 fence; dotclaude is the home repo.
+Spec: docs/superpowers/specs/2026-11-12-manager-design.md (2026-11-12), waiting on Eric's approval. Mockup: https://claude.ai/artifact/K9QsTKbRNnvZViEFWVWZno.
+
 ### FR-062 · The incubator review's open findings
 P2 · added 2026-11-11 · source: Eric ("incubator review full PROCCES", 2026-11-11)
 The 2026-11-11 review fixed the dead stage login, the GitHub page url taken as a repo and the project that queued for good on a backend with no stages. A second pass the same day fixed its five P1s: "continue" at a judge's park deploying what the judge refused, Accept's "no" reaching the builder with no reason, a ship cut short making a second GitHub repo and Vercel project, a crash during prepare stranding a voice memo, and one failed run failing a whole stage. 26 findings stay open, all P2 or P3. Most are read from the code and not yet reproduced, so each needs a failing test first.
