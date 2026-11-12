@@ -17507,6 +17507,7 @@ button.clock-job + .clock-lane {
 .plugin-server { display: contents; }
 .plugin-details summary { cursor: pointer; color: var(--ink-dim); font-size: var(--t-md); }
 .plugin-pending { border-top-color: var(--rust); }
+.plugin-change { margin: 0; padding-left: 1.2em; overflow-wrap: anywhere; }
 /* a long away reason (an ssh error with a path) wraps instead of widening a phone's page */
 /* an open sheet on a phone leaves a few rows of the matrix in view */
 .plugins-view .kit-scroll { min-height: 9rem; }

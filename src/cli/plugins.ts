@@ -2,13 +2,16 @@
  *  same reads and ops the plugins view runs. */
 import { ask, errText, take, targetsOf, Unreachable, type Target } from "./health";
 import { isPluginAgent, opText } from "../core/plugins";
-import type { BackendEntry, KitInfo, PluginAgent, PluginCatalog, PluginMachineSeen, PluginOp, PluginOpResult } from "../core/types";
+import type {
+  BackendEntry, KitInfo, PluginAgent, PluginCatalog, PluginCommitPreview, PluginCommitResult, PluginMachineSeen, PluginOp, PluginOpResult,
+} from "../core/types";
 
 export const PLUGINS_USAGE = [
   "usage: canopy plugins [list] [--machine M] [--agent claude|codex]",
   "       canopy plugins install|uninstall|update|enable|disable <name@marketplace> --machine M [--agent claude|codex] [--accept SHA256]",
   "       canopy plugins search [words] --machine M [--agent claude|codex] [--limit N]",
   "       canopy plugins marketplace add <source> | remove <name> | update <name> --machine M [--agent claude|codex]",
+  "       canopy plugins commit [--machine M] [--dry-run]",
   "       --backend URL asks that backend alone",
 ].join("\n");
 
@@ -16,7 +19,8 @@ export const PLUGINS_USAGE = [
 export function pluginLines(m: PluginMachineSeen, agent: PluginAgent | null): string[] {
   if (m.away) return [`${m.machine}  away: ${m.away}`];
   const how = m.shared ? (m.commits ? "commits the shared settings.json" : "follows the shared settings.json") : "own settings.json";
-  const out = [`${m.machine}  ${how}${m.shared && m.settingsDirty ? ", settings.json changed and not committed" : ""}`];
+  const unpushed = m.shared && m.unpushed ? `, ${m.unpushed} dotclaude ${m.unpushed === 1 ? "commit" : "commits"} not pushed` : "";
+  const out = [`${m.machine}  ${how}${m.shared && m.settingsDirty ? ", settings.json changed and not committed" : ""}${unpushed}`];
   for (const a of m.agents) {
     if (agent && a.agent !== agent) continue;
     if (a.error) out.push(`  ${a.agent}  ${a.error}`);
@@ -38,6 +42,20 @@ export function catalogLines(c: PluginCatalog): string[] {
     ...c.entries.map((e) => `${e.id}${e.installed ? "  (installed)" : ""}${e.installs !== null ? `  ${e.installs} installs` : ""}${e.description ? `  ${e.description}` : ""}`),
     `${c.total} on ${c.machine} for ${c.agent}${c.total > c.entries.length ? `, ${c.entries.length} shown` : ""}`,
   ];
+}
+
+/** a commit's preview: what it holds by name, then the message */
+export function commitPreviewLines(p: PluginCommitPreview & { lines: string[] }): string[] {
+  return [
+    `${p.machine}: settings.json on ${p.branch || "its branch"}`,
+    ...(p.lines.length > 0 ? p.lines : ["changes only the file's layout"]).map((l) => `  ${l}`),
+    "",
+    ...p.message.split("\n").map((l) => `  | ${l}`.trimEnd()),
+  ];
+}
+
+export function commitResultLine(r: PluginCommitResult): string {
+  return `${r.machine}: ${r.outcome === "failed" ? `nothing committed: ${r.message}` : r.message}`;
 }
 
 export function opLines(r: PluginOpResult, what: string): string[] {
@@ -97,6 +115,20 @@ export async function pluginsCommand(argv: string[], { fail }: { fail: (msg: str
     const ms = await read();
     if (ms.length === 0) return fail("no backend reads plugins: kit.json's plugins names the agents");
     for (const { m } of ms) if (!machine || m.machine === machine) for (const line of pluginLines(m, only)) console.log(line);
+    return;
+  }
+  if (sub === "commit") {
+    // the machine kit.json marks as committing dotclaude, unless one is named
+    const ms = await read();
+    const hit = machine ? ms.find((x) => x.m.machine === machine) : ms.find((x) => x.m.commits);
+    if (!hit) return fail(machine ? `no backend reads plugins on ${machine}` : "no machine is marked to commit dotclaude: kit.json machines.<name>.commits");
+    const name = hit.m.machine;
+    const p = await call<PluginCommitPreview & { lines: string[] }>(hit.t, "GET", `/api/kit/plugins/commit?${new URLSearchParams({ machine: name }).toString()}`);
+    for (const line of commitPreviewLines(p)) console.log(line);
+    if (args.includes("--dry-run")) return;
+    const r = await call<PluginCommitResult>(hit.t, "POST", "/api/kit/plugins/commit", { machine: name, sha: p.sha });
+    console.log(commitResultLine(r));
+    if (r.outcome !== "pushed") process.exitCode = 1;
     return;
   }
   if (sub === "search") {

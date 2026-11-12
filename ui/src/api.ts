@@ -22,7 +22,7 @@ import type {
   KitInstallResult,
   KitMcpPreview,
   PluginAgent,
-  PluginCatalog,
+  PluginCatalog, PluginCommitPreview, PluginCommitResult,
   PluginOpRequest,
   PluginOpResult,
   HealthInfo,
@@ -746,6 +746,12 @@ export const api = {
   /** claude's own account of an installed plugin */
   kitPluginDetails: (b: string, machine: string, agent: PluginAgent, id: string) =>
     req<{ text: string }>(b, `/api/kit/plugins/details?${new URLSearchParams({ machine, agent, id }).toString()}`),
+  /** what a commit of dotclaude's settings.json on that machine would hold, by name only */
+  kitPluginCommitPreview: (b: string, machine: string) =>
+    req<PluginCommitPreview & { lines: string[] }>(b, `/api/kit/plugins/commit?${new URLSearchParams({ machine }).toString()}`),
+  /** commits and pushes settings.json there, while it still hashes to the preview's sha */
+  kitPluginCommit: (b: string, machine: string, sha: string) =>
+    req<PluginCommitResult>(b, "/api/kit/plugins/commit", { method: "POST", body: JSON.stringify({ machine, sha }) }),
   /** heal one check now, by its plain id on that backend */
   healCheck: async (b: string, id: string) => from(b, await req<HealthCheck>(b, `/api/health/heal?id=${encodeURIComponent(id)}`, { method: "POST", body: "{}" }), qCheck),
   /* the secret store (server/secrets.ts); no answer here ever holds a value

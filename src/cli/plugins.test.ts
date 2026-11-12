@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { catalogLines, opLines, pluginLines } from "./plugins";
+import { catalogLines, commitPreviewLines, commitResultLine, opLines, pluginLines } from "./plugins";
 import type { PluginMachineSeen } from "../core/types";
 
 const mac: PluginMachineSeen = {
@@ -27,6 +27,7 @@ describe("canopy plugins", () => {
     ]);
     expect(pluginLines(mac, "codex")).toEqual(["mac  commits the shared settings.json, settings.json changed and not committed"]);
     expect(pluginLines({ ...mac, away: "no ssh" }, null)).toEqual(["mac  away: no ssh"]);
+    expect(pluginLines({ ...mac, settingsDirty: false, unpushed: 2 }, "codex")).toEqual(["mac  commits the shared settings.json, 2 dotclaude commits not pushed"]);
     const broken = { ...mac, agents: [{ ...mac.agents[0]!, plugins: [{ id: "v@m", version: "0.1.0", enabled: true, scope: "user", servers: {}, errors: ["skills load failed"], notes: [] }], declared: {}, markets: [] }] };
     expect(pluginLines(broken, null)).toEqual([
       "mac  commits the shared settings.json, settings.json changed and not committed",
@@ -42,5 +43,12 @@ describe("canopy plugins", () => {
   test("a search's lines end with the count", () => {
     expect(catalogLines({ machine: "mac", agent: "claude", total: 2, entries: [{ id: "remember@o", name: "remember", marketplace: "o", description: "memory", version: null, installs: 5, installed: false }] }))
       .toEqual(["remember@o  5 installs  memory", "2 on mac for claude, 1 shown"]);
+  });
+  test("a commit's preview, then what it came to", () => {
+    const change = { on: [], off: ["superpowers@o"], dropped: [], marketsAdded: [], marketsRemoved: [], marketsChanged: [], other: [] };
+    expect(commitPreviewLines({ machine: "mac", sha: "a".repeat(40), branch: "main", change, lines: ["turns off superpowers@o"], message: "settings.json: turn off superpowers@o\n\nCommitted from canopy." }))
+      .toEqual(["mac: settings.json on main", "  turns off superpowers@o", "", "  | settings.json: turn off superpowers@o", "  |", "  | Committed from canopy."]);
+    expect(commitResultLine({ machine: "mac", outcome: "pushed", commit: "abc1234", message: "committed abc1234 and pushed" })).toBe("mac: committed abc1234 and pushed");
+    expect(commitResultLine({ machine: "mac", outcome: "failed", message: "settings.json has nothing to commit" })).toBe("mac: nothing committed: settings.json has nothing to commit");
   });
 });

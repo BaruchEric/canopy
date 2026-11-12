@@ -179,8 +179,9 @@ const RULES: readonly Rule[] = [
   { methods: POST_DEL, paths: ["sources"], right: "admin" },
   { methods: POST, paths: ["sources/rescan", "kit/*", "secrets/*", "ranger", "ranger/restart", "ranger/fresh"], right: "admin" },
   // a plugin catalog or details read runs the agent's CLI on that machine
-  // (over ssh for gpd), so a run's token, which only reads, starts neither
-  { methods: ["GET"], paths: ["kit/plugins/catalog", "kit/plugins/details"], right: "operate" },
+  // (over ssh for gpd), and a commit's preview runs git in its ~/.claude,
+  // so a run's token, which only reads, starts none of them
+  { methods: ["GET"], paths: ["kit/plugins/catalog", "kit/plugins/details", "kit/plugins/commit"], right: "operate" },
   { methods: POST, paths: ["auth/approve", "auth/deny", "auth/revoke"], right: "admin" },
   { methods: ["PUT"], paths: ["guards"], right: "admin" },
   // the sweep's reads too: its plan names every shell and chat here, and an

@@ -2,7 +2,7 @@
  *  a row per plugin, a column per machine and agent, and what each cell
  *  offers. The server refuses what core/plugins.ts refuses; the page asks
  *  the same function first, so it never offers a button that would 409. */
-import { refusal } from "../../src/core/plugins";
+import { editsSettings, refusal } from "../../src/core/plugins";
 import type { KitInfo, PluginAgent, PluginAgentSeen, PluginMachineSeen, PluginOp, PluginOpRequest, PluginSeen } from "../../src/core/types";
 
 /** a machine as the page holds it: with the backend that reaches it */
@@ -80,23 +80,28 @@ export const committersOf = (ms: readonly PluginMachine[]): string[] => ms.filte
 /** The machine an op actually runs on. A machine on dotclaude's shared
  *  settings.json that does not commit it refuses an edit there; the same
  *  op then runs on the machine that commits, which every other one follows
- *  by pull. null: the op runs nowhere on this page, with the reason. */
+ *  by pull. Only that refusal moves: anything else (codex's config, an
+ *  agent not installed) is the machine's own. null: the op runs nowhere on
+ *  this page, with the reason. */
 export function routeOf(ms: readonly PluginMachine[], m: PluginMachine, req: Omit<PluginOpRequest, "machine">):
   { machine: PluginMachine; moved: boolean } | { why: string } {
   const committers = committersOf(ms);
   const why = refusal(m, req, committers);
   if (!why) return { machine: m, moved: false };
-  if (!(m.shared && !m.commits)) return { why };
+  const a = agentOf(m, req.agent);
+  if (!(m.shared && !m.commits && a?.path && editsSettings(a, req.op, req.id, req.source))) return { why };
   const w = ms.find((x) => x.commits && x.shared && !x.away && refusal(x, req, committers) === null);
   return w ? { machine: w, moved: true } : { why };
 }
 
-/** the ops a cell offers, in order */
+/** the ops a cell offers, in order. Codex has no update, and no switch for
+ *  a plugin the ChatGPT account brings. */
 export function cellOps(cell: PluginCell, agent: PluginAgent): PluginOp[] {
+  const codex = (op: PluginOp): PluginOp[] => (cell.plugin?.account ? ["uninstall"] : [op, "uninstall"]);
   switch (cell.state) {
-    case "on": return agent === "claude" ? ["disable", "update", "uninstall"] : ["uninstall"];
-    case "off": return agent === "claude" ? ["enable", "update", "uninstall"] : ["uninstall"];
-    case "broken": return agent === "claude" ? [cell.plugin?.enabled ? "disable" : "enable", "update", "uninstall"] : ["uninstall"];
+    case "on": return agent === "claude" ? ["disable", "update", "uninstall"] : codex("disable");
+    case "off": return agent === "claude" ? ["enable", "update", "uninstall"] : codex("enable");
+    case "broken": return agent === "claude" ? [cell.plugin?.enabled ? "disable" : "enable", "update", "uninstall"] : codex(cell.plugin?.enabled ? "disable" : "enable");
     case "wanted":
     case "none":
       return ["install"];

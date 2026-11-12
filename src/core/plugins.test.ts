@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
-  catalogOf, editsSettings, jsonOf, lastJsonObject, opArgs, outcomeOf, parseClaudeList, parseClaudeMarkets, parseCodexList, parseCodexMarkets,
-  parseSettings, refusal, searchCatalog, serverLine, sourceProblem,
+  catalogOf, changeLines, commitMessage, editsSettings, jsonOf, lastJsonObject, opArgs, opPlan, outcomeOf, parseClaudeList, parseClaudeMarkets,
+  parseCodexList, parseCodexMarkets, parseSettings, refusal, searchCatalog, serverLine, settingsChange, sourceProblem,
 } from "./plugins";
 import type { PluginAgentSeen, PluginMachineSeen } from "./types";
 
@@ -24,9 +24,10 @@ describe("reading the CLIs", () => {
     ]);
     expect(parseClaudeList({})).toBeNull();
   });
-  test("codex's list: the installed ones, enabled unless it says not", () => {
-    expect(parseCodexList({ installed: [{ pluginId: "pdf@openai-bundled", version: "1", installed: true, enabled: true }, { pluginId: "x@y", installed: false }], available: [] }))
+  test("codex's list: the installed ones, enabled unless it says not, and the account's marked", () => {
+    expect(parseCodexList({ installed: [{ pluginId: "pdf@openai-bundled", version: "1", installed: true, enabled: true, source: { source: "local", path: "/p" } }, { pluginId: "x@y", installed: false }], available: [] }))
       .toEqual([{ id: "pdf@openai-bundled", version: "1", enabled: true, scope: null, servers: {}, errors: [], notes: [] }]);
+    expect(parseCodexList({ installed: [{ pluginId: "gmail@openai-curated-remote", enabled: true, source: { source: "remote", id: "plugin_x" } }] })?.[0]?.account).toBe(true);
     expect(parseCodexList([])).toBeNull();
   });
   test("marketplaces: claude's repo, url or path; codex's marketplaceSource or root", () => {
@@ -69,13 +70,25 @@ describe("what an op may do where", () => {
     expect(refusal({ ...m, shared: false }, { agent: "claude", op: "disable", id: "a@m" }, [])).toBeNull();
     expect(refusal(m, { agent: "claude", op: "disable", id: "a@m" }, [])).toContain("none is marked");
   });
-  test("away, a missing CLI, an agent the kit does not read, and codex's missing toggle", () => {
+  test("away, a missing CLI, an agent the kit does not read, and codex's switch", () => {
     expect(refusal(machine({ away: "no ssh" }), { agent: "claude", op: "update", id: "a@m" }, [])).toBe("gpd is away: no ssh");
     expect(refusal(machine({ agents: [claude({ path: null })] }), { agent: "claude", op: "update", id: "a@m" }, [])).toBe("claude is not installed on gpd");
     expect(refusal(machine(), { agent: "codex", op: "install", id: "a@m" }, [])).toContain("does not read codex");
-    const cx = machine({ agents: [{ ...claude(), agent: "codex" }] });
-    expect(refusal(cx, { agent: "codex", op: "disable", id: "a@m" }, [])).toContain("no command that turns a plugin off");
+    const p = { version: null, enabled: true, scope: null, servers: {}, errors: [], notes: [] };
+    // codex's config is the machine's own, so a shared settings.json never refuses it
+    const cx = machine({ shared: true, agents: [{ ...claude(), agent: "codex", plugins: [{ ...p, id: "a@m" }, { ...p, id: "g@r-remote", account: true }] }] });
+    expect(refusal(cx, { agent: "codex", op: "disable", id: "a@m" }, [])).toBeNull();
+    expect(refusal(cx, { agent: "codex", op: "disable", id: "g@r-remote" }, [])).toContain("ChatGPT account");
+    expect(refusal(cx, { agent: "codex", op: "enable", id: "b@m" }, [])).toBe("b@m is not installed for codex on gpd");
+    expect(refusal(cx, { agent: "codex", op: "update", id: "a@m" }, [])).toContain("update the marketplace");
     expect(refusal(cx, { agent: "codex", op: "install", id: "a@m" }, [])).toBeNull();
+  });
+  test("plan: codex's switch is config.toml's, everything else the CLI's argv", () => {
+    expect(opPlan({ agent: "codex", op: "disable", id: "a@m" })).toEqual({ kind: "config", id: "a@m", on: false });
+    expect(opPlan({ agent: "codex", op: "enable", id: "a@m" })).toEqual({ kind: "config", id: "a@m", on: true });
+    expect(opPlan({ agent: "codex", op: "enable", id: "../x" })).toEqual({ error: "a plugin is named name@marketplace" });
+    expect(opPlan({ agent: "claude", op: "disable", id: "a@m" })).toEqual({ kind: "cli", args: ["plugin", "disable", "a@m", "--scope", "user", "--json"] });
+    expect(opPlan({ agent: "codex", op: "update", id: "a@m" })).toEqual({ error: "codex updates a plugin through its marketplace: update the marketplace" });
   });
   test("argv: claude's ops name the user scope; codex's use add, remove and upgrade; bad names and sources are refused", () => {
     expect(opArgs({ agent: "claude", op: "install", id: "a@m" })).toEqual(["plugin", "install", "a@m", "--scope", "user", "--json"]);
@@ -127,5 +140,43 @@ describe("the catalog", () => {
     expect(searchCatalog(all, "templat", 10).entries.map((e) => e.id)).toEqual(["carbone@o"]);
     expect(searchCatalog(all, "", 1)).toEqual({ total: 3, entries: [all[1]!] });
     expect(searchCatalog(all, "claude code", 10).entries.map((e) => e.id)).toEqual(["asana@o", "remember@o"]);
+  });
+});
+
+describe("a commit of settings.json", () => {
+  const before = JSON.stringify({
+    enabledPlugins: { "a@m": true, "b@m": true, "c@m": false, "d@m": true },
+    extraKnownMarketplaces: { m: { source: { source: "github", repo: "o/m" } }, gone: { source: { source: "github", repo: "o/gone" } } },
+    env: { TOKEN: "old" },
+    model: "opus",
+  });
+  const after = JSON.stringify({
+    enabledPlugins: { "a@m": false, "b@m": true, "c@m": true, "e@n": true, "f@n": false },
+    extraKnownMarketplaces: { m: { source: { source: "github", repo: "o/m2" } }, n: { source: { source: "github", repo: "o/n" } } },
+    env: { TOKEN: "new" },
+    model: "opus",
+    hooks: {},
+  });
+  test("what changed, by name: plugins on, off and dropped, marketplaces, and the other keys, never a value", () => {
+    const c = settingsChange(before, after);
+    expect(c).toEqual({
+      on: ["c@m", "e@n"], off: ["a@m", "f@n"], dropped: ["d@m"],
+      marketsAdded: ["n"], marketsRemoved: ["gone"], marketsChanged: ["m"], other: ["env", "hooks"],
+    });
+    expect(changeLines(c)).toEqual([
+      "turns on c@m, e@n", "turns off a@m, f@n", "drops d@m", "adds the marketplace n", "removes the marketplace gone",
+      "changes the source of the marketplace m", "also changes env, hooks",
+    ]);
+    expect(JSON.stringify(changeLines(c))).not.toContain("new");
+    // HEAD with no settings.json, or a file that does not parse, reads as empty
+    expect(settingsChange("", JSON.stringify({ enabledPlugins: { "a@m": true } })).on).toEqual(["a@m"]);
+  });
+  test("the message: one change in the subject, more counted and listed", () => {
+    const one = settingsChange(JSON.stringify({ enabledPlugins: { "a@m": true } }), JSON.stringify({ enabledPlugins: { "a@m": false } }));
+    expect(commitMessage(one, "mac")).toBe("settings.json: turn off a@m\n\nCommitted from canopy on mac.");
+    const many = commitMessage(settingsChange(before, after), "mac").split("\n");
+    expect(many[0]).toBe("settings.json: 9 changes");
+    expect(many).toContain("- change env, hooks");
+    expect(commitMessage(settingsChange("{}", "{ }"), "mac")).toBe("settings.json: its layout only\n\nCommitted from canopy on mac.");
   });
 });

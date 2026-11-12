@@ -46,9 +46,11 @@ describe("the plugins view's cells", () => {
     expect(pluginRows(ms, cols, { agent: null, machine: null, problems: true, text: "" })).toEqual(["homelab@homelab", "superpowers@o"]);
     expect(serversOf(ms, "context-mode@cm")).toEqual({ "context-mode": "node s.mjs" });
   });
-  test("ops a cell offers; codex has no toggle", () => {
+  test("ops a cell offers; codex has no update, and no switch for the account's plugins", () => {
     expect(cellOps(cellOf(ms, { machine: "mac", agent: "claude" }, "superpowers@o"), "claude")).toEqual(["disable", "update", "uninstall"]);
-    expect(cellOps({ state: "on", plugin: null, why: "" }, "codex")).toEqual(["uninstall"]);
+    expect(cellOps({ state: "on", plugin: { ...sp, scope: null }, why: "" }, "codex")).toEqual(["disable", "uninstall"]);
+    expect(cellOps({ state: "off", plugin: { ...sp, enabled: false, scope: null }, why: "" }, "codex")).toEqual(["enable", "uninstall"]);
+    expect(cellOps({ state: "on", plugin: { ...sp, account: true }, why: "" }, "codex")).toEqual(["uninstall"]);
     expect(cellOps({ state: "wanted", plugin: null, why: "" }, "claude")).toEqual(["install"]);
   });
 });
@@ -61,6 +63,16 @@ describe("where an op runs", () => {
     const mini = ms.find((m) => m.machine === "mini")!;
     expect(routeOf(ms, mini, { agent: "claude", op: "disable", id: "superpowers@o" })).toMatchObject({ machine: { machine: "mini" }, moved: false });
     expect(routeOf(ms, mini, { agent: "codex", op: "install", id: "a@b" })).toEqual({ why: "the kit does not read codex's plugins on mini" });
+  });
+  test("only a refusal over the shared settings.json moves: codex's config and a missing CLI stay the machine's own", () => {
+    const local = { ...sp, id: "pdf@b", scope: null };
+    const two: PluginMachine[] = [
+      { ...seen("mac", { shared: true, commits: true, agents: [claude(), { ...claude(), agent: "codex", plugins: [local] }] }), backend: "mac" },
+      { ...seen("gpd", { shared: true, agents: [claude({ path: null }), { ...claude(), agent: "codex", plugins: [] }] }), backend: "mac" },
+    ];
+    const gpd = two[1]!;
+    expect(routeOf(two, gpd, { agent: "codex", op: "disable", id: "pdf@b" })).toEqual({ why: "pdf@b is not installed for codex on gpd" });
+    expect(routeOf(two, gpd, { agent: "claude", op: "disable", id: "superpowers@o" })).toEqual({ why: "claude is not installed on gpd" });
   });
   test("a wanted plugin's marketplace that is not added here, and whether its source is a folder elsewhere", () => {
     expect(missingMarket(ms, { machine: "gpd", agent: "claude" }, "homelab@homelab")).toEqual({ name: "homelab", source: "/Users/e/dev/homelab" });

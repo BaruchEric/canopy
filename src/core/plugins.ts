@@ -1,10 +1,14 @@
 /** Agent plugins in the kit (FR-064, docs/superpowers/specs/2026-11-11-kit-plugins-design.md):
  *  what claude's and codex's plugin CLIs print, which ops a machine may
- *  run, and each op's argv. Canopy never edits an agent's plugin files
- *  itself; every change goes through that agent's own CLI. Pure and
- *  browser-safe: the page imports it to grey out what the server refuses. */
+ *  run, each op's argv, and what a commit of dotclaude's settings.json
+ *  holds. Every change goes through the agent's own CLI but one: codex has
+ *  no command that turns a plugin off and on, so canopy flips the `enabled`
+ *  line in that plugin's own config.toml table (pluginscan.ts
+ *  CODEX_SWITCH_SCRIPT) and keeps it only when the CLI then lists it so.
+ *  Pure and browser-safe: the page imports it to grey out what the server
+ *  refuses. */
 import type {
-  PluginAgent, PluginAgentSeen, PluginCatalogEntry, PluginMachineSeen, PluginMarketSeen, PluginOp, PluginOpRequest, PluginOutcome, PluginSeen,
+  PluginAgent, PluginAgentSeen, PluginCatalogEntry, PluginMachineSeen, PluginMarketSeen, PluginOp, PluginOpRequest, PluginOutcome, PluginSeen, SettingsChange,
 } from "./types";
 
 /** `name@marketplace`, both parts as the marketplaces name them */
@@ -98,7 +102,8 @@ export function parseCodexList(v: unknown): PluginSeen[] | null {
     if (!isObj(p) || p["installed"] === false) continue;
     const id = str(p["pluginId"]);
     if (!id) continue;
-    out.push({ id, version: str(p["version"]), enabled: p["enabled"] !== false, scope: null, servers: {}, errors: [], notes: [] });
+    const account = isObj(p["source"]) && p["source"]["source"] === "remote";
+    out.push({ id, version: str(p["version"]), enabled: p["enabled"] !== false, scope: null, servers: {}, errors: [], notes: [], ...(account ? { account } : {}) });
   }
   return out;
 }
@@ -182,7 +187,8 @@ export function sourceProblem(s: string): string | null {
   return null;
 }
 
-const CODEX_NO_TOGGLE = "codex has no command that turns a plugin off and on; remove it, and add it again later";
+const CODEX_ACCOUNT = "it comes with the ChatGPT account, and codex keeps no switch for it in config.toml";
+const CODEX_UPDATE = "codex updates a plugin through its marketplace: update the marketplace";
 
 /** Why a machine refuses an op, or null when it may run. The server
  *  checks this before it runs anything; the page uses it to say why a
@@ -193,8 +199,12 @@ export function refusal(m: PluginMachineSeen, req: Omit<PluginOpRequest, "machin
   const a = m.agents.find((x) => x.agent === req.agent);
   if (!a) return `the kit does not read ${req.agent}'s plugins on ${m.machine}`;
   if (!a.path) return `${req.agent} is not installed on ${m.machine}`;
-  if (req.agent === "codex" && (req.op === "enable" || req.op === "disable")) return CODEX_NO_TOGGLE;
-  if (req.agent === "codex" && req.op === "update") return "codex updates a plugin through its marketplace: update the marketplace";
+  if (req.agent === "codex" && (req.op === "enable" || req.op === "disable")) {
+    const p = a.plugins.find((x) => x.id === req.id);
+    if (!p) return `${req.id ?? "that plugin"} is not installed for codex on ${m.machine}`;
+    if (p.account) return CODEX_ACCOUNT;
+  }
+  if (req.agent === "codex" && req.op === "update") return CODEX_UPDATE;
   if (m.shared && !m.commits && editsSettings(a, req.op, req.id, req.source)) {
     const where = committers.length > 0 ? committers.join(" or ") : "the machine dotclaude is committed on (none is marked: kit.json machines.<name>.commits)";
     return `${m.machine} reads dotclaude's shared settings.json, so a change there leaves an edit that stops its pulls. Make it on ${where}; ${m.machine} follows once dotclaude is committed and pulled.`;
@@ -242,14 +252,27 @@ export function opArgs(req: Omit<PluginOpRequest, "machine">): string[] | { erro
     case "market-update": return ["plugin", "marketplace", "upgrade", name, "--json"];
     case "enable":
     case "disable":
-      return { error: CODEX_NO_TOGGLE };
+      return { error: "codex turns a plugin on and off in config.toml, not through its CLI (opPlan)" };
     case "update":
-      return { error: "codex updates a plugin through its marketplace: update the marketplace" };
+      return { error: CODEX_UPDATE };
     default: {
       const never: never = req.op;
       return never;
     }
   }
+}
+
+/** how an op runs: the agent's CLI with these arguments, or codex's switch
+ *  in config.toml, which its CLI does not have */
+export type OpPlan = { kind: "cli"; args: string[] } | { kind: "config"; id: string; on: boolean };
+
+export function opPlan(req: Omit<PluginOpRequest, "machine">): OpPlan | { error: string } {
+  if (req.agent === "codex" && (req.op === "enable" || req.op === "disable")) {
+    if (!(req.id && PLUGIN_ID.test(req.id))) return { error: "a plugin is named name@marketplace" };
+    return { kind: "config", id: req.id, on: req.op === "enable" };
+  }
+  const args = opArgs(req);
+  return "error" in args ? args : { kind: "cli", args };
 }
 
 /** a command a marketplace declares, as the CLI shows it for a person to accept */
@@ -332,4 +355,72 @@ export function opText(op: PluginOp, what: string): string {
       return never;
     }
   }
+}
+
+/* ---------- committing dotclaude's settings.json ---------- */
+
+const objOf = (text: string): Record<string, unknown> => {
+  try {
+    const j: unknown = JSON.parse(text);
+    return isObj(j) ? j : {};
+  } catch {
+    return {};
+  }
+};
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/** What `after` (the working file) holds that `before` (HEAD's) does not,
+ *  by name only. A file that does not parse reads as empty. */
+export function settingsChange(before: string, after: string): SettingsChange {
+  const b = objOf(before);
+  const a = objOf(after);
+  const plugins = (o: Record<string, unknown>): Record<string, unknown> => (isObj(o["enabledPlugins"]) ? o["enabledPlugins"] : {});
+  const markets = (o: Record<string, unknown>): Record<string, unknown> => (isObj(o["extraKnownMarketplaces"]) ? o["extraKnownMarketplaces"] : {});
+  const bp = plugins(b);
+  const ap = plugins(a);
+  const bm = markets(b);
+  const am = markets(a);
+  const sorted = (xs: string[]): string[] => xs.sort((x, y) => x.localeCompare(y));
+  return {
+    on: sorted(Object.keys(ap).filter((id) => ap[id] === true && bp[id] !== true)),
+    off: sorted(Object.keys(ap).filter((id) => ap[id] === false && bp[id] !== false)),
+    dropped: sorted(Object.keys(bp).filter((id) => !(id in ap))),
+    marketsAdded: sorted(Object.keys(am).filter((n) => !(n in bm))),
+    marketsRemoved: sorted(Object.keys(bm).filter((n) => !(n in am))),
+    marketsChanged: sorted(Object.keys(am).filter((n) => n in bm && !sameJson(am[n], bm[n]))),
+    other: sorted([...new Set([...Object.keys(a), ...Object.keys(b)])]
+      .filter((k) => k !== "enabledPlugins" && k !== "extraKnownMarketplaces" && !sameJson(a[k], b[k]))),
+  };
+}
+
+/** a change as lines a person reads before the commit */
+export function changeLines(c: SettingsChange): string[] {
+  const line = (label: string, xs: string[]): string[] => (xs.length > 0 ? [`${label} ${xs.join(", ")}`] : []);
+  return [
+    ...line("turns on", c.on),
+    ...line("turns off", c.off),
+    ...line("drops", c.dropped),
+    ...line("adds the marketplace", c.marketsAdded),
+    ...line("removes the marketplace", c.marketsRemoved),
+    ...line("changes the source of the marketplace", c.marketsChanged),
+    ...line("also changes", c.other),
+  ];
+}
+
+/** The commit message: one change says itself in the subject, more than
+ *  one is counted there and listed in the body. */
+export function commitMessage(c: SettingsChange, machine: string): string {
+  const parts: string[] = [
+    ...c.on.map((id) => `turn on ${id}`),
+    ...c.off.map((id) => `turn off ${id}`),
+    ...c.dropped.map((id) => `drop ${id}`),
+    ...c.marketsAdded.map((n) => `add the marketplace ${n}`),
+    ...c.marketsRemoved.map((n) => `remove the marketplace ${n}`),
+    ...c.marketsChanged.map((n) => `change the source of the marketplace ${n}`),
+    ...(c.other.length > 0 ? [`change ${c.other.join(", ")}`] : []),
+  ];
+  const subject = parts.length === 0 ? "settings.json: its layout only" : parts.length === 1 ? `settings.json: ${parts[0] ?? ""}` : `settings.json: ${parts.length} changes`;
+  const body = parts.length <= 1 ? [] : ["", ...parts.map((p) => `- ${p}`)];
+  return [subject, ...body, "", `Committed from canopy on ${machine}.`].join("\n");
 }

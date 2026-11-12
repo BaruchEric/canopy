@@ -6,11 +6,14 @@ import { onHost } from "../core/exec";
 import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, pluginAgentsOn, secretsOf, wantLink, withCanopyServer } from "../core/kit";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp, seeTools } from "../core/kitscan";
-import { catalogOf, isPluginAgent, isPluginOp, jsonOf, opArgs, outcomeOf, PLUGIN_ID, refusal, searchCatalog } from "../core/plugins";
-import { CATALOG_TIMEOUT, OP_TIMEOUT, plain, runCli, seePlugins } from "../core/pluginscan";
+import { catalogOf, changeLines, commitMessage, isPluginAgent, isPluginOp, jsonOf, opPlan, outcomeOf, parseCodexList, PLUGIN_ID, refusal, searchCatalog, settingsChange } from "../core/plugins";
+import {
+  CATALOG_TIMEOUT, codexSwitch, commitSettingsGit, OP_TIMEOUT, parseCommitRun, parseSettingsRead, plain, readSettingsGit, runCli, seePlugins,
+} from "../core/pluginscan";
 import type {
   KitAction, KitApplyResult, KitInfo, KitInstallResult, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen,
-  PluginAgent, PluginCatalog, PluginCatalogEntry, PluginMachineSeen, PluginOpRequest, PluginOpResult, SecretsInfo, ServerEvent,
+  PluginAgent, PluginCatalog, PluginCatalogEntry, PluginCommitPreview, PluginCommitResult, PluginMachineSeen, PluginOpRequest, PluginOpResult, PluginOutcome,
+  SecretsInfo, ServerEvent,
 } from "../core/types";
 
 export const KIT_EVERY = 10 * 60_000;
@@ -391,23 +394,95 @@ export class KitHub {
   }
 
   /** Install, remove, update, turn on or off a plugin, or add, remove or
-   *  update a marketplace, through the agent's own CLI on that machine.
+   *  update a marketplace, through the agent's own CLI on that machine
+   *  (codex's switch through its config.toml, which its CLI lacks).
    *  Refused on a machine reading dotclaude's shared settings.json when
    *  the op would edit it there (refusal in core/plugins.ts). One at a
    *  time per machine, then a rescan of that machine. */
   pluginOp(req: PluginOpRequest): Promise<PluginOpResult> {
     return this.serial(req.machine, async () => {
       const { kit, m, ps, path } = this.pluginsOf(req.machine, req.agent);
-      const args = opArgs(req);
-      if ("error" in args) throw new KitError(args.error, 400);
+      const plan = opPlan(req);
+      if ("error" in plan) throw new KitError(plan.error, 400);
       const why = refusal(ps, req, this.committers(kit));
       if (why) throw new KitError(why, 409);
-      const r = await runCli(m.host, path, args, { run: this.deps.run, env: this.cliEnv(m, req.agent), timeoutMs: OP_TIMEOUT });
-      const out = outcomeOf(req.agent, r.code, r.stdout, r.stderr);
+      let out: PluginOutcome;
+      if (plan.kind === "config") out = await this.switchCodex(m, path, plan.id, plan.on);
+      else {
+        const r = await runCli(m.host, path, plan.args, { run: this.deps.run, env: this.cliEnv(m, req.agent), timeoutMs: OP_TIMEOUT });
+        out = outcomeOf(req.agent, r.code, r.stdout, r.stderr);
+      }
       for (const k of this.catalogs.keys()) if (k.startsWith(`${req.machine}/`)) this.catalogs.delete(k);
       const now = this.kit ?? kit;
       await this.scanOne(now, this.mine(now).find((x) => x.name === req.machine) ?? m);
       return { machine: req.machine, agent: req.agent, op: req.op, ...out };
+    });
+  }
+
+  /** Codex's switch: the plugin's `enabled` line in config.toml, kept only
+   *  when codex's own list then says it is on or off; otherwise the file
+   *  goes back to the bytes it had (CODEX_SWITCH_SCRIPT). */
+  private async switchCodex(m: Mine, path: string, id: string, on: boolean): Promise<PluginOutcome> {
+    const io = { run: this.deps.run, env: this.deps.env };
+    const word = on ? "on" : "off";
+    const set = await codexSwitch(m.host, ["set", id, String(on)], io);
+    const said = set.stdout.trim().split("\n")[0] ?? "";
+    if (set.code === 7) return { outcome: "ok", message: `${id} is already ${word} in config.toml` };
+    if (set.code !== 0) return { outcome: "failed", message: said || (set.stderr.trim().split("\n")[0] ?? "") || `the switch exited ${set.code}` };
+    const sum = said.startsWith("S\t") ? said.slice(2) : "";
+    const list = await runCli(m.host, path, ["plugin", "list", "--json"], { ...io, timeoutMs: OP_TIMEOUT });
+    const listed = list.code === 0 ? parseCodexList(jsonOf(list.stdout))?.find((p) => p.id === id) : undefined;
+    if (listed?.enabled === on) {
+      await codexSwitch(m.host, ["keep"], io);
+      return { outcome: "ok", message: `turned ${word} in config.toml` };
+    }
+    const undo = await codexSwitch(m.host, ["undo", sum], io);
+    const seen = list.code !== 0 ? `codex plugin list failed after the edit (${(list.stderr.trim().split("\n")[0] ?? "") || `exited ${list.code}`})` : `codex still lists ${id} ${listed ? (listed.enabled ? "on" : "off") : "nowhere"} after the edit`;
+    return { outcome: "failed", message: `${seen}; ${undo.code === 0 ? "config.toml is back as it was" : (undo.stdout.trim() || "config.toml could not be put back")}` };
+  }
+
+  /** a machine whose settings.json canopy may commit: it commits dotclaude and reads the shared file */
+  private committing(machine: string): { m: Mine; ps: PluginMachineSeen } {
+    const { m } = this.reach(machine);
+    const ps = this.views.get(machine)?.plugins;
+    if (!ps) throw new KitError(`the kit reads no plugins on ${machine}; kit.json's plugins names the agents`, 409);
+    if (ps.away) throw new KitError(`${machine} is away: ${ps.away}`, 409);
+    if (!ps.commits) throw new KitError(`kit.json does not mark ${machine} as the machine dotclaude is committed on (machines.${machine}.commits)`, 409);
+    if (!ps.shared) throw new KitError(`${machine}'s settings.json is not dotclaude's shared file`, 409);
+    return { m, ps };
+  }
+
+  /** what a commit of settings.json would hold, by name only, and the bytes it holds them for */
+  private async readCommit(machine: string, m: Mine): Promise<PluginCommitPreview> {
+    const r = await readSettingsGit(m.host, { run: this.deps.run, env: this.deps.env });
+    if (r.code !== 0) throw new KitError(`${machine}: ${r.stdout.trim().split("\n")[0] || r.stderr.trim().split("\n")[0] || `the read exited ${r.code}`}`, 409);
+    const g = parseSettingsRead(r.stdout);
+    if (!g.dirty) throw new KitError(`${machine}'s settings.json has nothing to commit`, 409);
+    const change = settingsChange(g.head, g.work);
+    return { machine, sha: g.sha, branch: g.branch, change, message: commitMessage(change, machine) };
+  }
+
+  async commitPreview(machine: string): Promise<PluginCommitPreview & { lines: string[] }> {
+    const { m } = this.committing(machine);
+    const p = await this.readCommit(machine, m);
+    return { ...p, lines: changeLines(p.change) };
+  }
+
+  /** Commits and pushes dotclaude's settings.json on the machine that
+   *  commits it, only while it still holds the bytes a person was shown
+   *  (`sha`), with the message canopy writes from the change. */
+  commitSettings(machine: string, sha: string): Promise<PluginCommitResult> {
+    return this.serial(machine, async () => {
+      const { m } = this.committing(machine);
+      const p = await this.readCommit(machine, m);
+      if (p.sha !== sha) throw new KitError("settings.json changed since it was shown; look at it again", 409);
+      const r = await commitSettingsGit(m.host, sha, p.message, { run: this.deps.run, env: this.deps.env });
+      const c = parseCommitRun(r.stdout);
+      const kit = this.kit;
+      if (kit) await this.scanOne(kit, this.mine(kit).find((x) => x.name === machine) ?? m);
+      if (!c.commit) return { machine, outcome: "failed", message: c.error ?? (r.stderr.trim().split("\n")[0] || `the commit exited ${r.code}`) };
+      if (c.pushed) return { machine, outcome: "pushed", commit: c.commit, message: `committed ${c.commit} and pushed` };
+      return { machine, outcome: "committed", commit: c.commit, message: `committed ${c.commit} on ${machine}; the push failed: ${c.pushError || "git gave no reason"}` };
     });
   }
 
@@ -502,6 +577,16 @@ export class KitHub {
         const name = opt("name");
         const accept = opt("accept");
         return json(await this.pluginOp({ machine, agent, op, ...(id ? { id } : {}), ...(source ? { source } : {}), ...(name ? { name } : {}), ...(accept ? { accept } : {}) }));
+      }
+      if (path === "/api/kit/plugins/commit" && req.method === "GET") {
+        const machine = url.searchParams.get("machine");
+        if (!machine) return json({ error: "machine is required" }, 400);
+        return json(await this.commitPreview(machine));
+      }
+      if (path === "/api/kit/plugins/commit" && req.method === "POST") {
+        const body = (await req.json().catch(() => ({}))) as { machine?: unknown; sha?: unknown };
+        if (typeof body.machine !== "string" || typeof body.sha !== "string" || !/^[0-9a-f]{40,64}$/.test(body.sha)) return json({ error: "machine and the sha the preview gave are required" }, 400);
+        return json(await this.commitSettings(body.machine, body.sha));
       }
       if ((path === "/api/kit/plugins/catalog" || path === "/api/kit/plugins/details") && req.method === "GET") {
         const q = url.searchParams;

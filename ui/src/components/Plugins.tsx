@@ -11,7 +11,7 @@ import {
   CATALOG_CHIPS, PLUGIN_GLYPH, PLUGIN_PROBLEM, cellOf, cellOps, declaredOnly, isFolder, marketGap, mergePlugins, opLabel, pluginColumns, pluginRows,
   readsPlugins, routeOf, serversOf, sheetColumns, type PluginColumn, type PluginFilter, type PluginMachine,
 } from "../plugins";
-import type { PluginAgent, PluginCatalog, PluginOp, PluginOpRequest } from "../../../src/core/types";
+import type { PluginAgent, PluginCatalog, PluginCommitPreview, PluginOp, PluginOpRequest } from "../../../src/core/types";
 
 type Sheet = { kind: "plugin"; id: string } | { kind: "catalog" } | { kind: "markets" };
 
@@ -99,6 +99,61 @@ function PendingBox({ ops }: { ops: Ops }) {
   );
 }
 
+/** a commit of settings.json read from the machine, waiting on a person */
+type CommitAsk = { m: PluginMachine; preview: PluginCommitPreview & { lines: string[] } };
+
+/** Commit dotclaude's settings.json where it is committed: the button reads
+ *  what the commit would hold, by name only, and the box sends it with the
+ *  bytes' hash, so a file that changed in between is refused. */
+function useCommit(say: (msg: string) => void) {
+  const [ask, setAsk] = useState<CommitAsk | null>(null);
+  const [busy, setBusy] = useState(false);
+  const look = async (m: PluginMachine) => {
+    setBusy(true);
+    try {
+      setAsk({ m, preview: await api.kitPluginCommitPreview(m.backend, m.machine) });
+    } catch (e) {
+      say(`${m.machine}: settings.json: ${errorText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const commit = async () => {
+    if (!ask) return;
+    setBusy(true);
+    try {
+      const r = await api.kitPluginCommit(ask.m.backend, ask.m.machine, ask.preview.sha);
+      say(`${ask.m.machine}: ${r.outcome === "failed" ? `nothing committed. ${r.message}` : r.message}`);
+      setAsk(null);
+    } catch (e) {
+      say(`${ask.m.machine}: settings.json: ${errorText(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { ask, busy, look, commit, cancel: () => setAsk(null) };
+}
+
+type Commit = ReturnType<typeof useCommit>;
+
+function CommitBox({ c }: { c: Commit }) {
+  const a = c.ask;
+  if (!a) return null;
+  return (
+    <div className="kit-sheet plugin-pending">
+      <p className="kit-error">Commit dotclaude's settings.json on {a.m.machine} and push {a.preview.branch || "its branch"}? The other machines on the shared file follow at their next pull.</p>
+      <ul className="plugin-change">
+        {(a.preview.lines.length > 0 ? a.preview.lines : ["changes only the file's layout"]).map((l) => <li key={l}>{l}</li>)}
+      </ul>
+      <pre className="kit-command">{a.preview.message}</pre>
+      <div className="kit-line">
+        <button type="button" className="mini" disabled={c.busy} onClick={() => void c.commit()}>{c.busy ? "committing…" : "commit and push"}</button>
+        <button type="button" className="mini" onClick={c.cancel}>cancel</button>
+      </div>
+    </div>
+  );
+}
+
 function PluginSheet({ id, ops, cols, onClose }: { id: string; ops: Ops; cols: PluginColumn[]; onClose: () => void }) {
   const servers = Object.entries(serversOf(ops.ms, id));
   // claude's details from the first machine it is installed on
@@ -159,6 +214,7 @@ function PluginSheet({ id, ops, cols, onClose }: { id: string; ops: Ops; cols: P
                 </p>
               )}
               {cell.why && cell.state !== "none" && cell.state !== "off" && <p className="kit-note">{cell.why}</p>}
+              {cell.plugin?.account && <p className="kit-note">It comes with the ChatGPT account, so codex keeps no switch for it in config.toml.</p>}
               {notes.map((n) => <p key={n} className="kit-note">{n}</p>)}
               {refusals(ops, m, c.agent, list, id).map((w) => <p key={w} className="kit-note">{w}</p>)}
             </li>
@@ -317,6 +373,7 @@ export function PluginsView() {
   const [said, setSaid] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const ops = useOps(ms, setSaid);
+  const commit = useCommit(setSaid);
   const agents = [...new Set(allCols.map((c) => c.agent))];
 
   async function rescan() {
@@ -365,9 +422,13 @@ export function PluginsView() {
                 {[
                   m.shared ? (m.commits ? "commits dotclaude's shared settings.json" : "follows dotclaude's shared settings.json") : "its own settings.json",
                   ...(m.settingsDirty && m.shared ? ["settings.json changed, not committed"] : []),
+                  ...(m.unpushed && m.shared ? [`${m.unpushed} dotclaude ${m.unpushed === 1 ? "commit" : "commits"} not pushed`] : []),
                   ...m.agents.filter((a) => a.error).map((a) => `${a.agent}: ${a.error}`),
                 ].join("; ")}
               </span>
+            )}
+            {!m.away && m.commits && m.shared && m.settingsDirty && (
+              <button type="button" className="mini" disabled={commit.busy || commit.ask !== null} onClick={() => void commit.look(m)}>commit settings.json…</button>
             )}
           </div>
         ))}
@@ -410,6 +471,7 @@ export function PluginsView() {
       </div>
       <p className="kit-note plugin-legend">● on · ◐ off · ○ turned on in settings.json, not installed · ! fails to load</p>
       <PendingBox ops={ops} />
+      <CommitBox c={commit} />
       {sheet?.kind === "plugin" && <PluginSheet key={sheet.id} id={sheet.id} ops={ops} cols={allCols} onClose={() => setSheet(null)} />}
       {sheet?.kind === "catalog" && <CatalogSheet ops={ops} cols={allCols} onClose={() => setSheet(null)} />}
       {sheet?.kind === "markets" && <MarketsSheet ops={ops} cols={allCols} onClose={() => setSheet(null)} />}

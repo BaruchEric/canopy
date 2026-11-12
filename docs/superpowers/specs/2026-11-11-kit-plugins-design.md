@@ -28,20 +28,18 @@ The reading of the request:
 
 - One matrix: a row per plugin, a column per machine and agent.
 - Every op on any machine from the page and from `canopy plugins`.
-- No change ever made in a way the agent's own CLI would not make.
+- No change ever made in a way the agent would not make itself: through its
+  CLI, or for codex's switch the same `config.toml` line codex writes.
 - dotclaude's shared `settings.json` stays committable from one machine.
 
 ## Non-goals
 
 - Writing plugin files by hand: `settings.json`, `installed_plugins.json`,
-  the plugin cache, `config.toml`.
-- Codex enable, disable and update. Its CLI has no toggle (`codex plugin
-  add|remove|list|marketplace` only), and a toggle by editing
-  `config.toml` would be the hand edit above.
+  the plugin cache, `config.toml`. The one exception is codex's switch
+  (below), added the same day at Eric's "do Recommendations".
+- Codex update. Its CLI has none; a marketplace upgrade brings new versions.
 - Project-scope plugins (`--scope project|local`). Everything is user scope.
 - Authoring plugins or marketplaces.
-- Committing dotclaude from canopy. The page says when `settings.json`
-  changed and is not committed; the commit stays Eric's.
 
 ## Anti-goals
 
@@ -84,7 +82,7 @@ accept?}`. One op at a time per machine, then that machine is rescanned.
 | install | `plugin install id --scope user --json` | `plugin add id --json` |
 | uninstall | `plugin uninstall id --scope user --json` | `plugin remove id --json` |
 | update | `plugin update id --scope user --json` | refused |
-| enable, disable | `plugin enable|disable id --scope user --json` | refused |
+| enable, disable | `plugin enable|disable id --scope user --json` | the `enabled` line in `config.toml` (below) |
 | market-add | `plugin marketplace add src --scope user --json` | `plugin marketplace add src --json` |
 | market-remove | `plugin marketplace remove name --scope user --json` | `plugin marketplace remove name --json` |
 | market-update | `plugin marketplace update name --json` | `plugin marketplace upgrade name --json` |
@@ -107,6 +105,66 @@ The page asks the same `refusal` before it draws a button, and offers the op
 on the committing machine instead ("turn off on mac"). kit.json marks that
 machine `machines.mac.commits: true`. With none marked, the refusal says to
 mark one.
+
+### Codex's switch
+
+Codex's CLI is `codex plugin add|remove|list|marketplace`, with no switch.
+Its `config.toml` has one: for each local plugin it installs, codex writes a
+`[plugins."id"]` table with `enabled = true`, and `codex plugin list` reports
+`enabled: false` once that line says false (checked on 2026-11-11 in a
+scratch `CODEX_HOME`). So enable and disable for codex are
+`CODEX_SWITCH_SCRIPT` (`core/pluginscan.ts`), run through `onHost` like the
+scan, on `${CODEX_HOME:-$HOME/.codex}/config.toml`:
+
+- `set id true|false` rewrites the first `enabled` line inside that one
+  table (the header matched as a string, the table ending at the next `[`)
+  into a copy made with `cp -p`, so the mode (600: the file can hold
+  tokens) stays. It swaps the copy in with `mv` only when the file's
+  checksum has not moved since it was read, and keeps the old bytes as
+  `config.toml.canopy-before`. A link is refused rather than replaced.
+- The server then runs `codex plugin list --json`. When the plugin reads
+  the new state, `keep` drops the copy of before. When it does not, `undo`
+  puts the old bytes back, unless something else wrote the file since.
+- It never adds a table. A second table for the same plugin makes codex
+  refuse its whole config ("duplicate key"), and every local plugin codex
+  lists has one already.
+
+A plugin the ChatGPT account brings (`@openai-curated-remote`, whose list
+`source` is `remote`) ignores a table: `[plugins."x@openai-curated-remote"]
+enabled = false` left it listed on. Those cells offer remove only, and
+`refusal` says why. Codex's config is each machine's own, so a codex op is
+never moved to the committing machine.
+
+### Committing settings.json
+
+The committing machine's line says "settings.json changed, not committed"
+and offers "commit settings.json…". `GET /api/kit/plugins/commit?machine`
+(operate) reads `~/.claude` there (`SETTINGS_READ_SCRIPT`): the branch,
+`git hash-object settings.json`, and the file at HEAD and in the working
+tree. `settingsChange` names what differs: plugins turned on, turned off or
+dropped, marketplaces added, removed or with a new source, and other
+top-level keys. It names keys only, never a value, since `env` can hold
+secrets. `commitMessage` writes the message: one change in the subject, or
+a count there and a list in the body.
+
+`POST /api/kit/plugins/commit {machine, sha}` (admin) reads again, refuses
+(409) when the bytes no longer hash to `sha`, and runs
+`SETTINGS_COMMIT_SCRIPT`:
+
+- `git commit -m <message> -- settings.json`, which commits that path
+  alone and leaves anything else staged as it was;
+- `git push`, with no terminal and ssh in batch mode, so a missing key
+  fails at once with git's words instead of waiting on a prompt;
+- a push turned away is rebased onto the remote (`pull --rebase
+  --no-autostash`) and sent again, but only when no other tracked file is
+  changed. Otherwise the commit stays local, the answer is `committed` with
+  git's reason, and the checkout is never left mid-rebase. The scan counts
+  the commits the upstream lacks, and the machine's line says "1 dotclaude
+  commit not pushed" until a push from a terminal sends it.
+
+The other machines on the shared file catch up at their next pull.
+`canopy plugins commit [--machine M] [--dry-run]` does the same from a
+terminal.
 
 ### The mini's paths
 
@@ -135,8 +193,8 @@ what the plugin costs a session.
 ## Calls Claude made
 
 - User scope only, since the kit is about a person's machines.
-- Codex gets install and remove; its update and toggle are refused with the
-  reason rather than faked through `config.toml`.
+- Codex gets install and remove through its CLI and its switch through
+  `config.toml`; its update is refused with the reason.
 - A remove asks first. Install, update and the switch run on the click.
 - A marketplace counts as added on a machine when the agent lists it or a
   plugin from it is installed there: claude installs from `synced` and codex

@@ -148,6 +148,9 @@ describe("needs", () => {
     expect(needs("POST", "/api/kit/plugins")).toBe("admin");
     expect(needs("GET", "/api/kit/plugins/catalog")).toBe("operate");
     expect(needs("GET", "/api/kit/plugins/details")).toBe("operate");
+    // a commit's preview reads key names; the commit itself pushes dotclaude
+    expect(needs("GET", "/api/kit/plugins/commit")).toBe("operate");
+    expect(needs("POST", "/api/kit/plugins/commit")).toBe("admin");
     expect(needs("POST", "/api/secrets/set")).toBe("admin");
     expect(needs("POST", "/api/ranger/restart")).toBe("admin");
     expect(needs("PUT", "/api/guards")).toBe("admin");

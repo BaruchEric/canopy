@@ -4128,6 +4128,9 @@ export interface PluginSeen {
   servers: Record<string, string>;
   errors: string[];
   notes: string[];
+  /** codex: it comes with the ChatGPT account (the list's source is
+   *  remote), and config.toml holds no switch for it */
+  account?: boolean;
 }
 
 export interface PluginMarketSeen {
@@ -4162,6 +4165,9 @@ export interface PluginMachineSeen {
   shared: boolean;
   /** settings.json holds changes git has not committed */
   settingsDirty: boolean;
+  /** dotclaude commits here that its upstream does not have yet (a push
+   *  that failed after a commit); absent where it was not read */
+  unpushed?: number;
   /** kit.json names this machine as the one dotclaude is committed on */
   commits: boolean;
   agents: PluginAgentSeen[];
@@ -4192,6 +4198,40 @@ export type PluginOutcome =
   | { outcome: "confirm"; message: string; command: string; sha256: string };
 
 export type PluginOpResult = { machine: string; agent: PluginAgent; op: PluginOp } & PluginOutcome;
+
+/** What dotclaude's settings.json holds that HEAD does not, by name only:
+ *  a value can be a secret (`env`), so none is ever shown. */
+export interface SettingsChange {
+  /** plugins enabledPlugins turns on that HEAD did not */
+  on: string[];
+  /** plugins it turns off that HEAD turned on or did not name */
+  off: string[];
+  /** plugins HEAD named and it does not */
+  dropped: string[];
+  marketsAdded: string[];
+  marketsRemoved: string[];
+  /** marketplaces whose source changed */
+  marketsChanged: string[];
+  /** the other top-level keys that differ */
+  other: string[];
+}
+
+/** what a commit of settings.json would hold, for a person to read first */
+export interface PluginCommitPreview {
+  machine: string;
+  /** `git hash-object settings.json`: the commit runs only on these bytes */
+  sha: string;
+  branch: string;
+  change: SettingsChange;
+  /** the commit message canopy writes */
+  message: string;
+}
+
+/** a commit of settings.json: pushed; committed but not pushed (git's words why); or not made */
+export type PluginCommitResult =
+  | { machine: string; outcome: "pushed"; commit: string; message: string }
+  | { machine: string; outcome: "committed"; commit: string; message: string }
+  | { machine: string; outcome: "failed"; message: string };
 
 export interface PluginCatalogEntry {
   id: string;

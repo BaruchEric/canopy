@@ -5,9 +5,14 @@
  *  The claude one edits $HOME/.claude/settings.json the way claude 2.1.322
  *  does (install and enable set enabledPlugins[id] true, disable false,
  *  uninstall drops it, a marketplace add of a source not declared adds it),
- *  and records installPaths under $HOME in installed_plugins.json. A
- *  catalog entry whose id starts `needs-cmd` asks for a command to be
- *  accepted, with the sha256 of "run-me". */
+ *  and records installPaths under $HOME in installed_plugins.json. The
+ *  codex one keeps a `[plugins."id"]` table with `enabled` in
+ *  ${CODEX_HOME:-$HOME/.codex}/config.toml the way codex does for a local
+ *  plugin: add writes it, remove drops it, and list reads enabled from it,
+ *  except for a remote plugin (the ChatGPT account's) and one whose id
+ *  starts `stuck`, which stays as its state says. A catalog entry whose id
+ *  starts `needs-cmd` asks for a command to be accepted, with the sha256
+ *  of "run-me". */
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PluginAgent } from "./types";
@@ -28,6 +33,35 @@ const settings = () => (fs.existsSync(settingsFile) ? JSON.parse(fs.readFileSync
 const writeSettings = (s) => fs.writeFileSync(settingsFile, JSON.stringify(s, null, 2));
 const out = (o) => console.log(JSON.stringify(o));
 const fail = (msg, code = 1, extra = {}) => { out({ outcome: "failed", message: msg, ...extra }); console.error("✘ " + msg); process.exit(code); };
+const cfgFile = (process.env.CODEX_HOME || home + "/.codex") + "/config.toml";
+const cfg = () => (fs.existsSync(cfgFile) ? fs.readFileSync(cfgFile, "utf8") : "");
+const hdr = (id) => '[plugins."' + id + '"]';
+const tableOn = (id) => {
+  const lines = cfg().split("\\n");
+  const at = lines.findIndex((l) => l.trim() === hdr(id));
+  if (at < 0) return undefined;
+  for (const l of lines.slice(at + 1)) {
+    if (l.trim().startsWith("[")) return undefined;
+    const m = /^\\s*enabled\\s*=\\s*(true|false)/.exec(l);
+    if (m) return m[1] === "true";
+  }
+  return undefined;
+};
+const addTable = (id) => {
+  if (agent !== "codex" || tableOn(id) !== undefined) return;
+  fs.mkdirSync(require("node:path").dirname(cfgFile), { recursive: true });
+  fs.writeFileSync(cfgFile, cfg() + "\\n" + hdr(id) + "\\nenabled = true\\n");
+};
+const dropTable = (id) => {
+  if (agent !== "codex") return;
+  const lines = cfg().split("\\n");
+  const at = lines.findIndex((l) => l.trim() === hdr(id));
+  if (at < 0) return;
+  let end = at + 1;
+  while (end < lines.length && !lines[end].trim().startsWith("[")) end++;
+  fs.writeFileSync(cfgFile, [...lines.slice(0, at), ...lines.slice(end)].join("\\n"));
+};
+const codexOn = (id, p) => (p.remote || id.startsWith("stuck") ? p.enabled : (tableOn(id) ?? p.enabled));
 const installedFile = home + "/.claude/plugins/installed_plugins.json";
 const recordInstall = (id, version) => {
   if (agent !== "claude") return;
@@ -44,7 +78,8 @@ const json = args.includes("--json");
 if (sub === "list") {
   const installed = Object.entries(st.installed).map(([id, p]) => agent === "claude"
     ? { id, version: p.version ?? "1.0.0", scope: "user", enabled: p.enabled, installPath: home + "/x", mcpServers: p.servers, errors: p.errors ?? null, notes: null }
-    : { pluginId: id, name: id.split("@")[0], marketplaceName: id.split("@")[1], version: p.version ?? "1.0.0", installed: true, enabled: p.enabled });
+    : { pluginId: id, name: id.split("@")[0], marketplaceName: id.split("@")[1], version: p.version ?? "1.0.0", installed: true, enabled: codexOn(id, p),
+        source: p.remote ? { source: "remote", id: "plugin_" + id } : { source: "local", path: "/p/" + id } });
   if (args.includes("--available")) {
     const available = st.catalog.map((c) => agent === "claude"
       ? { pluginId: c.id, name: c.id.split("@")[0], description: c.description ?? "", marketplaceName: c.id.split("@")[1], installCount: c.installs }
@@ -98,6 +133,7 @@ if (sub === "install" || sub === "add") {
   }
   st.installed[id] = { enabled: true, version: "1.0.0" }; save();
   recordInstall(id, "1.0.0");
+  addTable(id);
   if (agent === "claude") { const s = settings(); s.enabledPlugins ??= {}; if (s.enabledPlugins[id] !== true) { s.enabledPlugins[id] = true; writeSettings(s); } }
   out({ command: "install", outcome: "ok", plugin: id, message: "Successfully installed plugin: " + id });
   process.exit(0);
@@ -105,6 +141,7 @@ if (sub === "install" || sub === "add") {
 if (!p) fail("Plugin " + id + " is not installed");
 if (sub === "uninstall" || sub === "remove") {
   delete st.installed[id]; save();
+  dropTable(id);
   if (agent === "claude") { const s = settings(); if (s.enabledPlugins) { delete s.enabledPlugins[id]; writeSettings(s); } }
   out({ command: "uninstall", outcome: "ok", plugin: id, message: "Successfully uninstalled plugin: " + id });
   process.exit(0);
@@ -129,7 +166,7 @@ export function fakePluginCli(dir: string, agent: PluginAgent): string {
 }
 
 export interface FakePluginState {
-  installed?: Record<string, { enabled: boolean; version?: string; servers?: Record<string, unknown>; errors?: string[] }>;
+  installed?: Record<string, { enabled: boolean; version?: string; servers?: Record<string, unknown>; errors?: string[]; remote?: boolean }>;
   markets?: Record<string, string>;
   catalog?: { id: string; description?: string; installs?: number }[];
 }
