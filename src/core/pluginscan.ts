@@ -220,7 +220,8 @@ printf 'W\t%s\n' "$(base64 < settings.json | tr -d '\n')"
  *  never leaves the checkout every machine pulls from mid-rebase. git
  *  never prompts: no terminal, and ssh in batch mode unless the repo
  *  names its own ssh command. Prints E <why> and exits non-zero before a
- *  commit; after one, C <short sha> and P ok or P failed <git's words>. */
+ *  commit; after one, C <short sha> and P ok or P failed <git's words,
+ *  without its hints>. */
 export const SETTINGS_COMMIT_SCRIPT = String.raw`
 cd "$HOME/.claude" 2>/dev/null || { printf 'E\tthere is no ~/.claude\n'; exit 3; }
 export GIT_TERMINAL_PROMPT=0
@@ -240,7 +241,7 @@ if [ -z "$(git status --porcelain --untracked-files=no)" ]; then
     git rebase --abort >/dev/null 2>&1
   fi
 fi
-printf 'P\tfailed\t%s\n' "$(printf %s "$out" | tr '\n' ' ')"
+printf 'P\tfailed\t%s\n' "$(printf '%s\n' "$out" | grep -v -e '^hint:' -e '^To ' | tr '\n' ' ')"
 `;
 
 export interface SettingsGit { branch: string; sha: string; dirty: boolean; head: string; work: string }

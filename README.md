@@ -166,7 +166,7 @@ canopy run fork <id> [--at N] [--profile NAME] [-m note]   # a new branch run th
 canopy run prune                   # remove kept runs past the sweep's transcript span (30 days); a live branch's or an open PR's stays
 canopy awake [off|always|working]  # keep this backend's machine from idle sleep: never, always, or while an agent of its own works
 canopy plugins [--machine M] [--agent claude|codex]   # every Claude Code and Codex plugin on every kit machine: on, off, wanted by settings.json and not installed, or failing, with the MCP servers it brings
-canopy plugins install|update|enable|disable|uninstall <name@marketplace> --machine M [--agent codex]   # through that agent's own CLI on that machine; codex has no update, and its enable and disable flip the plugin's own table in ~/.codex/config.toml
+canopy plugins install|update|enable|disable|uninstall <name@marketplace> --machine M [--agent codex]   # through that agent's own CLI on that machine; codex has no update, and its enable and disable flip the enabled line in the plugin's own table in ~/.codex/config.toml
 canopy plugins search [words] --machine M [--agent codex]   # what the machine's marketplaces offer, most installed first
 canopy plugins marketplace add <owner/repo|url|path> | remove <name> | update <name> --machine M   # a marketplace runs what its plugins declare, so add only one you trust
 canopy plugins commit [--machine M] [--dry-run]   # commit dotclaude's settings.json alone and push it, on the machine kit.json marks commits: true; prints what it holds first, by key name

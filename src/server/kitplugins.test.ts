@@ -344,7 +344,8 @@ describe("committing dotclaude's settings.json", () => {
     writeFileSync(join(store, "skills/ship/SKILL.md"), "an edit of Eric's own");
     const second = await commit(hub, { machine: "mac", sha: (await preview(hub, "mac")).data.sha });
     expect(second.data["outcome"]).toBe("committed");
-    expect(String(second.data["message"])).toContain("the push failed");
+    expect(String(second.data["message"])).toContain("the push failed: ! [rejected]");
+    expect(String(second.data["message"])).not.toContain("hint:");
     // the checkout is not left mid-rebase, and the edit is where it was
     expect((await exec(["git", "-C", store, "status", "--porcelain", "--untracked-files=no"])).stdout.trim()).toBe("M skills/ship/SKILL.md");
     expect(readFileSync(join(store, "skills/ship/SKILL.md"), "utf8")).toBe("an edit of Eric's own");
