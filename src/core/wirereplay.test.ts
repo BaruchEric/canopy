@@ -125,3 +125,27 @@ describe("claudefold", () => {
     expect(state.heldTurns).toBeNull();
   });
 });
+
+describe("a steered run's kept wire (FR-066)", () => {
+  test("the CLI's echoes and its interrupt marker replay as nothing; the person's words once", () => {
+    const echo = (text: string) => line({ type: "user", isReplay: true, message: { role: "user", content: text } });
+    const got = replayWire([
+      start(),
+      line({ canopy: "in", at: 1001, line: line({ type: "user", message: { role: "user", content: "framed" } }) }),
+      echo("framed"),
+      line({ canopy: "tick", at: 1500 }), line(say("working")),
+      line({ canopy: "in", at: 1600, line: line({ type: "user", message: { role: "user", content: "use bun" } }) }),
+      line({ type: "user", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } }),
+      line({ type: "result", subtype: "error_during_execution", is_error: true, num_turns: 1 }),
+      line({ type: "system", subtype: "init", session_id: "s" }),
+      echo("use bun"),
+      line({ canopy: "tick", at: 2000 }), line(say("done with bun")),
+      line({ canopy: "end", at: 3000, status: "done" }),
+    ], run(), opts);
+    const texts = got.steps.map((s) => s.text ?? "");
+    expect(got.steps.filter((s) => s.text === "use bun").map((s) => s.kind)).toEqual(["user"]);
+    expect(texts.some((t) => t.includes("Request interrupted"))).toBe(false);
+    expect(texts).toContain("working");
+    expect(texts).toContain("done with bun");
+  });
+});
