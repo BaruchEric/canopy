@@ -198,15 +198,17 @@ A loadout resolves to three things at launch, in the process that spawns
    server, built by the kit's `buildEntry` for claude (a server with secrets
    runs through `canopy-mcp-env`). `--strict-mcp-config` stays, so the run
    holds exactly these. `mcp__<server>__*` joins the run's allowed tools for
-   each server, as `CANOPY_TOOL_RULE` does for canopy's. A server that
-   cannot start where the run executes (probe P4) refuses the start with
-   the reason; it never starts without the server.
+   each server, as `CANOPY_TOOL_RULE` does for canopy's. A server the kit
+   does not want on this machine, or one the kit cannot build an entry for,
+   refuses the start. One that fails to start where the run executes
+   (probe P4) ends the run as failed at its init message, naming the
+   server, so a run never goes on without a server its loadout names.
 
 The run records `loadout` (the name) and `equip` (what it resolved to:
 model, effort, skills, servers) so every view can show it. A loadout is also
-a launch pick: `{loadout: "homelab-ops"}` beside `{profile}` and
-`{harness}` in `LaunchPick`, accepted by the branch run route, the plan sheet
-and `canopy run --loadout`.
+a launch pick: the run route's `loadout` field (a run takes no
+`LaunchPick` today; that type serves shells), the plan sheet and
+`canopy run --loadout`.
 
 ### Cards carry a loadout, a workflow and `after`
 
@@ -398,6 +400,46 @@ container, and write the answers into this section:
 - **P6.** Does the claude driver's `nudge` deliver a user message into a
   running stream-json session without breaking the turn, and does Codex's
   driver have anything like it?
+
+### Answers (2026-11-12, claude 2.1.323)
+
+P1 to P5 ran on the Mac with `claude -p --input-format stream-json` and the
+init message read back. P4 read the mini's `canopy-canopy-1` container.
+
+- **P1.** A second `--settings` replaces the first: with two files, only the
+  later file's `skillOverrides` took effect. canopy writes one file per run,
+  the provider's settings with the loadout's `skillOverrides` laid over.
+- **P2.** An "off" from `--settings` keeps the skill out of the init
+  message's `skills` list. The flag's `skillOverrides` merges with the
+  user's key by key: the user's own "off" entries stay off, and the flag's
+  "on" brings back a skill the user turned off (`docktail`).
+- **P3.** A plugin skill's key is `<plugin>:<folder>` (`homelab:tailchan`,
+  `firebase:firebase-data-connect-basics`), a user skill's is its folder
+  (`ripe`, not its SKILL.md name `cli-anything-ripe`). The flag beats a
+  repo's `.claude/settings.local.json`: a local "on" lost to the flag's
+  "off". A `"*": "off"` key does nothing, so canopy names every skill it
+  turns off, taken from `listMentions` (`core/mentions.ts`), which reads the
+  same folders and plugin manifest the CLI does. Skills from the claude.ai
+  account (`anthropic-skills:*`) and Claude Code's bundled ones (`loop`,
+  `code-review`) are not on disk and stay on. claude prints its init message
+  only after the first user message, and the SessionStart hooks run first,
+  so asking claude for its list before a run is not an option.
+- **P4.** In the mini's canopy container HOME is `/home/bun`. `~/.claude` is
+  mounted there (kit.json and `canopy-mcp-env` are present), but `~/dev` is
+  mounted only at `/home/eric/dev` and `~/.config/executor` not at all, and
+  `npx` is missing; `bash`, `bunx` and `node` are there. So `executor` cannot
+  start, `wiki-memory` starts only if `~` expands to the host's home
+  (`CANOPY_HOST_HOME`), `github` can, and the artcraft servers and
+  `excalidraw` are Mac-only in the kit already. Two checks follow: the
+  launch refuses a server the kit does not want on this machine or cannot
+  build an entry for, and the run reads its init message's `mcp_servers`
+  and ends failed, naming the server, when a loadout server is not
+  `connected`.
+- **P5.** One `--mcp-config` holding `pdfcraft` and `wiki-memory` under
+  `--strict-mcp-config` loaded both (`connected`, source `dynamic`).
+- **P6.** Left for plan 3. FR-066 (branch `human-steer`, not yet merged) adds
+  words into a working run, and plan 3 builds on it rather than on a new
+  `runs/nudge`.
 
 ## Phases
 
