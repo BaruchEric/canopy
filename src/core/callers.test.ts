@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { allows, KIND_RIGHTS, LANES, needs, PAIR_KINDS } from "./callers";
+import { allows, isPerson, KIND_RIGHTS, LANES, needs, PAIR_KINDS, type CallerKind } from "./callers";
 
 describe("needs", () => {
   test("a GET needs read, bar the two upgrades and the Library", () => {
@@ -476,5 +476,16 @@ describe("a run's token (FR-038)", () => {
     ] as const) {
       expect([path, allows("run", needs(method, path))]).toEqual([path, false]);
     }
+  });
+});
+
+describe("who is a person (FR-066)", () => {
+  test("a page and the CLI are; a shell's, the ranger's, a coordinator's, a run's and a helper's tokens are not", () => {
+    const kinds: CallerKind[] = ["page", "cli", "shell", "ranger", "coordinator", "run", "helper", "none"];
+    expect(kinds.filter((kind) => isPerson({ kind }))).toEqual(["page", "cli"]);
+  });
+
+  test("no caller at all counts as one, as it does for every route outside enforce", () => {
+    expect(isPerson(null)).toBe(true);
   });
 });

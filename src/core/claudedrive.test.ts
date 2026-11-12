@@ -1030,6 +1030,18 @@ describe("a person steering a Claude run (FR-066)", () => {
     expect(texts(run.steps)).toContain("working on: do the other thing");
   });
 
+  test("every turn counts: a steer, then a stop with another behind it, is three turns", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "5000", FAKE_STEER_NEXT_MS: "100" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    d.driver.steer("use bun");
+    await Bun.sleep(50);
+    d.driver.interrupt();
+    d.driver.steer("stop that");
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result).toMatchObject({ turns: 3, costUsd: 0.03 });
+  });
+
   test("a job interrupted with nothing to go on with fails as interrupted", async () => {
     const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "5000" } });
     await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");

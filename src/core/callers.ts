@@ -19,6 +19,13 @@ export type CallerKind = "page" | "cli" | "shell" | "ranger" | "coordinator" | "
 export type PairKind = "page" | "cli" | "helper";
 export const PAIR_KINDS: readonly PairKind[] = ["page", "cli", "helper"];
 
+/** The kinds a person holds: a page and the CLI. A shell's token is the
+ *  shell's, shared by whatever agent runs in it, and the ranger,
+ *  coordinator and run tokens are agents', so only these steer a run mid-turn
+ *  or stop its turn (FR-066). No caller at all, outside enforce, counts as a
+ *  person, as it does for every other route there. */
+export const isPerson = (caller: { kind: CallerKind } | null): boolean => caller === null || caller.kind === "page" || caller.kind === "cli";
+
 /** The kind a label names, for a request that does not say: "cli " a CLI,
  *  "helper " a helper, anything else a page. */
 export const kindOfLabel = (label: string): PairKind => (label.startsWith("cli ") ? "cli" : label.startsWith("helper ") ? "helper" : "page");

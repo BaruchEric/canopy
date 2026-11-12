@@ -41,6 +41,7 @@ let root: string;
 let config: string;
 let cli: string;
 let page: string;
+let rangerToken: string;
 let server: Awaited<ReturnType<typeof startServer>>;
 const saved: Record<string, string | undefined> = {};
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND"];
@@ -101,6 +102,9 @@ beforeAll(async () => {
   const book = new CallerBook({ file: join(config, "callers.json") });
   cli = book.mint("cli", { label: "cli test" }).token;
   page = book.mint("page", { label: "page test" }).token;
+  // an agent's token with operate, as a shell's is (a shell's own is swept
+  // at the start for want of its shell; isPerson's test covers the kind)
+  rangerToken = book.mint("ranger", { label: "ranger test" }).token;
   // what a restart must clear: a token and a file a run left behind
   book.mint("run", { label: "run app", run: "dead1234" });
   await book.flush();
@@ -362,6 +366,23 @@ describe("a person steering a run over the API (FR-066)", () => {
     expect(interrupts.get(chat.id)).toBeUndefined();
     await end(child.id);
     await post("/api/runs/stop", { id: chat.id });
+  });
+
+  test("an agent's token with operate (the ranger's) keeps the old rule too: no steer mid-turn, no stop", async () => {
+    const job = await startTools();
+    await until(async () => starts.get(job.id), "the driver");
+    const said = await post("/api/runs/say", { id: job.id, text: "from an agent" }, rangerToken);
+    expect(said.status).toBe(409);
+    expect(await errorOf(said)).toBe("only a chat takes messages");
+    const stop = await post("/api/runs/interrupt", { id: job.id, text: "instead" }, rangerToken);
+    expect(stop.status).toBe(403);
+    expect(await errorOf(stop)).toContain("only a person stops a run's turn");
+    expect(steered.get(job.id)).toBeUndefined();
+    expect(interrupts.get(job.id)).toBeUndefined();
+    // the page is a person, as the CLI is
+    expect((await post("/api/runs/say", { id: job.id, text: "from the page" }, page)).status).toBe(200);
+    expect(steered.get(job.id)).toEqual(["from the page"]);
+    await end(job.id);
   });
 
   test("a run that is not here is a 404, a bad body a 400", async () => {

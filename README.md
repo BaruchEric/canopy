@@ -163,7 +163,7 @@ canopy run show <id>               # a kept run's head and timeline; a live run'
 canopy run show <id> --wire        # a finished run's steps as its kept wire replays them, with the prompts it asked
 canopy run export <id> [--out f]   # the run as a markdown transcript, secrets redacted; stdout unless --out
 canopy run fork <id> [--at N] [--profile NAME] [-m note]   # a new branch run that goes on from step N of a finished run (its end without --at), with the run's context; --profile picks its agent
-canopy run say <id> <words…>       # a person's words into a live run: a chat between turns takes them as its next turn, a run at work (a job's turn or a chat's reply) at its next step
+canopy run say <id> <words…>       # a person's words into a live run: a chat between turns takes them as its next turn, a run at work (a job's turn or a chat's reply) at its next step; inside a canopy shell the shell's token reaches a chat between turns only
 canopy run interrupt <id> [words…] # stop the turn a run is on and keep the run, as Escape does in a terminal; the words go next, and a job needs them (stop ends a job)
 canopy run prune                   # remove kept runs past the sweep's transcript span (30 days); a live branch's or an open PR's stays
 canopy awake [off|always|working]  # keep this backend's machine from idle sleep: never, always, or while an agent of its own works

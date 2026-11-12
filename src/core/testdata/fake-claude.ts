@@ -394,7 +394,12 @@ function steerEnd(interrupted: boolean): void {
   }
   steerTook = [];
   const next = steerQueue.shift();
-  if (next !== undefined) setTimeout(() => steerStart(next), 20);
+  // busy from now, as the CLI is: a message that comes before the queued
+  // turn starts queues behind it rather than starting a turn of its own
+  if (next !== undefined) {
+    steerBusy = true;
+    setTimeout(() => steerStart(next), 20);
+  }
   else if (steerEof) process.exit(0);
 }
 

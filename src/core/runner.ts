@@ -594,8 +594,9 @@ export class Runner {
    *  With `steer`, a person's message reaches any run that is working or
    *  waiting too, a job's turn as well as a chat's reply: the harness takes
    *  it at its next step, or as the next turn, and the run goes on through
-   *  it. A run's own token keeps the old rule, a chat between turns, so one
-   *  agent never redirects another's work in flight. */
+   *  it. An agent's token (the route's `isPerson` decides) keeps the old
+   *  rule, a chat between turns, so one agent never redirects another's
+   *  work in flight. */
   say(id: string, text: string, opts: { steer?: boolean } = {}): Run {
     const live = this.live.get(id);
     if (!live) throw new UnknownRunError(id);

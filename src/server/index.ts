@@ -62,6 +62,7 @@ import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { choiceOnScreen, steerWords } from "../core/steer";
+import { isPerson } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
@@ -4651,16 +4652,18 @@ async function handleApi(
       const them = state.runner.get(b.id);
       if (!me || !them || !areKin(me, them)) return json({ error: "a run's token says only to its own parent and children" }, 403);
     }
-    // a person steers any working run; a run's token keeps to a chat
-    // between turns, so one agent never redirects another mid-turn
+    // a person steers any working run; an agent's token (a shell's, the
+    // ranger's, a run's) keeps to a chat between turns, so one agent never
+    // redirects another mid-turn
     const { id, text } = b;
-    return json(steering(() => state.runner.say(id, text, { steer: caller?.kind !== "run" })));
+    return json(steering(() => state.runner.say(id, text, { steer: isPerson(caller) })));
   }
   if (path === "/api/runs/interrupt" && method === "POST") {
     const b = (await req.json()) as { id?: unknown; text?: unknown };
     if (typeof b.id !== "string" || (b.text !== undefined && typeof b.text !== "string")) {
       return json({ error: "a run id, and text to go next if any" }, 400);
     }
+    if (!isPerson(caller)) return json({ error: "only a person stops a run's turn; an agent's token says to a chat between turns" }, 403);
     const id = b.id;
     const text = typeof b.text === "string" ? b.text : undefined;
     return json(steering(() => state.runner.interrupt(id, text)));
