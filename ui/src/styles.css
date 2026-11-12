@@ -17490,7 +17490,8 @@ button.clock-job + .clock-lane {
 }
 
 /* the plugins view: a plugin × machine × agent matrix (components/Plugins.tsx, FR-064) */
-.plugins-grid tbody th { max-width: 22rem; }
+/* the name keeps a readable width; on a phone the machine columns scroll under it instead */
+.plugins-grid tbody th { min-width: 11rem; max-width: 22rem; }
 .plugin-name { font-family: var(--mono); text-align: left; overflow-wrap: anywhere; white-space: normal; }
 .plugin-servers { display: block; color: var(--ink-faint); font-size: var(--t-sm); white-space: normal; overflow-wrap: anywhere; }
 .plugin-on { color: var(--moss); }
