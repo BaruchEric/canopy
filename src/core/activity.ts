@@ -260,6 +260,11 @@ function call(t: Tally, at: number | null, name: string, input: unknown, id: unk
   t.toolCalls++;
   t.tools.set(name, (t.tools.get(name) ?? 0) + 1);
   if (typeof id === "string" && id) t.calls.set(id, { name, at });
+  // a task stopped by hand gets no notice of its own
+  if (STOPS.has(name) && isRecord(input)) {
+    const task = str(input.task_id) ?? str(input.shell_id) ?? str(input.bash_id);
+    if (task) endTask(t, task);
+  }
   for (const f of filesOf(name, input)) {
     if (t.touched.has(f)) t.files = t.files.filter((x) => x !== f);
     t.touched.add(f);
@@ -273,12 +278,26 @@ function call(t: Tally, at: number | null, name: string, input: unknown, id: unk
 const ENDED = new Set(["completed", "failed", "killed", "stopped"]);
 /** how many ended task ids a tally remembers */
 const SETTLED_MAX = 500;
-/** a shell's id in the words of its result, for a record with no `toolUseResult` */
-const BACKGROUND_WORDS = /running in background with ID: ([A-Za-z0-9_-]+)/;
+/** a shell's id in the words that open a Bash result, for a record with no
+ *  `toolUseResult`; the same words further in are output quoting them */
+const BACKGROUND_WORDS = /^\s*Command running in background with ID: ([A-Za-z0-9_-]+)/;
+/** the tools that stop a background task, which then sends no notice */
+const STOPS = new Set(["TaskStop", "KillShell", "KillBash"]);
 
 function startTask(t: Tally, task: BackgroundTask): void {
   if (t.settled.has(task.id) || t.background.has(task.id)) return;
   t.background.set(task.id, task);
+}
+
+/** a task is over: it leaves the background and a later start of it is ignored */
+function endTask(t: Tally, id: string): void {
+  t.background.delete(id);
+  t.settled.delete(id);
+  t.settled.add(id);
+  if (t.settled.size > SETTLED_MAX) {
+    const oldest = t.settled.values().next().value;
+    if (oldest !== undefined) t.settled.delete(oldest);
+  }
 }
 
 /**
@@ -311,14 +330,7 @@ export function settleTasks(t: Tally, line: string): void {
     const body = m[1] ?? "";
     const id = /<task-id>([A-Za-z0-9_-]+)<\/task-id>/.exec(body)?.[1];
     const status = /<status>(\w+)<\/status>/.exec(body)?.[1];
-    if (!id || !status || !ENDED.has(status)) continue;
-    t.background.delete(id);
-    t.settled.delete(id);
-    t.settled.add(id);
-    if (t.settled.size > SETTLED_MAX) {
-      const oldest = t.settled.values().next().value;
-      if (oldest !== undefined) t.settled.delete(oldest);
-    }
+    if (id && status && ENDED.has(status)) endTask(t, id);
   }
 }
 
@@ -404,7 +416,7 @@ function feedClaude(t: Tally, rec: Record<string, unknown>): void {
         const id = typeof part.tool_use_id === "string" ? part.tool_use_id : "";
         const tool = t.calls.get(id)?.name;
         t.calls.delete(id);
-        const shell = BACKGROUND_WORDS.exec(textOf(part.content) ?? "")?.[1];
+        const shell = tool === undefined || tool === "Bash" ? BACKGROUND_WORDS.exec(textOf(part.content) ?? "")?.[1] : undefined;
         if (shell) startTask(t, { id: shell, kind: "shell", at, until: null });
         if (part.is_error !== true) continue;
         t.toolErrors++;

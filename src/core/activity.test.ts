@@ -182,6 +182,29 @@ describe("background work and the call in progress", () => {
     ]);
   });
 
+  test("a task stopped by hand ends with its stop call, which sends no notice", () => {
+    const a = claude([
+      result(1, "t1", { backgroundTaskId: "bash4" }),
+      result(2, "t2", { backgroundTaskId: "bash5" }),
+      result(3, "t3", { backgroundTaskId: "bash6" }),
+      assistant(4, "m1", [{ type: "tool_use", id: "t4", name: "TaskStop", input: { task_id: "bash4" } }]),
+      user(5, [{ type: "tool_result", tool_use_id: "t4", content: '{"message":"Successfully stopped task: bash4"}' }]),
+      // an older Claude Code's kill
+      assistant(6, "m2", [{ type: "tool_use", id: "t5", name: "KillShell", input: { shell_id: "bash5" } }]),
+    ]);
+    expect(a.background.map((b) => b.id)).toEqual(["bash6"]);
+  });
+
+  test("the words quoted inside some output start nothing", () => {
+    const a = claude([
+      assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "grep task-id old.jsonl" } }]),
+      user(1, [{ type: "tool_result", tool_use_id: "t1", content: "old.jsonl: Command running in background with ID: bx1" }]),
+      assistant(2, "m2", [{ type: "tool_use", id: "t2", name: "Read", input: { file_path: "/r/log.txt" } }]),
+      user(3, [{ type: "tool_result", tool_use_id: "t2", content: "Command running in background with ID: bx2" }]),
+    ]);
+    expect(a.background).toEqual([]);
+  });
+
   test("the tool call still open, the oldest of several", () => {
     const a = claude([
       assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/r/a.ts" } }]),
