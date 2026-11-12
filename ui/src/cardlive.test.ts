@@ -82,7 +82,7 @@ describe("the marks", () => {
     const waiting = agent({ state: "waiting", waiting: "permission: Bash" });
     const marks = liveMarks(input({ agents: [idle, working, waiting] }));
     expect(states(marks)).toEqual(["agent:waiting", "agent:working", "agent:idle"]);
-    expect(marks[0]).toMatchObject({ id: `agent:${waiting.id}`, repoId: "app", title: `${waiting.handle}: waiting: permission: Bash, kitty on ericmac` });
+    expect(marks[0]).toMatchObject({ id: `agent:${waiting.id}`, repoId: "app", title: `${waiting.handle}: waiting on you: permission: Bash, kitty on ericmac` });
   });
 
   test("an agent's since is when the page saw it take its state", () => {
@@ -168,7 +168,7 @@ describe("the groups", () => {
     );
     const groups = liveGroups(marks, []);
     expect(groups.map((g) => g.kind)).toEqual(["agent", "task", "shell"]);
-    expect(groups.map((g) => g.words)).toEqual(["3 agents: 1 waiting, 2 working", "2 tasks: test failed, dev running", "2 shells, 1 on a screen"]);
+    expect(groups.map((g) => g.words)).toEqual(["3 agents: 1 waiting on you, 2 working", "2 tasks: test failed, dev running", "2 shells, 1 on a screen"]);
     expect(groups.map((g) => g.more)).toEqual([0, 0, 0]);
     expect(liveGroups(liveMarks(input({ shells: [shell()] })), [])[0]?.words).toBe("1 shell, on no screen");
   });
@@ -219,6 +219,24 @@ describe("the headline", () => {
     expect(head({ ...all, agents: [idle], tasks: [running] })).toEqual({ tone: "calm", text: "up 3h" });
     expect(head({ agents: [idle], shells: [sh] })).toEqual({ tone: "calm", text: "idle" });
     expect(head({ shells: [sh] })).toEqual({ tone: "calm", text: "shell open 2d" });
+  });
+
+  test("a session at its prompt is idle, or in the background while its shells and monitors run; one that stalls holds", () => {
+    // tailchan's "your turn", a minute after the turn ended, asks nothing
+    const turn = agent({ state: "waiting", waiting: "your turn" });
+    expect(head({ agents: [turn] })).toEqual({ tone: "calm", text: "idle" });
+    expect(liveEdge([turn])).toBeNull();
+    const pulse = { id: turn.id, shells: 1, monitors: 1, agents: 0, tool: null, stalledSince: null };
+    const facts = (c: AgentCard) => (c.id === turn.id ? { pulse } : {});
+    const marks = liveMarks(input({ agents: [turn], facts }));
+    expect(states(marks)).toEqual(["agent:background"]);
+    expect(marks[0]?.title).toBe(`${turn.handle}: background: 1 shell, 1 monitor, kitty on ericmac`);
+    expect(liveHead(marks, 10 * H)).toEqual({ tone: "calm", text: "background" });
+    const work = agent({ state: "working" });
+    const stuck = (c: AgentCard) => (c.id === work.id ? { pulse: { ...pulse, id: work.id, shells: 0, monitors: 0, stalledSince: 10 * H - 12 * M } } : {});
+    expect(liveHead(liveMarks(input({ agents: [work], facts: stuck })), 10 * H)).toEqual({ tone: "hold", text: "stalled 12m" });
+    // an open ask on an idle card is a wait on you
+    expect(liveHead(liveMarks(input({ agents: [turn], facts: () => ({ asking: true }) })), 10 * H)).toEqual({ tone: "ask", text: "needs you" });
   });
 
   test("how long, once it is a minute, when the page saw it start", () => {

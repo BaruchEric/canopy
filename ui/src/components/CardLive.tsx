@@ -22,7 +22,7 @@ import {
   type ShownMark,
 } from "../cardlive";
 import { backendOf, plainOf } from "../registry";
-import { agentsOn, useStore } from "../store";
+import { agentsOn, statusFacts, useStore } from "../store";
 import { keepKeys } from "../surface";
 import { useNow } from "./Registry";
 
@@ -257,7 +257,8 @@ export function CardLive({ repo, checkouts, selecting }: { repo: Repo; checkouts
   );
   const tasks = useStore(useShallow((s) => s.taskAll.filter((t) => checkouts.includes(t.repoId))));
   const shells = useStore(useShallow((s) => s.shells.filter((t) => checkouts.includes(t.repoId))));
-  const marks = useMemo(() => liveMarks({ lead: repo.id, agents, trail, tasks, shells, split }), [repo.id, agents, trail, tasks, shells]);
+  const facts = useStore(statusFacts);
+  const marks = useMemo(() => liveMarks({ lead: repo.id, agents, trail, tasks, shells, split, facts }), [repo.id, agents, trail, tasks, shells, facts]);
   const gone = useDeparted(marks);
   const last = useMemo(() => lastEnded({ lead: repo.id, agents, tasks, split }), [repo.id, agents, tasks]);
   const trace = useUntil(last ? traceUntil(last) : null) ? last : null;

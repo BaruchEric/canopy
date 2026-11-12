@@ -64,7 +64,7 @@ import { appendFeed, describeEvent, feedOnSide, feedPlaceOf, feedPlaceShown, swe
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, AgentPulse, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -76,6 +76,7 @@ import { mergePrs } from "./prs";
 import { HARNESS_SAID_KEY, harnessNotice, mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type HarnessNotice, type InboxAnswer, type InboxItem } from "./inbox";
 import { replaceSprouts, staleSprout } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
+import { factsFrom, mergePulses, statusFrom, type FactsOf, type StatusOf } from "./agentstatus";
 import { headingRuns, type Ids } from "./allagents";
 import { clientCaps } from "../../src/core/client";
 import { normalizeRoutes, resolveAgent } from "../../src/core/route";
@@ -815,6 +816,10 @@ export interface CanopyState {
   registryReady: boolean;
   /** the states this page saw each card take, by card id (`markTrail`) */
   registryTrail: Record<string, TrailMark[]>;
+  /** what each backend read in its own live agents' transcripts, by
+   *  backend and then card id (server/pulse.ts): background work, a long
+   *  tool call, a stall. `statusOf` lays it over the cards. */
+  pulses: Record<string, Record<string, AgentPulse>>;
   /** what runs in each shell no live registry card names, by shell id, as
    *  tmux last said (`probeShells`): the agents board's cards for a Claude
    *  or Codex with no hook */
@@ -1285,6 +1290,8 @@ export interface CanopyState {
   loadSprouts: (backend?: string) => Promise<void>;
   /** reads one backend's ranger, home by default; an older backend has none */
   loadRanger: (backend?: string) => Promise<void>;
+  /** reads one backend's pulses, home by default; an older backend has none */
+  loadPulse: (backend?: string) => Promise<void>;
   /** reads one backend's keep awake; an older backend has none */
   loadAwake: (backend: string) => Promise<void>;
   /** sets one backend's keep awake mode; the error is the backend's words */
@@ -1934,6 +1941,8 @@ const sproutLoads = new Map<string, number>();
 const stagesEvents = new Map<string, number>();
 /* and each backend's ranger events, the same */
 const rangerEvents = new Map<string, number>();
+/* and each backend's pulse events, the same */
+const pulseEvents = new Map<string, number>();
 /* and the home backend's sweep events */
 let sweepEvents = 0;
 /* each "pick" from the sweep's ask, so the sheet it opens is a new one */
@@ -2155,6 +2164,7 @@ function resync(get: () => CanopyState, set: (fn: (s: CanopyState) => Partial<Ca
   // every backend's incubator, which may have moved on too
   void get().loadSprouts(b);
   void get().loadRanger(b);
+  void get().loadPulse(b);
   void get().loadHealth(b);
   void get().loadCapacity(b);
   void get().loadKit(b);
@@ -2397,6 +2407,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   registry: {},
   registryReady: false,
   registryTrail: {},
+  pulses: {},
   shellAgents: {},
   asks: {},
   asksReady: false,
@@ -2672,6 +2683,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     void get().loadAsks();
     void get().loadSprouts();
     void get().loadRanger();
+    void get().loadPulse();
     if (signedIn(home)) void get().loadSweep();
     void get().loadHealth();
     void get().loadCapacity();
@@ -2887,6 +2899,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     readPeers(get, set, name);
     void get().loadSprouts(name);
     void get().loadRanger(name);
+    void get().loadPulse(name);
     void get().loadHealth(name);
     void get().loadCapacity(name);
     void get().loadKit(name);
@@ -2952,6 +2965,7 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _stages, ...stages } = s.stages;
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _awake, ...awake } = s.awake;
+    const { [name]: _pulses, ...pulses } = s.pulses;
     const { [name]: _health, ...health } = s.health;
     const { [name]: _capacity, ...capacity } = s.capacity;
     const { [name]: _kit, ...kit } = s.kit;
@@ -2994,6 +3008,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       stages,
       rangers,
       awake,
+      pulses,
       health,
       capacity,
       kit,
@@ -3507,6 +3522,15 @@ export const useStore = create<CanopyState>((set, get) => ({
       set((st) => ({ awake: { ...st.awake, [b]: ev.awake } }));
       return;
     }
+    if (ev.type === "pulse") {
+      pulseEvents.set(b, (pulseEvents.get(b) ?? 0) + 1);
+      set((st) => {
+        const held = Object.hasOwn(st.pulses, b) ? st.pulses[b] : undefined;
+        const next = mergePulses(held, ev.pulses, ev.gone);
+        return next === held ? {} : { pulses: { ...st.pulses, [b]: next } };
+      });
+      return;
+    }
     if (ev.type === "sweep") {
       // The event says only that the sweep changed, since every stream hears
       // it and the routes need admin, so the page reads it, but only when
@@ -3946,6 +3970,17 @@ export const useStore = create<CanopyState>((set, get) => ({
       if ((rangerEvents.get(b) ?? 0) === mark && isShown(get(), b)) set((s) => ({ rangers: { ...s.rangers, [b]: ranger } }));
     } catch {
       // an older backend has no ranger; nothing shows for it
+    }
+  },
+  loadPulse: async (backend) => {
+    const b = backend ?? get().home;
+    const mark = pulseEvents.get(b) ?? 0;
+    try {
+      const { pulses } = await api.agentPulse(b);
+      if ((pulseEvents.get(b) ?? 0) !== mark || !isShown(get(), b) || !Array.isArray(pulses)) return;
+      set((s) => ({ pulses: { ...s.pulses, [b]: Object.fromEntries(pulses.map((p) => [p.id, p])) } }));
+    } catch {
+      // an older backend reads no pulses; its agents show what their cards say
     }
   },
   loadAwake: async (b) => {
@@ -5776,6 +5811,23 @@ export function agentsByCard(s: CanopyState): Map<string, AgentCard[]> {
   return agentsOut;
 }
 
+let factsIn: { pulses: CanopyState["pulses"]; asks: CanopyState["asks"]; facts: FactsOf; status: StatusOf } | null = null;
+
+/** What the page knows beside each registry card: every backend's pulse
+ *  and the asks still open (ui/src/agentstatus.ts). The same function
+ *  until either changes, so a selector over it settles. */
+function factsMemo(s: Pick<CanopyState, "pulses" | "asks">): { facts: FactsOf; status: StatusOf } {
+  if (factsIn && factsIn.pulses === s.pulses && factsIn.asks === s.asks) return factsIn;
+  const facts = factsFrom(s.pulses, s.asks);
+  factsIn = { pulses: s.pulses, asks: s.asks, facts, status: statusFrom(facts) };
+  return factsIn;
+}
+
+export const statusFacts = (s: Pick<CanopyState, "pulses" | "asks">): FactsOf => factsMemo(s).facts;
+
+/** each card's status with those facts laid over it, stable as `statusFacts` is */
+export const statusOf = (s: Pick<CanopyState, "pulses" | "asks">): StatusOf => factsMemo(s).status;
+
 /** the agents on the card a checkout is on, anywhere, archived or out of
  *  the workspace or not; a stable array, so a selector over it settles */
 export function agentsOn(s: CanopyState, repoId: string): AgentCard[] {
@@ -5949,6 +6001,7 @@ let turnIn: {
   repos: Repo[];
   rangers: Record<string, RangerInfo>;
   landing: Record<string, LandingInfo>;
+  pulses: CanopyState["pulses"];
 } | null = null;
 let turnOut: TurnRow[] = [];
 
@@ -5957,11 +6010,22 @@ let turnOut: TurnRow[] = [];
  *  prompt by design (a permission it waits on is in the inbox). */
 export function turnItems(s: CanopyState): TurnRow[] {
   const t = turnIn;
-  if (t && t.runs === s.runs && t.flowRuns === s.flowRuns && t.registry === s.registry && t.asks === s.asks && t.repos === s.repos && t.rangers === s.rangers && t.landing === s.landing) return turnOut;
-  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers, landing: s.landing };
+  if (
+    t &&
+    t.runs === s.runs &&
+    t.flowRuns === s.flowRuns &&
+    t.registry === s.registry &&
+    t.asks === s.asks &&
+    t.repos === s.repos &&
+    t.rangers === s.rangers &&
+    t.landing === s.landing &&
+    t.pulses === s.pulses
+  )
+    return turnOut;
+  turnIn = { runs: s.runs, flowRuns: s.flowRuns, registry: s.registry, asks: s.asks, repos: s.repos, rangers: s.rangers, landing: s.landing, pulses: s.pulses };
   const rangers = rangerSessions(s.rangers);
   const cards = Object.values(s.registry).filter((c) => c.session === null || !rangers.has(c.session));
-  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos, landingAll(s));
+  turnOut = turnRows(Object.values(s.runs), s.flowRuns, cards, Object.values(s.asks), s.repos, landingAll(s), statusOf(s));
   return turnOut;
 }
 

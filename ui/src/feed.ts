@@ -2,6 +2,7 @@
  *  feed panel shows. Pure, so it is tested; the store hands it the event and
  *  what it knew before the event, and the difference is what the line says. */
 
+import { statusFromState } from "../../src/core/agentstatus";
 import { isLiveAgent } from "../../src/core/types";
 import type {
   AgentCard,
@@ -550,6 +551,8 @@ export function describeEvent(
     case "secrets":
     // keep awake is a setting; its row in Settings says where it stands
     case "awake":
+    // a pulse moves an agent's status on its card and in the registry
+    case "pulse":
     // the repo's landing section and the inbox say where the queue stands
     case "landing":
     case "worktrees":
@@ -600,9 +603,11 @@ export function askLines(ev: Extract<ServerEvent, { type: "asks" }>, prev: FeedS
   return lines;
 }
 
-/** What the registry says: an agent started, is waiting, ended or was
+/** What the registry says: an agent started, waits on you, ended or was
  *  lost, one line each; a turn starting or ending is a quiet line, and a
- *  card the broker swept after a week says nothing. */
+ *  card the broker swept after a week says nothing. A card's state reads as
+ *  its status (core/agentstatus), so the harness's "your turn" a minute
+ *  after a turn ends is the idle it already was and adds no line. */
 export function registryLines(ev: Extract<ServerEvent, { type: "registry" }>, prev: FeedSnapshot, at: number): FeedLine[] {
   const held = prev.registry ?? {};
   const lines: FeedLine[] = [];
@@ -612,18 +617,20 @@ export function registryLines(ev: Extract<ServerEvent, { type: "registry" }>, pr
     // a line about a repo shows its name in its own column; else it says which
     const name = repo ? cardName(c) : [cardName(c), repoWord(c) ? `in ${repoWord(c)}` : ""].filter(Boolean).join(" ");
     const say = (text: string, quiet = false) => lines.push(about(repo, "registry", at, text, quiet));
-    const waiting = `${name} is waiting${c.waiting ? `: ${clip(c.waiting, 80)}` : ""}`;
+    const now = statusFromState(c.state, c.waiting);
+    const was = before ? statusFromState(before.state, before.waiting) : null;
+    const waiting = `${name} is waiting on you${c.waiting ? `: ${clip(c.waiting, 80)}` : ""}`;
     if (!before || (before.state === "ended" && isLiveAgent(c))) {
-      if (c.state === "waiting") say(waiting);
+      if (now === "waiting") say(waiting);
       else if (isLiveAgent(c)) say(`${name} started, ${whereWord(c)}`);
       else say(`${name} ${c.state}`, true);
-    } else if (before.state !== c.state) {
-      if (c.state === "waiting") say(waiting);
-      else if (c.state === "ended") say(`${name} ended`);
-      else if (c.state === "lost") say(`${name} lost: no word from it for minutes`);
-      else if (before.state === "lost") say(`${name} is back, ${c.state}`);
-      else say(`${name} ${c.state}`, true);
-    } else if (c.state === "waiting" && c.waiting !== before.waiting) {
+    } else if (was !== now) {
+      if (now === "waiting") say(waiting);
+      else if (now === "ended") say(`${name} ended`);
+      else if (now === "lost") say(`${name} lost: no word from it for minutes`);
+      else if (was === "lost") say(`${name} is back, ${now}`);
+      else say(`${name} ${now}`, true);
+    } else if (now === "waiting" && c.waiting !== before.waiting) {
       say(waiting);
     }
   }

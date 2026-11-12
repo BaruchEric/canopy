@@ -4,8 +4,10 @@
  * the registry tab shows them in. Pure, so it is tested. (The spec calls
  * this ui/src/registry.ts; that name is the multi-backend registry's.)
  */
-import { isLiveAgent, type AgentCard, type AgentState, type Repo } from "../../src/core/types";
+import { AGENT_STATUSES, agentStatus, statusFromState, statusWord, type AgentStatus, type StatusFacts } from "../../src/core/agentstatus";
+import { isLiveAgent, type AgentCard, type Repo } from "../../src/core/types";
 import { webUrl } from "../../src/core/remote";
+import { cardStatus, type StatusOf } from "./agentstatus";
 import type { RepoCard } from "./checkouts";
 
 const DAY = 86_400_000;
@@ -62,9 +64,9 @@ export function repoOfCard(card: AgentCard, repos: readonly Repo[]): Repo | unde
   return hits.sort((a, b) => b.path.length - a.path.length)[0];
 }
 
-/** the states in order of need: what waits on you, what works, the rest */
-const NEED: readonly AgentState[] = ["waiting", "working", "idle", "lost", "ended"];
-const RANK: Record<AgentState, number> = { waiting: 0, working: 1, idle: 2, lost: 3, ended: 4 };
+/** the statuses in order of need: what waits on you, what stalled, what
+ *  works, what runs in the background, the rest (core/agentstatus) */
+const RANK: Record<AgentStatus, number> = { waiting: 0, stalled: 1, working: 2, background: 3, idle: 4, lost: 5, ended: 6 };
 
 /** whether a canopy run's card is a chat's; the page knows from its runs */
 export type IsChat = (c: AgentCard) => boolean;
@@ -85,24 +87,26 @@ export function tierOf(c: AgentCard, chat: IsChat = noChat): number {
 }
 
 /** running sessions first, then runs at work or waiting, then the rest;
- *  in each waiting, working, idle, lost, ended, newest start first */
-export function orderCards(cards: readonly AgentCard[], chat: IsChat = noChat): AgentCard[] {
+ *  in each by status (waiting on you, stalled, working, background, idle,
+ *  lost, ended), newest start first */
+export function orderCards(cards: readonly AgentCard[], chat: IsChat = noChat, status: StatusOf = cardStatus): AgentCard[] {
   return [...cards].sort(
-    (a, b) => tierOf(a, chat) - tierOf(b, chat) || RANK[a.state] - RANK[b.state] || b.startedAt - a.startedAt || a.id.localeCompare(b.id),
+    (a, b) => tierOf(a, chat) - tierOf(b, chat) || RANK[status(a)] - RANK[status(b)] || b.startedAt - a.startedAt || a.id.localeCompare(b.id),
   );
 }
 
 export const liveCount = (cards: readonly AgentCard[]): number => cards.filter(isLiveAgent).length;
 
-export const anyWaiting = (cards: readonly AgentCard[]): boolean => cards.some((c) => c.state === "waiting");
+/** whether any of them waits on you: a permission, a question, an ask */
+export const anyWaiting = (cards: readonly AgentCard[], status: StatusOf = cardStatus): boolean => cards.some((c) => status(c) === "waiting");
 
-/** The agents section's header: the running agents by state, waiting first
- *  ("1 waiting · 2 working"), or with none running how many stopped within
- *  the day ("3 earlier"), or nothing. */
-export function agentsHead(live: readonly AgentCard[], past: readonly AgentCard[]): { state: AgentState | "past"; text: string }[] {
-  const out: { state: AgentState | "past"; text: string }[] = [];
-  for (const state of NEED) {
-    const n = live.filter((c) => c.state === state).length;
+/** The agents section's header: the running agents by status, waiting
+ *  first ("1 waiting · 2 working · 1 idle"), or with none running how many
+ *  stopped within the day ("3 earlier"), or nothing. */
+export function agentsHead(live: readonly AgentCard[], past: readonly AgentCard[], status: StatusOf = cardStatus): { state: AgentStatus | "past"; text: string }[] {
+  const out: { state: AgentStatus | "past"; text: string }[] = [];
+  for (const state of AGENT_STATUSES) {
+    const n = live.filter((c) => status(c) === state).length;
     if (n) out.push({ state, text: `${n} ${state}` });
   }
   if (out.length === 0 && past.length > 0) out.push({ state: "past", text: `${past.length} earlier` });
@@ -111,25 +115,29 @@ export function agentsHead(live: readonly AgentCard[], past: readonly AgentCard[
 
 /** The running cards, and the ones that ended or were lost within `span`
  *  of `now`; anything older is left out. Each in `orderCards` order. */
-export function splitRecent(cards: readonly AgentCard[], now: number, chat: IsChat = noChat, span = DAY): { live: AgentCard[]; past: AgentCard[] } {
+export function splitRecent(
+  cards: readonly AgentCard[],
+  now: number,
+  chat: IsChat = noChat,
+  o: { span?: number; status?: StatusOf } = {},
+): { live: AgentCard[]; past: AgentCard[] } {
+  const span = o.span ?? DAY;
   const live: AgentCard[] = [];
   const past: AgentCard[] = [];
   for (const c of cards) {
     if (isLiveAgent(c)) live.push(c);
     else if ((c.endedAt ?? c.seenAt) >= now - span) past.push(c);
   }
-  return { live: orderCards(live, chat), past: orderCards(past, chat) };
+  return { live: orderCards(live, chat, o.status), past: orderCards(past, chat, o.status) };
 }
 
 /** what a row calls an agent: its handle, or for a scan card (no handle,
  *  nothing reads a DM for it) its harness and pid */
 export const cardName = (c: AgentCard): string => c.handle || `${c.harness}${c.where.pid !== null ? ` pid ${c.where.pid}` : ""}`;
 
-/** "working", "waiting: your turn", "lost" */
-export function stateWord(c: AgentCard): string {
-  if (c.state === "waiting") return c.waiting ? `waiting: ${c.waiting}` : "waiting";
-  return c.state;
-}
+/** "working: Bash", "waiting on you: permission", "background: 1 shell",
+ *  "idle", "lost" (core/agentstatus `statusWord`) */
+export const stateWord = (c: AgentCard, f: StatusFacts = {}): string => statusWord(c, f);
 
 /** the machine a card runs on, as the page names it: a canopy backend's
  *  own name when the card came from one, else the tailnet node */
@@ -212,8 +220,11 @@ export const todayMs = (c: AgentCard, now: number, dayStart: number): number => 
  *  midnight added up, the longest running and the harnesses. */
 export interface RegistrySummary {
   live: number;
+  /** the live ones by status (core/agentstatus) */
   working: number;
+  stalled: number;
   waiting: number;
+  background: number;
   idle: number;
   machines: number;
   repos: number;
@@ -225,11 +236,13 @@ export interface RegistrySummary {
   harnesses: { harness: AgentCard["harness"]; count: number }[];
 }
 
-export function registrySummary(cards: readonly AgentCard[], now: number, dayStart = dayStartOf(now)): RegistrySummary {
+export function registrySummary(cards: readonly AgentCard[], now: number, dayStart = dayStartOf(now), status: StatusOf = cardStatus): RegistrySummary {
   const out: RegistrySummary = {
     live: 0,
     working: 0,
+    stalled: 0,
     waiting: 0,
+    background: 0,
     idle: 0,
     machines: 0,
     repos: 0,
@@ -250,8 +263,8 @@ export function registrySummary(cards: readonly AgentCard[], now: number, daySta
     out.todayMs += todayMs(c, now, dayStart);
     if (!isLiveAgent(c)) continue;
     out.live++;
-    if (c.state === "working") out.working++;
-    else if (c.state === "waiting") out.waiting++;
+    const s = status(c);
+    if (s === "working" || s === "stalled" || s === "waiting" || s === "background") out[s]++;
     else out.idle++;
     machines.add(machineOf(c));
     const repo = urlKey(c.repo) ?? (c.cwd || null);
@@ -338,7 +351,7 @@ export function readerOf(card: AgentCard, shown: readonly string[], cards: reado
 
 /** a state the page saw a card take, and when */
 export interface TrailMark {
-  state: AgentState;
+  state: AgentCard["state"];
   at: number;
   /** what it waited on, for a wait */
   waiting?: string;
@@ -384,11 +397,31 @@ export function markTrail(
   return next ?? trail;
 }
 
-/** since when a live card has been in its state, when the page saw it
- *  change; null when it did not */
-export function stateSince(c: AgentCard, marks: readonly TrailMark[] | undefined): number | null {
-  const last = marks?.[marks.length - 1];
-  return last && isLiveAgent(c) && last.state === c.state ? last.at : null;
+/** the stretch a status counts its time in: background is time at the
+ *  prompt, and a stall is time at work */
+const stretchOf = (s: AgentStatus): AgentStatus => (s === "background" ? "idle" : s === "stalled" ? "working" : s);
+
+/**
+ * Since when a live card has been as its status says, when the page saw it
+ * change; null when it did not. A stall counts from its pulse's quiet. Idle
+ * runs from the turn's end, so the "your turn" notice Claude sends a minute
+ * later starts no new stretch. Each wait on you is its own: a wait that
+ * names a new thing counts from then.
+ */
+export function stateSince(c: AgentCard, marks: readonly TrailMark[] | undefined, f: StatusFacts = {}): number | null {
+  if (!isLiveAgent(c)) return null;
+  const now = agentStatus(c, f);
+  if (now === "stalled" && f.pulse && f.pulse.stalledSince !== null) return f.pulse.stalledSince;
+  const want = stretchOf(now);
+  const list = marks ?? [];
+  let since: number | null = null;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const m = list[i];
+    if (!m || stretchOf(statusFromState(m.state, m.waiting)) !== want) break;
+    since = m.at;
+    if (want === "waiting") break;
+  }
+  return since;
 }
 
 export type CardGrouping = "machine" | "repo";

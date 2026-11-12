@@ -1124,6 +1124,7 @@ describe("several backends", () => {
         "/api/workspaces",
         "/api/runs",
         "/api/agents",
+        "/api/agents/pulse",
         "/api/flows",
         "/api/fleets",
         "/api/verdict",

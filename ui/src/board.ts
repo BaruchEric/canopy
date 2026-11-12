@@ -13,6 +13,8 @@ import type { PaneMsg } from "./panes";
 import { paneVar, type PaneKey } from "../../src/core/panesizes";
 import { BOARD_LAYOUTS, isLiveAgent, type Ask, type AgentCard, type AgentState, type BoardLayout } from "../../src/core/types";
 import { groupCards, runEnd, tierOf, type IsChat, type TrailMark } from "./agentcards";
+import { cardStatus, type StatusOf } from "./agentstatus";
+import { cardAsks, type AgentStatus } from "../../src/core/agentstatus";
 import type { InboxAnswer } from "./inbox";
 import { recommendLayout } from "../../src/core/screenlayouts";
 import { statusOf } from "./move";
@@ -86,7 +88,7 @@ export interface BoardGroup {
   cards: AgentCard[];
 }
 
-const RANK: Record<AgentState, number> = { waiting: 0, working: 1, idle: 2, lost: 3, ended: 4 };
+const RANK: Record<AgentStatus, number> = { waiting: 0, stalled: 1, working: 2, background: 3, idle: 4, lost: 5, ended: 6 };
 const HOUR = 3_600_000;
 
 /** How long a stopped agent stays on the board. */
@@ -104,14 +106,15 @@ export function sinceOf(c: AgentCard, marks: readonly TrailMark[] | undefined): 
 
 /** The board's order: the running sessions first (canopy shells, hooked
  *  terminals, chats), then the runs at work or waiting, then the rest
- *  (`tierOf`). In each, waiting first, the longest wait first since it is
- *  the one to answer next, then working, idle, lost and ended, the longest
- *  in its state first in each. */
-export function boardOrder(cards: readonly AgentCard[], trail: Record<string, TrailMark[]>, chat?: IsChat): AgentCard[] {
+ *  (`tierOf`). In each, by status (`status`): waiting on you first, the
+ *  longest wait first since it is the one to answer next, then stalled,
+ *  working, background, idle, lost and ended, the longest in its state
+ *  first in each. */
+export function boardOrder(cards: readonly AgentCard[], trail: Record<string, TrailMark[]>, chat?: IsChat, status: StatusOf = cardStatus): AgentCard[] {
   return [...cards].sort(
     (a, b) =>
       tierOf(a, chat) - tierOf(b, chat) ||
-      RANK[a.state] - RANK[b.state] ||
+      RANK[status(a)] - RANK[status(b)] ||
       sinceOf(a, trail[a.id]) - sinceOf(b, trail[b.id]) ||
       a.id.localeCompare(b.id),
   );
@@ -125,9 +128,9 @@ export function boardCards(cards: readonly AgentCard[], now: number, recent = RE
 /** The board's cards in groups, each in the board's order: one group with
  *  no name when the board is not grouped, else by machine or repo with the
  *  busier groups first, as the registry tab groups them. */
-export function boardGroups(cards: readonly AgentCard[], by: BoardGrouping, trail: Record<string, TrailMark[]>, chat?: IsChat): BoardGroup[] {
-  if (by === "none") return cards.length ? [{ key: "", label: "", cards: boardOrder(cards, trail, chat) }] : [];
-  return groupCards(cards, by, chat).map((g) => ({ key: g.key || "none", label: g.label, cards: boardOrder(g.cards, trail, chat) }));
+export function boardGroups(cards: readonly AgentCard[], by: BoardGrouping, trail: Record<string, TrailMark[]>, chat?: IsChat, status: StatusOf = cardStatus): BoardGroup[] {
+  if (by === "none") return cards.length ? [{ key: "", label: "", cards: boardOrder(cards, trail, chat, status) }] : [];
+  return groupCards(cards, by, chat).map((g) => ({ key: g.key || "none", label: g.label, cards: boardOrder(g.cards, trail, chat, status) }));
 }
 
 /** the agent in focus: the one picked while it is on the board, else the
@@ -147,6 +150,8 @@ export interface PlanOptions {
   focusOpen: boolean;
   /** the focus is in a window of its own, so the rail takes the board */
   focusAway: boolean;
+  /** each card's status, for triage and the dashboard; the card's own state read alone without it */
+  status?: StatusOf;
 }
 
 /**
@@ -168,13 +173,17 @@ const groupFurn = (g: BoardGroup, r: number, c2: number): Furn => ({
   tone: null,
 });
 
-/** the states each triage column holds */
-export const TRIAGE: readonly { key: string; label: string; states: readonly AgentState[]; tone: AgentState | "done" }[] = [
+/** the statuses each triage column holds: a stalled agent is still at work,
+ *  and one with background work is at its prompt */
+export const TRIAGE: readonly { key: string; label: string; states: readonly AgentStatus[]; tone: AgentState | "done" }[] = [
   { key: "waiting", label: "waiting on you", states: ["waiting"], tone: "waiting" },
-  { key: "working", label: "working", states: ["working"], tone: "working" },
-  { key: "idle", label: "idle", states: ["idle"], tone: "idle" },
+  { key: "working", label: "working", states: ["working", "stalled"], tone: "working" },
+  { key: "idle", label: "idle", states: ["background", "idle"], tone: "idle" },
   { key: "done", label: "ended and lost", states: ["ended", "lost"], tone: "done" },
 ];
+
+/** whether a card is busy: working, stalled or not */
+const busy = (s: AgentStatus): boolean => s === "working" || s === "stalled";
 
 /** The board as a grid for `layout`: its tracks and where each card and
  *  each heading goes. */
@@ -183,7 +192,8 @@ export function planBoard(layout: BoardLayout, groups: readonly BoardGroup[], o:
   const grouped = groups.some((g) => g.key !== "");
   if (order.length === 0) return { columns: "minmax(0, 1fr)", rows: "1fr", slots: [], furn: [] };
   const focus = focusOf(order, o.focus);
-  if (o.narrow) return planNarrow(layout, groups, grouped, focus, o);
+  const status = o.status ?? cardStatus;
+  if (o.narrow) return planNarrow(layout, groups, grouped, focus, o, status);
   if (hasFocusSlot(layout) && o.focusAway) return planList(groups, grouped);
   switch (layout) {
     case "rail":
@@ -193,9 +203,9 @@ export function planBoard(layout: BoardLayout, groups: readonly BoardGroup[], o:
     case "spotlight":
       return planSpotlight(order, focus);
     case "dashboard":
-      return planDashboard(order, 6);
+      return planDashboard(order, 6, status);
     case "triage":
-      return planTriage(groups, grouped);
+      return planTriage(groups, grouped, status);
     case "lanes":
       return planLanes(groups, grouped);
   }
@@ -287,10 +297,10 @@ function planSpotlight(order: readonly AgentCard[], focus: string | null): Board
   return { columns: "repeat(6, minmax(0, 1fr))", rows: rows.join(" "), slots, furn: [] };
 }
 
-function planDashboard(order: readonly AgentCard[], cols: number): BoardPlan {
-  const waiting = order.filter((c) => c.state === "waiting");
-  const working = order.filter((c) => c.state === "working");
-  const rest = order.filter((c) => c.state !== "waiting" && c.state !== "working");
+function planDashboard(order: readonly AgentCard[], cols: number, status: StatusOf): BoardPlan {
+  const waiting = order.filter((c) => status(c) === "waiting");
+  const working = order.filter((c) => busy(status(c)));
+  const rest = order.filter((c) => status(c) !== "waiting" && !busy(status(c)));
   // One band of work (two tiles or fewer): the waits stack at their own
   // height and the work spans them and a last row that takes the rest, so
   // short rows do not each claim a share of the stage. More bands share
@@ -323,7 +333,7 @@ function planDashboard(order: readonly AgentCard[], cols: number): BoardPlan {
   return { columns: `repeat(${cols}, minmax(0, 1fr))`, rows: rows.join(" "), slots, furn };
 }
 
-function planTriage(groups: readonly BoardGroup[], grouped: boolean): BoardPlan {
+function planTriage(groups: readonly BoardGroup[], grouped: boolean, status: StatusOf): BoardPlan {
   const rows: string[] = [FIT];
   const slots: Slot[] = [];
   const all = groups.flatMap((g) => g.cards);
@@ -332,7 +342,7 @@ function planTriage(groups: readonly BoardGroup[], grouped: boolean): BoardPlan 
     kind: "head" as const,
     area: area(1, i + 1),
     label: t.label,
-    count: all.filter((c) => t.states.includes(c.state)).length,
+    count: all.filter((c) => t.states.includes(status(c))).length,
     tone: t.tone,
   }));
   for (const g of groups) {
@@ -343,7 +353,7 @@ function planTriage(groups: readonly BoardGroup[], grouped: boolean): BoardPlan 
     const top = rows.length + 1;
     let deepest = 0;
     TRIAGE.forEach((t, col) => {
-      const these = g.cards.filter((c) => t.states.includes(c.state));
+      const these = g.cards.filter((c) => t.states.includes(status(c)));
       these.forEach((c, j) => slots.push({ id: c.id, area: area(top + j, col + 1), mode: "row", acts: true }));
       deepest = Math.max(deepest, these.length);
     });
@@ -375,7 +385,7 @@ function planLanes(groups: readonly BoardGroup[], grouped: boolean): BoardPlan {
  *  until an agent is opened, which then fills the board alone; the wall
  *  and the dashboard stack; triage stacks its columns under their heads;
  *  lanes keep their two tracks. */
-function planNarrow(layout: BoardLayout, groups: readonly BoardGroup[], grouped: boolean, focus: string | null, o: PlanOptions): BoardPlan {
+function planNarrow(layout: BoardLayout, groups: readonly BoardGroup[], grouped: boolean, focus: string | null, o: PlanOptions, status: StatusOf): BoardPlan {
   const order = groups.flatMap((g) => g.cards);
   if (hasFocusSlot(layout)) {
     if (o.focusOpen && focus) {
@@ -390,13 +400,13 @@ function planNarrow(layout: BoardLayout, groups: readonly BoardGroup[], grouped:
   }
   if (layout === "lanes") return planLanes(groups, grouped);
   if (layout === "wall") return planWall(groups, grouped, 0);
-  if (layout === "dashboard") return planDashboardNarrow(order);
+  if (layout === "dashboard") return planDashboardNarrow(order, status);
   // triage: each state's head, then its rows
   const rows: string[] = [];
   const slots: Slot[] = [];
   const furn: Furn[] = [];
   for (const t of TRIAGE) {
-    const these = order.filter((c) => t.states.includes(c.state));
+    const these = order.filter((c) => t.states.includes(status(c)));
     rows.push(FIT);
     furn.push({ key: `h:${t.key}`, kind: "head", area: area(rows.length, 1), label: t.label, count: these.length, tone: t.tone });
     for (const c of these) {
@@ -408,14 +418,14 @@ function planNarrow(layout: BoardLayout, groups: readonly BoardGroup[], grouped:
   return { columns: "minmax(0, 1fr)", rows: rows.join(" "), slots, furn };
 }
 
-function planDashboardNarrow(order: readonly AgentCard[]): BoardPlan {
+function planDashboardNarrow(order: readonly AgentCard[], status: StatusOf): BoardPlan {
   const rows: string[] = [FIT];
   const slots: Slot[] = [];
   const furn: Furn[] = [{ key: "summary", kind: "summary", area: area(1, 1), label: "", count: 0, tone: null }];
   const parts: { key: string; label: string; tone: AgentState | null; cards: AgentCard[]; mode: TileMode; track: string }[] = [
-    { key: "waiting", label: "waiting on you", tone: "waiting", cards: order.filter((c) => c.state === "waiting"), mode: "row", track: FIT },
-    { key: "working", label: "working", tone: "working", cards: order.filter((c) => c.state === "working"), mode: "term", track: "minmax(12rem, auto)" },
-    { key: "rest", label: "idle and done", tone: null, cards: order.filter((c) => c.state !== "waiting" && c.state !== "working"), mode: "chip", track: FIT },
+    { key: "waiting", label: "waiting on you", tone: "waiting", cards: order.filter((c) => status(c) === "waiting"), mode: "row", track: FIT },
+    { key: "working", label: "working", tone: "working", cards: order.filter((c) => busy(status(c))), mode: "term", track: "minmax(12rem, auto)" },
+    { key: "rest", label: "idle and done", tone: null, cards: order.filter((c) => status(c) !== "waiting" && !busy(status(c))), mode: "chip", track: FIT },
   ];
   for (const p of parts) {
     if (!p.cards.length) continue;
@@ -434,8 +444,8 @@ function planDashboardNarrow(order: readonly AgentCard[]): BoardPlan {
 /** The next agent waiting after `focus` in the board's order, which puts
  *  a session's wait before a run's and the longest wait first in each;
  *  round to the first after the last. */
-export function nextWaiting(order: readonly AgentCard[], focus: string | null): string | null {
-  const waiting = order.filter((c) => c.state === "waiting");
+export function nextWaiting(order: readonly AgentCard[], focus: string | null, status: StatusOf = cardStatus): string | null {
+  const waiting = order.filter((c) => status(c) === "waiting");
   if (!waiting.length) return null;
   const i = waiting.findIndex((c) => c.id === focus);
   return waiting[(i + 1) % waiting.length]!.id;
@@ -467,14 +477,16 @@ export function boardKey(e: { key: string; metaKey: boolean; ctrlKey: boolean; a
  *  focus from under a word being typed */
 export const TYPING_HOLD = 3000;
 
-/** The cards that started waiting between two registries, or took a new
- *  wait, the latest first. */
+/** The cards that started waiting on you between two registries, or took
+ *  a new wait, the latest first. A session's "your turn" is no wait on you
+ *  (`cardAsks`), so follow mode never jumps to a session that only ended
+ *  its turn. */
 export function startedWaiting(before: Record<string, AgentCard>, after: Record<string, AgentCard>): string[] {
   return Object.values(after)
     .filter((c) => {
-      if (c.state !== "waiting") return false;
+      if (!cardAsks(c)) return false;
       const was = before[c.id];
-      return !was || was.state !== "waiting" || was.waiting !== c.waiting;
+      return !was || !cardAsks(was) || was.waiting !== c.waiting;
     })
     .sort((a, b) => b.seenAt - a.seenAt || a.id.localeCompare(b.id))
     .map((c) => c.id);
@@ -485,7 +497,10 @@ export function startedWaiting(before: Record<string, AgentCard>, after: Record<
  *  `TYPING_HOLD`, when it waits (null) and is asked again later. */
 export function followTarget(pending: readonly string[], cards: Record<string, AgentCard>, lastKeyAt: number, now: number): string | null {
   if (now - lastKeyAt < TYPING_HOLD) return null;
-  return pending.find((id) => cards[id]?.state === "waiting") ?? null;
+  return pending.find((id) => {
+    const c = cards[id];
+    return c !== undefined && cardAsks(c);
+  }) ?? null;
 }
 
 /* ---------- keeping shells ---------- */

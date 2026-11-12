@@ -400,7 +400,10 @@ describe("the registry", () => {
 
   test("started, waiting, ended and lost are lines; a turn is a quiet one", () => {
     expect(lines(agent())).toEqual([["registry", "alpha", "alpha-0123 started, canopy shell on mini", false]]);
-    expect(lines(agent({ state: "waiting", waiting: "your turn" }), agent())).toEqual([["registry", "alpha", "alpha-0123 is waiting: your turn", false]]);
+    // the harness's "your turn" is the idle the card was at: a quiet line, and none from idle
+    expect(lines(agent({ state: "waiting", waiting: "your turn" }), agent({ state: "working" }))).toEqual([["registry", "alpha", "alpha-0123 idle", true]]);
+    expect(lines(agent({ state: "waiting", waiting: "your turn" }), agent({ state: "idle" }))).toEqual([]);
+    expect(lines(agent({ state: "waiting", waiting: "permission" }), agent())).toEqual([["registry", "alpha", "alpha-0123 is waiting on you: permission", false]]);
     expect(lines(agent({ state: "working" }), agent())).toEqual([["registry", "alpha", "alpha-0123 working", true]]);
     expect(lines(agent({ state: "ended" }), agent())).toEqual([["registry", "alpha", "alpha-0123 ended", false]]);
     expect(lines(agent({ state: "lost" }), agent())).toEqual([["registry", "alpha", "alpha-0123 lost: no word from it for minutes", false]]);

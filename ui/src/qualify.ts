@@ -274,6 +274,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     case "auth":
     // keep awake names no repo; the store files it under its backend
     case "awake":
+    // a pulse names registry cards, whose ids are the broker's, not a backend's
+    case "pulse":
       return ev;
   }
 }

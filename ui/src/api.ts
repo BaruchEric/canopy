@@ -39,6 +39,7 @@ import type {
   RangerWake,
   TermScreen,
   AgentActivity,
+  AgentPulse,
   AgentKind,
   About,
   AgentPick,
@@ -651,6 +652,9 @@ export const api = {
    *  backend `b` on the machine it ran on; a 404 when the file is not there */
   agentActivity: (b: string, harness: Harness, session: string, cwd: string) =>
     req<AgentActivity>(b, `/api/agents/activity?harness=${harness}&session=${encodeURIComponent(session)}&cwd=${encodeURIComponent(cwd)}`),
+  /** what backend `b` last read in its own live agents' transcripts; an
+   *  older backend has no such route */
+  agentPulse: (b: string) => req<{ pulses: AgentPulse[] }>(b, "/api/agents/pulse"),
   /** the models a spoken conversation would use, each null when the home backend has no key for it */
   voice: (b: string = homeName()) => req<VoiceInfo>(b, "/api/voice"),
   /** a field's recorded clip as text, from a backend whose /api/voice says it can */

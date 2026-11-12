@@ -136,9 +136,80 @@ describe("a Claude Code transcript", () => {
   });
 });
 
+describe("background work and the call in progress", () => {
+  const notice = (id: string, status: string) => `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n<summary>done</summary>\n</task-notification>`;
+  const result = (sec: number, id: string, toolUseResult: unknown, text = "ok") => user(sec, [{ type: "tool_result", tool_use_id: id, content: text }], { toolUseResult });
+
+  test("a shell, a monitor and an agent it started stay open until a notice ends them", () => {
+    const a = claude([
+      assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Bash", input: { command: "bun test", run_in_background: true } }]),
+      result(1, "t1", { stdout: "", backgroundTaskId: "bash1" }),
+      assistant(2, "m2", [{ type: "tool_use", id: "t2", name: "Monitor", input: { command: "tail -f log" } }]),
+      result(3, "t2", { taskId: "mon1", timeoutMs: 600_000 }),
+      assistant(4, "m3", [{ type: "tool_use", id: "t3", name: "Agent", input: { description: "look", prompt: "x" } }]),
+      result(5, "t3", { agentId: "ag1", isAsync: true }),
+      // a sync agent's result is no background work
+      assistant(6, "m4", [{ type: "tool_use", id: "t4", name: "Agent", input: { description: "look", prompt: "x" } }]),
+      result(7, "t4", { agentId: "ag2", isAsync: false }),
+      // the shell's notice reaches the transcript as a queued line
+      line({ type: "queue-operation", operation: "enqueue", timestamp: at(8), content: notice("bash1", "completed") }),
+    ]);
+    expect(a.background).toEqual([
+      { id: "mon1", kind: "monitor", at: ms(3), until: ms(3) + 600_000 },
+      { id: "ag1", kind: "agent", at: ms(5), until: null },
+    ]);
+    expect(a.tool).toBeNull();
+  });
+
+  test("a notice written before its start still ends it; a running note ends nothing", () => {
+    const a = claude([
+      line({ type: "attachment", timestamp: at(1), attachment: { type: "queued_command", prompt: notice("bash2", "killed") } }),
+      result(2, "t1", { backgroundTaskId: "bash2" }),
+      result(3, "t2", { backgroundTaskId: "bash3" }),
+      user(4, notice("bash3", "running")),
+    ]);
+    expect(a.background.map((b) => b.id)).toEqual(["bash3"]);
+  });
+
+  test("an older result names its shell only in its words; a persistent monitor never times out", () => {
+    const a = claude([
+      user(1, [{ type: "tool_result", tool_use_id: "t1", content: "Command running in background with ID: bash9. Output is being written to: /tmp/x" }]),
+      result(2, "t2", { taskId: "mon2", persistent: true }),
+    ]);
+    expect(a.background).toEqual([
+      { id: "bash9", kind: "shell", at: ms(1), until: null },
+      { id: "mon2", kind: "monitor", at: ms(2), until: null },
+    ]);
+  });
+
+  test("the tool call still open, the oldest of several", () => {
+    const a = claude([
+      assistant(0, "m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/r/a.ts" } }]),
+      user(1, [{ type: "tool_result", tool_use_id: "t1", content: "x" }]),
+      assistant(2, "m2", [
+        { type: "tool_use", id: "t2", name: "Bash", input: { command: "bun test" } },
+        { type: "tool_use", id: "t3", name: "Grep", input: { pattern: "x" } },
+      ]),
+      user(3, [{ type: "tool_result", tool_use_id: "t3", content: "x" }]),
+    ]);
+    expect(a.tool).toEqual({ name: "Bash", at: ms(2) });
+  });
+
+  test("a Codex call's output closes it", () => {
+    const t = newTally("codex");
+    for (const l of [
+      line({ timestamp: at(1), type: "response_item", payload: { type: "function_call", name: "shell", arguments: "{}", call_id: "c1" } }),
+      line({ timestamp: at(2), type: "response_item", payload: { type: "custom_tool_call", name: "exec", input: "x", call_id: "c2" } }),
+      line({ timestamp: at(3), type: "response_item", payload: { type: "function_call_output", call_id: "c1", output: "ok" } }),
+    ])
+      feedLine(t, l);
+    expect(activityOf(t, S2, 0, 0).tool).toEqual({ name: "exec", at: ms(2) });
+  });
+});
+
 /* ---------- Codex ---------- */
 
-const ev = (sec: number, payload: unknown) => line({ timestamp: at(sec), type: "event_msg", payload });
+const ev =(sec: number, payload: unknown) => line({ timestamp: at(sec), type: "event_msg", payload });
 const item = (sec: number, payload: unknown) => line({ timestamp: at(sec), type: "response_item", payload });
 
 function codex(lines: string[]) {

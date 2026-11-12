@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, Repo } from "../../src/core/types";
+import { agentStatus, type AgentStatus } from "../../src/core/agentstatus";
 import {
   ageWord,
   agentsHead,
@@ -112,7 +113,14 @@ describe("joining cards to repo cards", () => {
 
 describe("words", () => {
   test("state, name, repo and where", () => {
-    expect(stateWord(card({ state: "waiting", waiting: "your turn" }))).toBe("waiting: your turn");
+    // a session at its prompt is idle, whatever the harness's notice says
+    expect(stateWord(card({ state: "waiting", waiting: "your turn" }))).toBe("idle");
+    expect(stateWord(card({ state: "waiting", waiting: "permission" }))).toBe("waiting on you: permission");
+    expect(stateWord(card({ state: "idle" }), { asking: true })).toBe("waiting on you");
+    const pulse = { id: "x", shells: 1, monitors: 1, agents: 0, tool: null, stalledSince: null };
+    expect(stateWord(card({ state: "waiting", waiting: "your turn" }), { pulse })).toBe("background: 1 shell, 1 monitor");
+    expect(stateWord(card({ state: "working" }), { pulse: { ...pulse, tool: { name: "Bash", at: 1 } } })).toBe("working: Bash");
+    expect(stateWord(card({ state: "working" }), { pulse: { ...pulse, stalledSince: 1 } })).toBe("stalled");
     expect(stateWord(card({ state: "lost" }))).toBe("lost");
     expect(cardName(card({ handle: "app-1a2b" }))).toBe("app-1a2b");
     expect(cardName(card({ handle: "", harness: "codex", where: { ...card().where, pid: 77 } }))).toBe("codex pid 77");
@@ -245,6 +253,18 @@ describe("the trail of states the page saw", () => {
     expect(markTrail(trail, { a: other }, { a: other }, [stale], 400)).toBe(trail);
     expect(stateSince(other, trail["a"])).toBe(200);
     expect(stateSince({ ...other, state: "working" }, trail["a"])).toBeNull();
+    // the harness's "your turn" a minute after the turn ended starts no new stretch
+    const turns = [
+      { state: "working" as const, at: 10 },
+      { state: "idle" as const, at: 20 },
+      { state: "waiting" as const, at: 80, waiting: "your turn" },
+    ];
+    const prompt = { ...a, state: "waiting" as const, waiting: "your turn" };
+    expect(stateSince(prompt, turns)).toBe(20);
+    // background is time at the prompt too, and a stall counts from its quiet
+    const pulse = { id: "a", shells: 1, monitors: 0, agents: 0, tool: null, stalledSince: null };
+    expect(stateSince(prompt, turns, { pulse })).toBe(20);
+    expect(stateSince({ ...a, state: "working" }, turns.slice(0, 1), { pulse: { ...pulse, stalledSince: 5 } })).toBe(5);
     expect(markTrail(trail, {}, {}, [], 500, ["a", "nope"])).toEqual({});
   });
 
@@ -294,6 +314,24 @@ describe("order and groups", () => {
     ]);
     expect(agentsHead([], [lost, ended])).toEqual([{ state: "past", text: "2 earlier" }]);
     expect(agentsHead([], [])).toEqual([]);
+  });
+
+  test("by status when one is given: a stall before the work, background before idle", () => {
+    const stalled = card({ id: "st", state: "working", node: "mini", startedAt: 1 });
+    const bg = card({ id: "bg", state: "waiting", waiting: "your turn", node: "mini", startedAt: 2 });
+    const turn = card({ id: "turn", state: "waiting", waiting: "your turn", node: "mini", startedAt: 3 });
+    const status: (c: AgentCard) => AgentStatus = (c) => (c.id === "st" ? "stalled" : c.id === "bg" ? "background" : agentStatus(c));
+    expect(orderCards([turn, bg, working, stalled, waiting], undefined, status)).toEqual([waiting, stalled, working, bg, turn]);
+    expect(anyWaiting([turn, bg], status)).toBe(false);
+    expect(agentsHead([turn, bg, stalled, waiting], [], status)).toEqual([
+      { state: "waiting", text: "1 waiting" },
+      { state: "stalled", text: "1 stalled" },
+      { state: "background", text: "1 background" },
+      { state: "idle", text: "1 idle" },
+    ]);
+    const sum = registrySummary([turn, bg, stalled, waiting, working], 100, 0, status);
+    expect([sum.live, sum.waiting, sum.stalled, sum.working, sum.background, sum.idle]).toEqual([5, 1, 1, 1, 1, 1]);
+    expect(splitRecent([turn, stalled], 100, undefined, { status }).live).toEqual([stalled, turn]);
   });
 
   test("the running ones, and the day's ended and lost; older ones left out", () => {

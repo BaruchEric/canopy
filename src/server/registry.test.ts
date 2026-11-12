@@ -186,6 +186,12 @@ describe("the follow", () => {
     expect(info.cards.find((c) => c.id === "claude:s1")).toMatchObject({ state: "waiting", waiting: "your turn" });
   });
 
+  test("the pulses of its own agents answer, none before a reading", async () => {
+    const res = await fetch(api("/api/agents/pulse"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ pulses: [] });
+  });
+
   test("a new card arrives whole", async () => {
     post(card({ id: "codex:t2", harness: "codex", handle: "web-9f9f", seenAt: 4_000 }));
     await until(() => registryEvents().some((e) => e.cards.some((c) => c.id === "codex:t2")), "the new card");

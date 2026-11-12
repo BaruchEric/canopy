@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { HARNESSES, type AgentCard } from "../../../src/core/types";
+import { cardAsks, type AgentStatus } from "../../../src/core/agentstatus";
 import { agentName } from "../allagents";
 import { joinTarget, machineOf, stateWord } from "../agentcards";
 import { healthBadge } from "../badges";
@@ -8,7 +9,7 @@ import { NARROW, useMedia } from "../media";
 import { backendOf, qual } from "../registry";
 import { agentRows, heldShellAt, machinesOf, newTabKey, nextWaitingRow, pickRepos, sessionsKey, showingIn, splitKey, stepTab, tabsIn, untabbed, type Machine, type RepoTone, type TabKind, type TabScope } from "../sessions";
 import { boxesOf, groupOf, hasPane, headOf, leaveGroup, neighbourOf, paneIds, rowOf, setAt, splitIn, type Box, type Edge, type PaneTree } from "../splitpanes";
-import { connOf, idText, useStore } from "../store";
+import { connOf, idText, statusFacts, statusOf, useStore } from "../store";
 import { isItemTab, isPageTab, isPageTabId, itemTabsAt, pageTabLabel, sectionTabId, sectionTabsAt, tabbableKeys, type PageTab } from "../sectiontabs";
 import { OVER_PAGE } from "../surface";
 import { LABEL_MAX, viewKey, type TermTab } from "../term";
@@ -28,7 +29,7 @@ const typing = (t: EventTarget | null): boolean =>
 
 const TONE_DOT: Record<RepoTone, string> = { waiting: "rust", working: "moss live", live: "moss", dirty: "lichen", quiet: "hollow" };
 
-const STATE_DOT: Record<AgentCard["state"], string> = { waiting: "rust", working: "moss live", idle: "moss", lost: "faint", ended: "faint" };
+const STATE_DOT: Record<AgentStatus, string> = { waiting: "rust", stalled: "lichen", working: "moss live", background: "sky", idle: "moss", lost: "faint", ended: "faint" };
 
 /** the textarea of the shell showing (the focused pane of a split tab),
  *  once the layout has settled; never taken from a field typed in
@@ -141,7 +142,9 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
   const [newTab, setNewTab] = useState<string | null>(null);
   const [kind, setKind] = useState<TabKind>("shell");
   const chat = useIsChat();
-  const rows = useMemo(() => agentRows(cards, chat), [cards, chat]);
+  const status = useStore(statusOf);
+  const facts = useStore(statusFacts);
+  const rows = useMemo(() => agentRows(cards, chat, status), [cards, chat, status]);
   const pickedCard = picked && "agent" in picked ? cards.find((c) => c.id === picked.agent) : undefined;
   const pickedInfo = picked && "shell" in picked ? shells.find((t) => t.id === picked.shell) : undefined;
   const pickedRepo = pickedInfo ? repos.find((r) => r.id === pickedInfo.repoId) : undefined;
@@ -174,8 +177,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
     [boxes, current, overTabs, reachIds],
   );
   const machines = useMemo(
-    () => machinesOf({ home, shown, repos, shells, tabs: strip, cards, backendOf }, currentRepo ? [currentRepo] : []),
-    [home, shown, repos, shells, strip, cards, currentRepo],
+    () => machinesOf({ home, shown, repos, shells, tabs: strip, cards, backendOf, status }, currentRepo ? [currentRepo] : []),
+    [home, shown, repos, shells, strip, cards, currentRepo, status],
   );
 
   const showTab = (id: string) => {
@@ -281,8 +284,8 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
 
   // read inside the key handler, which is set up once
   const head = overTabs ? null : headOf(row, groups, current);
-  const live = useRef({ row, head, current, rows, currentAgent, showRowTab, pickAgent, newShell, splitFrom });
-  live.current = { row, head, current, rows, currentAgent, showRowTab, pickAgent, newShell, splitFrom };
+  const live = useRef({ row, head, current, rows, currentAgent, showRowTab, pickAgent, newShell, splitFrom, status });
+  live.current = { row, head, current, rows, currentAgent, showRowTab, pickAgent, newShell, splitFrom, status };
   const startTab = (repoId: string, name: string, run: TabKind) => {
     setNewTab(null);
     setKind(run);
@@ -304,7 +307,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
         if (id) l.showRowTab(id);
       } else if (k === "new") l.newShell();
       else {
-        const id = nextWaitingRow(l.rows, l.currentAgent);
+        const id = nextWaitingRow(l.rows, l.currentAgent, l.status);
         const c = id ? l.rows.find((r) => r.id === id) : undefined;
         if (c) l.pickAgent(c);
       }
@@ -356,20 +359,20 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
         <ul className="ss-list">
           {rows.map((c) => (
             <li key={c.id}>
-              <button type="button" className={`ss-agent${c.id === currentAgent ? " on" : ""}`} title={stateWord(c)} onClick={() => pickAgent(c)}>
-                <span className={`dot ${STATE_DOT[c.state]}`} aria-hidden="true" />
+              <button type="button" className={`ss-agent${c.id === currentAgent ? " on" : ""}`} title={stateWord(c, facts(c))} onClick={() => pickAgent(c)}>
+                <span className={`dot ${STATE_DOT[status(c)]}`} aria-hidden="true" />
                 <span className="ss-lines">
                   <span className="ss-line">
                     <span className="ss-faint">{machineOf(c)}</span>
                     {" · "}
                     <span className="ss-name">{agentName(c)}</span>
                     {" · "}
-                    <span className="ss-faint">{c.state === "waiting" ? (c.waiting ?? "waiting") : c.state}</span>
+                    <span className="ss-faint">{status(c) === "waiting" ? (cardAsks(c) && c.waiting ? c.waiting : "waiting on you") : status(c)}</span>
                   </span>
                   <span className="ss-sub">{[c.harness, c.model].filter(Boolean).join(" · ")}</span>
                 </span>
               </button>
-              {c.state === "waiting" && (
+              {status(c) === "waiting" && (
                 <div className="ss-answer">
                   <QuickAnswer card={c} />
                 </div>
@@ -425,7 +428,7 @@ export function SessionsView({ onView }: { onView: (view: string) => void }) {
                 )}
                 {pickedCard && (
                   <span className="term-tab on ss-picked" title="the agent picked from the list">
-                    <span className={`dot ${STATE_DOT[pickedCard.state]}`} aria-hidden="true" />
+                    <span className={`dot ${STATE_DOT[status(pickedCard)]}`} aria-hidden="true" />
                     {agentName(pickedCard)}
                     <button
                       type="button"

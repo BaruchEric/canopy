@@ -18,6 +18,15 @@ describe("view tab badges", () => {
       title: "2 agents running on the broker: 1 working, 1 idle",
     });
     expect(agentsBadge([agent("a", "working"), agent("b", "waiting")])?.tone).toBe("rust");
+    // a session at its prompt asks nothing; a stall is lichen
+    const turn = { id: "t", state: "waiting" as const, waiting: "your turn" };
+    expect(agentsBadge([turn])).toMatchObject({ tone: "sky", title: "1 agent running on the broker: 1 idle" });
+    const status = (c: { id: string }) => (c.id === "s" ? ("stalled" as const) : c.id === "b" ? ("background" as const) : ("idle" as const));
+    expect(agentsBadge([agent("s", "working"), agent("b", "idle"), turn], status)).toEqual({
+      text: "✦ 3",
+      tone: "lichen",
+      title: "3 agents running on the broker: 1 stalled, 1 in background, 1 idle",
+    });
   });
 
   test("health counts down, healing and given-up checks on every backend", () => {
@@ -67,7 +76,7 @@ describe("group sums", () => {
       "↑3: 3 commits not pushed",
       "⧉ 1: 1 worktree holding work",
       "✦ 1: 1 agent working right now, 1 more open and idle",
-      "⚑ 1: 1 agent waiting on you: a permission, a question or its turn",
+      "⚑ 1: 1 agent waiting on you: a permission or a question",
     ]);
   });
 

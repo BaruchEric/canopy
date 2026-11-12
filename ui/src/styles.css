@@ -12809,6 +12809,12 @@ span.effective-flag:not(:first-child) {
 .rs-waiting {
   color: var(--rust);
 }
+.rs-stalled {
+  color: var(--lichen);
+}
+.rs-background {
+  color: color-mix(in srgb, var(--sky) 70%, var(--ink-dim));
+}
 .rs-ended,
 .rs-lost {
   color: var(--ink-faint);
@@ -12833,6 +12839,15 @@ span.effective-flag:not(:first-child) {
 .reg-head-waiting {
   color: var(--rust);
   font-weight: 600;
+}
+.reg-state.rs-stalled,
+.reg-head-stalled {
+  color: var(--lichen);
+  font-weight: 600;
+}
+.reg-state.rs-background,
+.reg-head-background {
+  color: color-mix(in srgb, var(--sky) 70%, var(--ink-dim));
 }
 .reg-state.rs-lost {
   color: var(--ink-faint);
@@ -12949,6 +12964,11 @@ span.effective-flag:not(:first-child) {
   color: var(--ink-dim);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+/* the running agents by status: up to five counts, which wrap rather than cut */
+.reg-stat-sub.reg-stat-states {
+  max-width: 40ch;
+  white-space: normal;
 }
 .reg-stat-link {
   margin: 0 -3px;
@@ -14953,6 +14973,12 @@ button.trigger-title:hover {
 .bt[data-state="idle"] {
   --tone: var(--moss);
 }
+.bt[data-state="background"] {
+  --tone: color-mix(in srgb, var(--sky) 70%, var(--ink-dim));
+}
+.bt[data-state="stalled"] {
+  --tone: var(--lichen);
+}
 .bt[data-state="waiting"] {
   --tone: var(--rust);
   border-color: color-mix(in srgb, var(--rust) 45%, var(--hair));
@@ -16417,8 +16443,9 @@ button.card-live-trace:hover {
   color: var(--ink-dim);
   background: var(--wash);
 }
-/* sap for work, rust for what needs you or broke, lichen for a restart,
-   moss for what is up; an idle agent and a shell on no screen sit back */
+/* sap for work, rust for what needs you or broke, lichen for a restart or a
+   stall, moss for what is up; an idle agent, one whose work runs in the
+   background and a shell on no screen sit back */
 .card-live-mark.is-working,
 .card-live-head.h-work {
   --tone: var(--sky);
@@ -16427,9 +16454,12 @@ button.card-live-trace:hover {
 .card-live-head:is(.h-ask, .h-bad) {
   --tone: var(--rust);
 }
-.card-live-mark.is-restarting,
+.card-live-mark:is(.is-restarting, .is-stalled),
 .card-live-head.h-hold {
   --tone: var(--lichen);
+}
+.card-live-mark.is-background {
+  --tone: color-mix(in srgb, var(--sky) 60%, transparent);
 }
 .card-live-mark.is-running {
   --tone: var(--moss);
@@ -16522,8 +16552,9 @@ button.card-live-trace:hover {
   .card.agents-waiting::before {
     animation: needs 1s ease-in-out infinite alternate;
   }
-  /* a task that is up: slow and even, a pilot light */
-  .is-running .card-live-glyph {
+  /* a task that is up, or an agent's own work in the background: slow and
+     even, a pilot light */
+  :is(.is-running, .is-background) .card-live-glyph {
     animation: live-up 2.8s ease-in-out infinite;
   }
   @keyframes live-up {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard } from "../../src/core/types";
+import { agentStatus, type AgentStatus } from "../../src/core/agentstatus";
 import {
   boardCards,
   boardGroups,
@@ -205,6 +206,22 @@ describe("planBoard", () => {
     expect(plan.furn.map((f) => f.count)).toEqual([1, 2, 1, 1]);
   });
 
+  test("triage by status: a session at its prompt is idle, background with it; a stall is at work", () => {
+    const turn = card({ state: "waiting", waiting: "your turn" });
+    const bg = card({ state: "waiting", waiting: "your turn" });
+    const stuck = card({ state: "working" });
+    const asks = card({ state: "waiting", waiting: "permission" });
+    const status = (c: AgentCard): AgentStatus => (c.id === bg.id ? "background" : c.id === stuck.id ? "stalled" : agentStatus(c));
+    const plan = planBoard("triage", one([turn, bg, stuck, asks]), opts({ status }));
+    expect(plan.furn.map((f) => [f.label, f.count])).toEqual([
+      ["waiting on you", 1],
+      ["working", 1],
+      ["idle", 2],
+      ["ended and lost", 0],
+    ]);
+    expect(nextWaiting([turn, bg, stuck, asks], null, status)).toBe(asks.id);
+  });
+
   test("triage grouped: swimlanes, each as deep as its fullest column", () => {
     const a = card({ node: "mac", state: "working" });
     const b = card({ node: "mac", state: "working" });
@@ -287,6 +304,10 @@ describe("follow", () => {
     const b2 = { ...b, waiting: "y", seenAt: 5 };
     expect(startedWaiting(before, { [a.id]: a2, [b.id]: b2 })).toEqual([a.id, b.id]);
     expect(startedWaiting(before, before)).toEqual([]);
+    // a turn that ended is no wait on you: follow mode stays put
+    const done = { ...a, state: "waiting" as const, waiting: "your turn", seenAt: 9 };
+    expect(startedWaiting(before, { [a.id]: done })).toEqual([]);
+    expect(followTarget([a.id], { [a.id]: done }, 0, 10_000)).toBeNull();
   });
 
   test("holds off while typing, skips one no longer waiting", () => {

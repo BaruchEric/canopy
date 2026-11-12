@@ -3,7 +3,7 @@ import { ACTIONS, branchLine, branchPrompt, busyWith, splitMembers, type ActionS
 import { PREFLIGHT_HEADERS, corsHeaders, parseOrigins } from "../core/cors";
 import { coordApiHost, Library, libraryCall, libraryOriginAllowed, libraryStateDir, openBind, returnLeg, tailnetHost } from "../core/library";
 import { LibrarySync } from "./libsync";
-import { Awake, workingCount } from "../core/awake";
+import { Awake, ownCard, workingCount } from "../core/awake";
 import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, trustedComments, type GhRun } from "../core/issue";
 import { handoffFence, titleOf, workBranchName, type WorkStart } from "../core/work";
 import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
@@ -223,6 +223,7 @@ import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
+import { PULSE_EVERY, PulseHub } from "./pulse";
 import { RegistryHub } from "./registry";
 import { AskHub } from "./asks";
 import { PushHub } from "./push";
@@ -498,6 +499,9 @@ interface ServerState {
   /** the agent registry: this machine's scan posted to the broker, and the
    *  broker's cards followed for `/api/registry` */
   registry: RegistryHub;
+  /** what this backend reads in its own live agents' transcripts:
+   *  background work, a long tool call, a stall (server/pulse.ts) */
+  pulse: PulseHub;
   /** keep awake: the hold on this machine's idle sleep (core/awake) */
   awake: Awake;
   /** asks for a human: the broker's open asks followed for the inbox,
@@ -4756,6 +4760,9 @@ async function handleApi(
     if (!got) return json({ error: `no ${harness} transcript of that session on ${state.backendName}` }, 404);
     return json(got);
   }
+  // What this backend last read in its own live agents' transcripts
+  // (server/pulse.ts): background work, a long tool call, a stall.
+  if (path === "/api/agents/pulse" && method === "GET") return json({ pulses: state.pulse.list() });
 
   if (path === "/api/backends" && method === "GET") {
     const cfg = await loadConfig();
@@ -5613,6 +5620,8 @@ export async function startServer(opts: {
   /** the agent registry's timings and scan; tests turn the scan on with a
    *  stand-in lister (it is off under `bun test` and `CANOPY_AGENT_SCAN=0`) */
   registry?: { scanEvery?: number; relistEvery?: number; lister?: () => Promise<AgentProc[]>; container?: boolean };
+  /** ms between pulse readings (server/pulse.ts), 0 for none */
+  pulseEvery?: number;
   /** the asks hub's timings, shrunk by tests */
   asks?: { closedKeep?: number; relistEvery?: number; sweepEvery?: number };
   /** the incubator: tests turn autostart off and pass a speech model and
@@ -6265,7 +6274,10 @@ export async function startServer(opts: {
     registry: new RegistryHub(chanCfg, {
       broadcast: (ev) => {
         broadcast(state, ev);
-        if (ev.type === "registry") recountAwake(state);
+        if (ev.type === "registry") {
+          recountAwake(state);
+          state.pulse.nudge();
+        }
       },
       onStream: (up) => state.health.report("canopy:registry", streamResult(up)),
       repos: () => state.result.repos,
@@ -6273,6 +6285,14 @@ export async function startServer(opts: {
       ...(opts.registry?.relistEvery !== undefined ? { relistEvery: opts.registry.relistEvery } : {}),
       ...(opts.registry?.lister ? { lister: opts.registry.lister } : {}),
       ...(opts.registry?.container !== undefined ? { container: opts.registry.container } : {}),
+    }),
+    pulse: new PulseHub({
+      cards: () => state.registry.list(),
+      own: (c, cards) => ownCard(c, state.backendName, hostname(), cards),
+      read: (harness, session, cwd) => readActivity(harness, session, cwd),
+      broadcast: (ev) => broadcast(state, ev),
+      // off under `bun test` unless a test asks: a stand-in broker's cards name no transcript here
+      every: opts.pulseEvery ?? (process.env["NODE_ENV"] === "test" ? 0 : PULSE_EVERY),
     }),
     asks: new AskHub(chanCfg, {
       broadcast: (ev) => broadcast(state, ev),
@@ -7488,6 +7508,7 @@ export async function startServer(opts: {
   state.gate.announce();
   void state.chan.start().catch((err) => console.error("canopy: tailchan", err));
   state.registry.start();
+  if (chanCfg) state.pulse.start();
   if (process.env["NODE_ENV"] !== "test") state.kit.start();
   if (process.env["NODE_ENV"] !== "test") state.landing.start();
   if (process.env["NODE_ENV"] !== "test") state.warm.start();
@@ -7583,6 +7604,7 @@ export async function startServer(opts: {
       state.launcher.shutdown();
       state.chan.close();
       state.registry.close();
+      state.pulse.close();
       state.asks.close();
       state.push.stop();
       // the ptys go with the server; a shell on tmux stays for the next one

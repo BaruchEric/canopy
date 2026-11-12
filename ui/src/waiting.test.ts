@@ -190,6 +190,12 @@ describe("turnRows", () => {
     expect(term?.kind === "agent" && [term.what, term.where]).toEqual(["your turn", "kitty on mac"]);
   });
 
+  test("a session whose shells or monitors still run waits on them, not on you", () => {
+    const status = (c: AgentCard) => (c.id === "bg" ? ("background" as const) : ("idle" as const));
+    const rows = turnRows([], {}, [card("bg"), card("term")], [], [app], undefined, status);
+    expect(rows.map((r) => r.id)).toEqual(["term"]);
+  });
+
   test("an idle coordinator is your turn only while its cards wait for start these", () => {
     const coord = (id: string, states: CoordTask["state"][]): Run => ({
       ...run(id, "idle", 100, 200),

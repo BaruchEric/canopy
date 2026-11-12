@@ -1,7 +1,7 @@
 import { open, readdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CODEX_DAYS, claudeHome, codexDayDirs, codexHome, isSessionId, projectFolder } from "./sessions";
-import type { ActivityEvent, AgentActivity, Harness } from "./types";
+import type { ActivityEvent, AgentActivity, BackgroundTask, Harness } from "./types";
 
 /*
  * What an agent did, read from its session's transcript on this machine:
@@ -77,9 +77,16 @@ export interface Tally {
   costUsd: number | null;
   linesAdded: number | null;
   linesRemoved: number | null;
-  /** call ids to tool names, so a failed result can say whose it was */
-  calls: Map<string, string>;
+  /** call ids to the tool and when it was called: a result takes its call
+   *  out, so a failed one can say whose it was and what is left is running */
+  calls: Map<string, { name: string; at: number | null }>;
   events: ActivityEvent[];
+  /** background work started and not yet reported back, by task id */
+  background: Map<string, BackgroundTask>;
+  /** task ids a notification said ended. Claude Code can write a quick
+   *  task's notification ahead of the result that started it, so a start
+   *  for one of these is passed over. */
+  settled: Set<string>;
 }
 
 export function newTally(harness: Harness): Tally {
@@ -113,6 +120,8 @@ export function newTally(harness: Harness): Tally {
     linesRemoved: null,
     calls: new Map(),
     events: [],
+    background: new Map(),
+    settled: new Set(),
   };
 }
 
@@ -250,7 +259,7 @@ function reply(t: Tally, at: number | null, text: string): void {
 function call(t: Tally, at: number | null, name: string, input: unknown, id: unknown): void {
   t.toolCalls++;
   t.tools.set(name, (t.tools.get(name) ?? 0) + 1);
-  if (typeof id === "string" && id) t.calls.set(id, name);
+  if (typeof id === "string" && id) t.calls.set(id, { name, at });
   for (const f of filesOf(name, input)) {
     if (t.touched.has(f)) t.files = t.files.filter((x) => x !== f);
     t.touched.add(f);
@@ -258,6 +267,59 @@ function call(t: Tally, at: number | null, name: string, input: unknown, id: unk
   }
   if (t.files.length > FILES_KEPT) t.files.length = FILES_KEPT;
   push(t, { at, kind: "tool", tool: name, text: toolText(name, input) });
+}
+
+/** a task notification's end states; "running" is a progress note */
+const ENDED = new Set(["completed", "failed", "killed", "stopped"]);
+/** how many ended task ids a tally remembers */
+const SETTLED_MAX = 500;
+/** a shell's id in the words of its result, for a record with no `toolUseResult` */
+const BACKGROUND_WORDS = /running in background with ID: ([A-Za-z0-9_-]+)/;
+
+function startTask(t: Tally, task: BackgroundTask): void {
+  if (t.settled.has(task.id) || t.background.has(task.id)) return;
+  t.background.set(task.id, task);
+}
+
+/**
+ * Background work a tool result says it started, from the record's
+ * `toolUseResult` (Claude Code 2.1): a shell's `backgroundTaskId` (Bash
+ * with `run_in_background`), a monitor's `taskId` beside its timeout or
+ * `persistent` flag, an agent's `agentId` when it went off on its own
+ * (`isAsync`). A persistent monitor has no end of its own.
+ */
+function startedTasks(t: Tally, result: unknown, at: number | null): void {
+  if (!isRecord(result)) return;
+  const shell = str(result.backgroundTaskId);
+  if (shell) return startTask(t, { id: shell, kind: "shell", at, until: null });
+  const monitor = str(result.taskId);
+  if (monitor && ("timeoutMs" in result || "persistent" in result)) {
+    const ms = num(result.timeoutMs);
+    const until = result.persistent === true || ms === null || at === null ? null : at + ms;
+    return startTask(t, { id: monitor, kind: "monitor", at, until });
+  }
+  const agent = str(result.agentId);
+  if (agent && result.isAsync === true) startTask(t, { id: agent, kind: "agent", at, until: null });
+}
+
+/** Every task a notification in this raw line says ended: completed,
+ *  failed, killed or stopped. Read off the line as written, so it counts
+ *  in whichever record carries it (the queue's, an attachment, the user
+ *  turn it became). */
+export function settleTasks(t: Tally, line: string): void {
+  for (const m of line.matchAll(/<task-notification>([\s\S]*?)(?:<\/task-notification>|$)/g)) {
+    const body = m[1] ?? "";
+    const id = /<task-id>([A-Za-z0-9_-]+)<\/task-id>/.exec(body)?.[1];
+    const status = /<status>(\w+)<\/status>/.exec(body)?.[1];
+    if (!id || !status || !ENDED.has(status)) continue;
+    t.background.delete(id);
+    t.settled.delete(id);
+    t.settled.add(id);
+    if (t.settled.size > SETTLED_MAX) {
+      const oldest = t.settled.values().next().value;
+      if (oldest !== undefined) t.settled.delete(oldest);
+    }
+  }
 }
 
 function model(t: Tally, v: unknown): void {
@@ -325,6 +387,7 @@ function feedClaude(t: Tally, rec: Record<string, unknown>): void {
   const at = time(rec.timestamp);
   stamp(t, at);
   if (rec.type === "user") {
+    startedTasks(t, rec.toolUseResult, at);
     if (rec.isMeta === true) return;
     if (typeof msg.content === "string") {
       prompt(t, at, msg.content);
@@ -339,8 +402,10 @@ function feedClaude(t: Tally, rec: Record<string, unknown>): void {
         prompt(t, at, part.text);
       } else if (part.type === "tool_result") {
         const id = typeof part.tool_use_id === "string" ? part.tool_use_id : "";
-        const tool = t.calls.get(id);
+        const tool = t.calls.get(id)?.name;
         t.calls.delete(id);
+        const shell = BACKGROUND_WORDS.exec(textOf(part.content) ?? "")?.[1];
+        if (shell) startTask(t, { id: shell, kind: "shell", at, until: null });
         if (part.is_error !== true) continue;
         t.toolErrors++;
         const ev: ActivityEvent = { at, kind: "error", text: oneLine(textOf(part.content) ?? "") || "failed" };
@@ -437,6 +502,11 @@ function feedCodex(t: Tally, rec: Record<string, unknown>): void {
       stamp(t, at);
       call(t, at, "web_search", isRecord(p.action) ? p.action : null, null);
       return;
+    case "function_call_output":
+    case "custom_tool_call_output":
+      stamp(t, at);
+      if (typeof p.call_id === "string") t.calls.delete(p.call_id);
+      return;
     default:
       return;
   }
@@ -453,8 +523,17 @@ export function feedLine(t: Tally, line: string): void {
     return;
   }
   if (!isRecord(rec)) return;
-  if (t.harness === "codex") feedCodex(t, rec);
-  else feedClaude(t, rec);
+  if (t.harness === "codex") return feedCodex(t, rec);
+  const carrier = rec.type === "user" || rec.type === "queue-operation" || rec.type === "attachment";
+  if (carrier && rec.isSidechain !== true && line.includes("<task-notification>")) settleTasks(t, line);
+  feedClaude(t, rec);
+}
+
+/** the tool call in progress, the oldest when several run at once */
+function openCall(t: Tally): { name: string; at: number | null } | null {
+  let first: { name: string; at: number | null } | null = null;
+  for (const c of t.calls.values()) if (!first || (c.at !== null && (first.at === null || c.at < first.at))) first = c;
+  return first ? { ...first } : null;
 }
 
 /** What the tally says, as the page reads it. */
@@ -489,6 +568,8 @@ export function activityOf(t: Tally, session: string, bytes: number, writtenAt: 
     linesRemoved: t.linesRemoved,
     subagents,
     events: t.events.slice(-ACTIVITY_EVENTS),
+    background: [...t.background.values()].map((b) => ({ ...b })),
+    tool: openCall(t),
   };
 }
 

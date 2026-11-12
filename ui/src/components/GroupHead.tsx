@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { groupSum, sumParts, sumTitle } from "../badges";
-import { headingAgentsOn, useStore } from "../store";
+import { headingAgentsOn, statusOf, useStore } from "../store";
 import type { Repo } from "../../../src/core/types";
 
 /** A section heading in the tree or the grid. The name is a button that
@@ -58,7 +58,7 @@ export function GroupHead({
  *  the group is quiet. */
 export function GroupSummary({ repos, compact = false }: { repos: readonly Repo[]; compact?: boolean }) {
   // the sum is plain numbers, so a shallow compare holds while none changed
-  const sum = useStore(useShallow((s) => groupSum(repos, repos.map((r) => headingAgentsOn(s, r.id)))));
+  const sum = useStore(useShallow((s) => groupSum(repos, repos.map((r) => headingAgentsOn(s, r.id)), statusOf(s))));
   const parts = sumParts(sum, compact);
   if (parts.length === 0) return null;
   return (

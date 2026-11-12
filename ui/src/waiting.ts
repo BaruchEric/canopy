@@ -11,6 +11,7 @@ import { groupWaiting } from "./groups";
 import type { AgentCard, Ask, RangerInfo, Repo, Run, TaskInfo } from "../../src/core/types";
 import { collisionNotice, type Collision } from "../../src/core/touch";
 import { cardName, repoOfCard, whereWord } from "./agentcards";
+import { cardStatus, type StatusOf } from "./agentstatus";
 import { coordTurn, isCoordinator } from "./coord";
 import { stateOf } from "./util";
 import type { HealthRow } from "./health";
@@ -184,8 +185,10 @@ export type TurnRow =
  * (status "idle", less a flow's own steps), and the hooked agents whose
  * harness said it waits on the user (tailchan's "waiting", Claude's idle
  * prompt). A card for a canopy run is the run's, already here or in the
- * inbox, and a card with an open ask is the inbox's. An idle coordinator is
- * here only while its cards wait for start these.
+ * inbox, and a card with an open ask is the inbox's. A session at its prompt
+ * with a shell, monitor or agent still going in the background (`status`
+ * says "background") waits on that, not on the user, so it is left out. An
+ * idle coordinator is here only while its cards wait for start these.
  */
 export function turnRows(
   runs: readonly Run[],
@@ -194,6 +197,7 @@ export function turnRows(
   asks: readonly Ask[],
   repos: readonly Repo[],
   landing?: LandingInfo,
+  status: StatusOf = cardStatus,
 ): TurnRow[] {
   const out: TurnRow[] = [];
   for (const group of landing?.groups ?? []) if (landing && groupWaiting(group, landing)) out.push({ kind: "group", id: group.id, repoId: group.repoId, what: `best of ${group.expectedMembers}: ${group.note}`, at: group.endedAt ?? group.startedAt });
@@ -205,7 +209,7 @@ export function turnRows(
   }
   const asking = new Set(asks.filter((a) => a.state === "open").map((a) => a.agent));
   for (const c of cards) {
-    if (c.state !== "waiting" || c.origin === "canopy-run" || asking.has(c.id)) continue;
+    if (c.state !== "waiting" || c.origin === "canopy-run" || asking.has(c.id) || status(c) === "background") continue;
     out.push({
       kind: "agent",
       id: c.id,

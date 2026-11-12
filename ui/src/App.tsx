@@ -33,7 +33,7 @@ import { noteCopied, onCopied, pageCopyText } from "./clipsink";
 import { runPanel } from "./itempanel";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
-import { SIDEBAR, attentionCount, dockless, useStore, type CanopyState } from "./store";
+import { SIDEBAR, attentionCount, dockless, statusOf, useStore, type CanopyState } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { agentsBadge, gitBadge, healthBadge, incubatorBadge, type Badge, type BadgeTone } from "./badges";
 import { PickMenu, type PickGroup } from "./components/PickMenu";
@@ -98,7 +98,7 @@ function badgeOf(s: CanopyState, key: string): Badge | null {
     case "git":
       return gitBadge(attentionCount(s));
     case "agents":
-      return s.registryReady ? agentsBadge(Object.values(s.registry)) : null;
+      return s.registryReady ? agentsBadge(Object.values(s.registry), statusOf(s)) : null;
     case "health":
       return healthBadge(s.health);
     case "incubator":

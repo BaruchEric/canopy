@@ -2,7 +2,9 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { keepKeys } from "../surface";
 import { useShallow } from "zustand/react/shallow";
 import { HARNESS } from "../../../src/core/harness";
+import { backgroundWord, cardAsks, statusFromState } from "../../../src/core/agentstatus";
 import { isLiveAgent, type ActivityEvent, type AgentActivity, type AgentCard, type Repo } from "../../../src/core/types";
+import { pulseIn, type StatusOf } from "../agentstatus";
 import {
   ageWord,
   agentsHead,
@@ -33,7 +35,7 @@ import { chatOf } from "../allagents";
 import { api } from "../api";
 import { handoffFrom, handoffRepo } from "../handoff";
 import { backendOf, qual } from "../registry";
-import { agentsOn, helperFor, useStore } from "../store";
+import { agentsOn, helperFor, statusFacts, statusOf, useStore } from "../store";
 import { repoChannel } from "../../../src/core/tailchan";
 import { fmtTokens, usd } from "../util";
 import { HandoffButton } from "./Handoff";
@@ -92,7 +94,9 @@ export function AgentRow({
   open?: boolean;
   onToggle?: () => void;
 }) {
-  const since = useStore((s) => stateSince(card, s.registryTrail[card.id]));
+  const since = useStore((s) => stateSince(card, s.registryTrail[card.id], statusFacts(s)(card)));
+  const status = useStore((s) => statusOf(s)(card));
+  const word = useStore((s) => stateWord(card, statusFacts(s)(card)));
   const [ownOpen, setOwnOpen] = useState(false);
   const open = openProp ?? ownOpen;
   const toggle = onToggle ?? (() => setOwnOpen((o) => !o));
@@ -114,11 +118,11 @@ export function AgentRow({
         <span className="agents-line" title={card.cwd}>
           {showRepo ? repoWord(card) : (card.branch ?? "")}
         </span>
-        <span className={`reg-state rs-${card.state}`} title={card.waiting ?? undefined}>
-          {stateWord(card)}
+        <span className={`reg-state rs-${status}`} title={card.waiting ?? undefined}>
+          {word}
         </span>
         {since !== null && (
-          <span className="agents-fact" title={`${card.state} since ${new Date(since).toLocaleTimeString()}`}>
+          <span className="agents-fact" title={`${status} since ${new Date(since).toLocaleTimeString()}`}>
             for {durationWord(now - since)}
           </span>
         )}
@@ -285,6 +289,7 @@ function noReaderWord(card: AgentCard): string {
 export function AgentDetail({ card, now }: { card: AgentCard; now: number }) {
   const reader = useStore((s) => readerOf(card, s.backendOrder, Object.values(s.registry)));
   const marks = useStore((s) => s.registryTrail[card.id]);
+  const pulse = useStore((s) => pulseIn(s.pulses, card.id));
   const read = useActivity(card, reader);
   const a = read.activity;
   const live = isLiveAgent(card);
@@ -318,10 +323,32 @@ export function AgentDetail({ card, now }: { card: AgentCard; now: number }) {
             <dd>{ago(card.seenAt)}</dd>
           </>
         )}
-        {card.state === "waiting" && card.waiting && (
+        {cardAsks(card) && card.waiting && (
           <>
             <dt>waits on</dt>
             <dd className="reg-waits">{card.waiting}</dd>
+          </>
+        )}
+        {live && pulse?.tool && (
+          <>
+            <dt>in a call</dt>
+            <dd>
+              {pulse.tool.name} <span className="agents-fact">for {durationWord(now - pulse.tool.at)}</span>
+            </dd>
+          </>
+        )}
+        {live && pulse && pulse.stalledSince !== null && (
+          <>
+            <dt>stalled</dt>
+            <dd className="rs-stalled" title="It says it is working, but its transcript has not moved">
+              nothing new for {durationWord(now - pulse.stalledSince)}
+            </dd>
+          </>
+        )}
+        {live && pulse && backgroundWord(pulse) && (
+          <>
+            <dt>background</dt>
+            <dd title="What it started in the background and has not heard back from">{backgroundWord(pulse)}</dd>
           </>
         )}
         <dt>harness</dt>
@@ -514,11 +541,14 @@ function Trail({ card, marks }: { card: AgentCard; marks: readonly TrailMark[] |
   return (
     <p className="reg-trail" title="The states this page saw it take while it was open">
       <span className="reg-said-who">seen here</span>
-      {marks.map((m, i) => (
-        <span key={`${m.at}-${i}`} className="reg-mark">
-          {clockWord(m.at)} <span className={`rs-${m.state}`}>{m.waiting ? `waiting: ${m.waiting}` : m.state}</span>
-        </span>
-      ))}
+      {marks.map((m, i) => {
+        const s = statusFromState(m.state, m.waiting);
+        return (
+          <span key={`${m.at}-${i}`} className="reg-mark">
+            {clockWord(m.at)} <span className={`rs-${s}`}>{s === "waiting" && m.waiting ? `waiting on you: ${m.waiting}` : s}</span>
+          </span>
+        );
+      })}
       {card.endedAt !== null && card.state === "ended" && marks[marks.length - 1]?.state !== "ended" && (
         <span className="reg-mark">
           {clockWord(card.endedAt)} <span className="rs-ended">ended</span>
@@ -587,15 +617,31 @@ export function Summary({ s, now }: { s: RegistrySummary; now: number }) {
       <div className="reg-stat">
         <dt>running</dt>
         <dd className="reg-stat-n">{s.live}</dd>
-        <dd className="reg-stat-sub">
+        <dd className="reg-stat-sub reg-stat-states">
           <span className="rs-working">{s.working} working</span> ·{" "}
+          {s.stalled > 0 && (
+            <>
+              <span className="rs-stalled" title="Working, but nothing new in its transcript for a while">
+                {s.stalled} stalled
+              </span>{" "}
+              ·{" "}
+            </>
+          )}
           {s.waiting > 0 ? (
             <button type="button" className="reg-stat-link rs-waiting" title="Open the inbox" onClick={inbox}>
-              {s.waiting} waiting
+              {s.waiting} waiting on you
             </button>
           ) : (
-            <span>0 waiting</span>
+            <span>0 waiting on you</span>
           )}{" "}
+          {s.background > 0 && (
+            <>
+              ·{" "}
+              <span className="rs-background" title="Done with its turn, with a shell, monitor or agent still running">
+                {s.background} in background
+              </span>{" "}
+            </>
+          )}
           · <span className="rs-idle">{s.idle} idle</span>
         </dd>
       </div>
@@ -632,7 +678,7 @@ export function Summary({ s, now }: { s: RegistrySummary; now: number }) {
   );
 }
 
-const LEGEND = ["working", "waiting", "idle", "ended", "lost"] as const;
+const LEGEND = ["working", "stalled", "waiting", "background", "idle", "ended", "lost"] as const;
 
 /**
  * The day's runs on one time axis, a lane per agent, earliest start first:
@@ -640,7 +686,8 @@ const LEGEND = ["working", "waiting", "idle", "ended", "lost"] as const;
  * colour of its state now. A run from before midnight is cut flat at the
  * left. A lane is a button that opens the agent's row.
  */
-function DayTimeline({ t, drilled, onPick }: { t: Timeline; drilled: string | null; onPick: (id: string) => void }) {
+function DayTimeline({ t, drilled, onPick, status }: { t: Timeline; drilled: string | null; onPick: (id: string) => void; status: StatusOf }) {
+  const facts = useStore(statusFacts);
   if (t.lanes.length === 0) return null;
   const span = Math.max(1, t.to - t.from);
   const pct = (at: number) => ((at - t.from) / span) * 100;
@@ -672,7 +719,7 @@ function DayTimeline({ t, drilled, onPick }: { t: Timeline; drilled: string | nu
           </span>
           {t.lanes.map((l) => {
             const c = l.card;
-            const label = `${cardName(c)}: ${stateWord(c)}, ${ageWord(c, t.to)}; started ${clockWord(c.startedAt)}`;
+            const label = `${cardName(c)}: ${stateWord(c, facts(c))}, ${ageWord(c, t.to)}; started ${clockWord(c.startedAt)}`;
             return (
               <button key={c.id} type="button" className={drilled === c.id ? "tl-lane on" : "tl-lane"} aria-label={label} title={label} onClick={() => onPick(c.id)}>
                   <span className="tl-name">
@@ -680,7 +727,7 @@ function DayTimeline({ t, drilled, onPick }: { t: Timeline; drilled: string | nu
                   </span>
                   <span className="tl-track">
                     <span
-                      className={`tl-bar rs-${c.state}${l.clipped ? " clipped" : ""}`}
+                      className={`tl-bar rs-${status(c)}${l.clipped ? " clipped" : ""}`}
                       style={{ left: `${pct(l.start)}%`, width: `max(8px, ${pct(l.end) - pct(l.start)}%)` }}
                     />
                   </span>
@@ -716,9 +763,10 @@ export function RegistryTab({ onGit }: { onGit?: () => void }) {
   const [pastOpen, setPastOpen] = useState(false);
   const now = useNow();
   const chat = useIsChat();
-  const { live, past } = useMemo(() => splitRecent(all, now, chat), [all, now, chat]);
+  const status = useStore(statusOf);
+  const { live, past } = useMemo(() => splitRecent(all, now, chat, { status }), [all, now, chat, status]);
   const groups = useMemo(() => groupCards(live, by, chat), [live, by, chat]);
-  const summary = useMemo(() => registrySummary(all, now), [all, now]);
+  const summary = useMemo(() => registrySummary(all, now, undefined, status), [all, now, status]);
   const timeline = useMemo(() => timelineOf(all, now), [all, now]);
   const toggle = (id: string) => setDrilled((d) => (d === id ? null : id));
   const pick = (id: string) => {
@@ -729,7 +777,7 @@ export function RegistryTab({ onGit }: { onGit?: () => void }) {
   return (
     <>
       <Summary s={summary} now={now} />
-      <DayTimeline t={timeline} drilled={drilled} onPick={pick} />
+      <DayTimeline t={timeline} drilled={drilled} onPick={pick} status={status} />
       <div className="agents-add reg-bar">
         <Seg label="Group agents" value={by} options={GROUPINGS} onChange={setBy} />
       </div>
@@ -777,13 +825,15 @@ export function MessageAll({ url }: { url: string | null }) {
 export function AgentChip({ repoId }: { repoId: string }) {
   const cards = useStore((s) => agentsOn(s, repoId));
   const showAgents = useStore((s) => s.showAgents);
+  const status = useStore(statusOf);
+  const facts = useStore(statusFacts);
   const live = cards.filter(isLiveAgent);
   if (live.length === 0) return null;
-  const title = live.map((c) => `${cardName(c)}: ${stateWord(c)}, ${whereWord(c)}`).join("\n");
+  const title = live.map((c) => `${cardName(c)}: ${stateWord(c, facts(c))}, ${whereWord(c)}`).join("\n");
   return (
     <button
       type="button"
-      className={`run-chip agent-chip${anyWaiting(live) ? " waiting" : ""}`}
+      className={`run-chip agent-chip${anyWaiting(live, status) ? " waiting" : ""}`}
       title={title}
       aria-label={`${live.length} agent${live.length === 1 ? "" : "s"} on ${repoId}`}
       onClick={(e) => {
@@ -805,9 +855,10 @@ export function AgentsSection({ repo }: { repo: Repo }) {
   const cards = useStore((s) => agentsOn(s, repo.id));
   const now = useNow();
   const chat = useIsChat();
-  const { live, past } = useMemo(() => splitRecent(cards, now, chat), [cards, now, chat]);
+  const status = useStore(statusOf);
+  const { live, past } = useMemo(() => splitRecent(cards, now, chat, { status }), [cards, now, chat, status]);
   if (!ready) return null;
-  const head = agentsHead(live, past);
+  const head = agentsHead(live, past, status);
   return (
     <Section
       repo={repo}

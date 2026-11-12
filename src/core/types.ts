@@ -2077,7 +2077,11 @@ export type ServerEvent =
   | { type: "kit"; kit: KitInfo }
   | { type: "secrets"; info: SecretsInfo }
   /** keep awake, whole, whenever its mode or hold changes (core/awake) */
-  | { type: "awake"; awake: AwakeInfo };
+  | { type: "awake"; awake: AwakeInfo }
+  /** what this backend read in its own agents' transcripts since it last
+   *  said (core/agentstatus): pulses that changed, whole, and the card ids
+   *  it no longer reads. Every backend's, merged on the page by card id. */
+  | { type: "pulse"; pulses: AgentPulse[]; gone?: string[] };
 
 export type BuildChange = "installed" | "built" | "launched" | "exited" | "removed";
 
@@ -3471,6 +3475,49 @@ export interface AgentActivity {
   subagents: number;
   /** the newest events, oldest first */
   events: ActivityEvent[];
+  /** what it started in the background that has not reported back yet,
+   *  oldest first: Claude Code's background shells, monitors and agents */
+  background: BackgroundTask[];
+  /** the tool call it is in, the oldest when several run at once; null
+   *  between calls */
+  tool: { name: string; at: number | null } | null;
+}
+
+/** One piece of background work a session started: a shell (Bash with
+ *  `run_in_background`), a monitor, or a subagent sent off on its own. It
+ *  is open until the harness's task notification says it completed,
+ *  failed or was stopped. */
+export interface BackgroundTask {
+  /** the harness's task id, the one its notification names */
+  id: string;
+  kind: "shell" | "monitor" | "agent";
+  /** when it started, unix ms */
+  at: number | null;
+  /** when a monitor gives up on its own, unix ms; null for anything that
+   *  runs until it ends or is stopped */
+  until: number | null;
+}
+
+/**
+ * What a backend reads in the transcript of one of its own live agents,
+ * every few seconds (server/pulse.ts): the background work still open,
+ * a tool call that has run a minute or more, and whether the agent has
+ * stalled. Its own backend sends it; the page lays it over the card.
+ */
+export interface AgentPulse {
+  /** the registry card's id */
+  id: string;
+  /** background work open now, by kind */
+  shells: number;
+  monitors: number;
+  agents: number;
+  /** a tool call in progress for at least `TOOL_SHOWN` (a long build, a
+   *  subagent), its name and since when; null otherwise */
+  tool: { name: string; at: number } | null;
+  /** since when a card that says working has written nothing to its
+   *  transcript while in no tool call, once that is `STALL_MS` or more;
+   *  null while it is not stalled */
+  stalledSince: number | null;
 }
 
 /** One agent process a backend's scan found, as `POST /v1/agents/scan`

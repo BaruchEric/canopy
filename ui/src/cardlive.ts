@@ -4,9 +4,11 @@
  *  it, and the trace of the last thing that left the row. Pure; tested in
  *  cardlive.test.ts. The row is `CardLive.tsx`. */
 
+import { agentStatus } from "../../src/core/agentstatus";
 import { isLiveAgent, type AgentCard, type TaskInfo, type TaskStatus, type TermInfo } from "../../src/core/types";
 import { cardName, durationWord, runEnd, stateSince, stateWord, whereWord, type TrailMark } from "./agentcards";
 import { AGENT_GLYPH } from "./agentpanel";
+import { cardStatus, noFacts, type FactsOf, type StatusOf } from "./agentstatus";
 import { WAITING_GLYPH } from "./waiting";
 
 /** what every mark carries, whatever it stands for */
@@ -21,10 +23,11 @@ interface MarkBase {
   repoId: string;
 }
 
-/** an agent: at work, waiting on you, or open between turns */
+/** an agent: waiting on you, stalled, at work, between turns with work of
+ *  its own in the background, or idle at its prompt (core/agentstatus) */
 export interface AgentMark extends MarkBase {
   kind: "agent";
-  state: "working" | "waiting" | "idle";
+  state: "waiting" | "stalled" | "working" | "background" | "idle";
 }
 
 /** a task: up, being restarted after a failure, or failed */
@@ -63,9 +66,12 @@ export interface LiveInput {
   shells: readonly TermInfo[];
   /** a qualified id's backend and its plain id */
   split: (id: string) => [string, string];
+  /** what the page knows beside each agent's card: its pulse, an open ask
+   *  (ui/src/agentstatus.ts); the card alone when absent */
+  facts?: FactsOf;
 }
 
-const AGENT_ORDER: readonly AgentMark["state"][] = ["waiting", "working", "idle"];
+const AGENT_ORDER: readonly AgentMark["state"][] = ["waiting", "stalled", "working", "background", "idle"];
 const TASK_ORDER: readonly TaskMark["state"][] = ["failed", "restarting", "running"];
 
 /** the task states the row shows, each with its word; one that is idle,
@@ -77,7 +83,11 @@ const TASK_SHOWN: Partial<Record<TaskStatus, { state: TaskMark["state"]; word: s
   running: { state: "running", word: "running" },
 };
 
-const agentState = (c: AgentCard): AgentMark["state"] => (c.state === "waiting" ? "waiting" : c.state === "working" ? "working" : "idle");
+/** a live agent's mark state: its status, which for a live card is never lost or ended */
+function agentState(c: AgentCard, facts: FactsOf): AgentMark["state"] {
+  const s = agentStatus(c, facts(c));
+  return s === "lost" || s === "ended" ? "idle" : s;
+}
 
 /** " on mini" for a checkout on another backend than the card's lead, nothing for one at home */
 function elsewhere(lead: string, split: LiveInput["split"]): (id: string) => string {
@@ -89,26 +99,28 @@ function elsewhere(lead: string, split: LiveInput["split"]): (id: string) => str
 }
 
 /**
- * The card's marks, the most pressing first in each kind: agents (waiting,
- * working, idle), tasks (failed, restarting, running), shells (on a screen,
- * then held). A shell a live agent says it runs in is that agent's mark and
- * no shell's; a task's session and the ranger's are never shells.
+ * The card's marks, the most pressing first in each kind: agents (waiting
+ * on you, stalled, working, background, idle), tasks (failed, restarting,
+ * running), shells (on a screen, then held). A shell a live agent says it
+ * runs in is that agent's mark and no shell's; a task's session and the
+ * ranger's are never shells.
  */
-export function liveMarks({ lead, agents, trail, tasks, shells, split }: LiveInput): LiveMark[] {
+export function liveMarks({ lead, agents, trail, tasks, shells, split, facts = noFacts }: LiveInput): LiveMark[] {
   const away = elsewhere(lead, split);
   const out: LiveMark[] = [];
 
   const live = agents.filter(isLiveAgent);
   const ranked = [...live].sort(
-    (a, b) => AGENT_ORDER.indexOf(agentState(a)) - AGENT_ORDER.indexOf(agentState(b)) || b.startedAt - a.startedAt || a.id.localeCompare(b.id),
+    (a, b) => AGENT_ORDER.indexOf(agentState(a, facts)) - AGENT_ORDER.indexOf(agentState(b, facts)) || b.startedAt - a.startedAt || a.id.localeCompare(b.id),
   );
   for (const c of ranked) {
+    const f = facts(c);
     out.push({
       id: `agent:${c.id}`,
       kind: "agent",
-      state: agentState(c),
-      title: `${cardName(c)}: ${stateWord(c)}, ${whereWord(c)}`,
-      since: stateSince(c, trail[c.id]),
+      state: agentState(c, facts),
+      title: `${cardName(c)}: ${stateWord(c, f)}, ${whereWord(c)}`,
+      since: stateSince(c, trail[c.id], f),
       repoId: lead,
     });
   }
@@ -154,7 +166,7 @@ export function liveMarks({ lead, agents, trail, tasks, shells, split }: LiveInp
   return out;
 }
 
-/** a mark's glyph: the registry's ✦ and the waiting panel's ⚑ for an agent,
+/** a mark's glyph: the registry's ✦, and the waiting panel's ⚑ for an agent that waits on you,
  *  the task chip's ▶ and ✕, a terminal's cursor for a shell */
 export function liveGlyph(m: LiveMark): string {
   switch (m.kind) {
@@ -207,10 +219,13 @@ function byKind(marks: readonly LiveMark[]): { agents: AgentMark[]; tasks: TaskM
   return { agents, tasks, shells };
 }
 
+/** each agent mark state in words, for a screen reader */
+const AGENT_WORD: Record<AgentMark["state"], string> = { waiting: "waiting on you", stalled: "stalled", working: "working", background: "in the background", idle: "idle" };
+
 function agentWords(agents: readonly AgentMark[]): string {
   const by = AGENT_ORDER.flatMap((s) => {
     const n = agents.filter((m) => m.state === s).length;
-    return n ? [`${n} ${s}`] : [];
+    return n ? [`${n} ${AGENT_WORD[s]}`] : [];
   });
   return `${count(agents.length, "agent")}: ${by.join(", ")}`;
 }
@@ -272,10 +287,13 @@ const lasting = (m: LiveMark, now: number): string => {
 
 /**
  * The row's one line of words, about the most pressing thing on it: an
- * agent that waits on you, a task that failed, an agent at work, a task
- * being restarted, a task that is up, an idle agent, an open shell. One of
- * a kind says how long; several are counted. A task is named only when the
- * row holds more than one, since a lone task's mark already names it.
+ * agent that waits on you (a permission, a question), a task that failed,
+ * an agent that stalled, an agent at work, a task being restarted, an agent
+ * whose background work still runs, a task that is up, an idle agent, an
+ * open shell. One of a kind says how long; several are counted. A task is
+ * named only when the row holds more than one, since a lone task's mark
+ * already names it. An agent at its prompt with nothing asked is idle, not
+ * waiting on you.
  */
 export function liveHead(marks: readonly LiveMark[], now: number): LiveHead | null {
   const { agents, tasks, shells } = byKind(marks);
@@ -294,8 +312,10 @@ export function liveHead(marks: readonly LiveMark[], now: number): LiveHead | nu
   return (
     say(agentsIn("waiting"), "ask", (m) => `needs you${lasting(m, now)}`, (n) => `${n} need you`) ??
     say(tasksIn("failed"), "bad", (m) => `${named(m)}failed${ago(m)}`, (n) => `${n} tasks failed`) ??
+    say(agentsIn("stalled"), "hold", (m) => `stalled${lasting(m, now)}`, (n) => `${n} stalled`) ??
     say(agentsIn("working"), "work", (m) => `working${lasting(m, now)}`, (n) => `${n} working`) ??
     say(tasksIn("restarting"), "hold", (m) => `${named(m)}restarting`, (n) => `${n} tasks restarting`) ??
+    say(agentsIn("background"), "calm", (m) => `background${lasting(m, now)}`, (n) => `${n} in background`) ??
     say(tasksIn("running"), "calm", (m) => `${named(m)}up${lasting(m, now)}`, (n) => `${n} tasks up`) ??
     say(agentsIn("idle"), "calm", (m) => `idle${lasting(m, now)}`, (n) => `${n} idle`) ??
     say(shells, "calm", (m) => `shell open${lasting(m, now)}`, (n) => `${n} shells open`)
@@ -306,12 +326,14 @@ export function liveHead(marks: readonly LiveMark[], now: number): LiveHead | nu
 export const liveFlow = (marks: readonly LiveMark[]): boolean => marks.some((m) => m.kind === "agent" && m.state === "working");
 
 /** What the card's leaf edge does about its agents: asks while one waits on
- *  you, carries sap while one works, nothing otherwise. */
-export function liveEdge(agents: readonly Pick<AgentCard, "state">[]): "waiting" | "working" | null {
+ *  you, carries sap while one works, nothing otherwise (an idle one, one
+ *  whose work runs in the background, one that stalled). */
+export function liveEdge(agents: readonly AgentCard[], status: StatusOf = cardStatus): "waiting" | "working" | null {
   let working = false;
   for (const c of agents) {
-    if (c.state === "waiting") return "waiting";
-    if (c.state === "working") working = true;
+    const s = status(c);
+    if (s === "waiting") return "waiting";
+    if (s === "working") working = true;
   }
   return working ? "working" : null;
 }

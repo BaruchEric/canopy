@@ -226,7 +226,7 @@ export function QuickAnswer({ card }: { card: AgentCard }) {
   const answerInbox = useStore((s) => s.answerInbox);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // with nothing to answer the row line already says "waits on: your turn"
+  // with nothing to answer the row line already says what it waits on
   if (!item) return null;
   // a broker's ask needs this device's answer key; a run's prompt does not
   const quick = item.source !== "ask" || can ? quickAnswers(item) : null;

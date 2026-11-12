@@ -3,7 +3,7 @@ import { lastWords } from "../waiting";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from "react";
 import { flushSync } from "react-dom";
 import { isLiveAgent, type AgentCard, type Run } from "../../../src/core/types";
-import { cardName, clockWord, durationWord, machineOf, registrySummary, timelineOf, whereWord, type Timeline, type TrailMark } from "../agentcards";
+import { cardName, clockWord, durationWord, machineOf, registrySummary, stateWord, timelineOf, whereWord, type Timeline, type TrailMark } from "../agentcards";
 import {
   BOARD_GROUPINGS,
   BOARD_LAYOUTS,
@@ -36,8 +36,9 @@ import { PHONE, useMedia } from "../media";
 import { FOCUS_PANE, PANES_CHANNEL, parsePaneMsg, type PaneMsg } from "../panes";
 import { popOutFocus } from "../routes";
 import { screenNow } from "../screens";
-import { useStore } from "../store";
+import { statusFacts, statusOf, useStore } from "../store";
 import { OVER_PAGE } from "../surface";
+import { cardAsks } from "../../../src/core/agentstatus";
 import { AgentScreen, AskHere, QuickAnswer, pageIds, useAllAgents, useShellProbe } from "./AgentFocus";
 import { AgentActions, Summary, glyphOf, harnessWord, useIsChat, useNow } from "./Registry";
 import { PaneSeam } from "./PaneSeam";
@@ -165,7 +166,10 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
   const now = useNow(15_000);
   const chat = useIsChat();
   const cards = useMemo(() => boardCards(all, now), [all, now]);
-  const groups = useMemo(() => boardGroups(cards, grouping, trail, chat), [cards, grouping, trail, chat]);
+  const status = useStore(statusOf);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const groups = useMemo(() => boardGroups(cards, grouping, trail, chat, status), [cards, grouping, trail, chat, status]);
   const order = useMemo(() => groups.flatMap((g) => g.cards), [groups]);
   const timeline = useMemo(() => timelineOf(cards, now), [cards, now]);
   const [picked, setPicked] = useState<string | null>(null);
@@ -194,8 +198,8 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
   );
   const win = useFocusWindow(focus);
   const plan = useMemo(
-    () => planBoard(layout, groups, { focus, width: box.width, narrow, focusOpen, focusAway: win.away }),
-    [layout, groups, focus, box.width, narrow, focusOpen, win.away],
+    () => planBoard(layout, groups, { focus, width: box.width, narrow, focusOpen, focusAway: win.away, status }),
+    [layout, groups, focus, box.width, narrow, focusOpen, win.away, status],
   );
   const slots = useMemo(() => new Map(plan.slots.map((s) => [s.id, s])), [plan]);
   // the shell showing live, and the last few kept joined behind it
@@ -235,7 +239,7 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
       if (k === null) return;
       e.preventDefault();
       if (k === "next") {
-        const id = nextWaiting(orderRef.current, focusRef.current);
+        const id = nextWaiting(orderRef.current, focusRef.current, statusRef.current);
         if (id) pick(id, hasFocusSlot(layoutRef.current));
       } else if (k === "prev-layout" || k === "next-layout") setLayout(stepLayout(layoutRef.current, k === "next-layout" ? 1 : -1));
       else {
@@ -272,7 +276,13 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
       if (id) {
         pending.current = [];
         pick(id, false);
-      } else if (pending.current.some((p) => registryRef.current[p]?.state === "waiting")) timer = setTimeout(tryFollow, TYPING_HOLD);
+      } else if (
+        pending.current.some((p) => {
+          const c = registryRef.current[p];
+          return c !== undefined && cardAsks(c);
+        })
+      )
+        timer = setTimeout(tryFollow, TYPING_HOLD);
       else pending.current = [];
     };
     tryFollow();
@@ -282,7 +292,7 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
   const stageStyle = { gridTemplateColumns: plan.columns, gridTemplateRows: plan.rows, "--stage-h": `${box.height}px` } as CSSProperties;
   const ids = useMemo(() => [...cards].sort((a, b) => a.id.localeCompare(b.id)), [cards]);
   const place = useMemo(() => new Map(order.map((c, i) => [c.id, i + 1])), [order]);
-  const waitingCount = order.filter((c) => c.state === "waiting").length;
+  const waitingCount = order.filter((c) => status(c) === "waiting").length;
 
   return (
     <div className={`board bl-${layout}${narrow ? " narrow" : ""}`}>
@@ -297,7 +307,7 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
           disabled={waitingCount === 0}
           title="Focus the next agent waiting on you, a session's before a run's, the longest wait first (w)"
           onClick={() => {
-            const id = nextWaiting(order, focus);
+            const id = nextWaiting(order, focus, status);
             if (id) pick(id, hasFocusSlot(layout));
           }}
         >
@@ -380,9 +390,10 @@ export function BoardTab({ onGit }: { onGit?: () => void }) {
   );
 }
 
-/** what a row says under its name: the wait, else how and where it runs */
+/** what a row says under its name: what it waits on you for, else how and
+ *  where it runs. A session at its prompt ("your turn") waits on nothing. */
 function lastLine(c: AgentCard, run: Run | undefined): string {
-  if (c.state === "waiting") return `waits on: ${c.waiting ?? "your turn"}`;
+  if (cardAsks(c)) return `waits on: ${c.waiting ?? "you"}`;
   const made = madeWord(c, run);
   if (made) return [made, run ? lastWords(run) : null].filter(Boolean).join(" · ");
   return [ORIGIN_WORD[c.origin], whereWord(c), c.model].filter(Boolean).join(" · ");
@@ -429,6 +440,8 @@ function BoardTile({
   const name = agentName(card);
   const run = useStore((s) => (card.id.startsWith(RUN_CARD) ? s.runs[card.id.slice(RUN_CARD.length)] : undefined));
   const tools = useStore((s) => holdsTools(card, s.runs, pageIds));
+  const status = useStore((s) => statusOf(s)(card));
+  const word = useStore((s) => stateWord(card, statusFacts(s)(card)));
   // a click anywhere on a tile focuses it, but not one meant for a control
   // or for the live shell inside it
   const click = (e: MouseEvent<HTMLElement>) => {
@@ -444,12 +457,12 @@ function BoardTile({
   return (
     <article
       className={`bt bt-${slot.mode}${focused ? " focused" : ""}${isLiveAgent(card) ? "" : " gone"}`}
-      data-state={card.state}
+      data-state={status}
       data-card={card.id}
       hidden={slot.mode === "hidden"}
       style={{ gridArea: slot.area, viewTransitionName: slot.mode === "hidden" ? "none" : tileName(card.id) }}
       onClick={click}
-      aria-label={`${name}, ${card.state}`}
+      aria-label={`${name}, ${word}`}
     >
       <header
         className="bt-head"
@@ -485,9 +498,13 @@ function BoardTile({
         {tools && slot.mode !== "lane" && <span className="bt-tools" title="This run holds canopy's tools">⌁ tools</span>}
         <span className="bt-machine">{machineOf(card)}</span>
         {/* a lane's bar and dot say the state; its label has room for the name */}
-        {slot.mode !== "lane" && <span className={`bt-state rs-${card.state}`}>{card.state}</span>}
+        {slot.mode !== "lane" && (
+          <span className={`bt-state rs-${status}`} title={word}>
+            {status === "waiting" ? "waiting on you" : status}
+          </span>
+        )}
         {slot.mode !== "chip" && slot.mode !== "lane" && (
-          <span className="bt-age" title={`${card.state} since ${new Date(since).toLocaleTimeString()}`}>
+          <span className="bt-age" title={`${status} since ${new Date(since).toLocaleTimeString()}`}>
             {durationWord(Math.max(0, now - since))}
           </span>
         )}
@@ -512,7 +529,7 @@ function BoardTile({
         )}
       </header>
       {slot.mode === "row" && <div className="bt-last">{lastLine(card, run)}</div>}
-      {slot.acts && card.state === "waiting" && slot.mode !== "chip" && <QuickAnswer card={card} />}
+      {slot.acts && status === "waiting" && slot.mode !== "chip" && <QuickAnswer card={card} />}
       {slot.mode === "lane" && <LaneBar card={card} marks={marks} timeline={timeline} now={now} />}
       {(term || keep) && (
         <div className="bt-body" hidden={!term}>
@@ -544,10 +561,11 @@ function LaneBar({ card, marks, timeline, now }: { card: AgentCard; marks: reado
 
 function BoardFurn({ f, cards, timeline, now }: { f: Furn; cards: readonly AgentCard[]; timeline: Timeline; now: number }) {
   const style = { gridArea: f.area };
+  const status = useStore(statusOf);
   if (f.kind === "summary") {
     return (
       <div className="bf-summary" style={style}>
-        <Summary s={registrySummary(cards, now)} now={now} />
+        <Summary s={registrySummary(cards, now, undefined, status)} now={now} />
       </div>
     );
   }

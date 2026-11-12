@@ -2,6 +2,7 @@
  *  so each number is tested and agrees with the place it summarises: the
  *  attention pill, the registry, the health view, the incubator, the card. */
 
+import { statusFromState, type AgentStatus } from "../../src/core/agentstatus";
 import { isLiveAgent, type AgentCard, type HealthCheck, type Repo, type Sprout, type SproutStatus } from "../../src/core/types";
 import { AGENT_GLYPH } from "./agentpanel";
 import { tokenCount } from "./runs";
@@ -23,15 +24,31 @@ export function gitBadge(attention: number): Badge | null {
   return { text: String(attention), tone: "lichen", title: `${attention} repo${attention === 1 ? " needs" : "s need"} attention: changes, unpushed commits or errors` };
 }
 
-/** the agents tab: the home broker's live agents, rust while one waits,
- *  as the card's ✦ chip */
-export function agentsBadge(cards: readonly Pick<AgentCard, "state">[]): Badge | null {
+/** a card as far as its status goes; `waiting` may be missing */
+type StateCard = Pick<AgentCard, "state"> & Partial<Pick<AgentCard, "waiting">>;
+
+/** a card's status from the card alone, where no pulse or ask is known */
+const byState = (c: StateCard): AgentStatus => statusFromState(c.state, c.waiting);
+
+/** how the agents tab's tooltip words each live status */
+const LIVE_WORDS: readonly [AgentStatus, string][] = [
+  ["waiting", "waiting on you"],
+  ["stalled", "stalled"],
+  ["working", "working"],
+  ["background", "in background"],
+  ["idle", "idle"],
+];
+
+/** the agents tab: the home broker's live agents, rust while one waits on
+ *  you and lichen while one stalls, as the card's ✦ chip */
+export function agentsBadge<C extends StateCard>(cards: readonly C[], status: (c: C) => AgentStatus = byState): Badge | null {
   const live = cards.filter(isLiveAgent);
   if (live.length === 0) return null;
-  const waiting = live.filter((c) => c.state === "waiting").length;
-  const working = live.filter((c) => c.state === "working").length;
-  const words = [waiting && `${waiting} waiting`, working && `${working} working`, live.length - waiting - working && `${live.length - waiting - working} idle`].filter(Boolean).join(", ");
-  return { text: `✦ ${live.length}`, tone: waiting > 0 ? "rust" : "sky", title: `${plural(live.length, "agent")} running on the broker: ${words}` };
+  const n = new Map<AgentStatus, number>();
+  for (const c of live) n.set(status(c), (n.get(status(c)) ?? 0) + 1);
+  const words = LIVE_WORDS.flatMap(([s, w]) => (n.get(s) ? [`${n.get(s)} ${w}`] : [])).join(", ");
+  const tone: BadgeTone = n.get("waiting") ? "rust" : n.get("stalled") ? "lichen" : "sky";
+  return { text: `✦ ${live.length}`, tone, title: `${plural(live.length, "agent")} running on the broker: ${words}` };
 }
 
 const TROUBLE = new Set<HealthCheck["state"]>(["down", "healing", "gave-up"]);
@@ -70,18 +87,22 @@ export interface GroupSum {
   deleted: number;
   ahead: number;
   worktrees: number;
-  /** agents with a turn in progress */
+  /** agents with a turn in progress, stalled ones too */
   working: number;
-  /** agents stopped on you: a permission, a question, or their turn */
+  /** agents stopped on you: a permission or a question */
   waiting: number;
-  /** agents open between turns that ask nothing */
+  /** agents open between turns that ask nothing, background work or not */
   idle: number;
 }
 
 /** A group's sum: repos with changes, the lines their tracked changes come
  *  to (a backend that sends none adds none), commits not pushed, worktrees
- *  holding work, and the live agents on them by state, each counted once. */
-export function groupSum(repos: readonly Pick<Repo, "status">[], agents: readonly (readonly Pick<AgentCard, "id" | "state">[])[]): GroupSum {
+ *  holding work, and the live agents on them by status, each counted once. */
+export function groupSum<C extends StateCard & Pick<AgentCard, "id">>(
+  repos: readonly Pick<Repo, "status">[],
+  agents: readonly (readonly C[])[],
+  status: (c: C) => AgentStatus = byState,
+): GroupSum {
   const out: GroupSum = { dirty: 0, added: 0, deleted: 0, ahead: 0, worktrees: 0, working: 0, waiting: 0, idle: 0 };
   for (const r of repos) {
     const st = r.status;
@@ -96,8 +117,9 @@ export function groupSum(repos: readonly Pick<Repo, "status">[], agents: readonl
   for (const c of agents.flat()) {
     if (seen.has(c.id) || !isLiveAgent(c)) continue;
     seen.add(c.id);
-    if (c.state === "working") out.working++;
-    else if (c.state === "waiting") out.waiting++;
+    const s = status(c);
+    if (s === "working" || s === "stalled") out.working++;
+    else if (s === "waiting") out.waiting++;
     else out.idle++;
   }
   return out;
@@ -134,7 +156,7 @@ export function sumParts(s: GroupSum, compact = false): SumPart[] {
     out.push({ kind: "working", glyph: AGENT_GLYPH, text: String(s.working), cls: "t-sky sum-live", title: `${plural(s.working, "agent")} working right now${idle}` });
   }
   if (s.waiting > 0) {
-    out.push({ kind: "waiting", glyph: WAITING_GLYPH, text: String(s.waiting), cls: "t-rust", title: `${plural(s.waiting, "agent")} waiting on you: a permission, a question or its turn` });
+    out.push({ kind: "waiting", glyph: WAITING_GLYPH, text: String(s.waiting), cls: "t-rust", title: `${plural(s.waiting, "agent")} waiting on you: a permission or a question` });
   }
   return out;
 }

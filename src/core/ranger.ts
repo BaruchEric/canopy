@@ -7,6 +7,7 @@
  * the hub that runs it is server/ranger.ts.
  */
 
+import { cardIdle } from "./agentstatus";
 import { CLOCK_RE, CRON_MAX, isCron, lastClock, nextFire, parseCron, parseWhen } from "./cron";
 import { agentArgs, splitArgs, withProviderFile } from "./harness";
 import { isProfileName } from "./route";
@@ -249,11 +250,9 @@ export function rangerBrief(template: string, v: BriefVars): string {
 /** what Claude's trust dialog says, seen on the ranger's pane (Claude Code 2.1.296) */
 export const TRUST_RE = /Yes, I trust this folder|Is this a project you created or one you trust|Do you trust the files in this folder/;
 
-/** Whether a card says its agent is idle at its prompt. Claude's own
- *  notice after a minute at the prompt reaches the card as waiting "your
- *  turn" (tailchan's `idle_prompt`), which for the ranger, reached by DM,
- *  is idle too; a permission or a question waiting is not. */
-export const cardIdle = (c: { state: AgentState; waiting: string | null }): boolean => c.state === "idle" || (c.state === "waiting" && c.waiting === "your turn");
+/** Whether a card says its agent is idle at its prompt (core/agentstatus):
+ *  for the ranger, reached by DM, waiting "your turn" is idle too. */
+export { cardIdle };
 
 /** how long nothing must have happened on the pane before a fresh start */
 export const RANGER_QUIET = 10 * 60_000;

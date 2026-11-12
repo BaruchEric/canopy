@@ -16,6 +16,7 @@ import {
   isOnline,
   multi,
   runFor,
+  statusOf,
   useStore,
   visibleCards,
   visibleRepos,
@@ -136,7 +137,7 @@ const RepoCard = memo(function RepoCard({ repo, i }: { repo: Repo; i: number }) 
   const flow = useStore((s) => flowFor(s, repo.id));
   const activeFlow = useStore((s) => activeFlowFor(s, repo.id));
   // what the leaf edge does about the agents here, with no run of canopy's to say
-  const agentEdge = useStore((s) => liveEdge(agentsOn(s, repo.id)));
+  const agentEdge = useStore((s) => liveEdge(agentsOn(s, repo.id), statusOf(s)));
   const overview = useStore((s) => s.history);
   const history = historyFor(overview, repo.id);
   const selecting = useStore((s) => s.selecting);

@@ -1,6 +1,7 @@
 import type { AgentCard, Harness, Repo, TermInfo } from "../../src/core/types";
 import { isLiveAgent } from "../../src/core/types";
 import { orderCards, repoOfCard, type IsChat } from "./agentcards";
+import { cardStatus, type StatusOf } from "./agentstatus";
 import type { TermTab } from "./term";
 
 /** A repo's dot in the sessions view's machines tree, most pressing first:
@@ -38,6 +39,8 @@ export interface MachinesInput {
   tabs: readonly TermTab[];
   cards: readonly AgentCard[];
   backendOf: (id: string) => string;
+  /** each card's status; the card's own state read alone without it */
+  status?: StatusOf;
 }
 
 const isShell = (t: { task?: string; ranger?: true }): boolean => t.task === undefined && !t.ranger;
@@ -69,6 +72,7 @@ export function machinesOf(i: MachinesInput, keep: readonly string[] = []): Mach
   // a tab whose shell the backend has not reported yet
   for (const t of i.tabs) if (isShell(t) && !i.shells.some((s) => s.id === t.id)) bump(t.repoId);
   const live = i.cards.filter(isLiveAgent);
+  const status = i.status ?? cardStatus;
   return names.map((name) => {
     const mine = i.repos.filter((r) => !r.forge && i.backendOf(r.id) === name);
     const agents = new Map<string, AgentCard[]>();
@@ -81,9 +85,9 @@ export function machinesOf(i: MachinesInput, keep: readonly string[] = []): Mach
       .map((r) => {
         const on = agents.get(r.id) ?? [];
         const n = shells.get(r.id) ?? 0;
-        const tone: RepoTone = on.some((c) => c.state === "waiting")
+        const tone: RepoTone = on.some((c) => status(c) === "waiting")
           ? "waiting"
-          : on.some((c) => c.state === "working")
+          : on.some((c) => status(c) === "working" || status(c) === "stalled")
             ? "working"
             : n > 0 || on.length > 0
               ? "live"
@@ -133,9 +137,9 @@ export function untabbed(shells: readonly TermInfo[], tabs: readonly { id: strin
 }
 
 /** The agents list: every live agent, the sessions first and then the runs
- *  at work or waiting (`orderCards`); waiting, working, idle in each,
- *  newest first within those. */
-export const agentRows = (cards: readonly AgentCard[], chat?: IsChat): AgentCard[] => orderCards(cards.filter(isLiveAgent), chat);
+ *  at work or waiting (`orderCards`); by status in each, waiting on you
+ *  first, newest first within those. */
+export const agentRows = (cards: readonly AgentCard[], chat?: IsChat, status: StatusOf = cardStatus): AgentCard[] => orderCards(cards.filter(isLiveAgent), chat, status);
 
 /** The tab `by` steps from `active`, wrapping; null with no tabs. */
 export function stepTab(tabs: readonly { id: string }[], active: string | null, by: 1 | -1): string | null {
@@ -145,10 +149,10 @@ export function stepTab(tabs: readonly { id: string }[], active: string | null, 
   return tabs[(at + by + tabs.length) % tabs.length]?.id ?? null;
 }
 
-/** The next waiting agent after `current` in the list's order, wrapping;
- *  null when none waits. */
-export function nextWaitingRow(rows: readonly AgentCard[], current: string | null): string | null {
-  const waiting = rows.filter((c) => c.state === "waiting");
+/** The next agent waiting on you after `current` in the list's order,
+ *  wrapping; null when none waits. */
+export function nextWaitingRow(rows: readonly AgentCard[], current: string | null, status: StatusOf = cardStatus): string | null {
+  const waiting = rows.filter((c) => status(c) === "waiting");
   if (waiting.length === 0) return null;
   const at = waiting.findIndex((c) => c.id === current);
   return waiting[(at + 1) % waiting.length]?.id ?? null;
