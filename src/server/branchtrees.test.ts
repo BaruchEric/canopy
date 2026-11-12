@@ -424,6 +424,57 @@ test("sync rebases a tree onto its base with its uncommitted work put back, and 
   expect(await sh(tree.dir, "log", "--format=%s", "-3")).toBe("c t.txt\nc c.txt\nc m.txt");
 });
 
+/** main's tip amended in place: new content and body, the subject and author time kept */
+const amend = async (cwd: string, name: string, text: string): Promise<string> => {
+  await writeFile(join(cwd, name), text);
+  await sh(cwd, "commit", "-q", "-a", "--amend", "-m", `c ${name}`, "-m", "amended");
+  return sh(cwd, "rev-parse", "HEAD");
+};
+
+test("a commit the tree took from main and main then amended is left behind, not replayed, by sync and by merge", async () => {
+  const w = await world({}, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  await w.trees.idle();
+  await commit(w.repo.path, "x.txt", "x\n");
+  await w.trees.autoSync(w.repo.path);
+  await commit(tree.dir, "t.txt", "t\n");
+  const amended = await amend(w.repo.path, "x.txt", "x2\n");
+  // replaying the old x.txt over its amend would stop on x.txt; the tree keeps only its own commit
+  await w.trees.autoSync(w.repo.path);
+  const t = (await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees[0];
+  expect(t).toMatchObject({ ahead: 1, behind: 0, syncedTo: amended });
+  expect(t?.stopped).toBeUndefined();
+  expect(await sh(tree.dir, "rev-parse", "HEAD~1")).toBe(amended);
+  expect(await readFile(join(tree.dir, "x.txt"), "utf8")).toBe("x2\n");
+  // a tree that does not follow, merged after the amend, lands its own commit alone
+  const { tree: still } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "still", caches: false, sync: false }));
+  await w.trees.idle();
+  await commit(w.repo.path, "y.txt", "y\n");
+  expect((await post(w.trees, "/api/trees/sync", { repo: w.repo.id, tree: "still" })).status).toBe(200);
+  await commit(still.dir, "s.txt", "s\n");
+  const y2 = await amend(w.repo.path, "y.txt", "y2\n");
+  await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "still" });
+  await w.trees.idle();
+  expect(lastTrees(w.events).repos[0]?.trees.map((x) => x.branch)).toEqual(["feat"]);
+  expect(await sh(w.repo.path, "rev-parse", "HEAD~1")).toBe(y2);
+  expect(await sh(w.repo.path, "log", "--format=%s", "-1")).toBe("c s.txt");
+});
+
+test("a commit of the tree's own that main held and then dropped is still replayed", async () => {
+  const w = await world({}, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));
+  await w.trees.idle();
+  await commit(tree.dir, "t.txt", "t\n");
+  // landed by hand, then undone on main: the base's reflog held t.txt's commit, and no twin of it is left there
+  await sh(w.repo.path, "merge", "-q", "--ff-only", "feat");
+  await sh(w.repo.path, "reset", "-q", "--hard", "HEAD~1");
+  const moved = await commit(w.repo.path, "z.txt", "z\n");
+  await w.trees.autoSync(w.repo.path);
+  const t = (await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees[0];
+  expect(t).toMatchObject({ ahead: 1, behind: 0, syncedTo: moved });
+  expect(await sh(tree.dir, "log", "--format=%s", "-2")).toBe("c t.txt\nc z.txt");
+});
+
 test("a tree that follows waits while something is at work in it, says what, and goes once it is quiet; a sync by hand does not wait", async () => {
   const work = new Map<string, string>();
   const asked: string[][] = [];

@@ -14,7 +14,7 @@ import { exec, git } from "./exec";
 import { countStatusEntries, parseWorktreeList } from "./git";
 import { parsePortRange } from "./preview";
 import { configDir } from "./store";
-import { dirtyFiles, ffMain, midRebase, rebaseOnto, repoKey, revOf, subjectsSince } from "./worktree";
+import { dirtyFiles, ffMain, midRebase, rebaseOnto, repoKey, revOf, rewrittenUnder, subjectsSince } from "./worktree";
 import { TREES_SOURCE } from "./treewords";
 import type { Repo, Source } from "./types";
 
@@ -346,10 +346,12 @@ export type SyncOutcome = { ok: true; replayed: number; behind: number } | { sto
 
 /** The tree brought up to its base: its branch rebased onto the base with
  *  the uncommitted work stashed first and put back after (`--autostash`).
- *  Nothing happens when the base has no commit the tree lacks. A conflict
- *  aborts the rebase, the stash back in place, and names the files; work
- *  the stash could not put back over the new base stays in the stash, and
- *  the outcome says so. */
+ *  Nothing happens when the base has no commit the tree lacks. Commits the
+ *  tree took from the base and the base has since amended or rebased are
+ *  left behind rather than replayed (`rewrittenUnder`). A conflict aborts
+ *  the rebase, the stash back in place, and names the files; work the
+ *  stash could not put back over the new base stays in the stash, and the
+ *  outcome says so. */
 export async function syncTree(dir: string, base: string): Promise<SyncOutcome> {
   if (!base) return { stopped: "the tree has no base to sync from" };
   if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
@@ -358,12 +360,14 @@ export async function syncTree(dir: string, base: string): Promise<SyncOutcome> 
   const [behind = "0", ahead = "0"] = out(counts).split(/\s+/);
   const n = Number(behind) || 0;
   if (n === 0) return { ok: true, replayed: 0, behind: 0 };
-  const r = await git(dir, ["rebase", "--autostash", base], 120_000, { GIT_EDITOR: "true" });
+  const rewritten = await rewrittenUnder(dir, base);
+  const onto = rewritten ? ["--onto", base, rewritten.from] : [base];
+  const r = await git(dir, ["rebase", "--autostash", ...onto], 120_000, { GIT_EDITOR: "true" });
   if (r.code === 0) {
     if (/autostash resulted in conflicts/i.test(r.stderr + r.stdout)) {
       return { stopped: `rebased onto ${base}, but the uncommitted work did not go back over it; it is kept in the stash (git stash pop in the tree)` };
     }
-    return { ok: true, replayed: Number(ahead) || 0, behind: n };
+    return { ok: true, replayed: Math.max(0, (Number(ahead) || 0) - (rewritten?.dropped ?? 0)), behind: n };
   }
   const u = await git(dir, ["diff", "--name-only", "--diff-filter=U"]);
   const files = u.stdout.split("\n").filter(Boolean);
@@ -395,7 +399,10 @@ export async function mergeTree(
   if (branch === base) return { stopped: `the tree is on ${base} itself` };
   if (!base || (await revOf(repo, base)) === null) return { stopped: `${base || "its base"} is no longer a branch of the repo` };
   if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
-  const subjects = await subjectsSince(dir, base);
+  // commits the tree took from its base that the base has since rewritten are the base's: not counted, squashed or replayed
+  const rewritten = await rewrittenUnder(dir, base);
+  const from = rewritten?.from ?? base;
+  const subjects = await subjectsSince(dir, from);
   let swept = false;
   if (opts.commit) {
     try {
@@ -410,14 +417,14 @@ export async function mergeTree(
   const squashed = opts.squash && count > 1;
   if (squashed) {
     try {
-      await squashSince(dir, base, squashMessage(subjects, branch));
+      await squashSince(dir, from, squashMessage(subjects, branch));
     } catch (err) {
       return { stopped: errMessage(err) };
     }
   }
   // a tree its base already holds has nothing to replay or check: merging it is removing it
   if (count > 0) {
-    const rebased = await rebaseOnto(dir, base);
+    const rebased = await rebaseOnto(dir, base, rewritten?.from);
     if ("conflict" in rebased) {
       return { stopped: `the rebase onto ${base} stopped on ${rebased.conflict.join(", ")} and was aborted; rebase by hand in the tree, then merge again` };
     }
