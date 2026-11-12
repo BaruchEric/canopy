@@ -17,6 +17,8 @@ import type { Harness } from "../core/harness";
 import { SEED_BUSY, seedBusy } from "../core/seedgit";
 import { StageClient, type FenceNow } from "../core/stageclient";
 import type { StageLogin } from "../core/stagewire";
+import { setRole } from "../core/store";
+import { DEFAULT_AGENT } from "../core/types";
 import type { Flow, HealthCheck, IncubatorStages, Run, ScanResult, ServerEvent, Sprout } from "../core/types";
 import { startStageRunner } from "../stage/runner";
 import { startServer } from "./index";
@@ -452,6 +454,44 @@ describe("a runner whose claude login is dead", () => {
     await until(async () => (await check())?.state === "off", "the check to say the runner is silent");
     expect((await check())?.why).toBe("the runner does not say");
     expect(await stages()).toMatchObject({ isolated: true, login: null });
+  }, 30_000);
+});
+
+describe("stage routing with an unchanged dead claude login", () => {
+  test.each<StageLogin>([{ how: "expired", until: 0 }, { how: "none" }])("codex stages start and routing changes refresh the queue (%j)", async (login) => {
+    await fresh();
+    const codex = { ...DEFAULT_AGENT, harness: "codex" } as const;
+    await setRole("flow", codex);
+    const sock = join(scratch, "s.sock");
+    const runner = await startStageRunner({
+      socket: sock,
+      root: join(root, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
+      probe: blocked,
+      programs: { claude: "/usr/bin/true", codex: "/usr/bin/true" },
+      login: async () => login,
+    });
+    try {
+      server = await startServer({
+        root, port: 0, chan: null, harnesses: ["claude", "codex"],
+        incubator: { autostart: true, transcribe: null, notes: null, ship: null, stage: new StageClient(sock), stageEvery: 60_000 },
+        runner: { driver: (h) => new HoldingDriver(h) },
+      });
+      expect(await stages()).toMatchObject({ isolated: true, login: null, waiting: null });
+      // Changing routing must take effect without waiting for a new login or hello.
+      expect((await postJson("/api/agents/role", { role: "flow", pick: DEFAULT_AGENT })).status).toBe(200);
+      expect((await stages()).login).toContain("claude");
+      const s = (await (await intake("a codex tip jar")).json()) as Sprout;
+      await until(async () => (await stages()).waiting !== null, "the claude route to hold the queue");
+      expect((await sprouts()).find((x) => x.id === s.id)?.status).toBe("queued");
+      expect((await postJson("/api/agents/role", { role: "flow", pick: codex })).status).toBe(200);
+      expect((await stages()).login).toBeNull();
+      await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "the codex route to release the queue");
+      expect((await stages()).waiting).toBeNull();
+    } finally {
+      await runner.stop();
+      await done();
+    }
   }, 30_000);
 });
 

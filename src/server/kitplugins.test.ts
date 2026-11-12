@@ -141,6 +141,55 @@ describe("the kit's plugins", () => {
     expect((await post(hub, { machine: "mac", agent: "claude", op: "install", id: "fresh@official" })).status).toBe(409);
   });
 
+  for (const state of ["disabled", "removed"] as const) {
+    test(`an install is refused when dotclaude's pulled settings have ${state} its declaration`, async () => {
+      const { hub, store, dirty, calls } = await setup();
+      const enabledPlugins: Record<string, boolean> = { "superpowers@official": true, "remember@official": true };
+      if (state === "disabled") enabledPlugins["remember@official"] = false;
+      else delete enabledPlugins["remember@official"];
+      const pulled = { enabledPlugins, extraKnownMarketplaces: SETTINGS.extraKnownMarketplaces };
+      writeFileSync(join(store, "settings.json"), JSON.stringify(pulled, null, 2));
+      await exec(["git", "-C", store, "add", "settings.json"]);
+      await exec(["git", "-C", store, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "pull"]);
+
+      const result = await post(hub, { machine: "mac", agent: "claude", op: "install", id: "remember@official" });
+      expect(result.status).toBe(409);
+      expect(String((result.data as { error: string }).error)).toContain("reads dotclaude's shared settings.json");
+      expect(calls().filter((c) => c[1] === "install")).toEqual([]);
+      expect(readFileSync(join(store, "settings.json"), "utf8")).toBe(JSON.stringify(pulled, null, 2));
+      expect(await dirty()).toBe(false);
+    });
+  }
+
+  test("a plugin op is refused when dotclaude becomes shared after the scan", async () => {
+    const { hub, store, dirty, calls } = await setup();
+    await exec(["git", "-C", store, "rm", "--cached", "-q", "settings.json"]);
+    await exec(["git", "-C", store, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "stop tracking settings"]);
+    await hub.scan();
+    expect(hub.info().plugins![0]!.shared).toBe(false);
+
+    await exec(["git", "-C", store, "add", "settings.json"]);
+    await exec(["git", "-C", store, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "pull"]);
+    const result = await post(hub, { machine: "mac", agent: "claude", op: "disable", id: "superpowers@official" });
+    expect(result.status).toBe(409);
+    expect(calls().filter((c) => c[1] === "disable")).toEqual([]);
+    expect(await dirty()).toBe(false);
+  });
+
+  test("a plugin op uses the current kit.json commit permission", async () => {
+    const { hub, store, dirty, calls } = await setup({ commits: true });
+    const kitPath = join(store, "kit.json");
+    const kit = JSON.parse(readFileSync(kitPath, "utf8")) as { machines: { mac: { commits?: boolean } } };
+    delete kit.machines.mac.commits;
+    writeFileSync(kitPath, JSON.stringify(kit));
+
+    const result = await post(hub, { machine: "mac", agent: "claude", op: "disable", id: "superpowers@official" });
+    expect(result.status).toBe(409);
+    expect(String((result.data as { error: string }).error)).toContain("Make it on");
+    expect(calls().filter((c) => c[1] === "disable")).toEqual([]);
+    expect(await dirty()).toBe(false);
+  });
+
   test("the machine that commits dotclaude edits it, and the view says settings.json changed", async () => {
     const { hub, settings, dirty } = await setup({ commits: true });
     const r = await hub.pluginOp({ machine: "mac", agent: "claude", op: "disable", id: "superpowers@official" });

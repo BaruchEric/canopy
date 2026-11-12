@@ -401,9 +401,21 @@ export class KitHub {
    *  time per machine, then a rescan of that machine. */
   pluginOp(req: PluginOpRequest): Promise<PluginOpResult> {
     return this.serial(req.machine, async () => {
-      const { kit, m, ps, path } = this.pluginsOf(req.machine, req.agent);
+      const { view } = this.reach(req.machine);
+      // kit.json and dotclaude's settings can change through a pull without
+      // this backend scanning first. Base the safety check on what is there
+      // now, not the last scan's commit permission or plugin declarations.
+      const kit = await this.read();
+      const m = this.mine(kit).find((x) => x.name === req.machine);
+      if (!m) throw new KitError(`not a machine this backend reaches: ${req.machine}`, 400);
       const plan = opPlan(req);
       if ("error" in plan) throw new KitError(plan.error, 400);
+
+      const ps = await this.seePluginsOf(kit, m, view.seen);
+      if (!ps) throw new KitError(`the kit reads no plugins on ${req.machine}; kit.json's plugins names the agents`, 409);
+      if (ps.away) throw new KitError(`${req.machine} is away: ${ps.away}`, 409);
+      const path = ps.agents.find((a) => a.agent === req.agent)?.path;
+      if (!path) throw new KitError(`${req.agent} is not installed on ${req.machine}, or the kit does not read its plugins there`, 409);
       const why = refusal(ps, req, this.committers(kit));
       if (why) throw new KitError(why, 409);
       let out: PluginOutcome;

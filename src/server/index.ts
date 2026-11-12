@@ -507,6 +507,8 @@ interface ServerState {
   push: PushHub;
   /** new projects carried from an idea through clarify and on (core/incubator.ts) */
   incubator: IncubatorHub;
+  /** re-read stage routes, then reconsider the login hold and queued projects */
+  refreshStageRouting: () => Promise<void>;
   /** the screen layout profiles the pages keep here (`/api/layouts`) */
   layouts: ScreenLayouts;
   /** the name this backend goes by (`selfName`), read at start; what a
@@ -4703,6 +4705,7 @@ async function handleApi(
       return json({ error: "settings, or null to delete the profile" }, 400);
     }
     const agents = await setProfile(b.name, b.settings === null ? null : normalizeAgent(b.settings));
+    await state.refreshStageRouting();
     broadcast(state, { type: "agents", agents });
     return json(agents);
   }
@@ -4714,6 +4717,7 @@ async function handleApi(
     const why = pick ? pickRefusal(b.role, pick) : null;
     if (why) return json({ error: why }, 400);
     const agents = await setRole(b.role, pick);
+    await state.refreshStageRouting();
     broadcast(state, { type: "agents", agents });
     return json(agents);
   }
@@ -4724,6 +4728,7 @@ async function handleApi(
     const pick = b.pick === null ? null : normalizePick(b.pick);
     if (b.pick !== null && !pick) return json({ error: "a pick is a profile by name or settings of its own; null inherits" }, 400);
     const agents = await setAgentScope({ kind: b.kind, name: b.name }, pick);
+    await state.refreshStageRouting();
     broadcast(state, { type: "agents", agents });
     return json(agents);
   }
@@ -5264,6 +5269,7 @@ async function handleApi(
       if (legacy) {
         const all = normalizeAgent(raw);
         const agents = await setRepoAll(repo.path, isDefaultAgent(all) ? null : all);
+        await state.refreshStageRouting();
         broadcast(state, { type: "agents", agents });
         return json(agents);
       }
@@ -5271,6 +5277,7 @@ async function handleApi(
       const why = repoAgentRefusal(next);
       if (why) return json({ error: why }, 400);
       const agents = await setRepoAgent(repo.path, next);
+      await state.refreshStageRouting();
       broadcast(state, { type: "agents", agents });
       return json(agents);
     }
@@ -5742,20 +5749,26 @@ export async function startServer(opts: {
     return f?.fenced === true ? null : (f?.reason ?? "the stage runner says nothing of its fence: update the stages image");
   };
   /** Whether any stage workflow has a step that runs claude, by the routes
-   *  and workflows as they stood when the login was last seen to change.
+   *  and workflows at startup, after route writes and on each runner hello.
    *  True until read: claude is the default harness. A backend whose stages
    *  all run codex is not held for a claude login it never uses. */
   let claudeStages = true;
-  const readClaudeStages = async (): Promise<void> => {
-    const c = await loadConfig();
-    // any seed's path: the routes that reach a seed reach this one
-    const seed = join(root, SEEDS_DIR, "a-seed");
-    let any = false;
-    for (const name of STAGE_WORKFLOWS) {
-      const wf = await incubatorWorkflow(name);
-      if (wf?.steps.some((s) => s.body && stepAgentFor(c, seed, s.agent, wf.name).harness === "claude")) any = true;
-    }
-    claudeStages = any;
+  let stageRouteRead = Promise.resolve();
+  const readClaudeStages = (): Promise<void> => {
+    // A route write waits for its own read even if a hello overlaps it;
+    // an older read must never overwrite a newer route's decision.
+    stageRouteRead = stageRouteRead.catch(() => {}).then(async () => {
+      const c = await loadConfig();
+      // any seed's path: the routes that reach a seed reach this one
+      const seed = join(root, SEEDS_DIR, "a-seed");
+      let any = false;
+      for (const name of STAGE_WORKFLOWS) {
+        const wf = await incubatorWorkflow(name);
+        if (wf?.steps.some((s) => s.body && stepAgentFor(c, seed, s.agent, wf.name).harness === "claude")) any = true;
+      }
+      claudeStages = any;
+    });
+    return stageRouteRead;
   };
   /** Why a claude stage cannot run on the login the stages' runner speaks
    *  of, with what to do: its `/login` lapsed (about 30 days after it was
@@ -6294,6 +6307,15 @@ export async function startServer(opts: {
       onHealth: (r) => state.health.report(PUSH_CHECK, r),
       log: (line) => console.error(`canopy: ${line}`),
     }),
+    refreshStageRouting: async () => {
+      if (!stage) return;
+      await readClaudeStages().catch((e: unknown) => {
+        claudeStages = true;
+        console.error("canopy: could not read which stages run claude", e);
+      });
+      state.incubator.inc.pump();
+      tellStages();
+    },
     incubator: new IncubatorHub(
       new Incubator({
         root,
@@ -7278,7 +7300,10 @@ export async function startServer(opts: {
   // pumped, so a flow restored mid-step finds a runner compose started
   // beside canopy. If it does not answer, that flow parks and the sprouts
   // wait; the watch below starts them once it does.
-  if (stage) await stage.hello(10_000);
+  if (stage) {
+    await readClaudeStages();
+    await stage.hello(10_000);
+  }
   /** the flows and sprouts the last server left, taken in by the one
    *  holding the lock: at start, and from health's button once the server
    *  that held it is gone */
@@ -7384,8 +7409,6 @@ export async function startServer(opts: {
     // a runner that says nothing (an older image, a Mac's Keychain login) is not known to be well
     state.health.report(id, why !== null ? { state: "down", why } : word !== null ? { state: "ok", detail: word } : { state: "off", why: "the runner does not say" });
   };
-  /** the stages' login as the last hello left it: a change reads the routes again and moves the queue */
-  let lastLogin = JSON.stringify(stage?.claudeNow() ?? null);
   if (stage) state.health.add({ id: "canopy:stage-login", label: "stages' claude login", scope: { kind: "canopy" }, heal: "self" });
   if (coord) state.health.add({ id: "canopy:coord-login", label: "coordinator's claude login", scope: { kind: "canopy" }, heal: "self" });
   /** whether the last good hello said fenced: a flip pumps the queue */
@@ -7412,17 +7435,8 @@ export async function startServer(opts: {
           state.health.report("canopy:stages", unfenced === null ? { state: "ok" } : { state: "down", why: unfenced });
           if (stage) {
             reportLogin("canopy:stage-login", stage, STAGES_LOGIN);
-            const login = JSON.stringify(stage.claudeNow());
-            if (login !== lastLogin) {
-              lastLogin = login;
-              // the hold reads which stages run claude; then the queue moves either way
-              void readClaudeStages()
-                .catch((e: unknown) => console.error("canopy: could not read which stages run claude", e))
-                .finally(() => {
-                  state.incubator.inc.pump();
-                  tellStages();
-                });
-            }
+            // Routing and workflow files can change without a login change.
+            void state.refreshStageRouting();
           }
           const fenced = unfenced === null;
           const resumed = fenced ? state.flows.resumeStageParks() : 0;
