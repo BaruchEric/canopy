@@ -717,8 +717,11 @@ export class RangerHub {
     const command = [this.deps.shell, "-lic", `cd -- ${shellQuote(home)} && exec ${argv.map(shellQuote).join(" ")}`];
     this.setState("starting");
     this.tell();
-    // in a folder of its own, the scan root's CLAUDE.md comes in through --add-dir only with this
-    const env = { ...this.deps.env(this.termId), TAILCHAN_AS: handle, ...(own ? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" } : {}) };
+    // In a folder of its own, the scan root's CLAUDE.md comes in through
+    // --add-dir only with CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD. The
+    // ranger sits at its prompt by design, so tailchan's idle page (on by the
+    // broker's NOTIFY_IDLE_DEFAULT) is off for its card.
+    const env = { ...this.deps.env(this.termId), TAILCHAN_AS: handle, TAILCHAN_NOTIFY_IDLE: "off", ...(own ? { CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" } : {}) };
     await tmux.start(this.termId, home, command, env);
     if (epoch !== this.launchEpoch || !this.settings.on) {
       // tmux.start can finish after an off patch already ran its cleanup.

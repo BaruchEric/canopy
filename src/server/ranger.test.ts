@@ -185,7 +185,7 @@ describe("starting and keeping it", () => {
     expect(line).toContain("'--append-system-prompt-file'");
     expect(line).toContain("'[canopy] this is your first conversation.");
     expect(line).not.toContain("dangerously");
-    expect(fake.starts[0]?.env).toMatchObject({ TAILCHAN_AS: "ranger", CANOPY_TERM: TERM, CANOPY_BACKEND: BACKEND, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" });
+    expect(fake.starts[0]?.env).toMatchObject({ TAILCHAN_AS: "ranger", TAILCHAN_NOTIFY_IDLE: "off", CANOPY_TERM: TERM, CANOPY_BACKEND: BACKEND, CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: "1" });
     expect(fake.starts[0]?.env["CANOPY_REPO"]).toBeUndefined();
     expect(await readFile(join(dir(), "brief.md"), "utf8")).toBe(`You are ranger on mini in ${own()} over ${ROOT}.\n`);
     expect((await record()).session).toBe(sessionIn(line));
