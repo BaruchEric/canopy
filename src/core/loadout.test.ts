@@ -98,6 +98,12 @@ test("a repo skill named like a user skill is never named", () => {
   const twin = [m("redeploy", "user"), m("redeploy", "project")];
   expect(skillOverridesFor({ skills: [] }, [], twin)).toEqual({ overrides: {}, off: 0 });
 });
+test("a listed repo-only skill gets on and a repo skill is never turned off", () => {
+  expect(skillOverridesFor({ skills: ["redeploy"] }, [], [m("redeploy", "project"), m("ripe", "user")])).toEqual({ overrides: { redeploy: "on", ripe: "off" }, off: 1 });
+});
+test("a listed user skill that a repo skill shadows still gets on", () => {
+  expect(skillOverridesFor({ skills: ["redeploy"] }, [], [m("redeploy", "user"), m("redeploy", "project")])).toEqual({ overrides: { redeploy: "on" }, off: 0 });
+});
 test("an unknown loadout names the ones there are", () => {
   expect(planLoadoutStart({ ...planBase, name: "nope" })).toEqual({ refused: "no loadout named nope; kit.json has docs, homelab-ops, needs-missing, codex-fast" });
 });

@@ -154,26 +154,28 @@ export interface LoadoutStartPlan {
   equip: RunEquip;
 }
 
-/** The `skillOverrides` for a run: the loadout's skills on, every other user
- *  and plugin skill off, except those the base covers. A repo's own skill is
- *  left alone, and so is any user skill that shares its name. */
+/** The `skillOverrides` for a run. Every skill the loadout lists that the
+ *  machine has, from any source, gets "on", since the user's own settings may
+ *  have turned it off. Every other user or plugin skill gets "off", except
+ *  those the base covers and any user skill a repo skill of the same name
+ *  shadows. A repo skill is never turned off. */
 export function skillOverridesFor(
   loadout: Pick<Loadout, "skills">,
   base: readonly string[],
   skills: readonly Mention[],
 ): { overrides: Record<string, "on" | "off">; off: number } {
-  const repo = new Set(skills.filter((s) => s.kind === "skill" && s.harness === "claude" && s.from === "project").map((s) => s.name));
-  const names = new Set<string>();
-  for (const s of skills) {
-    if (s.kind !== "skill" || s.harness !== "claude") continue;
-    if (s.from !== "user" && !s.from.startsWith("plugin:")) continue;
-    if (!repo.has(s.name)) names.add(s.name);
+  const claude = skills.filter((s) => s.kind === "skill" && s.harness === "claude");
+  const repo = new Set(claude.filter((s) => s.from === "project").map((s) => s.name));
+  const have = new Set(claude.map((s) => s.name));
+  const offable = new Set<string>();
+  for (const s of claude) {
+    if ((s.from === "user" || s.from.startsWith("plugin:")) && !repo.has(s.name)) offable.add(s.name);
   }
   const overrides: Record<string, "on" | "off"> = {};
   let off = 0;
-  for (const name of [...names].sort()) {
+  for (const name of [...new Set([...have, ...offable])].sort()) {
     if (loadout.skills.includes(name)) overrides[name] = "on";
-    else if (!baseCovers(base, name)) {
+    else if (offable.has(name) && !baseCovers(base, name)) {
       overrides[name] = "off";
       off++;
     }
