@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { steerWords } from "../../../src/core/steer";
 import { isLiveAgent, type AgentCard } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { allAgents, runOfCard, shellsToProbe, type Ids } from "../allagents";
@@ -9,7 +8,7 @@ import { api } from "../api";
 import { peekWait, quickAnswers } from "../board";
 import { backendOf, plainOf, qual } from "../registry";
 import { canAnswer, inboxItems, useStore } from "../store";
-import { DictateButton } from "./Dictate";
+import { SteerBox, type SteerTarget } from "./SteerBox";
 import type { TermTab } from "../term";
 import { InboxRow } from "./Inbox";
 import { RunPane } from "./RunSheet";
@@ -309,91 +308,37 @@ export function AgentScreen({ card, live, active, showing = true, now }: { card:
   );
 }
 
-/** what a send from the steer bar said back */
-type SteerNote = { kind: "sent" | "error"; text: string };
-
 /**
  * A person's words to an agent that is not a canopy run (FR-066). One in a
  * canopy shell gets them typed into its terminal and sent with Enter, as
  * at its keyboard: Claude Code and Codex take a line typed mid-turn at
  * their next step. Escape stops the turn it is on. A hooked agent
  * elsewhere gets a DM, which it reads at its next prompt or when its turn
- * ends. The box never takes the keyboard on its own, so a board's keys
- * stay the board's, and an agent waiting on a choice takes no words: the
- * ask above is where that is answered.
+ * ends. An agent waiting on a choice takes no words: the ask above is
+ * where that is answered.
  */
 function SteerBar({ card, term }: { card: AgentCard; term: string | null }) {
   const chanReady = useStore((s) => s.chan?.ready === true);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<SteerNote | null>(null);
-  const box = useRef<HTMLTextAreaElement>(null);
-  const way = term ? "shell" : card.handle && chanReady ? "dm" : null;
-  if (!way || !isLiveAgent(card)) return null;
-  const waits = card.state === "waiting";
-  const typed = text.trim().length > 0;
+  if (!isLiveAgent(card) || (!term && !(card.handle && chanReady))) return null;
   const name = card.harness === "codex" ? "Codex" : card.harness === "claude" ? "Claude" : "the agent";
-
-  const run = async (act: () => Promise<unknown>, sent: string, clear: boolean) => {
-    setBusy(true);
-    setNote(null);
-    try {
-      await act();
-      if (clear) setText("");
-      setNote({ kind: "sent", text: sent });
-    } catch (e) {
-      setNote({ kind: "error", text: errText(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-  const send = () => {
-    const said = steerWords(text);
-    if (!said.ok || busy || waits) return;
-    if (term) void run(() => api.termSay(term, said.words), `typed into its shell: ${name} reads it at its next step`, true);
-    else void run(() => useStore.getState().sendChan(`@${card.handle}`, said.words), `sent as a DM to @${card.handle}: it reads it at its next prompt or when its turn ends`, true);
-  };
-  const escape = () => {
-    if (term && !busy) void run(() => api.termEscape(term), "Escape sent: the turn it was on stops", false);
-  };
-
-  return (
-    <div className="composer steer-bar" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="mention-host">
-        <textarea
-          ref={box}
-          className="composer-box"
-          rows={1}
-          placeholder={waits ? `${name} waits on you: answer above` : term ? `type to ${name} in its shell…` : `a DM to @${card.handle}…`}
-          value={text}
-          disabled={waits}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          aria-label={term ? `Words to type into ${name}'s shell` : `A DM to @${card.handle}`}
-          data-mic
-        />
-        {note && <span className={note.kind === "error" ? "steer-note err" : "steer-note"}>{note.text}</span>}
-      </div>
-      <DictateButton target={box} />
-      {term && (
-        <button type="button" className="mini" disabled={busy} title={`Escape into its terminal: stops the turn ${name} is on, as at its keyboard`} onClick={escape}>
-          esc
-        </button>
-      )}
-      <button
-        type="button"
-        className="mini strong"
-        disabled={busy || waits || !typed}
-        title={term ? "↩ types it into its shell and presses Enter; shift-↩ for a new line" : "↩ sends it as a DM over tailchan"}
-        onClick={send}
-      >
-        send
-      </button>
-    </div>
-  );
+  const closed = card.state === "waiting" ? { closed: `${name} waits on you: answer above` } : {};
+  const target: SteerTarget = term
+    ? {
+        placeholder: `type to ${name} in its shell…`,
+        label: `Words to type into ${name}'s shell`,
+        sendTitle: "↩ types it into its shell and presses Enter; shift-↩ for a new line",
+        sent: `typed into its shell: ${name} reads it at its next step`,
+        send: (words) => api.termSay(term, words),
+        escape: { title: `Escape into its terminal: stops the turn ${name} is on, as at its keyboard`, send: () => api.termEscape(term) },
+        ...closed,
+      }
+    : {
+        placeholder: `a DM to @${card.handle}…`,
+        label: `A DM to @${card.handle}`,
+        sendTitle: "↩ sends it as a DM over tailchan",
+        sent: `sent as a DM to @${card.handle}: it reads it at its next prompt or when its turn ends`,
+        send: (words) => useStore.getState().sendChan(`@${card.handle}`, words),
+        ...closed,
+      };
+  return <SteerBox target={target} />;
 }

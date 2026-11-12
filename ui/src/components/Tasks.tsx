@@ -14,6 +14,7 @@ import type { Repo, TaskInfo, TaskLogLine } from "../../../src/core/types";
 import { lastRun, taskFixPrompt } from "../fixit";
 import { AgentFix } from "./AgentFix";
 import { Seg } from "./Seg";
+import { SteerBox, type SteerTarget } from "./SteerBox";
 import { Section, SectionWindow, ShellSpotHere, useSectionClosed } from "./Surface";
 import { TermView } from "./TermDock";
 import { WellSeam } from "./Well";
@@ -344,8 +345,23 @@ function TaskLog({ repo, task }: { repo: Repo; task: TaskInfo }) {
         </pre>
         <WellSeam pane="task-log" label="Height a task's log shows before it scrolls" />
       </div>
+      {task.live && <TaskSay task={task} />}
     </div>
   );
+}
+
+/** A line typed into a running task's terminal and sent with Enter, from
+ *  under its log, without opening the terminal (FR-066): a dev server's
+ *  own keys (r to reload, q to quit) or an answer it asks for. */
+function TaskSay({ task }: { task: TaskInfo }) {
+  const target: SteerTarget = {
+    placeholder: `type into ${task.name}'s terminal…`,
+    label: `Words to type into ${task.name}'s terminal`,
+    sendTitle: "↩ types it into the task's terminal and presses Enter, as at its keyboard",
+    sent: `typed into ${task.name}'s terminal`,
+    send: (words) => api.termSay(task.termId, words),
+  };
+  return <SteerBox target={target} />;
 }
 
 /** a card's word on its tasks: ▶ n running, or ✕ name in rust for one in trouble */
