@@ -14,6 +14,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { mkdir, readdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { exec, git } from "./exec";
+import { COMMIT_FORMAT, type CommitFacts, parseCommits, subjectOf } from "./stalecopy";
 import { configDir } from "./store";
 import { branchSlug } from "./work";
 import { isWarmName } from "./warm";
@@ -286,14 +287,44 @@ export async function subjectsSince(dir: string, base: string): Promise<string[]
   return r.code === 0 ? r.stdout.split("\n").filter(Boolean) : [];
 }
 
+/** The commits under the branch's own that it took from `base` and the
+ *  base has since rewritten. A tree that follows main holds main's commits
+ *  as they stood at its last sync; an amend or a rebase on main after that
+ *  leaves the old ones in the tree, and a plain rebase replays them over
+ *  their own rewrites and stops on every file they touch. git's fork point
+ *  (read from the base's reflog) says how far the branch held the base.
+ *  The commits between the merge base and it are the base's only when each
+ *  has a twin on the base with the same subject, author and author time,
+ *  which an amend and a rebase keep. `from` is then where the branch's own
+ *  work starts, for `rebase --onto <base> <from>`. Null when there is
+ *  nothing to drop, or when one of those commits has no twin: work the
+ *  base held once and then lost (a land undone by a reset) stays the
+ *  branch's to replay. */
+export async function rewrittenUnder(dir: string, base: string): Promise<{ from: string; dropped: number } | null> {
+  const [mb, fp] = await Promise.all([git(dir, ["merge-base", base, "HEAD"]), git(dir, ["merge-base", "--fork-point", base, "HEAD"])]);
+  const merge = out(mb);
+  const fork = out(fp);
+  if (mb.code !== 0 || fp.code !== 0 || !merge || !fork || fork === merge) return null;
+  if ((await git(dir, ["merge-base", "--is-ancestor", merge, fork])).code !== 0) return null;
+  const since = (to: string) => git(dir, ["log", "--no-show-signature", `--format=${COMMIT_FORMAT}`, `${merge}..${to}`]);
+  const [held, now] = await Promise.all([since(fork), since(base)]);
+  if (held.code !== 0 || now.code !== 0) return null;
+  const old = parseCommits(held.stdout);
+  const theirs = parseCommits(now.stdout);
+  const twin = (c: CommitFacts) => theirs.some((t) => t.at === c.at && t.email === c.email && subjectOf(t) === subjectOf(c));
+  if (old.length === 0 || !old.every(twin)) return null;
+  return { from: fork, dropped: old.length };
+}
+
 export type RebaseResult = { ok: true } | { conflict: string[] } | { error: string };
 
-/** Rebases the worktree's branch onto `onto`. A conflict is aborted, and
- *  the files git stopped on are named. A rebase a crash left half done is
+/** Rebases the worktree's branch onto `onto`, or with `from` only the
+ *  commits after it (`rebase --onto`). A conflict is aborted, and the
+ *  files git stopped on are named. A rebase a crash left half done is
  *  aborted first. */
-export async function rebaseOnto(dir: string, onto: string): Promise<RebaseResult> {
+export async function rebaseOnto(dir: string, onto: string, from?: string): Promise<RebaseResult> {
   if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
-  const r = await git(dir, ["rebase", onto], 120_000, { GIT_EDITOR: "true" });
+  const r = await git(dir, from ? ["rebase", "--onto", onto, from] : ["rebase", onto], 120_000, { GIT_EDITOR: "true" });
   if (r.code === 0) return { ok: true };
   const u = await git(dir, ["diff", "--name-only", "--diff-filter=U"]);
   const files = u.stdout.split("\n").filter(Boolean);
