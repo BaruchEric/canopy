@@ -70,7 +70,7 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: "canopy_say",
     right: "plan",
-    description: "Send text to a running chat or run by its id, as typing into its sheet would.",
+    description: "Send text to a running chat or run by its id, as typing into its sheet would: a chat between turns takes it as its next turn, and a run at work takes it at its next step. A run's own token reaches only a chat of its kin, between turns.",
     inputSchema: schema({ id: stringInput("The run or chat id."), text: stringInput("Text to send to the run.") }, ["id", "text"]),
   },
   {

@@ -60,7 +60,9 @@ import { applyModes } from "../core/flowmodes";
 import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
+import { choiceOnScreen, steerWords } from "../core/steer";
+import { cardAsks } from "../core/agentstatus";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
 import { PASTE_MAX, pasteName, pasteText, savePaste } from "../core/paste";
 import { apiBase, ForgeAuthError, linkForgeClones, listForgeRepos, readToken } from "../core/forge";
@@ -151,7 +153,7 @@ import {
 } from "../core/store";
 import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
-import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, type BranchStart, type StartExtras } from "../core/runner";
+import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, UnknownRunError, type BranchStart, type StartExtras } from "../core/runner";
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
 import { canopyMcpCommand, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
@@ -218,7 +220,7 @@ import {
   type TaskTree,
 } from "../core/types";
 import type { About, AdviceAccepted, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
-import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
+import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
@@ -2793,6 +2795,39 @@ class SlotsFullError extends HttpError {
   }
 }
 
+/** A shell a person's words or keys may go into from outside its terminal:
+ *  a live shell, a task's session or the ranger's, on tmux. Its tmux base. */
+async function steerableShell(state: ServerState, term: string): Promise<string[]> {
+  const live = state.terms.get(term);
+  const known = (live !== undefined && !live.ending) || state.tasks.knows(term) || state.ranger.knows(term);
+  if (!known) throw new HttpError(404, "no such shell");
+  if (!state.tmux) throw new HttpError(400, "typing into a shell from here needs tmux shells");
+  if (!(await hasSession(state.tmux, term))) throw new HttpError(404, "no such shell");
+  return state.tmux;
+}
+
+/** Why a shell's agent cannot take a steer now: its hooks say it waits on a
+ *  permission or a question, or an ask of its is open. Typed words and an
+ *  Enter would answer that, and an answer is a deliberate act. */
+function shellWaits(state: ServerState, term: string): string | null {
+  const open = new Set(state.asks.list().filter((a) => a.state === "open").map((a) => a.agent));
+  const card = state.registry.list().find((c) => c.where.canopy?.term === term && isLiveAgent(c) && (cardAsks(c) || open.has(c.id)));
+  if (!card) return null;
+  return `it waits on you (${card.waiting ?? "an ask"}): answer that in its shell or the inbox, where an answer is a deliberate act`;
+}
+
+/** a message or a stop into a run, its refusals as the HTTP errors they
+ *  are: a run not held here is 404, one that cannot take it now is 409 */
+function steering<T>(act: () => T): T {
+  try {
+    return act();
+  } catch (err) {
+    if (err instanceof UnknownRunError) throw new HttpError(404, "no such run");
+    if (err instanceof SteerError) throw new HttpError(409, err.message);
+    throw err;
+  }
+}
+
 /** a files-section call, its refusals as the HTTP errors they are */
 async function finding<T>(run: () => Promise<T>): Promise<T> {
   try {
@@ -4461,6 +4496,36 @@ async function handleApi(
     const text = await paneScreen(state.tmux, term);
     return text === null ? json({ error: "tmux did not answer" }, 502) : json({ text });
   }
+  // A person's words into a shell from outside its terminal (a phone, the
+  // agents board): typed and sent as at the keyboard, without joining, so
+  // the agent's terminal keeps its size. A shell's agent, a task and the
+  // ranger alike. Never `lastInput`: a steer from a phone is not someone at
+  // the terminal, and an ask must still page them.
+  if (path === "/api/terms/say" && method === "POST") {
+    const b = await objectBody(req);
+    const { term, text } = b;
+    if (typeof term !== "string" || typeof text !== "string") return json({ error: "a shell in term and the words in text" }, 400);
+    const said = steerWords(text);
+    if (!said.ok) return json({ error: said.error }, 400);
+    const tmux = await steerableShell(state, term);
+    const waits = shellWaits(state, term);
+    if (waits) return json({ error: waits }, 409);
+    const screen = await paneScreen(tmux, term);
+    if (screen !== null && choiceOnScreen(screen)) {
+      return json({ error: "its screen shows a choice waiting: answer that in its shell or the inbox, where an answer is a deliberate act" }, 409);
+    }
+    if (!(await sayInto(tmux, term, said.words))) return json({ error: "tmux would not take the words" }, 502);
+    return json({ ok: true });
+  }
+  // Escape into a shell, which stops the turn an agent there is on
+  if (path === "/api/terms/keys" && method === "POST") {
+    const b = await objectBody(req);
+    const { term, key } = b;
+    if (typeof term !== "string" || key !== "escape") return json({ error: "a shell in term and escape in key" }, 400);
+    const tmux = await steerableShell(state, term);
+    await sendKeys(tmux, term, ["Escape"]);
+    return json({ ok: true });
+  }
   if (path === "/api/terms/label" && method === "POST") {
     const b = (await req.json()) as { term?: unknown; label?: unknown };
     if (typeof b.term !== "string" || typeof b.label !== "string") return json({ error: "a shell in term and its name in label" }, 400);
@@ -4586,7 +4651,19 @@ async function handleApi(
       const them = state.runner.get(b.id);
       if (!me || !them || !areKin(me, them)) return json({ error: "a run's token says only to its own parent and children" }, 403);
     }
-    return json(state.runner.say(b.id, b.text));
+    // a person steers any working run; a run's token keeps to a chat
+    // between turns, so one agent never redirects another mid-turn
+    const { id, text } = b;
+    return json(steering(() => state.runner.say(id, text, { steer: caller?.kind !== "run" })));
+  }
+  if (path === "/api/runs/interrupt" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown; text?: unknown };
+    if (typeof b.id !== "string" || (b.text !== undefined && typeof b.text !== "string")) {
+      return json({ error: "a run id, and text to go next if any" }, 400);
+    }
+    const id = b.id;
+    const text = typeof b.text === "string" ? b.text : undefined;
+    return json(steering(() => state.runner.interrupt(id, text)));
   }
   if (path === "/api/runs/child" && method === "POST") return json(await startChildRun(state, caller, await objectBody(req)), 201);
 

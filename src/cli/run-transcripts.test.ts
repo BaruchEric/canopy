@@ -273,3 +273,41 @@ test("missing or flag-like output filenames fail locally before any HTTP read", 
     expect(requests).toBe(0);
   } finally { server.stop(true); }
 });
+
+test("runCommand says words into a live run and interrupts its turn, the server's refusal its own (FR-066)", async () => {
+  const calls: { path: string; body: unknown }[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url);
+      const body: unknown = await request.json();
+      calls.push({ path: url.pathname, body });
+      if (url.pathname === "/api/runs/interrupt" && typeof body === "object" && body !== null && !("text" in body)) {
+        return Response.json({ error: "a job stops its turn only for a message to go on with; stop ends the run" }, { status: 409 });
+      }
+      if (url.pathname === "/api/runs/say" || url.pathname === "/api/runs/interrupt") return Response.json({ ...run, kept: undefined, status: "working" });
+      return Response.json({ error: "unexpected route" }, { status: 404 });
+    },
+  });
+  const logs: string[] = [];
+  const oldLog = console.log;
+  console.log = (line: string) => { logs.push(line); };
+  try {
+    const backend = ["--backend", `http://127.0.0.1:${server.port}`];
+    await runCommand(["say", "ab12cd34", "use", "bun", "here", ...backend], { fail });
+    await runCommand(["interrupt", "ab12cd34", "do", "this", "instead", ...backend], { fail });
+    await expect(runCommand(["interrupt", "ab12cd34", ...backend], { fail })).rejects.toThrow("a job stops its turn only for a message");
+    expect(calls).toEqual([
+      { path: "/api/runs/say", body: { id: "ab12cd34", text: "use bun here" } },
+      { path: "/api/runs/interrupt", body: { id: "ab12cd34", text: "do this instead" } },
+      { path: "/api/runs/interrupt", body: { id: "ab12cd34" } },
+    ]);
+    expect(logs).toEqual(["ab12cd34 working", "ab12cd34 working"]);
+    await expect(runCommand(["say", "ab12cd34", ...backend], { fail })).rejects.toThrow("needs the words");
+    await expect(runCommand(["say", "x/y", "hi", ...backend], { fail })).rejects.toThrow("invalid run id");
+    expect(calls).toHaveLength(3);
+  } finally {
+    console.log = oldLog;
+    server.stop(true);
+  }
+});

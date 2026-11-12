@@ -15,7 +15,7 @@
 import { homedir } from "node:os";
 import { describeTool, toolDetail } from "./actions";
 import { normalizeAgent } from "./agent";
-import { absolutePath, claudeFold, foldClaude, toolPaths as foldToolPaths, type ClaudeFold } from "./claudefold";
+import { absolutePath, claudeFold, foldClaude, isReplay, toolPaths as foldToolPaths, type ClaudeFold } from "./claudefold";
 import { bunSpawn, LineSplitter, type RpcProc, type RpcSpawn } from "./codexrpc";
 import { activeStatus, spawnEnv, type DriveCtx, type DriveSpec, type RunDriver } from "./driver";
 import { CANOPY_TOOL_RULE } from "./runtools";
@@ -35,6 +35,9 @@ const STDERR_WAIT = 1_000;
 const HELD_GRACE_MS = 60_000;
 /** how long canopy's own control request waits for the CLI's reply */
 const REQUEST_MS = 10_000;
+/** how long a result held for a person's steer waits for the turn the steer
+ *  starts; the CLI begins it a moment after the result (probe, 2026-11-12) */
+const STEER_GRACE_MS = 5_000;
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
@@ -145,6 +148,9 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     "--input-format",
     "stream-json",
     "--verbose",
+    // the CLI echoes each message it takes, so a person's steer is known to
+    // be in the turn, or still queued for the next one, when a result comes
+    "--replay-user-messages",
     // permission decisions the settings do not cover come to us on stdout
     "--permission-prompt-tool",
     "stdio",
@@ -197,6 +203,8 @@ export interface ClaudeOptions {
   spawn?: RpcSpawn;
   /** how long a held result waits once the subagents are done, for the turn they wake */
   heldGraceMs?: number;
+  /** how long a result held for a person's steer waits for the steer's turn */
+  steerGraceMs?: number;
   /** how long canopy's own control request waits for the CLI's reply */
   requestMs?: number;
 }
@@ -217,9 +225,19 @@ export class ClaudeDriver implements RunDriver {
    *  background shell may run for good (a dev server) and must not hold a
    *  run open */
   private agents = new Set<string>();
-  /** the last result that came while subagents ran */
+  /** the last result that came while subagents ran, or while a person's
+   *  steer waited for the turn it starts */
   private held: Record<string, unknown> | null = null;
+  /** what `held` waits on: the subagents, or the steer's turn */
+  private heldFor: "agents" | "steer" = "agents";
   private grace: ReturnType<typeof setTimeout> | null = null;
+  /** each user message sent down stdin that the CLI has not echoed back yet
+   *  (`--replay-user-messages`), oldest first: a person's steer, or any
+   *  other (the first message, a chat's next one, the watchdog's nudge) */
+  private unread: ("steer" | "other")[] = [];
+  /** a person stopped the turn (`interrupt`): the result that ends it is
+   *  no failure */
+  private cut = false;
   /** the subagents are done and the turn they woke has begun: the held
    *  result now waits for that turn's own, however long it runs */
   private woke = false;
@@ -252,7 +270,35 @@ export class ClaudeDriver implements RunDriver {
   say(text: string): void {
     this.fold.turnStart = Date.now();
     this.fold.heldTurns = null;
-    void this.send(userMessage(text));
+    void this.sendUser(text, "other");
+  }
+
+  /** A person's message into a turn that runs, a job's or a chat's: a plain
+   *  user message down the same stdin. The CLI takes it at its next step,
+   *  or runs it as the next turn once this one ends, and the run goes on
+   *  through that turn: `drive` holds the result that comes while the CLI
+   *  has not echoed the message back. False once the process, or the run,
+   *  is past taking one. */
+  steer(text: string): boolean {
+    const ctx = this.ctx;
+    if (!this.proc || this.closed || this.over || !ctx || !activeStatus(ctx.status())) return false;
+    void this.sendUser(text, "steer");
+    return true;
+  }
+
+  /** Stops the turn that runs and keeps the process (the CLI's interrupt
+   *  control request, as Escape is in the terminal). A chat then waits for
+   *  its next message, and a steer sent before the interrupt runs as the
+   *  next turn. False when no turn of the main thread runs, which includes
+   *  a result held for subagents. */
+  interrupt(): boolean {
+    const ctx = this.ctx;
+    if (!this.proc || this.closed || this.over || !ctx || this.held) return false;
+    const status = ctx.status();
+    if (status !== "working" && status !== "waiting") return false;
+    this.cut = true;
+    void this.request("interrupt", {});
+    return true;
   }
 
   /** The stall watchdog's one message into a job's turn: a plain user
@@ -264,7 +310,7 @@ export class ClaudeDriver implements RunDriver {
   nudge(text: string): boolean {
     const ctx = this.ctx;
     if (!this.proc || this.closed || !ctx || ctx.chat || ctx.status() !== "working") return false;
-    void this.send(userMessage(text));
+    void this.sendUser(text, "other");
     return true;
   }
 
@@ -321,6 +367,8 @@ export class ClaudeDriver implements RunDriver {
     this.agents = new Set();
     this.held = null;
     this.woke = false;
+    this.unread = [];
+    this.cut = false;
     this.fold.heldTurns = null;
     this.fold.turnStart = Date.now();
     this.clearGrace();
@@ -342,7 +390,7 @@ export class ClaudeDriver implements RunDriver {
       const stderrRead = new Response(proc.stderr ?? new ReadableStream()).text().then((text) => {
         stderr = text.slice(-STDERR_CAP);
       });
-      await this.send(userMessage(message));
+      await this.sendUser(message, "other");
 
       for await (const m of lines(proc.stdout, (line) => ctx.wire("out", line))) {
         if (m["type"] === "system" && str(m, "subtype") === "init") {
@@ -378,6 +426,12 @@ export class ClaudeDriver implements RunDriver {
           proc.kill();
           break;
         }
+        if (isReplay(m)) {
+          // the CLI took the oldest message still out: into the turn, or as
+          // the start of the next one
+          this.unread.shift();
+          continue;
+        }
         if (m["type"] === "control_request") {
           void this.control(m);
         } else if (m["type"] === "control_cancel_request") {
@@ -386,19 +440,33 @@ export class ClaudeDriver implements RunDriver {
           // any word from the CLI means the turn the subagents woke is running
           this.clearGrace();
           if (m["type"] === "system") this.noteBackground(m);
-          if (m["type"] === "result" && this.agents.size > 0) {
+          const steering = this.unread.includes("steer");
+          if (m["type"] === "result" && (this.agents.size > 0 || steering)) {
             // spec P5/P6: the main thread paused for a subagent; closing
-            // stdin now would fail every later permission request
+            // stdin now would fail every later permission request. A
+            // person's steer the CLI has not echoed back runs as the next
+            // turn (probe, 2026-11-12), and the run goes on through it: a
+            // job does not end on this result, nor a chat go idle.
             if (this.held) this.fold.heldTurns = (this.fold.heldTurns ?? 0) + num(this.held, "num_turns");
             this.held = m;
+            this.heldFor = this.agents.size > 0 ? "agents" : "steer";
             this.woke = false;
+            // the interrupt that ended this turn is spent: the steer goes on
+            const cut = this.cut;
+            this.cut = false;
+            // nothing more may come to arm it later, unlike a subagent's end
+            if (this.heldFor === "steer") this.armGrace(proc, chat, cut);
             continue;
           }
           if (m["type"] === "result" && this.held) {
             this.fold.heldTurns = (this.fold.heldTurns ?? 0) + num(this.held, "num_turns");
             this.held = null;
           }
-          this.apply(m);
+          if (m["type"] === "result") {
+            const cut = this.cut;
+            this.cut = false;
+            this.applyResult(m, chat, cut);
+          } else this.apply(m);
           // Stdin stays open while the turn runs, for the control replies.
           // The result ends the turn; closing stdin lets the CLI exit. A chat
           // keeps it open: the next message continues the same session.
@@ -408,22 +476,7 @@ export class ClaudeDriver implements RunDriver {
           }
           // subagents done, a result held: the CLI normally starts a turn
           // with their results; if none begins, the held result is the end
-          if (this.held && this.agents.size === 0 && !this.woke && !this.grace) {
-            const held = this.held;
-            const running = proc;
-            this.grace = setTimeout(() => {
-              this.grace = null;
-              if (this.held !== held) return;
-              this.held = null;
-              // a held result is timed from the start too, as one that outran it is
-              this.fold.heldTurns ??= 0;
-              this.apply(held);
-              if (!chat) {
-                this.endInput(running);
-                this.over = ctx.status() !== "working";
-              }
-            }, this.opts.heldGraceMs ?? HELD_GRACE_MS);
-          }
+          if (this.held && this.agents.size === 0 && !this.woke) this.armGrace(proc, chat, false);
         }
       }
       this.clearGrace();
@@ -456,6 +509,44 @@ export class ClaudeDriver implements RunDriver {
       this.held = null;
       if (this.proc === proc) this.proc = null;
     }
+  }
+
+  /** A user message, counted unread until the CLI echoes it back. */
+  private sendUser(text: string, kind: "steer" | "other"): Promise<void> {
+    this.unread.push(kind);
+    return this.send(userMessage(text));
+  }
+
+  /** Applies a held result once its wait is up with no turn begun: the
+   *  subagents ended and woke nothing, or a steer's turn never came. */
+  private armGrace(running: RpcProc, chat: boolean, cut: boolean): void {
+    const held = this.held;
+    if (!held || this.grace) return;
+    const steer = this.heldFor === "steer";
+    this.grace = setTimeout(
+      () => {
+        this.grace = null;
+        if (this.held !== held) return;
+        this.held = null;
+        // a steer the CLI never ran is not waited on again
+        if (steer) this.unread = this.unread.filter((k) => k !== "steer");
+        // a held result is timed from the start too, as one that outran it is
+        this.fold.heldTurns ??= 0;
+        this.applyResult(held, chat, cut);
+        if (!chat) {
+          this.endInput(running);
+          this.over = this.ctx?.status() !== "working";
+        }
+      },
+      steer ? (this.opts.steerGraceMs ?? STEER_GRACE_MS) : (this.opts.heldGraceMs ?? HELD_GRACE_MS),
+    );
+  }
+
+  /** A result into the run; one that ends a turn a person stopped is no
+   *  failure for a chat, and "interrupted" for a job. */
+  private applyResult(m: Record<string, unknown>, chat: boolean, cut: boolean): void {
+    if (cut) this.apply(m, chat ? null : "interrupted", true);
+    else this.apply(m);
   }
 
   private async send(msg: unknown): Promise<void> {
@@ -610,10 +701,10 @@ export class ClaudeDriver implements RunDriver {
 
   /** Folds one message into the run (`foldClaude`). `failure`, for a result
    *  only, is the problem that overrides what the result itself says. */
-  private apply(m: Record<string, unknown>, failure: string | null = null): void {
+  private apply(m: Record<string, unknown>, failure: string | null = null, interrupted = false): void {
     const ctx = this.ctx;
     if (!ctx) return;
-    foldClaude(this.fold, m, ctx, { failure, now: Date.now() });
+    foldClaude(this.fold, m, ctx, { failure, now: Date.now(), interrupted });
   }
 }
 

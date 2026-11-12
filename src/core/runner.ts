@@ -60,6 +60,21 @@ export class ChildRefusedError extends Error {
   override name = "ChildRefusedError";
 }
 
+/** A message or a stop that the run cannot take as it stands (a chat still
+ *  replying to a run's token, a run that has ended, an incubator stage): a
+ *  409 to a route. */
+export class SteerError extends Error {
+  override name = "SteerError";
+}
+
+/** A run this server does not hold: a 404 to a route. */
+export class UnknownRunError extends Error {
+  override name = "UnknownRunError";
+  constructor(id: string) {
+    super(`unknown run: ${id}`);
+  }
+}
+
 /** What a branch run starts with beyond a plain run's arguments. */
 export interface BranchStart {
   /** the branch and worktree, made before the run starts */
@@ -574,21 +589,78 @@ export class Runner {
 
   /** The user's next message in a chat. The first one starts the agent
    *  with the repo's framing around it; later ones are the conversation's
-   *  next turns, which the driver sends on the same session. */
-  say(id: string, text: string): Run {
+   *  next turns, which the driver sends on the same session.
+   *
+   *  With `steer`, a person's message reaches any run that is working or
+   *  waiting too, a job's turn as well as a chat's reply: the harness takes
+   *  it at its next step, or as the next turn, and the run goes on through
+   *  it. A run's own token keeps the old rule, a chat between turns, so one
+   *  agent never redirects another's work in flight. */
+  say(id: string, text: string, opts: { steer?: boolean } = {}): Run {
     const live = this.live.get(id);
-    if (!live) throw new Error(`unknown run: ${id}`);
+    if (!live) throw new UnknownRunError(id);
     const run = live.ctx.run;
-    if (!run.chat) throw new Error("only a chat takes messages");
-    if (run.status !== "idle") throw new Error(`${live.driver.label} is still replying`);
     const message = text.trim();
-    if (!message) throw new Error("say something first");
-    live.ctx.step({ kind: "user", text: message });
-    run.status = "working";
+    if (run.chat && run.status === "idle") {
+      if (!message) throw new SteerError("say something first");
+      live.ctx.step({ kind: "user", text: message });
+      run.status = "working";
+      this.hooks.onChange(run);
+      if (live.started) live.driver.say(message);
+      else this.begin(live, this.firstMessage(live, message));
+      return run;
+    }
+    if (!opts.steer || !isRunActive(run)) {
+      if (!run.chat) throw new SteerError(isRunActive(run) ? "only a chat takes messages" : "the run has ended");
+      throw new SteerError(isRunActive(run) ? `${live.driver.label} is still replying` : "the chat has ended");
+    }
+    if (!message) throw new SteerError("say something first");
+    this.steer(live, message);
     this.hooks.onChange(run);
-    if (live.started) live.driver.say(message);
-    else this.begin(live, this.firstMessage(live, message));
     return run;
+  }
+
+  /** Stops the turn a run is on and keeps the run, as Escape does in a
+   *  terminal. With `text` the message goes first and runs as the next
+   *  turn, for a job too ("stop and do this instead"); without it only a
+   *  chat may be stopped, since a job then has nothing to go on with and
+   *  `stop` is how it ends. Prompts still waiting belonged to the turn that
+   *  stops and are denied. */
+  interrupt(id: string, text?: string): Run {
+    const live = this.live.get(id);
+    if (!live) throw new UnknownRunError(id);
+    const run = live.ctx.run;
+    if (run.status !== "working" && run.status !== "waiting") {
+      throw new SteerError(isRunActive(run) ? "nothing to stop: it waits for your message" : "the run has ended");
+    }
+    const message = text?.trim() ?? "";
+    if (!message && !run.chat) throw new SteerError("a job stops its turn only for a message to go on with; stop ends the run");
+    this.canSteer(live);
+    if (!live.driver.interrupt) throw new SteerError(`${live.driver.label} cannot be stopped mid-turn here`);
+    // the interrupt first, so nothing has gone down the wire when it is
+    // refused; the message sent right after it still runs as the next turn
+    if (!live.driver.interrupt()) throw new SteerError("there is no turn running to stop (it may be starting, or waiting on its subagents)");
+    live.ctx.note(message ? "you stopped the turn; your message goes next" : "you stopped the turn");
+    live.ctx.denyAll();
+    if (message) this.steer(live, message);
+    this.hooks.onChange(run);
+    return run;
+  }
+
+  /** Why a person's message cannot go down this run's wire mid-turn. */
+  private canSteer(live: Live): void {
+    if (this.opts.stage?.(live.repo)) throw new SteerError("an incubator stage takes no messages mid-run; its questions are where you answer");
+    if (!live.started) throw new SteerError("it has not started yet: send once it is at work");
+    if (!live.driver.steer) throw new SteerError(`${live.driver.label} takes no message mid-turn here`);
+  }
+
+  /** A person's message down a working or waiting run's wire, and the
+   *  timeline's step for it. The status stays as it is: a run waiting on a
+   *  prompt still waits on it. */
+  private steer(live: Live, message: string): void {
+    this.canSteer(live);
+    if (!live.driver.steer?.(message)) throw new SteerError("it cannot take a message just now: it is starting or ending");
+    live.ctx.step({ kind: "user", text: message });
   }
 
   /** The remembered rules' say over one run's permissions, read fresh at

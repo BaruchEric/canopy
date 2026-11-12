@@ -155,7 +155,7 @@ export interface RunCommandDeps {
 export async function dispatchRunCommand(argv: string[], deps: RunCommandDeps): Promise<void> {
   const args = [...argv];
   const first = firstWord(args);
-  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune") {
+  if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune" || first === "say" || first === "interrupt") {
     if (deps.transcripts) return deps.transcripts(args, { fail: deps.fail });
     return deps.fail(RUN_USAGE);
   }

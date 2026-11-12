@@ -216,6 +216,15 @@ export interface RunDriver {
    *  when it went down the wire. A harness that takes no message mid-turn
    *  has none, and the watchdog only notes the quiet. */
   nudge?(text: string): boolean;
+  /** A person's message into a run that is working or waiting, a job's or
+   *  a chat's: the harness takes it into the turn, or as the next turn once
+   *  this one ends, and the run goes on through that turn. False when it
+   *  could not go (the process is gone, or the run's end has begun). */
+  steer?(text: string): boolean;
+  /** Stops the turn that runs and keeps the process, as Escape does in a
+   *  terminal: a chat waits for its next message, and a message steered
+   *  just before runs as the next turn. False when no turn runs. */
+  interrupt?(): boolean;
   /** Whether the run waits on work its steps do not show, such as a
    *  subagent in the background: the watchdog never calls such a run quiet. */
   holding?(): boolean;

@@ -109,6 +109,10 @@ describe("needs", () => {
     expect(needs("POST", "/api/ranger/wakes")).toBe("plan");
     expect(needs("DELETE", "/api/ranger/wakes")).toBe("operate");
     expect(needs("POST", "/api/runs/say")).toBe("plan");
+    // a person's stop of a run's turn, and words or Escape typed into a shell
+    expect(needs("POST", "/api/runs/interrupt")).toBe("operate");
+    expect(needs("POST", "/api/terms/say")).toBe("shell");
+    expect(needs("POST", "/api/terms/keys")).toBe("shell");
     expect(needs("POST", "/api/runs/child")).toBe("plan");
     expect(needs("POST", "/api/work/note")).toBe("plan");
     expect(needs("POST", "/api/work/close")).toBe("operate");

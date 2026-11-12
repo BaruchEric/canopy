@@ -58,6 +58,19 @@
  *          set_permission_mode has been answered (a bypass refused for want
  *          of the launch flag waits for the fallback after it)
  *
+ *    steer  a person's steering, as a probe of the real CLI showed it
+ *          (2026-11-12): each turn echoes its message back when
+ *          --replay-user-messages is on, says "working on: <message>" and
+ *          ends FAKE_STEER_MS (300) later with the result "reply N"
+ *          (turns after the first: FAKE_STEER_NEXT_MS, else the same). A
+ *          message that comes while a turn runs is queued and runs as the
+ *          next turn (a fresh init, its echo, its own result), or with
+ *          FAKE_STEER_TAKE=mid is taken into the turn at once (echoed, and
+ *          the result says "took" it). FAKE_STEER_SILENT=1 swallows such a
+ *          message: never echoed, never run. An `interrupt` control request
+ *          ends the running turn with the CLI's interrupt marker and an
+ *          error_during_execution result.
+ *
  *  Host control requests (set_permission_mode) are answered the way the
  *  real CLI did (spec P3, P8): a bypass is refused without
  *  --allow-dangerously-skip-permissions. FAKE_CLAUDE_REFUSE_BYPASS=1 refuses
@@ -344,6 +357,72 @@ function onResponse(m: Record<string, unknown>): void {
   });
 }
 
+/* ---------- steer mode ---------- */
+
+const replays = process.argv.includes("--replay-user-messages");
+let steerBusy = false;
+let steerTurns = 0;
+let steerEof = false;
+let steerTimer: ReturnType<typeof setTimeout> | null = null;
+const steerQueue: string[] = [];
+let steerTook: string[] = [];
+const echo = (text: string) => {
+  if (replays) out({ type: "user", session_id: "sess-1", message: { role: "user", content: text }, isReplay: true });
+};
+
+function steerStart(text: string): void {
+  steerBusy = true;
+  steerTurns += 1;
+  if (steerTurns > 1) sys("init", { cwd: process.cwd() });
+  echo(text);
+  out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: `working on: ${text}` }] } });
+  const ms = (steerTurns > 1 ? process.env["FAKE_STEER_NEXT_MS"] : undefined) ?? process.env["FAKE_STEER_MS"] ?? 300;
+  steerTimer = setTimeout(() => steerEnd(false), Number(ms));
+}
+
+function steerEnd(interrupted: boolean): void {
+  steerBusy = false;
+  steerTimer = null;
+  const cost = 0.01 * steerTurns;
+  if (interrupted) {
+    out({ type: "user", session_id: "sess-1", message: { role: "user", content: [{ type: "text", text: "[Request interrupted by user for tool use]" }] } });
+    out({ type: "result", subtype: "error_during_execution", is_error: true, terminal_reason: "aborted_tools", errors: ["[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=tool_use"], num_turns: 1, total_cost_usd: cost, duration_ms: 2, session_id: "sess-1" });
+  } else {
+    const text = `reply ${steerTurns}${steerTook.length ? ` (took ${steerTook.join(", ")})` : ""}`;
+    out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text }] } });
+    out({ type: "result", subtype: "success", is_error: false, result: text, num_turns: 1, total_cost_usd: cost, duration_ms: 3, session_id: "sess-1" });
+  }
+  steerTook = [];
+  const next = steerQueue.shift();
+  if (next !== undefined) setTimeout(() => steerStart(next), 20);
+  else if (steerEof) process.exit(0);
+}
+
+function steerUser(m: Record<string, unknown>): void {
+  const content = ((m["message"] ?? {}) as Record<string, unknown>)["content"];
+  const text = typeof content === "string" ? content : "";
+  if (!steerBusy) return steerStart(text);
+  if (process.env["FAKE_STEER_SILENT"] === "1") return;
+  if (process.env["FAKE_STEER_TAKE"] === "mid") {
+    echo(text);
+    steerTook.push(text);
+    return;
+  }
+  steerQueue.push(text);
+}
+
+function steerControl(m: Record<string, unknown>): void {
+  const r = (m["request"] ?? {}) as Record<string, unknown>;
+  if (r["subtype"] !== "interrupt") {
+    out({ type: "control_response", response: { subtype: "error", request_id: m["request_id"], error: "not in steer mode" } });
+    return;
+  }
+  out({ type: "control_response", response: { subtype: "success", request_id: m["request_id"], response: { still_queued: [] } } });
+  if (!steerBusy) return;
+  if (steerTimer) clearTimeout(steerTimer);
+  steerEnd(true);
+}
+
 const dec = new TextDecoder();
 let buf = "";
 for await (const chunk of Bun.stdin.stream()) {
@@ -356,11 +435,21 @@ for await (const chunk of Bun.stdin.stream()) {
     if (!line) continue;
     const m = JSON.parse(line) as Record<string, unknown>;
     record(m);
+    if (mode === "steer") {
+      if (m["type"] === "user") steerUser(m);
+      else if (m["type"] === "control_request") steerControl(m);
+      continue;
+    }
     if (m["type"] === "user") onUser();
     else if (m["type"] === "control_response") onResponse(m);
     else if (m["type"] === "control_request") onHostRequest(m);
   }
 }
 record({ eof: true });
+// steer mode finishes the turn it runs, and the one queued behind it, first
+if (mode === "steer") {
+  steerEof = true;
+  if (steerBusy || steerQueue.length > 0) await new Promise(() => {});
+}
 // latenudge's next turn ends the process itself, as the CLI finishes a turn before it exits on stdin's end
 if (!secondTurn) process.exit(0);

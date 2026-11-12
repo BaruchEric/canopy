@@ -687,3 +687,32 @@ export function attachTmuxTerm(base: string[], id: string, size: TermSize, hooks
 export async function sendKeys(base: string[], id: string, keys: string[], literal = false): Promise<void> {
   await exec(keysArgs(base, id, keys, literal), { timeoutMs: 10_000 });
 }
+
+/* ---------- a person's words into a pane (core/steer.ts) ---------- */
+
+/** the buffer a steer passes through, one per shell so two never mix */
+export const sayBuffer = (id: string): string => `canopy-say-${id}`;
+
+/** the words into a named buffer; `--` so words that start with a dash are words */
+export const setBufferArgs = (base: string[], name: string, text: string): string[] => [...base, "set-buffer", "-b", name, "--", text];
+
+/** the buffer into the pane as one paste, then gone (`-d`). `-p` brackets it
+ *  when the program asked for bracketed paste, as Claude Code and Codex do,
+ *  so a line break stays in their box instead of sending it early */
+export const pasteArgs = (base: string[], id: string, name: string): string[] => [...base, "paste-buffer", "-p", "-d", "-b", name, "-t", sessionName(id)];
+
+/** the pause between a paste and the Enter that sends it, so the program
+ *  has read the paste whole before the key comes */
+export const SAY_GAP_MS = 150;
+
+/** Types a person's words into a pane and sends them: one paste, then
+ *  Enter, as a person at the terminal would. An agent at work queues them
+ *  and takes them at its next step (probe, Claude Code 2.1.323, 2026-11-12).
+ *  False when tmux would not take them. */
+export async function sayInto(base: string[], id: string, text: string): Promise<boolean> {
+  const name = sayBuffer(id);
+  if ((await exec(setBufferArgs(base, name, text), { timeoutMs: 10_000 })).code !== 0) return false;
+  if ((await exec(pasteArgs(base, id, name), { timeoutMs: 10_000 })).code !== 0) return false;
+  await Bun.sleep(SAY_GAP_MS);
+  return (await exec(keysArgs(base, id, ["Enter"]), { timeoutMs: 10_000 })).code === 0;
+}

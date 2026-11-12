@@ -1622,6 +1622,8 @@ export interface CanopyState {
   forgetRemembered: (backend: string, id: string) => Promise<void>;
   /** the next message in a chat */
   sayRun: (runId: string, text: string) => Promise<void>;
+  /** stops a run's turn and keeps the run; `text` runs as the next turn */
+  interruptRun: (runId: string, text?: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
   /** edits a coordinator's proposed card; the run's broadcast brings it back */
@@ -5285,6 +5287,14 @@ export const useStore = create<CanopyState>((set, get) => ({
     const run = await api.say(runId, text);
     set((s) => {
       // a draft once sent is done with
+      const { [runId]: _sent, ...chatDrafts } = s.chatDrafts;
+      return { runs: { ...s.runs, [run.id]: run }, chatDrafts };
+    });
+  },
+  interruptRun: async (runId, text) => {
+    if (get().runs[runId]?.kept) return;
+    const run = await api.interruptRun(runId, text);
+    set((s) => {
       const { [runId]: _sent, ...chatDrafts } = s.chatDrafts;
       return { runs: { ...s.runs, [run.id]: run }, chatDrafts };
     });

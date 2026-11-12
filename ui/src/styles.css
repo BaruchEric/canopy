@@ -15371,6 +15371,19 @@ button.trigger-title:hover {
 .run-pane > .composer {
   flex: none;
 }
+/* words to a shell's agent or a DM, under its screen (FR-066) */
+.steer-bar {
+  flex: none;
+  padding: 6px 8px;
+}
+.steer-note {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--ink-faint);
+}
+.steer-note.err {
+  color: var(--rust);
+}
 .agent-panel-body,
 .agent-solo-body {
   flex: 1;

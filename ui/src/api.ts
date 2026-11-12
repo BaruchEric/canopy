@@ -566,6 +566,13 @@ export const api = {
    *  name takes it off */
   labelTerm: (id: string, label: string) =>
     repoReq<{ ok: true; label?: string }>(id, () => "/api/terms/label", { method: "POST", body: JSON.stringify({ term: plainOf(id), label }) }),
+  /** a person's words typed into a shell's agent and sent with Enter,
+   *  refused while it waits on a choice (FR-066) */
+  termSay: (id: string, text: string) =>
+    repoReq<{ ok: true }>(id, () => "/api/terms/say", { method: "POST", body: JSON.stringify({ term: plainOf(id), text }) }),
+  /** Escape into a shell, which stops the turn its agent is on */
+  termEscape: (id: string) =>
+    repoReq<{ ok: true }>(id, () => "/api/terms/keys", { method: "POST", body: JSON.stringify({ term: plainOf(id), key: "escape" }) }),
   /** moves a held shell to the strip or its repo's panel, so every
    *  device's tab moves with it (FR-031) */
   placeTerm: (id: string, place: ShellPlace) =>
@@ -1165,10 +1172,16 @@ export const api = {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, "/api/runs/stop", { method: "POST", body: JSON.stringify({ id: plain }) }), qRun);
   },
-  /** the next message in a chat */
+  /** the next message in a chat, or a person's message into any run at
+   *  work, which takes it at its next step (FR-066) */
   say: async (id: string, text: string) => {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, "/api/runs/say", { method: "POST", body: JSON.stringify({ id: plain, text }) }), qRun);
+  },
+  /** stops the turn a run is on and keeps the run; `text` goes next */
+  interruptRun: async (id: string, text?: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<Run>(b, "/api/runs/interrupt", { method: "POST", body: JSON.stringify({ id: plain, ...(text ? { text } : {}) }) }), qRun);
   },
   dismissRun: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/runs?${rq(p)}`, { method: "DELETE" }),

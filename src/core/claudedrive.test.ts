@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 async function drive(
-  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "canopytool" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang" | "latenudge",
+  mode: "job" | "chat" | "die" | "limited" | "limitdie" | "ratelimited" | "async" | "bgshell" | "canopytool" | "quiet" | "stray" | "subtodo" | "woke" | "lost" | "notifyonly" | "crash" | "two" | "propose" | "hang" | "latenudge" | "steer",
   message = "do the thing",
   unattended?: string,
   opts: {
@@ -34,6 +34,7 @@ async function drive(
     spawn?: RpcSpawn;
     onWire?: (run: DriveRun, line: string) => void;
     heldGraceMs?: number;
+    steerGraceMs?: number;
     requestMs?: number;
     agent?: typeof AGENT;
     env?: Record<string, string>;
@@ -91,6 +92,7 @@ async function drive(
     command: [process.execPath, FAKE],
     ...(opts.spawn ? { spawn: opts.spawn } : {}),
     ...(opts.heldGraceMs !== undefined ? { heldGraceMs: opts.heldGraceMs } : {}),
+    ...(opts.steerGraceMs !== undefined ? { steerGraceMs: opts.steerGraceMs } : {}),
     ...(opts.requestMs !== undefined ? { requestMs: opts.requestMs } : {}),
   });
   expect(driver.check()).toBeNull();
@@ -949,4 +951,111 @@ test("canopy's own tool call folds into a step like any other (probe P1)", async
   const run = await d.until(d.done, "the end");
   expect(run.status).toBe("done");
   expect(run.steps.find((s) => s.tool?.name === "mcp__canopy__canopy_status")?.tool).toMatchObject({ status: "ok", output: "app  main" });
+});
+
+describe("a person steering a Claude run (FR-066)", () => {
+  const texts = (steps: RunStep[]) => steps.filter((s) => s.kind === "text").map((s) => s.text);
+  const users = async (d: Awaited<ReturnType<typeof drive>>) =>
+    (await d.sent()).filter((m) => m["type"] === "user").map((m) => (m["message"] as { content: string }).content);
+
+  test("cliArgs asks the CLI to echo each message it takes", () => {
+    expect(cliArgs({ allowedTools: [], maxTurns: 5 })).toContain("--replay-user-messages");
+  });
+
+  test("a steer the CLI takes into the turn: the run ends on that turn's result, and no echo is a step", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_TAKE: "mid", FAKE_STEER_MS: "400" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    expect(d.driver.steer("use bun")).toBe(true);
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("reply 1 (took use bun)");
+    expect(await users(d)).toEqual(["build it", "use bun"]);
+    // the echoes are the CLI's bookkeeping, never the run's words
+    expect(run.steps.some((s) => s.kind === "user")).toBe(false);
+    expect(texts(run.steps)).toEqual(["working on: build it", "reply 1 (took use bun)"]);
+  });
+
+  test("a steer that misses the turn runs as the next one, and the job goes on through it", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "300" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    expect(d.driver.steer("then test it")).toBe(true);
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    // the second turn's result is the run's, with both turns counted and the
+    // CLI's running total as its cost
+    expect(run.result).toMatchObject({ text: "reply 2", turns: 2, costUsd: 0.02 });
+    expect(texts(run.steps)).toEqual(["working on: build it", "reply 1", "working on: then test it", "reply 2"]);
+  });
+
+  test("a chat steered while it replies stays at work through the steer's turn, then waits", async () => {
+    const statuses: string[] = [];
+    const d = await drive("steer", "hello", undefined, { chat: true, env: { FAKE_STEER_MS: "300" }, emit: (r) => statuses.push(r.status) });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: hello"), "the reply");
+    d.driver.steer("and one more thing");
+    await d.until((r) => r.status === "idle" && r.result?.text === "reply 2", "the steer's reply");
+    // no idle between the two turns: the composer never offered a third message as a new turn
+    expect(statuses.slice(0, statuses.lastIndexOf("idle")).includes("idle")).toBe(false);
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  test("an interrupt stops a chat's reply: it waits again, with no failure said and no marker as a step", async () => {
+    const d = await drive("steer", "hello", undefined, { chat: true, env: { FAKE_STEER_MS: "5000", FAKE_STEER_NEXT_MS: "100" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: hello"), "the reply");
+    expect(d.driver.interrupt()).toBe(true);
+    const run = await d.until((r) => r.status === "idle", "the stop");
+    expect(run.error).toBeUndefined();
+    expect(run.steps.some((s) => s.kind === "note")).toBe(false);
+    expect(run.steps.some((s) => s.text?.includes("Request interrupted"))).toBe(false);
+    expect((await d.sent()).some((m) => m["type"] === "control_request" && (m["request"] as { subtype?: string }).subtype === "interrupt")).toBe(true);
+    // the chat goes on: the next message is a new reply on the same process
+    d.run.status = "working";
+    d.driver.say("again");
+    await d.until((r) => r.status === "idle" && r.result?.text === "reply 2", "the next reply");
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  test("an interrupt with a message behind it redirects a job: the turn stops and the message runs to the job's end", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "5000", FAKE_STEER_NEXT_MS: "100" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    // the Runner's order: the interrupt, then the message
+    expect(d.driver.interrupt()).toBe(true);
+    expect(d.driver.steer("do the other thing")).toBe(true);
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.error).toBeUndefined();
+    expect(texts(run.steps)).toContain("working on: do the other thing");
+  });
+
+  test("a job interrupted with nothing to go on with fails as interrupted", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "5000" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    d.driver.interrupt();
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("interrupted");
+  });
+
+  test("a steer the CLI never takes holds the result only for the steer's grace", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_SILENT: "1", FAKE_STEER_MS: "200" }, steerGraceMs: 250 });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    d.driver.steer("lost words");
+    const t0 = Date.now();
+    await d.until((r) => r.result !== undefined || d.done(r), "the result");
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("reply 1");
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(150);
+  });
+
+  test("no steer and no interrupt once a job's result has ended it", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "50" } });
+    const run = await d.until(d.done, "the end");
+    expect(run.status).toBe("done");
+    expect(d.driver.steer("too late")).toBe(false);
+    expect(d.driver.interrupt()).toBe(false);
+  });
 });

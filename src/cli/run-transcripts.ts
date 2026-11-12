@@ -15,6 +15,8 @@ export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1
        canopy run show <id> [--wire] [--backend URL]
        canopy run export <id> [--out file.md] [--backend URL]
        canopy run fork <id> [--at N] [--profile NAME] [-m note] [--backend URL]
+       canopy run say <id> <words…> [--backend URL]
+       canopy run interrupt <id> [words…] [--backend URL]
        canopy run prune [--backend URL]`;
 
 /** One line per kept run, newest first. `now` is unix milliseconds. */
@@ -168,6 +170,20 @@ export async function runTranscriptCommand(argv: string[], { fail }: { fail: Fai
     const run = await ask<Run>(target, "POST", "/api/runs/fork", body).catch(requestFailure(target, fail));
     console.log(`${run.id} ${run.status}`);
     if (run.forkOf) console.log(forkLine(run.forkOf));
+    return;
+  }
+
+  // a person's words into a live run: a chat's next turn, or a steer into
+  // any run at work; interrupt stops the turn first, the words going next
+  if (sub === "say" || sub === "interrupt") {
+    const id = args.shift();
+    if (!id || outFlag) return fail(RUN_USAGE);
+    if (!RUN_ID.test(id)) return fail(`invalid run id: ${id}`);
+    const text = args.join(" ").trim();
+    if (sub === "say" && !text) return fail("canopy run say needs the words to send");
+    const body = { id, ...(text ? { text } : {}) };
+    const run = await ask<Run>(target, "POST", sub === "say" ? "/api/runs/say" : "/api/runs/interrupt", body).catch(requestFailure(target, fail));
+    console.log(`${run.id} ${run.status}`);
     return;
   }
 

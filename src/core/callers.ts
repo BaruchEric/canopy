@@ -110,7 +110,9 @@ const RULES: readonly Rule[] = [
   // answer is the one rule's words or nothing
   { methods: POST, paths: ["remembered/check"], right: "open" },
   { methods: POST, paths: ["repos/movecheck"], right: "read" },
-  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork"], right: "operate" },
+  // stopping a turn ends what the agent was doing, as a stop does, so a
+  // run's token, which holds plan alone, never interrupts another run
+  { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork", "runs/interrupt"], right: "operate" },
   // a coordinator's token holds plan alone: it proposes cards, and editing
   // them or starting them is the user's
   { methods: POST, paths: ["coordinator/plan"], right: "plan" },
@@ -163,6 +165,13 @@ const RULES: readonly Rule[] = [
   {
     methods: POST,
     paths: ["terms/restore", "terms/paste", "terms/move/out", "terms/move/finish", "terms/move/undo", "repos/agent", "repos/movein"],
+    right: "shell",
+  },
+  // typing a line or a key into a shell from outside its terminal is what
+  // its socket does, so it takes the same right
+  {
+    methods: POST,
+    paths: ["terms/say", "terms/keys"],
     right: "shell",
   },
   { methods: DEL, paths: ["terms", "terms/kept"], right: "shell" },

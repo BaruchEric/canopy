@@ -588,6 +588,7 @@ interface Scenario {
   userAgent?: string;
   threadStartError?: { code: number; message: string };
   ignoreEof?: boolean;
+  steer?: "accept" | "reject";
   turns?: Step[][];
 }
 
@@ -1435,5 +1436,81 @@ describe("foldCodex replays the recorded wire into the steps the live run made",
     expect(notes(rebuilt.steps)).toEqual(["asked: git push", "allowed: git push", "asked: rm x", "denied: rm x", "asked: Which color?", "answered: red", "and again"]);
     expect(record.asks).toHaveLength(3);
     expect(notes(record.steps).filter((t) => t?.startsWith("asked: "))).toEqual(["asked: git push", "asked: rm x", "asked: Which color?"]);
+  });
+});
+
+describe("a person steering a Codex run (FR-066)", () => {
+  const texts = (r: DriveRun) => r.steps.filter((s) => s.kind === "text").map((s) => s.text);
+
+  test("a steer goes into the running turn as turn/steer, and the job ends on that turn", async () => {
+    const d = await drive(() => ({ turns: [[agentMessage("m0", "on it", "commentary"), { waitSteer: true }, agentMessage("m1", "done, with bun"), { complete: "completed" }]] }));
+    await d.until((r) => texts(r).includes("on it"), "the turn");
+    expect(d.driver.steer("use bun")).toBe(true);
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("done, with bun");
+    const steer = requests(await d.sent(), "turn/steer")[0]?.["params"];
+    expect(steer).toEqual({ threadId: "thr-1", input: [{ type: "text", text: "use bun", text_elements: [] }], expectedTurnId: "turn-1" });
+    expect(requests(await d.sent(), "turn/start").length).toBe(1);
+  });
+
+  test("a steer codex refuses becomes the next turn, and the job goes on through it", async () => {
+    const d = await drive(() => ({
+      steer: "reject",
+      turns: [
+        [agentMessage("m0", "on it", "commentary"), { sleep: 300 }, agentMessage("m1", "first"), { complete: "completed" }],
+        [agentMessage("m2", "second"), { complete: "completed" }],
+      ],
+    }));
+    await d.until((r) => texts(r).includes("on it"), "the turn");
+    d.driver.steer("then test it");
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("done");
+    expect(run.result?.text).toBe("second");
+    expect(run.result?.turns).toBe(2);
+    const turns = requests(await d.sent(), "turn/start").map((m) => m["params"] as { input: { text: string }[] });
+    expect(turns[1]?.input[0]?.text).toBe("then test it");
+  });
+
+  test("interrupt and a message behind it: the turn stops and the message runs to the job's end", async () => {
+    const d = await drive(() => ({
+      turns: [
+        [commandItem("item/started", "c1", "sleep 100"), { waitInterrupt: true }, { complete: "interrupted" }],
+        [agentMessage("m2", "did the other thing"), { complete: "completed" }],
+      ],
+    }));
+    await d.until((r) => r.steps.some((s) => s.kind === "tool"), "the command");
+    expect(d.driver.interrupt()).toBe(true);
+    expect(d.driver.steer("do the other thing")).toBe(true);
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("done");
+    expect(run.error).toBeUndefined();
+    expect(run.result?.text).toBe("did the other thing");
+    const log = await d.sent();
+    expect(requests(log, "turn/interrupt")[0]?.["params"]).toEqual({ threadId: "thr-1", turnId: "turn-1" });
+    // behind the person's own stop the words wait for the next turn, never a steer
+    expect(requests(log, "turn/steer")).toEqual([]);
+  });
+
+  test("an interrupted chat waits for its next message, with nothing said failed", async () => {
+    const d = await drive(
+      () => ({ turns: [[commandItem("item/started", "c1", "sleep 100"), { waitInterrupt: true }, { complete: "interrupted" }]] }),
+      { chat: true, message: "hi" },
+    );
+    await d.until((r) => r.steps.some((s) => s.kind === "tool"), "the command");
+    d.driver.interrupt();
+    const run = await d.until((r) => r.status === "idle", "the stop");
+    expect(run.error).toBeUndefined();
+    d.stop();
+    expect((await d.until(d.ended, "the end")).status).toBe("done");
+  });
+
+  test("an interrupted job with nothing to go on with fails as interrupted", async () => {
+    const d = await drive(() => ({ turns: [[commandItem("item/started", "c1", "sleep 100"), { waitInterrupt: true }, { complete: "interrupted" }]] }));
+    await d.until((r) => r.steps.some((s) => s.kind === "tool"), "the command");
+    d.driver.interrupt();
+    const run = await d.until(d.ended, "the end");
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("interrupted");
   });
 });

@@ -141,9 +141,20 @@ export function claudeFold(cwd: string, home: string, turnStart = 0): ClaudeFold
   return { cwd, home, tools: new Map(), todoInputs: new Map(), todos: [], model: "", heldTurns: null, turnStart };
 }
 
+/** The words the CLI puts in a user message of its own when an interrupt
+ *  stops a turn ("[Request interrupted by user]", "... for tool use"). */
+export const INTERRUPT_MARK = "[Request interrupted by user";
+
+/** The CLI's echo of a message canopy sent (`--replay-user-messages`): it
+ *  says when the CLI took the message, and is no step of the run's. */
+export const isReplay = (m: Record<string, unknown>): boolean => m["type"] === "user" && m["isReplay"] === true;
+
 export interface ClaudeFoldOpts {
   /** for a result only: the problem that overrides what the result itself says */
   failure?: string | null;
+  /** for a result only: the turn ended on canopy's own interrupt, which a
+   *  person asked for, so the result's error is no failure of the run's */
+  interrupted?: boolean;
   /** the time now, for a result that outran a held one; without it such a
    *  result is timed as taking no time */
   now?: number;
@@ -159,6 +170,7 @@ export function foldClaude(state: ClaudeFold, m: Record<string, unknown>, out: F
     return;
   }
   if (type === "assistant" || type === "user") {
+    if (isReplay(m)) return;
     const message = isRecord(m["message"]) ? m["message"] : {};
     const content = message["content"];
     if (!Array.isArray(content)) return;
@@ -170,6 +182,9 @@ export function foldClaude(state: ClaudeFold, m: Record<string, unknown>, out: F
       const kind = str(block, "type");
       if (kind === "text") {
         const text = str(block, "text").trim();
+        // the CLI's own note that an interrupt stopped the turn; the run's
+        // timeline says that in canopy's words
+        if (type === "user" && text.startsWith(INTERRUPT_MARK)) continue;
         if (text) {
           out.step({ kind: "text", text, ...(parent ? { parent } : {}) });
           changed = true;
@@ -230,7 +245,9 @@ export function foldClaude(state: ClaudeFold, m: Record<string, unknown>, out: F
     const errors = Array.isArray(m["errors"])
       ? m["errors"].filter((e): e is string => typeof e === "string")
       : [];
-    const text = subtype === "success" ? str(m, "result") : errors.join("\n");
+    // an interrupt's result carries the CLI's diagnostic as its error, which
+    // is not the run's to show
+    const text = opts.interrupted ? "" : subtype === "success" ? str(m, "result") : errors.join("\n");
     const own = num(m, "num_turns");
     // a result that outran a held one, or a held one the run ends on,
     // counts every turn since the message and the time since it went
@@ -251,7 +268,7 @@ export function foldClaude(state: ClaudeFold, m: Record<string, unknown>, out: F
     // conversation, and a reply that failed is said in the timeline.
     out.result(
       { text: text.trim(), costUsd: num(m, "total_cost_usd"), durationMs, turns, ...(state.model ? { model: state.model } : {}), ...accounting },
-      opts.failure ?? (ok ? null : problem),
+      opts.failure ?? (ok || opts.interrupted ? null : problem),
     );
   }
 }

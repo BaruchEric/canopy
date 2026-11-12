@@ -612,6 +612,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const dismissRun = useStore((s) => s.dismissRun);
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
+  const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
   const active = !run.kept && isRunActive(run);
   const chat = run.chat;
@@ -701,14 +702,15 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         />
       )}
 
-      {/* hidden, not gone, in the cards view, so what was typed stays */}
-      {chat && active && (
+      {/* hidden, not gone, in the cards view, so what was typed stays;
+          any run at work takes a person's message, a job's too (FR-066) */}
+      {active && (
         <Composer
           who={name}
           repoId={run.repoId}
           harness={harness}
-          ready={run.status === "idle"}
-          first={run.steps.length === 0}
+          mode={composerMode(run, (text) => act(() => interruptRun(run.id, text || undefined), true))}
+          first={chat && run.steps.length === 0}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           hidden={cardsOnly}
           {...(draft ? { draft } : {})}
@@ -1252,6 +1254,7 @@ function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Pro
 export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
+  const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
   const [error, setError] = useState<string | null>(null);
   const act = (fn: () => Promise<void>, propagate = false) => {
@@ -1261,13 +1264,13 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
   return (
     <div className="run-pane" data-voice-run={run.id}>
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
-      {!run.kept && run.chat && isRunActive(run) && (
+      {!run.kept && isRunActive(run) && (
         <Composer
           who={AGENT_NAME[harnessOf(run)]}
           repoId={run.repoId}
           harness={harnessOf(run)}
-          ready={run.status === "idle"}
-          first={run.steps.length === 0}
+          mode={composerMode(run, (text) => act(() => interruptRun(run.id, text || undefined), true))}
+          first={run.chat && run.steps.length === 0}
           onSend={(text) => act(() => sayRun(run.id, text), true)}
           quiet
           {...(draft ? { draft } : {})}
@@ -1277,25 +1280,41 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
   );
 }
 
-/** The chat's message box. Enter sends, shift-enter breaks a line; `/`,
- *  `$` and `@` open the agent's commands, skills and the repo's files. */
+/** What the message box does with a message now. */
+type ComposerMode =
+  /** a chat between turns: the message is its next turn */
+  | { kind: "turn" }
+  /** a run at work, a chat's reply or a job: the message goes in at its
+   *  next step (or runs as the next turn), and `onStop` cuts the turn short
+   *  first, with the message to go on with or, for a chat, without one */
+  | { kind: "steer"; chat: boolean; onStop: (text: string) => Promise<void> };
+
+/** the box's mode for a live run: a chat between turns takes a turn, any
+ *  other live run a steer (FR-066) */
+function composerMode(run: Run, onStop: (text: string) => Promise<void>): ComposerMode {
+  return run.status === "idle" ? { kind: "turn" } : { kind: "steer", chat: run.chat, onStop };
+}
+
+/** A run's message box: a chat's next message, or a person's words into any
+ *  run at work. Enter sends, shift-enter breaks a line; `/`, `$` and `@`
+ *  open the agent's commands, skills and the repo's files. */
 function Composer({
   who,
   repoId,
   harness,
-  ready,
+  mode,
   onSend,
   draft = "",
   quiet = false,
   hidden = false,
   first = false,
 }: {
-  /** the agent's name, for the box's placeholder while it replies */
+  /** the agent's name, for the box's placeholder while it works */
   who: string;
   /** whose files and commands the menu offers */
   repoId: string;
   harness: Harness;
-  ready: boolean;
+  mode: ComposerMode;
   onSend: (text: string) => Promise<void>;
   /** what the box starts with: an accepted retro lesson, for the user to read and send */
   draft?: string;
@@ -1311,7 +1330,11 @@ function Composer({
   const [text, setText] = useState(draft);
   const [busy, setBusy] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
-  const can = ready && !busy && text.trim().length > 0;
+  const ready = mode.kind === "turn";
+  const typed = text.trim().length > 0;
+  const can = !busy && typed;
+  // a job stops its turn only for words to go on with: Stop ends the run
+  const canStop = mode.kind === "steer" && !busy && (typed || mode.chat);
   const mentions = useMentions({ box, text, setText, repoId, harness, bare: !first });
 
   // Back to the box as soon as the agent has answered, unless it is out of
@@ -1325,19 +1348,24 @@ function Composer({
     if (ready && !quiet && shown.current) box.current?.focus();
   }, [ready, quiet]);
 
-  const send = async () => {
-    if (!can) return;
+  const deliver = async (go: (message: string) => Promise<void>) => {
     const message = text;
     setBusy(true);
     setText("");
     try {
-      await onSend(message);
+      await go(message);
     } catch {
       // the box stays live while a send is out, so keep what was typed since
-      setText((now) => (now.trim() ? `${message}\n${now}` : message));
+      if (message.trim()) setText((now) => (now.trim() ? `${message}\n${now}` : message));
     } finally {
       setBusy(false);
     }
+  };
+  const send = async () => {
+    if (can) await deliver(onSend);
+  };
+  const stop = async () => {
+    if (canStop) await deliver(mode.onStop);
   };
 
   return (
@@ -1350,7 +1378,7 @@ function Composer({
           className="composer-box"
           // a draft is read before it is sent, so it gets room
           rows={draft ? 10 : 2}
-          placeholder={ready ? "say something…" : `${who} is replying…`}
+          placeholder={ready ? "say something…" : `${who} is at work: steer it…`}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -1365,11 +1393,32 @@ function Composer({
         />
       </div>
       <DictateButton target={box} />
+      {mode.kind === "steer" && (
+        <button
+          type="button"
+          className="mini"
+          disabled={!canStop}
+          title={
+            typed
+              ? `Stop the turn ${who} is on, then send this as what it does next`
+              : mode.chat
+                ? `Stop the turn ${who} is on; the chat waits for your next message`
+                : "A job stops its turn only for a message to go on with; type one, or end the run with stop"
+          }
+          onClick={() => void stop()}
+        >
+          {typed ? "stop & send" : "interrupt"}
+        </button>
+      )}
       <button
         type="button"
         className="mini strong"
         disabled={!can}
-        title={`↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`}
+        title={
+          ready
+            ? `↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`
+            : `↩ sends it into the work: ${who} reads it at its next step, or as its next turn`
+        }
         onClick={() => void send()}
       >
         send

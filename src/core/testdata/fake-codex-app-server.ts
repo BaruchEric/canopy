@@ -14,6 +14,7 @@
  *    { "userAgent": "canopy/0.158.0 (fake)",       // initialize's answer
  *      "threadStartError": { "code": -32600, "message": "..." },
  *      "ignoreEof": false,                          // stay up after stdin closes
+ *      "steer": "accept" | "reject",                // turn/steer's answer (accept)
  *      "turns": [ [ step, ... ], ... ] }            // one list per turn/start
  *
  *  Steps, run in order:
@@ -23,6 +24,7 @@
  *        sends a server request and, unless "wait" is false, waits for the
  *        client's answer before the next step
  *    { "waitInterrupt": true }       waits for turn/interrupt
+ *    { "waitSteer": true }           waits for a turn/steer into this turn
  *    { "complete": "completed" | "interrupted" | "failed", "error": { ... } }
  *        sends turn/completed for the running turn
  *    { "sleep": ms }
@@ -38,6 +40,7 @@ interface Scenario {
   userAgent?: string;
   threadStartError?: { code: number; message: string };
   ignoreEof?: boolean;
+  steer?: "accept" | "reject";
   turns?: Step[][];
 }
 
@@ -53,6 +56,8 @@ let lastReq = -1;
 const answers = new Map<number, (m: unknown) => void>();
 let interrupted: (() => void) | null = null;
 let interruptSeen = false;
+let steered: (() => void) | null = null;
+let steerSeen = false;
 
 const record = (m: unknown): void => {
   if (logPath) appendFileSync(logPath, JSON.stringify(m) + "\n");
@@ -99,6 +104,8 @@ async function play(steps: Step[]): Promise<void> {
       if (s["wait"] !== false) await answered;
     } else if (s["waitInterrupt"]) {
       if (!interruptSeen) await new Promise<void>((res) => (interrupted = res));
+    } else if (s["waitSteer"]) {
+      if (!steerSeen) await new Promise<void>((res) => (steered = res));
     } else if (typeof s["complete"] === "string") {
       const status = s["complete"];
       out({
@@ -162,6 +169,7 @@ function handle(m: Record<string, unknown>): void {
       turnSeq += 1;
       turn = `turn-${turnSeq}`;
       interruptSeen = false;
+      steerSeen = false;
       out({ id, result: { turn: turnShape("inProgress") } });
       out({ method: "turn/started", params: { threadId: THREAD, turn: turnShape("inProgress") } });
       const steps = scenario.turns?.[turnSeq - 1] ?? [{ complete: "completed" }];
@@ -173,6 +181,18 @@ function handle(m: Record<string, unknown>): void {
       interruptSeen = true;
       interrupted?.();
       interrupted = null;
+      return;
+    case "turn/steer":
+      // the driver reads only whether it was taken; "reject" plays a turn
+      // that ended or takes no steer
+      if (scenario.steer === "reject") {
+        out({ id, error: { code: -32600, message: "no active turn to steer" } });
+        return;
+      }
+      out({ id, result: { turnId: turn } });
+      steerSeen = true;
+      steered?.();
+      steered = null;
       return;
     default:
       out({ id, error: { code: -32601, message: `the stand-in does not know ${method}` } });

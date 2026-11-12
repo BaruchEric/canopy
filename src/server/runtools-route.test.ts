@@ -19,6 +19,9 @@ import { startServer } from "./index";
 
 const starts = new Map<string, DriveCtx>();
 const firstMessages = new Map<string, string>();
+/** what a person's steers put down each run's wire, and its interrupts */
+const steered = new Map<string, string[]>();
+const interrupts = new Map<string, number>();
 
 /** Holds a run open until `end` finishes it. */
 class HeldDriver implements RunDriver {
@@ -28,6 +31,8 @@ class HeldDriver implements RunDriver {
   check(): string | null { return null; }
   start(ctx: DriveCtx, message: string): void { this.ctx = ctx; starts.set(ctx.env["CANOPY_RUN"] ?? "", ctx); firstMessages.set(ctx.env["CANOPY_RUN"] ?? "", message); }
   say(): void {}
+  steer(text: string): boolean { const id = this.ctx?.env["CANOPY_RUN"] ?? ""; steered.set(id, [...(steered.get(id) ?? []), text]); return true; }
+  interrupt(): boolean { const id = this.ctx?.env["CANOPY_RUN"] ?? ""; interrupts.set(id, (interrupts.get(id) ?? 0) + 1); return true; }
   stop(): void { this.ctx?.exited({ code: null, stderr: "" }); }
 }
 
@@ -35,6 +40,7 @@ let scratch: string;
 let root: string;
 let config: string;
 let cli: string;
+let page: string;
 let server: Awaited<ReturnType<typeof startServer>>;
 const saved: Record<string, string | undefined> = {};
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND"];
@@ -94,6 +100,7 @@ beforeAll(async () => {
   delete process.env["CANOPY_BIND"];
   const book = new CallerBook({ file: join(config, "callers.json") });
   cli = book.mint("cli", { label: "cli test" }).token;
+  page = book.mint("page", { label: "page test" }).token;
   // what a restart must clear: a token and a file a run left behind
   book.mint("run", { label: "run app", run: "dead1234" });
   await book.flush();
@@ -311,5 +318,71 @@ describe("what a run's token reaches", () => {
     expect((await post("/api/runs/child", { note: "x" })).status).toBe(400);
     expect((await post("/api/runs/child", { note: "x", parent: "nope1234" })).status).toBe(404);
     expect((await post("/api/work/note", { id: "nope", text: "x" })).status).toBe(404);
+  });
+});
+
+describe("a person steering a run over the API (FR-066)", () => {
+  const errorOf = async (res: Response) => ((await res.json()) as { error: string }).error;
+
+  test("the CLI's token says into a working job and stops a chat's reply", async () => {
+    const job = await startTools();
+    await until(async () => starts.get(job.id), "the driver");
+    const said = await post("/api/runs/say", { id: job.id, text: "use bun" });
+    expect(said.status).toBe(200);
+    expect(steered.get(job.id)).toEqual(["use bun"]);
+    expect(((await said.json()) as Run).steps.at(-1)).toMatchObject({ kind: "user", text: "use bun" });
+
+    const chat = await started(await post("/api/repos/run?id=app", { action: "chat", note: "" }));
+    expect((await post("/api/runs/say", { id: chat.id, text: "hello" })).status).toBe(200);
+    await until(async () => starts.get(chat.id), "the chat's driver");
+    expect((await post("/api/runs/interrupt", { id: chat.id })).status).toBe(200);
+    expect(interrupts.get(chat.id)).toBe(1);
+    // a job is never stopped with nothing to go on with
+    const bare = await post("/api/runs/interrupt", { id: job.id });
+    expect(bare.status).toBe(409);
+    expect(await errorOf(bare)).toContain("a job stops its turn only for a message");
+    expect((await post("/api/runs/interrupt", { id: job.id, text: "do this instead" })).status).toBe(200);
+    expect(steered.get(job.id)).toEqual(["use bun", "do this instead"]);
+    await end(job.id);
+    await post("/api/runs/stop", { id: chat.id });
+  });
+
+  test("a run's token keeps the old rule: kin between turns, never mid-turn, never a stop", async () => {
+    const chat = await started(await post("/api/repos/run?id=app", { action: "chat", note: "", canopyTools: true }));
+    const child = await started(await post("/api/runs/child", { note: "a part" }, await tokenOf(chat.id)));
+    const kid = await tokenOf(child.id);
+    // the chat at work on a person's message
+    expect((await post("/api/runs/say", { id: chat.id, text: "hello" })).status).toBe(200);
+    await until(async () => starts.get(chat.id), "the chat's driver");
+    const busy = await post("/api/runs/say", { id: chat.id, text: "from the child" }, kid);
+    expect(busy.status).toBe(409);
+    expect(await errorOf(busy)).toBe("fake is still replying");
+    expect(steered.get(chat.id)).toBeUndefined();
+    expect((await post("/api/runs/interrupt", { id: chat.id }, kid)).status).toBe(403);
+    expect(interrupts.get(chat.id)).toBeUndefined();
+    await end(child.id);
+    await post("/api/runs/stop", { id: chat.id });
+  });
+
+  test("a run that is not here is a 404, a bad body a 400", async () => {
+    expect((await post("/api/runs/say", { id: "nope1234", text: "hi" })).status).toBe(404);
+    expect((await post("/api/runs/interrupt", { id: "nope1234" })).status).toBe(404);
+    expect((await post("/api/runs/interrupt", { id: 7 })).status).toBe(400);
+    expect((await post("/api/runs/interrupt", { id: "nope1234", text: 7 })).status).toBe(400);
+  });
+
+  test("typing into a shell takes the page's shell right: words checked first, an unknown shell is a 404", async () => {
+    expect((await post("/api/terms/say", { term: "abc", text: "  " }, page)).status).toBe(400);
+    expect((await post("/api/terms/say", { term: "abc" }, page)).status).toBe(400);
+    expect((await post("/api/terms/say", { term: "abc", text: "go on" }, page)).status).toBe(404);
+    expect((await post("/api/terms/keys", { term: "abc", key: "enter" }, page)).status).toBe(400);
+    expect((await post("/api/terms/keys", { term: "abc", key: "escape" }, page)).status).toBe(404);
+    // the CLI holds no shell right, as for every other write into a terminal
+    expect((await post("/api/terms/say", { term: "abc", text: "go on" })).status).toBe(403);
+    const run = await startTools();
+    const token = await tokenOf(run.id);
+    expect((await post("/api/terms/say", { term: "abc", text: "go on" }, token)).status).toBe(403);
+    expect((await post("/api/terms/keys", { term: "abc", key: "escape" }, token)).status).toBe(403);
+    await end(run.id);
   });
 });

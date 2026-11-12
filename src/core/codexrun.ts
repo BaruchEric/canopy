@@ -46,7 +46,7 @@ import type { McpLaunch } from "./runtools";
 import { sweepCodexTrust } from "./codextrust";
 import { bunSpawn, RpcClient, RpcClosed, RpcError, type RpcExit, type RpcRequest, type RpcSpawn } from "./codexrpc";
 import { changesInput, codexFold, codexThread, codexTurn, fileChanges, foldCodex, NO_COST, ownThread, type CodexFold, type CodexFolded, type FileChange } from "./codexfold";
-import { spawnEnv, type DriveAgent, type DriveCtx, type PromptInput, type RunDriver } from "./driver";
+import { activeStatus, spawnEnv, type DriveAgent, type DriveCtx, type PromptInput, type RunDriver } from "./driver";
 import { commandWords, EDIT_TOOLS, parseRule, unwrapShell, type ToolRule } from "./shellwords";
 import type { RunAnswer, RunQuestion } from "./types";
 
@@ -689,6 +689,18 @@ export class CodexDriver implements RunDriver {
   /** why canopy interrupted the running turn itself, which is its result's
    *  problem */
   private capped: string | null = null;
+  /** a person's messages for the next turn: ones `turn/steer` could not put
+   *  into the running turn (it had ended, or takes no steer), and ones sent
+   *  behind the person's own interrupt */
+  private next: string[] = [];
+  /** `turn/steer` requests still out: a turn that completes meanwhile waits
+   *  for them, so a refused one still becomes the next turn */
+  private steering = 0;
+  /** the completion that waited for those requests */
+  private parked: Extract<CodexFolded, { kind: "completed" }> | null = null;
+  /** a person stopped the running turn (`interrupt`): its completion as
+   *  interrupted is no failure */
+  private cut = false;
 
   constructor(private opts: CodexOptions = {}) {}
 
@@ -705,6 +717,52 @@ export class CodexDriver implements RunDriver {
 
   say(text: string): void {
     void this.send(text, false);
+  }
+
+  /** A person's message into the running turn: `turn/steer`, which codex
+   *  takes into the turn as a user message (probe, 2026-11-12). When the
+   *  turn has ended first, or takes no steer, or the person has just
+   *  stopped it, the message is the next turn instead, and a job goes on
+   *  through that turn rather than ending. */
+  steer(text: string): boolean {
+    const ctx = this.ctx;
+    const rpc = this.rpc;
+    const thread = this.fold.thread;
+    if (!ctx || !rpc || rpc.closed || this.interrupting || thread === null || !activeStatus(ctx.status())) return false;
+    const turn = this.turn;
+    if (turn === null || this.cut) {
+      this.next.push(text);
+      return true;
+    }
+    this.steering += 1;
+    rpc
+      .request("turn/steer", { threadId: thread, input: [{ type: "text", text, text_elements: [] }], expectedTurnId: turn })
+      .catch(() => {
+        this.next.push(text);
+      })
+      .finally(() => {
+        this.steering -= 1;
+        const parked = this.parked;
+        if (this.steering === 0 && parked) {
+          this.parked = null;
+          this.completed(parked);
+        }
+      });
+    return true;
+  }
+
+  /** Stops the running turn and keeps the thread (`turn/interrupt`). The
+   *  turn then completes as interrupted, which is no failure: a chat waits
+   *  for its next message, and a message sent behind the stop is the next
+   *  turn. False when no turn runs yet. */
+  interrupt(): boolean {
+    const rpc = this.rpc;
+    const thread = this.fold.thread;
+    const turn = this.turn;
+    if (!this.ctx || !rpc || rpc.closed || this.interrupting || thread === null || turn === null) return false;
+    this.cut = true;
+    rpc.request("turn/interrupt", { threadId: thread, turnId: turn }).catch(() => {});
+    return true;
   }
 
   stop(): void {
@@ -931,6 +989,26 @@ export class CodexDriver implements RunDriver {
     if (this.interrupting) {
       // the stop's own interrupt: the process goes, and its exit is the stop
       this.close();
+      return;
+    }
+    if (this.steering > 0) {
+      // a steer still out may come back refused, and then it is the next turn
+      this.parked = done;
+      return;
+    }
+    const cut = this.cut;
+    this.cut = false;
+    if (this.next.length > 0) {
+      // a person's words the turn did not take go on as the next turn, so a
+      // job is not over yet either
+      void this.send(this.next.splice(0).join("\n\n"), false);
+      return;
+    }
+    if (cut) {
+      // a person stopped it: a chat waits for them, and a job, which is only
+      // stopped this way behind a message, ends as interrupted
+      ctx.result(done.result, ctx.chat ? null : "interrupted");
+      if (!ctx.chat) this.close();
       return;
     }
     // canopy's own interrupt at the limit says why, rather than "interrupted"
