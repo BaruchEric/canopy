@@ -3620,7 +3620,8 @@ describe("the ranger in waiting on you", () => {
       handle: "ranger",
       session: "s-r",
       state: "waiting",
-      waiting: "your turn",
+      // a permission: a card at its prompt is no row for anyone
+      waiting: "permission: Bash",
       origin: "canopy-shell",
       cwd: "/config/ranger/home",
       repo: null,

@@ -277,6 +277,39 @@ describe("a Codex rollout", () => {
     expect(a.files).toEqual(["old.ts", "src/b.ts", "src/a.ts"]);
   });
 
+  test("a terminal still running after its exec, and a subagent, are background work until their items end them", () => {
+    const exec = (sec: number, id: string) => item(sec, { type: "custom_tool_call", name: "exec", input: "text(await tools.exec_command({cmd:\"bun run dev\"}));", call_id: id });
+    const out = (sec: number, id: string, result: unknown) =>
+      item(sec, { type: "custom_tool_call_output", call_id: id, output: [{ type: "input_text", text: "Script completed\nWall time 10.3 seconds\nOutput:\n" }, { type: "input_text", text: JSON.stringify(result) }] });
+    const sub = (sec: number, kind: string) => ev(sec, { type: "item_completed", item: { type: "SubAgentActivity", id: `call_${sec}`, kind, agent_thread_id: "thread-a1", agent_path: "/root/fix" } });
+    const done = (sec: number, pid: string) => ev(sec, { type: "item_completed", item: { type: "CommandExecution", id: `exec-${sec}`, process_id: pid, status: "completed", exit_code: 0 } });
+    const a = codex([
+      exec(1, "c1"),
+      out(2, "c1", { chunk_id: "5e09ad", wall_time_seconds: 10.003, session_id: 7010, original_token_count: 39, output: "listening on :5173" }),
+      // a command that ended inside its wait is no background work
+      exec(3, "c2"),
+      out(4, "c2", { chunk_id: "a9149f", wall_time_seconds: 0.07, exit_code: 0, session_id: 7011, output: "ok" }),
+      item(5, { type: "function_call", name: "spawn_agent", arguments: JSON.stringify({ task_name: "fix" }), call_id: "c3" }),
+      sub(5, "started"),
+      item(5, { type: "function_call_output", call_id: "c3", output: JSON.stringify({ task_name: "/root/fix" }) }),
+      sub(6, "interacted"),
+      // an older Codex said it in words
+      item(7, { type: "function_call", name: "exec_command", arguments: JSON.stringify({ cmd: "tail -f log" }), call_id: "c4" }),
+      item(8, { type: "function_call_output", call_id: "c4", output: "Chunk ID: 1\nWall time: 10.0 seconds\nProcess running with session ID 9001\nOutput:\n" }),
+      // another tool's output quoting an exec result starts nothing
+      item(9, { type: "function_call", name: "mcp__files__read", arguments: "{}", call_id: "c5" }),
+      item(10, { type: "function_call_output", call_id: "c5", output: '{"wall_time_seconds":1.0,"session_id":4242,"output":""}' }),
+    ]);
+    expect(a.background).toEqual([
+      { id: "exec:7010", kind: "shell", at: ms(2), until: null },
+      { id: "thread-a1", kind: "agent", at: ms(5), until: null },
+      { id: "exec:9001", kind: "shell", at: ms(8), until: null },
+    ]);
+    const t = newTally("codex");
+    for (const l of [exec(1, "c1"), out(2, "c1", { wall_time_seconds: 10, session_id: 7010, output: "" }), sub(3, "started"), done(20, "7010"), sub(21, "completed")]) feedLine(t, l);
+    expect(activityOf(t, S2, 0, 0).background).toEqual([]);
+  });
+
   test("its running token total stands, cached input apart", () => {
     const a = codex([
       ev(1, { type: "token_count", info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 60, output_tokens: 5 } } }),

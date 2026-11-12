@@ -174,7 +174,15 @@ describe("turnRows", () => {
     const rows = turnRows(
       [run("chat1", "idle", 100, 700), run("busy", "working", 50), run("step", "idle", 10), run("old", "idle", 300)],
       { step: "flow1" },
-      [card("term"), card("busy", { state: "working", waiting: null }), card("run", { origin: "canopy-run" }), card("asking"), card("lost", { cwd: "/elsewhere" })],
+      [
+        card("term", { waiting: "permission: Bash" }),
+        card("busy", { state: "working", waiting: null }),
+        card("run", { origin: "canopy-run", waiting: "permission: Bash" }),
+        card("asking", { waiting: "question" }),
+        card("lost", { cwd: "/elsewhere", waiting: "question" }),
+        // at its prompt: idle, asking nothing
+        card("done"),
+      ],
       [ask("asking", "open"), ask("term", "answered")],
       [app],
     );
@@ -187,13 +195,13 @@ describe("turnRows", () => {
     // a chat says its agent's last words, or its action before it has any
     expect(rows.filter((r) => r.kind === "chat").map((r) => r.what)).toEqual(["chat", "over to you"]);
     const term = rows.find((r) => r.id === "term");
-    expect(term?.kind === "agent" && [term.what, term.where]).toEqual(["your turn", "kitty on mac"]);
+    expect(term?.kind === "agent" && [term.what, term.where]).toEqual(["permission: Bash", "kitty on mac"]);
   });
 
-  test("a session whose shells or monitors still run waits on them, not on you", () => {
-    const status = (c: AgentCard) => (c.id === "bg" ? ("background" as const) : ("idle" as const));
-    const rows = turnRows([], {}, [card("bg"), card("term")], [], [app], undefined, status);
-    expect(rows.map((r) => r.id)).toEqual(["term"]);
+  test("only an agent that waits on you is a row: one at its prompt or in the background is not", () => {
+    const status = (c: AgentCard) => (c.id === "bg" ? ("background" as const) : c.id === "perm" ? ("waiting" as const) : ("idle" as const));
+    const rows = turnRows([], {}, [card("bg"), card("term"), card("perm", { waiting: "permission: Edit" })], [], [app], undefined, status);
+    expect(rows.map((r) => r.id)).toEqual(["perm"]);
   });
 
   test("an idle coordinator is your turn only while its cards wait for start these", () => {

@@ -276,6 +276,19 @@ function call(t: Tally, at: number | null, name: string, input: unknown, id: unk
 
 /** a task notification's end states; "running" is a progress note */
 const ENDED = new Set(["completed", "failed", "killed", "stopped"]);
+/** a Codex subagent's activity kinds that end it; "started" and
+ *  "interacted" are the others */
+const CODEX_AGENT_ENDED = new Set(["completed", "failed", "errored", "error", "interrupted", "shutdown", "closed", "cancelled", "canceled", "aborted", "killed", "stopped"]);
+/** the Codex tools whose output is a unified exec result */
+const CODEX_EXEC_TOOLS = new Set(["exec", "exec_command", "write_stdin", "shell", "unified_exec"]);
+/** a unified exec result's numbers after its wall time: a `session_id`
+ *  while the process still runs, an `exit_code` once it has ended */
+const CODEX_EXEC_RESULT = /"wall_time_seconds"\s*:\s*[-\d.eE+]+\s*,((?:\s*"(?:exit_code|session_id)"\s*:\s*-?\d+\s*,?)*)/g;
+/** the same, from a Codex that wrote its result as words */
+const CODEX_EXEC_WORDS = /^Process running with session ID (\d+)/m;
+/** a Codex background terminal's task id: its unified exec session, which
+ *  is also its CommandExecution's process_id */
+const codexShell = (session: string): string => `exec:${session}`;
 /** how many ended task ids a tally remembers */
 const SETTLED_MAX = 500;
 /** a shell's id in the words that open a Bash result, for a record with no
@@ -332,6 +345,50 @@ export function settleTasks(t: Tally, line: string): void {
     const status = /<status>(\w+)<\/status>/.exec(body)?.[1];
     if (id && status && ENDED.has(status)) endTask(t, id);
   }
+}
+
+/** every text a Codex output holds: a string, the parts of a list, or the
+ *  content of a record */
+function allText(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) return v.map(allText).filter(Boolean).join("\n");
+  if (isRecord(v)) return typeof v.text === "string" ? v.text : allText(v.content);
+  return "";
+}
+
+/**
+ * The background terminals a Codex exec output says are still running: a
+ * unified exec result with a `session_id` and no `exit_code` (the process
+ * outlived the call's wait), or an older Codex's "Process running with
+ * session ID" line. Its CommandExecution item, written when the process
+ * ends, carries the same id as `process_id` and ends it.
+ */
+function codexExecs(t: Tally, text: string, at: number | null): void {
+  for (const m of text.matchAll(CODEX_EXEC_RESULT)) {
+    const fields = m[1] ?? "";
+    const session = /"session_id"\s*:\s*(\d+)/.exec(fields)?.[1];
+    if (!session) continue;
+    if (/"exit_code"/.test(fields)) endTask(t, codexShell(session));
+    else startTask(t, { id: codexShell(session), kind: "shell", at, until: null });
+  }
+  const words = CODEX_EXEC_WORDS.exec(text)?.[1];
+  if (words) startTask(t, { id: codexShell(words), kind: "shell", at, until: null });
+}
+
+/** A completed Codex item that starts or ends background work: a
+ *  command's end, or a subagent's start or end. */
+function codexItem(t: Tally, item: Record<string, unknown>, at: number | null): void {
+  if (item.type === "CommandExecution") {
+    const pid = str(item.process_id) ?? (num(item.process_id) === null ? null : String(item.process_id));
+    if (pid) endTask(t, codexShell(pid));
+    return;
+  }
+  if (item.type !== "SubAgentActivity") return;
+  const agent = str(item.agent_thread_id);
+  const kind = str(item.kind);
+  if (!agent || !kind) return;
+  if (kind === "started") startTask(t, { id: agent, kind: "agent", at, until: null });
+  else if (CODEX_AGENT_ENDED.has(kind)) endTask(t, agent);
 }
 
 function model(t: Tally, v: unknown): void {
@@ -469,6 +526,7 @@ function feedCodex(t: Tally, rec: Record<string, unknown>): void {
         const text = item ? textOf(item.content) : null;
         if (text !== null && item?.type === "UserMessage") prompt(t, at, text);
         else if (text !== null && item?.type === "AgentMessage") reply(t, at, text);
+        else if (item) codexItem(t, item, at);
         return;
       }
       case "token_count": {
@@ -515,10 +573,14 @@ function feedCodex(t: Tally, rec: Record<string, unknown>): void {
       call(t, at, "web_search", isRecord(p.action) ? p.action : null, null);
       return;
     case "function_call_output":
-    case "custom_tool_call_output":
+    case "custom_tool_call_output": {
       stamp(t, at);
+      const tool = typeof p.call_id === "string" ? t.calls.get(p.call_id)?.name : undefined;
       if (typeof p.call_id === "string") t.calls.delete(p.call_id);
+      // an output whose call came before this reading started may be an exec's
+      if (tool === undefined || CODEX_EXEC_TOOLS.has(tool)) codexExecs(t, allText(p.output), at);
       return;
+    }
     default:
       return;
   }

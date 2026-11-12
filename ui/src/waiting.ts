@@ -182,13 +182,14 @@ export type TurnRow =
 
 /**
  * Whose turn it is, the longest waiting first: canopy's chats between turns
- * (status "idle", less a flow's own steps), and the hooked agents whose
- * harness said it waits on the user (tailchan's "waiting", Claude's idle
- * prompt). A card for a canopy run is the run's, already here or in the
- * inbox, and a card with an open ask is the inbox's. A session at its prompt
- * with a shell, monitor or agent still going in the background (`status`
- * says "background") waits on that, not on the user, so it is left out. An
- * idle coordinator is here only while its cards wait for start these.
+ * (status "idle", less a flow's own steps), and the hooked agents that wait
+ * on the user (`status` says "waiting": a permission or a question with no
+ * ask behind it). A session at its prompt, which tailchan marks waiting "your
+ * turn", asks nothing, so `status` reads it idle (or background, while a
+ * shell, monitor or agent still runs) and it is left out. A card for a canopy
+ * run is the run's, already here or in the inbox, and a card with an open ask
+ * is the inbox's. An idle coordinator is here only while its cards wait for
+ * start these.
  */
 export function turnRows(
   runs: readonly Run[],
@@ -209,14 +210,14 @@ export function turnRows(
   }
   const asking = new Set(asks.filter((a) => a.state === "open").map((a) => a.agent));
   for (const c of cards) {
-    if (c.state !== "waiting" || c.origin === "canopy-run" || asking.has(c.id) || status(c) === "background") continue;
+    if (c.state !== "waiting" || c.origin === "canopy-run" || asking.has(c.id) || status(c) !== "waiting") continue;
     out.push({
       kind: "agent",
       id: c.id,
       repoId: repoOfCard(c, repos)?.id ?? null,
       name: cardName(c),
       where: whereWord(c),
-      what: c.waiting ?? "your turn",
+      what: c.waiting ?? "waiting on you",
       at: c.seenAt,
     });
   }
