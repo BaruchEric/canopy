@@ -97,6 +97,9 @@ export async function pluginsCommand(argv: string[], { fail }: { fail: (msg: str
     for (const t of targets) {
       try {
         const info = await ask<KitInfo>(t, "GET", "/api/kit");
+        // a backend just started has no scan yet ("not scanned yet"); say so
+        // rather than let a missing machine read as one kit.json does not mark
+        if (!info.ok && info.error) console.log(`${t.name}'s kit: ${info.error}`);
         for (const m of info.plugins ?? []) if (!out.some((x) => x.m.machine === m.machine)) out.push({ t, m });
       } catch (err) {
         console.log(`${t.name}: ${err instanceof Unreachable ? `did not answer: ${err.message}` : errText(err)}`);
