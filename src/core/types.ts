@@ -1324,6 +1324,8 @@ export interface WorkspaceScope {
 export interface Run {
   /** A persisted snapshot, shown read-only after its live run is gone. */
   kept?: true;
+  /** what the run's loadout resolved to at its start (FR-065) */
+  equip?: RunEquip;
   id: string;
   repoId: string;
   /** the best-of-N group, set before the first run event */
@@ -4156,6 +4158,43 @@ export interface KitInfo {
   mcp?: KitMcpView[];
   /** each machine's agent plugins, when kit.json lists `plugins` (FR-064) */
   plugins?: PluginMachineSeen[];
+  /** kit.json's loadouts as this backend parsed them (FR-065) */
+  loadouts?: LoadoutsInfo;
+}
+
+/** A named set of what a run starts with, from kit.json's `loadouts` (FR-065). */
+export interface Loadout {
+  name: string;
+  /** one line on what it is for, at most 200 characters */
+  note: string;
+  harness: Harness;
+  model: string;
+  effort: AgentEffort;
+  /** skill keys kept on: a user skill's folder, `<plugin>:<folder>` */
+  skills: string[];
+  /** server names from the kit's `mcp` block */
+  mcp: string[];
+  canopyTools: boolean;
+}
+
+/** kit.json's loadouts as this backend parsed them (FR-065). */
+export interface LoadoutsInfo {
+  /** `loadoutBase.skills`: on in every loadout; `name:*` covers a plugin's */
+  base: string[];
+  loadouts: Loadout[];
+  /** one line per problem, naming the loadout and the field; a loadout with one is left out */
+  errors: string[];
+}
+
+/** What a loadout resolved to at a run's start, kept on the run (FR-065). */
+export interface RunEquip {
+  loadout: string;
+  model: string;
+  effort: AgentEffort;
+  skills: string[];
+  mcp: string[];
+  /** how many of the machine's user and plugin skills the run started without */
+  off: number;
 }
 
 /* ---------- agent plugins (docs/superpowers/specs/2026-11-11-kit-plugins-design.md) ---------- */
