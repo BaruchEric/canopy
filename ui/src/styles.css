@@ -18116,3 +18116,162 @@ button.clock-job + .clock-lane {
 .plugins-view .kit-scroll { min-height: 9rem; }
 .plugins-view .kit-machine { min-width: 0; }
 .plugins-view .kit-machine > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* the manager's equip sheet: a panel on the right, the whole screen on a phone */
+.mgr-equip {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100vw);
+  background: var(--bark1);
+  border-left: 1px solid var(--hair);
+  box-shadow: -12px 0 32px light-dark(rgb(0 0 0 / 0.12), rgb(0 0 0 / 0.4));
+}
+.mgr-equip-head {
+  padding: 16px var(--gutter) 12px;
+  border-bottom: 1px solid var(--hair);
+}
+.mgr-equip-head h2 {
+  margin: 0;
+  font-size: var(--t-lg);
+  font-weight: 600;
+}
+.mgr-equip-head p {
+  margin: 6px 0 0;
+  color: var(--ink-dim);
+}
+.mgr-equip-body {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 14px var(--gutter);
+  overflow-y: auto;
+}
+.mgr-equip h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 6px;
+  font-size: var(--t-md);
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+.mgr-equip h3:not(:first-child) {
+  margin-top: 12px;
+}
+.mgr-equip-note,
+.mgr-equip-line {
+  margin: 4px 0 0;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.mgr-equip-name,
+.mgr-equip-count {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  color: var(--ink);
+}
+.mgr-equip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mgr-equip-pick,
+.mgr-equip-seg button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: transparent;
+  color: var(--ink-dim);
+  font: inherit;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.mgr-equip-pick[aria-pressed="true"],
+.mgr-equip-seg button[aria-pressed="true"] {
+  border-color: var(--moss);
+  background: var(--wash);
+  color: var(--ink);
+}
+.mgr-equip-seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mgr-equip-find {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  margin: 8px 0 4px;
+  padding: 0 10px;
+  border: 1px solid var(--hair);
+  border-radius: var(--r);
+  background: var(--bark0);
+  color: var(--ink);
+  font: inherit;
+}
+.mgr-equip-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--r);
+  cursor: pointer;
+}
+.mgr-equip-opt:hover {
+  background: var(--wash);
+}
+.mgr-equip-opt.off {
+  opacity: 0.55;
+  cursor: default;
+}
+.mgr-equip-opt input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+}
+.mgr-equip-opt > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.mgr-equip-foot {
+  padding: 12px var(--gutter) 16px;
+  border-top: 1px solid var(--hair);
+  background: var(--bark0);
+}
+.mgr-equip-summary {
+  margin: 0 0 10px;
+  color: var(--ink-dim);
+}
+@media (max-width: 760px) {
+  .mgr-equip {
+    width: 100vw;
+    height: 100dvh;
+    border-left: 0;
+  }
+  .mgr-equip .mini,
+  .mgr-equip-pick,
+  .mgr-equip-seg button {
+    min-height: 44px;
+  }
+  .mgr-equip-opt {
+    min-height: 44px;
+    align-items: center;
+  }
+  .mgr-equip-opt input {
+    width: 22px;
+    height: 22px;
+    margin: 0;
+  }
+  .mgr-equip-find {
+    min-height: 44px;
+  }
+}

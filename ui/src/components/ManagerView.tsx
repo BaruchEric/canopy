@@ -27,6 +27,7 @@ import { managerHere, managerUrl, openManager } from "../routes";
 import { harnessOf } from "../runs";
 import { connOf, idParts, idText, landingAll, prsAll, recordsIn, useStore, type CanopyState } from "../store";
 import { HoldButton } from "./CoordTasks";
+import { EquipSheet } from "./EquipSheet";
 import { RunPromptForm } from "./Prompts";
 import { useNow } from "./Registry";
 import { RunPane } from "./RunSheet";
@@ -189,7 +190,7 @@ function GoalView({ coord }: { coord: Run }) {
   const rows = useMemo(() => managerRows(coord, { runs, flows, landing, prs, loadouts }), [coord, runs, flows, landing, prs, loadouts]);
   // the ring and lane picked: a card's id, or "manager" for the chat
   const [picked, setPicked] = useState<string | null>(null);
-  // the card whose equip sheet is open (Task 9 draws the sheet from it)
+  // the card whose equip sheet is open
   const [equipping, setEquipping] = useState<string | null>(null);
   const [view, setView] = useState<PhoneView>("workers");
   const [error, setError] = useState<string | null>(null);
@@ -219,6 +220,9 @@ function GoalView({ coord }: { coord: Run }) {
   const rings = <Rings tasks={coord.tasks ?? []} rings={rows.rings} picked={picked} onPick={pick} />;
   const workers = <Workers coord={coord} lanes={rows.lanes} picked={picked} equipping={equipping} onEquip={setEquipping} onPick={setPicked} act={act} hidden={phone && view !== "workers"} />;
   const chat = <Chat coord={coord} lanes={rows.lanes} on={picked === "manager"} hidden={phone && view !== "chat"} />;
+  const equipTask = equipping ? (coord.tasks ?? []).find((t) => t.id === equipping) : undefined;
+  const equipLane = equipTask ? rows.lanes.find((l) => l.id === equipTask.id) : undefined;
+  const sheet = equipTask && equipLane?.canEquip ? <EquipSheet key={equipTask.id} run={coord} task={equipTask} onDone={() => setEquipping(null)} /> : null;
   if (phone) {
     return (
       <main className="mgr-view phone">
@@ -235,6 +239,7 @@ function GoalView({ coord }: { coord: Run }) {
         </div>
         {workers}
         {chat}
+        {sheet}
       </main>
     );
   }
@@ -250,6 +255,7 @@ function GoalView({ coord }: { coord: Run }) {
         </div>
         {chat}
       </div>
+      {sheet}
     </main>
   );
 }

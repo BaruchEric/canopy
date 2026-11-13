@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Loadout } from "../../src/core/types";
-import { equipTitle, loadoutLabel, loadoutsFor } from "./loadouts";
+import { equipFrom, equipTitle, loadoutLabel, loadoutsFor } from "./loadouts";
 
 const L = (over: Partial<Loadout>): Loadout => ({ name: "x", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, ...over });
 
@@ -27,5 +27,13 @@ describe("loadouts in the page", () => {
   });
   test("an equip with nothing set leaves those lines out", () => {
     expect(equipTitle({ loadout: "docs", model: "default", effort: "default", skills: [], mcp: [], off: 0 })).toBe("loadout docs");
+  });
+  test("equipFrom keeps only what differs from the loadout", () => {
+    const quick = L({ name: "quick", model: "haiku", effort: "low", skills: ["a", "b"], mcp: ["x"] });
+    const same = { model: "haiku", effort: "low", skills: ["a", "b"], mcp: ["x"] };
+    expect(equipFrom(quick, same)).toEqual({ loadout: "quick" });
+    expect(equipFrom(quick, { ...same, model: "sonnet" })).toEqual({ loadout: "quick", model: "sonnet" });
+    expect(equipFrom(quick, { ...same, skills: ["b", "a"] })).toEqual({ loadout: "quick" });
+    expect(equipFrom(quick, { ...same, effort: "high", skills: ["a"], mcp: [] })).toEqual({ loadout: "quick", effort: "high", skills: ["a"], mcp: [] });
   });
 });
