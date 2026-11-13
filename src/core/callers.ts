@@ -139,7 +139,7 @@ const RULES: readonly Rule[] = [
   { methods: ["GET"], paths: ["coordinator/workflows"], right: "read" },
   { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
-  { methods: POST, paths: ["flows/resume", "flows/stop", "fleet/stop", "jobs/stop"], right: "operate" },
+  { methods: POST, paths: ["flows/resume", "flows/stop", "flows/pickup", "fleet/stop", "jobs/stop"], right: "operate" },
   { methods: POST_DEL, paths: ["fleet", "repos/health", "incubator", "layouts"], right: "operate" },
   { methods: DEL, paths: ["ranger/wakes"], right: "operate" },
   { methods: ["POST", "DELETE", "PATCH"], paths: ["workspaces"], right: "operate" },

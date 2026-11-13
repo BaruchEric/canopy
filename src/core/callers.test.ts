@@ -216,6 +216,10 @@ describe("the coordinator's routes", () => {
     expect(needs("POST", "/api/coordinator/start")).toBe("operate");
   });
 
+  test("picking a stopped flow up needs operate", () => {
+    expect(needs("POST", "/api/flows/pickup")).toBe("operate");
+  });
+
   test("holding a goal needs operate, which a coordinator's token lacks", () => {
     expect(needs("POST", "/api/coordinator/hold")).toBe("operate");
     expect(allows("coordinator", needs("POST", "/api/coordinator/hold"))).toBe(false);
@@ -237,6 +241,8 @@ describe("the coordinator's routes", () => {
       ["POST", "/api/landing/land"],
       ["POST", "/api/landing/fix"],
       ["POST", "/api/auth/approve"],
+      ["POST", "/api/flows/pickup"],
+      ["POST", "/api/landing/followup"],
     ];
     for (const [m, p] of refused) expect([m, p, allows("coordinator", needs(m, p))]).toEqual([m, p, false]);
   });

@@ -5028,6 +5028,16 @@ async function handleApi(
       throw new HttpError(400, String(err instanceof Error ? err.message : err));
     }
   }
+  if (path === "/api/flows/pickup" && method === "POST") {
+    const b = (await req.json()) as { id?: unknown };
+    if (typeof b.id !== "string") return json({ error: "missing flow id" }, 400);
+    try {
+      return json(state.flows.pickUp(b.id));
+    } catch (err) {
+      const message = String(err instanceof Error ? err.message : err);
+      throw new HttpError(message.startsWith("unknown flow") ? 404 : 409, message);
+    }
+  }
   if (path === "/api/flows/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
     if (typeof b.id !== "string") return json({ error: "missing flow id" }, 400);
@@ -6087,7 +6097,6 @@ export async function startServer(opts: {
   coordPort: number | null;
   endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>;
   sweepShell: (id: string, seen?: number) => Promise<"ended" | "in use" | "unkept">;
-  pickUpFlow: (id: string) => Flow;
   stop: () => Promise<void>;
 }> {
   // Keep original sources before any await or startup environment stripping.
@@ -7986,7 +7995,6 @@ export async function startServer(opts: {
     /** the sweep's end of a shell, with how it went; tests */
     sweepShell: (id: string, seen?: number) => sweepShell(state, id, seen),
     /** a stopped flow on a branch picked up, as a trigger's resume does; tests */
-    pickUpFlow: (id: string) => state.flows.pickUp(id),
     stop: async () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);

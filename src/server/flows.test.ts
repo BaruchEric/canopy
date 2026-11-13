@@ -46,6 +46,21 @@ const rec = (id: string, root: string, repoId: string, status: "gated" | "workin
   },
 });
 
+/** a flow stopped on a branch, as a server that was shut down leaves it */
+const stoppedOnBranch = (id: string, root: string, repoId: string): FlowFile => {
+  const r = rec(id, root, repoId, "working");
+  return {
+    ...r,
+    flow: {
+      ...r.flow,
+      status: "stopped",
+      steps: [{ name: "First", status: "failed", reason: "stopped" }, { name: "Second", status: "pending" }],
+      endedAt: 1,
+      branch: { name: "run/x-pick", target: "main", base: "0".repeat(40), dir: join(root, repoId), state: "stopped", origin: "x1" },
+    },
+  };
+};
+
 let scratch: string;
 let previous: string | undefined;
 let server: { port: number; stop: () => void } | null = null;
@@ -85,6 +100,7 @@ beforeAll(async () => {
     rec("abcdef02", root, "gone", "working"),
     rec("abcdef03", root, "app2", "gated"),
     rec("abcdef05", root, "an-id-from-before", "gated", join(root, "app3")),
+    stoppedOnBranch("abcdef07", root, "app"),
   ]) {
     await writeFile(join(flowsDir, `${r.flow.id}.json`), JSON.stringify(r));
   }
@@ -134,6 +150,27 @@ test("stopping and dismissing a flow drops its record", async () => {
   expect(((await res.json()) as Flow).status).toBe("stopped");
   expect((await api("/api/flows?id=abcdef01", { method: "DELETE" })).status).toBe(200);
   await until(async () => (await onDisk("abcdef01")) === null, "the record to go");
+});
+
+test("pickup: a stopped branch flow answers 200 and working; the same flow again answers 409", async () => {
+  const post = (id: unknown) => api("/api/flows/pickup", { method: "POST", body: JSON.stringify({ id }) });
+  const res = await post("abcdef07");
+  expect(res.status).toBe(200);
+  expect(((await res.json()) as Flow).status).toBe("working");
+  const again = await post("abcdef07");
+  expect(again.status).toBe(409);
+  expect(((await again.json()) as { error: string }).error).toBe("the flow is working, not stopped");
+});
+
+test("pickup: an unknown id answers 404, a flow with no branch 409, a missing id 400", async () => {
+  const post = (id: unknown) => api("/api/flows/pickup", { method: "POST", body: JSON.stringify({ id }) });
+  const unknown = await post("nope0000");
+  expect(unknown.status).toBe(404);
+  expect(((await unknown.json()) as { error: string }).error).toBe("unknown flow: nope0000");
+  const plain = await post("abcdef03");
+  expect(plain.status).toBe(409);
+  expect(((await plain.json()) as { error: string }).error).toBe("only a flow on a branch can be picked up");
+  expect((await post(7)).status).toBe(400);
 });
 
 test("stopping the server leaves a gated record gated", async () => {

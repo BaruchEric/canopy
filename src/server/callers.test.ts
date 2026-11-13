@@ -450,6 +450,8 @@ describe("a coordinator at the gate", () => {
       ["POST", "/api/asks/answer"],
       ["POST", "/api/landing/land"],
       ["POST", "/api/auth/approve"],
+      ["POST", "/api/flows/pickup"],
+      ["POST", "/api/landing/followup"],
     ] as const) {
       expect([m, p, at(m, p)]).toEqual([m, p, 403]);
     }

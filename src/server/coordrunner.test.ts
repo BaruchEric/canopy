@@ -80,7 +80,7 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; pickUpFlow: (id: string) => Flow; made: Recorder[]; seeds: string; page: string };
+type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; made: Recorder[]; seeds: string; page: string };
 
 /** A server with its own config dir, in enforce unless `env` says otherwise,
  *  with a page token minted into its book before it starts. The
@@ -834,7 +834,7 @@ Check the thing.
       expect(existsSync(settings)).toBe(true);
       expect(existsSync(mcp)).toBe(true);
       expect((await flowNamed(flowId))?.status).toBe("stopped");
-      s.pickUpFlow(flowId);
+      expect((await postAs(s, "/api/flows/pickup", { id: flowId }, s.page)).status).toBe(200);
       liveFlows.push(flowId);
       const again = await until(async () => {
         const f = await flowNamed(flowId);
