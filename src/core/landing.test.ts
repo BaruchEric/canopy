@@ -6,6 +6,7 @@ import {
   canLand,
   enqueue,
   entryFor,
+  entryRefusal,
   fixPrompt,
   followupRefusal,
   landAllPick,
@@ -263,6 +264,13 @@ describe("followupRefusal", () => {
   test("a writer on the branch is named first, ahead of its flow, its PR or its entry", () => {
     expect(followupRefusal(run("f"), entryIn("red"), true, "f", { pr: true, flowStopped: true })?.error).toBe(BRANCH_BUSY);
     expect(BRANCH_BUSY).toBe("a run is working on this branch; say to it instead");
+  });
+  test("a landing entry is named ahead of a stopped flow, whose pickup it refuses too", () => {
+    expect(followupRefusal(run("f"), entryIn("red"), false, "f", { flowStopped: true })).toEqual({ status: 409, error: "it was sent back (red); fix it from the landing queue instead" });
+    expect(followupRefusal(run("f"), entryIn("rebasing"), false, "f", { flowStopped: true })?.error).toBe("it is in the landing queue (rebasing); wait for it, or drop it from the queue first");
+    expect(followupRefusal(run("f"), entryIn("landed"), false, "f", { flowStopped: true })?.error).toBe("it has landed");
+    expect(entryRefusal(entryIn("red"))).toBe("it was sent back (red); fix it from the landing queue instead");
+    expect(entryRefusal(undefined)).toBeNull();
   });
 });
 

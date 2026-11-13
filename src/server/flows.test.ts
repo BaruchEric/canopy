@@ -171,6 +171,9 @@ test("pickup: an unknown id answers 404, a flow with no branch 409, a missing id
   expect(plain.status).toBe(409);
   expect(((await plain.json()) as { error: string }).error).toBe("only a flow on a branch can be picked up");
   expect((await post(7)).status).toBe(400);
+  // a null body is a 400 too, never a 500 from reading a field off it
+  const bare = await api("/api/flows/pickup", { method: "POST", body: "null" });
+  expect([bare.status, ((await bare.json()) as { error: string }).error]).toEqual([400, "malformed body"]);
 });
 
 test("stopping the server leaves a gated record gated", async () => {

@@ -643,6 +643,44 @@ describe("a coordinator's card with a loadout", () => {
     }
   }, 30_000);
 
+  test("two fixes sent together on a sent-back branch start one run; the second sees the first's start", async () => {
+    const repo = join(scratch, "root", "app");
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    await mkdir(join(repo, ".canopy"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+    await commit(repo, "red gate");
+    try {
+      const { tasks } = await startCard({ equip: { loadout: "quick" } });
+      const id = tasks[0]?.run ?? "";
+      live.push(id);
+      const ctx = await ctxOf(id);
+      await writeFile(join(ctx.cwd, "double.txt"), "x\n");
+      await commit(ctx.cwd, "card");
+      finish(ctx, "done");
+      const origin = await until(async () => {
+        const r = (await runs()).find((x) => x.id === id);
+        return r && r.status !== "working" && r.branch?.state === "ready" ? r.branch.origin : null;
+      }, `card child ${id} to end ready`);
+      expect((await postAs(s, "/api/landing/land", { run: origin }, s.page)).status).toBe(200);
+      await until(async () => {
+        const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
+        return info.entries.some((e) => e.id === origin && e.state === "red");
+      }, "the red gate");
+      // a double tap on a phone: the loadout's files are written between
+      // the hub's check and the run's start, so both would pass the check
+      const drivers = s.made.length;
+      const both = await Promise.all([postAs(s, "/api/landing/fix", { id: origin }, s.page), postAs(s, "/api/landing/fix", { id: origin }, s.page)]);
+      const answers = await Promise.all(both.map(async (res) => ({ status: res.status, body: (await res.json()) as Run & { error?: string } })));
+      for (const a of answers) if (a.status === 201) live.push(a.body.id);
+      expect(answers.map((a) => a.status).sort()).toEqual([201, 409]);
+      expect(answers.find((a) => a.status === 409)?.body.error).toBe("a run is working on this branch; say to it instead");
+      expect(s.made.length).toBe(drivers + 1);
+    } finally {
+      await rm(join(repo, ".canopy", "gates.json"), { force: true });
+      await commit(repo, "no gate");
+    }
+  }, 30_000);
+
   test("a landing fix on a flow card's branch, which names no coordinator, reopens the card and takes it off its flow", async () => {
     const repo = join(scratch, "root", "app");
     const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
@@ -721,6 +759,13 @@ describe("a coordinator's card with a loadout", () => {
         const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
         return info.entries.some((e) => e.id === origin && e.state === "red");
       }, "the red gate");
+      // sent back, the branch is the queue's "fix it"'s: neither the flow's
+      // pickup nor a follow-up puts a writer on it, and both say so alike
+      const sentBack: [number, string] = [409, "it was sent back (red); fix it from the landing queue instead"];
+      expect(await answer(await postAs(s, "/api/flows/pickup", { id: flowId }, s.page))).toEqual(sentBack);
+      expect(await answer(await postAs(s, "/api/landing/followup", { id: origin, note: "rename the flag" }, s.page))).toEqual(sentBack);
+      expect((await flowNamed(flowId))?.status).toBe("stopped");
+      expect(s.made.length).toBe(drivers);
       const res = await postAs(s, "/api/landing/fix", { id: origin }, s.page);
       const fix = (await res.json()) as Run & { error?: string };
       expect([res.status, fix.error]).toEqual([201, undefined]);
@@ -871,6 +916,7 @@ Check the thing.
     const second = await stepRun(flowId, 1);
     expect(second.ctx.spec.settings).toBe(settings);
     expect(second.ctx.spec.unattended).toBeUndefined();
+    await Bun.$`git -C ${second.ctx.cwd} add -A && git -C ${second.ctx.cwd} -c user.name=t -c user.email=t@t commit -q --allow-empty -m checked`.quiet();
     finish(second.ctx, "checked");
     const parked = await until(async () => {
       const f = await flowNamed(flowId);
@@ -879,6 +925,10 @@ Check the thing.
     expect(parked.steps[1]?.reason).toBe("this step asks before the next one starts");
     expect((await cardOf(coord))?.state).toBe("running");
     expect(existsSync(settings)).toBe(true);
+    // the gate's next step works in this worktree: the queue never takes the
+    // branch while the flow is still going, gated or not
+    const land = await postAs(s, "/api/landing/land", { run: parked.branch?.origin ?? "" }, s.page);
+    expect([land.status, ((await land.json()) as { error?: string }).error]).toEqual([409, "the run is still going; land it once it ends"]);
   }, 30_000);
 
   test("a card flow's step that names a profile reports the profile's model and effort in its equip", async () => {
@@ -1021,5 +1071,66 @@ Check the thing.
       // as beforeAll left them, and the restore read the flow's own equip
       await rescan(true);
     }
+  }, 30_000);
+});
+
+describe("a card whose child hit the plan's usage limit", () => {
+  // a server of its own: the limit is a standing hit here, which holds
+  // every normal start after it
+  let s: Up;
+  const runs = async (): Promise<Run[]> => (await (await call(s, "/api/runs", s.page)).json()) as Run[];
+  const cardOf = async (coord: string): Promise<CoordTask | undefined> => (await runs()).find((r) => r.id === coord)?.tasks?.[0];
+  const ctxOf = (id: string): Promise<DriveCtx> => until(async () => s.made.find((d) => d.ctx?.env["CANOPY_RUN"] === id)?.ctx, `run ${id} to reach the driver`);
+  const live: string[] = [];
+  beforeAll(async () => {
+    s = await up("limited", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"]);
+  });
+  afterEach(async () => {
+    for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
+  });
+  afterAll(() => s.stop());
+
+  test("its resume and a follow-up sent together start one run on its branch", async () => {
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "cards" }, s.page);
+    expect(res.status).toBe(201);
+    const coord = ((await res.json()) as Run).id;
+    live.push(coord);
+    const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    expect((await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "app", note: "do the thing", action: "ask" }] }, token)).status).toBe(200);
+    const started = (await (await postAs(s, "/api/coordinator/start", { run: coord }, s.page)).json()) as { tasks: CoordTask[] };
+    const task = started.tasks[0];
+    const id = task?.run ?? "";
+    live.push(id);
+    const ctx = await ctxOf(id);
+    await writeFile(join(ctx.cwd, "limited.txt"), "x\n");
+    await commit(ctx.cwd, "card");
+    ctx.result({ text: "", durationMs: 1, turns: 1 }, "You've hit your usage limit");
+    ctx.exited({ code: 0, stderr: "" });
+    const waiting = await until(async () => {
+      const c = await cardOf(coord);
+      return c?.limited === 0 ? c : null;
+    }, "the card to wait for the reset");
+    const origin = waiting.branch ?? "";
+    // "start anyway" resumes the child on its branch while a follow-up is
+    // starting there: without the in-flight mark both would pass
+    const drivers = s.made.length;
+    // two connections open already, so neither request waits on its own
+    await Promise.all([runs(), runs()]);
+    const both = await Promise.all([
+      postAs(s, "/api/landing/followup", { id: origin, note: "one way" }, s.page),
+      postAs(s, "/api/capacity/release", { id: `card:${coord}:${task?.id ?? ""}` }, s.page),
+    ]);
+    const said = (await both[0].json()) as { run?: Run; error?: string };
+    if (said.run) live.push(said.run.id);
+    else expect([both[0].status, said.error]).toEqual([409, "a run is working on this branch; say to it instead"]);
+    await both[1].text();
+    const card = await until(async () => {
+      const c = await cardOf(coord);
+      return c?.run && c.run !== id ? c : null;
+    }, "the card to follow the run that carries on");
+    live.push(card.run ?? "");
+    expect(s.made.length).toBe(drivers + 1);
+    expect((await runs()).filter((r) => r.branch?.origin === origin && r.status === "working").map((r) => r.id)).toEqual([card.run ?? ""]);
   }, 30_000);
 });

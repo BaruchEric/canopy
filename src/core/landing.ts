@@ -175,8 +175,8 @@ export function rejoins(review: RunReview, entry: Pick<LandEntry, "auto" | "appr
   return { ok: false, why: entry.approved ? "the fix changed the sensitive files you approved; look again" : "the fix touches sensitive files; look at them and approve" };
 }
 
-/** the refusal while a writer works on a branch: a follow-up's, and a
- *  stopped flow's pickup's */
+/** the refusal while a writer works on a branch: a follow-up's, a stopped
+ *  flow's pickup's, a "fix it"'s and a card's resume after the limit's */
 export const BRANCH_BUSY = "a run is working on this branch; say to it instead";
 
 /** What else keeps a follow-up off a branch, beside a writer working on
@@ -188,21 +188,32 @@ export interface FollowupHolds {
   flowStopped?: boolean;
 }
 
+/** Why a branch's landing entry keeps a later writer off the branch, or
+ *  null with no entry that does: the queue works it, it was sent back to
+ *  its own "fix it", or it landed. A follow-up, a stopped flow's pickup
+ *  and the manager's say box all say it in these words. */
+export function entryRefusal(entry: LandEntry | undefined): string | null {
+  if (!entry) return null;
+  if (entry.state === "landed") return "it has landed";
+  if (inQueue(entry)) return `it is in the landing queue (${entry.state}); wait for it, or drop it from the queue first`;
+  if (sentBack(entry)) return `it was sent back (${entry.state}); fix it from the landing queue instead`;
+  return null;
+}
+
 /** Why a later run with a person's words may not start on a branch, or
  *  null when it may. A follow-up never puts a second writer on a branch:
- *  not beside a run or flow working on it, not on a branch its stopped
- *  flow or its PR watch owns, and not while the branch has a landing
- *  entry, which the queue or its own "fix it" works. `id` is the branch
- *  asked for, which the 404 names when canopy holds no record. */
+ *  not beside a run or flow working on it, not while the branch has a
+ *  landing entry, which the queue or its own "fix it" works, and not on a
+ *  branch its stopped flow or its PR watch owns. The entry is named ahead
+ *  of a stopped flow, since its pickup is refused then too. `id` is the
+ *  branch asked for, which the 404 names when canopy holds no record. */
 export function followupRefusal(rec: LandingRun | undefined, entry: LandEntry | undefined, busy: boolean, id: string, holds: FollowupHolds = {}): { status: 404 | 409; error: string } | null {
   if (!rec) return { status: 404, error: `canopy holds no branch ${id}; it was dropped or never ran` };
   if (busy) return { status: 409, error: BRANCH_BUSY };
+  const held = entryRefusal(entry);
+  if (held) return { status: 409, error: held };
   if (holds.flowStopped) return { status: 409, error: "its flow is stopped; pick the flow up instead" };
   if (holds.pr) return { status: 409, error: "it has an open pull request; comment on the PR and the PR watch fixes it" };
-  if (!entry) return null;
-  if (entry.state === "landed") return { status: 409, error: "it has landed" };
-  if (inQueue(entry)) return { status: 409, error: `it is in the landing queue (${entry.state}); wait for it, or drop it from the queue first` };
-  if (sentBack(entry)) return { status: 409, error: `it was sent back (${entry.state}); fix it from the landing queue instead` };
   return null;
 }
 

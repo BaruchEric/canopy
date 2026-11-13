@@ -281,7 +281,7 @@ import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, loopbackAuthWanted, loopbackBypass, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
-import { BRANCH_BUSY, fixPrompt, followupRefusal, landWord } from "../core/landing";
+import { BRANCH_BUSY, entryRefusal, fixPrompt, followupRefusal, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
 import { goingOf } from "../core/going";
 import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
@@ -410,9 +410,10 @@ interface ServerState {
   groups: GroupHub;
   /** serial branch preflights/fanout for each repo */
   branchStarts: Map<string, Promise<void>>;
-  /** branch origins a follow-up or a trigger event's resume is starting a
-   *  run on, from the check that let it through until the runner holds the
-   *  run (`startingOn`) */
+  /** branch origins a follow-up, a trigger event's resume, a landing
+   *  "fix it" or a card's resume after the limit is starting a run on,
+   *  from the check that let it through until the runner holds the run
+   *  (`startingOn`) */
   branchStarting: Set<string>;
   /** live file overlaps; warnings only, never a hold */
   collisions: CollisionHub;
@@ -2075,7 +2076,8 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
 /** Whether a writer works on the branch `origin`, or is about to: a live
  *  run on it or one the stall watchdog is resuming, an active flow on it,
  *  or a later run between its check and its start. A follow-up, a stopped
- *  flow's pickup and a trigger event's resume each refuse while it holds. */
+ *  flow's pickup, a trigger event's resume, a landing "fix it" and a
+ *  card's resume after the limit each refuse while it holds. */
 function branchBusy(state: ServerState, origin: string): boolean {
   if (state.branchStarting.has(origin)) return true;
   if (state.runner.list().some((r) => r.branch?.origin === origin && (isRunActive(r) || state.stalls.starting(r.id)))) return true;
@@ -2084,11 +2086,15 @@ function branchBusy(state: ServerState, origin: string): boolean {
 
 /** Whether run `id` still goes, as the landing queue and the PR watch read
  *  it: live, stopped by the stall watchdog and being resumed (followed to
- *  the run that resumed it), or on a branch a follow-up is starting on. */
+ *  the run that resumed it), on a branch a later run is starting on, or on
+ *  a branch a flow still works, gated between steps or picked up and not
+ *  yet into its step's run. */
 function runGoing(state: ServerState, id: string): boolean {
   if (state.stalls.starting(id)) return true;
   const run = state.runner.get(state.stalls.latest(id));
-  if (state.branchStarting.has(run?.branch?.origin ?? state.landing.record(id)?.id ?? id)) return true;
+  const origin = run?.branch?.origin ?? state.landing.record(id)?.id ?? id;
+  if (state.branchStarting.has(origin)) return true;
+  if (state.flows.list().some((f) => f.branch?.origin === origin && isFlowActive(f))) return true;
   return run !== undefined && isRunActive(run);
 }
 
@@ -2107,10 +2113,15 @@ async function startingOn(state: ServerState, origin: string, start: () => Promi
 
 /** Why a stopped branch flow may not be picked up now, or null, for the
  *  pickup route and a trigger event's resume alike: never while another
- *  writer works on its branch. Anything else is `Flows.pickUp`'s to say. */
+ *  writer works on its branch, and never while the branch has a landing
+ *  entry (queued, sent back or landed), said in a follow-up's words.
+ *  Anything else is `Flows.pickUp`'s to say. */
 function pickupRefusal(state: ServerState, id: string): string | null {
   const flow = state.flows.get(id);
-  return flow?.branch && flow.status === "stopped" && branchBusy(state, flow.branch.origin) ? BRANCH_BUSY : null;
+  if (!flow?.branch || flow.status !== "stopped") return null;
+  const origin = state.landing.record(flow.branch.origin)?.id ?? flow.branch.origin;
+  if (branchBusy(state, origin)) return BRANCH_BUSY;
+  return entryRefusal(state.landing.info().entries.find((e) => e.id === origin));
 }
 
 /** `POST /api/landing/followup`: a later run on a branch that settled
@@ -2460,12 +2471,16 @@ async function startCoordWorkflow(state: ServerState, coordId: string, task: Coo
 }
 
 /** A coordinator's child that hit the plan's usage limit carries on on its
- *  branch, its session resumed, as a new child of the same coordinator. */
+ *  branch, its session resumed, as a new child of the same coordinator.
+ *  Never beside another writer on the branch, as a follow-up: the card
+ *  waits, and its next wake tries again unless the card took that
+ *  writer's run in the meantime. */
 async function resumeCoordChild(state: ServerState, coordId: string, child: Run, priority: Priority): Promise<ChildResume> {
   const rec = child.branch ? state.landing.record(child.branch.origin) : undefined;
   if (!rec) throw new Error("its branch is gone, so the card cannot carry on");
+  if (branchBusy(state, rec.id)) return { busy: BRANCH_BUSY };
   try {
-    return { run: await startBranchFix(state, rec, "The plan's usage window has reset. Carry on with the task from where you stopped.", "carry on after the limit", true, { priority, parent: coordId }) };
+    return { run: await startingOn(state, rec.id, () => startBranchFix(state, rec, "The plan's usage window has reset. Carry on with the task from where you stopped.", "carry on after the limit", true, { priority, parent: coordId })) };
   } catch (err) {
     if (isCapacityHeld(err)) return { busy: err.message };
     throw err;
@@ -5106,12 +5121,12 @@ async function handleApi(
     }
   }
   if (path === "/api/flows/pickup" && method === "POST") {
-    const b = (await req.json()) as { id?: unknown };
-    if (typeof b.id !== "string") return json({ error: "missing flow id" }, 400);
-    const refused = pickupRefusal(state, b.id);
+    const id = (await objectBody(req))["id"];
+    if (typeof id !== "string") return json({ error: "missing flow id" }, 400);
+    const refused = pickupRefusal(state, id);
     if (refused) return json({ error: refused }, 409);
     try {
-      return json(state.flows.pickUp(b.id));
+      return json(state.flows.pickUp(id));
     } catch (err) {
       const message = String(err instanceof Error ? err.message : err);
       throw new HttpError(message.startsWith("unknown flow") ? 404 : 409, message);
@@ -6966,7 +6981,12 @@ export async function startServer(opts: {
       repo: (id) => state.result.repos.find((r) => r.id === id),
       repoByPath: (path) => repoAtPath(state.result.repos, path),
       check: (cwd, line) => runGate(cwd, line),
-      startFix: (rec, entry, how) => startFixRun(state, rec, entry, how),
+      // never a second writer on the branch: a double tap's second "fix it"
+      // finds the first starting, as a second follow-up does
+      startFix: (rec, entry, how) => {
+        if (branchBusy(state, rec.id)) throw new HttpError(409, BRANCH_BUSY);
+        return startingOn(state, rec.id, () => startFixRun(state, rec, entry, how));
+      },
       work: {
         note: (id, text) => state.work.note(id, text),
         close: (id, end, text) => state.work.close(id, end, text),
