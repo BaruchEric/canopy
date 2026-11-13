@@ -929,6 +929,36 @@ describe("start with ids", () => {
     ]);
   });
 
+  test("a card whose start is in flight is neither edited nor removed, and ends running with its child", async () => {
+    let open = (): void => {};
+    let reached = (): void => {};
+    const atGate = new Promise<void>((r) => (reached = r));
+    const gate = new Promise<void>((r) => (open = r));
+    const h = hub({
+      startChild: async (coordId, t) => {
+        reached();
+        await gate;
+        started.push({ coord: coordId, task: t.id });
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: branch(`c${n}`) } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    const starting = post(h, "start", { run: "co1" });
+    await atGate;
+    expect(card("t1")?.state).toBe("queued");
+    expect(await post(h, "tasks", { run: "co1", id: "t1", remove: true })).toEqual({ status: 409, body: { error: "t1 is starting" } });
+    expect(await post(h, "tasks", { run: "co1", id: "t1", equip: { loadout: "quick" } })).toEqual({ status: 409, body: { error: "t1 is starting" } });
+    open();
+    expect((await starting).status).toBe(200);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: "c1" });
+    expect(card("t1")?.equip).toBeUndefined();
+    expect(started.map((s) => s.task)).toEqual(["t1"]);
+  });
+
   test("a started card records its branch", async () => {
     const h = hub();
     await post(h, "plan", { run: "co1", tasks: [task()] });

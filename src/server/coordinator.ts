@@ -123,6 +123,9 @@ export class CoordinatorHub {
   /** the words each queued card's blocked note said, `<coordinator>:<card>`,
    *  so the manager hears a card blocked once per reason */
   private blockedSaid = new Map<string, string>();
+  /** cards whose start is in flight, `<coordinator>:<card>`: still queued,
+   *  but neither edited nor removed, or the child would start with no card */
+  private starting = new Set<string>();
 
   constructor(private deps: CoordinatorDeps) {}
 
@@ -262,6 +265,7 @@ export class CoordinatorHub {
       const t = tasks.find((x) => x.id === id);
       if (!t) throw new CoordError(`no card ${id}`, 404);
       if (t.state !== "proposed" && t.state !== "queued") throw new CoordError(`${id} is ${t.state}; only a proposed or queued card changes`);
+      if (this.starting.has(`${coord.id}:${id}`)) throw new CoordError(`${id} is starting`);
       return { coord, tasks, t };
     };
     const first = find();
@@ -420,12 +424,15 @@ export class CoordinatorHub {
         const key = `${coordId}:${next.id}`;
         const priority: Priority = this.released.delete(key) ? "interactive" : "normal";
         let out: ChildStart;
+        this.starting.add(key);
         try {
           out = await this.deps.startChild(coordId, next, priority);
         } catch (err) {
           this.update(coordId, next.id, (x) => withOutcome({ ...x, state: "failed" }, errText(err)));
           this.queueNote(coordId, startNote(next, errText(err)));
           continue;
+        } finally {
+          this.starting.delete(key);
         }
         if ("busy" in out) {
           // the governor holds every card at once: they share its window,
