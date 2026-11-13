@@ -1278,13 +1278,15 @@ function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Pro
  * answer here as they do in the sheet, and the box never takes the
  * keyboard until clicked.
  */
-export function RunPane({ run, repo, onSend, to }: {
+export function RunPane({ run, repo, onSend, hint }: {
   run: Run;
   repo: Repo | undefined;
-  /** where the box sends its words instead of into this run (the manager page sends to a coordinator's worker or the coordinator itself) */
+  /** where the box sends its words instead of into this run (the manager
+   *  page sends them to one of the coordinator's workers). The box then has
+   *  no interrupt and no stop & send: both would cut this run's turn. */
   onSend?: (text: string) => Promise<void>;
-  /** whom the words go to, named in the box's placeholder */
-  to?: string;
+  /** the box's placeholder while `onSend` takes its words, naming whom they go to */
+  hint?: string;
 }) {
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
@@ -1300,11 +1302,10 @@ export function RunPane({ run, repo, onSend, to }: {
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
       {!run.kept && isRunActive(run) && (
         <Composer
-          who={to ?? AGENT_NAME[harnessOf(run)]}
-          {...(to ? { to } : {})}
+          who={AGENT_NAME[harnessOf(run)]}
           repoId={run.repoId}
           harness={harnessOf(run)}
-          mode={composerMode(run, (text) => act(() => interruptRun(run.id, text || undefined), true))}
+          mode={onSend ? { kind: "relay", hint: hint ?? "say something…" } : composerMode(run, (text) => act(() => interruptRun(run.id, text || undefined), true))}
           first={run.chat && run.steps.length === 0}
           onSend={(text) => act(() => (onSend ? onSend(text) : sayRun(run.id, text)), true)}
           quiet
@@ -1322,7 +1323,10 @@ type ComposerMode =
   /** a run at work, a chat's reply or a job: the message goes in at its
    *  next step (or runs as the next turn), and `onStop` cuts the turn short
    *  first, with the message to go on with or, for a chat, without one */
-  | { kind: "steer"; chat: boolean; onStop: (text: string) => Promise<void> };
+  | { kind: "steer"; chat: boolean; onStop: (text: string) => Promise<void> }
+  /** the message goes elsewhere than this run (`hint` says where), so
+   *  nothing here cuts this run's turn */
+  | { kind: "relay"; hint: string };
 
 /** the box's mode for a live run: a chat between turns takes a turn, any
  *  other live run a steer (FR-066) */
@@ -1335,7 +1339,6 @@ function composerMode(run: Run, onStop: (text: string) => Promise<void>): Compos
  *  open the agent's commands, skills and the repo's files. */
 function Composer({
   who,
-  to,
   repoId,
   harness,
   mode,
@@ -1347,8 +1350,6 @@ function Composer({
 }: {
   /** the agent's name, for the box's placeholder while it works */
   who: string;
-  /** whom the words go to, when that is not the agent whose run this is */
-  to?: string;
   /** whose files and commands the menu offers */
   repoId: string;
   harness: Harness;
@@ -1416,7 +1417,7 @@ function Composer({
           className="composer-box"
           // a draft is read before it is sent, so it gets room
           rows={draft ? 10 : 2}
-          placeholder={ready ? (to ? `say something to ${to}…` : "say something…") : `${who} is at work: steer it…`}
+          placeholder={mode.kind === "relay" ? mode.hint : ready ? "say something…" : `${who} is at work: steer it…`}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
@@ -1453,9 +1454,11 @@ function Composer({
         className="mini strong"
         disabled={!can}
         title={
-          ready
-            ? `↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`
-            : `↩ sends it into the work: ${who} reads it at its next step, or as its next turn`
+          mode.kind === "relay"
+            ? `↩ sends: ${mode.hint}`
+            : ready
+              ? `↩ sends, shift-↩ for a new line; ${harness === "codex" ? "/ or $ for a skill" : "/ for a command or skill"}, @ for a file`
+              : `↩ sends it into the work: ${who} reads it at its next step, or as its next turn`
         }
         onClick={() => void send()}
       >

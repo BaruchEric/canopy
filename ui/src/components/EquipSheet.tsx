@@ -35,7 +35,8 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
   const backend = backendOf(run.id);
   const info = useStore((s) => s.kit[backend]?.loadouts);
   const coordPlanEdit = useStore((s) => s.coordPlanEdit);
-  const offered = loadoutsFor(task.action, info?.loadouts);
+  // every step of a card's flow needs Claude Code, as plan, then build does
+  const offered = loadoutsFor(task.workflow ? "propose" : task.action, info?.loadouts);
   const first = offered.find((l) => l.name === task.equip?.loadout) ?? offered[0];
   const [name, setName] = useState<string | undefined>(first?.name);
   const loadout = offered.find((l) => l.name === name) ?? first;
@@ -201,7 +202,7 @@ function Head({ task }: { task: CoordTask }) {
       <p>
         {task.repo}: {task.title}
       </p>
-      <p className="mgr-equip-note">A queued card takes the change when it starts. A worker that has started keeps what it started with.</p>
+      <p className="mgr-equip-note">{`A ${task.state === "proposed" ? "proposed" : "queued"} card takes the change when it starts. A worker that has started keeps what it started with.`}</p>
     </header>
   );
 }

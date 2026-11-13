@@ -546,7 +546,8 @@ function GateAnswer({ need, act }: { need: Need; act: Act }) {
  *  holds of it: a ready one lands (through the approve sheet when its
  *  sort wants a look) or goes back with a note as a follow-up run; one sent
  *  back is fixed; one waiting on the judge lands anyway. Drop stays in the
- *  landing view. */
+ *  landing view. One action at a time, as the landing view's buttons: a
+ *  double tap on a phone sends one request. */
 function LandingAnswer({ need, act }: { need: Need; act: Act }) {
   const landing = useStore(landingAll);
   const landRun = useStore((s) => s.landRun);
@@ -555,16 +556,26 @@ function LandingAnswer({ need, act }: { need: Need; act: Act }) {
   const followUp = useStore((s) => s.followUp);
   const [sending, setSending] = useState(false);
   const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
+  // the action going: "land", "fix" or "send"
+  const [busy, setBusy] = useState<string | null>(null);
   const id = need.landingId;
   if (!id) return null;
   const rec = landing.runs.find((r) => r.id === id);
   const entry = landing.entries.find((e) => e.id === id);
+  const once = async (key: string, fn: () => Promise<void>) => {
+    if (busy !== null) return;
+    setBusy(key);
+    try {
+      await act(fn);
+    } finally {
+      setBusy(null);
+    }
+  };
   if (need.canLand) {
     const send = async () => {
       const words = note.trim();
-      if (!words || busy) return;
-      setBusy(true);
+      if (!words || busy !== null) return;
+      setBusy("send");
       try {
         await act(() => followUp(id, words), true);
         setSending(false);
@@ -572,19 +583,19 @@ function LandingAnswer({ need, act }: { need: Need; act: Act }) {
       } catch {
         // the error shows under the head; the note stays
       } finally {
-        setBusy(false);
+        setBusy(null);
       }
     };
     return (
       <>
         <div className="mgr-need-acts">
           {rec && needsApproval(rec) ? (
-            <button type="button" className="mini strong" title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(id)}>
+            <button type="button" className="mini strong" disabled={busy !== null} title="Open its sensitive files and their diffs, then approve and land" onClick={() => showApprove(id)}>
               look and land
             </button>
           ) : (
-            <button type="button" className="mini strong" title="Rebase onto its target, run the gates, fast-forward the target" onClick={() => void act(() => landRun(id))}>
-              land
+            <button type="button" className="mini strong" disabled={busy !== null} title="Rebase onto its target, run the gates, fast-forward the target" onClick={() => void once("land", () => landRun(id))}>
+              {busy === "land" ? "queueing…" : "land"}
             </button>
           )}
           <button type="button" className={sending ? "mini on" : "mini"} aria-expanded={sending} title="Start a run on its branch with your note" onClick={() => setSending(!sending)}>
@@ -604,8 +615,8 @@ function LandingAnswer({ need, act }: { need: Need; act: Act }) {
                 if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void send();
               }}
             />
-            <button type="button" className="mini strong" disabled={!note.trim() || busy} title="⌘↩" onClick={() => void send()}>
-              {busy ? "sending…" : "send it back"}
+            <button type="button" className="mini strong" disabled={!note.trim() || busy !== null} title="⌘↩" onClick={() => void send()}>
+              {busy === "send" ? "sending…" : "send it back"}
             </button>
           </div>
         )}
@@ -615,8 +626,8 @@ function LandingAnswer({ need, act }: { need: Need; act: Act }) {
   if (entry && sentBack(entry)) {
     return (
       <div className="mgr-need-acts">
-        <button type="button" className="mini strong" title="Continue the run on its branch with the reason as its next message" onClick={() => void act(() => fixLanding(id))}>
-          fix it
+        <button type="button" className="mini strong" disabled={busy !== null} title="Continue the run on its branch with the reason as its next message" onClick={() => void once("fix", () => fixLanding(id))}>
+          {busy === "fix" ? "starting…" : "fix it"}
         </button>
       </div>
     );
@@ -624,8 +635,8 @@ function LandingAnswer({ need, act }: { need: Need; act: Act }) {
   if (entry?.state === "judge") {
     return (
       <div className="mgr-need-acts">
-        <button type="button" className="mini strong" title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => void act(() => landRun(id, undefined, true))}>
-          land anyway
+        <button type="button" className="mini strong" disabled={busy !== null} title="Land it with its judge scenarios left out; its command scenarios ran and passed" onClick={() => void once("land", () => landRun(id, undefined, true))}>
+          {busy === "land" ? "queueing…" : "land anyway"}
         </button>
       </div>
     );
@@ -780,7 +791,7 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
             </button>
           )}
           {lane.canStartNow && (
-            <button type="button" className="mini" title={coord.held ? "Queue this card alone; it starts once you resume" : "Queue this card alone, ahead of the rest"} onClick={() => void act(() => useStore.getState().coordStart(coord.id, [lane.id]))}>
+            <button type="button" className="mini" title="Queue this card alone, ahead of the rest" onClick={() => void act(() => useStore.getState().coordStart(coord.id, [lane.id]))}>
               start now
             </button>
           )}
@@ -865,7 +876,7 @@ function Chat({ coord, lanes, on, hidden }: { coord: Run; lanes: readonly Lane[]
           </label>
         )}
       </div>
-      <RunPane run={coord} repo={repo} {...(lane ? { onSend: (text: string) => sayWith(lane.say, text), to: lane.id } : {})} />
+      <RunPane run={coord} repo={repo} {...(lane ? { onSend: (text: string) => sayWith(lane.say, text), hint: sayHint(lane) } : {})} />
     </aside>
   );
 }

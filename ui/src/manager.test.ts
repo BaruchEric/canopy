@@ -429,6 +429,23 @@ describe("what a lane's say box sends to", () => {
     expect(sayTarget(task, { ...sr, status: "done" }, checking, none)).toEqual({ kind: "none", why: "no step of its flow is at work just now" });
   });
 
+  test("a stopped flow whose branch has a landing entry says the entry's words, not to pick the flow up", () => {
+    const sr = run("s2", { status: "stopped", branch: br("s2", { origin: "b-f1", state: "ready" }) });
+    const f = flow("f1", [fstep("Build", "passed", { runId: "s1" }), fstep("Test", "failed", { runId: "s2" })], { current: 1, status: "stopped" });
+    const task = card({ state: "failed", outcome: "stopped", flow: "f1", branch: "b-f1" });
+    expect(sayTarget(task, sr, f, landing([rec("b-f1")], [entry("b-f1", "red")]))).toEqual({ kind: "none", why: "it was sent back (red); fix it from the landing queue instead" });
+    expect(sayTarget(task, sr, f, landing([rec("b-f1")], [entry("b-f1", "rebasing")]))).toEqual({ kind: "none", why: "it is in the landing queue (rebasing); wait for it, or drop it from the queue first" });
+    expect(sayTarget(task, sr, f, landing([rec("b-f1")], [entry("b-f1", "landed")]))).toEqual({ kind: "none", why: "it has landed" });
+  });
+
+  test("a card waiting on the usage reset takes no words: it carries on after the reset", () => {
+    const task = child("c1", { limited: 0, outcome: "waiting for capacity" });
+    const limited = run("c1", { status: "limited" });
+    expect(sayTarget(task, limited, undefined, landing([rec("b-c1")]))).toEqual({ kind: "none", why: "it carries on after the reset" });
+    // once it resumed, its run is steered as any other
+    expect(sayTarget(child("c2", { limited: 1 }), run("c2", { status: "working" }), undefined, none)).toEqual({ kind: "steer", runId: "c2" });
+  });
+
   test("a card not started, or landed, takes no message", () => {
     expect(sayTarget(card(), undefined, undefined, none)).toEqual({ kind: "none", why: "it has not started" });
     expect(sayTarget(card({ state: "queued" }), undefined, undefined, none)).toEqual({ kind: "none", why: "it has not started" });
@@ -544,6 +561,12 @@ describe("the lanes", () => {
     // the server refuses a follow-up on a branch its PR watch holds, so resume does not offer one
     expect(lane(failed, { runs: runsOf(stopped), landing: landing([rec("b-c1", { state: "stopped", pr: 12 })]), prs: [watch()] })?.canResume).toBe(false);
   });
+
+  test("a stopped flow whose branch the landing queue holds, sent back or landed offers no resume, since its pickup is refused", () => {
+    const lane = (es: LandEntry[]) => managerRows(coord([card({ state: "failed", outcome: "stopped", flow: "f1", branch: "b-f1" })]), at({ flows: flowsOf(flow("f1", [fstep("Build", "failed")], { status: "stopped" })), landing: landing([rec("b-f1")], es) })).lanes[0];
+    expect(lane([])?.canResume).toBe(true);
+    for (const state of ["queued", "rebasing", "red", "landed"] as const) expect(lane([entry("b-f1", state)])?.canResume).toBe(false);
+  });
 });
 
 describe("the goal", () => {
@@ -562,6 +585,15 @@ describe("the goal", () => {
     expect(goal).toEqual({ text: "the goal as noted", model: "opus-5", effort: "low", startedAt: 100, working: 3, waiting: needs.length, held: true, ended: false });
     expect(needs.length).toBe(2);
     expect(managerRows({ ...k, status: "done", held: undefined }, at({ runs, flows })).goal).toMatchObject({ held: false, ended: true });
+  });
+
+  test("a flow parked at its gate waits on Eric and is not counted as working, though it can still be stopped", () => {
+    const tasks = [child("c1"), card({ id: "t2", state: "running", flow: "f2" })];
+    const gated = flow("f2", [fstep("Build", "passed", { runId: "s1" }), fstep("Check", "gated", { runId: "s2" })], { current: 1, status: "gated" });
+    const rows = managerRows(coord(tasks), at({ runs: runsOf(run("c1", { status: "working" })), flows: flowsOf(gated) }));
+    expect(rows.goal.working).toBe(1);
+    expect(rows.needs.map((n) => n.key)).toEqual(["gate:f2"]);
+    expect(rows.lanes[1]?.canStop).toBe(true);
   });
 
   test("the manager's ring says how the goal stands and carries the manager's model", () => {

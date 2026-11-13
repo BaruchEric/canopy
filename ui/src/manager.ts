@@ -11,7 +11,7 @@
 import { SEP } from "../../src/core/backendid";
 import { cardLanded } from "../../src/core/coordinator";
 import type { RunGroup } from "../../src/core/group";
-import { followupRefusal } from "../../src/core/landing";
+import { entryRefusal, followupRefusal } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
 import {
   isFlowActive,
@@ -93,18 +93,23 @@ function branchOf(task: CoordTask, run: Run | undefined, flow: Flow | undefined,
 /** Where a lane's say box sends: a steer into the run at work, a follow-up
  *  run on a settled branch the server would take, or why neither applies.
  *  For a flow card, `run` is the step run in hand. Each refusal is asked
- *  the server's way (`followupRefusal`, with the PR watch's hold), so the
- *  box never offers a follow-up the server answers 409; `busy` is false
- *  since a run at work is a steer above it. */
+ *  the server's way (`entryRefusal`, then `followupRefusal` with the PR
+ *  watch's hold), so the box never offers a follow-up the server answers
+ *  409; `busy` is false since a run at work is a steer above it. A card
+ *  waiting on the usage reset takes no words: its own run carries on. */
 export function sayTarget(task: CoordTask, run: Run | undefined, flow: Flow | undefined, landing: LandingInfo, prs: readonly PrWatch[] = []): SayTarget {
   const none = (why: string): SayTarget => ({ kind: "none", why });
   if (notStarted(task)) return none("it has not started");
   if (cardLanded(task)) return none("it has landed");
   if (flow?.status === "gated") return none("release or stop its gate first");
   if (run && isRunActive(run)) return run.harness === "codex" ? none("a Codex worker takes no message mid-turn") : { kind: "steer", runId: run.id };
+  if (task.limited === 0) return none("it carries on after the reset");
   if (flow && isFlowActive(flow)) return none("no step of its flow is at work just now");
-  if (flow?.status === "stopped") return none("pick its flow up first");
   const { origin, rec, entry } = branchOf(task, run, flow, landing);
+  // the queue's hold comes ahead of a stopped flow, whose pickup it refuses too
+  const held = entryRefusal(entry);
+  if (held) return none(held);
+  if (flow?.status === "stopped") return none("pick its flow up first");
   if (!origin) return none("it has no branch to follow up on");
   // a stopped flow was answered above, so it needs no flowStopped here
   const refused = followupRefusal(rec, entry, false, origin, { pr: watchHolds(prs.find((w) => w.id === origin)) });
@@ -473,11 +478,16 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     canEquip: fresh && isRunActive(coord),
     canStartNow: fresh && !coord.held && isRunActive(coord),
     canStop: (run !== undefined && isRunActive(run)) || (flow !== undefined && isFlowActive(flow)),
-    // a resume is a follow-up with no words, so it applies where the server takes one
-    canResume: (run?.status === "stopped" && say.kind === "followup") || (flow?.status === "stopped" && flow.branch !== undefined),
+    // a resume is a follow-up with no words, so it applies where the server
+    // takes one; a stopped flow's pickup, while its branch has no landing entry
+    canResume: (run?.status === "stopped" && say.kind === "followup") || (flow?.status === "stopped" && flow.branch !== undefined && w.branch.entry === undefined),
     say,
   };
 }
+
+/** Whether a card's worker is at work: its run, or its flow short of a
+ *  gate, which waits on Eric and counts there instead. */
+const atWork = (w: Work): boolean => (w.run !== undefined && isRunActive(w.run)) || (w.flow !== undefined && isFlowActive(w.flow) && w.flow.status !== "gated");
 
 /** The manager's own state in a word: ended, held, waiting on Eric, or at work. */
 function managerLook(coord: Run, asks: boolean): { word: string; tone: Tone } {
@@ -539,7 +549,7 @@ export function managerRows(coord: Run, at: ManagerInputs): ManagerRows {
       model,
       effort: effortOf(coord) ?? null,
       startedAt: coord.startedAt,
-      working: lanes.filter((l) => l.canStop).length,
+      working: works.filter(atWork).length,
       waiting: needs.length,
       held: coord.held === true,
       ended: !isRunActive(coord),

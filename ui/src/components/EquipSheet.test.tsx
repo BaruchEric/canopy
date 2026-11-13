@@ -56,6 +56,20 @@ describe("EquipSheet", () => {
     const html = renderCurrent(<EquipSheet run={coord} task={task({ action: "propose" })} onDone={() => {}} />);
     expect(html).not.toContain(">fast</button>");
   });
+  test("a card that names a workflow is offered no codex loadout, since every step of its flow needs Claude Code", () => {
+    seed([]);
+    const html = renderCurrent(<EquipSheet run={coord} task={task({ workflow: "two-steps" })} onDone={() => {}} />);
+    expect(html).not.toContain(">fast</button>");
+    expect(html).toContain(">quick</button>");
+  });
+  test("its head says what is true for the card's state: a proposed card is never called queued", () => {
+    seed([]);
+    const proposed = renderCurrent(<EquipSheet run={coord} task={task({ state: "proposed" })} onDone={() => {}} />);
+    expect(proposed).toContain("A proposed card takes the change when it starts.");
+    expect(proposed).not.toContain("queued");
+    const queued = renderCurrent(<EquipSheet run={coord} task={task({ state: "queued" })} onDone={() => {}} />);
+    expect(queued).toContain("A queued card takes the change when it starts.");
+  });
   test("a server this backend refuses is disabled and says where it is missing", () => {
     seed([{ name: "github", here: true }, { name: "executor", here: false }]);
     const html = renderCurrent(<EquipSheet run={coord} task={task({ equip: { loadout: "quick" } })} onDone={() => {}} />);

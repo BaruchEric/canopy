@@ -13,6 +13,7 @@ import type { BackendState } from "../backends";
 import { registry, setRegistry } from "../registry";
 import { connOf, useStore, type Conn } from "../store";
 import { arcPath, ManagerView } from "./ManagerView";
+import { RunPane } from "./RunSheet";
 
 const pristine = useStore.getState();
 const pristineRegistry = registry();
@@ -396,5 +397,21 @@ describe("the layout", () => {
     expect(html.indexOf('aria-label="rings"')).toBeGreaterThan(needs);
     expect(html).toContain('<div class="mgr-switch" role="group" aria-label="Show"><button type="button" class="mini on" aria-pressed="true">workers</button><button type="button" class="mini" aria-pressed="false">chat</button></div>');
     expect(html).toMatch(/<aside class="mgr-chat[^"]*" id="mgr-chat" aria-label="manager chat" hidden="">/);
+  });
+});
+
+describe("the chat's box", () => {
+  const working = coord([], { status: "working" });
+  test("aimed at a worker, it has no interrupt or stop & send, which would cut the manager's turn, and its placeholder names the worker", () => {
+    const html = renderCurrent(<RunPane run={working} repo={undefined} onSend={async () => {}} hint="say to t1; it reads this at its next step" />);
+    expect(html).toContain('placeholder="say to t1; it reads this at its next step"');
+    expect(buttons(html)).toEqual(["*send"]);
+    expect(html).not.toContain("is at work: steer it");
+  });
+
+  test("aimed at the manager, it steers the manager's turn as before", () => {
+    const html = renderCurrent(<RunPane run={working} repo={undefined} />);
+    expect(html).toContain("Claude Code is at work: steer it");
+    expect(buttons(html)).toEqual(["interrupt", "*send"]);
   });
 });
