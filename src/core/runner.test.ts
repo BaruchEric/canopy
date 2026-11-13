@@ -750,6 +750,7 @@ describe("a run's child (FR-038)", () => {
     const run = runner.start(repo, "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, branchOf("t"), { mcpConfig: "/c/mcp.json", canopy: true });
     expect(run.canopyTools).toBe(true);
     expect(seen?.spec.mcpConfig).toBe("/c/mcp.json");
+    expect(seen?.spec.canopy).toBe(true);
     expect(parentOf(made()).canopyTools).toBeUndefined();
   });
 
@@ -762,6 +763,8 @@ describe("a run's child (FR-038)", () => {
     expect(run.canopyTools).toBeUndefined();
     expect(run.equip).toEqual(equip);
     expect(seen?.spec).toMatchObject({ mcpConfig: "/c/mcp.json", settings: "/c/s.json", servers: ["probe"] });
+    // no canopy server in its file, so no canopy rule
+    expect(seen?.spec.canopy).toBeUndefined();
     expect(parentOf(made()).equip).toBeUndefined();
   });
 });

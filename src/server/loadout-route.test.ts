@@ -125,6 +125,7 @@ beforeAll(async () => {
       tools: { skills: ["repo-skill"], mcp: ["probe"] },
       missing: { skills: ["nope-xyz"] },
       quick: { harness: "codex", effort: "low" },
+      helper: { skills: ["repo-skill"], canopyTools: true },
     },
   }));
   process.env["CANOPY_CONFIG_DIR"] = config;
@@ -141,7 +142,7 @@ beforeAll(async () => {
   server = await startServer({ root, port: 0, chan: null, harnesses: ["claude", "codex"], runner: { driver: (h: Harness) => new HeldDriver(h) } });
   // a test server's kit never scans on its own
   expect((await post("/api/kit/scan", {})).status).toBe(200);
-  await until(async () => ((await (await get("/api/loadouts")).json()) as LoadoutsInfo).loadouts.length === 4, "the kit's loadouts");
+  await until(async () => ((await (await get("/api/loadouts")).json()) as LoadoutsInfo).loadouts.length === 5, "the kit's loadouts");
 });
 
 afterEach(async () => {
@@ -183,10 +184,33 @@ describe("a run started with a loadout", () => {
     const withTools = await started({ loadout: "tools", canopyTools: true });
     const tctx = await ctxOf(withTools.id);
     const file = JSON.parse(await readFile(tctx.spec.mcpConfig ?? "", "utf8")) as { mcpServers: Record<string, { command: string; args: string[] }> };
-    expect(Object.keys(file.mcpServers)).toEqual(["canopy", "probe"]);
+    // canopy's entry last, so no server of the kit's can take the token's place
+    expect(Object.keys(file.mcpServers)).toEqual(["probe", "canopy"]);
     expect(file.mcpServers["probe"]).toMatchObject({ command: "bash", args: ["-c", "true"] });
     expect(tctx.spec.servers).toEqual(["probe"]);
     expect(withTools.body.canopyTools).toBe(true);
+  });
+
+  test("a loadout with canopyTools starts with canopy's tools, and the start's word beats it", async () => {
+    const run = await started({ loadout: "helper" });
+    const ctx = await ctxOf(run.id);
+    expect(ctx.spec.canopy).toBe(true);
+    const file = JSON.parse(await readFile(ctx.spec.mcpConfig ?? "", "utf8")) as { mcpServers: Record<string, { env?: Record<string, string> }> };
+    expect(Object.keys(file.mcpServers)).toEqual(["canopy"]);
+    expect(file.mcpServers["canopy"]?.env?.["CANOPY_TOKEN"]).toBeTruthy();
+    expect(file.mcpServers["canopy"]?.env?.["CANOPY_RUN"]).toBe(run.id);
+    expect(run.body.canopyTools).toBe(true);
+    const minted = (await (await get("/api/auth")).json()) as { callers: { kind: string }[] };
+    expect(minted.callers.filter((c) => c.kind === "run")).toHaveLength(1);
+    await stop(run.id);
+
+    const without = await started({ loadout: "helper", canopyTools: false });
+    const wctx = await ctxOf(without.id);
+    expect(wctx.spec.mcpConfig).toBeUndefined();
+    expect(wctx.spec.canopy).toBeUndefined();
+    expect(without.body.canopyTools).toBeUndefined();
+    const none = (await (await get("/api/auth")).json()) as { callers: { kind: string }[] };
+    expect(none.callers.filter((c) => c.kind === "run")).toEqual([]);
   });
 
   test("the files go when the run stops", async () => {

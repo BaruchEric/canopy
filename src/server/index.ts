@@ -1329,7 +1329,8 @@ async function runTools(state: ServerState, repo: Repo, extras: StartExtras, ser
   const release = (): Promise<void> => dropRunTools(state, id);
   const names = Object.keys(servers);
   try {
-    const mcpConfig = await writeMcpConfig(id, { canopy: { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } }, ...servers });
+    // canopy's last, so a server of the same name never takes the token's place
+    const mcpConfig = await writeMcpConfig(id, { ...servers, canopy: { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } } });
     return { extras: { ...extras, id, canopy: true, mcpConfig, mcpServer: runConfigLaunch(mcpConfig), brief: await toolsBrief(), ...(names.length ? { servers: names } : {}) }, release };
   } catch (err) {
     await release();

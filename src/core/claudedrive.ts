@@ -131,10 +131,6 @@ export function claudeBinary(): string | null {
   return Bun.which("claude");
 }
 
-/** The print-mode command line. The repo's agent settings ride along the
- *  way they would on an interactive `claude`, except that yolo becomes the
- *  bypass permission mode: the interactive flag and the prompt tool are two
- *  ways of answering the same question, and print mode takes the mode. */
 /** The wanted servers an init says did not start, as "name (status)" in the
  *  order asked: one missing from `mcp_servers` is "absent". */
 export function serversDown(init: Record<string, unknown>, want: readonly string[]): string[] {
@@ -147,6 +143,10 @@ export function serversDown(init: Record<string, unknown>, want: readonly string
   });
 }
 
+/** The print-mode command line. The repo's agent settings ride along the
+ *  way they would on an interactive `claude`, except that yolo becomes the
+ *  bypass permission mode: the interactive flag and the prompt tool are two
+ *  ways of answering the same question, and print mode takes the mode. */
 export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, stage = false): string[] {
   // a stage runs in a container without canopy's config dir, so a Claude
   // provider's settings file stays here and the stage keeps its own login
@@ -155,7 +155,9 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
   const base = { ...agent, yolo: false };
   const flags = agentArgs(spec.settings ? base : withProviderFile(base, stage ? null : providersDir()));
   // one flag for the rules: --allowedTools takes every plain word after it
-  const allowed = [...spec.allowedTools, ...(spec.mcpConfig ? [CANOPY_TOOL_RULE] : []), ...(spec.servers ?? []).map(mcpRule)];
+  // canopy's rule only when its server is in the run's file: a loadout's
+  // mcp.json may hold the loadout's servers alone
+  const allowed = [...spec.allowedTools, ...(spec.mcpConfig && spec.canopy ? [CANOPY_TOOL_RULE] : []), ...(spec.servers ?? []).map(mcpRule)];
   return [
     "-p",
     "--output-format",
@@ -193,8 +195,10 @@ export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, s
     // spec P8: a switch to bypass after the plan is refused without it; a
     // run that starts in bypass needs no switch
     ...(spec.permissionMode === "plan" && agent.yolo ? ["--allow-dangerously-skip-permissions"] : []),
-    ...(spec.settings ? ["--settings", spec.settings] : []),
     ...flags,
+    // after the route's extra flags: a later --settings replaces an earlier
+    // one (probe P1), so an extra --settings never takes the run's file away
+    ...(spec.settings ? ["--settings", spec.settings] : []),
   ];
 }
 
@@ -237,6 +241,7 @@ export class ClaudeDriver implements RunDriver {
   private fold: ClaudeFold = claudeFold("", homedir(), Date.now());
   /** the session id is taken from the first message that carries one */
   private sessionSeen = false;
+  /** the first init has been checked for the loadout's servers; later ones are not */
   private initChecked = false;
   /** live subagent task ids (spec P7): task_type local_agent only, since a
    *  background shell may run for good (a dev server) and must not hold a

@@ -489,7 +489,7 @@ export class Runner {
     // a folder no rule was kept for
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
-    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpConfig && extras.canopy ? { canopy: true as const } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;

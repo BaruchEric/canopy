@@ -73,6 +73,8 @@ export interface DriveSpec {
   fork?: true;
   /** the run's `mcp.json`, which carries its token (FR-038) */
   mcpConfig?: string;
+  /** that file holds canopy's own server, so `mcp__canopy__*` is allowed */
+  canopy?: true;
   /** the same server for Codex, which takes it as `-c` lines */
   mcpServer?: McpLaunch;
   /** the run's own settings file, passed as the one `--settings`: a loadout's,

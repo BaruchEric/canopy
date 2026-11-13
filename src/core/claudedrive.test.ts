@@ -925,7 +925,7 @@ describe("foldClaude replays the recorded wire into the steps the live run made"
 });
 
 test("a run with canopy's tools: the file by path, then one rule list that names them", () => {
-  const spec = { allowedTools: ["Read", "Grep"], maxTurns: 5, mcpConfig: "/c/runs/r1/mcp.json" };
+  const spec = { allowedTools: ["Read", "Grep"], maxTurns: 5, mcpConfig: "/c/runs/r1/mcp.json", canopy: true as const };
   const args = cliArgs(spec);
   const at = args.indexOf("--mcp-config");
   expect(args[at + 1]).toBe("/c/runs/r1/mcp.json");
@@ -943,7 +943,7 @@ test("with no tools the command line is as it was, even when the settings ask fo
 });
 
 test("a run with tools and no rules of its own still names them", () => {
-  const args = cliArgs({ allowedTools: [], maxTurns: 5, mcpConfig: "/m.json" });
+  const args = cliArgs({ allowedTools: [], maxTurns: 5, mcpConfig: "/m.json", canopy: true });
   expect(args[args.indexOf("--mcp-config") + 2]).toBe("--allowedTools");
   expect(args[args.indexOf("--allowedTools") + 1]).toBe("mcp__canopy__*");
 });
@@ -1119,6 +1119,17 @@ test("a run's own settings file is the one --settings, provider or not", () => {
 });
 
 test("each loadout server is allowed by its own rule", () => {
-  const argv = cliArgs({ allowedTools: ["Read"], maxTurns: 5, mcpConfig: "/c/m.json", servers: ["pdfcraft", "wiki-memory"] });
+  const argv = cliArgs({ allowedTools: ["Read"], maxTurns: 5, mcpConfig: "/c/m.json", canopy: true, servers: ["pdfcraft", "wiki-memory"] });
   expect(argv[argv.indexOf("--allowedTools") + 1]).toBe("Read,mcp__canopy__*,mcp__pdfcraft__*,mcp__wiki-memory__*");
+});
+
+test("a loadout's mcp.json without canopy's server allows no canopy tool", () => {
+  const argv = cliArgs({ allowedTools: ["Read"], maxTurns: 5, mcpConfig: "/c/m.json", servers: ["pdfcraft"] });
+  expect(argv[argv.indexOf("--allowedTools") + 1]).toBe("Read,mcp__pdfcraft__*");
+});
+
+test("a route's extra flags never replace the run's own settings file: the run's comes last", () => {
+  const argv = cliArgs({ allowedTools: [], maxTurns: 5, settings: "/c/run-tools/r1.settings.json" }, { ...DEFAULT_AGENT, extra: "--settings /x/route.json --add-dir /x" });
+  expect(argv[argv.lastIndexOf("--settings") + 1]).toBe("/c/run-tools/r1.settings.json");
+  expect(argv.lastIndexOf("--settings")).toBeGreaterThan(argv.indexOf("/x/route.json"));
 });
