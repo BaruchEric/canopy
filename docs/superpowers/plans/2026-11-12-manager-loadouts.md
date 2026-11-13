@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Status: written 2026-11-12, not started.
+Status: implemented 2026-11-12 on branch `manager-loadouts`, not yet merged. Real run on a scratch server with claude 2.1.323: loadout `docs` (haiku, low, user skill `unslop`) ran on haiku, and its init `skills` held `unslop` and the repo's `projskill`, and 137 entries against 202 for a run with no loadout, the difference being user skills; `equip` was kept in `run.json` and `run-tools/` was empty after. Two things differ from the plan: the user's commands (`skillsets`, `visual-plan`) and every plugin skill stay in the init list, since `skillOverrides` does not reach them in this claude (a plugin key such as `vercel:ai-sdk` set `off` in a hand-made settings file did not remove it either). Loadout `broken` (server `command: "false"`) ended failed with "a loadout server did not start here: badsrv (failed)", and its files were gone.
 
 **Goal:** A run started from the plan sheet or `canopy run --loadout NAME` gets exactly the harness, model, effort, skills and MCP servers a kit.json loadout names, plus the repo's own skills and `loadoutBase`.
 

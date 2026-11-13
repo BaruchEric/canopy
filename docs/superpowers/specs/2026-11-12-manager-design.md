@@ -437,9 +437,8 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
   `connected`.
 - **P5.** One `--mcp-config` holding `pdfcraft` and `wiki-memory` under
   `--strict-mcp-config` loaded both (`connected`, source `dynamic`).
-- **P6.** Left for plan 3. FR-066 (branch `human-steer`, not yet merged) adds
-  words into a working run, and plan 3 builds on it rather than on a new
-  `runs/nudge`.
+- **P6.** Left for plan 3. FR-066 (merged into main) adds words into a
+  working run, and plan 3 builds on it rather than on a new `runs/nudge`.
 
 ## Phases
 
@@ -447,7 +446,14 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
    kit.json blocks and parser, `GET /api/loadouts`, the launch (settings
    file, MCP config, allowed tools), the run's `loadout` and `equip`, the
    launch pick in the plan sheet, `canopy loadouts` and `canopy run
-   --loadout`, the loadout shown on run cards.
+   --loadout`, the loadout shown on run cards. Shipped 2026-11-12 on branch
+   `manager-loadouts` (plan 1). Known gaps: a fix or follow-up run on a
+   loadout run's branch (`startBranchFix`) starts with the repo's agent, not
+   the loadout (plan 2's cards carry `equip`); the "machine has this skill"
+   check reads the repo's checkout while a branch run works in a worktree
+   cut from the base; and claude 2.1.323 still lists a plugin's skills at
+   init when `skillOverrides` turns them off, so only the user's own skills
+   go off today.
 2. Cards: `equip`, `workflow`, `after`, flows as children and their
    settling, a card following its branch, hold, `start` with `ids`, the
    brief and the lane reads, `manager.md`.
