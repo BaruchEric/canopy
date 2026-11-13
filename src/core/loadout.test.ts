@@ -73,8 +73,10 @@ test("baseCovers takes a name or a plugin's prefix", () => {
 });
 
 const m = (name: string, from: string, kind: Mention["kind"] = "skill", harness: Harness = "claude"): Mention => ({ name, kind, harness, from, description: "" });
-const skills = [m("ripe", "user"), m("grill-me", "user"), m("homelab:tailchan", "plugin:homelab"), m("homelab:macmini", "plugin:homelab"),
-  m("superpowers:brainstorming", "plugin:superpowers"), m("redeploy", "project"), m("verify-build", "user"), m("commit", "user", "command"),
+/** a plugin's skill or command, as the scan names it: from its name, keyed by name@marketplace */
+const p = (name: string, key: string, kind: Mention["kind"] = "skill"): Mention => ({ name, kind, harness: "claude", from: `plugin:${key.slice(0, key.indexOf("@"))}`, description: "", plugin: key });
+const skills = [m("ripe", "user"), m("grill-me", "user"), p("homelab:tailchan", "homelab@hl"), p("homelab:macmini", "homelab@hl"),
+  p("superpowers:brainstorming", "superpowers@sp"), m("redeploy", "project"), m("verify-build", "user"), m("commit", "user", "command"),
   m("codex-thing", "user", "skill", "codex"), m("compact", "builtin", "builtin")];
 const planInfo: LoadoutsInfo = {
   base: ["verify-build", "homelab:*"],
@@ -88,21 +90,67 @@ const planInfo: LoadoutsInfo = {
 };
 const planBase = { name: "docs", info: planInfo, agent: DEFAULT_AGENT, skills, machine: "mini", entryOf: () => ({ entry: { type: "stdio", command: "bash", args: [] } }) };
 
-test("listed on, base and the repo's left alone, every other user and plugin skill off", () => {
+const NO_PLUGINS = { plugins: {}, pluginsOff: [] };
+
+test("listed on, base and the repo's left alone, every other user skill off and every plugin the loadout leaves out off whole", () => {
   expect(skillOverridesFor({ skills: ["homelab:tailchan"] }, ["verify-build", "homelab:*"], skills)).toEqual({
-    overrides: { "grill-me": "off", "homelab:tailchan": "on", ripe: "off", "superpowers:brainstorming": "off" },
+    overrides: { "grill-me": "off", "homelab:tailchan": "on", ripe: "off" },
+    plugins: { "superpowers@sp": false },
+    pluginsOff: ["superpowers"],
     off: 3,
   });
 });
 test("a repo skill named like a user skill is never named", () => {
   const twin = [m("redeploy", "user"), m("redeploy", "project")];
-  expect(skillOverridesFor({ skills: [] }, [], twin)).toEqual({ overrides: {}, off: 0 });
+  expect(skillOverridesFor({ skills: [] }, [], twin)).toEqual({ overrides: {}, ...NO_PLUGINS, off: 0 });
 });
 test("a listed repo-only skill gets on and a repo skill is never turned off", () => {
-  expect(skillOverridesFor({ skills: ["redeploy"] }, [], [m("redeploy", "project"), m("ripe", "user")])).toEqual({ overrides: { redeploy: "on", ripe: "off" }, off: 1 });
+  expect(skillOverridesFor({ skills: ["redeploy"] }, [], [m("redeploy", "project"), m("ripe", "user")])).toEqual({ overrides: { redeploy: "on", ripe: "off" }, ...NO_PLUGINS, off: 1 });
 });
 test("a listed user skill that a repo skill shadows still gets on", () => {
-  expect(skillOverridesFor({ skills: ["redeploy"] }, [], [m("redeploy", "user"), m("redeploy", "project")])).toEqual({ overrides: { redeploy: "on" }, off: 0 });
+  expect(skillOverridesFor({ skills: ["redeploy"] }, [], [m("redeploy", "user"), m("redeploy", "project")])).toEqual({ overrides: { redeploy: "on" }, ...NO_PLUGINS, off: 0 });
+});
+test("a plugin skill never gets an off key: its plugin goes off, and off counts its skills", () => {
+  const got = skillOverridesFor({ skills: [] }, [], skills);
+  expect(got.overrides).toEqual({ "grill-me": "off", ripe: "off", "verify-build": "off" });
+  expect(got.plugins).toEqual({ "homelab@hl": false, "superpowers@sp": false });
+  expect(got.pluginsOff).toEqual(["homelab", "superpowers"]);
+  expect(got.off).toBe(6);
+});
+test("one listed skill keeps its whole plugin on", () => {
+  const got = skillOverridesFor({ skills: ["homelab:macmini"] }, [], skills);
+  expect(got.overrides["homelab:macmini"]).toBe("on");
+  expect(got.overrides["homelab:tailchan"]).toBeUndefined();
+  expect(got.plugins).toEqual({ "superpowers@sp": false });
+  expect(got.off).toBe(4);
+});
+test("a skill the base names keeps its plugin on", () => {
+  expect(skillOverridesFor({ skills: [] }, ["homelab:tailchan"], skills).plugins).toEqual({ "superpowers@sp": false });
+});
+test("a base of plugin:* keeps that plugin on", () => {
+  expect(skillOverridesFor({ skills: [] }, ["superpowers:*"], skills).plugins).toEqual({ "homelab@hl": false });
+});
+test("a plugin with no skills (commands or hooks only) is left alone", () => {
+  const got = skillOverridesFor({ skills: [] }, [], [p("vercel:deploy", "vercel@official", "command"), m("ripe", "user")]);
+  expect(got).toEqual({ overrides: { ripe: "off" }, ...NO_PLUGINS, off: 1 });
+});
+test("two plugins of one name from two marketplaces go off by their own keys", () => {
+  const twins = [p("foo:x", "foo@a"), p("foo:y", "foo@b"), p("foo:z", "foo@b")];
+  expect(skillOverridesFor({ skills: ["foo:x"] }, [], twins)).toEqual({ overrides: { "foo:x": "on" }, plugins: { "foo@b": false }, pluginsOff: ["foo"], off: 2 });
+  expect(skillOverridesFor({ skills: [] }, [], twins)).toEqual({ overrides: {}, plugins: { "foo@a": false, "foo@b": false }, pluginsOff: ["foo"], off: 3 });
+});
+test("only a claude skill counts as one the machine has", () => {
+  const info: LoadoutsInfo = { ...planInfo, loadouts: [
+    { name: "cmd", note: "", harness: "claude", model: "default", effort: "default", skills: ["commit"], mcp: [], canopyTools: false },
+    { name: "cdx", note: "", harness: "claude", model: "default", effort: "default", skills: ["codex-thing"], mcp: [], canopyTools: false },
+  ] };
+  expect(planLoadoutStart({ ...planBase, info, name: "cmd" })).toEqual({ refused: "loadout cmd names commit, which mini does not have" });
+  expect(planLoadoutStart({ ...planBase, info, name: "cdx" })).toEqual({ refused: "loadout cdx names codex-thing, which mini does not have" });
+});
+test("the plan carries the plugins off, and equip names them", () => {
+  const plan = planLoadoutStart({ ...planBase, name: "docs" }) as LoadoutStartPlan;
+  expect(plan.plugins).toEqual({ "superpowers@sp": false });
+  expect(plan.equip).toEqual({ loadout: "docs", model: "haiku", effort: "low", skills: [], mcp: [], off: 3, pluginsOff: ["superpowers"] });
 });
 test("an unknown loadout names the ones there are", () => {
   expect(planLoadoutStart({ ...planBase, name: "nope" })).toEqual({ refused: "no loadout named nope; kit.json has docs, homelab-ops, needs-missing, codex-fast" });
@@ -121,17 +169,26 @@ test("a server the kit cannot give refuses the start with the kit's why", () => 
 test("a claude loadout replaces model and effort and keeps provider, yolo and extra", () => {
   const plan = planLoadoutStart({ ...planBase, name: "homelab-ops", agent: { ...DEFAULT_AGENT, provider: "zai", extra: "--verbose", yolo: true } });
   expect(plan).toMatchObject({ agent: { harness: "claude", model: "sonnet", effort: "medium", provider: "zai", extra: "--verbose", yolo: true }, canopyTools: false,
-    equip: { loadout: "homelab-ops", model: "sonnet", effort: "medium", skills: ["homelab:tailchan"], mcp: ["executor", "wiki-memory"], off: 3 } });
+    equip: { loadout: "homelab-ops", model: "sonnet", effort: "medium", skills: ["homelab:tailchan"], mcp: ["executor", "wiki-memory"], off: 3, pluginsOff: ["superpowers"] } });
   expect(Object.keys((plan as LoadoutStartPlan).servers)).toEqual(["executor", "wiki-memory"]);
 });
 test("a harness change drops the route's provider and extra", () => {
   const plan = planLoadoutStart({ ...planBase, name: "codex-fast", agent: { ...DEFAULT_AGENT, provider: "zai", extra: "--verbose" } }) as LoadoutStartPlan;
   expect(plan.agent).toEqual({ ...DEFAULT_AGENT, harness: "codex", model: "gpt-5.5", effort: "low", extra: "" });
   expect(plan.overrides).toEqual({});
+  expect(plan.plugins).toEqual({});
   expect(plan.servers).toEqual({});
+  expect(plan.equip.pluginsOff).toBeUndefined();
 });
 test("the provider's settings keep everything and take the overrides over their own", () => {
   expect(mergeProviderSettings({ env: { A: "1" }, skillOverrides: { ripe: "on", x: "off" } }, { ripe: "off" }))
     .toEqual({ env: { A: "1" }, skillOverrides: { ripe: "off", x: "off" } });
   expect(mergeProviderSettings(null, { ripe: "off" })).toEqual({ skillOverrides: { ripe: "off" } });
+});
+test("the plugins off lay over the provider's enabledPlugins key by key", () => {
+  expect(mergeProviderSettings({ enabledPlugins: { "a@m": true, "b@m": true } }, {}, { "b@m": false }))
+    .toEqual({ skillOverrides: {}, enabledPlugins: { "a@m": true, "b@m": false } });
+  expect(mergeProviderSettings(null, {}, { "b@m": false })).toEqual({ skillOverrides: {}, enabledPlugins: { "b@m": false } });
+  // no plugins off: the provider's own switches stay as they are
+  expect(mergeProviderSettings({ enabledPlugins: { "a@m": false } }, {}, {})).toEqual({ enabledPlugins: { "a@m": false }, skillOverrides: {} });
 });

@@ -90,7 +90,7 @@ function isRun(v: unknown): v is Run {
     optional(v, "branch", isBranch) && optional(v, "limited", (x) => record(x) && number(x["at"]) && text(x["text"]) && optional(x, "resetsAt", number) && optional(x, "window", (w) => w === "fiveHour" || w === "weekly")) &&
     optional(v, "flowStep", (x) => record(x) && strFields(x, ["workflow", "step"]) && oneOf(x["source"], ["bundled", "user", "repo"])) &&
     optional(v, "agentSettings", (x) => record(x) && harness(x["harness"]) && text(x["model"]) && oneOf(x["effort"], AGENT_EFFORTS) && optional(x, "provider", text)) &&
-    optional(v, "equip", (x) => record(x) && strFields(x, ["loadout", "model"]) && oneOf(x["effort"], AGENT_EFFORTS) && strings(x["skills"]) && strings(x["mcp"]) && number(x["off"])) &&
+    optional(v, "equip", (x) => record(x) && strFields(x, ["loadout", "model"]) && oneOf(x["effort"], AGENT_EFFORTS) && strings(x["skills"]) && strings(x["mcp"]) && number(x["off"]) && optional(x, "pluginsOff", strings)) &&
     optional(v, "todos", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "subject"]) && oneOf(t["status"], ["pending", "in_progress", "completed"]) && optional(t, "active", text))) &&
     optional(v, "result", (x) => record(x) && text(x["text"]) && number(x["durationMs"]) && number(x["turns"]) && optional(x, "costUsd", number) && optStrFields(x, ["model", "provider"]) && optional(x, "tokens", (t) => record(t) && ["input", "cachedInput", "output", "reasoning", "total"].every((key) => number(t[key])))) &&
     optional(v, "tasks", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "title", "repo", "note"]) && oneOf(t["action"], ["propose", "ask"]) && oneOf(t["state"], ["proposed", "queued", "running", "done", "failed", "dropped"]) && optStrFields(t, ["run", "work", "outcome", "group"]) && optional(t, "times", number)));
@@ -153,7 +153,7 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
   if (run.priority !== undefined) safe.priority = t(run.priority);
   if (run.proposalState) safe.proposalState = t(run.proposalState);
   if (run.agentSettings) safe.agentSettings = { harness: t(run.agentSettings.harness), model: r(run.agentSettings.model), effort: t(run.agentSettings.effort), ...(run.agentSettings.provider !== undefined ? { provider: r(run.agentSettings.provider) } : {}) };
-  if (run.equip) safe.equip = { loadout: r(run.equip.loadout), model: r(run.equip.model), effort: t(run.equip.effort), skills: run.equip.skills.map(r), mcp: run.equip.mcp.map(r), off: run.equip.off };
+  if (run.equip) safe.equip = { loadout: r(run.equip.loadout), model: r(run.equip.model), effort: t(run.equip.effort), skills: run.equip.skills.map(r), mcp: run.equip.mcp.map(r), off: run.equip.off, ...(run.equip.pluginsOff ? { pluginsOff: run.equip.pluginsOff.map(r) } : {}) };
   if (run.flowStep) safe.flowStep = { workflow: r(run.flowStep.workflow), step: r(run.flowStep.step), source: t(run.flowStep.source) };
   if (run.limited) safe.limited = { at: run.limited.at, text: r(run.limited.text), ...(run.limited.resetsAt !== undefined ? { resetsAt: run.limited.resetsAt } : {}), ...(run.limited.window ? { window: t(run.limited.window) } : {}) };
   if (run.branch) {

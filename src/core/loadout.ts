@@ -148,39 +148,66 @@ export interface LoadoutStartPlan {
   agent: AgentSettings;
   /** empty for a codex loadout */
   overrides: Record<string, "on" | "off">;
+  /** `enabledPlugins` for the run: each plugin it goes without, by its
+   *  `name@marketplace` key; empty for a codex loadout */
+  plugins: Record<string, false>;
   /** each loadout server's entry, by name */
   servers: Record<string, KitMcpEntry>;
   canopyTools: boolean;
   equip: RunEquip;
 }
 
-/** The `skillOverrides` for a run. Every skill the loadout lists that the
- *  machine has, from any source, gets "on", since the user's own settings may
- *  have turned it off. Every other user or plugin skill gets "off", except
- *  those the base covers and any user skill a repo skill of the same name
- *  shadows. A repo skill is never turned off. */
+/** What a claude loadout turns on and off in the run's settings file. */
+export interface SkillPlan {
+  /** `skillOverrides`: "on" for each listed skill, "off" for each other user skill */
+  overrides: Record<string, "on" | "off">;
+  /** `enabledPlugins`: false for each plugin the run goes without */
+  plugins: Record<string, false>;
+  /** those plugins' names */
+  pluginsOff: string[];
+  /** the user skills turned off plus the skills of the plugins turned off */
+  off: number;
+}
+
+/** A run's skill switches. Every skill the loadout lists that the machine
+ *  has, from any source, gets "on", since the user's own settings may have
+ *  turned it off. Every other user skill gets "off", except those the base
+ *  covers and any a repo skill of the same name shadows; a repo skill is
+ *  never turned off. claude 2.1.323 ignores `skillOverrides` for a plugin's
+ *  skills, so a plugin goes off whole through `enabledPlugins`: one with at
+ *  least one skill, none of which the loadout lists or the base covers. A
+ *  plugin with no skills (hooks or commands only) is left alone, and so is
+ *  one the scan read with no key. */
 export function skillOverridesFor(
   loadout: Pick<Loadout, "skills">,
   base: readonly string[],
   skills: readonly Mention[],
-): { overrides: Record<string, "on" | "off">; off: number } {
+): SkillPlan {
   const claude = skills.filter((s) => s.kind === "skill" && s.harness === "claude");
   const repo = new Set(claude.filter((s) => s.from === "project").map((s) => s.name));
-  const have = new Set(claude.map((s) => s.name));
-  const offable = new Set<string>();
-  for (const s of claude) {
-    if ((s.from === "user" || s.from.startsWith("plugin:")) && !repo.has(s.name)) offable.add(s.name);
-  }
+  const user = new Set(claude.filter((s) => s.from === "user" && !repo.has(s.name)).map((s) => s.name));
   const overrides: Record<string, "on" | "off"> = {};
   let off = 0;
-  for (const name of [...new Set([...have, ...offable])].sort()) {
+  for (const name of [...new Set(claude.map((s) => s.name))].sort()) {
     if (loadout.skills.includes(name)) overrides[name] = "on";
-    else if (offable.has(name) && !baseCovers(base, name)) {
+    else if (user.has(name) && !baseCovers(base, name)) {
       overrides[name] = "off";
       off++;
     }
   }
-  return { overrides, off };
+  const byPlugin = new Map<string, string[]>();
+  for (const s of claude) if (s.plugin) byPlugin.set(s.plugin, [...(byPlugin.get(s.plugin) ?? []), s.name]);
+  const plugins: Record<string, false> = {};
+  const names = new Set<string>();
+  for (const key of [...byPlugin.keys()].sort()) {
+    const own = byPlugin.get(key) ?? [];
+    if (own.some((name) => loadout.skills.includes(name) || baseCovers(base, name))) continue;
+    plugins[key] = false;
+    const at = key.indexOf("@");
+    names.add(at > 0 ? key.slice(0, at) : key);
+    off += own.length;
+  }
+  return { overrides, plugins, pluginsOff: [...names], off };
 }
 
 /** Plan a run's start from a loadout, or say why it cannot start. */
@@ -199,8 +226,9 @@ export function planLoadoutStart(o: {
     const err = o.info.errors[0];
     return { refused: `no loadout named ${o.name}; kit.json has ${have}${err ? ` (${err})` : ""}` };
   }
+  // a claude skill only: a command of the same name or a codex skill is not one the run can be given
   for (const s of loadout.skills) {
-    if (!o.skills.some((k) => k.name === s)) return { refused: `loadout ${loadout.name} names ${s}, which ${o.machine} does not have` };
+    if (!o.skills.some((k) => k.name === s && k.kind === "skill" && k.harness === "claude")) return { refused: `loadout ${loadout.name} names ${s}, which ${o.machine} does not have` };
   }
   const servers: Record<string, KitMcpEntry> = {};
   for (const name of loadout.mcp) {
@@ -212,18 +240,33 @@ export function planLoadoutStart(o: {
   const { provider: _provider, ...rest } = o.agent;
   const kept = loadout.harness === o.agent.harness ? o.agent : { ...rest, extra: "" };
   const agent: AgentSettings = { ...kept, harness: loadout.harness, model: loadout.model, effort: loadout.effort };
-  const { overrides, off } = codex ? { overrides: {}, off: 0 } : skillOverridesFor(loadout, o.info.base, o.skills);
+  const { overrides, plugins, pluginsOff, off }: SkillPlan = codex ? { overrides: {}, plugins: {}, pluginsOff: [], off: 0 } : skillOverridesFor(loadout, o.info.base, o.skills);
   return {
     agent,
     overrides,
+    plugins,
     servers: codex ? {} : servers,
     canopyTools: loadout.canopyTools,
-    equip: { loadout: loadout.name, model: loadout.model, effort: loadout.effort, skills: [...loadout.skills], mcp: [...loadout.mcp], off },
+    equip: {
+      loadout: loadout.name, model: loadout.model, effort: loadout.effort, skills: [...loadout.skills], mcp: [...loadout.mcp], off,
+      ...(pluginsOff.length > 0 ? { pluginsOff } : {}),
+    },
   };
 }
 
-/** A provider's settings file with the skill overrides laid over its own. */
-export function mergeProviderSettings(provider: Record<string, unknown> | null, overrides: Record<string, "on" | "off">): Record<string, unknown> {
+/** A provider's settings file with the skill overrides laid over its own
+ *  `skillOverrides`, and the plugins off over its own `enabledPlugins`, key
+ *  by key. The flag's `enabledPlugins` merges with the user's the same way. */
+export function mergeProviderSettings(
+  provider: Record<string, unknown> | null,
+  overrides: Record<string, "on" | "off">,
+  plugins: Record<string, false> = {},
+): Record<string, unknown> {
   const own = provider?.["skillOverrides"];
-  return { ...provider, skillOverrides: { ...(isObj(own) ? own : {}), ...overrides } };
+  const ownPlugins = provider?.["enabledPlugins"];
+  return {
+    ...provider,
+    skillOverrides: { ...(isObj(own) ? own : {}), ...overrides },
+    ...(Object.keys(plugins).length > 0 ? { enabledPlugins: { ...(isObj(ownPlugins) ? ownPlugins : {}), ...plugins } } : {}),
+  };
 }

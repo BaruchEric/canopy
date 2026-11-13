@@ -18,5 +18,6 @@ export function equipTitle(e: RunEquip): string {
     e.skills.length > 0 ? `skills: ${e.skills.join(", ")}` : "",
     e.mcp.length > 0 ? `servers: ${e.mcp.join(", ")}` : "",
     e.off > 0 ? `${e.off} skills off` : "",
+    e.pluginsOff && e.pluginsOff.length > 0 ? `plugins off: ${e.pluginsOff.join(", ")}` : "",
   ].filter(Boolean).join("\n");
 }

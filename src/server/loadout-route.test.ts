@@ -1,10 +1,12 @@
 /**
  * A run started with a loadout from kit.json (FR-065), over real HTTP on a
  * server in `enforce`: a scratch kit.json whose one machine is this backend,
- * a scratch repo with a skill of its own, and a driver that holds each run
- * open until the test stops it. The run gets the loadout's model and effort,
- * one settings file of its own and the loadout's servers, and both files go
- * when it ends or fails to start.
+ * a scratch repo with a skill of its own, a scratch HOME with one user skill
+ * and one plugin holding one skill (so what the run turns off is the same on
+ * every machine), and a driver that holds each run open until the test stops
+ * it. The run gets the loadout's model and effort, one settings file of its
+ * own and the loadout's servers, and both files go when it ends or fails to
+ * start.
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -38,7 +40,7 @@ let config: string;
 let cli: string;
 let server: Awaited<ReturnType<typeof startServer>>;
 const saved: Record<string, string | undefined> = {};
-const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND", "CANOPY_KIT"];
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_CALLERS", "CANOPY_TMUX", "CANOPY_COORD_SOCKET", "CANOPY_BIND", "CANOPY_KIT", "HOME", "CODEX_HOME"];
 
 const url = (p: string) => `http://127.0.0.1:${server.port}${p}`;
 const get = (p: string) => fetch(url(p), { headers: { "x-canopy-token": cli } });
@@ -94,6 +96,17 @@ beforeAll(async () => {
   await exec(["git", "init", "-q", "-b", "main", proj]);
   await exec(["git", "-C", proj, "add", "-A"]);
   await exec(["git", "-C", proj, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+  // the home listMentions reads: one user skill, and one installed plugin
+  // with one skill, outside it as the CLI's cache is
+  const home = join(scratch, "home");
+  const plugin = join(scratch, "plugins", "kitplug");
+  await mkdir(join(home, ".claude", "skills", "user-one"), { recursive: true });
+  await writeFile(join(home, ".claude", "skills", "user-one", "SKILL.md"), "---\nname: user-one\ndescription: the user's own\n---\n");
+  await mkdir(join(home, ".claude", "plugins"), { recursive: true });
+  await writeFile(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({ version: 2, plugins: { "kitplug@scratch": [{ scope: "user", installPath: plugin }] } }));
+  await mkdir(join(plugin, "skills", "helper"), { recursive: true });
+  await writeFile(join(plugin, "skills", "helper", "SKILL.md"), "---\nname: helper\ndescription: the plugin's own\n---\n");
+  await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
   const seed = join(root, SEEDS_DIR, "seedy");
   await mkdir(seed, { recursive: true });
   await exec(["git", "init", "-q", "-b", "main", seed]);
@@ -118,6 +131,8 @@ beforeAll(async () => {
   process.env["CANOPY_CALLERS"] = "enforce";
   process.env["CANOPY_TMUX"] = "0";
   process.env["CANOPY_KIT"] = kitFile;
+  process.env["HOME"] = home;
+  delete process.env["CODEX_HOME"];
   delete process.env["CANOPY_COORD_SOCKET"];
   delete process.env["CANOPY_BIND"];
   const book = new CallerBook({ file: join(config, "callers.json") });
@@ -147,10 +162,11 @@ describe("a run started with a loadout", () => {
     const run = await started({ loadout: "docs" });
     const ctx = await ctxOf(run.id);
     expect(ctx.agent).toMatchObject({ model: "haiku", effort: "low" });
-    const settings = JSON.parse(await readFile(ctx.spec.settings ?? "", "utf8")) as { skillOverrides: Record<string, string> };
-    expect(settings.skillOverrides["repo-skill"]).toBe("on");
-    expect(Object.entries(settings.skillOverrides).filter(([k]) => k !== "repo-skill").every(([, v]) => v === "off")).toBe(true);
-    expect(run.body.equip).toEqual({ loadout: "docs", model: "haiku", effort: "low", skills: ["repo-skill"], mcp: [], off: expect.any(Number) });
+    const settings = JSON.parse(await readFile(ctx.spec.settings ?? "", "utf8")) as { skillOverrides: Record<string, string>; enabledPlugins: Record<string, boolean> };
+    expect(settings.skillOverrides).toEqual({ "repo-skill": "on", "user-one": "off" });
+    // a plugin's skills take no off key; the plugin goes off whole
+    expect(settings.enabledPlugins).toEqual({ "kitplug@scratch": false });
+    expect(run.body.equip).toEqual({ loadout: "docs", model: "haiku", effort: "low", skills: ["repo-skill"], mcp: [], off: 2, pluginsOff: ["kitplug"] });
     // no servers and no tools: no mcp.json at all
     expect(ctx.spec.mcpConfig).toBeUndefined();
     expect(run.body.canopyTools).toBeUndefined();

@@ -560,10 +560,18 @@ test("a kept run keeps its loadout's equip, and a malformed one is refused", asy
   const log = open(dir, value);
   await log.settle(value);
   expect((await readKeptRun(dir, value.id))?.equip).toEqual(equip);
-  for (const invalid of [{ ...equip, effort: "warp" }, { ...equip, skills: [7] }, { ...equip, off: "3" }]) {
+  for (const invalid of [{ ...equip, effort: "warp" }, { ...equip, skills: [7] }, { ...equip, off: "3" }, { ...equip, pluginsOff: "vercel" }]) {
     await writeFile(join(log.folder, RUN_FILE), JSON.stringify({ ...value, equip: invalid }));
     expect(await readKeptRun(dir, value.id)).toBeNull();
   }
+});
+
+test("a kept run keeps the plugins its loadout turned off", async () => {
+  const dir = join(root, "equip-plugins");
+  const equip = { loadout: "docs", model: "haiku", effort: "low" as const, skills: [], mcp: [], off: 40, pluginsOff: ["vercel", "firebase"] };
+  const value = run({ id: "equip456", equip });
+  await open(dir, value).settle(value);
+  expect((await readKeptRun(dir, value.id))?.equip).toEqual(equip);
 });
 
 test("a kept coordinator keeps its cards' times and group", async () => {

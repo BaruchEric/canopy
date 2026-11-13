@@ -1360,7 +1360,7 @@ async function planLoadout(state: ServerState, repo: Repo, name: string, agent: 
 }
 
 /** A claude loadout run's files: its own settings file (the provider's, with
- *  the loadout's skill overrides laid over) and, when it has servers or holds
+ *  the loadout's skill overrides and plugins off laid over) and, when it has servers or holds
  *  canopy's tools, its `mcp.json`. The provider is read before anything is
  *  written; `release` removes whatever was, for a start that fails. */
 async function loadoutFiles(state: ServerState, repo: Repo, plan: LoadoutStartPlan, extras: StartExtras, withTools: boolean): Promise<{ extras: StartExtras; release: () => Promise<void> }> {
@@ -1369,7 +1369,7 @@ async function loadoutFiles(state: ServerState, repo: Repo, plan: LoadoutStartPl
   const release = (): Promise<void> => dropRunTools(state, id);
   const names = Object.keys(plan.servers);
   try {
-    const settings = await writeRunSettings(id, mergeProviderSettings(provider, plan.overrides));
+    const settings = await writeRunSettings(id, mergeProviderSettings(provider, plan.overrides, plan.plugins));
     const own: StartExtras = { ...extras, id, settings };
     if (withTools) return await runTools(state, repo, own, plan.servers);
     if (names.length === 0) return { extras: own, release };

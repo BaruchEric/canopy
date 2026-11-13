@@ -2298,6 +2298,9 @@ export interface Mention {
   description: string;
   /** what its SKILL.md calls it, when that differs from the folder's name */
   alias?: string;
+  /** a plugin's skill or command: the plugin's `name@marketplace` key, what
+   *  `enabledPlugins` turns it on and off by */
+  plugin?: string;
 }
 
 /** one repo's row in a search across many */
@@ -4193,8 +4196,12 @@ export interface RunEquip {
   effort: AgentEffort;
   skills: string[];
   mcp: string[];
-  /** how many of the machine's user and plugin skills the run started without */
+  /** how many of the machine's skills the run started without: the user
+   *  skills turned off and the skills of the plugins turned off */
   off: number;
+  /** the plugins turned off whole (by name), since a plugin's skills cannot
+   *  be turned off one by one; absent when none */
+  pluginsOff?: string[];
 }
 
 /* ---------- agent plugins (docs/superpowers/specs/2026-11-11-kit-plugins-design.md) ---------- */

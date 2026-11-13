@@ -58,18 +58,19 @@ export function scanCommand(root: string, home = ""): string[] {
   return ["sh", "-c", script, "sh", home];
 }
 
-/** The plugin pass: each plugin's commands and skills, from name and path
- *  pairs on the command line. */
+/** The plugin pass: each plugin's commands and skills, from key and path
+ *  pairs on the command line. A record's source is `plugin:<key>`, the
+ *  `name@marketplace` key, which `mentionsOf` splits. */
 export function pluginCommand(plugins: readonly PluginDir[]): string[] {
   const script = [
     ...SCAN_FUNCTIONS,
     'while [ $# -ge 2 ]; do',
-    '  n=$1; p=$2; shift 2',
-    '  cmds "$p/commands" "plugin:$n"',
-    '  skills "$p/skills" "plugin:$n"',
+    '  k=$1; p=$2; shift 2',
+    '  cmds "$p/commands" "plugin:$k"',
+    '  skills "$p/skills" "plugin:$k"',
     "done",
   ].join("\n");
-  return ["sh", "-c", script, "sh", ...plugins.flatMap((p) => [p.name, p.path])];
+  return ["sh", "-c", script, "sh", ...plugins.flatMap((p) => [p.key, p.path])];
 }
 
 /** one record of the scan's output */
@@ -150,29 +151,37 @@ export function mentionsOf(records: readonly ScanRecord[]): Mention[] {
     if (r.kind !== "command" && r.kind !== "skill") continue;
     const codex = r.from.startsWith("codex-");
     const harness: Harness = codex ? "codex" : "claude";
-    const from = codex ? r.from.slice("codex-".length) : r.from;
-    const plugin = from.startsWith("plugin:") ? from.slice("plugin:".length) : null;
+    const source = codex ? r.from.slice("codex-".length) : r.from;
+    // a plugin's records carry its name@marketplace key: the name names its
+    // words and its source, the key is what enabledPlugins turns off
+    const key = source.startsWith("plugin:") ? source.slice("plugin:".length) : null;
+    const at = key?.indexOf("@") ?? -1;
+    const plugin = key && at > 0 ? key.slice(0, at) : key;
+    const from = plugin ? `plugin:${plugin}` : source;
     const parts = r.name.split("/");
     const leaf = parts.at(-1) ?? "";
     if (!leaf) continue;
     const name = plugin ? `${plugin}:${leaf}` : leaf;
     const fm = frontmatter(r.head);
+    const owner = key ? { plugin: key } : {};
     if (r.kind === "command") {
       // a subfolder sorts a command and shows beside it; the name stays the file's
       const folder = parts.slice(0, -1).join("/");
-      out.push({ name, kind: "command", harness, from: folder ? `${from}:${folder}` : from, description: fm.description ?? firstLine(r.head) });
+      out.push({ name, kind: "command", harness, from: folder ? `${from}:${folder}` : from, description: fm.description ?? firstLine(r.head), ...owner });
     } else {
       // the folder names a skill; what its SKILL.md calls it shows beside it
       const alias = fm.name && fm.name !== leaf ? fm.name : null;
-      out.push({ name, kind: "skill", harness, from, description: fm.description ?? "", ...(alias ? { alias } : {}) });
+      out.push({ name, kind: "skill", harness, from, description: fm.description ?? "", ...(alias ? { alias } : {}), ...owner });
     }
   }
   return out;
 }
 
-/** an installed plugin's name and folder */
+/** an installed plugin's name, key and folder */
 export interface PluginDir {
   name: string;
+  /** `name@marketplace`, as installed_plugins.json and enabledPlugins key it */
+  key: string;
   path: string;
 }
 
@@ -204,7 +213,7 @@ export function enabledPlugins(manifest: string, settings: string): PluginDir[] 
     const path = list.map((i: unknown) => (isObj(i) ? i["installPath"] : null)).find((p): p is string => typeof p === "string" && p !== "");
     if (!path) continue;
     const at = key.indexOf("@");
-    out.push({ name: at > 0 ? key.slice(0, at) : key, path });
+    out.push({ name: at > 0 ? key.slice(0, at) : key, key, path });
   }
   return out;
 }

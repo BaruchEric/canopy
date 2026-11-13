@@ -14,6 +14,11 @@ describe("loadouts in the page", () => {
     expect(equipTitle({ loadout: "homelab-ops", model: "sonnet", effort: "medium", skills: ["homelab:tailchan"], mcp: ["executor"], off: 42 }))
       .toBe("loadout homelab-ops\nsonnet, medium\nskills: homelab:tailchan\nservers: executor\n42 skills off");
   });
+  test("the plugins a run went without get a line of their own", () => {
+    expect(equipTitle({ loadout: "docs", model: "haiku", effort: "default", skills: [], mcp: [], off: 40, pluginsOff: ["vercel", "firebase"] }))
+      .toBe("loadout docs\nhaiku\n40 skills off\nplugins off: vercel, firebase");
+    expect(equipTitle({ loadout: "docs", model: "default", effort: "default", skills: [], mcp: [], off: 0, pluginsOff: [] })).toBe("loadout docs");
+  });
   test("an equip with nothing set leaves those lines out", () => {
     expect(equipTitle({ loadout: "docs", model: "default", effort: "default", skills: [], mcp: [], off: 0 })).toBe("loadout docs");
   });

@@ -472,7 +472,7 @@ export class Runner {
     const depth = extras.child ? (this.get(extras.parent ?? "")?.depth ?? 0) + 1 : extras.depth ?? 0;
     if (depth > 0) run.depth = depth;
     if (extras.canopy) run.canopyTools = true;
-    if (extras.equip) run.equip = { ...extras.equip, skills: [...extras.equip.skills], mcp: [...extras.equip.mcp] };
+    if (extras.equip) run.equip = { ...extras.equip, skills: [...extras.equip.skills], mcp: [...extras.equip.mcp], ...(extras.equip.pluginsOff ? { pluginsOff: [...extras.equip.pluginsOff] } : {}) };
     if (spec.unattended) run.unattended = true;
     const group = extras.group ?? branch?.branch.group;
     if (group) run.group = group;

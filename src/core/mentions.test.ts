@@ -32,8 +32,8 @@ describe("parseScan and mentionsOf", () => {
     "skill\nuser\nripe\n---\nname: cli-anything-ripe\ndescription: Drive ripe\n---\n",
     "skill\nproject\nredeploy\n---\nname: redeploy\ndescription: Redeploy the mini\n---\n",
     "skill\ncodex-user\nbuzz\n---\ndescription: Buzz\n---\n",
-    "command\nplugin:vercel\ndeploy\n---\ndescription: Deploy\n---\n",
-    "skill\nplugin:superpowers\nbrainstorming\n---\nname: brainstorming\ndescription: Think first\n---\n",
+    "command\nplugin:vercel@official\ndeploy\n---\ndescription: Deploy\n---\n",
+    "skill\nplugin:superpowers@market\nbrainstorming\n---\nname: brainstorming\ndescription: Think first\n---\n",
     "plugins\n-\n-\n{}",
     "garbage",
     "",
@@ -52,8 +52,8 @@ describe("parseScan and mentionsOf", () => {
       { name: "ripe", kind: "skill", harness: "claude", from: "user", description: "Drive ripe", alias: "cli-anything-ripe" },
       { name: "redeploy", kind: "skill", harness: "claude", from: "project", description: "Redeploy the mini" },
       { name: "buzz", kind: "skill", harness: "codex", from: "user", description: "Buzz" },
-      { name: "vercel:deploy", kind: "command", harness: "claude", from: "plugin:vercel", description: "Deploy" },
-      { name: "superpowers:brainstorming", kind: "skill", harness: "claude", from: "plugin:superpowers", description: "Think first" },
+      { name: "vercel:deploy", kind: "command", harness: "claude", from: "plugin:vercel", description: "Deploy", plugin: "vercel@official" },
+      { name: "superpowers:brainstorming", kind: "skill", harness: "claude", from: "plugin:superpowers", description: "Think first", plugin: "superpowers@market" },
     ]);
   });
   test("sorts the repo's own first, then the user's, the CLI's, the plugins'", () => {
@@ -82,14 +82,21 @@ describe("enabledPlugins", () => {
   });
   test("the settings switch wins, then the manifest's, else on", () => {
     expect(enabledPlugins(manifest, JSON.stringify({ enabledPlugins: { "telegram@official": false, "ctx@ctx": true } }))).toEqual([
-      { name: "vercel", path: "/p/vercel/1" },
-      { name: "ctx", path: "/p/ctx/1" },
+      { name: "vercel", key: "vercel@official", path: "/p/vercel/1" },
+      { name: "ctx", key: "ctx@ctx", path: "/p/ctx/1" },
     ]);
     expect(enabledPlugins(manifest, "")).toEqual([
-      { name: "vercel", path: "/p/vercel/1" },
-      { name: "telegram", path: "/p/telegram/1" },
+      { name: "vercel", key: "vercel@official", path: "/p/vercel/1" },
+      { name: "telegram", key: "telegram@official", path: "/p/telegram/1" },
     ]);
     expect(enabledPlugins("not json", "{")).toEqual([]);
+  });
+  test("two plugins of one name from two marketplaces keep their own keys", () => {
+    const two = JSON.stringify({ plugins: { "foo@a": [{ installPath: "/p/a/foo" }], "foo@b": [{ installPath: "/p/b/foo" }] } });
+    expect(enabledPlugins(two, "")).toEqual([
+      { name: "foo", key: "foo@a", path: "/p/a/foo" },
+      { name: "foo", key: "foo@b", path: "/p/b/foo" },
+    ]);
   });
 });
 
@@ -149,8 +156,8 @@ describe("scanMentions", () => {
     expect(by["claude ripe"]).toMatchObject({ kind: "skill", from: "user", alias: "cli-anything-ripe" });
     expect(by["claude redeploy"]).toMatchObject({ kind: "skill", from: "project" });
     expect(by["codex buzz"]).toMatchObject({ kind: "skill", from: "user", description: "Buzz" });
-    expect(by["claude vercel:deploy"]).toMatchObject({ kind: "command", from: "plugin:vercel" });
-    expect(by["claude vercel:eve"]).toMatchObject({ kind: "skill", from: "plugin:vercel" });
+    expect(by["claude vercel:deploy"]).toMatchObject({ kind: "command", from: "plugin:vercel", plugin: "vercel@official" });
+    expect(by["claude vercel:eve"]).toMatchObject({ kind: "skill", from: "plugin:vercel", plugin: "vercel@official" });
     expect(by["claude compact"]).toMatchObject({ kind: "builtin" });
     expect(by["claude telegram:chat"]).toBeUndefined();
     expect(by["claude empty"]).toBeUndefined();
