@@ -476,8 +476,9 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
   `connected`.
 - **P5.** One `--mcp-config` holding `pdfcraft` and `wiki-memory` under
   `--strict-mcp-config` loaded both (`connected`, source `dynamic`).
-- **P6.** Left for plan 3. FR-066 (merged into main) adds words into a
-  working run, and plan 3 builds on it rather than on a new `runs/nudge`.
+- **P6.** Left for plan 3 (shipped in plan 3). FR-066 (merged into main)
+  adds words into a working run, and plan 3 builds on it rather than on a
+  new `runs/nudge`.
 
 ## Phases
 
@@ -507,7 +508,7 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
    refuses a step off Claude Code, a profile step on another provider than
    the loadout's, and a codex loadout; a workflow of one plain step starts a
    plain branch run; there is no `POST /api/flows/pickup` yet, so a stopped
-   card flow is not picked up from a route (phase 3); and a stalled run on a
+   card flow is not picked up from a route (phase 3; shipped in plan 3); and a stalled run on a
    card's branch is not resumed while its coordinator runs (Calls #16).
 3. The steering routes (`flows/pickup`, and `landing/followup` for send
    back and resume through `startBranchFix`; a working worker takes words
@@ -520,7 +521,20 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
      stopped ("pick the flow up instead"), and any landing entry, sent back
      and landed included, not only one in the queue.
    - `POST /api/flows/pickup`, and a trigger event's resume, refuse while
-     another writer works on the flow's branch (`branchBusy`).
+     another writer works on the flow's branch (`branchBusy`), and while
+     the branch has a landing entry (queued, sent back or landed), in a
+     follow-up's words (`entryRefusal`). A follow-up names such an entry
+     ahead of a stopped flow, and the say box does the same.
+   - A landing "fix it" and a card's resume after the usage limit refuse
+     while another writer works on the branch, and mark the branch while
+     they start (`startingOn`), so a double tap starts one fix. A card
+     waiting on the reset takes no words in its say box.
+   - The landing queue and the PR watch read a run as still going while a
+     flow on its branch is active, gated included, so a gated card flow's
+     branch is not landed or dropped under its next step.
+   - The manager's chat, aimed at a worker, has no interrupt and no stop &
+     send, since both would cut the manager's own turn; its placeholder
+     names the worker.
    - `sayTarget` takes the PR watches as a fifth argument, so the say box
      never offers a follow-up the server would refuse.
    - Rings and chips take the view's palette rather than `cardStatus`'s

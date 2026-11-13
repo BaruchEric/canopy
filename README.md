@@ -173,7 +173,7 @@ canopy run export <id> [--out f]   # the run as a markdown transcript, secrets r
 canopy run fork <id> [--at N] [--profile NAME] [-m note]   # a new branch run that goes on from step N of a finished run (its end without --at), with the run's context; --profile picks its agent
 canopy run say <id> <words…>       # a person's words into a live run: a chat between turns takes them as its next turn, a run at work (a job's turn or a chat's reply) at its next step; inside a canopy shell the shell's token reaches a chat between turns only
 canopy run interrupt <id> [words…] # stop the turn a run is on and keep the run, as Escape does in a terminal; the words go next, and a job needs them (stop ends a job)
-canopy run pickup <flow>           # take a stopped branch flow up where it stopped; prints its id and status
+canopy run pickup <flow>           # take a stopped branch flow up where it stopped; prints its id and status. Refused while another run works on its branch or the landing queue holds it, sent it back or landed it
 canopy run prune                   # remove kept runs past the sweep's transcript span (30 days); a live branch's or an open PR's stays
 canopy awake [off|always|working]  # keep this backend's machine from idle sleep: never, always, or while an agent of its own works
 canopy plugins [--machine M] [--agent claude|codex]   # every Claude Code and Codex plugin on every kit machine: on, off, wanted by settings.json and not installed, or failing, with the MCP servers it brings
