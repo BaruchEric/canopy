@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { validatePlan, type ChildBranch } from "../core/coordinator";
+import { blockedNote, holdNote, landedNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
-import type { CoordTask, LandEntry, Run, RunBranch } from "../core/types";
+import type { CoordTask, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
 
@@ -19,6 +19,10 @@ let sent: number;
 let clock: number;
 let n: number;
 let made: CoordinatorHub[];
+let asked: { repo: string; withRepo: boolean }[];
+
+const lo = (over: Partial<Loadout> = {}): Loadout => ({ name: "quick", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, ...over });
+const kit: LoadoutsInfo = { base: [], loadouts: [lo()], errors: [] };
 
 const coordinator = (over: Partial<Run> = {}): Run => {
   const r = {
@@ -71,6 +75,13 @@ function hub(over: Partial<CoordinatorDeps> = {}): CoordinatorHub {
     repoFull: (repo) => full.has(repo),
     known: (repo) => (repo === "web" || repo === "api" ? "local" : repo === "mini:box" ? "remote" : null),
     landing: (run) => branches.get(run.id) ?? {},
+    // a child's branch is br-<child id>, so the branch's facts are its child's
+    branch: (origin) => branches.get(origin.replace(/^br-/, "")) ?? {},
+    loadouts: () => kit,
+    workflows: async (repo, withRepo) => {
+      asked.push({ repo, withRepo });
+      return [{ name: "review", fromRepo: false }, ...(withRepo && repo === "web" ? [{ name: "local", fromRepo: true }] : [])];
+    },
     broadcast: () => {
       sent++;
     },
@@ -144,6 +155,7 @@ beforeEach(() => {
   clock = 10_000;
   n = 0;
   made = [];
+  asked = [];
   coordinator();
 });
 
@@ -229,7 +241,7 @@ describe("the tasks route", () => {
     await post(h, "plan", { run: "co1", tasks: [task()] });
     await post(h, "start", { run: "co1" });
     expect(card("t1")?.state).toBe("running");
-    expect(await post(h, "tasks", { run: "co1", id: "t1", title: "other" })).toEqual({ status: 409, body: { error: "t1 is running; only a proposed card changes" } });
+    expect(await post(h, "tasks", { run: "co1", id: "t1", title: "other" })).toEqual({ status: 409, body: { error: "t1 is running; only a proposed or queued card changes" } });
     expect((await post(h, "tasks", { run: "co1", id: "t1", remove: true })).status).toBe(409);
   });
 
@@ -742,6 +754,23 @@ describe("a card with times", () => {
     expect(card("t1")).toMatchObject({ state: "failed", outcome: "needs you" });
   });
 
+  test("a group card whose winner was picked lands later, and the card after it starts", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 }), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    live = group({ state: "picked", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "winner picked" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    live = group({ state: "landed", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")?.state).toBe("running");
+  });
+
   test("a group the backend no longer keeps fails its card", async () => {
     const h = groupHub();
     coordinator({ status: "idle" });
@@ -750,5 +779,271 @@ describe("a card with times", () => {
     live = undefined;
     h.recheck();
     expect(card("t1")).toMatchObject({ state: "failed", outcome: "its group is no longer kept" });
+  });
+});
+
+/** every note said so far, after the coordinator went idle as often as it takes */
+async function hearAll(h: CoordinatorHub): Promise<string[]> {
+  for (let i = 0; i < 10; i++) {
+    await settled(h);
+    goIdle(h);
+  }
+  await settled(h);
+  return said.map((s) => s.text);
+}
+
+describe("card fields on the plan and tasks routes", () => {
+  test("a plan takes equip, workflow and after; a coordinator names a bundled or user workflow only", async () => {
+    const h = hub();
+    const ok = await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "quick" }, workflow: "review" }), task({ title: "two", after: ["t1"] })] }, coordCaller("co1"));
+    expect(ok.status).toBe(200);
+    expect(cards()).toMatchObject([
+      { id: "t1", equip: { loadout: "quick" }, workflow: "review" },
+      { id: "t2", after: ["t1"] },
+    ]);
+    expect(asked).toEqual([{ repo: "web", withRepo: false }]);
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ workflow: "local" })] }, coordCaller("co1"))).toEqual({ status: 400, body: { error: "tasks[0].workflow: no workflow local for web" } });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "quick", model: "opus" } })] }, coordCaller("co1"))).toEqual({
+      status: 400,
+      body: { error: "tasks[0].equip: a coordinator names a loadout; its fields are Eric's" },
+    });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "gone" } })] })).toEqual({ status: 400, body: { error: "tasks[0].equip.loadout: no loadout gone in kit.json" } });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ after: ["t9"] })] })).toEqual({ status: 400, body: { error: "tasks[0].after: no card t9" } });
+    // Eric names the repo's own workflow from the page
+    const own = await post(h, "plan", { run: "co1", tasks: [task({ workflow: "local", workflowRepo: true })] });
+    expect(own.status).toBe(200);
+    expect((own.body["added"] as CoordTask[])[0]).toMatchObject({ workflow: "local", workflowRepo: true });
+    expect(asked.at(-1)).toEqual({ repo: "web", withRepo: true });
+  });
+
+  test("a proposed card's equip, workflow and after change through tasks", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });
+    expect((await post(h, "tasks", { run: "co1", id: "t2", equip: { loadout: "quick", effort: "high" }, workflow: "local", workflowRepo: true, after: ["t1"] })).status).toBe(200);
+    expect(card("t2")).toMatchObject({ equip: { loadout: "quick", effort: "high" }, workflow: "local", workflowRepo: true, after: ["t1"] });
+    expect(await post(h, "tasks", { run: "co1", id: "t1", after: ["t2"] })).toEqual({ status: 400, body: { error: "t1.after: t1 and t2 wait for each other" } });
+    expect((await post(h, "tasks", { run: "co1", id: "t2", equip: null, workflow: null, after: null })).status).toBe(200);
+    expect(card("t2")).toEqual({ id: "t2", title: "two", repo: "web", note: "the login form drops the email", action: "propose", state: "proposed" });
+  });
+
+  test("a queued card takes a new loadout and after, and nothing else, and may be removed", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] }), task({ title: "three", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+      ["t1", "running", undefined],
+      ["t2", "queued", "waits for t1"],
+      ["t3", "queued", "waits for t1"],
+    ]);
+    expect(await post(h, "tasks", { run: "co1", id: "t2", title: "other" })).toEqual({ status: 409, body: { error: "t2 is queued; only its loadout and after change" } });
+    expect((await post(h, "tasks", { run: "co1", id: "t2", equip: { loadout: "quick" } })).status).toBe(200);
+    expect(card("t2")).toMatchObject({ state: "queued", equip: { loadout: "quick" } });
+    // taking its after off lets it start
+    const off = await post(h, "tasks", { run: "co1", id: "t2", after: [] });
+    expect(off.status).toBe(200);
+    await settled(h);
+    expect(card("t2")).toMatchObject({ state: "running" });
+    expect(card("t2")?.after).toBeUndefined();
+    expect(await post(h, "tasks", { run: "co1", id: "t3", remove: true })).toEqual({ status: 200, body: { ok: true, removed: "t3" } });
+    expect(cards().map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("holding the goal", () => {
+  test("a held goal queues its cards and starts none; resuming starts them; the chat hears both", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });
+    expect(await post(h, "hold", { run: "co1", held: true })).toEqual({ status: 200, body: { ok: true, held: true } });
+    expect(runs.get("co1")?.held).toBe(true);
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([["queued", "the goal is held"], ["queued", "the goal is held"]]);
+    expect(started).toEqual([]);
+    expect(said.map((s) => s.text)).toEqual([holdNote(true)]);
+    // a start with ids starts nothing either
+    expect((await post(h, "start", { run: "co1", ids: ["t1"] })).status).toBe(200);
+    expect(started).toEqual([]);
+    goIdle(h);
+    expect(await post(h, "hold", { run: "co1", held: false })).toEqual({ status: 200, body: { ok: true, held: false } });
+    await settled(h);
+    expect(runs.get("co1")?.held).toBeUndefined();
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([["running", undefined], ["running", undefined]]);
+    expect(said.map((s) => s.text)).toEqual([holdNote(true), holdNote(false)]);
+  });
+
+  test("holding twice says it once; a running child goes on", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    await post(h, "hold", { run: "co1", held: true });
+    await post(h, "hold", { run: "co1", held: true });
+    expect(child("t1").status).toBe("working");
+    expect(card("t1")?.state).toBe("running");
+    expect((await hearAll(h)).filter((t) => t === holdNote(true))).toHaveLength(1);
+  });
+
+  test("a coordinator's own token cannot hold, and held must be true or false", async () => {
+    const h = hub();
+    expect(await post(h, "hold", { run: "co1", held: true }, coordCaller("co1"))).toEqual({ status: 403, body: { error: "a coordinator proposes; holding the goal is Eric's" } });
+    expect(await post(h, "hold", { run: "co1", held: "yes" })).toEqual({ status: 400, body: { error: "held must be true or false" } });
+    expect(runs.get("co1")?.held).toBeUndefined();
+  });
+});
+
+describe("start with ids", () => {
+  test("starts the named cards only, and refuses a card that is not there or has started", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" }), task({ title: "three" })] });
+    expect((await post(h, "start", { run: "co1", ids: ["t1"] })).status).toBe(200);
+    const two = await post(h, "start", { run: "co1", ids: ["t2"] });
+    expect(two.status).toBe(200);
+    expect(cards().map((t) => t.state)).toEqual(["running", "running", "proposed"]);
+    expect(started.map((s) => s.task)).toEqual(["t1", "t2"]);
+    expect(await post(h, "start", { run: "co1", ids: ["t9"] })).toEqual({ status: 404, body: { error: "no card t9" } });
+    expect(await post(h, "start", { run: "co1", ids: ["t1"] })).toEqual({ status: 409, body: { error: "t1 is running; only a proposed or queued card starts" } });
+    expect(await post(h, "start", { run: "co1", ids: "t3" })).toEqual({ status: 400, body: { error: "ids must list card ids" } });
+    expect(card("t3")?.state).toBe("proposed");
+  });
+
+  test("a queued card named goes before the cards queued ahead of it", async () => {
+    full.add("web");
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", repo: "api" }), task({ title: "three" }), task({ title: "four", repo: "api" })] });
+    await post(h, "start", { run: "co1" });
+    expect(cards().map((t) => [t.id, t.state])).toEqual([
+      ["t1", "queued"],
+      ["t2", "running"],
+      ["t3", "queued"],
+      ["t4", "running"],
+    ]);
+    full.delete("web");
+    // room for one: t3 goes, t1 waits
+    expect((await post(h, "start", { run: "co1", ids: ["t3"] })).status).toBe(200);
+    expect(cards().map((t) => [t.id, t.state])).toEqual([
+      ["t1", "queued"],
+      ["t2", "running"],
+      ["t3", "running"],
+      ["t4", "running"],
+    ]);
+  });
+
+  test("a started card records its branch", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    expect(card("t1")).toMatchObject({ run: "c1", branch: "br-c1" });
+  });
+});
+
+describe("after waits for landed", () => {
+  test("a card after another waits, and starts once that card lands through the queue", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    branches.set("c1", { verdict: "auto" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    expect(card("t2")?.state).toBe("queued");
+    branches.set("c1", { verdict: "auto", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")).toMatchObject({ state: "running" });
+    expect(card("t2")?.outcome).toBeUndefined();
+  });
+
+  test("Review Focus 1: a card that settled ready lands later by Eric's hand, and the card after it starts", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "approve" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
+    h.recheck();
+    await settled(h);
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    branches.set("c1", { verdict: "approve", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    const t1 = card("t1");
+    if (!t1) throw new Error("no t1");
+    h.recheck();
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")?.state).toBe("running");
+    expect((await hearAll(h)).filter((t) => t === landedNote(t1))).toHaveLength(1);
+  });
+
+  test("Review Focus 1: a card's run gone, its branch still says landed", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "land" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", branch: "br-c1" });
+    const landed = entry("t1", "landed");
+    runs.delete("c1");
+    branches.set("c1", { entry: landed, entries: [landed] });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")?.outcome).toBe("landed");
+    expect(card("t2")?.state).toBe("running");
+  });
+
+  test("Review Focus 1: a card that settled PR opened lands when its PR merges", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { openPr: true, prUrl: "https://github.com/x/web/pull/7" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "PR opened" });
+    expect(card("t2")?.state).toBe("queued");
+    const t1 = card("t1");
+    if (!t1) throw new Error("no t1");
+    branches.set("c1", { openPr: true, prUrl: "https://github.com/x/web/pull/7", prMerged: true });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")?.outcome).toBe("landed");
+    expect(card("t2")?.state).toBe("running");
+    expect(await hearAll(h)).toContain(landedNote(t1));
+  });
+
+  test("Review Focus 5: a card after one that failed stays queued, and the manager hears it once", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    end(h, "t1", { status: "failed" });
+    await settled(h);
+    await h.pump("co1");
+    await h.pump("co1");
+    expect(card("t1")?.state).toBe("failed");
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    const t2 = card("t2");
+    if (!t2) throw new Error("no t2");
+    expect((await hearAll(h)).filter((t) => t === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+    expect(started.map((s) => s.task)).toEqual(["t1"]);
+  });
+
+  test("Review Focus 5: a card after one that was removed says so", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    expect((await post(h, "tasks", { run: "co1", id: "t1", remove: true })).status).toBe(200);
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which was removed" });
+    const t2 = card("t2");
+    if (!t2) throw new Error("no t2");
+    expect((await hearAll(h)).filter((t) => t === blockedNote(t2, "waits for t1, which was removed"))).toHaveLength(1);
+    expect(started).toEqual([]);
   });
 });

@@ -216,12 +216,19 @@ describe("the coordinator's routes", () => {
     expect(needs("POST", "/api/coordinator/start")).toBe("operate");
   });
 
+  test("holding a goal needs operate, which a coordinator's token lacks", () => {
+    expect(needs("POST", "/api/coordinator/hold")).toBe("operate");
+    expect(allows("coordinator", needs("POST", "/api/coordinator/hold"))).toBe(false);
+    expect(allows("page", needs("POST", "/api/coordinator/hold"))).toBe(true);
+  });
+
   test("a coordinator may post a plan and read, and nothing that starts, stops or answers", () => {
     expect(allows("coordinator", needs("POST", "/api/coordinator/plan"))).toBe(true);
     expect(allows("coordinator", needs("GET", "/api/runs"))).toBe(true);
     const refused: [string, string][] = [
       ["POST", "/api/coordinator/tasks"],
       ["POST", "/api/coordinator/start"],
+      ["POST", "/api/coordinator/hold"],
       ["POST", "/api/repos/run"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],

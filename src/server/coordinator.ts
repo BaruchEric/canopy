@@ -8,11 +8,28 @@
  *  live object, so they go out with every run change and die with the run,
  *  like the rest of it. The notes waiting for an idle turn live here. */
 
+import { allows } from "../core/callers";
 import { isCapacityWords, limitedWords } from "../core/capacity";
-import { EMPTY_LOADOUTS } from "../core/loadout";
-import { childSettled, groupNote, groupSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import {
+  afterWait,
+  blockedNote,
+  childSettled,
+  editCard,
+  groupNote,
+  groupSettled,
+  holdNote,
+  landedNote,
+  MAX_PLAN,
+  MAY_LAND_LATER,
+  nextToStart,
+  settleNote,
+  startNote,
+  validatePlan,
+  type ChildBranch,
+  type PlanContext,
+} from "../core/coordinator";
 import type { RunGroup } from "../core/group";
-import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type Priority, type Run } from "../core/types";
+import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type LoadoutsInfo, type Priority, type Run } from "../core/types";
 import type { WorkSink } from "../core/work";
 import type { Caller } from "./callers";
 
@@ -58,6 +75,12 @@ export interface CoordinatorDeps {
   known: (repo: string) => "local" | "remote" | null;
   /** what the landing queue and the PR watch know of a child's branch */
   landing: (run: Run) => ChildBranch;
+  /** what the landing queue and the PR watch know of a branch by its origin, once its run is gone */
+  branch?: (origin: string) => ChildBranch;
+  /** kit.json's loadouts, which a card's `equip` names */
+  loadouts: () => LoadoutsInfo;
+  /** the workflows a card in this repo may name: bundled and user ones, and the repo's own when `withRepo` */
+  workflows: (repo: string, withRepo: boolean) => Promise<{ name: string; fromRepo: boolean }[]>;
   /** a coordinator's cards changed: send its run out again */
   broadcast: (run: Run) => void;
   /** the work item's settle line; absent for pre-ledger cards */
@@ -70,6 +93,10 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const errText = (err: unknown): string => String(err instanceof Error ? err.message : err);
 const slotWord = (repo: string): string => `waiting for a branch slot in ${repo}`;
+/** a held coordinator's queued card's outcome */
+const HELD_WORD = "the goal is held";
+/** a card's outcome that may still turn landed (`MAY_LAND_LATER`) */
+const mayLandLater = (outcome: string | undefined): boolean => outcome !== undefined && (MAY_LAND_LATER as readonly string[]).includes(outcome);
 
 /** a card with its outcome set, or taken off when `outcome` is undefined */
 function withOutcome(t: CoordTask, outcome: string | undefined): CoordTask {
@@ -90,6 +117,12 @@ export class CoordinatorHub {
   private serial: Promise<void> = Promise.resolve();
   /** cards "start anyway" let go once as interactive, `<coordinator>:<card>` */
   private released = new Set<string>();
+  /** the cards a start with ids named, tried before the rest until each has
+   *  started or left the queue, by coordinator */
+  private first = new Map<string, string[]>();
+  /** the words each queued card's blocked note said, `<coordinator>:<card>`,
+   *  so the manager hears a card blocked once per reason */
+  private blockedSaid = new Map<string, string>();
 
   constructor(private deps: CoordinatorDeps) {}
 
@@ -156,16 +189,57 @@ export class CoordinatorHub {
       if (JSON.stringify(u) !== JSON.stringify(t)) changed = true;
       return u;
     });
-    if (changed) this.setTasks(coord, next);
+    if (!changed) return;
+    this.setTasks(coord, next);
+    // a card others wait for settled, landed or reopened: they may start now,
+    // or the manager hears why they cannot
+    const was = tasks.find((t) => t.id === taskId);
+    const now = next.find((t) => t.id === taskId);
+    const moved = was !== undefined && now !== undefined && (was.state !== now.state || (now.outcome === "landed" && was.outcome !== "landed"));
+    if (moved && next.some((t) => t.state === "queued" && t.after?.includes(taskId))) void this.pump(coordId);
+  }
+
+  /** who a card's checks are for: a coordinator names a loadout and a shared
+   *  workflow; whoever operates is Eric, with every field */
+  private by(caller: Caller | null): "coordinator" | "person" {
+    return caller === null || allows(caller.kind, "operate") ? "person" : "coordinator";
+  }
+
+  /** the highest card number a coordinator has given out */
+  private last(coord: Run): number {
+    return Math.max(this.numbers.get(coord.id) ?? 0, ...(coord.tasks ?? []).map((t) => Number(t.id.slice(1)) || 0));
+  }
+
+  /** The workflows each repo the cards name may run, read before the checks,
+   *  which are not async. A repo the cards do not name a workflow for, or
+   *  one not on this machine, reads none. */
+  private async flowsFor(cards: readonly unknown[], withRepo: boolean): Promise<PlanContext["workflows"]> {
+    const repos = new Set<string>();
+    for (const c of cards.slice(0, MAX_PLAN)) {
+      if (!isRecord(c) || (c["workflow"] === undefined && c["workflowRepo"] === undefined)) continue;
+      const repo = c["repo"];
+      if (typeof repo === "string" && this.deps.known(repo) === "local") repos.add(repo);
+    }
+    const lists = new Map<string, { name: string; fromRepo: boolean }[]>();
+    for (const r of repos) lists.set(r, await this.deps.workflows(r, withRepo));
+    return (r) => lists.get(r) ?? [];
   }
 
   /** `POST /api/coordinator/plan {run, tasks}`: the coordinator's proposal,
-   *  added as `proposed` cards numbered t1, t2, ... per coordinator. */
-  plan(caller: Caller | null, b: Record<string, unknown>): { ok: true; added: CoordTask[] } {
+   *  added as `proposed` cards numbered t1, t2, ... per coordinator. A card
+   *  may carry `equip`, `workflow` and `after` (`validatePlan`): a
+   *  coordinator's token names a loadout and a bundled or user workflow,
+   *  and Eric's may set the loadout's fields and pick the repo's own. */
+  async plan(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; added: CoordTask[] }> {
+    this.coordinator(b["run"], caller);
+    const by = this.by(caller);
+    const input = b["tasks"];
+    const workflows = await this.flowsFor(Array.isArray(input) ? input : [], by === "person");
+    // the cards may have moved while the workflows were read
     const coord = this.coordinator(b["run"], caller);
     const have = coord.tasks ?? [];
-    let last = Math.max(this.numbers.get(coord.id) ?? 0, ...have.map((t) => Number(t.id.slice(1)) || 0));
-    const got = validatePlan(b["tasks"], { known: this.deps.known, cards: have, next: last + 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: caller?.kind === "coordinator" ? "coordinator" : "person" });
+    let last = this.last(coord);
+    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by });
     if ("error" in got) throw new CoordError(got.error, 400);
     const added = got.tasks.map((t): CoordTask => ({ id: `t${++last}`, ...t, state: "proposed" }));
     this.numbers.set(coord.id, last);
@@ -174,51 +248,99 @@ export class CoordinatorHub {
   }
 
   /** `POST /api/coordinator/tasks {run, id, title?, note?, repo?, action?,
-   *  remove?}`: edits or removes a card that has not started, under the
-   *  plan's limits. */
-  edit(caller: Caller | null, b: Record<string, unknown>): { ok: true; task: CoordTask } | { ok: true; removed: string } {
+   *  times?, equip?, workflow?, workflowRepo?, after?, remove?}`: edits or
+   *  removes a card that has not started (`editCard`). A proposed card
+   *  changes in every field; a queued one in its `equip` and `after` only,
+   *  and either may be removed. Eric's alone. */
+  async edit(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; task: CoordTask } | { ok: true; removed: string }> {
     if (caller?.kind === "coordinator") throw new CoordError("a coordinator proposes; changing a card is Eric's", 403);
-    const coord = this.coordinator(b["run"], caller);
     const id = b["id"];
-    if (typeof id !== "string" || !id) throw new CoordError("missing card id", 400);
-    const tasks = coord.tasks ?? [];
-    const t = tasks.find((x) => x.id === id);
-    if (!t) throw new CoordError(`no card ${id}`, 404);
-    if (t.state !== "proposed") throw new CoordError(`${id} is ${t.state}; only a proposed card changes`);
+    const find = (): { coord: Run; tasks: CoordTask[]; t: CoordTask } => {
+      const coord = this.coordinator(b["run"], caller);
+      if (typeof id !== "string" || !id) throw new CoordError("missing card id", 400);
+      const tasks = coord.tasks ?? [];
+      const t = tasks.find((x) => x.id === id);
+      if (!t) throw new CoordError(`no card ${id}`, 404);
+      if (t.state !== "proposed" && t.state !== "queued") throw new CoordError(`${id} is ${t.state}; only a proposed or queued card changes`);
+      return { coord, tasks, t };
+    };
+    const first = find();
     if (b["remove"] === true) {
+      const { coord, tasks } = first;
       this.setTasks(
         coord,
         tasks.filter((x) => x.id !== id),
       );
-      return { ok: true, removed: id };
+      this.blockedSaid.delete(`${coord.id}:${first.t.id}`);
+      // the cards after it hear it was removed
+      if (tasks.some((x) => x.state === "queued" && x.id !== id)) await this.pump(coord.id);
+      return { ok: true, removed: first.t.id };
     }
-    const merged = { title: b["title"] ?? t.title, note: b["note"] ?? t.note, repo: b["repo"] ?? t.repo, action: b["action"] ?? t.action, times: b["times"] ?? t.times };
-    const got = validatePlan([merged], { known: this.deps.known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person" });
-    if ("error" in got) throw new CoordError(got.error.replace(/^tasks\[0\]/, id), 400);
-    const [fields] = got.tasks;
-    if (!fields) throw new CoordError("the card did not check out", 400);
-    const { times: _times, ...kept } = t;
-    const task: CoordTask = { ...kept, ...fields };
+    const workflows = await this.flowsFor([{ ...b, repo: b["repo"] ?? first.t.repo }], true);
+    // the card may have moved while the workflows were read
+    const { coord, tasks, t } = find();
+    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller) });
+    // a field a queued card does not change is a conflict with its state, like a running card's
+    if ("error" in got) throw new CoordError(got.error, got.error.startsWith(`${t.id} is `) ? 409 : 400);
     this.setTasks(
       coord,
-      tasks.map((x) => (x.id === id ? task : x)),
+      tasks.map((x) => (x.id === t.id ? got.task : x)),
     );
-    return { ok: true, task };
+    // a new after, or none, may let it start, or leave it waiting with new words
+    if (got.task.state === "queued") await this.pump(coord.id);
+    return { ok: true, task: this.deps.run(coord.id)?.tasks?.find((x) => x.id === t.id) ?? got.task };
   }
 
-  /** `POST /api/coordinator/start {run}`: start these. Every proposed card
-   *  is queued, and as many start as the cap and the repos' slots allow. */
+  /** `POST /api/coordinator/start {run, ids?}`: start these. With no ids
+   *  every proposed card is queued; with ids those cards are (each proposed
+   *  or queued), and they go before the rest. As many start as the cap and
+   *  the repos' slots allow, and none while the goal is held. */
   async begin(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; tasks: CoordTask[] }> {
     if (caller?.kind === "coordinator") throw new CoordError("a coordinator proposes; starting its cards is Eric's", 403);
     const coord = this.coordinator(b["run"], caller);
     const tasks = coord.tasks ?? [];
-    if (!tasks.some((t) => t.state === "proposed")) throw new CoordError("no proposed cards to start");
-    this.setTasks(
-      coord,
-      tasks.map((t) => (t.state === "proposed" ? { ...t, state: "queued" } : t)),
-    );
+    const ids = b["ids"];
+    if (ids === undefined) {
+      if (!tasks.some((t) => t.state === "proposed")) throw new CoordError("no proposed cards to start");
+      this.setTasks(
+        coord,
+        tasks.map((t) => (t.state === "proposed" ? { ...t, state: "queued" } : t)),
+      );
+    } else {
+      if (!Array.isArray(ids) || ids.length === 0 || ids.some((x) => typeof x !== "string")) throw new CoordError("ids must list card ids", 400);
+      const want = [...new Set(ids as string[])];
+      for (const id of want) {
+        const t = tasks.find((x) => x.id === id);
+        if (!t) throw new CoordError(`no card ${id}`, 404);
+        if (t.state !== "proposed" && t.state !== "queued") throw new CoordError(`${id} is ${t.state}; only a proposed or queued card starts`);
+      }
+      this.setTasks(
+        coord,
+        tasks.map((t) => (t.state === "proposed" && want.includes(t.id) ? { ...t, state: "queued" } : t)),
+      );
+      // the last start with ids names the cards that go first
+      this.first.set(coord.id, want);
+    }
     await this.pump(coord.id);
     return { ok: true, tasks: this.deps.run(coord.id)?.tasks ?? [] };
+  }
+
+  /** `POST /api/coordinator/hold {run, held}`: a held goal starts no card,
+   *  through start these, a start with ids or the queue; its running
+   *  children go on. The run carries `held`, and the manager hears it. */
+  async hold(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; held: boolean }> {
+    if (caller?.kind === "coordinator") throw new CoordError("a coordinator proposes; holding the goal is Eric's", 403);
+    const coord = this.coordinator(b["run"], caller);
+    const held = b["held"];
+    if (typeof held !== "boolean") throw new CoordError("held must be true or false", 400);
+    if ((coord.held === true) !== held) {
+      if (held) coord.held = true;
+      else delete coord.held;
+      this.deps.broadcast(coord);
+      this.queueNote(coord.id, holdNote(held));
+    }
+    await this.pump(coord.id);
+    return { ok: true, held };
   }
 
   /* ---------- the queue ---------- */
@@ -238,10 +360,43 @@ export class CoordinatorHub {
     }, 0);
   }
 
+  /** The words a queued card waits with, most telling first: the goal is
+   *  held, the cards its `after` names have not landed, this pass's words,
+   *  its repo has no slot, or the governor's window it waited on. */
+  private waitWords(t: CoordTask, tasks: readonly CoordTask[], held: boolean, passed: ReadonlyMap<string, string>): string | undefined {
+    if (held) return HELD_WORD;
+    const wait = afterWait(t, tasks);
+    if (wait) return wait.words;
+    return passed.get(t.id) ?? (this.deps.repoFull(t.repo, t.times ?? 1) ? slotWord(t.repo) : isCapacityWords(t.outcome) ? t.outcome : undefined);
+  }
+
+  /** A queued card whose `after` can never be met by itself: the manager
+   *  hears it once for each reason, and again only if the reason changes. */
+  private noteBlocked(coordId: string, t: CoordTask, tasks: readonly CoordTask[]): void {
+    const key = `${coordId}:${t.id}`;
+    const wait = afterWait(t, tasks);
+    if (!wait?.blocked) {
+      this.blockedSaid.delete(key);
+      return;
+    }
+    if (this.blockedSaid.get(key) === wait.words) return;
+    this.blockedSaid.set(key, wait.words);
+    this.queueNote(coordId, blockedNote(t, wait.words));
+  }
+
+  /** the cards a start with ids named that still wait in the queue */
+  private firstFor(coordId: string, tasks: readonly CoordTask[]): string[] {
+    const ids = (this.first.get(coordId) ?? []).filter((id) => tasks.some((t) => t.id === id && t.state === "queued"));
+    if (ids.length > 0) this.first.set(coordId, ids);
+    else this.first.delete(coordId);
+    return ids;
+  }
+
   /** Starts the coordinator's queued cards, one at a time, while fewer than
    *  three of its children work and their repos have a slot. A card whose
-   *  repo is full stays queued and says so; a start that throws fails its
-   *  card and queues a note saying why. */
+   *  repo is full stays queued and says so, as does a card waiting for the
+   *  cards its `after` names to land; a held coordinator starts none. A
+   *  start that throws fails its card and queues a note saying why. */
   pump(coordId: string): Promise<void> {
     return this.queue(async () => {
       /** cards looked at this pass, with the words they wait with */
@@ -250,12 +405,16 @@ export class CoordinatorHub {
         const coord = this.deps.run(coordId);
         if (!coord || !isRunActive(coord)) return;
         const tasks = coord.tasks ?? [];
+        const held = coord.held === true;
         for (const t of tasks) {
-          if (t.state === "queued") this.update(coordId, t.id, (x) => withOutcome(x, passed.get(x.id) ?? (this.deps.repoFull(x.repo, x.times ?? 1) ? slotWord(x.repo) : isCapacityWords(x.outcome) ? x.outcome : undefined)));
+          if (t.state !== "queued") continue;
+          this.noteBlocked(coordId, t, tasks);
+          this.update(coordId, t.id, (x) => withOutcome(x, this.waitWords(x, tasks, held, passed)));
         }
+        if (held) return;
         const [next] = nextToStart(
           tasks.filter((t) => !passed.has(t.id)),
-          { working: this.working(coord), repoFull: this.deps.repoFull, cards: tasks },
+          { working: this.working(coord), repoFull: this.deps.repoFull, cards: tasks, first: this.firstFor(coordId, tasks) },
         );
         if (!next) return;
         const key = `${coordId}:${next.id}`;
@@ -272,7 +431,8 @@ export class CoordinatorHub {
           // the governor holds every card at once: they share its window,
           // so the rest wait with the same words and none is tried this pass
           if (isCapacityWords(out.busy)) {
-            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id)) passed.set(t.id, out.busy);
+            // a card waiting on its after keeps saying so
+            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id) && !afterWait(t, tasks)) passed.set(t.id, out.busy);
             for (const [id, words] of passed) this.update(coordId, id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
             return;
           }
@@ -290,8 +450,8 @@ export class CoordinatorHub {
         }
         const child = out.run;
         this.update(coordId, next.id, (x) => {
-          const { work: _work, ...rest } = x;
-          return withOutcome({ ...rest, state: "running", run: child.id, ...(child.branch?.work ? { work: child.branch.work } : {}) }, undefined);
+          const { work: _work, branch: _branch, ...rest } = x;
+          return withOutcome({ ...rest, state: "running", run: child.id, ...(child.branch ? { branch: child.branch.origin } : {}), ...(child.branch?.work ? { work: child.branch.work } : {}) }, undefined);
         });
         // a child can end inside its own start, before its card knew its id
         this.follow(child);
@@ -471,18 +631,21 @@ export class CoordinatorHub {
         return;
       }
       const next = out.run;
-      this.update(coordId, taskId, (x) => ({ ...withOutcome(x, undefined), run: next.id, limited: 1 }));
+      this.update(coordId, taskId, (x) => ({ ...withOutcome(x, undefined), run: next.id, limited: 1, ...(next.branch ? { branch: next.branch.origin } : {}) }));
       this.follow(next);
     });
     return answer.why;
   }
 
   /** Every card waiting on a child that ended is looked at again: the
-   *  landing queue or the PR watch moved, or a ready child's wait ran out. */
+   *  landing queue or the PR watch moved, or a ready child's wait ran out.
+   *  So is every card that settled ready, PR opened or with a winner
+   *  picked, which Eric may land long after (`landLater`). */
   recheck(): void {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       for (const t of coord.tasks ?? []) {
+        if (t.state === "done" && mayLandLater(t.outcome)) this.landLater(coord, t);
         if (t.state === "running" && t.group) this.settleGroup(coord, t);
         if (t.state !== "running" || !t.run) continue;
         const child = this.deps.run(t.run);
@@ -490,6 +653,24 @@ export class CoordinatorHub {
         else this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "failed" }, "its run is no longer kept"));
       }
     }
+  }
+
+  /** A settled card whose work landed since: its branch landed through the
+   *  queue or its PR merged (read off its run, or off its branch once the run
+   *  is gone), or its group landed its winner. It turns landed, the manager
+   *  hears it, and the cards after it may start. */
+  private landLater(coord: Run, t: CoordTask): void {
+    if (!this.hasLanded(t)) return;
+    this.update(coord.id, t.id, (x) => withOutcome(x, "landed"));
+    this.queueNote(coord.id, landedNote(t));
+    if (isRunActive(coord) && (coord.tasks ?? []).some((x) => x.state === "queued")) void this.pump(coord.id);
+  }
+
+  private hasLanded(t: CoordTask): boolean {
+    if (t.group) return this.deps.group?.(t.group)?.state === "landed";
+    const child = t.run ? this.deps.run(t.run) : undefined;
+    const b = child ? this.deps.landing(child) : t.branch ? this.deps.branch?.(t.branch) : undefined;
+    return b?.entry?.state === "landed" || b?.prMerged === true;
   }
 
   private later(childId: string, ms: number): void {
@@ -552,6 +733,8 @@ export class CoordinatorHub {
    *  waiting notes go. Its children go on as branch runs of their own. */
   private end(coord: Run): void {
     this.notes.delete(coord.id);
+    this.first.delete(coord.id);
+    for (const key of this.blockedSaid.keys()) if (key.startsWith(`${coord.id}:`)) this.blockedSaid.delete(key);
     const tasks = coord.tasks ?? [];
     // its children's cards still settle on the broadcasts' recheck, with
     // nothing said, so no timer need outlive it
@@ -586,7 +769,7 @@ export class CoordinatorHub {
     const path = url.pathname.replace(/\/+$/, "");
     if (req.method !== "POST" || !path.startsWith("/api/coordinator/")) return null;
     const act = path.slice("/api/coordinator/".length);
-    if (act !== "plan" && act !== "tasks" && act !== "start") return null;
+    if (act !== "plan" && act !== "tasks" && act !== "start" && act !== "hold") return null;
     try {
       if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY) return json({ error: "body too large" }, 413);
       const text = await req.text();
@@ -598,8 +781,9 @@ export class CoordinatorHub {
         // answered below
       }
       if (!isRecord(b)) return json({ error: "the body must be a JSON object" }, 400);
-      if (act === "plan") return json(this.plan(caller, b));
-      if (act === "tasks") return json(this.edit(caller, b));
+      if (act === "plan") return json(await this.plan(caller, b));
+      if (act === "tasks") return json(await this.edit(caller, b));
+      if (act === "hold") return json(await this.hold(caller, b));
       return json(await this.begin(caller, b));
     } catch (err) {
       return json({ error: errText(err) }, err instanceof CoordError ? err.status : 500);

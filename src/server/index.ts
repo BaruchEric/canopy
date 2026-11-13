@@ -259,6 +259,7 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
+import type { ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -2082,6 +2083,39 @@ function branchSlotsTaken(state: ServerState, repoId: string): number {
   const runs = state.runner.branchRunsFor(repoId).flatMap((run) => run.branch && !run.branch.held ? [run.branch.origin] : []);
   const flows = state.flows.list().flatMap((flow) => flow.repoId === repoId && flow.branch && isFlowActive(flow) ? [flow.branch.origin] : []);
   return new Set([...runs, ...flows]).size;
+}
+
+/** What the landing queue and the PR watch know of a branch by its origin,
+ *  for a coordinator's card: its queue entry, its PR and whether that PR
+ *  merged, the sort's verdict, and whether it opens a PR in place of the
+ *  queue. A merged PR's watch stays for the list after its record goes. */
+function branchFacts(state: ServerState, origin: string): ChildBranch {
+  const rec = state.landing.record(origin);
+  const entries = state.landing.info().entries;
+  const entry = entries.find((e) => e.id === origin);
+  const pr = state.prs.info().find((w) => w.id === origin);
+  return {
+    ...(entry ? { entry, entries } : {}),
+    ...(pr ? { prUrl: pr.url } : {}),
+    ...(pr?.state?.status === "merged" ? { prMerged: true as const } : {}),
+    ...(rec?.review ? { verdict: rec.review.verdict } : {}),
+    ...(rec?.openPr ? { openPr: true } : {}),
+  };
+}
+
+/** The workflows a coordinator's card in a repo may name: the bundled and
+ *  user ones that parse and are listed, and with `withRepo` the repo's own
+ *  as well, each marked. The two lists are read apart, since a repo's own
+ *  replaces a bundled one of its name in the merged list, and a coordinator
+ *  still names the bundled one. */
+async function coordWorkflowNames(state: ServerState, repoId: string, withRepo: boolean): Promise<{ name: string; fromRepo: boolean }[]> {
+  const usable = (list: WorkflowEntry[]) => list.flatMap((e) => (e.ok && e.workflow.listed !== false ? [e.workflow] : []));
+  const shared = usable(await loadWorkflows({ path: "", host: "none" })).map((w) => ({ name: w.name, fromRepo: false }));
+  if (!withRepo) return shared;
+  const repo = state.result.repos.find((r) => r.id === repoId);
+  if (!repo || repo.host || repo.forge) return shared;
+  const own = usable(await loadWorkflows(repo)).filter((w) => w.source === "repo").map((w) => ({ name: w.name, fromRepo: true }));
+  return [...shared, ...own];
 }
 
 /** A coordinator's card as a branch run (FR-010): the repo's agent on its
@@ -6928,20 +6962,10 @@ export async function startServer(opts: {
         const r = state.result.repos.find((x) => x.id === repo);
         return !r ? null : r.host || r.forge ? "remote" : "local";
       },
-      landing: (run) => {
-        const id = run.branch?.origin;
-        if (!id) return {};
-        const rec = state.landing.record(id);
-        const entries = state.landing.info().entries;
-        const entry = entries.find((e) => e.id === id);
-        const pr = state.prs.info().find((w) => w.id === id);
-        return {
-          ...(entry ? { entry, entries } : {}),
-          ...(pr ? { prUrl: pr.url } : {}),
-          ...(rec?.review ? { verdict: rec.review.verdict } : {}),
-          ...(rec?.openPr ? { openPr: true } : {}),
-        };
-      },
+      landing: (run) => (run.branch?.origin ? branchFacts(state, run.branch.origin) : {}),
+      branch: (origin) => branchFacts(state, origin),
+      loadouts: () => state.kit.loadouts(),
+      workflows: (repo, withRepo) => coordWorkflowNames(state, repo, withRepo),
       broadcast: (run) => {
         broadcast(state, { type: "run", run });
         state.capacity.touch();

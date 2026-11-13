@@ -121,13 +121,13 @@ const RULES: readonly Rule[] = [
   // run's token, which holds plan alone, never interrupts another run
   { methods: POST, paths: ["runs/answer", "runs/stop", "runs/fork", "runs/interrupt"], right: "operate" },
   // a coordinator's token holds plan alone: it proposes cards, and editing
-  // them or starting them is the user's
+  // them, starting them or holding the goal is the user's
   { methods: POST, paths: ["coordinator/plan"], right: "plan" },
   // what a run's token may do beyond reading (FR-038). Whoever operates may
   // plan, so the rest keep these routes; a run's handler holds it to its own
   // run, and the coordinator's lane leaves these out
   { methods: POST, paths: ["runs/child", "runs/say", "ranger/wakes", "work/note"], right: "plan" },
-  { methods: POST, paths: ["coordinator/tasks", "coordinator/start"], right: "operate" },
+  { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
   { methods: POST, paths: ["flows/resume", "flows/stop", "fleet/stop", "jobs/stop"], right: "operate" },
   { methods: POST_DEL, paths: ["fleet", "repos/health", "incubator", "layouts"], right: "operate" },

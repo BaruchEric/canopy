@@ -253,6 +253,27 @@ describe("with a coordinator's runner", () => {
     expect(await exists(s.seeds)).toBe(true);
   });
 
+  test("a coordinator's card names a listed bundled workflow, and only a page holds the goal", async () => {
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "cards" }, s.page);
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    try {
+      const card = { title: "t", repo: "app", note: "n", action: "ask" };
+      expect((await postAs(s, "/api/coordinator/plan", { tasks: [{ ...card, workflow: "review" }] }, token)).status).toBe(200);
+      // the incubator's own stages are not listed, so a card cannot name one
+      const unlisted = await postAs(s, "/api/coordinator/plan", { tasks: [{ ...card, workflow: "scout" }] }, token);
+      expect(await unlisted.json()).toEqual({ error: "tasks[0].workflow: no workflow scout for app" });
+      expect((await postAs(s, "/api/coordinator/hold", { run: run.id, held: true }, token)).status).toBe(403);
+      const held = await postAs(s, "/api/coordinator/hold", { run: run.id, held: true }, s.page);
+      expect(await held.json()).toEqual({ ok: true, held: true });
+      const runs = (await (await call(s, "/api/runs", s.page)).json()) as Run[];
+      expect(runs.find((r) => r.id === run.id)?.held).toBe(true);
+    } finally {
+      await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+    }
+  });
+
   test("a runner whose fence is not confirmed holds the run in its words, and leaves no folder", async () => {
     state.fenced = false;
     const before = await readdir(s.seeds);
