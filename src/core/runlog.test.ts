@@ -553,6 +553,19 @@ test("retained credential collisions still fail closed on trusted routing metada
   expect(await listKept(join(root, "retained-collision"))).toEqual([]);
 });
 
+test("a kept run keeps its loadout's equip, and a malformed one is refused", async () => {
+  const dir = join(root, "equip");
+  const equip = { loadout: "docs", model: "haiku", effort: "low" as const, skills: ["repo-skill"], mcp: ["probe"], off: 3 };
+  const value = run({ id: "equip123", equip });
+  const log = open(dir, value);
+  await log.settle(value);
+  expect((await readKeptRun(dir, value.id))?.equip).toEqual(equip);
+  for (const invalid of [{ ...equip, effort: "warp" }, { ...equip, skills: [7] }, { ...equip, off: "3" }]) {
+    await writeFile(join(log.folder, RUN_FILE), JSON.stringify({ ...value, equip: invalid }));
+    expect(await readKeptRun(dir, value.id)).toBeNull();
+  }
+});
+
 test("a kept coordinator keeps its cards' times and group", async () => {
   const dir = join(root, "cards");
   const value = run({ id: "coordcards", action: "coordinate", tasks: [{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 3, group: "g-a1b2c3d4" }] });

@@ -39,6 +39,7 @@ import {
   type RunAnswer,
   type RunBranch,
   type RunBranchState,
+  type RunEquip,
   type RunFork,
   type WorkspaceScope,
 } from "./types";
@@ -113,12 +114,20 @@ export interface StartExtras {
   child?: true;
   /** its depth, for a fix of a run's child; a new child's comes from `child` */
   depth?: number;
-  /** the run's `mcp.json`: it holds canopy's tools (FR-038) */
+  /** the run's `mcp.json`: canopy's tools (FR-038), a loadout's servers, or both */
   mcpConfig?: string;
   /** that server's launch line, for Codex */
   mcpServer?: McpLaunch;
   /** what the prompt tells it about those tools */
   brief?: string;
+  /** the run holds canopy's tools: its `mcp.json` has canopy's server and its token */
+  canopy?: true;
+  /** the run's own settings file, the one `--settings` (a loadout's, FR-065) */
+  settings?: string;
+  /** the loadout's servers in its `mcp.json`, each allowed and checked at init */
+  servers?: readonly string[];
+  /** what the loadout it started with resolved to */
+  equip?: RunEquip;
   /** the run's id, chosen first: a coordinator's token is minted for it
    *  before the run exists */
   id?: string;
@@ -462,7 +471,8 @@ export class Runner {
     if (extras.parent) run.parent = extras.parent;
     const depth = extras.child ? (this.get(extras.parent ?? "")?.depth ?? 0) + 1 : extras.depth ?? 0;
     if (depth > 0) run.depth = depth;
-    if (extras.mcpConfig) run.canopyTools = true;
+    if (extras.canopy) run.canopyTools = true;
+    if (extras.equip) run.equip = { ...extras.equip, skills: [...extras.equip.skills], mcp: [...extras.equip.mcp] };
     if (spec.unattended) run.unattended = true;
     const group = extras.group ?? branch?.branch.group;
     if (group) run.group = group;
@@ -479,7 +489,7 @@ export class Runner {
     // a folder no rule was kept for
     const remember = stage || coordinate ? null : this.rememberHook(run, cwd);
     const resume = branch?.resume ?? extras.resume;
-    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}) };
+    const driveSpec = { ...spec, ...(scope ? { addDirs: scope.others } : {}), ...(resume ? { resume, ...(branch?.fork ? { fork: true as const } : {}) } : {}), ...(extras.mcpConfig ? { mcpConfig: extras.mcpConfig } : {}), ...(extras.mcpServer ? { mcpServer: extras.mcpServer } : {}), ...(extras.settings ? { settings: extras.settings } : {}), ...(extras.servers?.length ? { servers: [...extras.servers] } : {}) };
     const env = runEnv(run, this.opts.backend, extras.env);
     // open can fail synchronously, before a context exists to receive its note.
     let ctx: RunCtx | undefined;

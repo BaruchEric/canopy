@@ -72,7 +72,7 @@ import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
 import { hasGatewayKey, jev, jevJudge, jevScenario } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
-import type { AgentEnv } from "../core/harness";
+import { takesProvider, type AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
 import { effectiveAgents, hasProfile, isAgentScopeName, isProfileName, launchPick, resolveAgent, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
@@ -113,6 +113,7 @@ import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { listMentions } from "../core/mentions";
+import { LOADOUT_NAME, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -131,6 +132,7 @@ import {
   configDir,
   launchFor,
   loadConfig,
+  providerFile,
   warmFor,
   setWarm,
   rememberRoot,
@@ -156,7 +158,7 @@ import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, UnknownRunError, type BranchStart, type StartExtras } from "../core/runner";
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
-import { canopyMcpCommand, removeMcpConfig, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig } from "./runtools";
+import { canopyMcpCommand, removeMcpConfig, removeRunSettings, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, STAGE_WORKFLOWS, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -176,6 +178,7 @@ import {
   type CanopyConfig,
   type Harness,
   type HeldStart,
+  type KitMcpEntry,
   type Priority,
   type MoveCheck,
   type MoveOut,
@@ -1255,7 +1258,11 @@ async function startRepoRun(
     const busy = state.runner.activeFor(repo.id);
     if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
   }
-  const agent = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
+  const routed = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
+  // a loadout's harness, model and effort replace the route's, so every
+  // check below hears the agent that will run (FR-065)
+  const plan = how.loadout === undefined ? null : await planLoadout(state, repo, how.loadout, routed);
+  const agent = plan?.agent ?? routed;
   // Before the workspace and install checks, so a workspace propose on
   // Codex hears what is wrong with the action, not with the workspace.
   if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
@@ -1264,12 +1271,20 @@ async function startRepoRun(
   // the device it was started from, when the browser said and is on the stream
   const by = how.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
   needCapacity(state, agent.harness, priority);
-  const base: StartExtras = { ...(priority === "interactive" ? {} : { priority }), ...(how.parent ? { parent: how.parent, child: true as const } : {}) };
-  // the start's word beats the settings'; a start that asks outright hears
-  // why it cannot have them, and settings that cannot apply here are passed over
+  const base: StartExtras = {
+    ...(priority === "interactive" ? {} : { priority }),
+    ...(how.parent ? { parent: how.parent, child: true as const } : {}),
+    // a loadout run's files are named by its id, so the id comes first
+    ...(plan ? { id: crypto.randomUUID().slice(0, 8), equip: plan.equip } : {}),
+  };
+  // the start's word beats the settings' (or the loadout's); a start that asks
+  // outright hears why it cannot have them, and settings that cannot apply here are passed over
   const refused = toolsRefusal(state, repo);
   if (how.tools === true && refused) throw new HttpError(400, refused);
-  const tools = !refused && (how.tools ?? agent.canopyTools === true) ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
+  const withTools = !refused && (how.tools ?? (plan ? plan.canopyTools : agent.canopyTools === true));
+  const tools = plan && plan.agent.harness === "claude" ? await loadoutFiles(state, repo, plan, base, withTools)
+    : withTools ? await runTools(state, repo, base)
+    : { extras: base, release: async () => {} };
   try {
     if (onBranch) {
       const resolved = await issueNoteFor(repo, note);
@@ -1292,6 +1307,8 @@ interface RunStartHow {
   by?: string;
   /** the pre-flight's toggle: the dev task starts in the branch's worktree */
   devTask?: boolean;
+  /** a loadout from kit.json to start with (FR-065) */
+  loadout?: string;
 }
 
 /** Why a run here cannot hold canopy's tools, or null. An incubator seed runs
@@ -1304,24 +1321,80 @@ function toolsRefusal(state: ServerState, repo: Repo): string | null {
 
 /** Mints a run's token and writes its `mcp.json`, for a run whose id is chosen
  *  here. The token rides in the file and never in the agent's env, and dies
- *  with the run (`dropRunTools`). `release` undoes both for a start that fails. */
-async function runTools(state: ServerState, repo: Repo, extras: StartExtras): Promise<{ extras: StartExtras; release: () => Promise<void> }> {
+ *  with the run (`dropRunTools`). `release` undoes both for a start that fails.
+ *  A loadout's `servers` go in the same file beside canopy's. */
+async function runTools(state: ServerState, repo: Repo, extras: StartExtras, servers: Readonly<Record<string, KitMcpEntry>> = {}): Promise<{ extras: StartExtras; release: () => Promise<void> }> {
   const id = extras.id ?? crypto.randomUUID().slice(0, 8);
   const { token } = state.callers.mint("run", { label: `run ${repo.id}`, run: id });
   const release = (): Promise<void> => dropRunTools(state, id);
+  const names = Object.keys(servers);
   try {
-    const mcpConfig = await writeMcpConfig(id, { canopy: { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } } });
-    return { extras: { ...extras, id, mcpConfig, mcpServer: runConfigLaunch(mcpConfig), brief: await toolsBrief() }, release };
+    const mcpConfig = await writeMcpConfig(id, { canopy: { ...canopyMcpCommand(), env: { CANOPY_API: state.apiUrl ?? "", CANOPY_TOKEN: token, CANOPY_RUN: id } }, ...servers });
+    return { extras: { ...extras, id, canopy: true, mcpConfig, mcpServer: runConfigLaunch(mcpConfig), brief: await toolsBrief(), ...(names.length ? { servers: names } : {}) }, release };
   } catch (err) {
     await release();
     throw new HttpError(500, `could not write the run's mcp.json: ${String(err instanceof Error ? err.message : err)}`);
   }
 }
 
-/** Revokes a run's token and removes its file; safe to call twice. */
+/** Revokes a run's token and removes its files; safe to call twice, and for
+ *  a run that has none of them. */
 async function dropRunTools(state: ServerState, id: string): Promise<void> {
   await state.callers.dropRun(id).catch(() => {});
   await removeMcpConfig(id).catch(() => {});
+  await removeRunSettings(id).catch(() => {});
+}
+
+/** A loadout's plan for a start here (FR-065), or the 400 that says why it
+ *  cannot start. A seed's run goes to a stage, which has neither the run's
+ *  files nor this machine's skills. */
+async function planLoadout(state: ServerState, repo: Repo, name: string, agent: AgentSettings): Promise<LoadoutStartPlan> {
+  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, "an incubator seed's run takes no loadout");
+  const info = state.kit.loadouts();
+  // a codex loadout takes no skills, so only a claude one reads them
+  const claude = info.loadouts.find((l) => l.name === name)?.harness === "claude";
+  const skills = claude ? await listMentions(repo.path).catch((err: unknown) => { throw err instanceof FinderError ? new HttpError(err.status, err.message) : err; }) : [];
+  const plan = planLoadoutStart({ name, info, agent, skills, machine: state.kit.machineName() ?? hostname(), entryOf: (s) => state.kit.runEntry(s) });
+  if ("refused" in plan) throw new HttpError(400, plan.refused);
+  return plan;
+}
+
+/** A claude loadout run's files: its own settings file (the provider's, with
+ *  the loadout's skill overrides laid over) and, when it has servers or holds
+ *  canopy's tools, its `mcp.json`. The provider is read before anything is
+ *  written; `release` removes whatever was, for a start that fails. */
+async function loadoutFiles(state: ServerState, repo: Repo, plan: LoadoutStartPlan, extras: StartExtras, withTools: boolean): Promise<{ extras: StartExtras; release: () => Promise<void> }> {
+  const provider = await providerSettings(plan.agent);
+  const id = extras.id ?? crypto.randomUUID().slice(0, 8);
+  const release = (): Promise<void> => dropRunTools(state, id);
+  const names = Object.keys(plan.servers);
+  try {
+    const settings = await writeRunSettings(id, mergeProviderSettings(provider, plan.overrides));
+    const own: StartExtras = { ...extras, id, settings };
+    if (withTools) return await runTools(state, repo, own, plan.servers);
+    if (names.length === 0) return { extras: own, release };
+    return { extras: { ...own, mcpConfig: await writeMcpConfig(id, plan.servers), servers: names }, release };
+  } catch (err) {
+    await release();
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(500, `could not write the run's files: ${String(err instanceof Error ? err.message : err)}`);
+  }
+}
+
+/** The settings file of the Claude provider the agent names, or null when it
+ *  names none. One that cannot be read refuses the start, since a run must
+ *  never go to another endpoint than the route said. */
+async function providerSettings(agent: AgentSettings): Promise<Record<string, unknown> | null> {
+  if (agent.harness !== "claude" || !takesProvider("claude", agent.provider)) return null;
+  const file = providerFile(agent.provider);
+  let got: unknown;
+  try {
+    got = JSON.parse(await readFile(file, "utf8"));
+  } catch (err) {
+    throw new HttpError(400, `provider ${agent.provider}'s settings file ${file} cannot be read: ${String(err instanceof Error ? err.message : err)}`);
+  }
+  if (!isRecord(got)) throw new HttpError(400, `provider ${agent.provider}'s settings file ${file} cannot be read: it is not a JSON object`);
+  return got;
 }
 
 /** A child a run starts through its tools, or a person starts for it with
@@ -5492,12 +5565,16 @@ async function handleApi(
       if (priority === null) return json({ error: "priority must be interactive, normal or low" }, 400);
       if (b.canopyTools !== undefined && typeof b.canopyTools !== "boolean") return json({ error: "canopyTools must be true or false" }, 400);
       if (b.canopyTools === true && (times > 1 || b.action === "coordinate")) return json({ error: "a group or a coordinator starts without canopy tools" }, 400);
+      if (b.loadout !== undefined && !(typeof b.loadout === "string" && LOADOUT_NAME.test(b.loadout))) return json({ error: "loadout must be a loadout's name" }, 400);
+      const loadout = typeof b.loadout === "string" ? b.loadout : undefined;
+      if (loadout !== undefined && times > 1) return json({ error: "a loadout starts one run; a group picks a profile per member" }, 400);
+      if (loadout !== undefined && b.action === "coordinate") return json({ error: "a coordinator starts without a loadout" }, 400);
       if (times > 1) return json(await startGroup(state, repo, b.action, note, b.client, times, profiles, b.autoLand === true, b.pr === true, priority, b.reviewers === 2 ? { reviewers: 2 } : {}), 201);
       if (b.action === "coordinate") {
         if (b.branch === true || b.pr === true) return json({ error: "a coordinator works on no branch; each of its tasks gets one" }, 400);
         return json(await startCoordinator(state, repo, note, b.client), 201);
       }
-      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, { ...(b.canopyTools === undefined ? {} : { tools: b.canopyTools }), ...(b.devTask === true ? { devTask: true } : {}) }), 201);
+      return json(await startRepoRun(state, repo, b.action, note, b.client, undefined, b.branch, b.pr === true, priority, { ...(b.canopyTools === undefined ? {} : { tools: b.canopyTools }), ...(b.devTask === true ? { devTask: true } : {}), ...(loadout !== undefined ? { loadout } : {}) }), 201);
     }
     if (method === "POST" && action === "peer") return postRepoPeer(peerDeps(state), repo, req);
     if (method === "POST" && action === "movecheck") {
@@ -5992,8 +6069,9 @@ export async function startServer(opts: {
         state.callers.dropRun(run.id).catch(() => {});
         void dropCoordFolder(run.id);
       }
-      // so does a run's, and its mcp.json with it (FR-038)
-      if (run.canopyTools && !isRunActive(run)) void dropRunTools(state, run.id);
+      // so does a run's, and its mcp.json with it (FR-038), and a loadout
+      // run's settings file and mcp.json (FR-065)
+      if ((run.canopyTools || run.equip) && !isRunActive(run)) void dropRunTools(state, run.id);
     },
     onGone: (id) => {
       broadcast(state, { type: "run-gone", id });

@@ -747,9 +747,21 @@ describe("a run's child (FR-038)", () => {
     let seen: DriveCtx | undefined;
     const driver: RunDriver = { ...quiet("claude"), start: (ctx) => { seen = ctx; } };
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver });
-    const run = runner.start(repo, "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, branchOf("t"), { mcpConfig: "/c/mcp.json" });
+    const run = runner.start(repo, "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, branchOf("t"), { mcpConfig: "/c/mcp.json", canopy: true });
     expect(run.canopyTools).toBe(true);
     expect(seen?.spec.mcpConfig).toBe("/c/mcp.json");
     expect(parentOf(made()).canopyTools).toBeUndefined();
+  });
+
+  test("a loadout's settings file, servers and equip reach the driver and the run; its mcp.json alone is not canopy's tools", () => {
+    let seen: DriveCtx | undefined;
+    const driver: RunDriver = { ...quiet("claude"), start: (ctx) => { seen = ctx; } };
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => driver });
+    const equip = { loadout: "docs", model: "haiku", effort: "low" as const, skills: ["repo-skill"], mcp: ["probe"], off: 2 };
+    const run = runner.start(repo, "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, branchOf("l"), { mcpConfig: "/c/mcp.json", settings: "/c/s.json", servers: ["probe"], equip });
+    expect(run.canopyTools).toBeUndefined();
+    expect(run.equip).toEqual(equip);
+    expect(seen?.spec).toMatchObject({ mcpConfig: "/c/mcp.json", settings: "/c/s.json", servers: ["probe"] });
+    expect(parentOf(made()).equip).toBeUndefined();
   });
 });
