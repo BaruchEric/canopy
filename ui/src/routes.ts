@@ -118,6 +118,35 @@ export function dropSproutHere() {
   window.history.replaceState(null, "", u.toString());
 }
 
+/** `?view=manager&run=<id>`: the manager's top view of that coordinator's
+ *  goal (ManagerView.tsx), the id decoded (`mini|ed71ddfb`) */
+export function managerHere(search: string): string | null {
+  const q = new URLSearchParams(search);
+  const id = q.get("run");
+  return q.get("view") === "manager" && id && RUN_ID.test(id) ? id : null;
+}
+
+/** The top view's address on this page: a coordinator's goal, or with no
+ *  id the goals to pick from. */
+export function managerUrl(runId: string | null): string {
+  return `${location.pathname}?view=manager${runId ? `&run=${encodeURIComponent(runId)}` : ""}`;
+}
+
+/** Opens the top view of a coordinator's goal, or the goals to pick from.
+ *  The whole page changes in place and hears it as it hears back and
+ *  forward (App and ManagerView follow popstate); a window of one thing
+ *  shows only what its address named when it opened, so it loads anew. */
+export function openManager(runId: string | null): void {
+  const url = managerUrl(runId);
+  const r = parseRoute(location.search);
+  if (r.run || r.agent || (r.repo && (r.solo || r.shell || r.section))) {
+    location.assign(url);
+    return;
+  }
+  history.pushState(null, "", url);
+  dispatchEvent(new PopStateEvent("popstate"));
+}
+
 /** Writes the shell's name into this window's URL, in place. */
 export function nameShellHere(term: string) {
   const u = new URL(window.location.href);

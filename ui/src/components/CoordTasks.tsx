@@ -6,6 +6,7 @@ import { groupReviews } from "../groups";
 import { loadoutLabel, loadoutsFor } from "../loadouts";
 import { ciChip, prLine } from "../prs";
 import { backendOf, plainOf } from "../registry";
+import { openManager } from "../routes";
 import { idText, landingAll, prsAll, useStore } from "../store";
 import { useMentions } from "./Mentions";
 
@@ -61,6 +62,7 @@ export function CoordTasks({ run, act, layout, error = null }: { run: Run; act: 
           </span>
         )}
         <span className="spacer" />
+        <TopViewButton run={run} />
         {active && <HoldButton run={run} act={act} />}
         {!run.kept && canStartCards(run) && (
           <button
@@ -125,6 +127,25 @@ export function HoldButton({ run, act }: { run: Run; act: Act }) {
       onClick={() => void act(() => useStore.getState().coordHold(run.id, !held))}
     >
       {held ? "resume" : "hold"}
+    </button>
+  );
+}
+
+/** The goal's top view (`?view=manager&run=`): every card's ring, what
+ *  waits on you and a lane per worker. The sheet closes, since it would
+ *  cover the view. Hook-free like HoldButton. */
+export function TopViewButton({ run }: { run: Run }) {
+  return (
+    <button
+      type="button"
+      className="mini"
+      title="This goal from the top: a ring per card, what waits on you, a lane per worker and this chat"
+      onClick={() => {
+        useStore.getState().closeSheet();
+        openManager(run.id);
+      }}
+    >
+      top view
     </button>
   );
 }

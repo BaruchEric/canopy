@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentCard, RepoStatus } from "../../src/core/types";
-import { agentsBadge, gitBadge, groupSum, healthBadge, incubatorBadge, partText, sumParts, sumTitle } from "./badges";
+import { agentsBadge, gitBadge, groupSum, healthBadge, incubatorBadge, managerBadge, partText, sumParts, sumTitle } from "./badges";
 
 const agent = (id: string, state: AgentCard["state"]) => ({ id, state });
 
@@ -44,6 +44,13 @@ describe("view tab badges", () => {
     expect(incubatorBadge([{ status: "live" }, { status: "parked" }])).toBeNull();
     expect(incubatorBadge([{ status: "building" }, { status: "live" }])).toMatchObject({ text: "1", tone: "sky" });
     expect(incubatorBadge([{ status: "building" }, { status: "approving" }])).toMatchObject({ text: "2", tone: "rust" });
+  });
+
+  test("manager counts what waits on you across the live goals, rust as the work tab's; else the goals going, sky", () => {
+    expect(managerBadge([])).toBeNull();
+    expect(managerBadge([{ waiting: 0 }, { waiting: 0 }])).toEqual({ text: "2", tone: "sky", title: "2 goals going; nothing waits on you" });
+    expect(managerBadge([{ waiting: 2 }, { waiting: 1 }])).toEqual({ text: "3", tone: "rust", title: "3 things wait on you across 2 goals" });
+    expect(managerBadge([{ waiting: 1 }])).toEqual({ text: "1", tone: "rust", title: "1 thing waits on you across 1 goal" });
   });
 });
 

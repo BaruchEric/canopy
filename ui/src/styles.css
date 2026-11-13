@@ -6801,6 +6801,546 @@ button.dl-gut.has {
   min-height: 44px;
 }
 
+/* the manager's top view (FR-065, ManagerView.tsx): the goal's head, a ring
+   per card in waves by after, what waits on you, a lane per worker and the
+   manager's chat. Wide (over 1100px) the rings run across the top over a
+   main column beside the chat, each scrolling on its own; a tablet stacks
+   them, the chat last; a phone puts what waits on you first, the rings in a
+   strip that scrolls sideways, then the workers or the chat, every button a
+   finger tall. Tones: sky at work, lichen waits on you, moss passed, rust
+   failed or sent back, hair to come. */
+.mgr-view {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  font-size: var(--t-md);
+}
+.mgr-pick {
+  padding: 18px var(--gutter) 24px;
+}
+.mgr-pick > * {
+  max-width: 900px;
+}
+.mgr-sub,
+.mgr-empty {
+  margin: 4px 0 0;
+  color: var(--ink-dim);
+}
+.mgr-goals {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.mgr-goal-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  padding: 10px 8px;
+  border-top: 1px solid var(--hair);
+  color: var(--ink);
+  text-decoration: none;
+}
+.mgr-goal-row:hover {
+  background: var(--wash);
+}
+.mgr-goal-name {
+  font-size: var(--t-lg);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.mgr-goal-facts {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+
+/* the goal's head */
+.mgr-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 24px;
+  padding: 18px var(--gutter) 14px;
+}
+.mgr-goal {
+  flex: 999 1 420px;
+  min-width: 0;
+}
+.mgr-goal-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  margin: 0 0 6px;
+  font-size: var(--t-2xl);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.mgr-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 16px;
+  margin: 0;
+  color: var(--ink-dim);
+}
+.mgr-facts .sky {
+  color: var(--sky);
+}
+.mgr-facts .lichen {
+  color: var(--lichen);
+}
+.mgr-head-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mgr-end {
+  color: var(--rust);
+}
+.mgr-held,
+.mgr-ended {
+  flex-basis: 100%;
+  margin: 0;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--lichen);
+  color: var(--ink-dim);
+}
+.mgr-add {
+  flex-basis: 100%;
+  max-width: 720px;
+}
+.mgr-error {
+  margin-top: 0;
+}
+
+/* the rings, in a band of their own that scrolls sideways */
+.mgr-rings {
+  border-block: 1px solid var(--hair);
+  background: var(--bark1);
+}
+.mgr-ring-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px var(--gutter);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+}
+.mgr-ring {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 128px;
+  padding: 8px 6px 10px;
+  border: 0;
+  border-radius: var(--r-card);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+.mgr-ring:hover {
+  background: var(--wash);
+}
+.mgr-ring.on {
+  background: var(--wash-strong);
+}
+.mgr-dial {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 96px;
+  height: 96px;
+  margin-bottom: 4px;
+}
+.mgr-arcs {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.mgr-arc {
+  fill: none;
+  stroke: var(--tone);
+  stroke-width: 8;
+}
+.mgr-at {
+  position: relative;
+  font-family: var(--mono);
+  font-size: var(--t-md);
+  color: var(--ink-dim);
+}
+.mgr-ring-id {
+  font-family: var(--mono);
+  font-size: var(--t-lg);
+}
+.mgr-ring-repo,
+.mgr-ring-model {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+}
+.mgr-ring-model {
+  color: var(--ink-faint);
+}
+/* the line before a wave, at the dials' height, naming what it waits for */
+.mgr-wave {
+  flex: none;
+  align-self: flex-start;
+  min-width: 28px;
+  margin-top: 54px;
+  padding: 0 4px 3px;
+  border-bottom: 1px dashed var(--hair2);
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  color: var(--ink-faint);
+  text-align: center;
+  white-space: nowrap;
+}
+.mgr-word {
+  font-size: var(--t-sm);
+  color: var(--tone);
+}
+.mgr-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone);
+}
+.mgr-arc.sky,
+.mgr-word.sky,
+.mgr-dot.sky {
+  --tone: var(--sky);
+}
+.mgr-arc.lichen,
+.mgr-word.lichen,
+.mgr-dot.lichen {
+  --tone: var(--lichen);
+}
+.mgr-arc.moss,
+.mgr-word.moss,
+.mgr-dot.moss {
+  --tone: var(--moss);
+}
+.mgr-arc.rust,
+.mgr-word.rust,
+.mgr-dot.rust {
+  --tone: var(--rust);
+}
+.mgr-arc.hair,
+.mgr-dot.hair {
+  --tone: var(--hair);
+}
+/* hair is a line's colour, too faint to read as words */
+.mgr-word.hair {
+  --tone: var(--ink-faint);
+}
+
+/* needs you and the workers */
+.mgr-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 18px 0 8px;
+  font-size: var(--t-lg);
+  font-weight: 500;
+  color: var(--ink-dim);
+}
+.mgr-count {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.mgr-needs {
+  padding: 0 var(--gutter);
+}
+.mgr-needs .mgr-count {
+  color: var(--lichen);
+}
+.mgr-need-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+/* an item hangs off a lichen rail; its prompt's form sits in it unboxed */
+.mgr-need {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 0 4px 12px;
+  border-left: 2px solid var(--lichen);
+}
+.mgr-need-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-width: 0;
+}
+.mgr-who {
+  font-family: var(--mono);
+  font-size: var(--t-sm);
+  color: var(--lichen);
+}
+.mgr-what {
+  font-weight: 500;
+  color: var(--ink);
+}
+.mgr-detail {
+  flex-basis: 100%;
+  max-height: 7.5em;
+  margin: 0;
+  overflow-y: auto;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.mgr-need-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mgr-say {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.mgr-say > textarea {
+  flex: 1;
+  min-width: 0;
+}
+.mgr-workers > .mgr-h,
+.mgr-workers > .mgr-empty {
+  margin-inline: var(--gutter);
+}
+.mgr-workers {
+  padding-bottom: 16px;
+}
+.mgr-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px var(--gutter) 12px;
+  border-top: 1px solid var(--hair);
+}
+.mgr-lane.on {
+  background: var(--wash);
+}
+.mgr-lane-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.mgr-lane-id {
+  font-family: var(--mono);
+  color: var(--ink-dim);
+}
+.mgr-lane-title {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--t-lg);
+  font-weight: 500;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.mgr-lane-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+  margin-left: auto;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.mgr-lane-facts .mono,
+.mgr-loadout .mono {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+.mgr-live {
+  margin: 0 0 0 18px;
+  color: var(--ink-dim);
+  overflow-wrap: anywhere;
+}
+.mgr-steps.step-strip {
+  margin-left: 18px;
+  padding: 0;
+}
+.mgr-steps .step-seg {
+  cursor: default;
+}
+.mgr-lane-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-left: 18px;
+}
+.mgr-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.mgr-chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--t-sm);
+  color: var(--ink-dim);
+  background: var(--wash);
+}
+.mgr-loadout {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.mgr-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-left: auto;
+}
+.mgr-lane > .mgr-say {
+  margin-left: 18px;
+}
+
+/* the manager's chat: its timeline scrolls inside, its box at the foot */
+.mgr-chat {
+  display: flex;
+  flex-direction: column;
+  height: min(80vh, 760px);
+  min-height: 0;
+  border-top: 1px solid var(--hair);
+}
+.mgr-chat[hidden],
+.mgr-workers[hidden] {
+  display: none;
+}
+.mgr-chat-head {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding: 12px var(--gutter) 6px;
+}
+.mgr-chat.on .mgr-chat-head {
+  background: var(--wash);
+}
+.mgr-chat-head .mgr-h {
+  margin: 0;
+}
+.mgr-to {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: auto;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.mgr-to > select {
+  width: auto;
+  min-width: 0;
+  max-width: 260px;
+}
+@media (min-width: 1101px) {
+  .mgr-view:not(.mgr-pick) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .mgr-view:not(.mgr-pick) > * {
+    flex: none;
+  }
+  .mgr-view:not(.mgr-pick) > .mgr-cols {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 32%);
+  }
+  .mgr-main {
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .mgr-chat {
+    height: auto;
+    border-top: 0;
+    border-left: 1px solid var(--hair);
+  }
+}
+/* a phone: the head's actions share the width, the dials shrink, and
+   every button and field takes a finger */
+.mgr-view.phone .mini,
+.mgr-view.phone .settings-input {
+  min-height: 44px;
+}
+.mgr-view.phone .mgr-head-acts {
+  width: 100%;
+}
+.mgr-view.phone .mgr-head-acts > .mini,
+.mgr-view.phone .mgr-acts > .mini,
+.mgr-view.phone .mgr-switch > .mini {
+  flex: 1 1 0;
+  justify-content: center;
+}
+.mgr-view.phone .mgr-ring-row {
+  scroll-snap-type: x mandatory;
+}
+.mgr-view.phone .mgr-ring {
+  width: 96px;
+}
+.mgr-view.phone .mgr-dial {
+  width: 68px;
+  height: 68px;
+}
+.mgr-view.phone .mgr-wave {
+  margin-top: 40px;
+}
+.mgr-view.phone .mgr-lane-facts {
+  flex-basis: 100%;
+  margin-left: 0;
+}
+.mgr-view.phone .mgr-acts {
+  width: 100%;
+  margin-left: 0;
+}
+.mgr-view.phone .mgr-live,
+.mgr-view.phone .mgr-steps.step-strip,
+.mgr-view.phone .mgr-lane-foot,
+.mgr-view.phone .mgr-lane > .mgr-say {
+  margin-left: 0;
+}
+.mgr-switch {
+  display: flex;
+  gap: 4px;
+  margin: 14px var(--gutter) 4px;
+}
+.mgr-view.phone .mgr-chat {
+  height: 75vh;
+}
+
 /* a repo's landing queue: the card's word, its panel section */
 .landing-card.queued {
   --tone: var(--lichen);

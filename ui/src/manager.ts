@@ -134,6 +134,9 @@ export function waves(tasks: readonly CoordTask[]): Map<string, number> {
   return new Map(tasks.map((t) => [t.id, wave(t.id)]));
 }
 
+/** A goal in words: the coordinator's first message, else its note. */
+export const goalText = (coord: Run): string => coord.steps.find((s) => s.kind === "user" && s.text)?.text ?? coord.note;
+
 /** The coordinators still going, newest first. */
 export function liveCoordinators(runs: Record<string, Run>): Run[] {
   return Object.values(runs)
@@ -530,10 +533,9 @@ export function managerRows(coord: Run, at: ManagerInputs): ManagerRows {
     ...cards.map(({ w, look }): Ring => ({ id: w.task.id, title: w.task.title, repo: w.task.repo, word: look.word, tone: look.tone, model: look.carried.model, arcs: look.arcs, at: look.at, wave: wave.get(w.task.id) ?? 0 })),
   ];
   const lanes = cards.map(({ w, look }) => laneOf(w, coord, at, look));
-  const goalText = coord.steps.find((s) => s.kind === "user" && s.text)?.text;
   return {
     goal: {
-      text: goalText ?? coord.note,
+      text: goalText(coord),
       model,
       effort: effortOf(coord) ?? null,
       startedAt: coord.startedAt,

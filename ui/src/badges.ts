@@ -80,6 +80,16 @@ export function incubatorBadge(sprouts: readonly Pick<Sprout, "status">[]): Badg
   };
 }
 
+/** the manager tab: what waits on you across the live coordinators' goals
+ *  (each its `managerRows` goal), rust as the work tab's needs; with
+ *  nothing waiting, the goals going, sky */
+export function managerBadge(goals: readonly { waiting: number }[]): Badge | null {
+  if (goals.length === 0) return null;
+  const waiting = goals.reduce((n, g) => n + g.waiting, 0);
+  if (waiting === 0) return { text: String(goals.length), tone: "sky", title: `${plural(goals.length, "goal")} going; nothing waits on you` };
+  return { text: String(waiting), tone: "rust", title: `${plural(waiting, "thing")} ${waiting === 1 ? "waits" : "wait"} on you across ${plural(goals.length, "goal")}` };
+}
+
 /** What a group of repos holds, in sum. */
 export interface GroupSum {
   dirty: number;

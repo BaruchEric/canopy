@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseRoute, popupFeatures, runUrl, soloUrl, sproutHere } from "./routes";
+import { managerHere, parseRoute, popupFeatures, runUrl, soloUrl, sproutHere } from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -174,5 +174,19 @@ describe("sproutHere", () => {
     expect(sproutHere("?view=incubator&sprout=sp_0123456789ab")).toBe("sp_0123456789ab");
     expect(sproutHere("?view=git&sprout=sp_0123456789ab")).toBeNull();
     expect(sproutHere("?view=incubator&sprout=../x")).toBeNull();
+  });
+});
+
+describe("managerHere", () => {
+  test("the manager view's run, decoded, and nothing else", () => {
+    expect(managerHere("?view=manager&run=mini%7Ced71ddfb")).toBe("mini|ed71ddfb");
+    expect(managerHere("?view=manager&run=ed71ddfb")).toBe("ed71ddfb");
+    expect(managerHere("?view=manager")).toBeNull();
+    expect(managerHere("?view=run&run=ed71ddfb")).toBeNull();
+    expect(managerHere("?view=manager&run=../x")).toBeNull();
+  });
+
+  test("a manager link is not a chat's window", () => {
+    expect(parseRoute("?view=manager&run=mini%7Ced71ddfb").run).toBeNull();
   });
 });

@@ -18,6 +18,7 @@ const LOADS = {
   clock: () => import("./Clock"),
   library: () => import("./Library"),
   agents: () => import("./AgentsView"),
+  manager: () => import("./ManagerView"),
   incubator: () => import("./Incubator"),
   work: () => import("./Work"),
 };
@@ -57,6 +58,7 @@ export const ClockView = view(LOADS.clock, (m) => m.ClockView);
 export const Library = view(LOADS.library, (m) => m.Library);
 // its props parameter is optional, which leaves them to be named here
 export const AgentsView = view(LOADS.agents, (m): ((props: { onGit?: () => void }) => ReactNode) => m.AgentsView);
+export const ManagerView = view(LOADS.manager, (m) => m.ManagerView);
 export const IncubatorView = view(LOADS.incubator, (m) => m.IncubatorView);
 export const WorkView = view(LOADS.work, (m) => m.WorkView);
 

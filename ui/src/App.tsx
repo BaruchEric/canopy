@@ -1,5 +1,5 @@
 import { HealthView } from "./components/Health";
-import { AgentsView, ClockView, CostsView, IncubatorView, KitView, Library, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
+import { AgentsView, ClockView, CostsView, IncubatorView, KitView, Library, ManagerView, PluginsView, SecretsView, SessionsView, TriggersView, WorkView, warmChunks } from "./components/LazyViews";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Wordmark } from "./components/TopBar";
@@ -33,9 +33,10 @@ import { noteCopied, onCopied, pageCopyText } from "./clipsink";
 import { runPanel } from "./itempanel";
 import { dropAskHere, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
-import { SIDEBAR, attentionCount, dockless, statusOf, useStore, type CanopyState } from "./store";
+import { SIDEBAR, attentionCount, dockless, landingAll, prsAll, statusOf, useStore, type CanopyState } from "./store";
 import { useShallow } from "zustand/react/shallow";
-import { agentsBadge, gitBadge, healthBadge, incubatorBadge, type Badge, type BadgeTone } from "./badges";
+import { agentsBadge, gitBadge, healthBadge, incubatorBadge, managerBadge, type Badge, type BadgeTone } from "./badges";
+import { liveCoordinators, managerRows, type Goal } from "./manager";
 import { PickMenu, type PickGroup } from "./components/PickMenu";
 import { WAITING_PANEL } from "./waiting";
 import { bindNavigate } from "./clirun";
@@ -69,6 +70,7 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
     views: [
       { key: "sessions", label: "sessions", what: "Every shell and agent on every machine, in one screen" },
       { key: "agents", label: "agents", what: "Which harness starts for what, per repo and role" },
+      { key: "manager", label: "manager", what: "One coordinator's goal from the top: a ring per card, what waits on you, a lane per worker and the manager's chat" },
       { key: "incubator", label: "incubator", what: "New projects from an idea, clarified and researched before anything is built" },
       { key: "triggers", label: "triggers", what: "Sentry issues and labeled Linear issues that start work on a branch with nobody typing, and what became of each" },
       { key: "clock", label: "clock", what: "Everything that runs by the clock, on one axis: the rangers' wakes, schedule rules, issue polls, the sweep and reminders" },
@@ -90,7 +92,22 @@ const VIEW_GROUPS: { label: string; views: ViewDef[] }[] = [
 const VIEWS: ViewDef[] = VIEW_GROUPS.flatMap((g) => g.views);
 
 /** the views that are not the git cockpit: their own bar, no board keys */
-const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets"];
+const OTHER_VIEWS = ["library", "ports", "sessions", "agents", "manager", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "plugins", "secrets"];
+
+let goalsIn: readonly unknown[] = [];
+let goalsOut: Goal[] = [];
+
+/** The live coordinators' goals as the top view reads them, worked out
+ *  once per change of what they read. Needs never read the loadouts. */
+function liveGoals(s: CanopyState): Goal[] {
+  const inputs = { runs: s.runs, flows: s.flows, landing: landingAll(s), prs: prsAll(s), loadouts: [] };
+  const key = [inputs.runs, inputs.flows, inputs.landing, inputs.prs];
+  if (key.some((k, i) => k !== goalsIn[i])) {
+    goalsIn = key;
+    goalsOut = liveCoordinators(s.runs).map((c) => managerRows(c, inputs).goal);
+  }
+  return goalsOut;
+}
 
 /** A view tab's live count, or null where its view has nothing waiting. */
 function badgeOf(s: CanopyState, key: string): Badge | null {
@@ -109,6 +126,8 @@ function badgeOf(s: CanopyState, key: string): Badge | null {
       return clockBadge(s.triggers);
     case "work":
       return workBadge(workRows(s.work, s.backendOrder, { landing: s.landing, triggers: s.triggers, qual }));
+    case "manager":
+      return managerBadge(liveGoals(s));
     default:
       return null;
   }
@@ -276,6 +295,8 @@ export function App() {
     if (next === "git") url.searchParams.delete("view");
     else url.searchParams.set("view", next);
     url.searchParams.delete("project");
+    // the top view's goal belongs to the top view; a chat's window keeps its own run
+    if (!route.run) url.searchParams.delete("run");
     history.pushState(null, "", url);
     setView(next);
     setProject(null);
@@ -707,6 +728,8 @@ export function App() {
         <SessionsView onView={navigate} />
       ) : view === "agents" ? (
         <AgentsView onGit={() => navigate("git")} />
+      ) : view === "manager" ? (
+        <ManagerView />
       ) : view === "incubator" ? (
         <IncubatorView onGit={() => navigate("git")} />
       ) : view === "health" ? (

@@ -92,6 +92,7 @@ export const GO: readonly { key: string; view: string; what: string }[] = [
   { key: "k", view: "kit", what: "the kit" },
   { key: "e", view: "plugins", what: "plugins" },
   { key: "w", view: "work", what: "the work ledger" },
+  { key: "m", view: "manager", what: "the manager's top view of a goal" },
 ];
 
 /** what y then a letter copies (FR-025, kbcopy.ts): the branch, the PR's link, the run's id */

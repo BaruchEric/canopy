@@ -220,6 +220,13 @@ describe("hold and resume", () => {
   });
 });
 
+describe("the top view", () => {
+  test("the head offers the goal's top view, while it goes and once it ended", () => {
+    expect(words(list(coordinator()))).toContain("top view");
+    expect(words(list(coordinator({ status: "done" })))).toContain("top view");
+  });
+});
+
 describe("starting one card", () => {
   test("a proposed card has start; a queued one is edited or removed, and has none", () => {
     const run = coordinator({ tasks: [card("t1", "proposed"), card("t2", "queued", { outcome: "waits for t1", after: ["t1"] }), card("t3", "running", { run: "k3" })] });
