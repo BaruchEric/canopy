@@ -121,6 +121,25 @@ describe("KitHub loadouts", () => {
     expect(hub.loadouts().loadouts.map((l) => l.name)).toEqual(["docs"]);
     expect(hub.info().loadouts?.loadouts.map((l) => l.name)).toEqual(["docs"]);
   });
+  test("loadouts carry every kit server by name, and read here only for the ones this machine gets", async () => {
+    const { hub } = await setup(WITH_LOADOUTS, { hostHome: "/home/eric", procEnv: {} });
+    expect(hub.loadouts().servers).toEqual([]);
+    await hub.scan();
+    // sorted; canopy's own server is no card's to take; needy has an unset secret, so a run would refuse it
+    expect(hub.loadouts().servers).toEqual([
+      { name: "elsewhere", here: false },
+      { name: "needy", here: false },
+      { name: "probe", here: true },
+    ]);
+    expect(hub.info().loadouts?.servers).toEqual(hub.loadouts().servers);
+    // names only: no definition, env or headers
+    expect(JSON.stringify(hub.loadouts().servers)).not.toContain("LOADOUT_TEST_UNSET");
+  });
+  test("a backend that is no kit machine reads every server away", async () => {
+    const { hub } = await setup(WITH_LOADOUTS, { self: "elsewhere" });
+    await hub.scan();
+    expect(hub.loadouts().servers.map((x) => x.here)).toEqual([false, false, false]);
+  });
   test("a backend that is no kit machine still sends the loadouts to the page", async () => {
     const { hub, events } = await setup(WITH_LOADOUTS, { self: "elsewhere" });
     const info = await hub.scan();

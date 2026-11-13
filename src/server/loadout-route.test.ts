@@ -14,6 +14,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { selfName } from "../core/backends";
+import { loadoutsView } from "../core/loadout";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import { exec } from "../core/exec";
 import { SEEDS_DIR } from "../core/sprout";
@@ -156,6 +157,20 @@ afterAll(async () => {
     else process.env[k] = v;
   }
   await rm(scratch, { recursive: true, force: true });
+});
+
+describe("GET /api/loadouts", () => {
+  test("a person reads the kit's servers beside the loadouts", async () => {
+    const info = (await (await get("/api/loadouts")).json()) as LoadoutsInfo;
+    expect(info.servers).toEqual([{ name: "probe", here: true }]);
+  });
+  test("a coordinator reads base and loadouts only", () => {
+    const info: LoadoutsInfo = { base: ["a"], loadouts: [], errors: ["kit.json: oops"], servers: [{ name: "probe", here: true }] };
+    expect(loadoutsView(info, "coordinator")).toEqual({ base: ["a"], loadouts: [] });
+    expect("servers" in loadoutsView(info, "coordinator")).toBe(false);
+    expect(loadoutsView(info, "cli")).toEqual(info);
+    expect(loadoutsView(info, undefined)).toEqual(info);
+  });
 });
 
 describe("a run started with a loadout", () => {

@@ -113,7 +113,7 @@ import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { listMentions } from "../core/mentions";
-import { cardLoadout, LOADOUT_NAME, loadoutOfEquip, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
+import { cardLoadout, LOADOUT_NAME, loadoutOfEquip, loadoutsView, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -4380,10 +4380,8 @@ async function handleApi(
   const rangerRes = await state.ranger.handle(req, url, caller?.kind === "run" ? caller.run ?? "" : undefined);
   if (rangerRes) return rangerRes;
   if (path === "/api/loadouts" && method === "GET") {
-    // a coordinator reads the loadouts to name one on a card; kit.json's
-    // errors are Eric's to read (a parse error can quote the file), not its
-    const info = state.kit.loadouts();
-    return json(caller?.kind === "coordinator" ? { base: info.base, loadouts: info.loadouts } : info);
+    // a coordinator reads the loadouts to name one on a card (see loadoutsView)
+    return json(loadoutsView(state.kit.loadouts(), caller?.kind));
   }
   if (path === "/api/coordinator/workflows" && method === "GET") return json(coordWorkflows(await loadWorkflows({ path: "", host: "none" })));
   const kitRes = await state.kit.handle(req, url);

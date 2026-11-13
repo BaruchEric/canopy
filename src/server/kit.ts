@@ -173,6 +173,8 @@ export class KitHub {
     // the hashes before the manifest, so a republish during the await never plans a new kit against old hashes
     this.hashes = Object.fromEntries(await Promise.all(kit.mcp.map(async (s) => [s.name, await mcpHash(mcpDefOf(s))] as const)));
     this.kit = kit;
+    // runEntry reads this.kit, so the servers wait until it is set
+    this.loadoutsInfo = { ...this.loadoutsInfo, servers: kit.mcp.filter((x) => x.name !== "canopy").map((x) => x.name).sort().map((name) => ({ name, here: "entry" in this.runEntry(name) })) };
     const mine = this.mine(kit);
     for (const name of this.views.keys()) if (!mine.some((m) => m.name === name)) this.views.delete(name);
     // a backend that is no machine and reaches none has no scan to publish,

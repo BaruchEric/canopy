@@ -23,7 +23,7 @@ let asked: { repo: string; withRepo: boolean }[];
 let flows: Map<string, Flow>;
 
 const lo = (over: Partial<Loadout> = {}): Loadout => ({ name: "quick", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, ...over });
-const kit: LoadoutsInfo = { base: [], loadouts: [lo()], errors: [] };
+const kit: LoadoutsInfo = { base: [], loadouts: [lo()], errors: [], servers: [] };
 
 const coordinator = (over: Partial<Run> = {}): Run => {
   const r = {
@@ -853,7 +853,7 @@ describe("card fields on the plan and tasks routes", () => {
   });
 
   test("Minor 4: a codex loadout on plan, then build or a workflow is a 400 at plan and edit time", async () => {
-    const h = hub({ loadouts: () => ({ base: [], loadouts: [lo(), lo({ name: "cx", harness: "codex" })], errors: [] }) });
+    const h = hub({ loadouts: () => ({ base: [], loadouts: [lo(), lo({ name: "cx", harness: "codex" })], errors: [], servers: [] }) });
     expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "cx" } })] }, coordCaller("co1"))).toEqual({
       status: 400,
       body: { error: "tasks[0].equip.loadout: cx runs codex; plan, then build needs Claude Code" },

@@ -18,7 +18,7 @@ if (!("kit" in parsed)) throw new Error(`kit fixture: ${parsed.errors.join("; ")
 const kit: KitManifest = withCanopyServer(parsed.kit);
 
 test("no loadouts block is no loadouts and no errors", () => {
-  expect(parseLoadouts({ version: 1 }, kit)).toEqual({ base: [], loadouts: [], errors: [] });
+  expect(parseLoadouts({ version: 1 }, kit)).toEqual({ base: [], loadouts: [], errors: [], servers: [] });
 });
 test("an empty definition takes the defaults", () => {
   expect(parseLoadouts({ loadouts: { docs: {} } }, kit).loadouts).toEqual([
@@ -58,13 +58,13 @@ test.each([
   expect(info.loadouts.map((l) => l.name)).toEqual(["good"]);
 });
 test("a bad base is an error and no base", () => {
-  expect(parseLoadouts({ loadoutBase: { skills: "x" }, loadouts: {} }, kit)).toEqual({ base: [], loadouts: [], errors: ["loadoutBase.skills: a list of skill names"] });
+  expect(parseLoadouts({ loadoutBase: { skills: "x" }, loadouts: {} }, kit)).toEqual({ base: [], loadouts: [], errors: ["loadoutBase.skills: a list of skill names"], servers: [] });
 });
 test("a loadouts block that is not an object", () => {
   expect(parseLoadouts({ loadouts: [] }, kit).errors).toEqual(["loadouts: an object of loadout name to definition"]);
 });
 test("with no kit nothing can be checked", () => {
-  expect(parseLoadouts({ loadouts: { a: {} } }, null)).toEqual({ base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"] });
+  expect(parseLoadouts({ loadouts: { a: {} } }, null)).toEqual({ base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"], servers: [] });
 });
 test("baseCovers takes a name or a plugin's prefix", () => {
   expect(baseCovers(["verify-build", "homelab:*"], "verify-build")).toBe(true);
@@ -82,6 +82,7 @@ const skills = [m("ripe", "user"), m("grill-me", "user"), p("homelab:tailchan", 
 const planInfo: LoadoutsInfo = {
   base: ["verify-build", "homelab:*"],
   errors: [],
+  servers: [],
   loadouts: [
     { name: "docs", note: "", harness: "claude", model: "haiku", effort: "low", skills: [], mcp: [], canopyTools: false },
     { name: "homelab-ops", note: "", harness: "claude", model: "sonnet", effort: "medium", skills: ["homelab:tailchan"], mcp: ["executor", "wiki-memory"], canopyTools: false },
@@ -162,7 +163,7 @@ test("an unknown loadout names the ones there are", () => {
   expect(planLoadoutStart({ ...planBase, name: "nope" })).toEqual({ refused: "no loadout named nope; kit.json has docs, homelab-ops, needs-missing, codex-fast" });
 });
 test("an unknown loadout in a kit with errors says so", () => {
-  expect(planLoadoutStart({ ...planBase, name: "nope", info: { base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"] } }))
+  expect(planLoadoutStart({ ...planBase, name: "nope", info: { base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"], servers: [] } }))
     .toEqual({ refused: "no loadout named nope; kit.json has none (loadouts: kit.json did not parse, so no loadout can be checked)" });
 });
 test("a skill the machine lacks refuses the start", () => {
@@ -200,7 +201,7 @@ test("the plugins off lay over the provider's enabledPlugins key by key", () => 
 });
 
 const feature: Loadout = { name: "feature", note: "build a feature", harness: "claude", model: "opus", effort: "high", skills: ["grill-me"], mcp: ["executor"], canopyTools: true };
-const cardInfo: LoadoutsInfo = { base: [], errors: [], loadouts: [
+const cardInfo: LoadoutsInfo = { base: [], errors: [], servers: [], loadouts: [
   feature,
   { name: "cx", note: "", harness: "codex", model: "gpt-5.5", effort: "low", skills: [], mcp: [], canopyTools: false },
 ] };

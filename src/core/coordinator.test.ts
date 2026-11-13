@@ -319,7 +319,7 @@ describe("a group card settling", () => {
 });
 
 const lo = (over: Partial<Loadout> = {}): Loadout => ({ name: "quick", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, ...over });
-const kit: LoadoutsInfo = { base: [], loadouts: [lo(), lo({ name: "cx", harness: "codex" })], errors: [] };
+const kit: LoadoutsInfo = { base: [], loadouts: [lo(), lo({ name: "cx", harness: "codex" })], errors: [], servers: [] };
 const dest = (over: Partial<PlanContext> = {}) => ctxOf({ loadouts: kit, ...over });
 const one = (over: Record<string, unknown> = {}) => ({ title: "t", repo: "web", note: "n", action: "ask", ...over });
 const held = (id: string, over: Partial<CoordTask> = {}): CoordTask => ({ id, title: id, repo: "web", note: "n", action: "ask", state: "queued", ...over });

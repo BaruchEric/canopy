@@ -274,7 +274,7 @@ describe("a card's flow", () => {
 
 describe("the card's form", () => {
   const lo = (name: string, model = "default"): Loadout => ({ name, note: `for ${name}`, harness: "claude", model, effort: "default", skills: [], mcp: [], canopyTools: false });
-  const kit: KitInfo = { ok: true, error: null, machines: [], cells: [], loadouts: { base: [], loadouts: [lo("feature"), lo("docs", "sonnet")], errors: [] } };
+  const kit: KitInfo = { ok: true, error: null, machines: [], cells: [], loadouts: { base: [], loadouts: [lo("feature"), lo("docs", "sonnet")], errors: [], servers: [] } };
   /** renders with the kit's loadouts in the store, as the page holds them */
   function form(task: CoordTask): string {
     const initial = useStore.getInitialState();

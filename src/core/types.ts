@@ -4219,6 +4219,9 @@ export interface LoadoutsInfo {
   loadouts: Loadout[];
   /** one line per problem, naming the loadout and the field; a loadout with one is left out */
   errors: string[];
+  /** every server in the kit's `mcp` block (canopy's own left out), sorted, by name only.
+   *  `here` is false when a run on this backend would refuse the server. */
+  servers: { name: string; here: boolean }[];
 }
 
 /** What a loadout resolved to at a run's start, kept on the run (FR-065). */

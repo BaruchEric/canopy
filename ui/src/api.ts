@@ -1141,6 +1141,12 @@ export const api = {
     const [b, plain] = on(id);
     return from(b, await req<Run>(b, "/api/landing/fix", { method: "POST", body: JSON.stringify({ id: plain }) }), qRun);
   },
+  /** a later run on a settled branch with the person's words, or none to resume it */
+  followUp: async (id: string, note?: string) => {
+    const [b, plain] = on(id);
+    const got = await req<{ run: Run }>(b, "/api/landing/followup", { method: "POST", body: JSON.stringify({ id: plain, ...(note ? { note } : {}) }) });
+    return { run: from(b, got.run, qRun) };
+  },
   /** gives a sent-back branch up, with its worktree */
   dropLanding: async (id: string) => {
     const [b, plain] = on(id);
@@ -1199,6 +1205,11 @@ export const api = {
     const [b, plain] = on(runId);
     await req<{ ok: true }>(b, "/api/coordinator/start", { method: "POST", body: JSON.stringify({ run: plain, ...(ids ? { ids } : {}) }) });
   },
+  /** adds cards to a coordinator's plan as a person; the run's broadcast carries them */
+  coordPlan: async (runId: string, tasks: Array<{ title: string; repo: string; note: string; action: "ask" | "propose" }>) => {
+    const [b, plain] = on(runId);
+    return req<{ ok: true }>(b, "/api/coordinator/plan", { method: "POST", body: JSON.stringify({ run: plain, tasks: tasks.map((t) => ({ ...t, repo: on(t.repo)[1] })) }) });
+  },
   /** holds a coordinator's goal, so none of its cards starts, or resumes it */
   coordHold: async (runId: string, held: boolean) => {
     const [b, plain] = on(runId);
@@ -1219,6 +1230,11 @@ export const api = {
     );
   },
   flows: async (b: string = homeName()) => fromAll(b, await req<Flow[]>(b, "/api/flows"), qFlow),
+  /** takes up a stopped flow where it left off */
+  pickUpFlow: async (id: string) => {
+    const [b, plain] = on(id);
+    return from(b, await req<Flow>(b, "/api/flows/pickup", { method: "POST", body: JSON.stringify({ id: plain }) }), qFlow);
+  },
   resumeFlow: async (id: string, choice: FlowChoice) => {
     const [b, plain] = on(id);
     return from(

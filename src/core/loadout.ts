@@ -19,7 +19,7 @@ const SKILL_KEY = /^[A-Za-z0-9][\w.-]*(:[A-Za-z0-9][\w.-]*)?$/;
 const BASE_KEY = /^[A-Za-z0-9][\w.-]*(:([A-Za-z0-9][\w.-]*|\*))?$/;
 const FIELDS = ["note", "harness", "model", "effort", "skills", "mcp", "canopyTools"];
 
-export const EMPTY_LOADOUTS: LoadoutsInfo = { base: [], loadouts: [], errors: [] };
+export const EMPTY_LOADOUTS: LoadoutsInfo = { base: [], loadouts: [], errors: [], servers: [] };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -114,7 +114,7 @@ function parseOne(name: string, o: Record<string, unknown>, kit: KitManifest, er
  *  there is nothing to check servers against, so no loadout is taken. */
 export function parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsInfo {
   if (!isObj(raw) || (raw["loadouts"] === undefined && raw["loadoutBase"] === undefined)) return EMPTY_LOADOUTS;
-  if (!kit) return { base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"] };
+  if (!kit) return { base: [], loadouts: [], errors: ["loadouts: kit.json did not parse, so no loadout can be checked"], servers: [] };
   const errors: string[] = [];
 
   let base: string[] = [];
@@ -140,7 +140,15 @@ export function parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsIn
       }
     }
   }
-  return { base, loadouts, errors };
+  // the servers (and where they run) are filled in by the kit hub, which knows this machine
+  return { base, loadouts, errors, servers: [] };
+}
+
+/** What `GET /api/loadouts` answers a caller. A coordinator gets base and
+ *  loadouts only: kit.json's errors are Eric's to read (a parse error can
+ *  quote the file), and the server list is for the person's page. */
+export function loadoutsView(info: LoadoutsInfo, caller: string | undefined): LoadoutsInfo | Pick<LoadoutsInfo, "base" | "loadouts"> {
+  return caller === "coordinator" ? { base: info.base, loadouts: info.loadouts } : info;
 }
 
 /** The loadout a card starts with: the named one with Eric's overrides laid

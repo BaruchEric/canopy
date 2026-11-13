@@ -1278,7 +1278,14 @@ function PrBlock({ run, act }: { run: Run; act: (fn: () => Promise<void>) => Pro
  * answer here as they do in the sheet, and the box never takes the
  * keyboard until clicked.
  */
-export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
+export function RunPane({ run, repo, onSend, to }: {
+  run: Run;
+  repo: Repo | undefined;
+  /** where the box sends its words instead of into this run (the manager page sends to a coordinator's worker or the coordinator itself) */
+  onSend?: (text: string) => Promise<void>;
+  /** whom the words go to, named in the box's placeholder */
+  to?: string;
+}) {
   const answerRun = useStore((s) => s.answerRun);
   const sayRun = useStore((s) => s.sayRun);
   const interruptRun = useStore((s) => s.interruptRun);
@@ -1293,12 +1300,13 @@ export function RunPane({ run, repo }: { run: Run; repo: Repo | undefined }) {
       <Timeline run={run} repo={repo} error={error} onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))} />
       {!run.kept && isRunActive(run) && (
         <Composer
-          who={AGENT_NAME[harnessOf(run)]}
+          who={to ?? AGENT_NAME[harnessOf(run)]}
+          {...(to ? { to } : {})}
           repoId={run.repoId}
           harness={harnessOf(run)}
           mode={composerMode(run, (text) => act(() => interruptRun(run.id, text || undefined), true))}
           first={run.chat && run.steps.length === 0}
-          onSend={(text) => act(() => sayRun(run.id, text), true)}
+          onSend={(text) => act(() => (onSend ? onSend(text) : sayRun(run.id, text)), true)}
           quiet
           {...(draft ? { draft } : {})}
         />
@@ -1327,6 +1335,7 @@ function composerMode(run: Run, onStop: (text: string) => Promise<void>): Compos
  *  open the agent's commands, skills and the repo's files. */
 function Composer({
   who,
+  to,
   repoId,
   harness,
   mode,
@@ -1338,6 +1347,8 @@ function Composer({
 }: {
   /** the agent's name, for the box's placeholder while it works */
   who: string;
+  /** whom the words go to, when that is not the agent whose run this is */
+  to?: string;
   /** whose files and commands the menu offers */
   repoId: string;
   harness: Harness;
@@ -1405,7 +1416,7 @@ function Composer({
           className="composer-box"
           // a draft is read before it is sent, so it gets room
           rows={draft ? 10 : 2}
-          placeholder={ready ? "say something…" : `${who} is at work: steer it…`}
+          placeholder={ready ? (to ? `say something to ${to}…` : "say something…") : `${who} is at work: steer it…`}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {

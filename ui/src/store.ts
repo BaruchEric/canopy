@@ -1642,6 +1642,12 @@ export interface CanopyState {
   /** `request`: the plan sheet's id for this start (see api.startFlow) */
   startFlow: (repoId: string, workflow: string, note: string, request?: string) => Promise<void>;
   resumeFlow: (flowId: string, choice: FlowChoice) => Promise<void>;
+  /** takes up a stopped flow where it left off */
+  pickUpFlow: (flowId: string) => Promise<void>;
+  /** a later run on a settled branch with the person's words; the run joins `runs` */
+  followUp: (id: string, note?: string) => Promise<void>;
+  /** adds a card to a coordinator's plan as a person */
+  coordAdd: (runId: string, task: { title: string; repo: string; note: string; action: "ask" | "propose" }) => Promise<void>;
   stopFlow: (flowId: string) => Promise<void>;
   dismissFlow: (flowId: string) => Promise<void>;
   showFlow: (flowId: string) => void;
@@ -5348,6 +5354,17 @@ export const useStore = create<CanopyState>((set, get) => ({
   resumeFlow: async (flowId, choice) => {
     const flow = await api.resumeFlow(flowId, choice);
     set((s) => ({ flows: { ...s.flows, [flow.id]: flow }, flowRuns: { ...s.flowRuns, ...flowRunsOf([flow]) } }));
+  },
+  pickUpFlow: async (flowId) => {
+    const flow = await api.pickUpFlow(flowId);
+    set((s) => ({ flows: { ...s.flows, [flow.id]: flow }, flowRuns: { ...s.flowRuns, ...flowRunsOf([flow]) } }));
+  },
+  followUp: async (id, note) => {
+    const { run } = await api.followUp(id, note);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  coordAdd: async (runId, task) => {
+    await api.coordPlan(runId, [task]);
   },
   stopFlow: async (flowId) => {
     const flow = await api.stopFlow(flowId);
