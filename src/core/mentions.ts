@@ -230,12 +230,14 @@ export const BUILTIN_MENTIONS: readonly Mention[] = [
 ];
 
 const FROM_RANK = (from: string): number => (from.startsWith("project") ? 0 : from.startsWith("user") ? 1 : from === "builtin" ? 2 : 3);
+const KIND_RANK: Record<Mention["kind"], number> = { skill: 0, command: 1, builtin: 2 };
 
 /** The repo's own first, then the user's, the CLI's, the plugins', by name
  *  within; one row per name for an agent, as the CLI lists them, so a
- *  repo's skill hides the user's of the same name. */
+ *  repo's skill hides the user's of the same name. A skill and a command of
+ *  one name keep the skill, which the CLI lists and a loadout turns off. */
 export function sortMentions(words: readonly Mention[]): Mention[] {
-  const sorted = [...words].sort((a, b) => FROM_RANK(a.from) - FROM_RANK(b.from) || a.name.localeCompare(b.name));
+  const sorted = [...words].sort((a, b) => FROM_RANK(a.from) - FROM_RANK(b.from) || a.name.localeCompare(b.name) || KIND_RANK[a.kind] - KIND_RANK[b.kind]);
   const seen = new Set<string>();
   return sorted.filter((w) => {
     const key = `${w.harness} ${w.name}`;

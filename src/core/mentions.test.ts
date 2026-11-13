@@ -67,6 +67,16 @@ describe("parseScan and mentionsOf", () => {
     const rows = sortMentions(mentionsOf(twice)).map((w) => `${w.harness} ${w.from} ${w.name}: ${w.description}`);
     expect(rows).toEqual(["claude project desk: This repo's", "codex user desk: Codex's"]);
   });
+  test("a skill and a command of one name keep the skill, in the scan's own order (commands first)", () => {
+    const both = parseScan([
+      "command\nuser\nvisual-plan\nPlan it.",
+      "skill\nuser\nvisual-plan\n---\ndescription: The skill\n---\n",
+      "command\nplugin:vercel@official\nbootstrap\nBoot it.",
+      "skill\nplugin:vercel@official\nbootstrap\n---\ndescription: The plugin's skill\n---\n",
+    ].join("\0"));
+    const rows = sortMentions(mentionsOf(both)).map((w) => `${w.kind} ${w.from} ${w.name}`);
+    expect(rows).toEqual(["skill user visual-plan", "skill plugin:vercel vercel:bootstrap"]);
+  });
 });
 
 describe("enabledPlugins", () => {

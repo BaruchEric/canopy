@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { baseCovers, mergeProviderSettings, parseLoadouts, planLoadoutStart, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
 import { parseKit, withCanopyServer } from "./kit";
+import { sortMentions } from "./mentions";
 import { DEFAULT_AGENT, type Harness, type KitManifest, type LoadoutsInfo, type Mention } from "./types";
 
 const srv = (agents?: string[]) => ({ command: "x", ...(agents ? { agents } : {}) });
@@ -138,6 +139,11 @@ test("two plugins of one name from two marketplaces go off by their own keys", (
   const twins = [p("foo:x", "foo@a"), p("foo:y", "foo@b"), p("foo:z", "foo@b")];
   expect(skillOverridesFor({ skills: ["foo:x"] }, [], twins)).toEqual({ overrides: { "foo:x": "on" }, plugins: { "foo@b": false }, pluginsOff: ["foo"], off: 2 });
   expect(skillOverridesFor({ skills: [] }, [], twins)).toEqual({ overrides: {}, plugins: { "foo@a": false, "foo@b": false }, pluginsOff: ["foo"], off: 3 });
+});
+test("a skill that shares its name with a command is still turned off, and its plugin with it", () => {
+  // the order the scan reads them: each folder's commands before its skills
+  const read = sortMentions([m("visual-plan", "user", "command"), m("visual-plan", "user"), p("vercel:bootstrap", "vercel@official", "command"), p("vercel:bootstrap", "vercel@official")]);
+  expect(skillOverridesFor({ skills: [] }, [], read)).toEqual({ overrides: { "visual-plan": "off" }, plugins: { "vercel@official": false }, pluginsOff: ["vercel"], off: 2 });
 });
 test("only a claude skill counts as one the machine has", () => {
   const info: LoadoutsInfo = { ...planInfo, loadouts: [
