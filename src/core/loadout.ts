@@ -4,6 +4,7 @@ import { takesEffort, takesModel } from "./harness";
 import {
   isHarness,
   type AgentSettings,
+  type CardEquip,
   type Harness,
   type KitManifest,
   type KitMcpEntry,
@@ -140,6 +141,28 @@ export function parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsIn
     }
   }
   return { base, loadouts, errors };
+}
+
+/** The loadout a card starts with: the named one with Eric's overrides laid
+ *  over, never holding canopy's tools, since a manager's worker never does.
+ *  The card's checks ran when it was planned; kit.json may have changed
+ *  since, so the name and the overrides are checked again here. */
+export function cardLoadout(equip: CardEquip, info: LoadoutsInfo): Loadout | { refused: string } {
+  const name = equip.loadout ?? "";
+  const lo = info.loadouts.find((l) => l.name === name);
+  if (!lo) return { refused: `no loadout ${name} in kit.json` };
+  if (lo.harness === "codex" && (equip.skills !== undefined || equip.mcp !== undefined)) return { refused: "a codex loadout takes no skills or servers" };
+  if (equip.mcp?.includes("canopy")) return { refused: "a card's worker never holds canopy's own server" };
+  if (equip.model !== undefined && !takesModel(lo.harness, equip.model)) return { refused: `${lo.harness} does not take ${equip.model}` };
+  if (equip.effort !== undefined && !takesEffort(lo.harness, equip.effort)) return { refused: `${lo.harness} does not take ${equip.effort}` };
+  return {
+    ...lo,
+    model: equip.model ?? lo.model,
+    effort: equip.effort ?? lo.effort,
+    skills: [...(equip.skills ?? lo.skills)],
+    mcp: [...(equip.mcp ?? lo.mcp)],
+    canopyTools: false,
+  };
 }
 
 /** What a loadout start needs from the route and the machine. */

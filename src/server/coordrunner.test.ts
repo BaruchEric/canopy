@@ -6,19 +6,25 @@
  * The runner is a stand-in client and the harness a driver that runs
  * nothing, so nothing here needs docker or a claude login.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+import { selfName } from "../core/backends";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
-import type { About, Harness, Run } from "../core/types";
+import type { About, CoordTask, Harness, LoadoutsInfo, Run } from "../core/types";
 import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
-const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT"];
+const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT", "CANOPY_KIT", "HOME"];
 const saved: Record<string, string | undefined> = {};
 let scratch = "";
+
+/** the start checks to let through before one is refused, counted down: 1
+ *  refuses the next. A coordinator runs through its runner and is never checked. */
+const refusal = { in: 0 };
 
 /** a driver that only records what it was started with */
 class Recorder implements RunDriver {
@@ -26,6 +32,7 @@ class Recorder implements RunDriver {
   ctx: DriveCtx | null = null;
   constructor(readonly harness: Harness) {}
   check(): string | null {
+    if (refusal.in > 0 && --refusal.in === 0) return "this driver refuses the start";
     return null;
   }
   start(ctx: DriveCtx): void {
@@ -59,7 +66,8 @@ beforeAll(async () => {
   process.env["CANOPY_TMUX"] = "0";
   delete process.env["CANOPY_BIND"];
   const repo = join(scratch, "root", "app");
-  await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q`.quiet();
+  // one commit on main, so a card's branch run has a tip to cut from
+  await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q -b main && git -C ${repo} -c user.name=t -c user.email=t@t commit -q --allow-empty -m one`.quiet();
 });
 afterAll(async () => {
   for (const [k, v] of Object.entries(saved)) {
@@ -75,7 +83,7 @@ type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; m
  *  with a page token minted into its book before it starts. The
  *  coordinator's listener takes any free port unless `coordPort` is
  *  null, which leaves it to CANOPY_COORD_PORT. */
-async function up(name: string, client: StageClient | null, env: Record<string, string> = {}, coordPort: number | null = 0): Promise<Up> {
+async function up(name: string, client: StageClient | null, env: Record<string, string> = {}, coordPort: number | null = 0, harnesses?: Harness[]): Promise<Up> {
   const config = join(scratch, name);
   process.env["CANOPY_CONFIG_DIR"] = config;
   const book = new CallerBook({ file: join(config, "callers.json") });
@@ -90,6 +98,7 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
     root: join(scratch, "root"),
     port: 0,
     coordinator: { client, ...(coordPort !== null ? { port: coordPort } : {}) },
+    ...(harnesses ? { harnesses } : {}),
     runner: {
       driver: (h) => {
         const d = new Recorder(h);
@@ -127,6 +136,16 @@ const exists = (path: string): Promise<boolean> =>
     () => false,
   );
 const COORD_ENV = { CANOPY_COORD_SOCKET: "/run/canopy-coord/runner.sock", CANOPY_COORD_API: API };
+
+async function until<T>(read: () => Promise<T | null | undefined | false>, what: string, ms = 10_000): Promise<T> {
+  const begun = Date.now();
+  for (;;) {
+    const got = await read();
+    if (got) return got;
+    if (Date.now() - begun > ms) throw new Error(`gave up waiting for ${what}`);
+    await Bun.sleep(20);
+  }
+}
 
 describe("without a coordinator's runner", () => {
   let s: Up;
@@ -338,5 +357,150 @@ describe("the coordinator's lane, on its own listener", () => {
     });
     if (opened) ws.close();
     expect(opened).toBe(false);
+  });
+});
+
+describe("a coordinator's card with a loadout", () => {
+  let s: Up;
+  let kitFile = "";
+  /** kit.json with this backend as its one machine and these loadouts; the
+   *  store target sits in the scratch folder, so a scan never reads the real ~/.claude */
+  const writeKit = (loadouts: Record<string, unknown>): Promise<void> =>
+    writeFile(kitFile, JSON.stringify({
+      version: 1,
+      machines: { here: { backend: selfName(null, hostname()) } },
+      targets: [{ agent: "claude", skills: join(scratch, "store", "skills"), mode: "store" }],
+      skills: {},
+      mcp: {},
+      loadouts,
+    }));
+  const names = async (): Promise<string[]> => ((await (await call(s, "/api/loadouts", s.page)).json()) as LoadoutsInfo).loadouts.map((l) => l.name);
+  /** a test server's kit never scans on its own */
+  async function rescan(has: boolean): Promise<void> {
+    expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+    await until(async () => (await names()).includes("quick") === has, `quick ${has ? "in" : "gone from"} the loadouts`);
+  }
+  const runs = async (): Promise<Run[]> => (await (await call(s, "/api/runs", s.page)).json()) as Run[];
+  const cardOf = async (coord: string): Promise<CoordTask | undefined> => (await runs()).find((r) => r.id === coord)?.tasks?.[0];
+  const ctxOf = (id: string): Promise<DriveCtx> => until(async () => s.made.find((d) => d.ctx?.env["CANOPY_RUN"] === id)?.ctx, `run ${id} to reach the driver`);
+  /** runs to stop when the test ends, children first */
+  const live: string[] = [];
+
+  /** a coordinator with one card planned by its own token, then "start these" from the page */
+  async function startCard(card: Record<string, unknown>): Promise<{ coord: string; tasks: CoordTask[] }> {
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "cards" }, s.page);
+    expect(res.status).toBe(201);
+    const coord = ((await res.json()) as Run).id;
+    live.push(coord);
+    const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "app", note: "do the thing", action: "ask", ...card }] }, token);
+    expect(plan.status).toBe(200);
+    const started = await postAs(s, "/api/coordinator/start", { run: coord }, s.page);
+    expect(started.status).toBe(200);
+    return { coord, tasks: ((await started.json()) as { tasks: CoordTask[] }).tasks };
+  }
+
+  beforeAll(async () => {
+    const home = join(scratch, "loadout-home");
+    await mkdir(join(home, ".claude", "skills"), { recursive: true });
+    await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
+    kitFile = join(scratch, "kit.json");
+    // canopyTools on, so the test shows a card's worker goes without them anyway
+    await writeKit({ quick: { model: "haiku", canopyTools: true } });
+    process.env["CANOPY_KIT"] = kitFile;
+    process.env["HOME"] = home;
+    s = await up("loadout", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"]);
+    await rescan(true);
+  });
+  afterEach(async () => {
+    for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
+  });
+  afterAll(() => s.stop());
+
+  test("a card's child starts with the card's loadout, its settings file, and no canopy tools", async () => {
+    const { coord, tasks } = await startCard({ equip: { loadout: "quick" } });
+    const task = tasks[0];
+    expect(task).toMatchObject({ state: "running", equip: { loadout: "quick" } });
+    const id = task?.run ?? "";
+    live.push(id);
+    const child = (await runs()).find((r) => r.id === id);
+    expect(child?.equip?.loadout).toBe("quick");
+    expect(child?.parent).toBe(coord);
+    expect(child?.by).toBe("coordinator");
+    expect(child?.canopyTools).toBeUndefined();
+    const ctx = await ctxOf(id);
+    expect(ctx.agent.model).toBe("haiku");
+    expect(ctx.spec.canopy).toBeUndefined();
+    expect(ctx.spec.mcpConfig).toBeUndefined();
+    expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+    // no run token was minted for it
+    const callers = (await (await call(s, "/api/auth", s.page)).json()) as { callers: { kind: string }[] };
+    expect(callers.callers.filter((c) => c.kind === "run")).toEqual([]);
+    await postAs(s, "/api/runs/stop", { id }, s.page);
+    await until(async () => !existsSync(ctx.spec.settings ?? ""), "the child's settings file to go");
+  });
+
+  test("a card with times gives every member the card's loadout", async () => {
+    const { tasks } = await startCard({ times: 2, equip: { loadout: "quick" } });
+    const group = tasks[0]?.group;
+    expect(tasks[0]?.state).toBe("running");
+    expect(group).toBeTruthy();
+    const members = await until(async () => {
+      const got = (await runs()).filter((r) => r.group === group);
+      return got.length === 2 ? got : null;
+    }, "two members");
+    live.push(...members.map((m) => m.id));
+    expect(members.map((m) => m.equip?.loadout)).toEqual(["quick", "quick"]);
+    for (const m of members) {
+      const ctx = await ctxOf(m.id);
+      expect(ctx.agent.model).toBe("haiku");
+      expect(ctx.spec.canopy).toBeUndefined();
+      expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+    }
+  });
+
+  test("a card whose start fails after its loadout's files are written leaves none behind, one run or a group", async () => {
+    const tools = join(scratch, "loadout", "run-tools");
+    const files = async (): Promise<string[]> => readdir(tools).catch(() => [] as string[]);
+    // the runs the tests before stopped take their files with them
+    await until(async () => (await files()).length === 0, "the earlier runs' files to go");
+    refusal.in = 1;
+    try {
+      const one = await startCard({ equip: { loadout: "quick" } });
+      expect(one.tasks[0]).toMatchObject({ state: "failed", outcome: "this driver refuses the start" });
+      expect(await files()).toEqual([]);
+      // a repo has one coordinator at a time
+      await postAs(s, "/api/runs/stop", { id: one.coord }, s.page);
+      await until(async () => (await runs()).find((r) => r.id === one.coord)?.status !== "working", "the first coordinator to stop");
+      // the first member starts; the second is refused after both members' files were written
+      refusal.in = 2;
+      const two = await startCard({ times: 2, equip: { loadout: "quick" } });
+      expect(two.tasks[0]).toMatchObject({ state: "failed", outcome: "this driver refuses the start" });
+      expect(await files()).toEqual([]);
+    } finally {
+      refusal.in = 0;
+    }
+  });
+
+  test("a card whose loadout is gone from kit.json fails saying so", async () => {
+    // planned while kit.json has it, started after it went
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "gone" }, s.page);
+    expect(res.status).toBe(201);
+    const coord = ((await res.json()) as Run).id;
+    live.push(coord);
+    const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "app", note: "n", action: "ask", equip: { loadout: "quick" } }] }, token);
+    expect(plan.status).toBe(200);
+    await writeKit({ other: { model: "sonnet" } });
+    try {
+      await rescan(false);
+      const before = s.made.length;
+      expect((await postAs(s, "/api/coordinator/start", { run: coord }, s.page)).status).toBe(200);
+      expect(await cardOf(coord)).toMatchObject({ state: "failed", outcome: "no loadout quick in kit.json" });
+      expect(s.made.length).toBe(before);
+    } finally {
+      await writeKit({ quick: { model: "haiku", canopyTools: true } });
+      await rescan(true);
+    }
   });
 });

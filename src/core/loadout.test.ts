@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { baseCovers, mergeProviderSettings, parseLoadouts, planLoadoutStart, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
+import { baseCovers, cardLoadout, mergeProviderSettings, parseLoadouts, planLoadoutStart, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
 import { parseKit, withCanopyServer } from "./kit";
 import { sortMentions } from "./mentions";
-import { DEFAULT_AGENT, type Harness, type KitManifest, type LoadoutsInfo, type Mention } from "./types";
+import { DEFAULT_AGENT, type Harness, type KitManifest, type Loadout, type LoadoutsInfo, type Mention } from "./types";
 
 const srv = (agents?: string[]) => ({ command: "x", ...(agents ? { agents } : {}) });
 const parsed = parseKit({
@@ -197,4 +197,35 @@ test("the plugins off lay over the provider's enabledPlugins key by key", () => 
   expect(mergeProviderSettings(null, {}, { "b@m": false })).toEqual({ skillOverrides: {}, enabledPlugins: { "b@m": false } });
   // no plugins off: the provider's own switches stay as they are
   expect(mergeProviderSettings({ enabledPlugins: { "a@m": false } }, {}, {})).toEqual({ enabledPlugins: { "a@m": false }, skillOverrides: {} });
+});
+
+const feature: Loadout = { name: "feature", note: "build a feature", harness: "claude", model: "opus", effort: "high", skills: ["grill-me"], mcp: ["executor"], canopyTools: true };
+const cardInfo: LoadoutsInfo = { base: [], errors: [], loadouts: [
+  feature,
+  { name: "cx", note: "", harness: "codex", model: "gpt-5.5", effort: "low", skills: [], mcp: [], canopyTools: false },
+] };
+test("a card's loadout keeps the name, harness and effort, takes Eric's model and skills, and never holds canopy's tools", () => {
+  expect(cardLoadout({ loadout: "feature", model: "sonnet", skills: ["unslop"] }, cardInfo)).toEqual(
+    { name: "feature", note: "build a feature", harness: "claude", model: "sonnet", effort: "high", skills: ["unslop"], mcp: ["executor"], canopyTools: false },
+  );
+});
+test("a card's loadout with no overrides is the loadout, without canopy's tools", () => {
+  expect(cardLoadout({ loadout: "feature" }, cardInfo)).toEqual({ ...feature, canopyTools: false });
+  expect(cardLoadout({ loadout: "feature", effort: "low", mcp: [] }, cardInfo)).toMatchObject({ effort: "low", mcp: [], skills: ["grill-me"] });
+});
+test("a card's loadout that kit.json no longer has is refused", () => {
+  expect(cardLoadout({ loadout: "nope" }, cardInfo)).toEqual({ refused: "no loadout nope in kit.json" });
+});
+test("a card's codex loadout takes no skills or servers", () => {
+  expect(cardLoadout({ loadout: "cx", skills: ["unslop"] }, cardInfo)).toEqual({ refused: "a codex loadout takes no skills or servers" });
+  expect(cardLoadout({ loadout: "cx", mcp: ["executor"] }, cardInfo)).toEqual({ refused: "a codex loadout takes no skills or servers" });
+  expect(cardLoadout({ loadout: "cx", model: "gpt-5" }, cardInfo)).toMatchObject({ harness: "codex", model: "gpt-5" });
+});
+test("canopy's own server is never among a card's servers", () => {
+  expect(cardLoadout({ loadout: "feature", mcp: ["executor", "canopy"] }, cardInfo)).toEqual({ refused: "a card's worker never holds canopy's own server" });
+});
+test("a card's model or effort the loadout's harness does not take is refused", () => {
+  // kit.json may change a loadout's harness after Eric set the card's model
+  expect(cardLoadout({ loadout: "cx", model: "sonnet" }, cardInfo)).toEqual({ refused: "codex does not take sonnet" });
+  expect(cardLoadout({ loadout: "feature", model: "gpt-5" }, cardInfo)).toEqual({ refused: "claude does not take gpt-5" });
 });

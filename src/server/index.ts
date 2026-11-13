@@ -113,7 +113,7 @@ import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { listMentions } from "../core/mentions";
-import { LOADOUT_NAME, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
+import { cardLoadout, LOADOUT_NAME, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -223,7 +223,7 @@ import {
   TERM_GONE,
   type TaskTree,
 } from "../core/types";
-import type { About, AdviceAccepted, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, RepoStatus } from "../core/types";
+import type { About, AdviceAccepted, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus } from "../core/types";
 import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
@@ -1260,33 +1260,33 @@ async function startRepoRun(
     if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
   }
   const routed = agentFor(await loadConfig(), repo.path, action === "chat" ? "chat" : "job", undefined, { kind: "task", name: action });
-  // a loadout's harness, model and effort replace the route's, so every
-  // check below hears the agent that will run (FR-065)
-  const plan = how.loadout === undefined ? null : await planLoadout(state, repo, how.loadout, routed);
-  const agent = plan?.agent ?? routed;
-  // Before the workspace and install checks, so a workspace propose on
-  // Codex hears what is wrong with the action, not with the workspace.
-  if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
-  if (scope && agent.harness !== "claude") throw new HttpError(400, "workspace runs need Claude Code");
-  await needHarness(state, agent.harness, repo.path);
-  // the device it was started from, when the browser said and is on the stream
-  const by = how.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
-  needCapacity(state, agent.harness, priority);
   const base: StartExtras = {
     ...(priority === "interactive" ? {} : { priority }),
     ...(how.parent ? { parent: how.parent, child: true as const } : {}),
-    // a loadout run's files are named by its id, so the id comes first
-    ...(plan ? { id: crypto.randomUUID().slice(0, 8), equip: plan.equip } : {}),
   };
-  // the start's word beats the settings' (or the loadout's); a start that asks
-  // outright hears why it cannot have them, and settings that cannot apply here are passed over
+  // the start's word beats the loadout's, and the loadout's the settings'; a
+  // start that asks outright hears below why it cannot have them, and
+  // settings that cannot apply here are passed over
   const refused = toolsRefusal(state, repo);
-  if (how.tools === true && refused) throw new HttpError(400, refused);
-  const withTools = !refused && (how.tools ?? (plan ? plan.canopyTools : agent.canopyTools === true));
-  const tools = plan && plan.agent.harness === "claude" ? await loadoutFiles(state, repo, plan, base, withTools)
-    : withTools ? await runTools(state, repo, base)
-    : { extras: base, release: async () => {} };
+  const named = how.loadout === undefined ? undefined : state.kit.loadouts().loadouts.find((l) => l.name === how.loadout);
+  const withTools = !refused && (how.tools ?? (how.loadout === undefined ? routed.canopyTools === true : named?.canopyTools === true));
+  // a loadout's harness, model and effort replace the route's, so every
+  // check below hears the agent that will run (FR-065); its files are
+  // written here, and go again when a check refuses the start
+  const loaded = how.loadout === undefined ? null : await withLoadout(state, repo, how.loadout, routed, base, withTools);
+  const agent = loaded?.agent ?? routed;
+  let tools = loaded ?? { extras: base, release: async () => {} };
   try {
+    // Before the workspace and install checks, so a workspace propose on
+    // Codex hears what is wrong with the action, not with the workspace.
+    if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
+    if (scope && agent.harness !== "claude") throw new HttpError(400, "workspace runs need Claude Code");
+    await needHarness(state, agent.harness, repo.path);
+    // the device it was started from, when the browser said and is on the stream
+    const by = how.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    needCapacity(state, agent.harness, priority);
+    if (how.tools === true && refused) throw new HttpError(400, refused);
+    if (!loaded && withTools) tools = await runTools(state, repo, base);
     if (onBranch) {
       const resolved = await issueNoteFor(repo, note);
       return await startBranchRun(state, repo, action, resolved.note, agent, by, pr, ACTIONS[action], { ...tools.extras, ...(how.devTask ? { devTask: true } : {}) }, resolved.work);
@@ -1349,10 +1349,13 @@ async function dropRunTools(state: ServerState, id: string): Promise<void> {
 
 /** A loadout's plan for a start here (FR-065), or the 400 that says why it
  *  cannot start. A seed's run goes to a stage, which has neither the run's
- *  files nor this machine's skills. */
-async function planLoadout(state: ServerState, repo: Repo, name: string, agent: AgentSettings): Promise<LoadoutStartPlan> {
+ *  files nor this machine's skills. A loadout given whole (a card's, with
+ *  Eric's overrides) is planned in place of kit.json's of its name. */
+async function planLoadout(state: ServerState, repo: Repo, loadout: string | Loadout, agent: AgentSettings): Promise<LoadoutStartPlan> {
   if (isSeedPath(state.root, repo.path)) throw new HttpError(400, "an incubator seed's run takes no loadout");
-  const info = state.kit.loadouts();
+  const kit = state.kit.loadouts();
+  const name = typeof loadout === "string" ? loadout : loadout.name;
+  const info: LoadoutsInfo = typeof loadout === "string" ? kit : { ...kit, loadouts: [...kit.loadouts.filter((l) => l.name !== name), loadout] };
   // a codex loadout takes no skills, so only a claude one reads them
   const claude = info.loadouts.find((l) => l.name === name)?.harness === "claude";
   const skills = claude ? await listMentions(repo.path).catch((err: unknown) => { throw err instanceof FinderError ? new HttpError(err.status, err.message) : err; }) : [];
@@ -1381,6 +1384,21 @@ async function loadoutFiles(state: ServerState, repo: Repo, plan: LoadoutStartPl
     if (err instanceof HttpError) throw err;
     throw new HttpError(500, `could not write the run's files: ${String(err instanceof Error ? err.message : err)}`);
   }
+}
+
+/** The agent and extras a start takes for a loadout (FR-065): the plan's
+ *  agent, the run's id and `equip`, and a claude loadout's files. A codex
+ *  loadout writes none, and holds canopy's tools only through `runTools`.
+ *  It never sets `child`: a coordinator's card names its `parent` alone.
+ *  `release` removes what was written, for a start that fails. */
+async function withLoadout(state: ServerState, repo: Repo, loadout: string | Loadout, routed: AgentSettings, base: StartExtras, withTools: boolean): Promise<{ agent: AgentSettings; extras: StartExtras; release: () => Promise<void> }> {
+  const plan = await planLoadout(state, repo, loadout, routed);
+  // a loadout run's files are named by its id, so the id comes first
+  const own: StartExtras = { ...base, id: base.id ?? crypto.randomUUID().slice(0, 8), equip: plan.equip };
+  const files = plan.agent.harness === "claude" ? await loadoutFiles(state, repo, plan, own, withTools)
+    : withTools ? await runTools(state, repo, own)
+    : { extras: own, release: async () => {} };
+  return { agent: plan.agent, ...files };
 }
 
 /** The settings file of the Claude provider the agent names, or null when it
@@ -1445,6 +1463,9 @@ interface GroupStart {
   by?: string;
   parent?: string;
   work?: WorkStart;
+  /** every member starts with this loadout in place of a profile (FR-065):
+   *  a coordinator's card's, never holding canopy's tools */
+  loadout?: Loadout;
 }
 
 async function startGroup(state: ServerState, repo: Repo, action: RunAction, note: string, client: unknown, times: number, profiles: (string | null)[] | undefined, autoLand: boolean, pr: boolean, priority: Priority = "low", extra: GroupStart = {}): Promise<RunGroup> {
@@ -1457,14 +1478,15 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
     if (going + times > BRANCH_RUNS_PER_REPO) throw new HttpError(409, `${repo.name} has ${BRANCH_RUNS_PER_REPO - going} free branch slots; this group needs ${times}`);
     const cfg = await loadConfig();
     // every member is checked before anything is cut, so one that cannot run
-    // refuses the whole start
-    const lineup = memberProfiles(profiles, times).map((profile, i) => {
+    // refuses the whole start; a loadout's harness is every member's
+    const lineup = memberProfiles(extra.loadout ? undefined : profiles, times).map((profile, i) => {
       if (profile && !hasProfile(agentRoutes(cfg).profiles, profile)) throw new HttpError(400, `unknown agent profile ${profile}`);
       const agent = agentFor(cfg, repo.path, "job", profile ? { profile } : undefined, { kind: "task", name: action });
-      if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, `plan, then build needs Claude Code; member ${i + 1} runs ${agent.harness}`);
-      return { profile, agent };
+      const harness = extra.loadout?.harness ?? agent.harness;
+      if (action === "propose" && harness !== "claude") throw new HttpError(400, `plan, then build needs Claude Code; member ${i + 1} runs ${harness}`);
+      return { profile, agent, harness };
     });
-    for (const harness of new Set(lineup.map((member) => member.agent.harness))) {
+    for (const harness of new Set(lineup.map((member) => member.harness))) {
       await needHarness(state, harness, repo.path);
       // a fan-out is low work unless its start says otherwise (FR-036)
       needCapacity(state, harness, priority);
@@ -1475,7 +1497,19 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
     const items: string[] = [];
     const runs: Run[] = [];
     const by = extra.by ?? deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
+    /** each member's loadout files, removed again if the group does not start */
+    const releases: (() => Promise<void>)[] = [];
     try {
+      // a loadout's files for every member before anything is cut, so one
+      // that cannot be planned or written refuses the whole start
+      const equipped: { agent: AgentSettings; extras: StartExtras }[] = [];
+      if (extra.loadout) {
+        for (const member of lineup) {
+          const got = await withLoadout(state, repo, extra.loadout, member.agent, {}, false);
+          releases.push(got.release);
+          equipped.push(got);
+        }
+      }
       for (let i = 0; i < times; i++) {
         const item = state.work.mint({ ...(resolved.work ?? { title: titleOf(resolved.note), from: { kind: "note" } }), repos: [repo.id] });
         items.push(item.id);
@@ -1486,7 +1520,9 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
       for (const [i, cut] of cuts.entries()) {
         const member = lineup[i];
         if (!member) throw new Error("a group member has no agent");
-        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, member.agent, by, undefined, cut, { group: group.id, priority, ...(extra.parent ? { parent: extra.parent } : {}) });
+        const own = extra.loadout ? equipped[i] : { agent: member.agent, extras: {} };
+        if (!own) throw new Error("a group member has no loadout");
+        const run = state.runner.start(repo, action, ACTIONS[action], resolved.note, own.agent, by, undefined, cut, { ...own.extras, group: group.id, priority, ...(extra.parent ? { parent: extra.parent } : {}) });
         runs.push(run);
         await state.groups.addMember(group.id, { run: run.id, origin: cut.branch.origin, profile: member.profile });
       }
@@ -1496,6 +1532,8 @@ async function startGroup(state: ServerState, repo: Repo, action: RunAction, not
       // must settle before records are forgotten, or they could resurrect one.
       const stopped = await Promise.allSettled(runs.map(run => state.runner.stopAndWait(run.id)));
       for (const result of stopped) if (result.status === "rejected") console.error(`groups: rollback stop: ${String(result.reason)}`);
+      // a member that never started has no end to remove its files
+      for (const release of releases) await release();
       await state.landing.idle();
       for (const cut of cuts) {
         try { await removeRunTree(repo.path, cut.branch.dir, cut.branch.name); }
@@ -2129,6 +2167,10 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
   if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
   if (isSeedPath(state.root, repo.path)) throw new Error(`${repo.name} is an incubator seed; its runs work in the seed, not on a branch`);
+  // the card's loadout with Eric's overrides, as kit.json has it now; one
+  // it can no longer have fails the card in its words (FR-065)
+  const loadout = task.equip?.loadout ? cardLoadout(task.equip, state.kit.loadouts()) : null;
+  if (loadout && "refused" in loadout) throw new Error(loadout.refused);
   // the runner's own count takes held branch runs too, so both are asked
   const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   const times = task.times ?? 1;
@@ -2138,21 +2180,32 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
     // a group's members are low unless "start anyway" let the card go, and it
     // lands by Eric's hand: a fan-out is a choice to compare (the spec's call 4)
     try {
-      return { group: await startGroup(state, repo, task.action, task.note, null, times, undefined, false, false, priority === "interactive" ? "interactive" : "low", { by: "coordinator", parent: coordId, work }) };
+      return { group: await startGroup(state, repo, task.action, task.note, null, times, undefined, false, false, priority === "interactive" ? "interactive" : "low", { by: "coordinator", parent: coordId, work, ...(loadout ? { loadout } : {}) }) };
     } catch (err) {
       if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
       if (err instanceof HttpError && err.status === 409) return { busy: err.message };
       throw err;
     }
   }
-  const agent = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
-  if (task.action === "propose" && agent.harness !== "claude") throw new Error("plan, then build needs Claude Code");
-  await needHarness(state, agent.harness, repo.path);
+  const routed = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
+  const harness = loadout?.harness ?? routed.harness;
+  if (task.action === "propose" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
+  await needHarness(state, harness, repo.path);
+  // a card's child names its parent and never `child`: the tool-child
+  // refusal and depth are for runs a run starts through canopy's tools
+  const base: StartExtras = { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) };
+  let release = async (): Promise<void> => {};
   try {
+    // the governor before the loadout's files, so a held card writes none
+    needCapacity(state, harness, priority);
+    // a manager's worker never holds canopy's tools, whatever its loadout says
+    const loaded = loadout ? await withLoadout(state, repo, loadout, routed, base, false) : { agent: routed, extras: base, release };
+    release = loaded.release;
     return {
-      run: await startBranchRun(state, repo, task.action, task.note, agent, "coordinator", false, ACTIONS[task.action], { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) }, work),
+      run: await startBranchRun(state, repo, task.action, task.note, loaded.agent, "coordinator", false, ACTIONS[task.action], loaded.extras, work),
     };
   } catch (err) {
+    await release();
     // another branch run took the last slot while this one got ready, or
     // the governor holds the card (FR-036): it waits either way
     if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
