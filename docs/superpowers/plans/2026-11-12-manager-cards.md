@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Status: planned 2026-11-12 on branch `manager-cards`.
+Status: built and reviewed on branch `manager-cards` 2026-11-12; waiting on merge and deploy.
 
 **Goal:** A coordinator's card names a loadout, a workflow and the cards it waits for; it starts with that loadout, runs that workflow as a flow on its branch, waits until the cards it names have landed, follows every later run on its branch, and Eric can hold the goal or start one card.
 

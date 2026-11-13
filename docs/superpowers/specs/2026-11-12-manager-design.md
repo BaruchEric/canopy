@@ -254,7 +254,8 @@ Starting (`startCoordChild`):
   loadout.
 - The same split triggers make, without their refusal of steps that ask
   (`triggerPlan` refuses those, since nobody is there; Eric is here). A
-  workflow of one plain step is a branch run with that step's spec.
+  workflow of one plain step is a branch run with that step's spec
+  (`workflowPlan`), attended, with no flow.
 - Anything more: a flow on a branch (`cutBranch`, then `Flows.start` with
   `branch`), not marked unattended, so an `ask` gate parks and waits for Eric.
   The loadout's skills and servers apply to every step, and its servers are
@@ -262,6 +263,18 @@ Starting (`startCoordChild`):
   A step that names its own `agent:` keeps that profile's model and effort,
   as a trigger's flow does (`live.agent(def.agent, …)` in `core/flow.ts`);
   other steps take the loadout's.
+
+As built, a workflow card refuses the start, before anything is written,
+when a step runs a harness other than Claude Code, when a step's profile is
+on another provider than the loadout's (one settings file serves every
+step), when the loadout is a codex one, and when the profile is not on this
+backend. A card that names `workflowRepo` loads the workflow from the
+repo's own list; any other card loads it from the bundled and user lists
+alone, so a repo's own `review.md` never stands in for the bundled `review`.
+The loadout's settings file and `mcp.json` live under
+`run-tools/flow-<flow id>`, written before the first step, kept through
+stops, gates and restarts, and removed when the flow ends done or failed or
+is dismissed.
 
 The card holds `flow` in place of `run` for a flow. It settles when the flow
 ends: a done flow hands its branch to the landing queue, and the card then
@@ -280,6 +293,15 @@ resume, a fix, the usage limit's carry-on) carries the coordinator as
 settles it again with a new note to the manager. This generalizes what
 `resumeLimited` does for the usage limit. Dependents keep waiting, since
 they wait for landed.
+
+As built (plan 2), adoption (`adopt`, from `follow`) takes a run whose
+parent is the coordinator, and also a run with no parent that is not a flow
+step and whose `branch` is the card's: a flow hands its branch over by its
+last step's run, which names no parent, and a person's own run on the branch
+names none either. So a run started by hand on a settled card's branch
+reopens the card as well. A card that has landed stays closed. The landing
+record of a coordinator's child keeps its `parent`, so a landing fix or a
+PR fix carries it. An adopted run is not held to `COORD_AT_ONCE`.
 
 ### What each steering action does
 
@@ -304,8 +326,11 @@ they wait for landed.
 - **Resume a stopped worker.** A run resumes on its branch through
   `startBranchFix`. A stopped branch flow resumes through `Flows.pickUp`,
   which only the trigger hub calls today, through a new
-  `POST /api/flows/pickup` with the operate right.
-- **Start now.** `POST /api/coordinator/start` with `ids`.
+  `POST /api/flows/pickup` with the operate right. Plan 2 does not add the
+  route (phase 3 does); the hub already puts a card back to running when its
+  flow is picked up.
+- **Start now.** `POST /api/coordinator/start` with `ids` (shipped in plan
+  2).
 
 ### The manager's brief and reads
 
@@ -475,7 +500,16 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
    a worktree cut from the base.
 2. Cards: `equip`, `workflow`, `after`, flows as children and their
    settling, a card following its branch, hold, `start` with `ids`, the
-   brief and the lane reads, `manager.md`.
+   brief and the lane reads, `manager.md`. Shipped 2026-11-12 on branch
+   `manager-cards` (plan 2), built and reviewed, waiting on merge and deploy.
+   Where it differs from this spec: adoption also takes a run with no parent
+   on the card's branch (see "A card follows its branch"); the coordinator's
+   workflows route answers no file path and no step prompt; a workflow card
+   refuses a step off Claude Code, a profile step on another provider than
+   the loadout's, and a codex loadout; a workflow of one plain step starts a
+   plain branch run; there is no `POST /api/flows/pickup` yet, so a stopped
+   card flow is not picked up from a route (phase 3); and a stalled run on a
+   card's branch is not resumed while its coordinator runs (Calls #16).
 3. The steering routes (`runs/nudge`, `flows/pickup`, send back and resume
    through `startBranchFix`) and the top view on desktop, tablet and phone,
    with the equip sheet.
@@ -511,6 +545,16 @@ for the manager to plan by area.
     Eric's to set from the page.
 14. A card follows every run canopy starts on its branch, and settles again.
 15. A server that cannot start where the run executes refuses the start.
+16. A stalled run on a card's branch is not resumed by the stall watchdog
+    while its coordinator runs (`stalls.ts` leaves a coordinator's child
+    alone, fixes included). The card settles and the coordinator or a
+    person carries on. Plan 2 keeps this rule.
+17. A run with no parent that works on a card's branch belongs to the card
+    (adoption takes it), because a flow's last step and a hand-started run
+    name no coordinator.
+18. Cards that settled "ready", "PR opened" or "winner picked" are read again
+    on every recheck and turn landed when their branch lands or their PR
+    merges, so `after` waits on the real landing.
 
 ## Left to the builder
 

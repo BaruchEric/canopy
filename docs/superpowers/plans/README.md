@@ -7,6 +7,7 @@ Each plan here is a checklist written before the work began, for the agent or pe
 | Plan | Status | Shipped | Spec |
 | --- | --- | --- | --- |
 | [Manager, plan 1: loadouts for a hand-started run](2026-11-12-manager-loadouts.md) | implemented on branch `manager-loadouts` 2026-11-12; real run checked, merge and deploy pending | | [manager design](../specs/2026-11-12-manager-design.md) |
+| [Manager, plan 2: cards carry a loadout, a workflow and after](2026-11-12-manager-cards.md) | built and reviewed on branch `manager-cards` 2026-11-12; waiting on merge and deploy | | [manager design](../specs/2026-11-12-manager-design.md) |
 | [Agent defaults](2026-10-26-agent-defaults.md) | implemented and verified on `main`; deployed to the Mac and mini 2026-10-27 | | [agent defaults](../specs/2026-10-26-agent-defaults-design.md) |
 | [Best-of-N, plan 1: groups of one profile, a compare run and the winner lands](2026-10-26-best-of-n-1.md) | implemented and independently reviewed locally 2026-10-27 on `main` | 2026-11-03 | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
 | [Best-of-N, plan 2: profiles per member, two reviewers, card times and the costs fold](2026-11-03-best-of-n-2.md) | implemented and merged to `main` 2026-11-03; live check passed the same day | 2026-11-03 | [best-of-N](../specs/2026-10-25-best-of-n-design.md) |
