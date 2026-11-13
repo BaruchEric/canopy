@@ -165,6 +165,11 @@ export function cardLoadout(equip: CardEquip, info: LoadoutsInfo): Loadout | { r
   };
 }
 
+/** The loadout a run started with, rebuilt from its equip, so a restart gets the same one whatever kit.json says now. */
+export function loadoutOfEquip(equip: RunEquip, harness: Harness): Loadout {
+  return { name: equip.loadout, note: "", harness, model: equip.model, effort: equip.effort, skills: [...equip.skills], mcp: [...equip.mcp], canopyTools: false };
+}
+
 /** What a loadout start needs from the route and the machine. */
 export interface LoadoutStartPlan {
   /** the route's settings with harness, model and effort replaced */

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { SWEPT_DAYS } from "./keep";
 import { configDir } from "./store";
-import { isHarness, SWEEP_KINDS, type SweepItem, type SweepLogEntry, type SweepOutcome, type SweptChat } from "./types";
+import { AGENT_EFFORTS, isHarness, SWEEP_KINDS, type RunEquip, type SweepItem, type SweepLogEntry, type SweepOutcome, type SweptChat } from "./types";
 
 /* What the sweep keeps on disk: the chats it stopped, so a resume can start
  * from their session, a short log of its passes, the scheduled fire's
@@ -47,11 +47,21 @@ const isTime = (v: unknown): v is number => typeof v === "number" && Number.isFi
 const isBool = (v: unknown): v is boolean => typeof v === "boolean";
 const RESULTS: readonly unknown[] = ["closed", "in use now", "gone", "failed"] satisfies SweepOutcome["result"][];
 
+const isStrs = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
+
+function parseEquip(v: unknown): RunEquip | null {
+  if (!isObj(v)) return null;
+  const { loadout, model, effort, skills, mcp, off, pluginsOff } = v;
+  if (!isStr(loadout) || !isStr(model) || !(AGENT_EFFORTS as readonly unknown[]).includes(effort) || !isStrs(skills) || !isStrs(mcp) || typeof off !== "number") return null;
+  return { loadout, model, effort: effort as RunEquip["effort"], skills, mcp, off, ...(isStrs(pluginsOff) ? { pluginsOff } : {}) };
+}
+
 function parseChat(v: unknown): SweptChat | null {
   if (!isObj(v)) return null;
   const { runId, repoId, harness, session, title, sweptAt } = v;
   if (!isStr(runId) || !isStr(repoId) || !isHarness(harness) || !isStr(session) || !isStr(title) || !isTime(sweptAt)) return null;
-  return { runId, repoId, harness, session, title, sweptAt };
+  const equip = parseEquip(v["equip"]);
+  return { runId, repoId, harness, session, title, sweptAt, ...(equip ? { equip } : {}) };
 }
 
 function parseOutcome(v: unknown): SweepOutcome | null {

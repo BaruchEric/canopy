@@ -1845,6 +1845,8 @@ export interface LandingRun {
   stalls?: number;
   /** its run held canopy's tools, so a fix gets a fresh token (FR-038) */
   canopyTools?: true;
+  /** the loadout its run started with, so a fix starts with the same one */
+  equip?: RunEquip;
   /** a run's child: its chain, which a fix keeps so that it stays a child */
   parent?: string;
   depth?: number;
@@ -3783,6 +3785,8 @@ export interface SweptChat {
   title: string;
   /** unix ms */
   sweptAt: number;
+  /** the loadout the chat started with, so its restart has the same one */
+  equip?: RunEquip;
 }
 
 export interface SweepLogEntry {

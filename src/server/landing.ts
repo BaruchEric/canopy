@@ -575,6 +575,7 @@ export class LandingHub {
         ...(b.work ? { work: b.work } : {}),
         ...(run.group ?? b.group ? { group: run.group ?? b.group } : {}),
         ...(run.canopyTools ? { canopyTools: true as const } : {}),
+        ...(run.equip ? { equip: run.equip } : {}),
         ...(run.depth ? { depth: run.depth, ...(run.parent ? { parent: run.parent } : {}) } : {}),
       };
     }

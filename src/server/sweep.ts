@@ -453,7 +453,7 @@ export class SweepHub {
         const run = facts.runs.find((r) => r.id === id);
         if (!run?.session) return { key, result: "failed", why: "it has no session to resume" };
         // the record goes first, so a stopped chat can always be resumed
-        await addSweptChat({ runId: id, repoId: run.repoId, harness: run.harness, session: run.session, title: item.title, sweptAt: this.now() });
+        await addSweptChat({ runId: id, repoId: run.repoId, harness: run.harness, session: run.session, title: item.title, sweptAt: this.now(), ...(run.equip ? { equip: run.equip } : {}) });
         // the record's write gave a message time to start a turn: a chat
         // that is not idle this moment is in use, and a stop would cut it off
         if (this.deps.runStatus(id) !== "idle") {

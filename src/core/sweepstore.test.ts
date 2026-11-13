@@ -44,6 +44,15 @@ test("a swept chat is stored, listed and taken once", async () => {
   expect((await readSweptChats()).map((c) => c.runId)).toEqual(["b"]);
 });
 
+test("a swept chat keeps the loadout it started with", async () => {
+  const equip = { loadout: "docs", model: "haiku", effort: "low" as const, skills: ["repo-skill"], mcp: [], off: 2, pluginsOff: ["kitplug"] };
+  await addSweptChat({ ...chat("e"), equip });
+  await addSweptChat(chat("n"));
+  const got = await readSweptChats();
+  expect(got.find((c) => c.runId === "e")?.equip).toEqual(equip);
+  expect(got.find((c) => c.runId === "n")?.equip).toBeUndefined();
+});
+
 test("records older than 14 days are dropped on read", async () => {
   expect(SWEPT_DAYS).toBe(14);
   const day = 24 * 60 * 60 * 1000;

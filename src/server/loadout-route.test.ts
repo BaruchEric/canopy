@@ -335,3 +335,110 @@ describe("a run started with a loadout", () => {
     expect(kept.equip).toMatchObject({ loadout: "docs", model: "haiku" });
   });
 });
+
+describe("a restart keeps the run's loadout", () => {
+  const runOf = async (id: string) => ((await (await get("/api/runs")).json()) as Run[]).find((r) => r.id === id);
+  const commit = async (cwd: string, msg: string) => {
+    await exec(["git", "-C", cwd, "add", "-A"]);
+    await exec(["git", "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", msg]);
+  };
+  /** a branch run with the loadout that changed a file and ended */
+  async function endedWith(loadout: string, file: string): Promise<Run> {
+    const run = await started({ loadout });
+    const ctx = await ctxOf(run.id);
+    const dir = run.body.branch?.dir ?? "";
+    await writeFile(join(dir, file), "x\n");
+    await commit(dir, file);
+    ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+    live.delete(run.id);
+    return until(async () => {
+      const r = await runOf(run.id);
+      return r && r.status !== "working" && r.branch?.state !== "working" ? r : null;
+    }, `run ${run.id} to end`);
+  }
+  /** the run sent back by a red gate, then fixed through the landing route */
+  async function fixed(loadout: string, file: string, between: () => Promise<void> = async () => {}): Promise<{ original: Run; fix: Run }> {
+    const repo = join(root, "app");
+    await mkdir(join(repo, ".canopy"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+    await commit(repo, "red gate");
+    try {
+      const original = await endedWith(loadout, file);
+      const origin = original.branch?.origin ?? "";
+      expect((await post("/api/landing/land", { run: origin })).status).toBe(200);
+      await until(async () => {
+        const info = (await (await get("/api/landing")).json()) as { entries: { id: string; state: string }[] };
+        return info.entries.some((e) => e.id === origin && e.state === "red");
+      }, "the red gate");
+      await between();
+      const res = await answer(await post("/api/landing/fix", { id: origin }));
+      expect(res.status).toBe(201);
+      if (res.body.id) live.add(res.body.id);
+      return { original, fix: res.body as Run };
+    } finally {
+      await rm(join(repo, ".canopy", "gates.json"), { force: true });
+      await commit(repo, "no gate");
+    }
+  }
+
+  test("a landing fix starts with the same loadout, model and a settings file", async () => {
+    const { original, fix } = await fixed("docs", "fix-a.txt");
+    expect(fix.equip).toEqual(original.equip);
+    expect(fix.equip).toMatchObject({ loadout: "docs", model: "haiku", effort: "low" });
+    const ctx = await ctxOf(fix.id);
+    expect(ctx.agent).toMatchObject({ model: "haiku", effort: "low" });
+    expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+    expect(ctx.spec.mcpConfig).toBeUndefined();
+    expect(fix.canopyTools).toBeUndefined();
+  }, 30_000);
+
+  test("the same after the loadout was taken out of kit.json", async () => {
+    const kitFile = process.env["CANOPY_KIT"] ?? "";
+    const whole = await readFile(kitFile, "utf8");
+    const rescan = async (has: boolean) => {
+      expect((await post("/api/kit/scan", {})).status).toBe(200);
+      await until(async () => ((await (await get("/api/loadouts")).json()) as LoadoutsInfo).loadouts.some((l) => l.name === "tools") === has, "the kit's loadouts");
+    };
+    const { fix } = await fixed("tools", "fix-b.txt", async () => {
+      const kit = JSON.parse(whole) as { loadouts: Record<string, unknown> };
+      delete kit.loadouts["tools"];
+      await writeFile(kitFile, JSON.stringify(kit));
+      await rescan(false);
+    }).finally(async () => {
+      await writeFile(kitFile, whole);
+      await rescan(true);
+    });
+    expect(fix.equip).toMatchObject({ loadout: "tools", skills: ["repo-skill"], mcp: ["probe"] });
+    const ctx = await ctxOf(fix.id);
+    expect(ctx.spec.servers).toEqual(["probe"]);
+    expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+    expect(existsSync(ctx.spec.mcpConfig ?? "")).toBe(true);
+  }, 30_000);
+
+  test("a fork of a loadout run carries the same equip and a settings file", async () => {
+    const original = await endedWith("docs", "fork-a.txt");
+    const res = await answer(await post("/api/runs/fork", { run: original.id }));
+    expect(res.status).toBe(201);
+    if (res.body.id) live.add(res.body.id);
+    expect(res.body.equip).toEqual(original.equip);
+    const ctx = await ctxOf(res.body.id ?? "");
+    expect(ctx.agent).toMatchObject({ model: "haiku", effort: "low" });
+    expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+  }, 30_000);
+
+  test("a run without equip restarts without a loadout", async () => {
+    const plain = await started({});
+    const ctx = await ctxOf(plain.id);
+    ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+    live.delete(plain.id);
+    await until(async () => (await runOf(plain.id))?.status === "done", "the plain run to end");
+    const res = await answer(await post("/api/runs/fork", { run: plain.id }));
+    expect(res.status).toBe(201);
+    if (res.body.id) live.add(res.body.id);
+    expect(res.body.equip).toBeUndefined();
+    expect((await ctxOf(res.body.id ?? "")).spec.settings).toBeUndefined();
+  }, 30_000);
+});
+

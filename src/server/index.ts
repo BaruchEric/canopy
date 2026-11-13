@@ -113,7 +113,7 @@ import { fence } from "../core/pr";
 import { mapPool, searchRepo } from "../core/search";
 import { FinderError, listDir, listFiles, readRaw, RAW_MAX, safeRel } from "../core/finder";
 import { listMentions } from "../core/mentions";
-import { cardLoadout, LOADOUT_NAME, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
+import { cardLoadout, LOADOUT_NAME, loadoutOfEquip, mergeProviderSettings, planLoadoutStart, type LoadoutStartPlan } from "../core/loadout";
 import { mimeOf } from "../core/filekind";
 import { readActivity } from "../core/activity";
 import { agentSessions, hasAgentSession, isSessionId, newestTranscript, resumeLine, transcriptFile } from "../core/sessions";
@@ -1021,9 +1021,17 @@ async function startSweptChat(state: ServerState, c: SweptChat): Promise<Run> {
   if (state.flows.activeFor(repo.id)) throw new HttpError(409, "a workflow is running here");
   const busy = state.runner.activeFor(repo.id);
   if (busy) throw new HttpError(409, busyWith(repo.name, busy.verb));
-  const agent = agentFor(await loadConfig(), repo.path, "chat", { harness: c.harness });
-  await needHarness(state, agent.harness, repo.path);
-  return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, { resume: c.session });
+  const routed = agentFor(await loadConfig(), repo.path, "chat", { harness: c.harness });
+  // a chat that started with a loadout restarts with it, rebuilt from its equip
+  const equipped = c.equip ? await withLoadout(state, repo, loadoutOfEquip(c.equip, c.harness), routed, { resume: c.session }, false) : null;
+  const agent = equipped?.agent ?? routed;
+  try {
+    await needHarness(state, agent.harness, repo.path);
+    return state.runner.start(repo, "chat", ACTIONS.chat, "", agent, undefined, undefined, undefined, equipped?.extras ?? { resume: c.session });
+  } catch (err) {
+    await equipped?.release();
+    throw err;
+  }
 }
 
 /* ---------- what a shell leaves behind (core/keep) ---------- */
@@ -1842,7 +1850,11 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
   const profile = b["profile"];
   if (profile !== undefined && profile !== null && (typeof profile !== "string" || !hasProfile(agentRoutes(cfg).profiles, profile))) throw new HttpError(400, `unknown agent profile ${String(profile)}`);
   const action: RunAction = original.action === "propose" ? "propose" : "ask";
-  const agent = agentFor(cfg, repo.path, "job", typeof profile === "string" ? { profile } : undefined, { kind: "task", name: action });
+  const routed = agentFor(cfg, repo.path, "job", typeof profile === "string" ? { profile } : undefined, { kind: "task", name: action });
+  // a fork of a loadout run starts with the loadout, rebuilt from the run's equip (so a kit.json
+  // that changed since does not matter); the plan is read now so its harness decides the context
+  const forkLoadout = original.equip ? loadoutOfEquip(original.equip, original.harness) : null;
+  const agent = forkLoadout ? (await planLoadout(state, repo, forkLoadout, routed)).agent : routed;
   if (action === "propose" && agent.harness !== "claude") throw new HttpError(400, "plan, then build needs Claude Code");
   await needHarness(state, agent.harness, repo.path);
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
@@ -1884,6 +1896,7 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
     const item = state.work.mint({ title: `fork of ${id}: ${titleOf(original.note) || original.verb}`, from: { kind: "note" }, repos: [repo.id] });
     let start: BranchStart | undefined;
     let copy: string | null = null;
+    let release: (() => Promise<void>) | undefined;
     try {
       start = await cutBranch(repo, slug, false, item.id, state.warm, original.branch?.base);
       const branch = start.branch;
@@ -1905,12 +1918,16 @@ async function startForkRun(state: ServerState, b: Record<string, unknown>, clie
       if (cut) copy = await placeCut(branch.dir, cut.id, cut.lines);
       const forkOf: RunFork = { run: id, ...(step ? { step: step.id } : {}), at, how };
       const file = copy;
-      return state.runner.start(repo, action, ACTIONS[action], note, agent, by, undefined, {
+      const base: StartExtras = { forkOf, ...(file ? { cleanup: () => removeCut(file) } : {}) };
+      const equipped = forkLoadout ? await withLoadout(state, repo, forkLoadout, routed, base, false) : null;
+      release = equipped?.release;
+      return state.runner.start(repo, action, ACTIONS[action], note, equipped?.agent ?? agent, by, undefined, {
         ...start,
         ...(message !== undefined ? { message } : {}),
         ...(resume !== undefined ? { resume, fork: true as const } : {}),
-      }, { forkOf, ...(file ? { cleanup: () => removeCut(file) } : {}) });
+      }, equipped?.extras ?? base);
     } catch (err) {
+      await release?.();
       const text = err instanceof Error ? err.message : String(err);
       state.work.close(item.id, "dropped", `the fork did not start: ${text}`);
       if (copy) await removeCut(copy).catch(() => {});
@@ -1957,7 +1974,9 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   const priority: Priority = how.priority ?? (rec.group ? "low" : "interactive");
   needCapacity(state, agent.harness, priority);
   const b = { name: rec.branch, target: rec.target, base: rec.base, dir: rec.dir, state: "working" as const, origin: rec.id, ...(rec.work ? { work: rec.work } : {}), ...(rec.group ? { group: rec.group } : {}) };
-  const resume = agent.harness === "claude" && rec.harness === "claude" ? rec.session : undefined;
+  // a run that started with a loadout is fixed with it, rebuilt from its equip
+  const fixLoadout = rec.equip ? loadoutOfEquip(rec.equip, rec.harness) : null;
+  const resume = (fixLoadout ? rec.harness : agent.harness) === "claude" && rec.harness === "claude" ? rec.session : undefined;
   const notes = rec.work ? state.work.get(rec.work)?.notes ?? [] : [];
   const fence = handoffFence(notes);
   const resumed = queueLine ? `${reason}\n\n${branchLine(b)}` : reason;
@@ -1973,9 +1992,15 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
     ...(parent ? { parent } : {}),
     ...(rec.depth ? { depth: rec.depth } : {}),
   };
-  const tools = holdsTools ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
+  const tools: { agent?: AgentSettings; extras: StartExtras; release: () => Promise<void> } = fixLoadout
+    ? await withLoadout(state, repo, fixLoadout, agent, base, holdsTools)
+    : holdsTools ? await runTools(state, repo, base) : { extras: base, release: async () => {} };
   try {
-    return state.runner.start(repo, "ask", ACTIONS.ask, note, agent, undefined, undefined, {
+    if (tools.agent && tools.agent.harness !== agent.harness) {
+      await needHarness(state, tools.agent.harness, repo.path);
+      needCapacity(state, tools.agent.harness, priority);
+    }
+    return state.runner.start(repo, "ask", ACTIONS.ask, note, tools.agent ?? agent, undefined, undefined, {
       branch: b,
       message,
       ...(resume ? { resume } : {}),

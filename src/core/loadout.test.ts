@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { baseCovers, cardLoadout, mergeProviderSettings, parseLoadouts, planLoadoutStart, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
+import { baseCovers, cardLoadout, loadoutOfEquip, mergeProviderSettings, parseLoadouts, planLoadoutStart, skillOverridesFor, type LoadoutStartPlan } from "./loadout";
 import { parseKit, withCanopyServer } from "./kit";
 import { sortMentions } from "./mentions";
 import { DEFAULT_AGENT, type Harness, type KitManifest, type Loadout, type LoadoutsInfo, type Mention } from "./types";
@@ -228,4 +228,14 @@ test("a card's model or effort the loadout's harness does not take is refused", 
   // kit.json may change a loadout's harness after Eric set the card's model
   expect(cardLoadout({ loadout: "cx", model: "sonnet" }, cardInfo)).toEqual({ refused: "codex does not take sonnet" });
   expect(cardLoadout({ loadout: "feature", model: "gpt-5" }, cardInfo)).toEqual({ refused: "claude does not take gpt-5" });
+});
+
+test("a loadout rebuilt from a run's equip keeps its name, model, effort, skills and servers, takes the harness given, and holds no tools", () => {
+  const equip = { loadout: "feature", model: "sonnet", effort: "high" as const, skills: ["unslop"], mcp: ["executor"], off: 3, pluginsOff: ["kitplug"] };
+  const got = loadoutOfEquip(equip, "claude");
+  expect(got).toEqual({ name: "feature", note: "", harness: "claude", model: "sonnet", effort: "high", skills: ["unslop"], mcp: ["executor"], canopyTools: false });
+  expect(loadoutOfEquip(equip, "codex").harness).toBe("codex");
+  // a copy: the run's own record is not shared with the restart
+  got.skills.push("more");
+  expect(equip.skills).toEqual(["unslop"]);
 });
