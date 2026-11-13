@@ -68,11 +68,23 @@ export const qRun = (q: Q, r: Run): Run => ({
   repoId: q(r.repoId),
   ...(r.group ? { group: q(r.group) } : {}),
   ...(r.branch ? { branch: { ...r.branch, origin: q(r.branch.origin), ...(r.branch.group ? { group: q(r.branch.group) } : {}) } } : {}),
-  // a coordinator's child names it, and its cards name their repos and runs
+  // a coordinator's child names it, and its cards name their repos, runs,
+  // groups, flows and branches (after names cards, which are not ids)
   ...(r.parent !== undefined ? { parent: q(r.parent) } : {}),
   // a fork names the run it was forked from (FR-043 plan 3)
   ...(r.forkOf ? { forkOf: { ...r.forkOf, run: q(r.forkOf.run) } } : {}),
-  ...(r.tasks ? { tasks: r.tasks.map((t) => ({ ...t, repo: q(t.repo), ...(t.run !== undefined ? { run: q(t.run) } : {}), ...(t.group !== undefined ? { group: q(t.group) } : {}) })) } : {}),
+  ...(r.tasks
+    ? {
+        tasks: r.tasks.map((t) => ({
+          ...t,
+          repo: q(t.repo),
+          ...(t.run !== undefined ? { run: q(t.run) } : {}),
+          ...(t.group !== undefined ? { group: q(t.group) } : {}),
+          ...(t.flow !== undefined ? { flow: q(t.flow) } : {}),
+          ...(t.branch !== undefined ? { branch: q(t.branch) } : {}),
+        })),
+      }
+    : {}),
 });
 
 /** The landing queue: a branch's id, its runs' and its repo's under the

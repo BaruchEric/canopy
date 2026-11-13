@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { CoordTask, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
+import type { CoordTask, Flow, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
 import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, chainWords, childLine, coordTurn, coordView, isCoordinator, parentCard, parseAfter, stepLine } from "./coord";
 
 const run = (id: string, over: Partial<Run> = {}): Run => ({
@@ -81,6 +81,19 @@ describe("a card's status", () => {
     const t = card({ state: "running", run: "c1" });
     expect(cardStatus(t, child, none, [])).toMatchObject({ word: "running", tone: "sky", line: "reading the tests" });
     expect(cardStatus(t, { ...child, status: "waiting" }, none, []).word).toBe("needs you");
+  });
+  test("a running flow card says needs you while its flow is parked at a gate or waits on a prompt", () => {
+    const flow: Flow = { id: "f1", repoId: "canopy", workflow: "review", verb: "review", note: "n", status: "working", steps: [{ name: "Build", status: "running" }, { name: "Check", status: "pending" }], current: 0, startedAt: 1 };
+    const t = card({ state: "running", flow: "f1", branch: "b1" });
+    expect(cardStatus(t, undefined, none, [], undefined, flow)).toEqual({ word: "running", tone: "sky", line: "review, step 1 of 2: Build" });
+    expect(cardStatus(t, undefined, none, [], undefined, { ...flow, status: "gated", current: 1, steps: [{ name: "Build", status: "passed" }, { name: "Check", status: "gated" }] })).toEqual({
+      word: "needs you",
+      tone: "lichen",
+      line: "review: Check is waiting for you",
+    });
+    expect(cardStatus(t, undefined, none, [], undefined, { ...flow, status: "waiting" })).toEqual({ word: "needs you", tone: "lichen", line: "review: the agent needs you" });
+    // a flow the page does not have says what the card says
+    expect(cardStatus({ ...t, outcome: "x" }, undefined, none, [])).toEqual({ word: "running", tone: "sky", line: "x" });
   });
   test("a running card whose child ended shows its landing word or its PR", () => {
     const child = run("c1", { status: "done", steps: [step("text", "all done")] });

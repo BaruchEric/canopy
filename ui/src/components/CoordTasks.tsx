@@ -36,7 +36,8 @@ const VIEWS: readonly CoordView[] = ["cards", "chat"];
  * repo, note and state, what it carries (its loadout, workflow and the
  * cards it waits for), an edit form and remove while it is proposed or
  * queued, start on a proposed one, and once it started, its child's newest
- * step, landing word or PR and a link to the child's sheet. The head holds
+ * step, landing word or PR and a link to the child's sheet, or to its flow's
+ * for a card that runs a workflow as a flow. The head holds
  * or resumes the goal while the coordinator is going, and "start these"
  * shows while any card is proposed. Showing only its head, the list stays
  * mounted, so an open edit form keeps what was typed. `error` is the
@@ -143,8 +144,22 @@ export function StartButton({ run, task, act }: { run: Run; task: CoordTask; act
   );
 }
 
+/** A card's way to its flow: the flow sheet, by the card's `flow`, which
+ *  `qRun` qualified with the coordinator's backend. Hook-free like
+ *  HoldButton. */
+export function FlowButton({ task }: { task: CoordTask }) {
+  const id = task.flow;
+  if (!id) return null;
+  return (
+    <button type="button" className="mini" title="Open the flow this card runs its workflow in" onClick={() => useStore.getState().showFlow(id)}>
+      open its flow
+    </button>
+  );
+}
+
 function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) {
   const child = useStore((s) => (task.run ? s.runs[task.run] : undefined));
+  const flow = useStore((s) => (task.flow ? s.flows[task.flow] : undefined));
   const landing = useStore((s) => landingAll(s));
   const prs = useStore((s) => prsAll(s));
   const showRun = useStore((s) => s.showRun);
@@ -152,7 +167,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
   const coordRemove = useStore((s) => s.coordRemove);
   const [editing, setEditing] = useState(false);
   const group = task.group ? landing.groups?.find((g) => g.id === task.group) : undefined;
-  const status = cardStatus(task, child, landing, prs, group);
+  const status = cardStatus(task, child, landing, prs, group, flow);
   const chip = status.pr ? ciChip(status.pr) : null;
   const live = !run.kept && isRunActive(run);
   // a queued card still changes its loadout and after, or goes
@@ -190,7 +205,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
       {!(editing && editable && task.state === "proposed") && <p className="coord-note">{task.note}</p>}
       {editing && editable && <CardForm run={run} task={task} act={act} onDone={() => setEditing(false)} />}
       {status.line && <p className={task.state === "failed" ? "coord-line err" : "coord-line"}>{status.line}</p>}
-      {(status.pr || (editable && !editing) || child || group) && (
+      {(status.pr || (editable && !editing) || child || group || task.flow) && (
         <div className="coord-actions">
           {status.pr && (
             <a className="run-pr-link" href={status.pr.url} target="_blank" rel="noreferrer" title={`${status.pr.slug} #${status.pr.number}`}>
@@ -215,6 +230,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
               open its run
             </button>
           )}
+          <FlowButton task={task} />
           {group && (
             <button type="button" className="mini" title="Open the group this card started" onClick={() => showGroup(group.id)}>
               open the group

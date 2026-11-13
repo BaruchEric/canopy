@@ -3,7 +3,8 @@
  *  child was started for, and whether start these applies. Pure. */
 
 import type { RunGroup } from "../../src/core/group";
-import { isRunActive, type CardEquip, type CoordTask, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
+import { isFlowActive, isRunActive, type CardEquip, type CoordTask, type Flow, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
+import { flowWord } from "./flows";
 import { groupWord } from "./groups";
 import { SEP } from "../../src/core/backendid";
 import { runLanding } from "./landing";
@@ -91,13 +92,16 @@ export function childLine(run: Pick<Run, "steps">): string {
 /** What a card shows of itself and its child. `child` is the run the card
  *  started when this page still has it. A card still running whose child
  *  ended waits on the landing queue, so it shows the child's landing word.
- *  A card that started a group shows the group's word in its place. */
+ *  A card that started a group shows the group's word in its place, and a
+ *  card whose `flow` the page has shows the flow's: needs you while it is
+ *  parked at a gate or waits on a prompt, as a waiting child does. */
 export function cardStatus(
   task: CoordTask,
   child: Run | undefined,
   landing: LandingInfo,
   prs: readonly PrWatch[],
   group?: RunGroup,
+  flow?: Flow,
 ): CardStatus {
   const line = child ? childLine(child) : "";
   const pr = child ? prOfRun(child, prs) : undefined;
@@ -110,6 +114,10 @@ export function cardStatus(
       return { word: "queued", tone: "sky", line: task.outcome ?? "" };
     case "running": {
       if (group) return { word: groupWord(group), tone: "sky", line: group.reason ?? "" };
+      if (flow && isFlowActive(flow)) {
+        const asks = flow.status === "gated" || flow.status === "waiting";
+        return { word: asks ? "needs you" : "running", tone: asks ? "lichen" : "sky", line: flowWord(flow, true) };
+      }
       if (!child) return { word: "running", tone: "sky", line: task.outcome ?? "" };
       if (isRunActive(child)) return { word: child.status === "waiting" ? "needs you" : "running", tone: child.status === "waiting" ? "lichen" : "sky", line, ...withPr };
       const word = pr ? prWord(pr) : (runLanding(child, landing)?.word ?? "settling");

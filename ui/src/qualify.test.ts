@@ -82,12 +82,18 @@ describe("shapes", () => {
       tasks: [
         { id: "t1", title: "x", repo: "a/b", note: "n", action: "ask", state: "running", run: "r2" },
         { id: "t2", title: "y", repo: "c", note: "n", action: "propose", state: "proposed" },
+        { id: "t3", title: "z", repo: "a/b", note: "n", action: "ask", state: "running", flow: "f1", branch: "b1", after: ["t1"] },
       ],
     } as Run);
     expect(coord.tasks?.map((t) => [t.id, t.repo, t.run])).toEqual([
       ["t1", "mac|a/b", "mac|r2"],
       ["t2", "mac|c", undefined],
+      ["t3", "mac|a/b", undefined],
     ]);
+    // a card's flow and branch are the backend's ids; after names cards, not ids
+    expect(coord.tasks?.[2]).toMatchObject({ flow: "mac|f1", branch: "mac|b1", after: ["t1"] });
+    expect(coord.tasks?.[0]?.flow).toBeUndefined();
+    expect(coord.tasks?.[0]?.branch).toBeUndefined();
     expect(qRun(q, { ...run, parent: "r0" } as Run).parent).toBe("mac|r0");
     expect(qRun(q, { ...run, forkOf: { run: "r0", step: "s3", at: 3, how: "cut" } } as Run).forkOf).toEqual({ run: "mac|r0", step: "s3", at: 3, how: "cut" });
     const f = qFlow(q, flow);

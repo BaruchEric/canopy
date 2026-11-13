@@ -4,7 +4,9 @@ import type { CoordTask, KitInfo, Loadout, Run } from "../../../src/core/types";
 import { api } from "../api";
 import { cardDraft, cardEdit } from "../coord";
 import { useStore } from "../store";
-import { CardForm, CoordTasks, HoldButton, StartButton, type CoordLayout } from "./CoordTasks";
+import { qualify, type Reg } from "../backends";
+import { qRun } from "../qualify";
+import { CardForm, CoordTasks, FlowButton, HoldButton, StartButton, type CoordLayout } from "./CoordTasks";
 import { Console } from "./RunSheet";
 
 const card = (id: string, state: CoordTask["state"], over: Partial<CoordTask> = {}): CoordTask => ({
@@ -241,6 +243,31 @@ describe("starting one card", () => {
       expect(calls).toEqual([["c1", ["t4"]]]);
     } finally {
       useStore.setState({ coordStart: prior });
+    }
+  });
+});
+
+describe("a card's flow", () => {
+  test("a card running a flow, or settled from one, offers open its flow; a card with a run offers open its run", () => {
+    const run = coordinator({ tasks: [card("t1", "running", { flow: "f1", branch: "b1", workflow: "review" }), card("t2", "done", { outcome: "ready", flow: "f2", branch: "b2", workflow: "review" }), card("t3", "proposed")] });
+    const w = words(list(run));
+    expect(w.filter((x) => x === "open its flow")).toHaveLength(2);
+    expect(w).not.toContain("open its run");
+  });
+
+  test("open its flow opens the flow sheet by the card's qualified id", () => {
+    const reg: Reg = { home: "mini", names: ["mini", "mac"] };
+    const coord = qRun((id) => qualify(reg, "mac", id), coordinator({ tasks: [card("t1", "running", { flow: "f1", branch: "b1", workflow: "review" })] }));
+    const task = coord.tasks?.[0];
+    if (!task) throw new Error("the fixture lost its card");
+    const opened: string[] = [];
+    const prior = useStore.getState().showFlow;
+    useStore.setState({ showFlow: (id) => void opened.push(id) });
+    try {
+      press(FlowButton({ task }));
+      expect(opened).toEqual(["mac|f1"]);
+    } finally {
+      useStore.setState({ showFlow: prior });
     }
   });
 });
