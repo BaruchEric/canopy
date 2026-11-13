@@ -2213,8 +2213,11 @@ function branchFacts(state: ServerState, origin: string): ChildBranch {
     ...(entry ? { entry, entries } : {}),
     ...(pr ? { prUrl: pr.url } : {}),
     ...(pr?.state?.status === "merged" ? { prMerged: true as const } : {}),
+    ...(pr?.state?.status === "closed" ? { prClosed: true as const } : {}),
     ...(rec?.review ? { verdict: rec.review.verdict } : {}),
     ...(rec?.openPr ? { openPr: true } : {}),
+    // dropped with its worktree, or landed or merged (which the entry or the PR says)
+    ...(!rec ? { gone: true as const } : {}),
   };
 }
 

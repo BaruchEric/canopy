@@ -16,12 +16,16 @@ import {
   cardLanded,
   childSettled,
   editCard,
+  flowGoneNote,
+  flowGoneSettled,
   flowNote,
   flowSettled,
   groupNote,
   groupSettled,
   holdNote,
   landedNote,
+  lateFailNote,
+  laterOutcome,
   MAX_PLAN,
   MAY_LAND_LATER,
   nextToStart,
@@ -400,7 +404,7 @@ export class CoordinatorHub {
     }
     if (this.blockedSaid.get(key) === wait.words) return;
     this.blockedSaid.set(key, wait.words);
-    this.queueNote(coordId, blockedNote(t, wait.words));
+    this.queueNote(coordId, blockedNote(t, wait.words, wait.reopens));
   }
 
   /** the cards a start with ids named that still wait in the queue */
@@ -538,7 +542,8 @@ export class CoordinatorHub {
   /** A later run on a card's branch that names the coordinator (a fix, a
    *  follow-up), or names none (`followBranch`), becomes the card's run:
    *  the card goes back to running with no outcome and settles again on
-   *  it, `limited` as it was. Only a run that works now, for a coordinator
+   *  it, with its `limited` cleared, since the run is a fresh attempt (the
+   *  limit resume's own run comes through `starting`, never here). Only a run that works now, for a coordinator
    *  still going, while the card's own run does not, so an old run's late word never takes the
    *  card back. A landed card stays closed, and a card whose start or
    *  resume is in flight keeps that start's run. A flow's step run is never
@@ -557,7 +562,7 @@ export class CoordinatorHub {
     if (t.run) this.cancel(t.run);
     if (t.flow) this.cancel(flowKey(t.flow));
     this.update(coord.id, t.id, (x) => {
-      const { flow: _flow, ...rest } = x;
+      const { flow: _flow, limited: _limited, ...rest } = x;
       return withOutcome({ ...rest, state: "running", run: run.id }, undefined);
     });
     return this.deps.run(coord.id)?.tasks?.find((x) => x.id === t.id);
@@ -769,16 +774,17 @@ export class CoordinatorHub {
   /** Every card waiting on a child or a flow that ended is looked at again:
    *  the landing queue or the PR watch moved, or a ready child's wait ran
    *  out. So is every card that settled ready, PR opened or with a winner
-   *  picked, which Eric may land long after (`landLater`). */
+   *  picked, which Eric may land long after, or drop (`landLater`), and a
+   *  card failed on a closed PR, whose branch may still land. */
   recheck(): void {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       for (const t of coord.tasks ?? []) {
-        if (t.state === "done" && mayLandLater(t.outcome)) this.landLater(coord, t);
+        if ((t.state === "done" && mayLandLater(t.outcome)) || (t.state === "failed" && t.outcome === "PR closed")) this.landLater(coord, t);
         if (t.state === "running" && t.flow) {
           const flow = this.deps.flow?.(t.flow);
           if (flow) this.settleFlow(coord, t, flow);
-          else this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "failed" }, "its flow is no longer kept"));
+          else this.settleFlowGone(coord, t);
           continue;
         }
         if (t.state === "running" && t.group) this.settleGroup(coord, t);
@@ -793,19 +799,53 @@ export class CoordinatorHub {
   /** A settled card whose work landed since: its branch landed through the
    *  queue or its PR merged (read off its run, or off its branch once the run
    *  is gone), or its group landed its winner. It turns landed, the manager
-   *  hears it, and the cards after it may start. */
+   *  hears it, and the cards after it may start. A done card whose work will
+   *  not land as it stood turns failed (`laterOutcome`: its branch dropped,
+   *  its PR closed unmerged; or its group dropped or sent back), the manager
+   *  hears it, and the cards after it hear they are blocked. A card failed
+   *  on a closed PR only turns landed. */
   private landLater(coord: Run, t: CoordTask): void {
-    if (!this.hasLanded(t)) return;
-    this.update(coord.id, t.id, (x) => withOutcome(x, "landed"));
-    this.queueNote(coord.id, landedNote(t));
-    if (isRunActive(coord) && (coord.tasks ?? []).some((x) => x.state === "queued")) void this.pump(coord.id);
+    const got = this.lateOutcome(t);
+    if (got?.outcome === "landed") {
+      this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "done" }, "landed"));
+      this.queueNote(coord.id, landedNote(t));
+      if (isRunActive(coord) && (coord.tasks ?? []).some((x) => x.state === "queued")) void this.pump(coord.id);
+      return;
+    }
+    if (!got || got.state !== "failed" || t.state !== "done") return;
+    this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "failed" }, got.outcome));
+    if (t.work) this.deps.work?.note(t.work, `card ${t.id} settled again: ${got.outcome}`);
+    this.queueNote(coord.id, lateFailNote(t, got.outcome));
   }
 
-  private hasLanded(t: CoordTask): boolean {
-    if (t.group) return this.deps.group?.(t.group)?.state === "landed";
+  /** What became of a settled card's work since: its group's word, or its
+   *  branch's (`laterOutcome`), read off its run while the runner keeps it. */
+  private lateOutcome(t: CoordTask): ReturnType<typeof laterOutcome> {
+    if (t.group) {
+      const g = this.deps.group?.(t.group);
+      return g ? groupSettled(g) : null;
+    }
     const child = t.run ? this.deps.run(t.run) : undefined;
     const b = child ? this.deps.landing(child) : t.branch ? this.deps.branch?.(t.branch) : undefined;
-    return b?.entry?.state === "landed" || b?.prMerged === true;
+    return b ? laterOutcome(b) : null;
+  }
+
+  /** A running flow card whose flow the backend no longer keeps (the flows
+   *  keep only the newest finished records) settles off its branch while
+   *  that says how (`flowGoneSettled`), waits while the queue still holds
+   *  it, and fails when nothing is known. */
+  private settleFlowGone(coord: Run, t: CoordTask): void {
+    const b = t.branch ? this.deps.branch?.(t.branch) : undefined;
+    const got = b ? flowGoneSettled(b) : null;
+    if (got === "waits") return;
+    if (!got || !b) {
+      this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "failed" }, "its flow is no longer kept"));
+      return;
+    }
+    if (t.flow) this.cancel(flowKey(t.flow));
+    this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
+    if (t.work) this.deps.work?.note(t.work, `card ${t.id} settled: ${got.outcome}`);
+    this.queueNote(coord.id, flowGoneNote(t, got.outcome, b));
   }
 
   private later(childId: string, ms: number): void {

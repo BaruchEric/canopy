@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { blockedNote, flowNote, holdNote, landedNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import { blockedNote, flowGoneNote, flowNote, holdNote, landedNote, lateFailNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
 import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
@@ -784,6 +784,29 @@ describe("a card with times", () => {
     expect(card("t2")?.state).toBe("running");
   });
 
+  test("a group card whose picked winner is dropped fails, and the card after it hears it is blocked", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 }), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    live = group({ state: "picked", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    const t1 = card("t1");
+    if (!t1) throw new Error("no t1");
+    live = group({ state: "dropped", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "dropped" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    const t2 = card("t2");
+    if (!t2) throw new Error("no t2");
+    const heard = await hearAll(h);
+    expect(heard.filter((x) => x === lateFailNote(t1, "dropped"))).toHaveLength(1);
+    // a group card has no branch a run could reopen it on
+    expect(heard.filter((x) => x === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+  });
+
   test("a group the backend no longer keeps fails its card", async () => {
     const h = groupHub();
     coordinator({ status: "idle" });
@@ -827,6 +850,21 @@ describe("card fields on the plan and tasks routes", () => {
     expect(own.status).toBe(200);
     expect((own.body["added"] as CoordTask[])[0]).toMatchObject({ workflow: "local", workflowRepo: true });
     expect(asked.at(-1)).toEqual({ repo: "web", withRepo: true });
+  });
+
+  test("Minor 4: a codex loadout on plan, then build or a workflow is a 400 at plan and edit time", async () => {
+    const h = hub({ loadouts: () => ({ base: [], loadouts: [lo(), lo({ name: "cx", harness: "codex" })], errors: [] }) });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ equip: { loadout: "cx" } })] }, coordCaller("co1"))).toEqual({
+      status: 400,
+      body: { error: "tasks[0].equip.loadout: cx runs codex; plan, then build needs Claude Code" },
+    });
+    expect(await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", workflow: "review", equip: { loadout: "cx" } })] }, coordCaller("co1"))).toEqual({
+      status: 400,
+      body: { error: "tasks[0].equip.loadout: cx runs codex; a card's flow needs Claude Code" },
+    });
+    expect((await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", equip: { loadout: "cx" } })] }, coordCaller("co1"))).status).toBe(200);
+    expect(await post(h, "tasks", { run: "co1", id: "t1", action: "propose" })).toEqual({ status: 400, body: { error: "t1.equip.loadout: cx runs codex; plan, then build needs Claude Code" } });
+    expect(card("t1")?.action).toBe("ask");
   });
 
   test("a proposed card's equip, workflow and after change through tasks", async () => {
@@ -1072,8 +1110,75 @@ describe("after waits for landed", () => {
     expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
     const t2 = card("t2");
     if (!t2) throw new Error("no t2");
-    expect((await hearAll(h)).filter((t) => t === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+    // t1 keeps its branch, so the note says a new run there may reopen it
+    expect((await hearAll(h)).filter((t) => t === blockedNote(t2, "waits for t1, which failed", "t1"))).toHaveLength(1);
     expect(started.map((s) => s.task)).toEqual(["t1"]);
+  });
+
+  test("I1: a card after one that ended with no change is blocked, and the manager hears it once", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    end(h, "t1", { branch: "nothing" });
+    await settled(h);
+    await h.pump("co1");
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "no change" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which ended with no change" });
+    const t2 = card("t2");
+    if (!t2) throw new Error("no t2");
+    // t1 has its branch, so a new run there may still reopen it
+    expect((await hearAll(h)).filter((t) => t === blockedNote(t2, "waits for t1, which ended with no change", "t1"))).toHaveLength(1);
+    expect(started.map((s) => s.task)).toEqual(["t1"]);
+  });
+
+  test("I1: a card that settled ready whose branch Eric dropped fails dropped, and the card after it hears it is blocked", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "approve" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
+    const ready = card("t1");
+    if (!ready) throw new Error("no t1");
+    // dropped with its worktree: the landing queue keeps no record of it
+    branches.set("c1", { gone: true });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "dropped" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    const t2 = card("t2");
+    if (!t2) throw new Error("no t2");
+    const heard = await hearAll(h);
+    expect(heard.filter((t) => t === lateFailNote(ready, "dropped"))).toHaveLength(1);
+    expect(heard.filter((t) => t === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+    // read again, it says nothing more
+    h.recheck();
+    expect((await hearAll(h)).filter((t) => t === lateFailNote(ready, "dropped"))).toHaveLength(1);
+  });
+
+  test("I1: a card whose PR closed unmerged fails PR closed, and still lands if its branch lands after all", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { openPr: true, prUrl: "https://github.com/x/web/pull/7" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "PR opened" });
+    branches.set("c1", { prUrl: "https://github.com/x/web/pull/7", prClosed: true });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "PR closed" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    // Eric lands the branch through the queue after all
+    branches.set("c1", { prUrl: "https://github.com/x/web/pull/7", prClosed: true, entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")?.state).toBe("running");
   });
 
   test("Review Focus 5: a card after one that was removed says so", async () => {
@@ -1131,6 +1236,45 @@ describe("a card follows its branch", () => {
     expect(notes).toHaveLength(2);
     expect(notes[0]).toContain("result: First go.");
     expect(notes[1]).toContain("result: Fixed it.");
+  });
+
+  test("Minor 2: a card that used its limit resume and then takes Eric's fix waits at the fix's first limit, not fails", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    const LIMIT = "You've hit your limit · resets 3pm";
+    const h = hub({
+      resumeChild: async (coordId, t, old) => {
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: old.branch } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const limit = (r: Run): void => {
+      r.status = "limited";
+      r.endedAt = clock;
+      r.error = LIMIT;
+      r.limited = { at: clock, text: LIMIT };
+      h.onRun(r);
+    };
+    limit(child("t1"));
+    await settled(h);
+    h.wake(() => true);
+    await settled(h);
+    expect(card("t1")?.limited).toBe(1);
+    branches.set(child("t1").id, { verdict: "approve" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", limited: 1 });
+    const fix = onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: fix.id });
+    expect(card("t1")?.limited).toBeUndefined();
+    limit(fix);
+    await settled(h);
+    expect([card("t1")?.state, card("t1")?.outcome, card("t1")?.limited]).toEqual(["running", "waiting for capacity (resets 15:00)", 0]);
   });
 
   test("a card that landed stays closed", async () => {
@@ -1277,6 +1421,11 @@ describe("a card that names a workflow", () => {
   const flowEntry = (taskId: string, state: LandEntry["state"]): LandEntry => {
     const b = flowOf(taskId).branch;
     return { id: b?.origin ?? "", repoId: "web", repoPath: "/r/web", branch: b?.name ?? "", target: "main", dir: b?.dir ?? "", note: "n", state, tries: 0, queuedAt: 1, updatedAt: 1 };
+  };
+  /** the same by the flow's id, once the flow is no longer kept */
+  const flowEntryOf = (flowId: string, state: LandEntry["state"]): LandEntry => {
+    const b = branch(flowId);
+    return { id: b.origin, repoId: "web", repoPath: "/r/web", branch: b.name, target: "main", dir: b.dir, note: "n", state, tries: 0, queuedAt: 1, updatedAt: 1 };
   };
 
   test("a start answering a flow sets the card's flow and branch, and the flow counts as one working child", async () => {
@@ -1491,6 +1640,40 @@ describe("a card that names a workflow", () => {
     flows.clear();
     h.recheck();
     expect(card("t1")).toMatchObject({ state: "failed", outcome: "its flow is no longer kept" });
+  });
+
+  test("Minor 3: a flow card waiting on the queue whose flow is no longer kept settles from its branch", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" }), task({ title: "two", workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("fl1", { verdict: "auto", entry: flowEntry("t1", "queued"), entries: [flowEntry("t1", "queued")] });
+    branches.set("fl2", { verdict: "auto", entry: flowEntry("t2", "gate"), entries: [flowEntry("t2", "gate")] });
+    move(h, "t1", "done", "ready");
+    move(h, "t2", "done", "ready");
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["running", "running"]);
+    const t1 = card("t1");
+    const t2 = card("t2");
+    if (!t1 || !t2) throw new Error("no cards");
+    // the flows keep only the newest finished records
+    flows.clear();
+    h.recheck();
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["running", "running"]);
+    const landedEntry = { ...flowEntryOf("fl1", "landed") };
+    branches.set("fl1", { verdict: "auto", entry: landedEntry, entries: [landedEntry] });
+    const red = { ...flowEntryOf("fl2", "red"), reason: "a gate went red" };
+    branches.set("fl2", { verdict: "auto", entry: red, entries: [red] });
+    h.recheck();
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([
+      ["done", "landed"],
+      ["failed", "sent back"],
+    ]);
+    const heard = await hearAll(h);
+    expect(heard).toContain(flowGoneNote(t1, "landed", { entry: landedEntry, entries: [landedEntry] }));
+    expect(heard).toContain(flowGoneNote(t2, "sent back", { entry: red, entries: [red] }));
   });
 
   test("a flow card that settled ready lands later through its branch", async () => {

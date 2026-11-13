@@ -98,6 +98,8 @@ describe("a card's status", () => {
       line: "its run is no longer kept",
     });
     expect(cardStatus(card({ state: "dropped" }), undefined, none, [])).toEqual({ word: "dropped", tone: "faint", line: "" });
+    // a card that settled ready whose PR closed unmerged
+    expect(cardStatus(card({ state: "failed", outcome: "PR closed" }), undefined, none, [])).toEqual({ word: "PR closed", tone: "rust", line: "" });
   });
 });
 

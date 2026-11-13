@@ -41,6 +41,7 @@ export const OUTCOME_WORDS: readonly string[] = Object.freeze([
   "landed",
   "ready",
   "PR opened",
+  "PR closed",
   "sent back",
   "failed",
   "stopped",

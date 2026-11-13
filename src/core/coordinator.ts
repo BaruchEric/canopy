@@ -91,6 +91,17 @@ function checkEquip(v: unknown, at: string, ctx: PlanContext): { equip: CardEqui
   return { equip };
 }
 
+/** Why a card's loadout cannot run what the card asks of it, or null: plan,
+ *  then build and every step of a card's flow need Claude Code, so a codex
+ *  loadout fits neither. A loadout kit.json no longer holds is not read. */
+function harnessRefusal(at: string, loadout: string | undefined, action: unknown, workflow: unknown, ctx: PlanContext): string | null {
+  const lo = loadout === undefined ? undefined : ctx.loadouts.loadouts.find((l) => l.name === loadout);
+  if (!lo || lo.harness === "claude") return null;
+  if (workflow !== undefined && workflow !== null) return `${at}.equip.loadout: ${lo.name} runs ${lo.harness}; a card's flow needs Claude Code`;
+  if (action === "propose") return `${at}.equip.loadout: ${lo.name} runs ${lo.harness}; plan, then build needs Claude Code`;
+  return null;
+}
+
 /** One card off the wire, checked on its own. `self` is the id it will have
  *  and `ids` every id its `after` may name. */
 function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string>, ctx: PlanContext): PlannedTask | { error: string } {
@@ -145,6 +156,8 @@ function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string
     }
     if (after.length > 0) out.after = after as string[];
   }
+  const refused = harnessRefusal(at, out.equip?.loadout, out.action, out.workflow, ctx);
+  if (refused) return { error: refused };
   return out;
 }
 
@@ -237,6 +250,11 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   const check: PlanContext = { ...ctx, known: (r) => (r === repoGone ? "local" : ctx.known(r)) };
   const got = checkCard(merged, t.id, t.id, ids, check);
   if ("error" in got) return got;
+  // a new action or workflow is checked against the loadout the card keeps
+  if (!equipSet && (has("action") || flowSet)) {
+    const refused = harnessRefusal(t.id, t.equip?.loadout, got.action, flowSet ? got.workflow : t.workflow, ctx);
+    if (refused) return { error: refused };
+  }
   const after = afterSet ? got.after : t.after;
   const graph = new Map<string, readonly string[]>(ctx.cards.map((c) => [c.id, c.after ?? []]));
   graph.set(t.id, after ?? []);
@@ -263,10 +281,17 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
  *  landed or its PR merged. Ready, PR opened and a picked winner do not count. */
 export const cardLanded = (t: Pick<CoordTask, "state" | "outcome">): boolean => t.state === "done" && t.outcome === "landed";
 
+/** Whether a settled card may reopen: a later run on its branch takes it
+ *  (the hub's `adopt`), so it needs a branch, one not dropped. A group card
+ *  has no branch of its own to match. */
+const mayReopen = (c: CoordTask): boolean => c.branch !== undefined && c.outcome !== "dropped";
+
 /** What a card waits for, in words, or null when it waits for nothing (no
  *  `after`, or every card named has landed). `blocked` says a card it waits
- *  for will not land by itself: it failed, was dropped or was removed. */
-export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean } | null {
+ *  for will not land by itself: it failed, ended done without landing (no
+ *  change), was dropped or was removed. `reopens` names that card when a
+ *  new run on its branch may still reopen it. */
+export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean; reopens?: string } | null {
   const open = (task.after ?? []).filter((id) => {
     const c = cards.find((x) => x.id === id);
     return !c || !cardLanded(c);
@@ -275,8 +300,12 @@ export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words
   for (const id of open) {
     const c = cards.find((x) => x.id === id);
     if (!c) return { words: `waits for ${id}, which was removed`, blocked: true };
-    if (c.state === "failed") return { words: `waits for ${id}, which failed`, blocked: true };
+    const reopens = mayReopen(c) ? { reopens: id } : {};
+    if (c.state === "failed") return { words: `waits for ${id}, which failed`, blocked: true, ...reopens };
     if (c.state === "dropped") return { words: `waits for ${id}, which was dropped`, blocked: true };
+    if (c.state === "done" && !(MAY_LAND_LATER as readonly string[]).includes(c.outcome ?? "")) {
+      return { words: `waits for ${id}, which ended with ${c.outcome ?? "no change"}`, blocked: true, ...reopens };
+    }
   }
   return { words: `waits for ${andList(open)}`, blocked: false };
 }
@@ -328,7 +357,7 @@ export interface ChildLanding {
 }
 
 /** How a child settled, in the words a card and its note use. */
-export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change" | "waiting for capacity" | "winner picked" | "needs you" | "dropped";
+export type ChildOutcomeWord = "landed" | "ready" | "PR opened" | "PR closed" | "sent back" | "failed" | "stopped" | "uncommitted" | "plan turned down" | "no change" | "waiting for capacity" | "winner picked" | "needs you" | "dropped";
 
 /** A settled child as its card's state and outcome word. Null while the
  *  child is going, or ended with its branch still being read (its first
@@ -368,6 +397,12 @@ function branchOutcome(b: RunBranchState, landing: ChildLanding, turnedDown: boo
 export interface ChildBranch extends ChildLanding {
   verdict?: ReviewVerdict;
   openPr?: boolean;
+  /** the landing queue keeps no record of the branch: dropped with its
+   *  worktree, or gone once it landed or its PR merged (which the entry or
+   *  `prMerged` says) */
+  gone?: true;
+  /** the PR the branch opened closed without merging */
+  prClosed?: true;
 }
 
 /** Whether a child has settled for its card and its note, and how. A child
@@ -396,6 +431,33 @@ function readySettled(out: { state: "done" | "failed"; outcome: ChildOutcomeWord
 /** outcomes that may turn `landed` after the card settled, when Eric lands
  *  the branch or merges its PR later */
 export const MAY_LAND_LATER: readonly ChildOutcomeWord[] = ["ready", "PR opened", "winner picked"];
+
+/** What became of the branch of a card that settled ready or with a PR
+ *  open, read again on the landing and PR broadcasts: landed (its entry
+ *  landed or its PR merged, read first), dropped (the queue keeps no record
+ *  of it and it has no PR, so Eric dropped it with its worktree), PR closed
+ *  (closed unmerged, and the queue does not hold it), or null while it may
+ *  still land. A branch with a PR is the PR watch's to say: a merge forgets
+ *  the record before the watch reads merged. */
+export function laterOutcome(b: ChildBranch): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
+  if (b.entry?.state === "landed" || b.prMerged) return { state: "done", outcome: "landed" };
+  if (b.gone && !b.prUrl) return { state: "failed", outcome: "dropped" };
+  if (b.prClosed && !(b.entry && inQueue(b.entry))) return { state: "failed", outcome: "PR closed" };
+  return null;
+}
+
+/** How a flow card settles once its flow's record is gone (the flows keep
+ *  only the newest finished ones) while it waited on the landing queue,
+ *  read off its branch alone: landed, sent back and a PR open settle it,
+ *  an entry still in the queue `waits`, and anything else is null, which
+ *  says nothing is known. */
+export function flowGoneSettled(b: ChildBranch): { state: "done" | "failed"; outcome: ChildOutcomeWord } | "waits" | null {
+  if (b.entry?.state === "landed" || b.prMerged) return { state: "done", outcome: "landed" };
+  if (b.entry && inQueue(b.entry)) return "waits";
+  if (b.entry && sentBack(b.entry)) return { state: "failed", outcome: "sent back" };
+  if (b.prUrl && !b.prClosed) return { state: "done", outcome: "PR opened" };
+  return null;
+}
 
 /** How a flow ended, as its card's outcome. Null while the flow works, waits
  *  or sits at a gate. A done flow's branch settles as a run's does. */
@@ -513,12 +575,34 @@ export function flowNote(task: CoordTask, flow: Flow, landing: ChildLanding = {}
   return lines.join("\n");
 }
 
+/** The note a flow card whose flow is no longer kept sends once its branch
+ *  settles it (`flowGoneSettled`), in `flowNote`'s lines. */
+export function flowGoneNote(task: CoordTask, outcome: ChildOutcomeWord, landing: ChildLanding = {}): string {
+  const lines = [
+    "canopy: a task you started has settled",
+    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `outcome: ${outcome}`,
+    `result: ${task.workflow ?? "its workflow"} ended; its flow is no longer kept`,
+  ];
+  const e = landing.entry;
+  if (landing.prUrl) lines.push(`PR: ${landing.prUrl}`);
+  else if (e) lines.push(`branch: ${e.branch}, ${landWord(e, landing.entries ?? [e])}`);
+  return lines.join("\n");
+}
+
 /** The note a landed card sends: the cards that wait for it can start. */
 export const landedNote = (task: CoordTask): string => `canopy: task ${task.id} (${task.title}) landed; cards that wait for it can start`;
 
-/** The note for a queued card whose `after` can never be met. */
-export const blockedNote = (task: CoordTask, words: string): string =>
-  `canopy: task ${task.id} (${task.title}) ${words}; it stays queued until Eric takes its after off or removes it`;
+/** The note a card that settled ready, PR opened or winner picked sends when
+ *  its work will not land as it stood (`laterOutcome`, or its group's word). */
+export const lateFailNote = (task: CoordTask, outcome: ChildOutcomeWord): string =>
+  `canopy: task ${task.id} (${task.title}) settled ${task.outcome ?? "done"}, then failed: ${outcome}`;
+
+/** The note for a queued card whose `after` can never be met by itself.
+ *  `reopens` names the card it waits for when a new run on that card's
+ *  branch may still reopen it (`afterWait`). */
+export const blockedNote = (task: CoordTask, words: string, reopens?: string): string =>
+  `canopy: task ${task.id} (${task.title}) ${words}; it stays queued until Eric takes its after off or removes it${reopens ? `, or a new run on ${reopens}'s branch reopens ${reopens}` : ""}`;
 
 /** The note a hold or a resume sends. */
 export const holdNote = (held: boolean): string =>

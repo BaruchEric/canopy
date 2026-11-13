@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, coordWorkflows, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, coordWorkflows, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -423,6 +423,20 @@ describe("editCard", () => {
     const t = held("t1", { state: "running" });
     expect(editCard(t, { title: "x" }, ctx(t))).toEqual({ error: "t1 is running; only a proposed or queued card changes" });
   });
+  test("a codex loadout on plan, then build or a workflow is refused at plan and edit time", () => {
+    const flows = () => [{ name: "review", fromRepo: false }];
+    expect(validatePlan([one({ action: "propose", equip: { loadout: "cx" } })], dest())).toEqual({ error: "tasks[0].equip.loadout: cx runs codex; plan, then build needs Claude Code" });
+    expect(validatePlan([one({ workflow: "review", equip: { loadout: "cx" } })], dest({ workflows: flows }))).toEqual({ error: "tasks[0].equip.loadout: cx runs codex; a card's flow needs Claude Code" });
+    expect("tasks" in validatePlan([one({ equip: { loadout: "cx" } })], dest())).toBe(true);
+    const t = held("t1", { state: "proposed", equip: { loadout: "cx" } });
+    expect(editCard(t, { action: "propose" }, ctx(t))).toEqual({ error: "t1.equip.loadout: cx runs codex; plan, then build needs Claude Code" });
+    expect(editCard(t, { workflow: "review" }, dest({ cards: cards(t), next: 3, workflows: flows }))).toEqual({ error: "t1.equip.loadout: cx runs codex; a card's flow needs Claude Code" });
+    const propose = held("t1", { action: "propose" });
+    expect(editCard(propose, { equip: { loadout: "cx" } }, ctx(propose))).toEqual({ error: "t1.equip.loadout: cx runs codex; plan, then build needs Claude Code" });
+    // a loadout gone from kit.json is not read for its harness
+    const gone = held("t1", { state: "proposed", equip: { loadout: "gone" } });
+    expect("task" in editCard(gone, { action: "propose" }, ctx(gone))).toBe(true);
+  });
   test("errors name the card, and a loop through the card is refused", () => {
     const t = held("t1", { state: "proposed" });
     expect(editCard(t, { after: ["t1"] }, ctx(t))).toEqual({ error: "t1.after: a card cannot wait for itself" });
@@ -452,8 +466,67 @@ describe("afterWait", () => {
     expect(afterWait(t, [held("t1", { state: "dropped" })])).toEqual({ words: "waits for t1, which was dropped", blocked: true });
     expect(afterWait(t, [])).toEqual({ words: "waits for t1, which was removed", blocked: true });
   });
+  test("a card that ended done without landing blocks, with its outcome", () => {
+    const t = held("t2", { after: ["t1"] });
+    expect(afterWait(t, [held("t1", { state: "done", outcome: "no change" })])).toEqual({ words: "waits for t1, which ended with no change", blocked: true });
+    expect(afterWait(held("t3", { after: ["t1", "t2"] }), [held("t1", { state: "running" }), held("t2", { state: "done", outcome: "no change" })])).toEqual({ words: "waits for t2, which ended with no change", blocked: true });
+  });
+  test("a card with a branch it may reopen on says so; one dropped with its branch, a group's or a removed one does not", () => {
+    const t = held("t2", { after: ["t1"] });
+    expect(afterWait(t, [held("t1", { state: "failed", outcome: "sent back", branch: "br-1" })])).toEqual({ words: "waits for t1, which failed", blocked: true, reopens: "t1" });
+    expect(afterWait(t, [held("t1", { state: "done", outcome: "no change", branch: "br-1" })])).toEqual({ words: "waits for t1, which ended with no change", blocked: true, reopens: "t1" });
+    expect(afterWait(t, [held("t1", { state: "failed", outcome: "dropped", branch: "br-1" })])).toEqual({ words: "waits for t1, which failed", blocked: true });
+    expect(afterWait(t, [held("t1", { state: "failed", outcome: "dropped", group: "g-1" })])).toEqual({ words: "waits for t1, which failed", blocked: true });
+  });
   test("may land later is the three words Eric can still land", () => {
     expect(MAY_LAND_LATER).toEqual(["ready", "PR opened", "winner picked"]);
+  });
+});
+
+describe("what became of a branch left to Eric", () => {
+  const landed: LandEntry = { id: "b1", repoId: "web", repoPath: "/r", branch: "run/b1", target: "main", dir: "/w", note: "n", state: "landed", tries: 0, queuedAt: 1, updatedAt: 1 };
+  const queued: LandEntry = { ...landed, state: "queued" };
+  const red: LandEntry = { ...landed, state: "red", reason: "a gate went red" };
+  test("landed or merged is landed, before anything else", () => {
+    expect(laterOutcome({ entry: landed, gone: true })).toEqual({ state: "done", outcome: "landed" });
+    expect(laterOutcome({ prMerged: true, prUrl: "u", gone: true })).toEqual({ state: "done", outcome: "landed" });
+  });
+  test("a branch canopy keeps no record of was dropped; a PR closed unmerged fails while the queue does not hold it", () => {
+    expect(laterOutcome({ gone: true })).toEqual({ state: "failed", outcome: "dropped" });
+    expect(laterOutcome({ prUrl: "u", prClosed: true })).toEqual({ state: "failed", outcome: "PR closed" });
+    expect(laterOutcome({ prUrl: "u", prClosed: true, entry: queued })).toBeNull();
+    // a merge forgets the record before the PR watch reads merged
+    expect(laterOutcome({ gone: true, prUrl: "u" })).toBeNull();
+    expect(laterOutcome({ gone: true, prUrl: "u", prClosed: true })).toEqual({ state: "failed", outcome: "PR closed" });
+  });
+  test("anything else may still land", () => {
+    expect(laterOutcome({})).toBeNull();
+    expect(laterOutcome({ verdict: "approve" })).toBeNull();
+    expect(laterOutcome({ prUrl: "u" })).toBeNull();
+    expect(laterOutcome({ entry: red })).toBeNull();
+  });
+  test("a flow card whose flow is no longer kept settles off its branch, waits on the queue, or knows nothing", () => {
+    expect(flowGoneSettled({ entry: landed })).toEqual({ state: "done", outcome: "landed" });
+    expect(flowGoneSettled({ prMerged: true })).toEqual({ state: "done", outcome: "landed" });
+    expect(flowGoneSettled({ entry: red })).toEqual({ state: "failed", outcome: "sent back" });
+    expect(flowGoneSettled({ prUrl: "u" })).toEqual({ state: "done", outcome: "PR opened" });
+    expect(flowGoneSettled({ entry: queued })).toBe("waits");
+    expect(flowGoneSettled({ prUrl: "u", prClosed: true })).toBeNull();
+    expect(flowGoneSettled({ verdict: "approve" })).toBeNull();
+    expect(flowGoneSettled({})).toBeNull();
+  });
+  test("its notes", () => {
+    const t: CoordTask = { id: "t1", title: "tidy the docs", repo: "api", note: "n", action: "ask", state: "done", outcome: "ready", workflow: "review" };
+    expect(lateFailNote(t, "dropped")).toBe("canopy: task t1 (tidy the docs) settled ready, then failed: dropped");
+    expect(lateFailNote({ ...t, outcome: "PR opened" }, "PR closed")).toBe("canopy: task t1 (tidy the docs) settled PR opened, then failed: PR closed");
+    expect(flowGoneNote({ ...t, state: "running" }, "landed", { entry: landed, entries: [landed] })).toBe([
+      "canopy: a task you started has settled",
+      "task t1: tidy the docs (repo api)",
+      "outcome: landed",
+      "result: review ended; its flow is no longer kept",
+      "branch: run/b1, landed",
+    ].join("\n"));
+    expect(flowGoneNote({ ...t, state: "running" }, "PR opened", { prUrl: "https://github.com/x/api/pull/3" })).toContain("\nPR: https://github.com/x/api/pull/3");
   });
 });
 
@@ -547,6 +620,7 @@ describe("the notes a card sends", () => {
     expect(n.endsWith(") landed; cards that wait for it can start")).toBe(true);
     expect(n).toBe("canopy: task t1 (tidy the docs) landed; cards that wait for it can start");
     expect(blockedNote(t, "waits for t1, which failed")).toBe("canopy: task t2 (tidy the docs) waits for t1, which failed; it stays queued until Eric takes its after off or removes it");
+    expect(blockedNote(t, "waits for t1, which failed", "t1")).toBe("canopy: task t2 (tidy the docs) waits for t1, which failed; it stays queued until Eric takes its after off or removes it, or a new run on t1's branch reopens t1");
   });
 });
 
