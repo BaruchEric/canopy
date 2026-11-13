@@ -181,14 +181,22 @@ A loadout resolves to three things at launch, in the process that spawns
 
 1. **Agent settings.** `harness`, `model`, `effort` replace the route's. The
    rest of the route's settings (provider, yolo, extra) stay.
-2. **A settings file.** Every skill on this machine that is neither in the
-   loadout nor covered by `loadoutBase` gets `"off"` in `skillOverrides`.
+2. **A settings file.** Every user skill on this machine that is neither in
+   the loadout nor covered by `loadoutBase` gets `"off"` in `skillOverrides`.
+   A plugin's skills cannot be turned off one by one (P3), so a plugin none
+   of whose skills the loadout lists or `loadoutBase` covers goes off whole,
+   with its hooks and commands: `false` under its `name@marketplace` key in
+   the file's `enabledPlugins`. A plugin with no skills is left alone, and a
+   plugin whose hooks act as a guardrail stays on only when the loadout or
+   `loadoutBase` names one of its skills (`<plugin>:*` in the base).
    The listed ones get `"on"`, so a skill the user's settings demote still
    loads. canopy writes the file per run, 0600, beside the run's MCP config
    (`server/runtools.ts`), merged with the provider's settings file when the
    route names a provider, and passes it as `--settings`. It is removed with
    the MCP config. "Every skill on this machine" is the skills folder of the
-   claude config dir the run uses plus the skills of the plugins it has on.
+   claude config dir the run uses plus the skills of the plugins in its
+   `installed_plugins.json`; Claude Code's bundled plugins (`@builtin`) and
+   the claude.ai account's (`@synced`) are not on disk and stay on.
    A repo's own `.claude/skills/` are left alone: the repo's owner put them
    there for work in that repo (canopy's `redeploy` and `merge-main`).
    A loadout skill that machine lacks refuses the start with
@@ -413,8 +421,15 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
   message's `skills` list. The flag's `skillOverrides` merges with the
   user's key by key: the user's own "off" entries stay off, and the flag's
   "on" brings back a skill the user turned off (`docktail`).
-- **P3.** A plugin skill's key is `<plugin>:<folder>` (`homelab:tailchan`,
-  `firebase:firebase-data-connect-basics`), a user skill's is its folder
+- **P3.** A plugin skill shows in init's `skills` as `<plugin>:<folder>`
+  (`homelab:tailchan`, `firebase:firebase-data-connect-basics`), but
+  `skillOverrides` does nothing for it: `vercel:ai-sdk` and a bare `ai-sdk`
+  set "off" both left it listed (found in plan 1's real run, 2026-11-12; the
+  first probe tried user skills only). `enabledPlugins`
+  `{"vercel@claude-plugins-official": false}` in the `--settings` file
+  turns the whole plugin off, all 37 of its skills, and merges with the
+  user's `enabledPlugins` key by key; init's `plugins` list names each by
+  that `name@marketplace` key (`source`). A user skill's key is its folder
   (`ripe`, not its SKILL.md name `cli-anything-ripe`). The flag beats a
   repo's `.claude/settings.local.json`: a local "on" lost to the flag's
   "off". A `"*": "off"` key does nothing, so canopy names every skill it
@@ -447,13 +462,17 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
    file, MCP config, allowed tools), the run's `loadout` and `equip`, the
    launch pick in the plan sheet, `canopy loadouts` and `canopy run
    --loadout`, the loadout shown on run cards. Shipped 2026-11-12 on branch
-   `manager-loadouts` (plan 1). Known gaps: a fix or follow-up run on a
-   loadout run's branch (`startBranchFix`) starts with the repo's agent, not
-   the loadout (plan 2's cards carry `equip`); the "machine has this skill"
-   check reads the repo's checkout while a branch run works in a worktree
-   cut from the base; and claude 2.1.323 still lists a plugin's skills at
-   init when `skillOverrides` turns them off, so only the user's own skills
-   go off today.
+   `manager-loadouts` (plan 1). Where it differs from this spec: phase 1
+   refuses `times` above 1 with a loadout (Calls #9 says a group takes one;
+   plan 2 lifts it); the run's loadout shows on the run sheet's head and in
+   the run chip's title (on hover), not as text on the chip; and a plugin
+   goes off whole through `enabledPlugins`, since `skillOverrides` does not
+   reach a plugin's skills (P3). Known gaps: a fix or follow-up run on a
+   loadout run's branch (`startBranchFix`), a swept chat's restart
+   (`startSweptChat`) and a fork (`/api/runs/fork`) start with the repo's
+   agent, not the loadout (plan 2's cards carry `equip`); the "machine has
+   this skill" check reads the repo's checkout while a branch run works in
+   a worktree cut from the base.
 2. Cards: `equip`, `workflow`, `after`, flows as children and their
    settling, a card following its branch, hold, `start` with `ids`, the
    brief and the lane reads, `manager.md`.
@@ -476,7 +495,7 @@ for the manager to plan by area.
    Eric steers; a card with none stays a branch run. (Eric's open question
    from the mockup; this is Claude's pick.)
 4. Listed skills on, every other user and plugin skill off, `loadoutBase`
-   and the repo's own skills kept on.
+   and the repo's own skills kept on. (Plan 1: a plugin goes off whole, P3.)
 5. The manager names a loadout only; only Eric overrides fields.
 6. A loadout's skills and servers cover every step of a flow; a step's own
    `agent:` still sets its model and effort.
