@@ -468,7 +468,9 @@ describe("what a lane's say box sends to", () => {
       kind: "none",
       why: "it was sent back (red); fix it from the landing queue instead",
     });
-    expect(sayTarget(task, r, undefined, none)).toEqual({ kind: "none", why: "canopy holds no branch b-c1; it was dropped or never ran" });
+    expect(sayTarget(task, r, undefined, none)).toEqual({ kind: "none", why: "canopy no longer holds its branch; it was dropped or never ran" });
+    // a card whose branch Eric dropped says so, with no id of canopy's
+    expect(sayTarget({ ...task, state: "failed", outcome: "dropped" }, r, undefined, none)).toEqual({ kind: "none", why: "its branch was dropped" });
     // a card whose start failed has no branch at all
     expect(sayTarget(card({ state: "failed", outcome: "repo not found" }), undefined, undefined, none)).toEqual({ kind: "none", why: "it has no branch to follow up on" });
   });

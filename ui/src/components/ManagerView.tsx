@@ -219,7 +219,8 @@ function GoalView({ coord }: { coord: Run }) {
   const needs = <Needs coord={coord} needs={rows.needs} act={act} />;
   const rings = <Rings tasks={coord.tasks ?? []} rings={rows.rings} picked={picked} onPick={pick} />;
   const workers = <Workers coord={coord} lanes={rows.lanes} picked={picked} equipping={equipping} onEquip={setEquipping} onPick={setPicked} act={act} hidden={phone && view !== "workers"} />;
-  const chat = <Chat coord={coord} lanes={rows.lanes} on={picked === "manager"} hidden={phone && view !== "chat"} />;
+  // keyed by the goal: a card id like t1 names a different card in each goal
+  const chat = <Chat key={coord.id} coord={coord} lanes={rows.lanes} on={picked === "manager"} hidden={phone && view !== "chat"} />;
   const equipTask = equipping ? (coord.tasks ?? []).find((t) => t.id === equipping) : undefined;
   const equipLane = equipTask ? rows.lanes.find((l) => l.id === equipTask.id) : undefined;
   const sheet = equipTask && equipLane?.canEquip ? <EquipSheet key={equipTask.id} run={coord} task={equipTask} onDone={() => setEquipping(null)} /> : null;

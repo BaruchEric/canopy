@@ -111,9 +111,11 @@ export function sayTarget(task: CoordTask, run: Run | undefined, flow: Flow | un
   if (held) return none(held);
   if (flow?.status === "stopped") return none("pick its flow up first");
   if (!origin) return none("it has no branch to follow up on");
+  // the page names the branch by its card, not by canopy's id for it
+  if (!rec) return none(task.outcome === "dropped" ? "its branch was dropped" : "canopy no longer holds its branch; it was dropped or never ran");
   // a stopped flow was answered above, so it needs no flowStopped here
   const refused = followupRefusal(rec, entry, false, origin, { pr: watchHolds(prs.find((w) => w.id === origin)) });
-  if (refused || !rec) return none(refused?.error ?? `canopy holds no branch ${origin}`);
+  if (refused) return none(refused.error);
   return { kind: "followup", landingId: rec.id };
 }
 
