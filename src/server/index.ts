@@ -4296,7 +4296,12 @@ async function handleApi(
   if (registryRes) return registryRes;
   const rangerRes = await state.ranger.handle(req, url, caller?.kind === "run" ? caller.run ?? "" : undefined);
   if (rangerRes) return rangerRes;
-  if (path === "/api/loadouts" && method === "GET") return json(state.kit.loadouts());
+  if (path === "/api/loadouts" && method === "GET") {
+    // a coordinator reads the loadouts to name one on a card; kit.json's
+    // errors are Eric's to read (a parse error can quote the file), not its
+    const info = state.kit.loadouts();
+    return json(caller?.kind === "coordinator" ? { base: info.base, loadouts: info.loadouts } : info);
+  }
   if (path === "/api/coordinator/workflows" && method === "GET") return json(coordWorkflows(await loadWorkflows({ path: "", host: "none" })));
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;

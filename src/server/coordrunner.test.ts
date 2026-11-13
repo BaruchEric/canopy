@@ -475,6 +475,27 @@ describe("a coordinator's card with a loadout", () => {
   });
   afterAll(() => s.stop());
 
+  test("a coordinator's token reads the loadouts without kit.json's errors, and a page's still has them", async () => {
+    const errorsNow = async (): Promise<string[] | undefined> => ((await (await call(s, "/api/loadouts", s.page)).json()) as Partial<LoadoutsInfo>).errors;
+    try {
+      await writeKit({ ...LOADOUTS, Bad_Name: {} });
+      expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+      await until(async () => ((await errorsNow()) ?? []).length > 0, "kit.json's error in the loadouts");
+      const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "loadouts" }, s.page);
+      expect(res.status).toBe(201);
+      live.push(((await res.json()) as Run).id);
+      const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+      const seen = (await (await call(s, "/api/loadouts", token, {}, lanePort(s))).json()) as Record<string, unknown>;
+      expect(Object.keys(seen).sort()).toEqual(["base", "loadouts"]);
+      expect((seen["loadouts"] as { name: string }[]).map((l) => l.name).sort()).toEqual(["probed", "quick"]);
+      expect(await errorsNow()).toEqual(["loadouts.Bad_Name: a name of lowercase letters, digits and dashes"]);
+    } finally {
+      await writeKit(LOADOUTS);
+      expect((await postAs(s, "/api/kit/scan", {}, s.page)).status).toBe(200);
+      await until(async () => (await errorsNow())?.length === 0, "kit.json's error gone");
+    }
+  });
+
   test("a card's child starts with the card's loadout, its settings file, and no canopy tools", async () => {
     const { coord, tasks } = await startCard({ equip: { loadout: "quick" } });
     const task = tasks[0];
