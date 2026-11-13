@@ -764,20 +764,25 @@ export function newEvent(rule: TriggerRule, inc: Incoming, repoId: string, sourc
   };
 }
 
-/** How a trigger runs a workflow. One step with a prompt and nothing after
- *  it is a branch run, with that step's task, tools and turns. Anything more
- *  (several steps, a check line, a gate) is a flow on a branch of its own.
- *  A step that asks, or waits for a go, is refused, since no one is there.
- *  A verdict or judge gate with no gateway key parks the same way, and
- *  the event then waits on Eric. */
-export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: string[]; turns: number } | { kind: "flow" } | string {
+/** How a workflow runs on a branch of its own, for a trigger or a
+ *  coordinator's card. One step with a prompt and nothing after it (no check
+ *  line, no gate, no wait for a go) is a branch run, with that step's task,
+ *  tools and turns. Anything more is a flow on the branch. A workflow with
+ *  no step, or no step with a prompt, is refused. */
+export function workflowPlan(wf: Workflow): { kind: "run"; task: string; tools: string[]; turns: number } | { kind: "flow" } | string {
   if (wf.steps.length === 0) return `${wf.name} has no steps`;
   if (!wf.steps.some((s) => s.body)) return `${wf.name} has no step with a prompt`;
-  const refusal = unattendedRefusal(wf, "a trigger's run");
-  if (refusal) return refusal;
   const only = wf.steps.length === 1 ? wf.steps[0] : undefined;
-  if (only?.body && !only.check && only.gate === "continue") return { kind: "run", task: only.body, tools: only.tools, turns: only.turns };
+  if (only?.body && !only.check && only.gate === "continue" && only.mode === "auto") return { kind: "run", task: only.body, tools: only.tools, turns: only.turns };
   return { kind: "flow" };
+}
+
+/** How a trigger runs a workflow: `workflowPlan`, after refusing a step
+ *  that asks, or waits for a go, since no one is there. A verdict or judge
+ *  gate with no gateway key parks the same way, and the event then waits
+ *  on Eric. */
+export function triggerPlan(wf: Workflow): { kind: "run"; task: string; tools: string[]; turns: number } | { kind: "flow" } | string {
+  return unattendedRefusal(wf, "a trigger's run") ?? workflowPlan(wf);
 }
 
 /** The event's state as its latest run says. Only moves an event that is

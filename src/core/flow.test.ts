@@ -1,11 +1,11 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { CapacityHeldError } from "./capacity";
-import { CAPACITY_NOTE, FAILED_RUN_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner } from "./flow";
+import { CAPACITY_NOTE, FAILED_RUN_NOTE, Flows, FLOW_PARALLEL, whenHolds, overBudget, PICKED_UP_NOTE, RESTART_NOTE, RESUME_NOTE, stepSpec, summaryOf, type CheckResult, type FlowRecord, type FlowRunner, type StepExtras } from "./flow";
 import { STAGE_AWAY, StageAwayError } from "./stagewire";
 import { parseWorkflow, unattendedRefusal, type RecordedWorkflow } from "./workflow";
-import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type VerdictAnswers, type Workflow } from "./types";
+import { DEFAULT_AGENT, type AgentSettings, type EvidenceFile, type Fleet, type Flow, type JudgeAnswers, type Repo, type Run, type RunEquip, type VerdictAnswers, type Workflow } from "./types";
 import type { ActionSpec } from "./actions";
-import type { BranchStart, StartExtras } from "./runner";
+import type { BranchStart } from "./runner";
 
 const flush = () => new Promise<void>((r) => setTimeout(r, 0));
 
@@ -52,13 +52,16 @@ class FakeRunner implements FlowRunner {
   branches: (BranchStart | undefined)[] = [];
   /** each start's priority, absent for one that named none */
   priorities: (string | undefined)[] = [];
+  /** each start's extras as the flow passed them */
+  extras: (Parameters<FlowRunner["start"]>[8])[] = [];
   /** the governor: a priority it names is refused, as the Runner refuses one */
   held = new Set<string>();
   onChange: (run: Run) => void = () => {};
   private n = 0;
-  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT, _by?: string, _scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner" | "priority">): Run {
+  start(r: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings = DEFAULT_AGENT, _by?: string, _scope?: undefined, branch?: BranchStart, extras?: Parameters<FlowRunner["start"]>[8]): Run {
     if (extras?.priority && this.held.has(extras.priority)) throw new CapacityHeldError({ hold: "hit", until: 99, why: "the 5-hour window is spent (resets 15:00)" });
     this.priorities.push(extras?.priority);
+    this.extras.push(extras);
     this.agents.push(agent);
     this.branches.push(branch);
     this.n += 1;
@@ -1775,6 +1778,97 @@ Fix it.
     expect(r2.branches[0]?.branch).toMatchObject({ origin: "b1", held: true });
     expect(r2.branches[0]?.prepare).toBeUndefined();
     expect(runner.branches).toHaveLength(1);
+  });
+});
+
+describe("a card's loadout on every step (manager plan 2)", () => {
+  const equip: RunEquip = { loadout: "quick", model: "haiku", effort: "low", skills: [], mcp: ["s"], off: 0 };
+  const extras: StepExtras = { settings: "/x.json", mcpConfig: "/x.mcp.json", servers: ["s"], equip };
+  const cut = (): BranchStart => ({
+    branch: { name: "run/card-b2", target: "main", base: "abc", dir: "/cfg/worktrees/r-b2", state: "working", origin: "b2" },
+    prepare: async () => {},
+  });
+  function equipped(answer: (flow: Flow) => StepExtras | undefined = (flow) => (flow.equip ? extras : undefined)) {
+    const runner = new FakeRunner();
+    const asked: string[] = [];
+    const flows = new Flows(runner, {
+      onChange: () => {},
+      onGone: () => {},
+      onFleet: () => {},
+      onFleetGone: () => {},
+      check: async () => ({ exit: 0, output: "" }),
+      evaluator: null,
+      branchState: async () => "ready",
+      stepExtras: (flow) => {
+        asked.push(flow.id);
+        return answer(flow);
+      },
+    });
+    runner.onChange = (run) => flows.onRun(run);
+    return { runner, flows, asked };
+  }
+
+  test("a flow started with equip keeps it, and every step's start gets the hook's extras", async () => {
+    const { runner, flows, asked } = equipped();
+    const flow = flows.start(repo(), TWO, "card", DEFAULT_AGENT, { branch: cut(), equip });
+    expect(flow.equip).toEqual(equip);
+    expect(runner.extras[0]).toMatchObject(extras);
+    expect(runner.extras[0]?.flowOwner).toBeDefined();
+    runner.end("run1", "done", "first");
+    await flush();
+    flows.resume(flow.id, "continue");
+    await flush();
+    expect(runner.extras[1]).toMatchObject(extras);
+    expect(asked).toEqual([flow.id, flow.id]);
+  });
+
+  test("a flow without equip starts its steps with no extras from the hook", () => {
+    const { runner, flows } = equipped();
+    const flow = flows.start(repo(), TWO, "plain", DEFAULT_AGENT, { branch: cut() });
+    expect(flow.equip).toBeUndefined();
+    expect(runner.extras[0]?.settings).toBeUndefined();
+    expect(runner.extras[0]?.equip).toBeUndefined();
+  });
+
+  test("a stopped branch flow picked up gives its next step the extras", async () => {
+    const { runner, flows } = equipped();
+    const flow = flows.start(repo(), TWO, "card", DEFAULT_AGENT, { branch: cut(), equip });
+    runner.session("run1", "sess-one");
+    flows.stop(flow.id);
+    await flush();
+    await flush();
+    expect(flow.status).toBe("stopped");
+    flows.pickUp(flow.id);
+    expect(runner.specs[1]).toMatchObject({ resume: "sess-one", message: PICKED_UP_NOTE });
+    expect(runner.extras[1]).toMatchObject(extras);
+  });
+
+  test("a start may name the flow's id, which must be free and of a flow's shape", () => {
+    const { flows } = equipped();
+    const flow = flows.start(repo(), TWO, "card", DEFAULT_AGENT, { branch: cut(), id: "0123abcd" });
+    expect(flow.id).toBe("0123abcd");
+    expect(() => flows.start(repo(), TWO, "card", DEFAULT_AGENT, { branch: cut(), id: "0123abcd" })).toThrow("a flow 0123abcd exists already");
+    expect(() => flows.start(repo(), TWO, "card", DEFAULT_AGENT, { branch: cut(), id: "../x" })).toThrow("not a flow id");
+  });
+
+  test("a restore hands the flow to agentFor, and a picked-up step after it gets the extras", async () => {
+    const { runner, flows } = equipped();
+    const flow = flows.start(repo(), TWO, "card", DEFAULT_AGENT, { branch: cut(), equip });
+    flows.stop(flow.id);
+    await flush();
+    await flush();
+    const rec: FlowRecord = { v: 1, flow: structuredClone(flow), repoPath: "/tmp/r", workflow: TWO, before: "", savedAt: 0 };
+    expect(runner.extras).toHaveLength(1);
+    const { runner: r2, flows: f2 } = equipped();
+    const seen: (RunEquip | undefined)[] = [];
+    f2.restore([rec], () => repo(), (_repo, f) => {
+      seen.push(f.equip);
+      return () => ({ ...DEFAULT_AGENT, model: f.equip?.model ?? "default" });
+    });
+    expect(seen).toEqual([equip]);
+    f2.pickUp(flow.id);
+    expect(r2.extras[0]).toMatchObject(extras);
+    expect(r2.agents[0]?.model).toBe("haiku");
   });
 });
 

@@ -16,6 +16,8 @@ import {
   cardLanded,
   childSettled,
   editCard,
+  flowNote,
+  flowSettled,
   groupNote,
   groupSettled,
   holdNote,
@@ -50,10 +52,11 @@ export class CoordError extends Error {
 }
 
 /** What starting a card came to: its child run, the group a card with
- *  `times` started, or the repo's branch slots are full. */
-export type ChildStart = { run: Run } | { group: RunGroup } | { busy: string };
-/** What resuming a child came to: a child resumes alone. */
-export type ChildResume = Exclude<ChildStart, { group: RunGroup }>;
+ *  `times` started, the flow on a branch a card that names a workflow
+ *  started, or the repo's branch slots are full. */
+export type ChildStart = { run: Run } | { group: RunGroup } | { flow: Flow } | { busy: string };
+/** What resuming a child came to: a child resumes alone, as a run. */
+export type ChildResume = Exclude<ChildStart, { group: RunGroup } | { flow: Flow }>;
 
 export interface CoordinatorDeps {
   run: (id: string) => Run | undefined;
@@ -78,6 +81,8 @@ export interface CoordinatorDeps {
   landing: (run: Run) => ChildBranch;
   /** what the landing queue and the PR watch know of a branch by its origin, once its run is gone */
   branch?: (origin: string) => ChildBranch;
+  /** a card's flow by its id, while the backend keeps it */
+  flow?: (id: string) => Flow | undefined;
   /** kit.json's loadouts, which a card's `equip` names */
   loadouts: () => LoadoutsInfo;
   /** the workflows a card in this repo may name: bundled and user ones, and the repo's own when `withRepo` */
@@ -96,6 +101,8 @@ const errText = (err: unknown): string => String(err instanceof Error ? err.mess
 const slotWord = (repo: string): string => `waiting for a branch slot in ${repo}`;
 /** a held coordinator's queued card's outcome */
 const HELD_WORD = "the goal is held";
+/** the key a card's flow's ready wait is kept under, apart from a run's */
+const flowKey = (id: string): string => `flow:${id}`;
 /** a card's outcome that may still turn landed (`MAY_LAND_LATER`) */
 const mayLandLater = (outcome: string | undefined): boolean => outcome !== undefined && (MAY_LAND_LATER as readonly string[]).includes(outcome);
 
@@ -111,7 +118,8 @@ export class CoordinatorHub {
   /** the highest card number each coordinator has given out, so a removed
    *  card's number is never given again */
   private numbers = new Map<string, number>();
-  /** a recheck waiting for a ready child's `readyWait` to pass, by child id */
+  /** a recheck waiting for a ready child's `readyWait` to pass, by child id
+   *  (`flowKey` for a card's flow) */
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** every pump runs here, one after another, so two run ends never start
    *  more than three children between them */
@@ -353,8 +361,8 @@ export class CoordinatorHub {
   /* ---------- the queue ---------- */
 
   /** children still working: a card whose child ended but waits on the
-   *  landing queue holds no slot, and a group card holds one for each member
-   *  still going */
+   *  landing queue holds no slot, a group card holds one for each member
+   *  still going, and a card's flow one while it is active */
   private working(coord: Run): number {
     const going = (id: string | undefined): boolean => {
       const r = id ? this.deps.run(id) : undefined;
@@ -362,6 +370,10 @@ export class CoordinatorHub {
     };
     return (coord.tasks ?? []).reduce((n, t) => {
       if (t.state !== "running") return n;
+      if (t.flow) {
+        const f = this.deps.flow?.(t.flow);
+        return n + (f && isFlowActive(f) ? 1 : 0);
+      }
       if (!t.group) return n + (going(t.run) ? 1 : 0);
       return n + (this.deps.group?.(t.group)?.members.filter((m) => going(m.run)).length ?? 0);
     }, 0);
@@ -458,6 +470,16 @@ export class CoordinatorHub {
           if (started) this.settleGroup(coord, started);
           continue;
         }
+        if ("flow" in out) {
+          const flow = out.flow;
+          this.update(coordId, next.id, (x) => {
+            const { work: _work, branch: _branch, run: _run, ...rest } = x;
+            return withOutcome({ ...rest, state: "running", flow: flow.id, ...(flow.branch ? { branch: flow.branch.origin } : {}), ...(flow.branch?.work ? { work: flow.branch.work } : {}) }, undefined);
+          });
+          // a flow can end inside its own start, before its card knew its id
+          this.followFlow(this.deps.flow?.(flow.id) ?? flow);
+          continue;
+        }
         const child = out.run;
         this.update(coordId, next.id, (x) => {
           const { work: _work, branch: _branch, ...rest } = x;
@@ -497,17 +519,25 @@ export class CoordinatorHub {
    *  Only a run that works now, for a coordinator still going, while the
    *  card's own run does not, so an old run's late word never takes the
    *  card back. A landed card stays closed, and a card whose start or
-   *  resume is in flight keeps that start's run. Not held to three at once:
-   *  it counts as working from then on. */
+   *  resume is in flight keeps that start's run. A flow's step run is never
+   *  taken, nor a card whose flow is still active; a card whose flow ended
+   *  follows the run from then on. Not held to three at once: it counts as
+   *  working from then on. */
   private adopt(coord: Run, run: Run): CoordTask | undefined {
     const origin = run.branch?.origin;
-    if (!origin || !isRunActive(run) || coord.action !== "coordinate" || !isRunActive(coord)) return undefined;
+    if (!origin || run.flowStep || !isRunActive(run) || coord.action !== "coordinate" || !isRunActive(coord)) return undefined;
     const t = coord.tasks?.find((x) => x.branch === origin && (x.state === "running" || x.state === "done" || x.state === "failed"));
     if (!t || cardLanded(t) || this.starting.has(`${coord.id}:${t.id}`)) return undefined;
     const own = t.run ? this.deps.run(t.run) : undefined;
     if (own && isRunActive(own)) return undefined;
+    const flow = t.flow ? this.deps.flow?.(t.flow) : undefined;
+    if (flow && isFlowActive(flow)) return undefined;
     if (t.run) this.cancel(t.run);
-    this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "running", run: run.id }, undefined));
+    if (t.flow) this.cancel(flowKey(t.flow));
+    this.update(coord.id, t.id, (x) => {
+      const { flow: _flow, ...rest } = x;
+      return withOutcome({ ...rest, state: "running", run: run.id }, undefined);
+    });
     return this.deps.run(coord.id)?.tasks?.find((x) => x.id === t.id);
   }
 
@@ -554,6 +584,45 @@ export class CoordinatorHub {
     this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
     if (task.work) this.deps.work?.note(task.work, `card ${task.id} settled: ${got.outcome}`);
     this.queueNote(coord.id, settleNote(task, child, branch));
+  }
+
+  /** A card's flow moved: a card that failed `stopped` goes back to running
+   *  when its flow is active again (picked up), and a running card settles
+   *  when its flow has (`settleFlow`). */
+  private followFlow(flow: Flow): void {
+    for (const coord of this.deps.runs()) {
+      if (coord.action !== "coordinate") continue;
+      const t = coord.tasks?.find((x) => x.flow === flow.id);
+      if (!t) continue;
+      if (t.state === "failed" && t.outcome === "stopped" && isFlowActive(flow)) {
+        this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "running" }, undefined));
+      } else if (t.state === "running") this.settleFlow(coord, t, flow);
+      return;
+    }
+  }
+
+  /** A card's flow settles it by `flowSettled`, the branch read by its
+   *  origin and the ready wait counted from the flow's end, as a child's
+   *  is from its run's; the note is `flowNote`. */
+  private settleFlow(coord: Run, task: CoordTask, flow: Flow): void {
+    const key = flowKey(flow.id);
+    if (isFlowActive(flow)) {
+      this.cancel(key);
+      return;
+    }
+    const branch = flow.branch ? (this.deps.branch?.(flow.branch.origin) ?? {}) : {};
+    const ended = flow.endedAt ?? this.now();
+    const left = ended + (this.deps.readyWait ?? READY_WAIT) - this.now();
+    const got = flowSettled(flow, branch, left <= 0);
+    if (!got) {
+      if (left > 0) this.later(key, left);
+      else this.cancel(key);
+      return;
+    }
+    this.cancel(key);
+    this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
+    if (task.work) this.deps.work?.note(task.work, `card ${task.id} settled: ${got.outcome}`);
+    this.queueNote(coord.id, flowNote(task, flow, branch));
   }
 
   /** A group card settles on the group's word (`groupSettled`). A group's
@@ -674,15 +743,21 @@ export class CoordinatorHub {
     return answer.why;
   }
 
-  /** Every card waiting on a child that ended is looked at again: the
-   *  landing queue or the PR watch moved, or a ready child's wait ran out.
-   *  So is every card that settled ready, PR opened or with a winner
+  /** Every card waiting on a child or a flow that ended is looked at again:
+   *  the landing queue or the PR watch moved, or a ready child's wait ran
+   *  out. So is every card that settled ready, PR opened or with a winner
    *  picked, which Eric may land long after (`landLater`). */
   recheck(): void {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       for (const t of coord.tasks ?? []) {
         if (t.state === "done" && mayLandLater(t.outcome)) this.landLater(coord, t);
+        if (t.state === "running" && t.flow) {
+          const flow = this.deps.flow?.(t.flow);
+          if (flow) this.settleFlow(coord, t, flow);
+          else this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "failed" }, "its flow is no longer kept"));
+          continue;
+        }
         if (t.state === "running" && t.group) this.settleGroup(coord, t);
         if (t.state !== "running" || !t.run) continue;
         const child = this.deps.run(t.run);
@@ -775,7 +850,10 @@ export class CoordinatorHub {
     const tasks = coord.tasks ?? [];
     // its children's cards still settle on the broadcasts' recheck, with
     // nothing said, so no timer need outlive it
-    for (const t of tasks) if (t.run) this.cancel(t.run);
+    for (const t of tasks) {
+      if (t.run) this.cancel(t.run);
+      if (t.flow) this.cancel(flowKey(t.flow));
+    }
     if (!tasks.some((t) => t.state === "proposed" || t.state === "queued")) return;
     this.setTasks(
       coord,
@@ -793,10 +871,12 @@ export class CoordinatorHub {
     if (!isRunActive(run)) this.pumpAll();
   }
 
-  /** The flows' every change: a branch flow holds one of its repo's branch
-   *  slots from its start to its end, so its end may free one a card waits
-   *  for. */
-  onFlow(flow: Pick<Flow, "status"> & { branch?: object }): void {
+  /** The flows' every change: a card's flow settles its card, or puts it
+   *  back to running once picked up; and a branch flow holds one of its
+   *  repo's branch slots from its start to its end, so its end may free one
+   *  a card waits for. */
+  onFlow(flow: Flow): void {
+    this.followFlow(flow);
     if (flow.branch && !isFlowActive(flow)) this.pumpAll();
   }
 

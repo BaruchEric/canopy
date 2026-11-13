@@ -12,6 +12,10 @@ const SUFFIX = ".mcp.json";
 const SETTINGS_SUFFIX = ".settings.json";
 
 export const toolsDir = (): string => join(configDir(), "run-tools");
+const FLOW_PREFIX = "flow-";
+/** the id a coordinator's card's flow keeps its settings file and `mcp.json`
+ *  under, which no run's id can be */
+export const flowToolsId = (flowId: string): string => `${FLOW_PREFIX}${flowId}`;
 export const mcpConfigPath = (id: string, dir = toolsDir()): string => join(dir, `${id}${SUFFIX}`);
 export const settingsPath = (id: string, dir = toolsDir()): string => join(dir, `${id}${SETTINGS_SUFFIX}`);
 
@@ -69,8 +73,13 @@ export async function removeRunSettings(id: string, dir = toolsDir()): Promise<v
   await rm(settingsPath(id, dir), { force: true });
 }
 
-/** At start: no run outlives a restart, so no file should be here. */
+/** At start: no run outlives a restart, so no run's file should be here. A
+ *  card flow's (`flowToolsId`) stays, since a flow does outlive one and its
+ *  next step reads them; the flow's end or its going takes them. */
 export async function sweepMcpConfigs(dir = toolsDir()): Promise<void> {
   const names = await readdir(dir).catch(() => [] as string[]);
-  for (const name of names) if (name.endsWith(SUFFIX) || name.endsWith(SETTINGS_SUFFIX)) await rm(join(dir, name), { force: true }).catch(() => {});
+  for (const name of names) {
+    if (name.startsWith(FLOW_PREFIX)) continue;
+    if (name.endsWith(SUFFIX) || name.endsWith(SETTINGS_SUFFIX)) await rm(join(dir, name), { force: true }).catch(() => {});
+  }
 }

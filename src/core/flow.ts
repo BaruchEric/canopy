@@ -28,6 +28,7 @@ import {
   type Run,
   type RunBranch,
   type RunBranchState,
+  type RunEquip,
   type Workflow,
   type VerdictAnswers,
   type FlowBudget,
@@ -195,16 +196,24 @@ export const FAILED_RUN_NOTE =
 export const PICKED_UP_NOTE =
   "You were stopped partway through this step, and are now picked up again on the same branch. Read the repo's state and finish the step.";
 
+/** a flow's id: the first group of a UUID, fit for its record's file name */
+export const FLOW_ID = /^[0-9a-f]{8}$/;
+
 /** what the browser mints for a flow or fleet start: 32 hex digits */
 export const isRequestId = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
 
 /** how long a stop waits for an aborted check to exit before the flow ends anyway */
 export const STOP_GRACE = 10_000;
 
+/** What a step's run starts with beside the flow's own: a coordinator's
+ *  card's loadout, as the flow's settings file, its `mcp.json` and servers,
+ *  and the equip they came from (`FlowHooks.stepExtras`). */
+export type StepExtras = Pick<StartExtras, "settings" | "mcpConfig" | "servers" | "equip">;
+
 /** What Flows needs from the Runner; the real one satisfies it. A flow on a
  *  branch passes the branch as the runner's last argument. */
 export interface FlowRunner {
-  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner" | "priority">): Run;
+  start(repo: Repo, action: string, spec: ActionSpec, note: string, agent: AgentSettings, by?: string, scope?: undefined, branch?: BranchStart, extras?: Pick<StartExtras, "flowOwner" | "priority"> & StepExtras): Run;
   get(id: string): Run | undefined;
   activeFor(repoId: string): Run | undefined;
   stop(id: string): Run;
@@ -252,6 +261,10 @@ export interface FlowHooks {
    *  hands its branch over; a stopped or failed one leaves it as it is.
    *  The released record survives UI dismissal only through this handoff. */
   onBranchEnd?: (flow: Flow, runId: string | undefined, releasedRun?: Run) => void;
+  /** what each step's run of this flow starts with besides the step's own:
+   *  asked at every step's start, a restart's and a pick-up's too, so it
+   *  answers from the flow alone (its id and `equip`) */
+  stepExtras?: (flow: Flow) => StepExtras | undefined;
 }
 
 /** The branch as a flow keeps it: in this state, never held (only its steps' runs are). */
@@ -440,15 +453,17 @@ export class Flows {
    *  minted makes a start sent twice (a retry after the answer was lost)
    *  find the flow the first one made. A `branch` (cut by the caller, its
    *  worktree made) runs every step there instead of the repo's checkout,
-   *  so the checkout's own run or flow does not stand in the way. */
+   *  so the checkout's own run or flow does not stand in the way. An `id`
+   *  chosen by the caller (8 hex digits, as a minted one) lets it write what
+   *  the flow's steps need under that id first; `equip` is kept on the flow. */
   start(
     repo: Repo,
     workflow: Workflow,
     note: string,
     agent: AgentSettings | StepAgent,
-    opts: { fleetId?: string; request?: string; branch?: BranchStart; priority?: Priority } = {},
+    opts: { fleetId?: string; request?: string; branch?: BranchStart; priority?: Priority; id?: string; equip?: RunEquip } = {},
   ): Flow {
-    const { fleetId, request, branch, priority } = opts;
+    const { fleetId, request, branch, priority, id, equip } = opts;
     if (request) {
       const again = this.forRequest(request);
       if (again) {
@@ -462,8 +477,10 @@ export class Flows {
     const busyRun = branch ? undefined : this.runner.activeFor(repo.id);
     if (busyRun) throw new Error(busyWith(repo.name, busyRun.verb));
     if (workflow.noteRequired && !note.trim()) throw new Error("write what the agent should do first");
+    if (id !== undefined && !FLOW_ID.test(id)) throw new Error(`${id} is not a flow id`);
+    if (id !== undefined && this.live.has(id)) throw new Error(`a flow ${id} exists already`);
     const flow: Flow = {
-      id: crypto.randomUUID().slice(0, 8),
+      id: id ?? crypto.randomUUID().slice(0, 8),
       repoId: repo.id,
       workflow: workflow.name,
       verb: workflow.verb,
@@ -478,6 +495,7 @@ export class Flows {
       ...(request ? { request } : {}),
       ...(branch ? { branch: branchOf(branch.branch, "working") } : {}),
       ...(priority ? { priority } : {}),
+      ...(equip ? { equip } : {}),
     };
     const live: LiveFlow = {
       flow,
@@ -889,10 +907,11 @@ export class Flows {
    *  reruns that step, its run having gone with the old process. Fleets are
    *  not kept, so a fleet id is dropped. `resolve` finds a repo by its path
    *  in the current scan (ids are relative to a root, a path is not), and the
-   *  flow takes the id the repo has there. A record the engine cannot take
-   *  back is skipped with a line naming it, so one bad file never stops the
-   *  server. */
-  restore(records: FlowRecord[], resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
+   *  flow takes the id the repo has there. `agentFor` sees the flow too, so a
+   *  card's flow gets its loadout's model back. A record the engine cannot
+   *  take back is skipped with a line naming it, so one bad file never stops
+   *  the server. */
+  restore(records: FlowRecord[], resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo, flow: Flow) => StepAgent): void {
     for (const rec of records) {
       const id = rec.flow.id;
       if (this.live.has(id)) continue;
@@ -906,7 +925,7 @@ export class Flows {
     this.prune();
   }
 
-  private restoreOne(rec: FlowRecord, resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo) => StepAgent): void {
+  private restoreOne(rec: FlowRecord, resolve: (path: string) => Repo | undefined, agentFor: (repo: Repo, flow: Flow) => StepAgent): void {
     const flow = rec.flow;
     const pendingEnd = restoredEnd(rec.pendingEnd);
     if (flow.steps.some((s) => !s || typeof s !== "object")) throw new Error("invalid flow steps");
@@ -918,7 +937,7 @@ export class Flows {
       owner: Symbol(),
       repo: repo ?? { id: flow.repoId, name: flow.repoId, path: rec.repoPath, group: "", source: "", status: null },
       workflow: chained(rec.workflow),
-      agent: repo ? agentFor(repo) : () => DEFAULT_AGENT,
+      agent: repo ? agentFor(repo, flow) : () => DEFAULT_AGENT,
       before: rec.before,
       checking: new Map(), marks: new Map(), attempts: new Map(), starting: new Map(), lifecycle: Symbol(), resuming: new Set(), restarting: new Set(),
       parks: restoredParks(rec.parks, flow.steps.length),
@@ -1397,7 +1416,7 @@ export class Flows {
       : undefined;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { flowOwner: live.owner, priority: this.stepPriority(live, i) });
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { ...this.hooks.stepExtras?.(flow), flowOwner: live.owner, priority: this.stepPriority(live, i) });
       delete live.prepare;
       delete live.startNote;
       delete live.released;

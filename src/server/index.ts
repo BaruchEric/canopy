@@ -55,7 +55,7 @@ import { browseLocal, browseRemote, expandHome, SshError } from "../core/browse"
 import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
-import { fleetSkipReason, Flows, isRequestId } from "../core/flow";
+import { fleetSkipReason, Flows, isRequestId, type StepExtras } from "../core/flow";
 import { applyModes } from "../core/flowmodes";
 import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
@@ -158,7 +158,7 @@ import { RememberedRules, scopeOf } from "../core/remember";
 import { repoHolding, sessionAsk, sessionRemember, sessionRule } from "../core/sessionrules";
 import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, UnknownRunError, type BranchStart, type StartExtras } from "../core/runner";
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
-import { canopyMcpCommand, removeMcpConfig, removeRunSettings, runConfigLaunch, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
+import { canopyMcpCommand, flowToolsId, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
 import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, STAGE_WORKFLOWS, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
@@ -187,6 +187,8 @@ import {
   type ClientInfo,
   type Device,
   type FlowChoice,
+  type Flow,
+  type RunEquip,
   type Ask,
   type HelperInfo,
   type GrepRepoResult,
@@ -273,7 +275,7 @@ import { handoffBrief, stepWords } from "../core/handoff";
 import type { ForkHow, RunFork, RunStep } from "../core/types";
 import { sentBack } from "../core/landing";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX, takeTriggerSecrets } from "../core/envnames";
-import { incomingFromIssueView, opensPr, triggerPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
+import { incomingFromIssueView, opensPr, triggerPlan, workflowPlan, type TriggerEvent, type TriggerRule } from "../core/trigger";
 import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, loopbackAuthWanted, loopbackBypass, type Caller } from "./callers";
@@ -1355,6 +1357,38 @@ async function dropRunTools(state: ServerState, id: string): Promise<void> {
   await removeRunSettings(id).catch(() => {});
 }
 
+/** Removes a card flow's settings file and `mcp.json`, kept under
+ *  `flowToolsId`; safe for a flow that has none. A step's run going never
+ *  takes them, since its files are named by its own id. */
+async function dropFlowTools(flowId: string): Promise<void> {
+  await removeMcpConfig(flowToolsId(flowId)).catch(() => {});
+  await removeRunSettings(flowToolsId(flowId)).catch(() => {});
+}
+
+/** What every step of a coordinator's card's flow starts with (FR-065): the
+ *  flow's own settings file, its `mcp.json` and servers when the loadout has
+ *  any, and the equip. Read off the flow alone, so a restart's step and a
+ *  pick-up's get them too. None for any other flow. */
+function flowStepExtras(flow: Flow): StepExtras | undefined {
+  if (!flow.equip) return undefined;
+  const id = flowToolsId(flow.id);
+  return {
+    settings: settingsPath(id),
+    equip: flow.equip,
+    ...(flow.equip.mcp.length > 0 ? { mcpConfig: mcpConfigPath(id), servers: [...flow.equip.mcp] } : {}),
+  };
+}
+
+/** A card flow's step that names no profile, after a restart: the route's
+ *  agent with the loadout's model and effort on Claude Code, as
+ *  `planLoadoutStart` made it at the flow's start (the route's provider and
+ *  extra flags dropped when the route is on another harness). */
+function equipAgent(routed: AgentSettings, equip: RunEquip): AgentSettings {
+  const { provider: _provider, ...rest } = routed;
+  const kept = routed.harness === "claude" ? routed : { ...rest, extra: "" };
+  return { ...kept, harness: "claude", model: equip.model, effort: equip.effort };
+}
+
 /** A loadout's plan for a start here (FR-065), or the 400 that says why it
  *  cannot start. A seed's run goes to a stage, which has neither the run's
  *  files nor this machine's skills. A loadout given whole (a card's, with
@@ -2201,6 +2235,14 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   const times = task.times ?? 1;
   if (going + times > BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
   const work: WorkStart = { title: task.title, from: { kind: "coordinator", run: coordId, card: task.id } };
+  if (task.workflow) {
+    try {
+      return await startCoordWorkflow(state, coordId, task, repo, loadout, work, priority);
+    } catch (err) {
+      if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
+      throw err;
+    }
+  }
   if (times > 1) {
     // a group's members are low unless "start anyway" let the card go, and it
     // lands by Eric's hand: a fan-out is a choice to compare (the spec's call 4)
@@ -2236,6 +2278,81 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
     if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
     throw err;
   }
+}
+
+/** A coordinator's card that names a workflow (FR-065). The workflow is read
+ *  from the source the card names, never by name through the repo's merged
+ *  list: the repo's own only when Eric picked it (`workflowRepo`), else the
+ *  bundled and user ones. The repo's modes are laid over it. One plain step
+ *  is a branch run with that step's spec, as a trigger's but attended; anything
+ *  more is a flow on a branch of its own, at the pump's priority. Every step
+ *  runs Claude Code: a step that names a profile keeps that profile's agent,
+ *  every other takes the loadout's (or the repo's job route for the
+ *  workflow), and the loadout's settings file and servers cover every step,
+ *  kept under the flow's own id (`flowToolsId`) until the flow ends. Every
+ *  refusal comes before anything is written. */
+async function startCoordWorkflow(state: ServerState, coordId: string, task: CoordTask, repo: Repo, loadout: Loadout | null, work: WorkStart, priority: Priority): Promise<ChildStart> {
+  const name = task.workflow ?? "";
+  const own = task.workflowRepo === true;
+  const found = findWorkflow(await loadWorkflows(own ? repo : { path: "", host: "none" }), name);
+  // the repo's own of that name may be gone, and the merged list would then answer the bundled one
+  if (!found || found.listed === false || own !== (found.source === "repo")) throw new Error(own ? `${repo.name} has no workflow ${name} of its own` : `no workflow ${name}`);
+  const wf = await withRepoModes(repo, found);
+  const plan = workflowPlan(wf);
+  if (typeof plan === "string") throw new Error(plan);
+  const cfg = await loadConfig();
+  const refused = stepProfileRefusal(cfg, wf);
+  if (refused) throw new Error(refused);
+  if (loadout && loadout.harness !== "claude") throw new Error(`loadout ${loadout.name} runs ${loadout.harness}; a card's flow needs Claude Code`);
+  const routed = agentFor(cfg, repo.path, "job", undefined, { kind: "workflow", name: wf.name });
+  // planned before anything is written; its files come once nothing refuses
+  const planned = loadout ? await planLoadout(state, repo, loadout, routed) : null;
+  const base = planned?.agent ?? routed;
+  const select = (profile: string | undefined): AgentSettings => (profile ? agentFor(cfg, repo.path, "job", { profile }, { kind: "workflow", name: wf.name }) : base);
+  for (const step of wf.steps.filter((s) => s.body)) {
+    const agent = select(step.agent);
+    if (agent.harness !== "claude") throw new Error(`step ${step.name} of ${wf.name} runs ${agent.harness}; a card's flow needs Claude Code`);
+    // one settings file serves every step, and it holds the loadout's provider
+    if (planned && (agent.provider ?? "") !== (base.provider ?? "")) {
+      throw new Error(`step ${step.name} of ${wf.name} runs on provider ${agent.provider ?? "none"}; a card's flow keeps its loadout's, ${base.provider ?? "none"}`);
+    }
+  }
+  await needHarness(state, "claude", repo.path);
+  // the governor before the files, so a held card writes none
+  needCapacity(state, "claude", priority);
+  if (plan.kind === "run") {
+    const spec: ActionSpec = { ...ACTIONS.ask, label: wf.label, verb: wf.verb, blurb: wf.blurb, allowedTools: plan.tools, maxTurns: plan.turns, expectsChange: wf.expectsChange, task: plan.task };
+    const child: StartExtras = { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) };
+    let release = async (): Promise<void> => {};
+    try {
+      // a manager's worker never holds canopy's tools, whatever its loadout says
+      const loaded = planned ? await loadoutFiles(state, repo, planned, { ...child, id: crypto.randomUUID().slice(0, 8), equip: planned.equip }, false) : { extras: child, release };
+      release = loaded.release;
+      return { run: await startBranchRun(state, repo, "ask", task.note, select(wf.steps[0]?.agent), "coordinator", false, spec, loaded.extras, work) };
+    } catch (err) {
+      await release();
+      throw err;
+    }
+  }
+  return withBranchStart(state, repo.id, async () => {
+    const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
+    if (going >= BRANCH_RUNS_PER_REPO) return { busy: `${repo.name} has ${going} branch runs going` };
+    const item = state.work.mint({ ...work, repos: [repo.id] });
+    // chosen first, so the loadout's files are in place under it before the first step starts
+    const id = crypto.randomUUID().slice(0, 8);
+    let start: BranchStart | undefined;
+    try {
+      start = await cutBranch(repo, task.note, false, item.id, state.warm);
+      if (planned) await loadoutFiles(state, repo, planned, { id: flowToolsId(id) }, false);
+      return { flow: state.flows.start(repo, { ...wf, agentRole: "job" }, task.note, select, { branch: start, priority, id, ...(planned ? { equip: planned.equip } : {}) }) };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      state.work.close(item.id, "dropped", `the flow did not start: ${message}`);
+      await dropFlowTools(id);
+      if (start) await removeRunTree(repo.path, start.branch.dir, start.branch.name);
+      throw err;
+    }
+  });
 }
 
 /** A coordinator's child that hit the plan's usage limit carries on on its
@@ -5936,6 +6053,7 @@ export async function startServer(opts: {
   coordPort: number | null;
   endTerm: (id: string, opts?: { keep?: true }) => Promise<boolean>;
   sweepShell: (id: string, seen?: number) => Promise<"ended" | "in use" | "unkept">;
+  pickUpFlow: (id: string) => Flow;
   stop: () => Promise<void>;
 }> {
   // Keep original sources before any await or startup environment stripping.
@@ -6211,11 +6329,15 @@ export async function startServer(opts: {
       state.incubator.onFlow(flow);
       state.triggers.onFlow(flow);
       state.coordinator.onFlow(flow);
+      // a card flow's files live until it ends for good; a stopped one may be picked up
+      if (flow.equip && (flow.status === "done" || flow.status === "failed")) void dropFlowTools(flow.id);
     },
     onGone: (id) => {
       broadcast(state, { type: "flow-gone", id });
       state.chan.forget(id);
+      void dropFlowTools(id);
     },
+    stepExtras: flowStepExtras,
     onFleet: (fleet) => {
       broadcast(state, { type: "fleet", fleet });
       state.chan.onFleet(fleet);
@@ -7044,6 +7166,7 @@ export async function startServer(opts: {
       branch: (origin) => branchFacts(state, origin),
       loadouts: () => state.kit.loadouts(),
       workflows: (repo, withRepo) => coordWorkflowNames(state, repo, withRepo),
+      flow: (id) => state.flows.get(id),
       broadcast: (run) => {
         broadcast(state, { type: "run", run });
         state.capacity.touch();
@@ -7604,8 +7727,13 @@ export async function startServer(opts: {
     state.flows.restore(
       await loadFlowRecords(root),
       (path) => state.result.repos.find((r) => r.path === path),
-      // a seed's flow is an incubator stage, held to the same rule as a fresh one
-      (repo) => (profile, workflow, role) => (isSeedPath(root, repo.path) ? stageAgent(stepAgentFor(restoreCfg, repo.path, profile, workflow, role)) : stepAgentFor(restoreCfg, repo.path, profile, workflow, role)),
+      // a seed's flow is an incubator stage, held to the same rule as a fresh
+      // one; a card's flow takes its loadout's model back for a step that names no profile
+      (repo, flow) => (profile, workflow, role) => {
+        if (isSeedPath(root, repo.path)) return stageAgent(stepAgentFor(restoreCfg, repo.path, profile, workflow, role));
+        if (flow.equip && !profile) return equipAgent(agentFor(restoreCfg, repo.path, role ?? "flow", undefined, workflow ? { kind: "workflow", name: workflow } : undefined), flow.equip);
+        return stepAgentFor(restoreCfg, repo.path, profile, workflow, role);
+      },
     );
     await state.flows.whenStarted();
     // the sprouts the last server left, once their flows are back; a server
@@ -7819,6 +7947,8 @@ export async function startServer(opts: {
     endTerm: (id: string, opts?: { keep?: true }) => endTerm(state, id, opts),
     /** the sweep's end of a shell, with how it went; tests */
     sweepShell: (id: string, seen?: number) => sweepShell(state, id, seen),
+    /** a stopped flow on a branch picked up, as a trigger's resume does; tests */
+    pickUpFlow: (id: string) => state.flows.pickUp(id),
     stop: async () => {
       state.repoHealth.stop();
       clearTimeout(state.repoHealthTimer);

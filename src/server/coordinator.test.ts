@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { blockedNote, holdNote, landedNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import { blockedNote, flowNote, holdNote, landedNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
-import type { CoordTask, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
+import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
 
@@ -20,6 +20,7 @@ let clock: number;
 let n: number;
 let made: CoordinatorHub[];
 let asked: { repo: string; withRepo: boolean }[];
+let flows: Map<string, Flow>;
 
 const lo = (over: Partial<Loadout> = {}): Loadout => ({ name: "quick", note: "", harness: "claude", model: "default", effort: "default", skills: [], mcp: [], canopyTools: false, ...over });
 const kit: LoadoutsInfo = { base: [], loadouts: [lo()], errors: [] };
@@ -59,6 +60,14 @@ function hub(over: Partial<CoordinatorDeps> = {}): CoordinatorHub {
       if (why) throw new Error(why);
       if (busy.has(task.repo)) return { busy: `${task.repo} has 3 branch runs going` };
       started.push({ coord: coordId, task: task.id });
+      if (task.workflow) {
+        // a card that names a workflow starts one flow on a branch of its own
+        const id = `fl${++n}`;
+        const flow: Flow = { id, repoId: task.repo, workflow: task.workflow, verb: task.workflow, note: task.note, status: "working", steps: [{ name: "Build", status: "running" }], current: 0, startedAt: clock, branch: branch(id) };
+        flows.set(id, flow);
+        h.onFlow(flow);
+        return { flow };
+      }
       const child = { id: `c${++n}`, repoId: task.repo, action: task.action, status: "working", startedAt: clock, steps: [], note: task.note, by: "coordinator", parent: coordId, branch: branch(`c${n}`) } as unknown as Run;
       runs.set(child.id, child);
       // the runner tells everyone about a run before its start returns
@@ -77,6 +86,7 @@ function hub(over: Partial<CoordinatorDeps> = {}): CoordinatorHub {
     landing: (run) => branches.get(run.id) ?? {},
     // a child's branch is br-<child id>, so the branch's facts are its child's
     branch: (origin) => branches.get(origin.replace(/^br-/, "")) ?? {},
+    flow: (id) => flows.get(id),
     loadouts: () => kit,
     workflows: async (repo, withRepo) => {
       asked.push({ repo, withRepo });
@@ -156,6 +166,7 @@ beforeEach(() => {
   n = 0;
   made = [];
   asked = [];
+  flows = new Map();
   coordinator();
 });
 
@@ -476,13 +487,15 @@ describe("a branch flow ending", () => {
     await post(h, "start", { run: "co1" });
     expect(card("t1")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in web" });
     full.delete("web");
-    h.onFlow({ status: "working", branch: {} });
+    const someone = (over: Partial<Flow>): Flow => ({ id: "other", repoId: "web", workflow: "fix", verb: "fix", note: "", status: "working", steps: [], current: 0, startedAt: 1, branch: branch("other"), ...over });
+    h.onFlow(someone({}));
     await settled(h);
     expect(card("t1")?.state).toBe("queued");
-    h.onFlow({ status: "done" });
+    const { branch: _b, ...inCheckout } = someone({ status: "done" });
+    h.onFlow(inCheckout);
     await settled(h);
     expect(card("t1")?.state).toBe("queued");
-    h.onFlow({ status: "done", branch: {} });
+    h.onFlow(someone({ status: "done" }));
     await settled(h);
     expect(card("t1")?.state).toBe("running");
   });
@@ -1240,5 +1253,169 @@ describe("a card follows its branch", () => {
     h.wake(() => true);
     await settled(h);
     expect(card("t1")).toMatchObject({ state: "failed", outcome: "failed", run: "c2", limited: 1 });
+  });
+});
+
+describe("a card that names a workflow", () => {
+  const flowOf = (taskId: string): Flow => {
+    const f = flows.get(card(taskId)?.flow ?? "");
+    if (!f) throw new Error(`${taskId} has no flow`);
+    return f;
+  };
+  /** the card's flow moves, as the flows' change fan-out tells the hub */
+  function move(h: CoordinatorHub, taskId: string, status: Flow["status"], state?: RunBranch["state"], over: Partial<Flow> = {}): Flow {
+    const f = flowOf(taskId);
+    f.status = status;
+    if (status === "done" || status === "failed" || status === "stopped") f.endedAt = clock;
+    else delete f.endedAt;
+    if (state && f.branch) f.branch = { ...f.branch, state };
+    Object.assign(f, over);
+    h.onFlow(f);
+    return f;
+  }
+  /** what the landing queue says of the card's flow's branch */
+  const flowEntry = (taskId: string, state: LandEntry["state"]): LandEntry => {
+    const b = flowOf(taskId).branch;
+    return { id: b?.origin ?? "", repoId: "web", repoPath: "/r/web", branch: b?.name ?? "", target: "main", dir: b?.dir ?? "", note: "n", state, tries: 0, queuedAt: 1, updatedAt: 1 };
+  };
+
+  test("a start answering a flow sets the card's flow and branch, and the flow counts as one working child", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" }), task({ title: "two" }), task({ title: "three" }), task({ title: "four" })] });
+    await post(h, "start", { run: "co1" });
+    expect(card("t1")).toMatchObject({ state: "running", flow: "fl1", branch: "br-fl1", work: "w-test2345" });
+    expect(card("t1")?.run).toBeUndefined();
+    expect(cards().map((t) => t.state)).toEqual(["running", "running", "running", "queued"]);
+    move(h, "t1", "gated");
+    await settled(h);
+    expect(card("t4")?.state).toBe("queued");
+    // a flow that ended and waits on the landing queue holds no place
+    move(h, "t1", "done", "ready");
+    await settled(h);
+    expect(card("t4")?.state).toBe("running");
+  });
+
+  test("a done flow whose branch is ready waits for the landing entry, then settles landed with the flow's note", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    const t1 = card("t1");
+    if (!t1) throw new Error("no t1");
+    // done, its worktree not read yet
+    move(h, "t1", "done", "working");
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    branches.set("fl1", { verdict: "auto" });
+    move(h, "t1", "done", "ready", { steps: [{ name: "Build", status: "passed", summary: "Built it." }] });
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    branches.set("fl1", { verdict: "auto", entry: flowEntry("t1", "gate"), entries: [flowEntry("t1", "gate")] });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    const landed = { verdict: "auto" as const, entry: flowEntry("t1", "landed"), entries: [flowEntry("t1", "landed")] };
+    branches.set("fl1", landed);
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed", flow: "fl1" });
+    expect(said.map((x) => x.text)).toEqual([flowNote(t1, flowOf("t1"), landed)]);
+    expect(said[0]?.text).toContain("result: review done, Build: Built it.");
+  });
+
+  test("a ready flow the queue never took settles ready once overdue, by the flow's end", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    move(h, "t1", "done", "ready");
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    expect(h.waiting()).toBe(1);
+    clock += 1000;
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
+    expect(h.waiting()).toBe(0);
+  });
+
+  test("a failed flow settles its card failed, a stopped one failed stopped", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" }), task({ title: "two", workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    move(h, "t1", "failed", "nothing", { error: "the check failed" });
+    move(h, "t2", "stopped", "uncommitted");
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([
+      ["failed", "failed"],
+      ["failed", "stopped"],
+    ]);
+    expect((await hearAll(h)).map((x) => x.split("\n")[2])).toEqual(["outcome: failed", "outcome: stopped"]);
+  });
+
+  test("a stopped card flow picked up puts the card back to running, and it settles again", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" }), task({ title: "two", workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    move(h, "t1", "stopped", "uncommitted");
+    move(h, "t2", "failed", "nothing");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "stopped" });
+    move(h, "t1", "working", "working");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", flow: "fl1" });
+    expect(card("t1")?.outcome).toBeUndefined();
+    // a failed flow is not picked up, and its card stays as it settled
+    move(h, "t2", "working", "working");
+    await settled(h);
+    expect(card("t2")).toMatchObject({ state: "failed", outcome: "failed" });
+    branches.set("fl1", { verdict: "approve" });
+    move(h, "t1", "done", "ready");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
+  });
+
+  test("a flow card's step runs and a card with an active flow are never adopted", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    const onItsBranch = (over: Partial<Run>): Run => {
+      const r = { id: `f${++n}`, repoId: "web", action: "ask", status: "working", startedAt: clock, steps: [], note: "fix it", parent: "co1", branch: { ...branch("fl1"), state: "working" }, ...over } as unknown as Run;
+      runs.set(r.id, r);
+      h.onRun(r);
+      return r;
+    };
+    onItsBranch({});
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", flow: "fl1" });
+    expect(card("t1")?.run).toBeUndefined();
+    move(h, "t1", "failed", "nothing");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "failed" });
+    onItsBranch({ flowStep: { workflow: "review", step: "Build", source: "bundled" } });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "failed" });
+    expect(card("t1")?.run).toBeUndefined();
+  });
+
+  test("a flow the backend no longer keeps fails its card on recheck", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    flows.clear();
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "its flow is no longer kept" });
+  });
+
+  test("a flow card that settled ready lands later through its branch", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("fl1", { verdict: "approve" });
+    move(h, "t1", "done", "ready");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
+    branches.set("fl1", { verdict: "approve", entry: flowEntry("t1", "landed"), entries: [flowEntry("t1", "landed")] });
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
   });
 });

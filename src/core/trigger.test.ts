@@ -35,6 +35,7 @@ import {
   MAX_DESCRIPTION,
   opensPr,
   triggerPlan,
+  workflowPlan,
   type Incoming,
   type TriggerEvent,
   type TriggerRule,
@@ -1030,6 +1031,27 @@ describe("triggerPlan", () => {
     expect(triggerPlan(wf([step({ gate: "ask" }), step({ name: "Two" })]))).toContain("no one answers");
     expect(triggerPlan(wf([step({ body: "", check: "bun test" })]))).toContain("no step with a prompt");
     expect(triggerPlan(wf([]))).toContain("no steps");
+  });
+});
+
+describe("workflowPlan", () => {
+  const step = (over: Partial<WorkflowStep> = {}): WorkflowStep => ({ name: "Fix", tools: ["Read"], turns: 60, check: null, gate: "continue", body: "fix it", retries: 0, back: "Fix", evidence: [], after: [], when: ["always"], mode: "auto", ...over });
+  const wf = (steps: WorkflowStep[]): Workflow => ({ name: "two-steps", steps }) as Workflow;
+  test("a step that asks makes a flow, which a trigger still refuses", () => {
+    const asks = wf([step({ name: "Build" }), step({ name: "Check", gate: "ask" })]);
+    expect(workflowPlan(asks)).toEqual({ kind: "flow" });
+    expect(triggerPlan(asks)).toBe("two-steps's Check step asks before the next one starts, and no one answers a trigger's run");
+  });
+  test("one plain step is a run with its task, tools and turns", () => {
+    expect(workflowPlan(wf([step()]))).toEqual({ kind: "run", task: "fix it", tools: ["Read"], turns: 60 });
+  });
+  test("one step that asks or waits for a go is a flow, so it parks there", () => {
+    expect(workflowPlan(wf([step({ gate: "ask" })]))).toEqual({ kind: "flow" });
+    expect(workflowPlan(wf([step({ mode: "manual" })]))).toEqual({ kind: "flow" });
+  });
+  test("no steps, or no step with a prompt, is refused", () => {
+    expect(workflowPlan(wf([]))).toBe("two-steps has no steps");
+    expect(workflowPlan(wf([step({ body: "", check: "bun test" })]))).toBe("two-steps has no step with a prompt");
   });
 });
 

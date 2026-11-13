@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile, mkdir } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FlowFiles, loadFlowRecords, lockFlows, parseFlowRecord, type FlowFile } from "./flowstore";
+import type { RunEquip } from "./types";
 import { parseWorkflow } from "./workflow";
 
 const e = parseWorkflow(`---\nblurb: b\n---\n\n## One\n\nx\n`, { name: "t", source: "bundled", file: "/t.md" });
@@ -47,6 +48,16 @@ describe("parseFlowRecord", () => {
     const back = parseFlowRecord(text);
     expect(back?.flow.request).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(back?.flow.steps[0]).toMatchObject({ session: "s1", harness: "claude" });
+  });
+  test("keeps a card flow's equip, and drops a malformed one rather than the record", () => {
+    const r = rec("abcdef01");
+    const equip: RunEquip = { loadout: "quick", model: "haiku", effort: "low", skills: ["a"], mcp: ["probe"], off: 2, pluginsOff: ["p"] };
+    expect(parseFlowRecord(JSON.stringify({ ...r, flow: { ...r.flow, equip } }))?.flow.equip).toEqual(equip);
+    for (const bad of [{ ...equip, mcp: "probe" }, { ...equip, effort: "loud" }, { ...equip, off: "2" }, "quick"]) {
+      const back = parseFlowRecord(JSON.stringify({ ...r, flow: { ...r.flow, equip: bad } }));
+      expect(back?.flow.id).toBe("abcdef01");
+      expect(back?.flow.equip).toBeUndefined();
+    }
   });
   test.each<[string, string]>([
     ["truncated JSON", JSON.stringify(rec("abcdef01")).slice(0, 40)],

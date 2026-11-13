@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { selfName } from "../core/backends";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
-import type { About, CoordTask, Harness, LoadoutsInfo, Run } from "../core/types";
+import type { About, CoordTask, Flow, Harness, LoadoutsInfo, Run } from "../core/types";
 import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
@@ -30,13 +30,16 @@ const refusal = { in: 0 };
 class Recorder implements RunDriver {
   readonly label = "Claude Code";
   ctx: DriveCtx | null = null;
+  /** the first message, the framed prompt */
+  message = "";
   constructor(readonly harness: Harness) {}
   check(): string | null {
     if (refusal.in > 0 && --refusal.in === 0) return "this driver refuses the start";
     return null;
   }
-  start(ctx: DriveCtx): void {
+  start(ctx: DriveCtx, message: string): void {
     this.ctx = ctx;
+    this.message = message;
   }
   say(): void {}
   stop(): void {
@@ -77,7 +80,7 @@ afterAll(async () => {
   await rm(scratch, { recursive: true, force: true });
 });
 
-type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; made: Recorder[]; seeds: string; page: string };
+type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; pickUpFlow: (id: string) => Flow; made: Recorder[]; seeds: string; page: string };
 
 /** A server with its own config dir, in enforce unless `env` says otherwise,
  *  with a page token minted into its book before it starts. The
@@ -90,7 +93,8 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
   const page = book.mint("page", { label: "a page" }).token;
   await book.flush();
   const seeds = join(scratch, `${name}-seeds`);
-  await mkdir(seeds);
+  // a server started again on the same config dir finds its seeds folder there
+  await mkdir(seeds, { recursive: true });
   for (const k of ["CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT"]) delete process.env[k];
   Object.assign(process.env, { CANOPY_CALLERS: "enforce", CANOPY_COORD_ROOT: seeds, ...env });
   const made: Recorder[] = [];
@@ -371,9 +375,31 @@ describe("a coordinator's card with a loadout", () => {
       machines: { here: { backend: selfName(null, hostname()) } },
       targets: [{ agent: "claude", skills: join(scratch, "store", "skills"), mode: "store" }],
       skills: {},
-      mcp: {},
+      mcp: { probe: { command: "bash", args: ["-c", "true"], machines: ["here"] } },
       loadouts,
     }));
+  /** the loadouts these tests start from: `quick` holds no server, `probed` one */
+  const LOADOUTS = { quick: { model: "haiku", canopyTools: true }, probed: { model: "haiku", effort: "low", mcp: ["probe"] } };
+  /** this server's own config dir */
+  const config = (): string => join(scratch, "loadout");
+  /** a user workflow in this server's config dir, which a card may name */
+  async function userWorkflow(name: string, text: string): Promise<void> {
+    await mkdir(join(config(), "workflows"), { recursive: true });
+    await writeFile(join(config(), "workflows", `${name}.md`), text);
+  }
+  const flowsNow = async (): Promise<Flow[]> => (await (await call(s, "/api/flows", s.page)).json()) as Flow[];
+  const flowNamed = (id: string): Promise<Flow | undefined> => flowsNow().then((all) => all.find((f) => f.id === id));
+  /** a step's run reaching the driver, once the flow has started it */
+  async function stepRun(flowId: string, step: number): Promise<{ id: string; ctx: DriveCtx; message: string }> {
+    const id = await until(async () => (await flowNamed(flowId))?.steps[step]?.runId, `step ${step} of flow ${flowId} to start a run`);
+    const ctx = await ctxOf(id);
+    return { id, ctx, message: s.made.find((d) => d.ctx === ctx)?.message ?? "" };
+  }
+  /** ends a step's run as its harness would: a result, then the process exits */
+  const finish = (ctx: DriveCtx, text: string): void => {
+    ctx.result({ text, durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+  };
   const names = async (): Promise<string[]> => ((await (await call(s, "/api/loadouts", s.page)).json()) as LoadoutsInfo).loadouts.map((l) => l.name);
   /** a test server's kit never scans on its own */
   async function rescan(has: boolean): Promise<void> {
@@ -385,6 +411,8 @@ describe("a coordinator's card with a loadout", () => {
   const ctxOf = (id: string): Promise<DriveCtx> => until(async () => s.made.find((d) => d.ctx?.env["CANOPY_RUN"] === id)?.ctx, `run ${id} to reach the driver`);
   /** runs to stop when the test ends, children first */
   const live: string[] = [];
+  /** card flows to stop when the test ends */
+  const liveFlows: string[] = [];
 
   /** a coordinator with one card planned by its own token, then "start these" from the page */
   async function startCard(card: Record<string, unknown>): Promise<{ coord: string; tasks: CoordTask[] }> {
@@ -406,13 +434,14 @@ describe("a coordinator's card with a loadout", () => {
     await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
     kitFile = join(scratch, "kit.json");
     // canopyTools on, so the test shows a card's worker goes without them anyway
-    await writeKit({ quick: { model: "haiku", canopyTools: true } });
+    await writeKit(LOADOUTS);
     process.env["CANOPY_KIT"] = kitFile;
     process.env["HOME"] = home;
     s = await up("loadout", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"]);
     await rescan(true);
   });
   afterEach(async () => {
+    for (const id of liveFlows.splice(0)) await postAs(s, "/api/flows/stop", { id }, s.page);
     for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
   });
   afterAll(() => s.stop());
@@ -499,7 +528,7 @@ describe("a coordinator's card with a loadout", () => {
       expect(await cardOf(coord)).toMatchObject({ state: "failed", outcome: "no loadout quick in kit.json" });
       expect(s.made.length).toBe(before);
     } finally {
-      await writeKit({ quick: { model: "haiku", canopyTools: true } });
+      await writeKit(LOADOUTS);
       await rescan(true);
     }
   });
@@ -550,5 +579,156 @@ describe("a coordinator's card with a loadout", () => {
       await rm(join(repo, ".canopy", "gates.json"), { force: true });
       await commit(repo, "no gate");
     }
+  }, 30_000);
+
+  const TWO_STEPS = `---
+name: two-steps
+verb: build and check
+blurb: Builds, then checks and asks.
+---
+
+## build
+
+Build the thing.
+
+## check
+gate: ask
+
+Check the thing.
+`;
+
+  test("a card that names a workflow starts a branch flow with the card's loadout on every step, and it parks at its ask gate", async () => {
+    await userWorkflow("two-steps", TWO_STEPS);
+    const { coord, tasks } = await startCard({ workflow: "two-steps", equip: { loadout: "quick" } });
+    const task = tasks[0];
+    expect(task).toMatchObject({ state: "running", workflow: "two-steps" });
+    expect(task?.run).toBeUndefined();
+    const flowId = task?.flow ?? "";
+    expect(flowId).toMatch(/^[0-9a-f]{8}$/);
+    liveFlows.push(flowId);
+    const flow = await flowNamed(flowId);
+    expect(flow?.branch?.origin).toBe(task?.branch);
+    expect(flow?.equip?.loadout).toBe("quick");
+    const settings = join(config(), "run-tools", `flow-${flowId}.settings.json`);
+    const first = await stepRun(flowId, 0);
+    const run = (await runs()).find((r) => r.id === first.id);
+    expect(run?.equip?.loadout).toBe("quick");
+    expect(run?.parent).toBeUndefined();
+    expect(run?.canopyTools).toBeUndefined();
+    expect(first.ctx.agent.model).toBe("haiku");
+    expect(first.ctx.spec.settings).toBe(settings);
+    expect(first.ctx.spec.mcpConfig).toBeUndefined();
+    expect(first.ctx.spec.canopy).toBeUndefined();
+    expect(first.ctx.spec.unattended).toBeUndefined();
+    expect(first.message).toContain("Build the thing.");
+    finish(first.ctx, "built");
+    await until(async () => (await runs()).find((r) => r.id === first.id)?.status === "done", "the build step's run to end");
+    // the step's end removes its own files, never the flow's
+    expect(existsSync(settings)).toBe(true);
+    const second = await stepRun(flowId, 1);
+    expect(second.ctx.spec.settings).toBe(settings);
+    expect(second.ctx.spec.unattended).toBeUndefined();
+    finish(second.ctx, "checked");
+    const parked = await until(async () => {
+      const f = await flowNamed(flowId);
+      return f?.status === "gated" ? f : null;
+    }, "the flow to park at its ask gate");
+    expect(parked.steps[1]?.reason).toBe("this step asks before the next one starts");
+    expect((await cardOf(coord))?.state).toBe("running");
+    expect(existsSync(settings)).toBe(true);
+  }, 30_000);
+
+  test("a card whose workflow is one plain step starts a branch run with that step's spec", async () => {
+    await userWorkflow("one-step", "---\nname: one-step\nverb: do one\nblurb: One step.\n---\n\n## do\n\nDo the one thing.\n");
+    const { tasks } = await startCard({ workflow: "one-step", equip: { loadout: "quick" } });
+    const task = tasks[0];
+    expect(task?.flow).toBeUndefined();
+    const id = task?.run ?? "";
+    live.push(id);
+    expect(task).toMatchObject({ state: "running", run: id, workflow: "one-step" });
+    const child = (await runs()).find((r) => r.id === id);
+    expect(child).toMatchObject({ verb: "do one", by: "coordinator", equip: { loadout: "quick" } });
+    expect(child?.branch).toBeDefined();
+    const ctx = await ctxOf(id);
+    expect(ctx.spec.unattended).toBeUndefined();
+    expect(existsSync(ctx.spec.settings ?? "")).toBe(true);
+    expect(s.made.find((d) => d.ctx === ctx)?.message).toContain("Do the one thing.");
+  });
+
+  test("Review Focus 2: a coordinator naming review in a repo that has its own review.md runs the bundled one", async () => {
+    const repo = join(scratch, "root", "app");
+    await mkdir(join(repo, ".canopy", "workflows"), { recursive: true });
+    // the repo's own is two steps, so it would start a flow; the bundled one is one step, a run
+    await writeFile(join(repo, ".canopy", "workflows", "review.md"), "---\nname: review\nlabel: repo review\nverb: repo review\nblurb: The repo's own.\n---\n\n## look\n\nLook at the repo's own way.\n\n## say\n\nSay it.\n");
+    try {
+      const { tasks } = await startCard({ workflow: "review" });
+      const task = tasks[0];
+      expect(task?.workflowRepo).toBeUndefined();
+      expect(task?.flow).toBeUndefined();
+      const id = task?.run ?? "";
+      live.push(id);
+      expect((await runs()).find((r) => r.id === id)?.verb).toBe("review");
+      const ctx = await ctxOf(id);
+      const message = s.made.find((d) => d.ctx === ctx)?.message ?? "";
+      expect(message).toContain("review this repository's current state");
+      expect(message).not.toContain("the repo's own way");
+    } finally {
+      await rm(join(repo, ".canopy", "workflows"), { recursive: true, force: true });
+    }
+  });
+
+  test("a card Eric gave the repo's own workflow fails at its start once that file is gone, and never runs the bundled one", async () => {
+    const repo = join(scratch, "root", "app");
+    await mkdir(join(repo, ".canopy", "workflows"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "workflows", "review.md"), "---\nname: review\nverb: repo review\nblurb: The repo's own.\n---\n\n## look\n\nLook.\n");
+    try {
+      const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "own" }, s.page);
+      expect(res.status).toBe(201);
+      const coord = ((await res.json()) as Run).id;
+      live.push(coord);
+      // Eric picks the repo's own from the page
+      const plan = await postAs(s, "/api/coordinator/plan", { run: coord, tasks: [{ title: "t", repo: "app", note: "n", action: "ask", workflow: "review", workflowRepo: true }] }, s.page);
+      expect(plan.status).toBe(200);
+      await rm(join(repo, ".canopy", "workflows"), { recursive: true, force: true });
+      const before = s.made.length;
+      expect((await postAs(s, "/api/coordinator/start", { run: coord }, s.page)).status).toBe(200);
+      expect(await cardOf(coord)).toMatchObject({ state: "failed", outcome: "app has no workflow review of its own", workflowRepo: true });
+      expect(s.made.length).toBe(before);
+    } finally {
+      await rm(join(repo, ".canopy", "workflows"), { recursive: true, force: true });
+    }
+  });
+
+  test("Review Focus 4: a card's flow stopped, the server started again on its config dir, and picked up, gives its next step the settings file and the servers", async () => {
+    await userWorkflow("two-steps", TWO_STEPS);
+    const { tasks } = await startCard({ workflow: "two-steps", equip: { loadout: "probed" } });
+    const flowId = tasks[0]?.flow ?? "";
+    expect(flowId).toMatch(/^[0-9a-f]{8}$/);
+    const settings = join(config(), "run-tools", `flow-${flowId}.settings.json`);
+    const mcp = join(config(), "run-tools", `flow-${flowId}.mcp.json`);
+    const first = await stepRun(flowId, 0);
+    expect(first.ctx.spec).toMatchObject({ settings, mcpConfig: mcp, servers: ["probe"] });
+    expect(first.ctx.agent.model).toBe("haiku");
+    expect((await postAs(s, "/api/flows/stop", { id: flowId }, s.page)).status).toBe(200);
+    await until(async () => (await flowNamed(flowId))?.status === "stopped", "the card's flow to stop");
+    await s.stop();
+    live.splice(0);
+    s = await up("loadout", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"]);
+    // the boot sweep leaves a flow's files for its pick-up
+    expect(existsSync(settings)).toBe(true);
+    expect(existsSync(mcp)).toBe(true);
+    expect((await flowNamed(flowId))?.status).toBe("stopped");
+    s.pickUpFlow(flowId);
+    liveFlows.push(flowId);
+    const again = await until(async () => {
+      const f = await flowNamed(flowId);
+      const id = f?.steps[0]?.runId;
+      return id && id !== first.id ? id : null;
+    }, "the picked-up step to start a run");
+    const ctx = await ctxOf(again);
+    expect(ctx.spec).toMatchObject({ settings, mcpConfig: mcp, servers: ["probe"] });
+    expect(ctx.agent.model).toBe("haiku");
+    expect(ctx.agent.effort).toBe("low");
+    expect((await runs()).find((r) => r.id === again)?.equip).toMatchObject({ loadout: "probed", mcp: ["probe"] });
   }, 30_000);
 });

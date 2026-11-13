@@ -2986,6 +2986,9 @@ export interface Flow {
    *  and the landing queue takes the branch once the flow is done. Its state
    *  stays working until the flow ends and the worktree is read. */
   branch?: RunBranch;
+  /** the loadout a coordinator's card started it with (FR-065): every step's
+   *  run gets the flow's own settings file and servers, and this as its equip */
+  equip?: RunEquip;
 }
 
 /** A flow with a live step: running, waiting on a prompt, or parked at a gate. */

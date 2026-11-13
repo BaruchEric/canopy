@@ -4,7 +4,7 @@ import { chmod, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runsDir } from "../core/runlog";
-import { BUNDLED_TOOLS_BRIEF, canopyMcpCommand, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
+import { BUNDLED_TOOLS_BRIEF, canopyMcpCommand, flowToolsId, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 
 let dir: string;
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "canopy-runtools-")); });
@@ -86,4 +86,14 @@ test("a run's settings file is 0600 and goes with removeRunSettings and the swee
   await writeRunSettings("r2", {}, dir);
   await sweepMcpConfigs(dir);
   expect(existsSync(settingsPath("r2", dir))).toBe(false);
+});
+
+test("the sweep leaves a card flow's files, which its steps read after a restart", async () => {
+  const id = flowToolsId("0123abcd");
+  expect(id).toBe("flow-0123abcd");
+  await writeRunSettings(id, {}, dir);
+  await writeMcpConfig(id, {}, dir);
+  await sweepMcpConfigs(dir);
+  expect(existsSync(settingsPath(id, dir))).toBe(true);
+  expect(existsSync(mcpConfigPath(id, dir))).toBe(true);
 });
