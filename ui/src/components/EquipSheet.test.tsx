@@ -76,4 +76,11 @@ describe("EquipSheet", () => {
     expect(html).toMatch(/aria-pressed="true"[^>]*>sonnet</);
     expect(html).toContain("Changed from quick");
   });
+  test("an absent server stays unchecked and is not counted in the summary", () => {
+    seed([{ name: "github", here: true }, { name: "executor", here: false }]);
+    useStore.setState({ kit: { ...useStore.getState().kit, mac: { ...useStore.getState().kit.mac, loadouts: { base: [], loadouts: [L({ name: "ops", mcp: ["github", "executor"] })], errors: [], servers: [{ name: "github", here: true }, { name: "executor", here: false }] } } } as typeof pristine.kit });
+    const html = renderCurrent(<EquipSheet run={coord} task={task()} onDone={() => {}} />);
+    expect(html).toContain("1 server<");
+    expect(html).not.toMatch(/value="executor"[^>]*checked/);
+  });
 });

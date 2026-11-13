@@ -1,6 +1,7 @@
 // How the page words a loadout (FR-065): the plan sheet's pick and the
 // title of a run that started with one. Pure and browser-safe.
-import type { CardEquip, Loadout, RunAction, RunEquip } from "../../src/core/types";
+import { baseCovers } from "../../src/core/loadout";
+import type { CardEquip, Loadout, Mention, RunAction, RunEquip } from "../../src/core/types";
 
 /** The loadouts the plan sheet offers for an action: plan, then build needs
  *  Claude Code, so a propose is offered no codex loadout. */
@@ -45,3 +46,41 @@ export function equipFrom(
   if (!sameSet(picks.mcp, loadout.mcp)) out.mcp = [...picks.mcp];
   return out;
 }
+
+/** "superpowers" out of a skill's `plugin:superpowers` origin, null for a user skill */
+export const pluginOf = (w: Mention): string | null => (w.plugin && w.from.startsWith("plugin:") ? w.from.slice("plugin:".length) : null);
+
+/** The sentence under a plugin's skill: plugins turn on and off whole. */
+export const pluginLine = (w: Mention): string | null => {
+  const plugin = pluginOf(w);
+  return plugin ? `Checking it turns on the whole ${plugin} plugin.` : null;
+};
+
+export interface SkillRow {
+  name: string;
+  description: string;
+  /** the sentence about its plugin, or null for a user skill */
+  plugin: string | null;
+  on: boolean;
+  /** on because `loadoutBase` or a `plugin:*` pick covers it: it cannot be unchecked here */
+  locked: boolean;
+}
+
+/** The skill rows the sheet draws: Claude's skills matching the find box, by
+ *  name. A skill the kit's base or a `plugin:*` pick covers reads on and is
+ *  locked, since the server keeps it on whatever the card lists. */
+export function skillRows(words: readonly Mention[], q: string, picked: readonly string[], base: readonly string[]): SkillRow[] {
+  const find = q.trim().toLowerCase();
+  return words
+    .filter((w) => w.kind === "skill" && w.harness === "claude")
+    .filter((w) => !find || `${w.name} ${w.description}`.toLowerCase().includes(find))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((w) => {
+      const locked = baseCovers(base, w.name) || picked.some((p) => p !== w.name && baseCovers([p], w.name));
+      return { name: w.name, description: w.description, plugin: pluginLine(w), on: locked || picked.includes(w.name), locked };
+    });
+}
+
+/** The loadout's servers this backend can run; a server it refuses is not saved or counted. */
+export const serversHere = (mcp: readonly string[], servers: readonly { name: string; here: boolean }[]): string[] =>
+  mcp.filter((m) => !servers.some((s) => s.name === m && !s.here));

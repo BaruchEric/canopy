@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { HARNESS } from "../../../src/core/harness";
 import type { CardEquip, CoordTask, Loadout, Mention, Run } from "../../../src/core/types";
 import { api } from "../api";
-import { equipFrom, loadoutsFor } from "../loadouts";
+import { equipFrom, loadoutsFor, serversHere, skillRows } from "../loadouts";
 import { backendOf } from "../registry";
 import { useStore } from "../store";
 
@@ -28,9 +28,6 @@ function picksOf(l: Loadout, saved: CardEquip | undefined): Picks {
 }
 
 const flip = (list: readonly string[], name: string): string[] => (list.includes(name) ? list.filter((x) => x !== name) : [...list, name]);
-
-/** "superpowers" out of a skill's `plugin:superpowers` origin */
-const pluginOf = (w: Mention): string | null => (w.plugin && w.from.startsWith("plugin:") ? w.from.slice("plugin:".length) : null);
 
 const count = (n: number, one: string): string => `${n} ${one}${n === 1 ? "" : "s"}`;
 
@@ -78,19 +75,18 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
   const table = HARNESS[loadout.harness];
   const models = table.models.includes(picks.model) ? table.models : [...table.models, picks.model];
   const efforts = table.efforts.includes(picks.effort as (typeof table.efforts)[number]) ? table.efforts : [...table.efforts, picks.effort as (typeof table.efforts)[number]];
-  const skills = (words ?? [])
-    .filter((w) => w.kind === "skill" && w.harness === "claude")
-    .filter((w) => !q.trim() || `${w.name} ${w.description}`.toLowerCase().includes(q.trim().toLowerCase()))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const skills = skillRows(words ?? [], q, picks.skills, info?.base ?? []);
   const servers = info?.servers ?? [];
-  const equip = equipFrom(loadout, picks);
+  const here = serversHere(picks.mcp, servers);
+  const saved: Picks = { ...picks, mcp: here };
+  const equip = equipFrom(loadout, saved);
   const changed = Object.keys(equip).length > 1;
   const summary = [
     loadout.name,
     picks.model !== "default" ? picks.model : "",
     picks.effort !== "default" ? `effort ${picks.effort}` : "",
     codex ? "" : count(picks.skills.length, "skill"),
-    codex ? "" : count(picks.mcp.length, "server"),
+    codex ? "" : count(here.length, "server"),
   ].filter(Boolean).join(", ");
 
   const choose = (l: Loadout) => {
@@ -144,19 +140,16 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
               <input type="search" className="mgr-equip-find" aria-label="find a skill" placeholder="find a skill" value={q} onChange={(e) => setQ(e.target.value)} />
               {wordsError && <p className="note err">{wordsError}</p>}
               {words === null && !wordsError && <p className="mgr-equip-note">Reading the skills on this machine.</p>}
-              {skills.map((w) => {
-                const plugin = pluginOf(w);
-                return (
-                  <label key={w.name} className="mgr-equip-opt">
-                    <input type="checkbox" value={w.name} checked={picks.skills.includes(w.name)} onChange={() => setPicks({ ...picks, skills: flip(picks.skills, w.name) })} />
-                    <span>
-                      <span className="mgr-equip-name">{w.name}</span>
-                      <span className="mgr-equip-line">{w.description}</span>
-                      {plugin && <span className="mgr-equip-line">Checking it turns on the whole {plugin} plugin.</span>}
-                    </span>
-                  </label>
-                );
-              })}
+              {skills.map((w) => (
+                <label key={w.name} className={`mgr-equip-opt${w.locked ? " off" : ""}`} title={w.locked ? "The kit or the loadout turns this skill on" : undefined}>
+                  <input type="checkbox" value={w.name} disabled={w.locked} checked={w.on} onChange={() => setPicks({ ...picks, skills: flip(picks.skills, w.name) })} />
+                  <span>
+                    <span className="mgr-equip-name">{w.name}</span>
+                    <span className="mgr-equip-line">{w.description}</span>
+                    {w.plugin && <span className="mgr-equip-line">{w.plugin}</span>}
+                  </span>
+                </label>
+              ))}
               {words !== null && skills.length === 0 && <p className="mgr-equip-note">No skill on this machine matches that.</p>}
             </>
           )}
@@ -164,7 +157,7 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
 
         <section aria-label="servers">
           <h3>
-            servers <span className="mgr-equip-count">{codex ? 0 : picks.mcp.length}</span>
+            servers <span className="mgr-equip-count">{codex ? 0 : here.length}</span>
           </h3>
           {codex ? (
             <p className="mgr-equip-note">A Codex worker takes model and effort only.</p>
