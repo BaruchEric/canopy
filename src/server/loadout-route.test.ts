@@ -174,20 +174,40 @@ describe("a run started with a loadout", () => {
   });
 
   test("the files go when the run stops", async () => {
-    const run = await started({ loadout: "tools", canopyTools: true });
+    const run = await started({ loadout: "tools" });
     const { settings, mcpConfig } = (await ctxOf(run.id)).spec;
     expect(existsSync(settings ?? "")).toBe(true);
     expect(existsSync(mcpConfig ?? "")).toBe(true);
+    await post("/api/runs/stop", { id: run.id });
+    await until(async () => !existsSync(settings ?? "") && !existsSync(mcpConfig ?? ""), "the run's files to go");
+  });
+
+  test("the files go when the run ends", async () => {
+    const run = await started({ loadout: "tools" });
+    const ctx = await ctxOf(run.id);
+    const { settings, mcpConfig } = ctx.spec;
+    ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+    await until(async () => !existsSync(settings ?? "") && !existsSync(mcpConfig ?? ""), "the run's files to go");
+  });
+
+  test("with canopy's tools, the stop takes the token too", async () => {
+    const run = await started({ loadout: "tools", canopyTools: true });
+    const { settings, mcpConfig } = (await ctxOf(run.id)).spec;
     await post("/api/runs/stop", { id: run.id });
     await until(async () => !existsSync(settings ?? "") && !existsSync(mcpConfig ?? ""), "the run's files to go");
     const callers = (await (await get("/api/auth")).json()) as { callers: { kind: string }[] };
     expect(callers.callers.filter((c) => c.kind === "run")).toEqual([]);
   });
 
-  test("a start that fails after the files are written leaves none behind", async () => {
+  test.each([
+    [{ loadout: "docs" }],
+    [{ loadout: "tools" }],
+    [{ loadout: "tools", canopyTools: true }],
+  ])("a start with %j that fails after the files are written leaves none behind", async (extra) => {
     const before = await held();
     // the runner refuses an empty note, after the files are written
-    const refused = await start({ loadout: "tools", canopyTools: true, note: "" });
+    const refused = await start({ ...extra, note: "" });
     expect(refused.status).toBe(400);
     expect(refused.body.error).toContain("write what the agent should do first");
     expect(await held()).toEqual(before);
