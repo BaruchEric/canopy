@@ -6,7 +6,7 @@ import { groupWord, type RunGroup } from "../core/group";
 import { parsePriority } from "../core/capacity";
 import { RUN_ACTIONS, type BackendEntry, type Priority, type Run, type RunAction, type ScanResult } from "../core/types";
 import { apiBase } from "./api";
-import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
+import { ask, errText, has, Refused, take, targetsOf, Unreachable, type Target } from "./health";
 import { RUN_USAGE, runTranscriptCommand } from "./run-transcripts";
 
 export { RUN_USAGE };
@@ -219,10 +219,19 @@ async function repoId(repoArg: string, target: Target, fail: Fail): Promise<stri
   return repo.id;
 }
 
+/** a backend as a person would name it: its name, or its address for --backend */
+const backendWord = (target: Target): string => (target.name === "home" ? (target.urls[0] ?? target.name) : target.name);
+
 async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promise<void> {
   const parsed = parseRunArgs(argv);
   if (typeof parsed === "string") return fail(parsed);
   const target = await selectedTarget(parsed, fail);
+  // a backend from before loadouts would take the body, drop the name and
+  // start a plain run with every skill on
+  if (parsed.loadout !== undefined) {
+    await ask<unknown>(target, "GET", "/api/loadouts").catch((error: unknown) =>
+      error instanceof Refused && error.status === 404 ? fail(`${backendWord(target)} predates loadouts; redeploy it`) : requestFailure(target, fail)(error));
+  }
   const id = await repoId(parsed.repo, target, fail);
   const body = {
     action: parsed.action,
@@ -248,6 +257,9 @@ async function runStartCommand(argv: string[], { fail }: RunCommandDeps): Promis
     return;
   }
   if (parsed.times > 1) return fail("the backend did not return a group record");
+  if (parsed.loadout !== undefined && !result.equip) {
+    return fail(`run ${result.id} started on ${backendWord(target)} without loadout ${parsed.loadout}; stop it and redeploy ${backendWord(target)}`);
+  }
   console.log(`${result.id} ${result.status}`);
 }
 

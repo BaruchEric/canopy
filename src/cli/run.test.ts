@@ -201,3 +201,58 @@ test.each([
   [["canopy", "ask", "--loadout"], "--loadout needs a name"],
   [["canopy", "ask", "--loadout", "docs", "--times", "2"], "--loadout starts one run; use --profiles for a group"],
 ])("%j is refused", (argv, why) => expect(parseRunArgs(argv)).toBe(why));
+
+/** a backend that answers GET /api/loadouts with `loadouts` (a status, or a
+ *  list) and a start with `run`, keeping each request */
+async function loadoutBackend(loadouts: number | { loadouts: { name: string }[] }, run: Record<string, unknown>, argv: string[]) {
+  resetCliApiState();
+  const requests: string[] = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(request) {
+      const url = new URL(request.url);
+      requests.push(`${request.method} ${url.pathname}`);
+      if (url.pathname === "/api/loadouts") return typeof loadouts === "number" ? Response.json({ error: "not found" }, { status: loadouts }) : Response.json({ base: [], errors: [], ...loadouts });
+      return Response.json(run, { status: 201 });
+    },
+  });
+  const backend = `http://127.0.0.1:${server.port}`;
+  const lines: string[] = [];
+  const oldLog = console.log;
+  console.log = (line: string) => { lines.push(line); };
+  const fail = (message: string): never => { throw new Error(message); };
+  try {
+    const failed = await dispatchRunCommand([...argv, "--backend", backend], { fail }).then(() => null, (err: unknown) => (err instanceof Error ? err.message : String(err)));
+    return { requests, lines, failed, backend };
+  } finally {
+    resetCliApiState();
+    console.log = oldLog;
+    server.stop(true);
+  }
+}
+
+test("--loadout against a backend that predates loadouts refuses before anything starts", async () => {
+  const got = await loadoutBackend(404, { id: "run-1", status: "working" }, ["app", "ask", "--loadout", "docs"]);
+  expect(got.failed).toBe(`${got.backend} predates loadouts; redeploy it`);
+  expect(got.requests).toEqual(["GET /api/loadouts"]);
+});
+
+test("--loadout fails loudly when the started run came back without its equip", async () => {
+  const got = await loadoutBackend({ loadouts: [{ name: "docs" }] }, { id: "run-1", status: "working" }, ["app", "ask", "--loadout", "docs"]);
+  expect(got.requests).toEqual(["GET /api/loadouts", "POST /api/repos/run"]);
+  expect(got.failed).toBe(`run run-1 started on ${got.backend} without loadout docs; stop it and redeploy ${got.backend}`);
+  expect(got.lines).toEqual([]);
+});
+
+test("--loadout prints the run when it came back with its equip", async () => {
+  const equip = { loadout: "docs", model: "haiku", effort: "low", skills: [], mcp: [], off: 3 };
+  const got = await loadoutBackend({ loadouts: [{ name: "docs" }] }, { id: "run-1", status: "working", equip }, ["app", "ask", "--loadout", "docs"]);
+  expect(got.failed).toBeNull();
+  expect(got.lines).toEqual(["run-1 working"]);
+});
+
+test("a run without --loadout never asks for the loadouts", async () => {
+  const got = await loadoutBackend(404, { id: "run-1", status: "working" }, ["app", "ask"]);
+  expect(got.failed).toBeNull();
+  expect(got.requests).toEqual(["POST /api/repos/run"]);
+});

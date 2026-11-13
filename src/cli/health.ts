@@ -209,6 +209,12 @@ export async function backendTargets(
 
 export class Unreachable extends Error {}
 
+/** A backend's refusal, with its status: a 404 from an older backend for a
+ *  route it does not have yet reads apart from one it answered. */
+export class Refused extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
+
 export const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -242,7 +248,7 @@ export async function ask<T>(t: Target, method: string, path: string, body?: unk
       tried.push(`${url}: needs a sign-in`);
       continue;
     }
-    if (!res.ok) throw new Error(out.error ?? `${t.name} answered ${res.status}`);
+    if (!res.ok) throw new Refused(out.error ?? `${t.name} answered ${res.status}`, res.status);
     return out;
   }
   throw new Unreachable(tried.join("; ") || "no address");
