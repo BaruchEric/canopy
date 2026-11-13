@@ -75,6 +75,7 @@ import {
   type RememberedRule,
   type Repo,
   type Run,
+  type RunStep,
   type ScanResult,
   type SourceState,
   type Sprout,
@@ -1066,6 +1067,58 @@ describe("several backends", () => {
     expect(sent).toEqual([]);
     expect(useStore.getState().runs.old).toBe(run);
     expect(useStore.getState().sheet).toEqual({ kind: "run", runId: "old" });
+  });
+
+  /** The stop route answers with the run as it was when the stop began, so
+   *  an idle chat's answer still says idle. Its end comes over the stream,
+   *  and on a page where that event beat the answer, the answer used to
+   *  put the ended chat back to "your turn" (the 2026-11-13 check). */
+  function heldMutation(path: string) {
+    let finish: (run: Run) => void = () => {};
+    const previous = globalThis.fetch;
+    globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith(path)) return new Promise<Response>(r => { finish = (run) => r(new Response(JSON.stringify(run))); });
+      return previous(input, init);
+    }, { preconnect: realFetch.preconnect });
+    return (run: Run) => finish(run);
+  }
+
+  test("a stop's late answer never puts back a run the stream already ended", async () => {
+    await replayPage();
+    const idle: Run = { ...activeReplayRun("chat"), status: "idle" };
+    useStore.getState().applyEvent({ type: "run", run: idle });
+    const answer = heldMutation("/api/runs/stop");
+    const stopping = useStore.getState().stopRun("chat");
+    const note: RunStep = { id: "s1", kind: "note", text: "ended from a page", at: 2 };
+    useStore.getState().applyEvent({ type: "run", run: { ...idle, steps: [note] } });
+    useStore.getState().applyEvent({ type: "run", run: { ...idle, status: "done", steps: [note], endedAt: 3 } });
+    answer({ ...idle, steps: [note] });
+    await stopping;
+    expect(useStore.getState().runs.chat?.status).toBe("done");
+  });
+
+  test("a stop's answer lands when the stream said nothing in between", async () => {
+    await replayPage();
+    const idle: Run = { ...activeReplayRun("chat"), status: "idle" };
+    useStore.getState().applyEvent({ type: "run", run: idle });
+    const answer = heldMutation("/api/runs/stop");
+    const stopping = useStore.getState().stopRun("chat");
+    answer({ ...idle, status: "done", endedAt: 3 });
+    await stopping;
+    expect(useStore.getState().runs.chat?.status).toBe("done");
+  });
+
+  test("a message's late answer never puts back a chat the stream already moved on", async () => {
+    await replayPage();
+    const idle: Run = { ...activeReplayRun("chat"), status: "idle" };
+    useStore.getState().applyEvent({ type: "run", run: idle });
+    const answer = heldMutation("/api/runs/say");
+    const saying = useStore.getState().sayRun("chat", "more");
+    useStore.getState().applyEvent({ type: "run", run: { ...idle, status: "working" } });
+    useStore.getState().applyEvent({ type: "run", run: { ...idle, status: "idle", steps: [{ id: "s2", kind: "text", text: "done", at: 4 }] } });
+    answer({ ...idle, status: "working" });
+    await saying;
+    expect(useStore.getState().runs.chat?.status).toBe("idle");
   });
 
   test("a reconnect invalidates a kept GET that began on the old event stream", async () => {

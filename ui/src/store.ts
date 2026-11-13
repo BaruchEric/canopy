@@ -1917,6 +1917,16 @@ let runOpen = 0;
 const runSyncs = new Map<string, number>();
 /** A run event takes precedence over a GET, including a run-gone event. */
 const runsHeard = new Map<string, number>();
+/** A stop, a message or an answer comes back with the run as the server
+ *  had it when it took the call: a stopped idle chat still says idle there,
+ *  and its end follows on the stream. The server broadcasts every change,
+ *  so a run event heard while the call was out is at least as new, and the
+ *  answer may only land when none was. Returns the run to keep, or null. */
+async function answered(runId: string, call: Promise<Run>): Promise<Run | null> {
+  const heard = runsHeard.get(runId);
+  const run = await call;
+  return runsHeard.get(runId) === heard ? run : null;
+}
 
 /** Each backend's automatic reconnect after a failed connect: the timer
  *  waiting to try again (null while a try is under way), how many tries
@@ -5271,8 +5281,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   answerRun: async (runId, promptId, answer) => {
     if (get().runs[runId]?.kept) return;
-    const run = await api.answerRun(runId, promptId, answer, get().answerKey);
-    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+    const run = await answered(runId, api.answerRun(runId, promptId, answer, get().answerKey));
+    if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
   loadRemembered: async () => {
     const order = get().backendOrder;
@@ -5292,25 +5302,25 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   sayRun: async (runId, text) => {
     if (get().runs[runId]?.kept) return;
-    const run = await api.say(runId, text);
+    const run = await answered(runId, api.say(runId, text));
     set((s) => {
       // a draft once sent is done with
       const { [runId]: _sent, ...chatDrafts } = s.chatDrafts;
-      return { runs: { ...s.runs, [run.id]: run }, chatDrafts };
+      return { runs: run ? { ...s.runs, [run.id]: run } : s.runs, chatDrafts };
     });
   },
   interruptRun: async (runId, text) => {
     if (get().runs[runId]?.kept) return;
-    const run = await api.interruptRun(runId, text);
+    const run = await answered(runId, api.interruptRun(runId, text));
     set((s) => {
       const { [runId]: _sent, ...chatDrafts } = s.chatDrafts;
-      return { runs: { ...s.runs, [run.id]: run }, chatDrafts };
+      return { runs: run ? { ...s.runs, [run.id]: run } : s.runs, chatDrafts };
     });
   },
   stopRun: async (runId) => {
     if (get().runs[runId]?.kept) return;
-    const run = await api.stopRun(runId);
-    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+    const run = await answered(runId, api.stopRun(runId));
+    if (run) set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
   coordPlanEdit: (runId, taskId, change) => api.coordTask(runId, taskId, change),
   coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
