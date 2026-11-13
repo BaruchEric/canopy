@@ -710,6 +710,11 @@ describe("a coordinator's card with a loadout", () => {
       finish(first.ctx, "built");
       finish((await stepRun(flowId, 1)).ctx, "checked");
       await until(async () => (await flowNamed(flowId))?.status === "done", "the card's flow to end");
+      // Flow completion precedes the asynchronous branch read and handover.
+      await until(async () => {
+        const info = (await (await call(s, "/api/landing", s.page)).json()) as { runs: { id: string; state: string }[] };
+        return info.runs.some((r) => r.id === origin && r.state === "ready");
+      }, "the completed flow's branch to be ready to land");
       expect((await postAs(s, "/api/landing/land", { run: origin }, s.page)).status).toBe(200);
       await until(async () => {
         const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
