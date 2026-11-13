@@ -212,28 +212,51 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
       if (b[k] !== undefined) return { error: `${t.id} is queued; only its loadout and after change` };
     }
   }
-  const pick = (k: keyof CoordTask): unknown => (b[k] === null ? undefined : (b[k] ?? t[k]));
-  const merged = {
+  // only what `b` supplies is checked; every other field is carried as stored,
+  // so a loadout, workflow or repo gone since the card was made does not stop an edit of `after`
+  const has = (k: string): boolean => b[k] !== undefined;
+  const equipSet = has("equip");
+  const flowSet = has("workflow") || has("workflowRepo");
+  const afterSet = has("after");
+  const merged: Record<string, unknown> = {
     title: b["title"] ?? t.title,
     note: b["note"] ?? t.note,
     repo: b["repo"] ?? t.repo,
     action: b["action"] ?? t.action,
     times: b["times"] ?? t.times,
-    equip: pick("equip"),
-    workflow: pick("workflow"),
-    workflowRepo: b["workflow"] !== undefined || b["workflowRepo"] !== undefined ? b["workflowRepo"] : t.workflowRepo,
-    after: pick("after"),
+    ...(equipSet && b["equip"] !== null ? { equip: b["equip"] } : {}),
+    ...(flowSet && b["workflow"] !== null ? { workflow: b["workflow"] ?? t.workflow, workflowRepo: has("workflow") ? b["workflowRepo"] : (b["workflowRepo"] ?? t.workflowRepo) } : {}),
+    ...(afterSet && b["after"] !== null ? { after: b["after"] } : {}),
   };
+  if (!flowSet && t.workflow !== undefined && typeof merged["times"] === "number" && merged["times"] > 1) {
+    return { error: `${t.id}: a card with a workflow starts one run` };
+  }
   const ids = new Set(ctx.cards.map((c) => c.id));
   ids.add(t.id);
-  const got = checkCard(merged, t.id, t.id, ids, ctx);
+  const repoGone = !has("repo") ? t.repo : null;
+  const check: PlanContext = { ...ctx, known: (r) => (r === repoGone ? "local" : ctx.known(r)) };
+  const got = checkCard(merged, t.id, t.id, ids, check);
   if ("error" in got) return got;
+  const after = afterSet ? got.after : t.after;
   const graph = new Map<string, readonly string[]>(ctx.cards.map((c) => [c.id, c.after ?? []]));
-  graph.set(t.id, got.after ?? []);
-  const loop = waitLoop(t.id, graph);
+  graph.set(t.id, after ?? []);
+  const loop = afterSet ? waitLoop(t.id, graph) : null;
   if (loop) return { error: `${t.id}.after: ${andList(loop)} wait for each other` };
   const { times: _t, equip: _e, workflow: _w, workflowRepo: _r, after: _a, ...kept } = t;
-  return { task: { ...kept, ...got } };
+  const { equip: _ge, workflow: _gw, workflowRepo: _gr, after: _ga, ...fields } = got;
+  const equip = equipSet ? got.equip : t.equip;
+  const workflow = flowSet ? got.workflow : t.workflow;
+  const workflowRepo = flowSet ? got.workflowRepo : t.workflowRepo;
+  return {
+    task: {
+      ...kept,
+      ...fields,
+      ...(equip ? { equip } : {}),
+      ...(workflow ? { workflow } : {}),
+      ...(workflowRepo ? { workflowRepo } : {}),
+      ...(after && after.length > 0 ? { after } : {}),
+    },
+  };
 }
 
 /** Whether a card has landed, the only state `after` waits for: its branch

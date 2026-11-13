@@ -407,6 +407,18 @@ describe("editCard", () => {
     expect(got).toEqual({ task: { ...t, equip: { loadout: "quick", model: "opus" }, after: ["t2"] } });
     expect(editCard(t, { note: "x" }, ctx(t))).toEqual({ error: "t1 is queued; only its loadout and after change" });
   });
+  test("a coordinator changes only after on a card carrying Eric's fields", () => {
+    const t = held("t1", { state: "proposed", equip: { loadout: "quick", model: "opus", skills: ["a"] }, workflow: "ship", workflowRepo: true });
+    const got = editCard(t, { after: ["t2"] }, dest({ by: "coordinator", cards: cards(t), next: 3 }));
+    expect(got).toEqual({ task: { ...t, after: ["t2"] } });
+    expect(editCard(t, { equip: { loadout: "quick", model: "opus" } }, dest({ by: "coordinator", cards: cards(t), next: 3 }))).toEqual({ error: "t1.equip: a coordinator names a loadout; its fields are Eric's" });
+  });
+  test("a queued card whose loadout is gone still takes an after change", () => {
+    const t = held("t1", { equip: { loadout: "gone" }, after: ["t2"] });
+    expect(editCard(t, { after: [] }, ctx(t))).toEqual({ task: { id: "t1", title: "t1", repo: "web", note: "n", action: "ask", state: "queued", equip: { loadout: "gone" } } });
+    const away = held("t1", { repo: "vanished" });
+    expect(editCard(away, { after: ["t2"] }, ctx(away))).toEqual({ task: { ...away, after: ["t2"] } });
+  });
   test("any other state changes nothing", () => {
     const t = held("t1", { state: "running" });
     expect(editCard(t, { title: "x" }, ctx(t))).toEqual({ error: "t1 is running; only a proposed or queued card changes" });
