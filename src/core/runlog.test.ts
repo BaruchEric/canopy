@@ -5,7 +5,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, utimes, writeFile }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeOpen, DiskRunLogger, dropKept, headOf, INDEX, listKept, pruneKept, readKeptRun, readWire, rebuildIndex, RUN_FILE, RUN_ID, RUN_LOG_MAX, RunLog, WIRE, WIRE_GZ, WIRE_TICK } from "./runlog";
-import type { Run } from "./types";
+import type { CoordTask, Run } from "./types";
 
 let root = "";
 beforeAll(async () => { root = await mkdtemp(join(tmpdir(), "canopy-runlog-")); });
@@ -580,4 +580,16 @@ test("a kept coordinator keeps its cards' times and group", async () => {
   const log = open(dir, value);
   await log.settle(value);
   expect((await readKeptRun(dir, value.id))?.tasks).toEqual([{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 3, group: "g-a1b2c3d4" }]);
+});
+
+test("a kept coordinator keeps each card's loadout, workflow, after, flow, branch and limit", async () => {
+  const dir = join(root, "cardfacts");
+  const cards: CoordTask[] = [
+    { id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "done", outcome: "ready", equip: { loadout: "feature", model: "opus", effort: "high", skills: ["tdd"], mcp: ["probe"] }, workflow: "build-and-check", workflowRepo: true, flow: "f1a2b3c4", branch: "b9c8d7e6", limited: 1 },
+    { id: "t2", title: "u", repo: "repo", note: "m", action: "propose", state: "queued", equip: { loadout: "quick" }, after: ["t1"] },
+  ];
+  const value = run({ id: "coordfacts", action: "coordinate", tasks: cards });
+  const log = open(dir, value);
+  await log.settle(value);
+  expect((await readKeptRun(dir, value.id))?.tasks).toEqual(cards);
 });

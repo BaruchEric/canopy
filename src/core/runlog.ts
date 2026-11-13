@@ -8,7 +8,7 @@ import type { WireDir } from "./driver";
 import { PRIVATE_ENV, TRIGGER_ENV_PREFIX } from "./envnames";
 import { PLAIN_SETTINGS, redactArgv, redactLine, secretValues, type Secret } from "./redact";
 import { configDir } from "./store";
-import { AGENT_EFFORTS, PRIORITIES, type Harness, type KeptRunHead, type Run, type RunBranch, type RunStep } from "./types";
+import { AGENT_EFFORTS, PRIORITIES, type CardEquip, type Harness, type KeptRunHead, type Run, type RunBranch, type RunStep } from "./types";
 
 export const RUN_LOG_MAX = 50 * 1024 * 1024;
 /** Out lines carry no time of their own: one comes after a `tick` line once
@@ -127,6 +127,9 @@ function checkFacts(v: unknown, privacy: RunLogPrivacy): void {
 function snapshot(run: Run, privacy: RunLogPrivacy): Run {
   const r = (s: string): string => redactLine(s, privacy.secrets).line;
   const t = <T extends string>(s: T): T => trusted(s, privacy);
+  // a card's loadout: names and lists are text, the effort is canopy's own word
+  const cardEquip = (e: CardEquip): CardEquip => ({ ...(e.loadout !== undefined ? { loadout: r(e.loadout) } : {}), ...(e.model !== undefined ? { model: r(e.model) } : {}),
+    ...(e.effort !== undefined ? { effort: t(e.effort) } : {}), ...(e.skills ? { skills: e.skills.map(r) } : {}), ...(e.mcp ? { mcp: e.mcp.map(r) } : {}) });
   const safe: Run = {
     id: t(run.id), repoId: t(run.repoId), action: r(run.action), verb: r(run.verb), progress: r(run.progress),
     expectsChange: run.expectsChange, chat: run.chat, harness: t(run.harness), note: r(run.note), status: t(run.status),
@@ -171,7 +174,10 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
     };
   }
   if (run.todos) safe.todos = run.todos.map((todo) => ({ id: t(todo.id), subject: r(todo.subject), status: t(todo.status), ...(todo.active !== undefined ? { active: r(todo.active) } : {}) }));
-  if (run.tasks) safe.tasks = run.tasks.map((task) => ({ id: t(task.id), title: r(task.title), repo: t(task.repo), note: r(task.note), action: t(task.action), state: t(task.state), ...(task.run ? { run: t(task.run) } : {}), ...(task.work ? { work: t(task.work) } : {}), ...(task.times !== undefined ? { times: task.times } : {}), ...(task.group ? { group: t(task.group) } : {}), ...(task.outcome !== undefined ? { outcome: r(task.outcome) } : {}) }));
+  if (run.tasks) safe.tasks = run.tasks.map((task) => ({ id: t(task.id), title: r(task.title), repo: t(task.repo), note: r(task.note), action: t(task.action), state: t(task.state), ...(task.run ? { run: t(task.run) } : {}), ...(task.work ? { work: t(task.work) } : {}), ...(task.times !== undefined ? { times: task.times } : {}), ...(task.group ? { group: t(task.group) } : {}), ...(task.outcome !== undefined ? { outcome: r(task.outcome) } : {}),
+    ...(task.limited !== undefined ? { limited: task.limited } : {}), ...(task.equip ? { equip: cardEquip(task.equip) } : {}),
+    ...(task.workflow !== undefined ? { workflow: r(task.workflow) } : {}), ...(task.workflowRepo ? { workflowRepo: true as const } : {}),
+    ...(task.after ? { after: task.after.map(t) } : {}), ...(task.flow ? { flow: t(task.flow) } : {}), ...(task.branch ? { branch: t(task.branch) } : {}) }));
   const prompt = run.prompt;
   if (prompt?.kind === "proposal") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), plan: r(prompt.plan), auto: prompt.auto };
   if (prompt?.kind === "permission") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), tool: r(prompt.tool), title: r(prompt.title), detail: r(prompt.detail),
