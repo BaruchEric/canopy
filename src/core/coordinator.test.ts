@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, coordWorkflows, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -677,5 +677,16 @@ describe("Eric's standing rules in the brief", () => {
   test("none, or blank, leaves the brief", () => {
     expect(withStandingRules("BRIEF", null)).toBe("BRIEF");
     expect(withStandingRules("BRIEF", " \n\t ")).toBe("BRIEF");
+  });
+});
+
+describe("the coordinator's brief", () => {
+  test("goalRepoLine names the repo and says not to ask", () => {
+    expect(goalRepoLine("playground/canopy-trigger-test")).toBe("Eric started this goal at the repo playground/canopy-trigger-test. Plan its cards there unless the goal names other repos; do not ask which repo.");
+  });
+  test("the bundled brief leaves run out of the plan body", async () => {
+    const text = await Bun.file(new URL("../../lib/coordinator.md", import.meta.url)).text();
+    expect(text).not.toContain('"run": "<your run id>"');
+    expect(text).toContain('leave "run" out');
   });
 });

@@ -261,7 +261,7 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
-import { coordWorkflows, withStandingRules, type ChildBranch } from "../core/coordinator";
+import { coordWorkflows, goalRepoLine, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -1669,7 +1669,7 @@ const COORD_BRIEF = join(import.meta.dir, "../../lib/coordinator.md");
 
 /** The coordinator's brief, the prompt it starts from: the config dir's
  *  copy, else the bundled one, else the action's own line. */
-async function coordinatorBrief(): Promise<string> {
+async function coordinatorBrief(repo: Repo): Promise<string> {
   let brief = "";
   for (const file of [join(configDir(), "coordinator.md"), COORD_BRIEF]) {
     try {
@@ -1679,7 +1679,7 @@ async function coordinatorBrief(): Promise<string> {
     }
     if (brief) break;
   }
-  return withStandingRules(brief || ACTIONS.coordinate.task, await standingRules());
+  return withStandingRules(`${brief || ACTIONS.coordinate.task}\n\n${goalRepoLine(repo.id)}`, await standingRules());
 }
 
 /** Eric's standing rules for every manager, `~/.claude/manager.md`, read at
@@ -1721,7 +1721,7 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
   // Claude Code alone, in bypass mode; a route's extra flags are dropped,
   // since they could change the mode or bring MCP servers in
   const agent: AgentSettings = { ...agentFor(await loadConfig(), repo.path, "coordinate"), harness: "claude", yolo: true, extra: "" };
-  const spec: ActionSpec = { ...ACTIONS.coordinate, task: await coordinatorBrief() };
+  const spec: ActionSpec = { ...ACTIONS.coordinate, task: await coordinatorBrief(repo) };
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
   const id = crypto.randomUUID().slice(0, 8);
   // its own folder under the coord runner's seeds, the same path in both

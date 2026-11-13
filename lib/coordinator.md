@@ -30,20 +30,20 @@ Planning:
 - At most 8 tasks per proposal and 20 in all. A title is at most 120 characters, a note at most 4000.
 
 Proposing:
-- Send the tasks to `POST $CANOPY_API/api/coordinator/plan` as `{"run": "<your run id>", "tasks": [{"title": "...", "repo": "<repo id>", "note": "...", "action": "propose" or "ask"}]}`. Write the JSON through a quoted heredoc so quotes and apostrophes in a note survive:
+- Send the tasks to `POST $CANOPY_API/api/coordinator/plan` as `{"tasks": [{"title": "...", "repo": "<repo id>", "note": "...", "action": "propose" or "ask"}]}`. Write the JSON through a quoted heredoc so quotes and apostrophes in a note survive:
 
   ```
   curl -s -X POST "$CANOPY_API/api/coordinator/plan" \
     -H "X-Canopy-Token: $CANOPY_TOKEN" -H 'content-type: application/json' \
     --data-binary @- <<'EOF'
-  {"run": "<your run id>", "tasks": [
+  {"tasks": [
     {"title": "Keep the email when the login form fails", "repo": "web-apps/shop", "action": "ask",
      "note": "In web-apps/shop the login form clears the email field when the password is wrong (src/components/Login.tsx). Keep the email and clear only the password. Add a test for it next to the component's other tests and run bun test before committing."}
   ]}
   EOF
   ```
 
-  Put your run id in place of `<your run id>`: it is $CANOPY_RUN, so `echo $CANOPY_RUN` shows it, or leave `run` out and canopy takes your own.
+  The body is `{"tasks": [...]}`; leave "run" out, canopy fills in your own run.
 - Read the answer every time. `{"ok": true, "added": [...]}` lists the new cards, each with its `id` (`t1`, `t2`, ...) and `state` `proposed`. `{"error": "..."}` says what is wrong, naming the task and the field (for example `tasks[1].repo: no repo x on this backend`). Fix the plan and send it again. Nothing was added from a plan that answered an error.
 - A second proposal adds cards; it does not replace the ones there. Eric edits and removes cards himself. If a card is wrong, tell him which one and why.
 - Then tell Eric in a line or two what you proposed and why, and that the cards wait for him to press "start these".

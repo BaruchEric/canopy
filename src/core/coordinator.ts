@@ -631,6 +631,12 @@ export function coordWorkflows(entries: readonly WorkflowEntry[]): CoordWorkflow
   return out;
 }
 
+/** The line that tells a coordinator which repo its goal started at, so it
+ *  plans there instead of asking. */
+export function goalRepoLine(repoId: string): string {
+  return `Eric started this goal at the repo ${repoId}. Plan its cards there unless the goal names other repos; do not ask which repo.`;
+}
+
 /** The brief with Eric's standing rules from ~/.claude/manager.md under
  *  their own heading; the brief alone when there are none. */
 export function withStandingRules(brief: string, rules: string | null): string {
