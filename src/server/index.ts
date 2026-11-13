@@ -261,7 +261,7 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
-import type { ChildBranch } from "../core/coordinator";
+import { coordWorkflows, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -1670,15 +1670,33 @@ const COORD_BRIEF = join(import.meta.dir, "../../lib/coordinator.md");
 /** The coordinator's brief, the prompt it starts from: the config dir's
  *  copy, else the bundled one, else the action's own line. */
 async function coordinatorBrief(): Promise<string> {
+  let brief = "";
   for (const file of [join(configDir(), "coordinator.md"), COORD_BRIEF]) {
     try {
-      const text = (await readFile(file, "utf8")).trim();
-      if (text) return text;
+      brief = (await readFile(file, "utf8")).trim();
     } catch {
       // the next one
     }
+    if (brief) break;
   }
-  return ACTIONS.coordinate.task;
+  return withStandingRules(brief || ACTIONS.coordinate.task, await standingRules());
+}
+
+/** Eric's standing rules for every manager, `~/.claude/manager.md`, read at
+ *  each coordinator start so an edit applies to the next goal. A missing
+ *  file is no rules; any other read error is logged once and is no rules. */
+let rulesFailed = false;
+async function standingRules(): Promise<string | null> {
+  try {
+    return await readFile(join(process.env["HOME"]?.trim() || homedir(), ".claude", "manager.md"), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    if (!rulesFailed) {
+      rulesFailed = true;
+      console.error(`coordinator: could not read ~/.claude/manager.md, so no standing rules apply: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return null;
+  }
 }
 
 /** Starts a coordinator at a repo (FR-010). It holds no repo, so no busy or
@@ -4276,6 +4294,7 @@ async function handleApi(
   const rangerRes = await state.ranger.handle(req, url, caller?.kind === "run" ? caller.run ?? "" : undefined);
   if (rangerRes) return rangerRes;
   if (path === "/api/loadouts" && method === "GET") return json(state.kit.loadouts());
+  if (path === "/api/coordinator/workflows" && method === "GET") return json(coordWorkflows(await loadWorkflows({ path: "", host: "none" })));
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
   const groupsRes = await state.groups.handle(req, url);

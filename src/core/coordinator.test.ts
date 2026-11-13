@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, coordWorkflows, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
-import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "./types";
+import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch, Workflow, WorkflowEntry, WorkflowSource } from "./types";
 
 const known = (repo: string): "local" | "remote" | null => (repo === "web" || repo === "api" ? "local" : repo === "mini:box" ? "remote" : null);
 const task = (over: Record<string, unknown> = {}) => ({ title: "fix the login", repo: "web", note: "the login form drops the email", action: "propose", ...over });
@@ -547,5 +547,61 @@ describe("the notes a card sends", () => {
     expect(n.endsWith(") landed; cards that wait for it can start")).toBe(true);
     expect(n).toBe("canopy: task t1 (tidy the docs) landed; cards that wait for it can start");
     expect(blockedNote(t, "waits for t1, which failed")).toBe("canopy: task t2 (tidy the docs) waits for t1, which failed; it stays queued until Eric takes its after off or removes it");
+  });
+});
+
+describe("what the coordinator reads of workflows", () => {
+  const entry = (name: string, source: WorkflowSource, extra: Partial<Workflow> = {}): WorkflowEntry => ({
+    ok: true,
+    workflow: {
+      name,
+      label: `Label ${name}`,
+      verb: name,
+      blurb: `does ${name}`,
+      when: "always",
+      expectsChange: true,
+      notePlaceholder: "",
+      noteRequired: false,
+      steps: [
+        { name: "build", tools: [], turns: 5, check: "bun test", gate: "continue", body: "SECRET BODY", retries: 0, back: "build", evidence: [], after: [], mode: "auto" },
+        { name: "look", tools: [], turns: 5, check: null, gate: "ask", body: "more", retries: 0, back: "look", evidence: [], after: ["build"], mode: "manual" },
+      ],
+      budget: null,
+      source,
+      file: `/abs/${name}.md`,
+      ...extra,
+    } as Workflow,
+  });
+  test("only parsed, listed, bundled and user entries, with no file path and no step body", () => {
+    const out = coordWorkflows([
+      entry("ship", "bundled"),
+      entry("mine", "user"),
+      entry("theirs", "repo"),
+      entry("scout", "bundled", { listed: false }),
+      { ok: false, name: "broken", source: "user", file: "/abs/broken.md", error: "bad" },
+    ]);
+    expect(out.map((w) => w.name)).toEqual(["ship", "mine"]);
+    expect(out[0]).toEqual({
+      name: "ship",
+      label: "Label ship",
+      blurb: "does ship",
+      source: "bundled",
+      steps: [
+        { name: "build", gate: "continue", mode: "auto" },
+        { name: "look", gate: "ask", mode: "manual" },
+      ],
+    });
+    expect(JSON.stringify(out)).not.toContain("SECRET BODY");
+    expect(JSON.stringify(out)).not.toContain("/abs/");
+  });
+});
+
+describe("Eric's standing rules in the brief", () => {
+  test("they follow the brief under their own heading, trimmed", () => {
+    expect(withStandingRules("BRIEF", "  Prefer the quick loadout.\n")).toBe("BRIEF\n\n## Eric's standing rules\n\nPrefer the quick loadout.");
+  });
+  test("none, or blank, leaves the brief", () => {
+    expect(withStandingRules("BRIEF", null)).toBe("BRIEF");
+    expect(withStandingRules("BRIEF", " \n\t ")).toBe("BRIEF");
   });
 });

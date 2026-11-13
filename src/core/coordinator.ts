@@ -6,7 +6,7 @@
 import { GROUP_MAX, type RunGroup } from "./group";
 import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
-import { isRunActive, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Run, type RunBranchState } from "./types";
+import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Run, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -523,3 +523,33 @@ export const blockedNote = (task: CoordTask, words: string): string =>
 /** The note a hold or a resume sends. */
 export const holdNote = (held: boolean): string =>
   held ? "canopy: Eric held the goal; no new card starts until he resumes it" : "canopy: Eric resumed the goal; queued cards start again";
+
+/** A workflow as the coordinator reads it: what a card may name and what it
+ *  will run, with no file path and no step prompt. */
+export interface CoordWorkflow {
+  name: string;
+  label: string;
+  blurb: string;
+  source: "bundled" | "user";
+  steps: { name: string; gate: GateKind; mode: StepMode }[];
+}
+
+/** The workflows a coordinator may name: parsed, listed, bundled and user
+ *  entries. A repo's own workflow is Eric's to set from the page. */
+export function coordWorkflows(entries: readonly WorkflowEntry[]): CoordWorkflow[] {
+  const out: CoordWorkflow[] = [];
+  for (const e of entries) {
+    if (!e.ok) continue;
+    const w = e.workflow;
+    if (w.listed === false || (w.source !== "bundled" && w.source !== "user")) continue;
+    out.push({ name: w.name, label: w.label, blurb: w.blurb, source: w.source, steps: w.steps.map((st) => ({ name: st.name, gate: st.gate, mode: st.mode })) });
+  }
+  return out;
+}
+
+/** The brief with Eric's standing rules from ~/.claude/manager.md under
+ *  their own heading; the brief alone when there are none. */
+export function withStandingRules(brief: string, rules: string | null): string {
+  const text = rules?.trim();
+  return text ? `${brief}\n\n## Eric's standing rules\n\n${text}` : brief;
+}

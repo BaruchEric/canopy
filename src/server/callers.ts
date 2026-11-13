@@ -580,7 +580,7 @@ export class CallerGate {
         ? "a call on the coordinator's listener needs a coordinator's token"
         : kind === "run"
           ? "a run's token reads the board and starts, says to and notes on its own run's work, and nothing else; landing, pushing and answering prompts are yours to ask of the user"
-          : "a coordinator's token reads the tree, runs and landing queue and posts its plan, and nothing else";
+          : "a coordinator's token reads the tree, runs, landing queue, loadouts and the workflows it may name, posts its plan, and nothing else";
     return Response.json({ error }, { status: 403 });
   }
 

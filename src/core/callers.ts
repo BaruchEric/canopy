@@ -48,7 +48,15 @@ export const KIND_RIGHTS: Record<CallerKind, readonly Right[]> = {
  *  its tools make and the four plan routes, each of which also holds a run's
  *  token to its own run in its handler (FR-038). */
 export const LANES: Partial<Record<CallerKind, ReadonlySet<string>>> = {
-  coordinator: new Set(["GET /api/about", "GET /api/tree", "GET /api/runs", "GET /api/landing", "POST /api/coordinator/plan"]),
+  coordinator: new Set([
+    "GET /api/about",
+    "GET /api/tree",
+    "GET /api/runs",
+    "GET /api/landing",
+    "GET /api/loadouts",
+    "GET /api/coordinator/workflows",
+    "POST /api/coordinator/plan",
+  ]),
   run: new Set([
     "GET /api/tree",
     "GET /api/runs",
@@ -127,6 +135,8 @@ const RULES: readonly Rule[] = [
   // plan, so the rest keep these routes; a run's handler holds it to its own
   // run, and the coordinator's lane leaves these out
   { methods: POST, paths: ["runs/child", "runs/say", "ranger/wakes", "work/note"], right: "plan" },
+  // what a card may name: the workflows a coordinator is allowed, a plain read
+  { methods: ["GET"], paths: ["coordinator/workflows"], right: "read" },
   { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
   { methods: POST, paths: ["flows/resume", "flows/stop", "fleet/stop", "jobs/stop"], right: "operate" },

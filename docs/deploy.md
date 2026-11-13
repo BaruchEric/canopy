@@ -1129,8 +1129,9 @@ a coordinator's token holds `read`, so without the lane the agent in `coord`
 could read everything any token reads: every live run's steps through
 `GET /api/runs`, the notes, the event stream. On the coordinator's listener a
 call must carry a coordinator's token and may only `GET /api/about`,
-`/api/tree`, `/api/runs` and `/api/landing` and `POST
-/api/coordinator/plan`, the reads the brief names and the plan. Anything
+`/api/tree`, `/api/runs`, `/api/landing`, `/api/loadouts` and
+`/api/coordinator/workflows` and `POST /api/coordinator/plan`, the reads
+the brief names and the plan. Anything
 else there is a 403, `/api/about` with no token included, and the listener
 serves no event stream, socket, static file or Library. A coordinator's
 token keeps to the same list on canopy's main port too. Unset, or not a

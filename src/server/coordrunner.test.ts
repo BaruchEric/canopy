@@ -249,6 +249,31 @@ describe("with a coordinator's runner", () => {
     }
   });
 
+  test("the coordinator's prompt carries Eric's standing rules from ~/.claude/manager.md, read at each start", async () => {
+    const home = join(scratch, "rules-home");
+    await mkdir(join(home, ".claude"), { recursive: true });
+    const before = process.env["HOME"];
+    process.env["HOME"] = home;
+    const start = async (): Promise<string> => {
+      const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
+      expect(res.status).toBe(201);
+      const run = (await res.json()) as Run;
+      const message = s.made.at(-1)?.message ?? "";
+      await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+      return message;
+    };
+    try {
+      expect(await start()).not.toContain("## Eric's standing rules");
+      await writeFile(join(home, ".claude", "manager.md"), "Prefer the quick loadout for docs.\n");
+      const message = await start();
+      expect(message).toContain("## Eric's standing rules");
+      expect(message).toContain("Prefer the quick loadout for docs.");
+    } finally {
+      if (before === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = before;
+    }
+  });
+
   test("a coordinate run starts in a folder of its own under the seeds, 0700, with the address and a token", async () => {
     const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
     expect(res.status).toBe(201);
@@ -336,9 +361,13 @@ describe("the coordinator's lane, on its own listener", () => {
   });
 
   test("a coordinator's token reads the brief's routes and posts its plan there, and nothing else", async () => {
-    for (const path of ["/api/about", "/api/tree", "/api/runs", "/api/landing"]) {
+    for (const path of ["/api/about", "/api/tree", "/api/runs", "/api/landing", "/api/loadouts", "/api/coordinator/workflows"]) {
       expect([path, (await call(s, path, token, {}, lanePort(s))).status]).toEqual([path, 200]);
     }
+    const listed = (await (await call(s, "/api/coordinator/workflows", token, {}, lanePort(s))).json()) as { name: string; source: string; file?: unknown; steps: { body?: unknown }[] }[];
+    expect(listed.length).toBeGreaterThan(0);
+    expect(listed.every((w) => (w.source === "bundled" || w.source === "user") && w.file === undefined && w.steps.every((st) => st.body === undefined))).toBe(true);
+    expect((await call(s, "/api/repos/workflows?id=app", token, {}, lanePort(s))).status).toBe(403);
     const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "app", note: "n", action: "ask" }] }, token, lanePort(s));
     expect(plan.status).toBe(200);
     for (const path of ["/api/repos/diff?id=app&untracked=1&file=.env", "/api/flows", "/api/events", "/library", "/"]) {

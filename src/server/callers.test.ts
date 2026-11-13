@@ -531,7 +531,7 @@ describe("the coordinator's lane", () => {
   });
 
   test("LANES pins both kinds, and a run's token keeps to its own on the main listener", () => {
-    expect([...(LANES.coordinator ?? [])].sort()).toEqual(["GET /api/about", "GET /api/landing", "GET /api/runs", "GET /api/tree", "POST /api/coordinator/plan"]);
+    expect([...(LANES.coordinator ?? [])].sort()).toEqual(["GET /api/about", "GET /api/coordinator/workflows", "GET /api/landing", "GET /api/loadouts", "GET /api/runs", "GET /api/tree", "POST /api/coordinator/plan"]);
     expect([...(LANES.run ?? [])].sort()).toEqual([
       "GET /api/auth",
       "GET /api/health",
