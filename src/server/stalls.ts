@@ -9,11 +9,12 @@
  *    fix) follows the resumed run;
  *  - a second stall on the same branch, a run with no Claude session, or a
  *    resume that would not start is left for Eric (`stalledWhy`);
- *  - a flow's step, a job in the checkout, a coordinator's child and a
- *    best-of-N member are only stopped: a flow is picked up by hand, a
- *    checkout job has no branch to carry on, and a child or a member has
- *    an owner (the card, the group) that reads the stop itself and would
- *    not see a run resumed here.
+ *  - a flow's step, a job in the checkout, the child of a coordinator still
+ *    going and a best-of-N member are only stopped: a flow is picked up by
+ *    hand, a checkout job has no branch to carry on, and a child or a
+ *    member has an owner (the card, the group) that reads the stop itself
+ *    and would not see a run resumed here. A child whose coordinator has
+ *    ended has no owner left, so it is resumed like any branch run.
  *
  *  The count is the branch's landing record's `stalls`, so it holds across
  *  every run on the branch, its PR's fix runs included. */
@@ -36,6 +37,8 @@ export interface StallDeps {
   carried: (from: Run, to: Run) => void;
   /** the stalled run is left for Eric, with why */
   left: (run: Run, why: string) => void;
+  /** whether this run is a coordinator still going, whose cards read their children's stops */
+  coordinatorActive: (id: string) => boolean;
   now?: () => number;
   /** how long a run may be quiet; tests shorten it */
   after?: number;
@@ -112,11 +115,13 @@ export class StallHub {
   private plan(run: Run): Plan {
     const b = run.branch;
     // a flow's step stops its flow, which is picked up by hand; a job in
-    // the checkout has no branch to carry on; a coordinator's child and a
-    // best-of-N member belong to an owner that reads the stop itself, and
-    // a resume here would work their branch as an orphan it never sees. A
-    // run's child (it has a depth) has no such owner, and a resume keeps it one
-    if (!b || run.flowStep || b.held || (run.parent && !run.depth) || run.group) return { kind: "none" };
+    // the checkout has no branch to carry on; the child of a coordinator
+    // still going and a best-of-N member belong to an owner that reads the
+    // stop itself, and a resume here would work their branch as an orphan
+    // it never sees. A run's child (it has a depth) has no such owner, and a
+    // resume keeps it one; nor has a child whose coordinator has ended
+    const owned = run.parent !== undefined && !run.depth && this.deps.coordinatorActive(run.parent);
+    if (!b || run.flowStep || b.held || owned || run.group) return { kind: "none" };
     const rec = this.deps.record(b.origin);
     if (!rec) return { kind: "none" };
     const count = this.deps.countStall(b.origin);

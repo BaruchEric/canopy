@@ -75,6 +75,8 @@ function world(over: Partial<StallDeps> = {}) {
     },
     carried: (from, to) => carried.push([from.id, to.id]),
     left: (r, why) => left.push([r.id, why]),
+    // co1 is a coordinator still going; any other parent has ended
+    coordinatorActive: (id) => id === "co1",
     ...over,
   });
   const stall = (r: Run) => {
@@ -167,5 +169,16 @@ describe("StallHub", () => {
     expect(w.resumed).toEqual([]);
     expect(w.left).toEqual([]);
     expect(w.records.get("b1")?.stalls).toBeUndefined();
+  });
+
+  test("a child whose coordinator has ended has no owner left, so it is resumed like any branch run", async () => {
+    const w = world();
+    w.stall(run("c2", { parent: "co2" }));
+    expect(w.hub.starting("c2")).toBe(true);
+    w.end("c2");
+    await w.hub.idle();
+    expect(w.resumed).toHaveLength(1);
+    expect(w.carried).toEqual([["c2", "resumed1"]]);
+    expect(w.records.get("b1")?.stalls).toBe(1);
   });
 });

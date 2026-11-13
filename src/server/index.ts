@@ -7171,6 +7171,10 @@ export async function startServer(opts: {
         const work = run.branch?.work;
         if (work) state.work.note(work, `stalled: ${why}`);
       },
+      coordinatorActive: (id) => {
+        const r = state.runner.get(id);
+        return r?.action === "coordinate" && isRunActive(r);
+      },
     }),
     coordinator: new CoordinatorHub({
       run: (id) => state.runner.get(id),
