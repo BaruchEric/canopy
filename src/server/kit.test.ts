@@ -121,6 +121,15 @@ describe("KitHub loadouts", () => {
     expect(hub.loadouts().loadouts.map((l) => l.name)).toEqual(["docs"]);
     expect(hub.info().loadouts?.loadouts.map((l) => l.name)).toEqual(["docs"]);
   });
+  test("a backend that is no kit machine still sends the loadouts to the page", async () => {
+    const { hub, events } = await setup(WITH_LOADOUTS, { self: "elsewhere" });
+    const info = await hub.scan();
+    expect(hub.machineName()).toBeNull();
+    expect(info.machines).toEqual([]);
+    expect(info.loadouts?.loadouts.map((l) => l.name)).toEqual(["docs"]);
+    const sent = events.at(-1);
+    expect(sent?.type === "kit" ? sent.kit.loadouts?.loadouts.map((l) => l.name) : null).toEqual(["docs"]);
+  });
   test("a kit.json that does not parse leaves no loadouts and says why", async () => {
     const { hub } = await setup("{ not json");
     await hub.scan();

@@ -9,7 +9,7 @@ import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, task
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
-import { equipTitle, loadoutLabel } from "../loadouts";
+import { equipTitle, loadoutLabel, loadoutsFor } from "../loadouts";
 import { planPriority, priorityTitle } from "../capacity";
 import { DEFAULT_CAPACITY, type CapacitySettings } from "../../../src/core/capacity";
 import { resolveAgent } from "../../../src/core/route";
@@ -296,17 +296,22 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const words = planWords(action, workspace);
   const coordinate = action === "coordinate";
   const agent = useStore((s) => agentFor(s, repo, coordinate ? "coordinate" : spec.mode === "chat" ? "chat" : "job", { kind: "task", name: action }));
-  const name = AGENT_NAME[agent.harness];
+  // FR-065: a named loadout from kit.json, for one plain run only
+  const loadouts = loadoutsFor(action, useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts));
+  const [loadoutPick, setLoadoutPick] = useState("");
+  const loadoutOffered = loadouts.length > 0 && !coordinate && !workspace && !repo.host && !repo.forge && times === 1;
+  // a pick that no longer fits (the list changed, or the run became a group) is not sent
+  const loadout = loadoutOffered ? loadouts.find((l) => l.name === loadoutPick) : undefined;
+  // the agent that will run: the loadout's harness replaces the route's
+  const harness = loadout?.harness ?? agent.harness;
+  const name = AGENT_NAME[harness];
   const [note, setNote] = useState("");
   const noteBox = useRef<HTMLTextAreaElement>(null);
-  const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo.id, harness: agent.harness, side: "below" });
+  const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo.id, harness, side: "below" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // null follows the route's setting, which may arrive after this sheet opens
   const [toolsPick, setToolsPick] = useState<boolean | null>(null);
-  // FR-065: a named loadout from kit.json, for one plain run only
-  const loadouts = useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts);
-  const [loadoutPick, setLoadoutPick] = useState("");
   const noteReady = !busy && (!spec.noteRequired || note.trim().length > 0);
   // a branch of its own: on for propose, off for the rest, never for a
   // workspace run or a checkout on another host or the forge; a coordinator
@@ -326,9 +331,6 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   }, [branchable, repo.id, loadTasks]);
   const [devTask, setDevTask] = useState(false);
   const startDev = branchable && onBranch && times === 1 && hasDev && devTask;
-  const loadoutOffered = (loadouts?.length ?? 0) > 0 && !coordinate && !workspace && !repo.host && !repo.forge && times === 1;
-  // a pick that no longer fits (the list changed, or the run became a group) is not sent
-  const loadout = loadoutOffered ? loadouts?.find((l) => l.name === loadoutPick) : undefined;
   const ready = noteReady && (!branchable || !onBranch || times <= free);
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
@@ -429,7 +431,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             start the dev task in the worktree
           </label>
         )}
-        {loadoutOffered && loadouts && (
+        {loadoutOffered && (
           <label className="plan-branch plan-loadout" title="Start with a named set of model, effort, skills and servers from kit.json">
             <span>loadout</span>
             <select value={loadout?.name ?? ""} onChange={(e) => setLoadoutPick(e.target.value)} aria-label="Loadout">

@@ -1,6 +1,13 @@
 // How the page words a loadout (FR-065): the plan sheet's pick and the
 // title of a run that started with one. Pure and browser-safe.
-import type { Loadout, RunEquip } from "../../src/core/types";
+import type { Loadout, RunAction, RunEquip } from "../../src/core/types";
+
+/** The loadouts the plan sheet offers for an action: plan, then build needs
+ *  Claude Code, so a propose is offered no codex loadout. */
+export function loadoutsFor(action: RunAction, loadouts: readonly Loadout[] | undefined): readonly Loadout[] {
+  if (!loadouts) return [];
+  return action === "propose" ? loadouts.filter((l) => l.harness === "claude") : loadouts;
+}
 
 /** The name, then in parentheses the harness when it is not claude and the
  *  model and effort when they are not `default`. */
