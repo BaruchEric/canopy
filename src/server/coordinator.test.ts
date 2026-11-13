@@ -6,6 +6,7 @@ import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
 import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
+import type { WorkState } from "../core/work";
 import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
 
 let runs: Map<string, Run>;
@@ -623,6 +624,45 @@ describe("capacity (FR-036 plan 2)", () => {
     h.onRun(second);
     await settled(h);
     expect([card("t1")?.state, card("t1")?.outcome]).toEqual(["failed", "the plan's usage limit, twice in a row"]);
+    // the note says what the card says, as the cards line under it does
+    const note = (await hearAll(h)).find((x) => x.startsWith("canopy: a task you started has settled"));
+    expect(note).toContain("outcome: failed");
+    expect(said.at(-1)?.cards).toBe("cards now: t1 failed");
+  });
+
+  test("a card waiting for capacity keeps the card after it waiting, not blocked; resumed and landed, the next one starts", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    coordinator({ status: "idle" });
+    const h = hub({
+      resumeChild: async (coordId, t, old) => {
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: old.branch } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const first = child("t1");
+    first.status = "limited";
+    first.endedAt = clock;
+    first.error = LIMIT;
+    first.limited = { at: clock, text: LIMIT };
+    h.onRun(first);
+    await settled(h);
+    expect([card("t1")?.state, card("t1")?.outcome, card("t1")?.limited]).toEqual(["running", "waiting for capacity (resets 15:00)", 0]);
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    h.wake(() => true);
+    await settled(h);
+    const resumed = child("t1");
+    expect(resumed.id).not.toBe(first.id);
+    branches.set(resumed.id, { verdict: "auto", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")?.state).toBe("running");
+    expect((await hearAll(h)).filter((x) => x.includes("stays queued"))).toEqual([]);
   });
 
   /** a child that hit the limit, then the runner forgot (a restart) */
@@ -807,6 +847,57 @@ describe("a card with times", () => {
     expect(heard.filter((x) => x === lateFailNote(t1, "dropped"))).toHaveLength(1);
     // a group card has no branch a run could reopen it on
     expect(heard.filter((x) => x === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+  });
+
+  test("a group card whose group needs Eric is read again: he picks a winner and lands it, and the card after it starts", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 }), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    live = group({ state: "needs-you", reason: "the reviewers split", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "needs you" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, whose group needs Eric" });
+    live = group({ state: "picked", expectedMembers: 2 });
+    h.recheck();
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "winner picked" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    live = group({ state: "landed", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")?.state).toBe("running");
+    const heard = await hearAll(h);
+    expect(heard.filter((x) => x.includes("outcome: winner picked"))).toHaveLength(1);
+    expect(heard.filter((x) => x.includes("stays queued"))).toEqual([]);
+  });
+
+  test("a group card whose group needed Eric and was dropped fails dropped, and the card after it hears it is blocked", async () => {
+    const h = groupHub();
+    coordinator({ status: "idle" });
+    await post(h, "plan", { run: "co1", tasks: [task({ action: "ask", times: 2 }), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    live = group({ state: "needs-you", reason: "the reviewers split", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    const t1 = card("t1");
+    if (!t1) throw new Error("no t1");
+    live = group({ state: "dropped", expectedMembers: 2 });
+    h.recheck();
+    await h.idle();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "dropped" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    const t2 = card("t2");
+    if (!t2) throw new Error("no t2");
+    const heard = await hearAll(h);
+    expect(heard.filter((x) => x === lateFailNote(t1, "dropped"))).toHaveLength(1);
+    expect(heard.filter((x) => x === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+    // dropped is the group's last word: read again, nothing more is said
+    h.recheck();
+    expect((await hearAll(h)).filter((x) => x === lateFailNote(t1, "dropped"))).toHaveLength(1);
   });
 
   test("a group the backend no longer keeps fails its card", async () => {
@@ -1156,6 +1247,26 @@ describe("after waits for landed", () => {
     // t1 has its branch, so a new run there may still reopen it
     expect((await hearAll(h)).filter((t) => t === blockedNote(t2, "waits for t1, which ended with no change", "t1"))).toHaveLength(1);
     expect(started.map((s) => s.task)).toEqual(["t1"]);
+  });
+
+  test("a card that settled ready reads landed off its work item once the queue has let its landed entry go", async () => {
+    let work: Record<string, WorkState> = {};
+    coordinator({ status: "idle" });
+    const h = hub({ workState: (id) => work[id] });
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "approve" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", work: "w-test2345" });
+    // it landed, and newer landings in the repo pushed its entry out of the
+    // queue's KEEP_LANDED before a recheck read it
+    work = { "w-test2345": "landed" };
+    branches.set("c1", { gone: true });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+    expect(card("t2")?.state).toBe("running");
   });
 
   test("I1: a card that settled ready whose branch Eric dropped fails dropped, and the card after it hears it is blocked", async () => {
@@ -1666,6 +1777,46 @@ describe("a card that names a workflow", () => {
     flows.clear();
     h.recheck();
     expect(card("t1")).toMatchObject({ state: "failed", outcome: "its flow is no longer kept" });
+  });
+
+  test("a flow card whose ready branch waits for Eric outside the queue settles ready once its flow is no longer kept", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    // the sort has yet to read the branch, so the card waits out the ready wait
+    branches.set("fl1", { branchState: "ready", branchEnded: clock });
+    move(h, "t1", "done", "ready");
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    // the flows keep only the newest finished records
+    flows.clear();
+    h.recheck();
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    // the sort leaves it to Eric, so nothing lands it by itself
+    branches.set("fl1", { branchState: "ready", branchEnded: clock, verdict: "approve" });
+    h.recheck();
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
+    expect((await hearAll(h)).filter((x) => x.includes("outcome: ready"))).toHaveLength(1);
+  });
+
+  test("a flow card whose flow is no longer kept and whose sort never says settles ready once the ready wait runs out", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("fl1", { branchState: "ready", branchEnded: clock });
+    move(h, "t1", "done", "ready");
+    flows.clear();
+    h.recheck();
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    clock += 1000;
+    await new Promise((r) => setTimeout(r, 1100));
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready" });
   });
 
   test("Minor 3: a flow card waiting on the queue whose flow is no longer kept settles from its branch", async () => {

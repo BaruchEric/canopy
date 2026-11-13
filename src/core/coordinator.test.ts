@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -230,6 +230,10 @@ describe("settleNote", () => {
     expect(note).toContain("outcome: waiting for capacity");
     expect(note).toContain(`result: ${text}`);
     expect(note).not.toContain("result: Partial work before the limit.");
+    // a second limit fails the card, and the note says what the card says
+    const failed = settleNote(t, child({ status: "limited", error: text, limited: { at: 3, text } }), {}, "failed");
+    expect(failed).toContain("outcome: failed");
+    expect(failed).toContain(`result: ${text}`);
   });
 
   test("a PR is named by its address, and a result keeps to one line", () => {
@@ -515,6 +519,14 @@ describe("afterWait", () => {
     expect(afterWait(t, [held("t1", { state: "failed", outcome: "dropped", branch: "br-1" })])).toEqual({ words: "waits for t1, which failed", blocked: true });
     expect(afterWait(t, [held("t1", { state: "failed", outcome: "dropped", group: "g-1" })])).toEqual({ words: "waits for t1, which failed", blocked: true });
   });
+  test("a group card whose group needs Eric does not block: he may still pick and land its winner", () => {
+    const t = held("t2", { after: ["t1"] });
+    expect(afterWait(t, [held("t1", { state: "failed", outcome: "needs you", group: "g-1" })])).toEqual({ words: "waits for t1, whose group needs Eric", blocked: false });
+    expect(groupNeedsEric(held("t1", { state: "failed", outcome: "needs you", group: "g-1" }))).toBe(true);
+    // a run's card has no group to pick from
+    expect(groupNeedsEric(held("t1", { state: "failed", outcome: "needs you" }))).toBe(false);
+    expect(afterWait(t, [held("t1", { state: "failed", outcome: "needs you" })])).toEqual({ words: "waits for t1, which failed", blocked: true });
+  });
   test("may land later is the three words Eric can still land", () => {
     expect(MAY_LAND_LATER).toEqual(["ready", "PR opened", "winner picked"]);
   });
@@ -527,6 +539,10 @@ describe("what became of a branch left to Eric", () => {
   test("landed or merged is landed, before anything else", () => {
     expect(laterOutcome({ entry: landed, gone: true })).toEqual({ state: "done", outcome: "landed" });
     expect(laterOutcome({ prMerged: true, prUrl: "u", gone: true })).toEqual({ state: "done", outcome: "landed" });
+  });
+  test("a branch whose work item closed landed landed, though the queue let its entry go", () => {
+    expect(laterOutcome({ gone: true, workLanded: true })).toEqual({ state: "done", outcome: "landed" });
+    expect(flowGoneSettled({ gone: true, workLanded: true })).toEqual({ state: "done", outcome: "landed" });
   });
   test("a branch canopy keeps no record of was dropped; a PR closed unmerged fails while the queue does not hold it", () => {
     expect(laterOutcome({ gone: true })).toEqual({ state: "failed", outcome: "dropped" });
@@ -551,6 +567,20 @@ describe("what became of a branch left to Eric", () => {
     expect(flowGoneSettled({ prUrl: "u", prClosed: true })).toBeNull();
     expect(flowGoneSettled({ verdict: "approve" })).toBeNull();
     expect(flowGoneSettled({})).toBeNull();
+    expect(flowGoneSettled({ gone: true })).toBeNull();
+  });
+  test("a flow card whose flow is gone but whose branch the queue keeps settles off the record's state, as a child's would", () => {
+    // the sort left it to Eric: it waits for him, so it settles ready
+    expect(flowGoneSettled({ branchState: "ready", verdict: "approve" }, false)).toEqual({ state: "done", outcome: "ready" });
+    // the queue takes an auto branch next, and the sort may not have read it yet
+    expect(flowGoneSettled({ branchState: "ready", verdict: "auto" }, false)).toBe("waits");
+    expect(flowGoneSettled({ branchState: "ready" }, false)).toBe("waits");
+    expect(flowGoneSettled({ branchState: "ready", openPr: true }, false)).toBe("waits");
+    // past the ready wait it settles ready whatever the sort said
+    expect(flowGoneSettled({ branchState: "ready" }, true)).toEqual({ state: "done", outcome: "ready" });
+    expect(flowGoneSettled({ branchState: "working" }, true)).toBe("waits");
+    expect(flowGoneSettled({ branchState: "nothing" })).toEqual({ state: "done", outcome: "no change" });
+    expect(flowGoneSettled({ branchState: "uncommitted" })).toEqual({ state: "failed", outcome: "uncommitted" });
   });
   test("its notes", () => {
     const t: CoordTask = { id: "t1", title: "tidy the docs", repo: "api", note: "n", action: "ask", state: "done", outcome: "ready", workflow: "review" };

@@ -568,18 +568,25 @@ for the manager to plan by area.
 
 ## Known gaps
 
-Plan 2 parked these, and plan 3 leaves them as they were. Plan 3's own two parked gaps, pickup and resume beside the PR watch's hold and the chat re-aiming at the manager when a picked worker stopped taking words, were closed on 2026-11-13.
+Plan 2 parked four gaps and plan 3 two more. All six were closed on
+2026-11-13. Plan 3's were pickup and resume beside the PR watch's hold,
+and the chat re-aiming at the manager when a picked worker stopped taking
+words. Plan 2's four:
 
-- A group card that settled "winner picked" turns failed when its group
-  later reads needs-you or dropped, and is not read again, so a winner Eric
-  lands afterwards is missed.
-- A landed entry pruned past `KEEP_LANDED` before a recheck reads as
-  dropped, so the card reads failed "dropped".
-- A pruned flow's card whose ready branch is not queued fails "its flow is
-  no longer kept" while its branch still waits for Eric.
-- A card that settled "waiting for capacity" has state failed, so a card
-  after it reads blocked "which failed" although the limit's resume revives
-  it.
+- A group card that settled "needs you", first or after "winner picked", is
+  read again on every recheck (`groupNeedsEric`): a winner Eric picks turns
+  it done "winner picked", his landing turns it landed, and a drop fails it
+  "dropped". A card waiting on it is not blocked meanwhile.
+- A landed entry the queue prunes past `KEEP_LANDED` no longer reads as
+  dropped: the hub reads the card's work item, which the queue closes
+  landed and which outlives the entry (`workLanded`).
+- A pruned flow's card whose branch the queue still keeps settles off the
+  record's branch state (`branchState`, the ready wait from `branchEnded`),
+  so a ready branch left to Eric settles ready.
+- A card whose child hit the limit was never failed: it stays running with
+  `limited: 0`, and a card after it reads "waits for t1", not blocked. A
+  hub test now pins that. The real slip was the second limit's note, which
+  said "waiting for capacity" for a failed card; it says failed now.
 
 ## Calls Claude made
 

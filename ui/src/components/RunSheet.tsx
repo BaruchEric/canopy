@@ -646,6 +646,9 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const now = useTick(active);
   const elapsed = (run.endedAt ?? now) - run.startedAt;
   const [error, setError] = useState<string | null>(null);
+  // ending a coordinator ends its goal, so it takes a second press, as the
+  // manager page's end goal does
+  const [ending, setEnding] = useState(false);
 
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
@@ -762,7 +765,17 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             fork
           </button>
         )}
-        {active ? (
+        {active && isCoordinator(run) ? (
+          <button
+            type="button"
+            className={`mini${ending ? " mgr-end" : ""}`}
+            title={ending ? "Stops the coordinator; its cards already running go on" : "Stop the coordinator. A second press ends it"}
+            onClick={() => (ending ? void act(() => stopRun(run.id)) : setEnding(true))}
+            onBlur={() => setEnding(false)}
+          >
+            {ending ? "press again to end" : "end goal"}
+          </button>
+        ) : active ? (
           <button
             type="button"
             className="mini"

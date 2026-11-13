@@ -287,11 +287,16 @@ export const cardLanded = (t: Pick<CoordTask, "state" | "outcome">): boolean => 
  *  has no branch of its own to match. */
 const mayReopen = (c: CoordTask): boolean => c.branch !== undefined && c.outcome !== "dropped";
 
+/** A group card that settled "needs you": its group waits on Eric, who may
+ *  still pick a winner and land it, so the hub reads the card again. */
+export const groupNeedsEric = (c: Pick<CoordTask, "group" | "state" | "outcome">): boolean => c.group !== undefined && c.state === "failed" && c.outcome === "needs you";
+
 /** What a card waits for, in words, or null when it waits for nothing (no
  *  `after`, or every card named has landed). `blocked` says a card it waits
  *  for will not land by itself: it failed, ended done without landing (no
- *  change), was dropped or was removed. `reopens` names that card when a
- *  new run on its branch may still reopen it. */
+ *  change), was dropped or was removed. A group card that needs Eric is not
+ *  blocked, since he may still pick its winner and land it. `reopens` names
+ *  that card when a new run on its branch may still reopen it. */
 export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean; reopens?: string } | null {
   const open = (task.after ?? []).filter((id) => {
     const c = cards.find((x) => x.id === id);
@@ -302,6 +307,8 @@ export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words
     const c = cards.find((x) => x.id === id);
     if (!c) return { words: `waits for ${id}, which was removed`, blocked: true };
     const reopens = mayReopen(c) ? { reopens: id } : {};
+    // Eric picks a winner, or lands one, and the card is read again
+    if (c.state === "failed" && groupNeedsEric(c)) return { words: `waits for ${id}, whose group needs Eric`, blocked: false };
     if (c.state === "failed") return { words: `waits for ${id}, which failed`, blocked: true, ...reopens };
     if (c.state === "dropped") return { words: `waits for ${id}, which was dropped`, blocked: true };
     if (c.state === "done" && !(MAY_LAND_LATER as readonly string[]).includes(c.outcome ?? "")) {
@@ -404,6 +411,14 @@ export interface ChildBranch extends ChildLanding {
   gone?: true;
   /** the PR the branch opened closed without merging */
   prClosed?: true;
+  /** the landing record's branch state and its last run's end, while the
+   *  queue keeps the record */
+  branchState?: RunBranchState;
+  branchEnded?: number;
+  /** the card's work item closed landed (FR-037). The item outlives the
+   *  queue's landed entry, which goes past `KEEP_LANDED`, so a branch with no
+   *  record that landed is not read as dropped. */
+  workLanded?: true;
 }
 
 /** Whether a child has settled for its card and its note, and how. A child
@@ -441,7 +456,7 @@ export const MAY_LAND_LATER: readonly ChildOutcomeWord[] = ["ready", "PR opened"
  *  still land. A branch with a PR is the PR watch's to say: a merge forgets
  *  the record before the watch reads merged. */
 export function laterOutcome(b: ChildBranch): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
-  if (b.entry?.state === "landed" || b.prMerged) return { state: "done", outcome: "landed" };
+  if (b.entry?.state === "landed" || b.prMerged || b.workLanded) return { state: "done", outcome: "landed" };
   if (b.gone && !b.prUrl) return { state: "failed", outcome: "dropped" };
   if (b.prClosed && !(b.entry && inQueue(b.entry))) return { state: "failed", outcome: "PR closed" };
   return null;
@@ -450,14 +465,18 @@ export function laterOutcome(b: ChildBranch): { state: "done" | "failed"; outcom
 /** How a flow card settles once its flow's record is gone (the flows keep
  *  only the newest finished ones) while it waited on the landing queue,
  *  read off its branch alone: landed, sent back and a PR open settle it,
- *  an entry still in the queue `waits`, and anything else is null, which
- *  says nothing is known. */
-export function flowGoneSettled(b: ChildBranch): { state: "done" | "failed"; outcome: ChildOutcomeWord } | "waits" | null {
-  if (b.entry?.state === "landed" || b.prMerged) return { state: "done", outcome: "landed" };
+ *  and an entry still in the queue `waits`. A branch the queue still keeps a
+ *  record of, with no entry and no PR, settles off the record's state as a
+ *  child's does (`childSettled`, `overdue` counted from the record's last
+ *  run), so a ready branch left to Eric settles ready. Anything else is
+ *  null, which says nothing is known. */
+export function flowGoneSettled(b: ChildBranch, overdue = true): { state: "done" | "failed"; outcome: ChildOutcomeWord } | "waits" | null {
+  if (b.entry?.state === "landed" || b.prMerged || b.workLanded) return { state: "done", outcome: "landed" };
   if (b.entry && inQueue(b.entry)) return "waits";
   if (b.entry && sentBack(b.entry)) return { state: "failed", outcome: "sent back" };
   if (b.prUrl && !b.prClosed) return { state: "done", outcome: "PR opened" };
-  return null;
+  if (b.gone || b.entry || b.prUrl || !b.branchState) return null;
+  return readySettled(branchOutcome(b.branchState, b, false), b, overdue) ?? "waits";
 }
 
 /** How a flow ended, as its card's outcome. Null while the flow works, waits
@@ -551,9 +570,10 @@ export function groupNote(task: CoordTask, group: RunGroup, outcome: ChildOutcom
 /** The user message a settled child sends into its coordinator's chat: the
  *  card, how it went, the child's result line (its error when it has none),
  *  and where its work is: the PR's address, or the branch and its landing
- *  state. */
-export function settleNote(task: CoordTask, run: Run, landing: ChildLanding = {}): string {
-  const how = childOutcome(run, landing);
+ *  state. `outcome` stands in for the child's own word where the card's
+ *  differs: a second limit fails the card, while the run reads limited. */
+export function settleNote(task: CoordTask, run: Run, landing: ChildLanding = {}, outcome?: ChildOutcomeWord): string {
+  const how = outcome ? { outcome } : childOutcome(run, landing);
   const result = run.status === "limited"
     ? run.limited?.text?.trim() || run.error?.trim() || run.result?.text?.trim() || ""
     : run.result?.text?.trim() || run.error?.trim() || "";

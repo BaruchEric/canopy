@@ -740,12 +740,15 @@ export class Runner {
 
   /** Stops a run. A chat between turns ends politely: the driver closes
    *  the session, the agent exits on its own, and the chat is done rather
-   *  than stopped. A chat that never started the agent is simply done. */
-  stop(id: string): Run {
+   *  than stopped. A chat that never started the agent is simply done.
+   *  `by` says who asked ("from Mac, Chrome", "by the sweep"), as a note on
+   *  the timeline the run log keeps, so an ended run says why it ended. */
+  stop(id: string, by?: string): Run {
     const live = this.live.get(id);
     if (!live) throw new Error(`unknown run: ${id}`);
     const run = live.ctx.run;
     if (!isRunActive(run)) return run;
+    if (by) live.ctx.note(`${run.status === "idle" ? "ended" : "stopped"} ${by}`);
     // a branch run still setting up has no driver to stop yet
     if (live.preparing) {
       live.ctx.finish("stopped");
@@ -863,7 +866,7 @@ export class Runner {
   stopAll(): void {
     for (const h of this.holds) h.cancel();
     for (const l of this.live.values()) {
-      if (isRunActive(l.ctx.run)) this.stop(l.ctx.run.id);
+      if (isRunActive(l.ctx.run)) this.stop(l.ctx.run.id, "when canopy stopped");
     }
   }
 

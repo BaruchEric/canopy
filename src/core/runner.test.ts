@@ -437,8 +437,10 @@ describe("the run log (FR-043)", () => {
     const { dir, log } = await disk(); let starts = 0;
     class NotStarted extends WireDriver { override start(ctx: DriveCtx, message: string) { starts++; super.start(ctx, message); } }
     const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver: () => new NotStarted(), log });
-    const chat = runner.start(repo, "chat", ACTIONS.chat, ""); runner.stop(chat.id);
+    const chat = runner.start(repo, "chat", ACTIONS.chat, ""); runner.stop(chat.id, "by the sweep");
     expect((await lines(dir, chat.id)).at(-1)).toMatchObject({ status: "done" });
+    // whoever ended it is on the timeline the run log keeps
+    expect(chat.steps.map((st) => [st.kind, st.text])).toEqual([["note", "ended by the sweep"]]);
     const failed = runner.start(repo, "ask", ACTIONS.ask, "inspect", DEFAULT_AGENT, undefined, undefined, { branch: { name: "run/setup", target: "main", base: "base", dir: "/owned/work", origin: "setup", state: "working" }, prepare: async () => { throw new Error("fixture setup error"); } });
     expect((await lines(dir, failed.id)).at(-1)).toMatchObject({ status: "failed" });
     expect(starts).toBe(0);

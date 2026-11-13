@@ -92,6 +92,14 @@ describe("a coordinator's sheet, wide", () => {
     expect(tag(html, '<div class="composer"')).not.toContain("hidden");
   });
 
+  test("ending the goal takes a second press, as on the manager page; a chat's end chat stays one", () => {
+    screen(false);
+    const html = sheet(coordinator({ status: "idle" }));
+    expect(html).toContain('title="Stop the coordinator. A second press ends it">end goal</button>');
+    expect(html).not.toContain(">end chat</button>");
+    expect(sheet(coordinator({ status: "idle", action: "chat" }))).toContain(">end chat</button>");
+  });
+
   test("folded, only the head shows, start these still in it", () => {
     const layout: CoordLayout = { kind: "wide", folded: true, onFold: () => {} };
     const html = renderToStaticMarkup(<CoordTasks run={coordinator()} act={async () => {}} layout={layout} />);

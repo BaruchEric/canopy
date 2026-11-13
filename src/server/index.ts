@@ -2289,8 +2289,9 @@ function branchSlotsTaken(state: ServerState, repoId: string): number {
 
 /** What the landing queue and the PR watch know of a branch by its origin,
  *  for a coordinator's card: its queue entry, its PR and whether that PR
- *  merged, the sort's verdict, and whether it opens a PR in place of the
- *  queue. A merged PR's watch stays for the list after its record goes. */
+ *  merged, the sort's verdict, whether it opens a PR in place of the queue,
+ *  and the record's branch state and last run's end while the queue keeps
+ *  the record. A merged PR's watch stays for the list after its record goes. */
 function branchFacts(state: ServerState, origin: string): ChildBranch {
   const rec = state.landing.record(origin);
   const entries = state.landing.info().entries;
@@ -2303,6 +2304,7 @@ function branchFacts(state: ServerState, origin: string): ChildBranch {
     ...(pr?.state?.status === "closed" ? { prClosed: true as const } : {}),
     ...(rec?.review ? { verdict: rec.review.verdict } : {}),
     ...(rec?.openPr ? { openPr: true } : {}),
+    ...(rec ? { branchState: rec.state, ...(rec.endedAt !== undefined ? { branchEnded: rec.endedAt } : {}) } : {}),
     // dropped with its worktree, or landed or merged (which the entry or the PR says)
     ...(!rec ? { gone: true as const } : {}),
   };
@@ -5066,7 +5068,8 @@ async function handleApi(
   if (path === "/api/runs/stop" && method === "POST") {
     const b = (await req.json()) as { id?: unknown };
     if (typeof b.id !== "string") return json({ error: "missing run id" }, 400);
-    return json(state.runner.stop(b.id));
+    // the kept timeline says who ended it ("ended from Mac, Chrome")
+    return json(state.runner.stop(b.id, caller ? `from ${caller.label}` : undefined));
   }
   if (path === "/api/runs/fork" && method === "POST") {
     const b = await objectBody(req);
@@ -7130,7 +7133,7 @@ export async function startServer(opts: {
         return how === "ended" ? "closed" : how === "in use" ? "in use now" : "failed";
       },
       runStatus: (id) => state.runner.get(id)?.status,
-      stopChat: (id) => state.runner.stop(id),
+      stopChat: (id) => state.runner.stop(id, "by the sweep"),
       dismissRun: (id) => state.runner.dismiss(id),
       // planSweep offers no run with a landing record, but a sibling run of a
       // live branch can come up: only a branch nothing holds loses its tasks
@@ -7325,6 +7328,7 @@ export async function startServer(opts: {
         close: (id, end, text) => state.work.close(id, end, text),
         link: (id, ref) => state.work.link(id, ref),
       },
+      workState: (id) => state.work.get(id)?.state,
     }),
     work: new WorkHub({
       broadcast: (ev) => broadcast(state, ev),

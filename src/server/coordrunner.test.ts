@@ -249,6 +249,14 @@ describe("with a coordinator's runner", () => {
     }
   });
 
+  test("a stop from a page leaves a note naming that page on the timeline the run log keeps", async () => {
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "origin" }, s.page);
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    const stopped = (await (await postAs(s, "/api/runs/stop", { id: run.id }, s.page)).json()) as Run;
+    expect(stopped.steps.filter((st) => st.kind === "note").map((st) => st.text)).toContainEqual(expect.stringMatching(/^(ended|stopped) from a page$/));
+  });
+
   test("the coordinator's prompt carries Eric's standing rules from ~/.claude/manager.md, read at each start", async () => {
     const home = join(scratch, "rules-home");
     await mkdir(join(home, ".claude"), { recursive: true });

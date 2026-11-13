@@ -20,6 +20,7 @@ import {
   flowGoneSettled,
   flowNote,
   flowSettled,
+  groupNeedsEric,
   groupNote,
   groupSettled,
   holdNote,
@@ -38,7 +39,7 @@ import {
 } from "../core/coordinator";
 import type { RunGroup } from "../core/group";
 import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type LoadoutsInfo, type Priority, type Run } from "../core/types";
-import type { WorkSink } from "../core/work";
+import type { WorkSink, WorkState } from "../core/work";
 import type { Caller } from "./callers";
 
 /** how long a ready child's card waits for the landing queue to sort or
@@ -96,6 +97,8 @@ export interface CoordinatorDeps {
   broadcast: (run: Run) => void;
   /** the work item's settle line; absent for pre-ledger cards */
   work?: WorkSink;
+  /** a work item's state, which outlives the landing queue's pruned entry */
+  workState?: (id: string) => WorkState | undefined;
   now?: () => number;
   readyWait?: number;
 }
@@ -214,7 +217,10 @@ export class CoordinatorHub {
     // or the manager hears why they cannot
     const was = tasks.find((t) => t.id === taskId);
     const now = next.find((t) => t.id === taskId);
-    const moved = was !== undefined && now !== undefined && (was.state !== now.state || (now.outcome === "landed" && was.outcome !== "landed"));
+    const moved =
+      was !== undefined &&
+      now !== undefined &&
+      (was.state !== now.state || (now.outcome === "landed" && was.outcome !== "landed") || groupNeedsEric(was) !== groupNeedsEric(now));
     if (moved && next.some((t) => t.state === "queued" && t.after?.includes(taskId))) void this.pump(coordId);
   }
 
@@ -595,7 +601,7 @@ export class CoordinatorHub {
       // limited again after its resume: it fails, so a misread text cannot loop
       this.cancel(child.id);
       this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: "failed" }, "the plan's usage limit, twice in a row"));
-      this.queueNote(coord.id, settleNote(task, child, this.deps.landing(child)));
+      this.queueNote(coord.id, settleNote(task, child, this.deps.landing(child), "failed"));
       return;
     }
     const branch = this.deps.landing(child);
@@ -775,13 +781,14 @@ export class CoordinatorHub {
   /** Every card waiting on a child or a flow that ended is looked at again:
    *  the landing queue or the PR watch moved, or a ready child's wait ran
    *  out. So is every card that settled ready, PR opened or with a winner
-   *  picked, which Eric may land long after, or drop (`landLater`), and a
-   *  card failed on a closed PR, whose branch may still land. */
+   *  picked, which Eric may land long after, or drop (`landLater`), a card
+   *  failed on a closed PR, whose branch may still land, and a group card
+   *  whose group needs Eric, who may still pick and land a winner. */
   recheck(): void {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       for (const t of coord.tasks ?? []) {
-        if ((t.state === "done" && mayLandLater(t.outcome)) || (t.state === "failed" && t.outcome === "PR closed")) this.landLater(coord, t);
+        if ((t.state === "done" && mayLandLater(t.outcome)) || (t.state === "failed" && (t.outcome === "PR closed" || groupNeedsEric(t)))) this.landLater(coord, t);
         if (t.state === "running" && t.flow) {
           const flow = this.deps.flow?.(t.flow);
           if (flow) this.settleFlow(coord, t, flow);
@@ -804,13 +811,23 @@ export class CoordinatorHub {
    *  not land as it stood turns failed (`laterOutcome`: its branch dropped,
    *  its PR closed unmerged; or its group dropped or sent back), the manager
    *  hears it, and the cards after it hear they are blocked. A card failed
-   *  on a closed PR only turns landed. */
+   *  on a closed PR only turns landed. A group card whose group needed Eric
+   *  takes the group's word again: a winner he picked, his landing, or his
+   *  drop. */
   private landLater(coord: Run, t: CoordTask): void {
     const got = this.lateOutcome(t);
     if (got?.outcome === "landed") {
       this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "done" }, "landed"));
       this.queueNote(coord.id, landedNote(t));
       if (isRunActive(coord) && (coord.tasks ?? []).some((x) => x.state === "queued")) void this.pump(coord.id);
+      return;
+    }
+    if (groupNeedsEric(t)) {
+      if (!got || got.outcome === t.outcome) return;
+      const group = t.group ? this.deps.group?.(t.group) : undefined;
+      this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
+      if (got.state === "done" && group) this.queueNote(coord.id, groupNote(t, group, got.outcome));
+      else if (got.state === "failed") this.queueNote(coord.id, lateFailNote(t, got.outcome));
       return;
     }
     if (!got || got.state !== "failed" || t.state !== "done") return;
@@ -828,17 +845,29 @@ export class CoordinatorHub {
     }
     const child = t.run ? this.deps.run(t.run) : undefined;
     const b = child ? this.deps.landing(child) : t.branch ? this.deps.branch?.(t.branch) : undefined;
-    return b ? laterOutcome(b) : null;
+    return b ? laterOutcome(this.withWork(t, b)) : null;
+  }
+
+  /** A branch's facts with its card's work item read too: an item closed
+   *  landed says the branch landed after the queue let its entry go. */
+  private withWork(t: CoordTask, b: ChildBranch): ChildBranch {
+    return t.work && this.deps.workState?.(t.work) === "landed" ? { ...b, workLanded: true } : b;
   }
 
   /** A running flow card whose flow the backend no longer keeps (the flows
    *  keep only the newest finished records) settles off its branch while
-   *  that says how (`flowGoneSettled`), waits while the queue still holds
-   *  it, and fails when nothing is known. */
+   *  that says how (`flowGoneSettled`, the ready wait counted from the
+   *  landing record's last run), waits while the queue still holds it or
+   *  the sort has yet to read it, and fails when nothing is known. */
   private settleFlowGone(coord: Run, t: CoordTask): void {
-    const b = t.branch ? this.deps.branch?.(t.branch) : undefined;
-    const got = b ? flowGoneSettled(b) : null;
-    if (got === "waits") return;
+    const found = t.branch ? this.deps.branch?.(t.branch) : undefined;
+    const b = found ? this.withWork(t, found) : undefined;
+    const left = b?.branchEnded !== undefined ? b.branchEnded + (this.deps.readyWait ?? READY_WAIT) - this.now() : 0;
+    const got = b ? flowGoneSettled(b, left <= 0) : null;
+    if (got === "waits") {
+      if (left > 0 && t.flow) this.later(flowKey(t.flow), left);
+      return;
+    }
     if (!got || !b) {
       this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "failed" }, "its flow is no longer kept"));
       return;
