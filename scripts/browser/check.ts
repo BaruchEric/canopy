@@ -59,13 +59,17 @@ const smallFields = (page: Page) =>
       .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).trim().split(/\s+/).join(".")}` : ""} ${getComputedStyle(el).fontSize}`),
   );
 
-/** the buttons on the screen under `sel` less than a finger (44px) tall, each as "class 'words' 30px" */
+/** the buttons on the screen under `sel`: how many (`seen`, so a selector
+ *  that matches nothing, or buttons all hidden, cannot pass for none short)
+ *  and those less than a finger (44px) tall, each as "class 'words' 30px" */
 const shortButtons = (page: Page, sel: string) =>
-  page.evaluate((sel) =>
-    [...document.querySelectorAll<HTMLElement>(`${sel} button`)]
-      .filter((el) => el.getClientRects().length > 0 && el.getBoundingClientRect().height < 43.5)
-      .map((el) => `${el.className || "button"} '${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 24)}' ${Math.round(el.getBoundingClientRect().height)}px`),
-  sel);
+  page.evaluate((sel) => {
+    const shown = [...document.querySelectorAll<HTMLElement>(`${sel} button`)].filter((el) => el.getClientRects().length > 0);
+    const short = shown
+      .filter((el) => el.getBoundingClientRect().height < 43.5)
+      .map((el) => `${el.className || "button"} '${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 24)}' ${Math.round(el.getBoundingClientRect().height)}px`);
+    return { seen: shown.length, short };
+  }, sel);
 
 async function openShell(page: Page) {
   await page.goto(`${base}/`, { waitUntil: "load" });
@@ -366,6 +370,11 @@ try {
       await get("/api/repos/mentions", mentions);
       return page;
     };
+    // the fewest buttons each phone check must see before "none is short"
+    // means anything (the goal above showed 28, 21 and 16 on 2026-11-13)
+    const WORKERS_BUTTONS = 20;
+    const CHAT_BUTTONS = 15;
+    const SHEET_BUTTONS = 10;
     const settle = async (page: Page) => {
       await page.waitForSelector(".mgr-view .mgr-head", { timeout: 20_000 });
       await page.waitForTimeout(1200);
@@ -431,8 +440,12 @@ try {
         fit.page <= 390 && fit.view <= 0 && fit.strip > 0 && fit.first,
         `at 390px needs you comes ${fit.first ? "before" : "after"} the rings, the rings scroll sideways in their own strip (${fit.strip}px more), and the page is ${fit.page}px wide${fit.view > 0 ? ` (the view hides ${fit.view}px)` : ""}`,
       );
+      // the view's root is .mgr-view; there is no .mgr, so a selector on that would see no button at all
       const workers = await shortButtons(page, ".mgr-view");
-      check(workers.length === 0, `at 390px every button with the workers showing is a finger tall${workers.length ? `: ${workers.join(", ")}` : ""}`);
+      check(
+        workers.seen >= WORKERS_BUTTONS && workers.short.length === 0,
+        `at 390px every button with the workers showing is a finger tall (${workers.seen} of them, at least ${WORKERS_BUTTONS} wanted)${workers.short.length ? `: ${workers.short.join(", ")}` : ""}`,
+      );
       const fields = await smallFields(page);
       await page.screenshot({ path: `${shots}/manager-390.png` });
       await page.evaluate(() => document.querySelector(".mgr-rings")?.scrollIntoView({ block: "start" }));
@@ -440,7 +453,10 @@ try {
       await page.locator(".mgr-switch").getByRole("button", { name: "chat" }).click();
       await page.waitForTimeout(500);
       const chat = await shortButtons(page, ".mgr-view");
-      check(chat.length === 0, `at 390px every button with the chat showing is a finger tall${chat.length ? `: ${chat.join(", ")}` : ""}`);
+      check(
+        chat.seen >= CHAT_BUTTONS && chat.short.length === 0,
+        `at 390px every button with the chat showing is a finger tall (${chat.seen} of them, at least ${CHAT_BUTTONS} wanted)${chat.short.length ? `: ${chat.short.join(", ")}` : ""}`,
+      );
       fields.push(...(await smallFields(page)));
       await page.screenshot({ path: `${shots}/manager-390-chat.png` });
       await page.locator(".mgr-switch").getByRole("button", { name: "workers" }).click();
@@ -456,7 +472,10 @@ try {
         `at 390px t3's equip sheet fills the screen (${Math.round(box?.width ?? 0)} by ${Math.round(box?.height ?? 0)}) with ${picks} loadouts and ${skills} skills`,
       );
       const inSheet = await shortButtons(page, ".mgr-equip");
-      check(inSheet.length === 0, `at 390px every button in the equip sheet is a finger tall${inSheet.length ? `: ${inSheet.join(", ")}` : ""}`);
+      check(
+        inSheet.seen >= SHEET_BUTTONS && inSheet.short.length === 0,
+        `at 390px every button in the equip sheet is a finger tall (${inSheet.seen} of them, at least ${SHEET_BUTTONS} wanted)${inSheet.short.length ? `: ${inSheet.short.join(", ")}` : ""}`,
+      );
       fields.push(...(await smallFields(page)));
       check(fields.length === 0, `at 390px no field in the manager view is under 16px, where iOS zooms the page${fields.length ? `: ${[...new Set(fields)].join(", ")}` : ""}`);
       await page.screenshot({ path: `${shots}/manager-390-equip.png` });

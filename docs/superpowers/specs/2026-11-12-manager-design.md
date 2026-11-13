@@ -491,12 +491,12 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
    plan 2 lifts it); the run's loadout shows on the run sheet's head and in
    the run chip's title (on hover), not as text on the chip; and a plugin
    goes off whole through `enabledPlugins`, since `skillOverrides` does not
-   reach a plugin's skills (P3). Known gaps: a fix or follow-up run on a
-   loadout run's branch (`startBranchFix`), a swept chat's restart
-   (`startSweptChat`) and a fork (`/api/runs/fork`) start with the repo's
-   agent, not the loadout (plan 2's cards carry `equip`); the "machine has
-   this skill" check reads the repo's checkout while a branch run works in
-   a worktree cut from the base.
+   reach a plugin's skills (P3). A fix or follow-up on a loadout run's
+   branch (`startBranchFix`), a swept chat's restart (`startSweptChat`) and
+   a fork (`/api/runs/fork`) rebuild the loadout from the run's `equip`
+   (`loadoutOfEquip`, 2026-11-12), so each keeps it. Known gap: the
+   "machine has this skill" check reads the repo's checkout while a branch
+   run works in a worktree cut from the base.
 2. Cards: `equip`, `workflow`, `after`, flows as children and their
    settling, a card following its branch, hold, `start` with `ids`, the
    brief and the lane reads, `manager.md`. Shipped 2026-11-12 on branch
