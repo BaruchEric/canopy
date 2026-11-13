@@ -3,14 +3,20 @@
  *  child was started for, and whether start these applies. Pure. */
 
 import type { RunGroup } from "../../src/core/group";
-import { isRunActive, type CoordTask, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
+import { isRunActive, type CardEquip, type CoordTask, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
 import { groupWord } from "./groups";
 import { SEP } from "../../src/core/backendid";
 import { runLanding } from "./landing";
 import { prOfRun, prWord } from "./prs";
 
-/** What an edit of a proposed card may change; a field left out stays. */
-export type CoordEdit = Partial<Pick<CoordTask, "title" | "note" | "repo" | "action" | "times">>;
+/** What an edit of a card may change; a field left out stays. A queued card
+ *  changes only its equip and after. null clears equip, workflow or after,
+ *  and workflowRepo says the workflow is the repo's own. */
+export type CoordEdit = Partial<Pick<CoordTask, "title" | "note" | "repo" | "action" | "times" | "workflowRepo">> & {
+  equip?: CardEquip | null;
+  workflow?: string | null;
+  after?: string[] | null;
+};
 
 /** A coordinate run: a chat that holds no repo, so it never counts as the
  *  run going there (the server's `Runner.activeFor` skips it too). */
@@ -115,6 +121,89 @@ export function cardStatus(
     case "dropped":
       return { word: "dropped", tone: "faint", line: sentence ?? "" };
   }
+}
+
+/** Eric's overrides of a card's loadout, in words: "model sonnet". */
+function overrides(e: CardEquip): string[] {
+  const list = (l: readonly string[]): string => (l.length > 0 ? l.join(", ") : "none");
+  return [
+    e.model !== undefined ? `model ${e.model}` : "",
+    e.effort !== undefined ? `effort ${e.effort}` : "",
+    e.skills !== undefined ? `skills ${list(e.skills)}` : "",
+    e.mcp !== undefined ? `servers ${list(e.mcp)}` : "",
+  ].filter(Boolean);
+}
+
+/** The words a card's facts line adds: its loadout (with "changed" when
+ *  Eric overrode a field, the overrides in its title), its workflow, and
+ *  "after t1, t3" for the cards it waits for. */
+export function cardCarries(task: CoordTask): { loadout?: { word: string; title: string }; workflow?: string; after?: string } {
+  const out: { loadout?: { word: string; title: string }; workflow?: string; after?: string } = {};
+  const e = task.equip;
+  if (e?.loadout) {
+    const set = overrides(e);
+    out.loadout = { word: set.length > 0 ? `${e.loadout}, changed` : e.loadout, title: [`loadout ${e.loadout}`, ...set].join("; ") };
+  }
+  if (task.workflow) out.workflow = task.workflow;
+  if (task.after && task.after.length > 0) out.after = `after ${task.after.join(", ")}`;
+  return out;
+}
+
+/** A card's edit form as typed: the loadout's name ("" for none), the
+ *  workflow picked with its source (null for none) and after as typed. */
+export interface CardDraft {
+  title: string;
+  note: string;
+  repo: string;
+  action: CoordTask["action"];
+  times: number;
+  loadout: string;
+  workflow: { name: string; fromRepo: boolean } | null;
+  after: string;
+}
+
+/** The form as it opens on a card. */
+export const cardDraft = (task: CoordTask): CardDraft => ({
+  title: task.title,
+  note: task.note,
+  repo: task.repo,
+  action: task.action,
+  times: task.times ?? 1,
+  loadout: task.equip?.loadout ?? "",
+  workflow: task.workflow ? { name: task.workflow, fromRepo: task.workflowRepo === true } : null,
+  after: (task.after ?? []).join(", "),
+});
+
+/** The card ids typed in an after field, split by commas or spaces. */
+export const parseAfter = (text: string): string[] => text.split(/[\s,]+/).filter(Boolean);
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** What saving the form sends: only what changed. A new loadout replaces
+ *  the card's equip, overrides and all; the same one sends none, so Eric's
+ *  overrides stay. A queued card sends only its equip and after. */
+export function cardEdit(task: CoordTask, d: CardDraft): CoordEdit {
+  const had = task.equip?.loadout ?? "";
+  const after = parseAfter(d.after);
+  const out: CoordEdit = {
+    ...(d.loadout !== had ? { equip: d.loadout ? { loadout: d.loadout } : null } : {}),
+    ...(!sameList(after, task.after ?? []) ? { after: after.length > 0 ? after : null } : {}),
+  };
+  if (task.state !== "proposed") return out;
+  const title = d.title.trim();
+  const note = d.note.trim();
+  // a workflow goes again with a new repo, so the server checks the new repo has it
+  const flowSame =
+    d.workflow === null ? task.workflow === undefined : d.workflow.name === task.workflow && d.workflow.fromRepo === (task.workflowRepo === true) && d.repo === task.repo;
+  return {
+    ...(title !== task.title ? { title } : {}),
+    ...(note !== task.note ? { note } : {}),
+    ...(d.repo !== task.repo ? { repo: d.repo } : {}),
+    ...(d.action !== task.action ? { action: d.action } : {}),
+    ...(d.times !== (task.times ?? 1) ? { times: d.times } : {}),
+    ...out,
+    ...(flowSame ? {} : d.workflow === null ? { workflow: null } : { workflow: d.workflow.name, ...(d.workflow.fromRepo ? { workflowRepo: true as const } : {}) }),
+  };
 }
 
 /** Start these applies while the coordinator is going and a card waits on it. */

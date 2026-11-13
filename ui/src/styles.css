@@ -6786,9 +6786,19 @@ button.dl-gut.has {
   flex-wrap: wrap;
   gap: 6px;
 }
-.coord-form-row > select {
+.coord-form-row > select,
+.coord-form-row > input {
   flex: 1 1 140px;
   min-width: 0;
+}
+/* on a phone the head wraps before it squeezes, and every button and field
+   in the cards takes a finger: hold, start, edit, the form */
+.coord-tasks.phone .coord-head {
+  flex-wrap: wrap;
+}
+.coord-tasks.phone .mini,
+.coord-tasks.phone .coord-form .settings-input {
+  min-height: 44px;
 }
 
 /* a repo's landing queue: the card's word, its panel section */

@@ -1185,17 +1185,24 @@ export const api = {
   },
   dismissRun: (id: string) =>
     repoReq<{ ok: true }>(id, (p) => `/api/runs?${rq(p)}`, { method: "DELETE" }),
-  /** edits or removes a coordinator's proposed card (FR-010); the run's
+  /** edits or removes a coordinator's proposed or queued card (FR-010);
+   *  null in the change clears equip, workflow or after. The run's
    *  broadcast carries the change, so the answer is not read */
   coordTask: async (runId: string, id: string, change: CoordEdit | { remove: true }) => {
     const [b, plain] = on(runId);
     const body = "remove" in change ? { run: plain, id, remove: true } : { run: plain, id, ...change, ...(change.repo !== undefined ? { repo: on(change.repo)[1] } : {}) };
     await req<{ ok: true }>(b, "/api/coordinator/tasks", { method: "POST", body: JSON.stringify(body) });
   },
-  /** start these: every proposed card of a coordinator joins its queue */
-  coordStart: async (runId: string) => {
+  /** start these: every proposed card of a coordinator joins its queue; with
+   *  `ids`, those cards (card ids, plain on every backend), ahead of the rest */
+  coordStart: async (runId: string, ids?: string[]) => {
     const [b, plain] = on(runId);
-    await req<{ ok: true }>(b, "/api/coordinator/start", { method: "POST", body: JSON.stringify({ run: plain }) });
+    await req<{ ok: true }>(b, "/api/coordinator/start", { method: "POST", body: JSON.stringify({ run: plain, ...(ids ? { ids } : {}) }) });
+  },
+  /** holds a coordinator's goal, so none of its cards starts, or resumes it */
+  coordHold: async (runId: string, held: boolean) => {
+    const [b, plain] = on(runId);
+    await req<{ ok: true; held: boolean }>(b, "/api/coordinator/hold", { method: "POST", body: JSON.stringify({ run: plain, held }) });
   },
   workflows: (id: string) => repoReq<WorkflowEntry[]>(id, (p) => `/api/repos/workflows?${rq(p)}`),
   /** `request` is the sheet's own id for this start, so sending it again

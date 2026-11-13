@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
-import { canStartCards, cardCounts, cardStatus, chainWords, childLine, coordTurn, coordView, isCoordinator, parentCard, stepLine } from "./coord";
+import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, chainWords, childLine, coordTurn, coordView, isCoordinator, parentCard, parseAfter, stepLine } from "./coord";
 
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id,
@@ -167,5 +167,63 @@ describe("a card that started a group", () => {
   test("the settled words read as words, not as sentences", () => {
     for (const outcome of ["winner picked", "landed"]) expect(cardStatus({ ...running, state: "done", outcome }, undefined, none, [])).toMatchObject({ word: outcome, tone: "moss", line: "" });
     for (const outcome of ["needs you", "dropped"]) expect(cardStatus({ ...running, state: "failed", outcome }, undefined, none, [])).toMatchObject({ word: outcome, tone: "rust", line: "" });
+  });
+});
+
+describe("what a card carries, for its facts line", () => {
+  test("its loadout, with changed and the overrides in the title when Eric set a field", () => {
+    expect(cardCarries(card({ equip: { loadout: "feature" } }))).toEqual({ loadout: { word: "feature", title: "loadout feature" } });
+    const changed = cardCarries(card({ equip: { loadout: "feature", model: "sonnet" } })).loadout;
+    expect(changed?.word).toBe("feature, changed");
+    expect(changed?.title).toBe("loadout feature; model sonnet");
+    const all = cardCarries(card({ equip: { loadout: "feature", effort: "high", skills: ["a", "b"], mcp: ["probe"] } })).loadout;
+    expect(all?.title).toBe("loadout feature; effort high; skills a, b; servers probe");
+    // no skills at all is an override too
+    expect(cardCarries(card({ equip: { loadout: "feature", skills: [] } })).loadout).toEqual({ word: "feature, changed", title: "loadout feature; skills none" });
+  });
+  test("its workflow and the cards it waits for", () => {
+    expect(cardCarries(card({ workflow: "review" })).workflow).toBe("review");
+    expect(cardCarries(card({ after: ["t1", "t3"] })).after).toBe("after t1, t3");
+    expect(cardCarries(card())).toEqual({});
+  });
+});
+
+describe("what a card's form sends", () => {
+  test("nothing while nothing changed, whatever the card carries", () => {
+    const t = card({ equip: { loadout: "feature", model: "sonnet" }, workflow: "review", workflowRepo: true, after: ["t2", "t3"] });
+    expect(cardEdit(t, cardDraft(t))).toEqual({});
+    // the same ids typed another way are no change
+    expect(cardEdit(t, { ...cardDraft(t), after: "t2 t3" })).toEqual({});
+  });
+  test("a new loadout replaces the card's equip; none clears it", () => {
+    const t = card({ equip: { loadout: "feature", model: "sonnet" } });
+    expect(cardEdit(t, { ...cardDraft(t), loadout: "docs" })).toEqual({ equip: { loadout: "docs" } });
+    expect(cardEdit(t, { ...cardDraft(t), loadout: "" })).toEqual({ equip: null });
+    expect(cardEdit(card(), { ...cardDraft(card()), loadout: "feature" })).toEqual({ equip: { loadout: "feature" } });
+  });
+  test("after takes ids split by commas or spaces; empty clears it", () => {
+    expect(parseAfter(" t1, t3  t4,,")).toEqual(["t1", "t3", "t4"]);
+    expect(parseAfter("  ")).toEqual([]);
+    expect(cardEdit(card(), { ...cardDraft(card()), after: "t1, t3" })).toEqual({ after: ["t1", "t3"] });
+    const t = card({ after: ["t1"] });
+    expect(cardEdit(t, { ...cardDraft(t), after: "" })).toEqual({ after: null });
+  });
+  test("a workflow names its source: the repo's own says so, none clears it", () => {
+    expect(cardEdit(card(), { ...cardDraft(card()), workflow: { name: "review", fromRepo: true } })).toEqual({ workflow: "review", workflowRepo: true });
+    expect(cardEdit(card(), { ...cardDraft(card()), workflow: { name: "review", fromRepo: false } })).toEqual({ workflow: "review" });
+    const own = card({ workflow: "review", workflowRepo: true });
+    expect(cardEdit(own, { ...cardDraft(own), workflow: { name: "review", fromRepo: false } })).toEqual({ workflow: "review" });
+    expect(cardEdit(own, { ...cardDraft(own), workflow: null })).toEqual({ workflow: null });
+    // a new repo sends the workflow again, so the server checks that repo has it
+    expect(cardEdit(own, { ...cardDraft(own), repo: "other" })).toEqual({ repo: "other", workflow: "review", workflowRepo: true });
+  });
+  test("a queued card sends only its loadout and after", () => {
+    const t = card({ state: "queued" });
+    const draft = { ...cardDraft(t), title: "another", times: 2, workflow: { name: "review", fromRepo: false }, loadout: "feature", after: "t2" };
+    expect(cardEdit(t, draft)).toEqual({ equip: { loadout: "feature" }, after: ["t2"] });
+  });
+  test("a proposed card's own fields, trimmed, as before", () => {
+    const t = card();
+    expect(cardEdit(t, { ...cardDraft(t), title: " add the other thing ", times: 3, action: "propose" })).toEqual({ title: "add the other thing", times: 3, action: "propose" });
   });
 });

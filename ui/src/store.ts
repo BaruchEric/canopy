@@ -1626,12 +1626,14 @@ export interface CanopyState {
   interruptRun: (runId: string, text?: string) => Promise<void>;
   stopRun: (runId: string) => Promise<void>;
   dismissRun: (runId: string) => Promise<void>;
-  /** edits a coordinator's proposed card; the run's broadcast brings it back */
+  /** edits a coordinator's proposed or queued card; the run's broadcast brings it back */
   coordPlanEdit: (runId: string, taskId: string, change: CoordEdit) => Promise<void>;
-  /** removes a coordinator's proposed card */
+  /** removes a coordinator's proposed or queued card */
   coordRemove: (runId: string, taskId: string) => Promise<void>;
-  /** start these: a coordinator's proposed cards join its queue */
-  coordStart: (runId: string) => Promise<void>;
+  /** start these: a coordinator's proposed cards join its queue; with `ids`, those cards first */
+  coordStart: (runId: string, ids?: string[]) => Promise<void>;
+  /** holds a coordinator's goal (no card starts) or resumes it */
+  coordHold: (runId: string, held: boolean) => Promise<void>;
 
   /** loads (or reloads) the workflows a repo can run, for the menu */
   loadWorkflows: (repoId: string) => Promise<void>;
@@ -5306,7 +5308,8 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   coordPlanEdit: (runId, taskId, change) => api.coordTask(runId, taskId, change),
   coordRemove: (runId, taskId) => api.coordTask(runId, taskId, { remove: true }),
-  coordStart: (runId) => api.coordStart(runId),
+  coordStart: (runId, ids) => api.coordStart(runId, ids),
+  coordHold: (runId, held) => api.coordHold(runId, held),
   dismissRun: async (runId) => {
     if (get().runs[runId]?.kept) return;
     await api.dismissRun(runId);
