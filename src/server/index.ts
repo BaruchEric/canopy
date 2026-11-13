@@ -188,6 +188,7 @@ import {
   type Device,
   type FlowChoice,
   type Flow,
+  type FlowStep,
   type RunEquip,
   type Ask,
   type HelperInfo,
@@ -1371,14 +1372,16 @@ async function dropFlowTools(flowId: string): Promise<void> {
 
 /** What every step of a coordinator's card's flow starts with (FR-065): the
  *  flow's own settings file, its `mcp.json` and servers when the loadout has
- *  any, and the equip. Read off the flow alone, so a restart's step and a
+ *  any, and the equip. A step that names a profile runs on that profile's
+ *  model and effort, so its equip reads them; the rest stays the flow's. Read
+ *  off the flow and the step's agent alone, so a restart's step and a
  *  pick-up's get them too. None for any other flow. */
-function flowStepExtras(flow: Flow): StepExtras | undefined {
+function flowStepExtras(flow: Flow, step: FlowStep, agent: AgentSettings): StepExtras | undefined {
   if (!flow.equip) return undefined;
   const id = flowToolsId(flow.id);
   return {
     settings: settingsPath(id),
-    equip: flow.equip,
+    equip: step.profile ? { ...flow.equip, model: agent.model, effort: agent.effort } : flow.equip,
     ...(flow.equip.mcp.length > 0 ? { mcpConfig: mcpConfigPath(id), servers: [...flow.equip.mcp] } : {}),
   };
 }

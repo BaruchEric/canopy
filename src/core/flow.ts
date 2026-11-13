@@ -18,6 +18,7 @@ import {
   type EvidenceFile,
   type Fleet,
   type Flow,
+  type FlowStep,
   type FlowChoice,
   type Harness,
   type HeldStart,
@@ -263,8 +264,9 @@ export interface FlowHooks {
   onBranchEnd?: (flow: Flow, runId: string | undefined, releasedRun?: Run) => void;
   /** what each step's run of this flow starts with besides the step's own:
    *  asked at every step's start, a restart's and a pick-up's too, so it
-   *  answers from the flow alone (its id and `equip`) */
-  stepExtras?: (flow: Flow) => StepExtras | undefined;
+   *  answers from the flow (its id and `equip`), the step and the agent the
+   *  step runs on */
+  stepExtras?: (flow: Flow, step: FlowStep, agent: AgentSettings) => StepExtras | undefined;
 }
 
 /** The branch as a flow keeps it: in this state, never held (only its steps' runs are). */
@@ -1416,7 +1418,7 @@ export class Flows {
       : undefined;
     let run: Run;
     try {
-      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { ...this.hooks.stepExtras?.(flow), flowOwner: live.owner, priority: this.stepPriority(live, i) });
+      run = this.runner.start(live.repo, workflow.name, spec, flow.note, agent, undefined, undefined, onBranch, { ...this.hooks.stepExtras?.(flow, step, agent), flowOwner: live.owner, priority: this.stepPriority(live, i) });
       delete live.prepare;
       delete live.startNote;
       delete live.released;

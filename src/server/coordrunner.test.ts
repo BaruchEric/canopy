@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { selfName } from "../core/backends";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
-import type { About, CoordTask, Flow, Harness, LoadoutsInfo, Run } from "../core/types";
+import { DEFAULT_AGENT, type About, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Run } from "../core/types";
 import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
@@ -879,6 +879,27 @@ Check the thing.
     expect(parked.steps[1]?.reason).toBe("this step asks before the next one starts");
     expect((await cardOf(coord))?.state).toBe("running");
     expect(existsSync(settings)).toBe(true);
+  }, 30_000);
+
+  test("a card flow's step that names a profile reports the profile's model and effort in its equip", async () => {
+    const made = await postAs(s, "/api/agents/profile", { name: "deep", settings: { ...DEFAULT_AGENT, harness: "claude", model: "opus", effort: "high" } }, s.page);
+    expect(made.status).toBe(200);
+    await userWorkflow("two-profiled", "---\nname: two-profiled\nverb: build and review\nblurb: Builds, then reviews on another model.\n---\n\n## build\n\nBuild the thing.\n\n## review\nagent: deep\n\nReview the thing.\n");
+    const { tasks } = await startCard({ workflow: "two-profiled", equip: { loadout: "quick" } });
+    const flowId = tasks[0]?.flow ?? "";
+    liveFlows.push(flowId);
+    const first = await stepRun(flowId, 0);
+    const firstRun = (await runs()).find((r) => r.id === first.id);
+    expect(first.ctx.agent.model).toBe("haiku");
+    expect(firstRun?.equip).toMatchObject({ loadout: "quick", model: "haiku" });
+    finish(first.ctx, "built");
+    const second = await stepRun(flowId, 1);
+    const secondRun = (await runs()).find((r) => r.id === second.id);
+    expect(second.ctx.agent.model).toBe("opus");
+    expect(secondRun?.agentSettings?.model).toBe("opus");
+    expect(secondRun?.equip).toMatchObject({ loadout: "quick", model: "opus", effort: "high" });
+    expect(secondRun?.equip?.skills).toEqual(firstRun?.equip?.skills ?? []);
+    finish(second.ctx, "reviewed");
   }, 30_000);
 
   test("a card whose workflow is one plain step starts a branch run with that step's spec", async () => {
