@@ -940,13 +940,13 @@ export const api = {
     );
   },
   /** `client` is this browser's id, so the run says which device started it */
-  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean, devTask?: boolean, canopyTools?: boolean) => {
+  run: async (id: string, action: RunAction, note: string, client?: string, branch?: boolean, pr?: boolean, devTask?: boolean, canopyTools?: boolean, loadout?: string) => {
     const [b, plain] = on(id);
     return from(
       b,
       await req<Run>(b, `/api/repos/run?${rq(plain)}`, {
         method: "POST",
-        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}), ...(pr ? { pr } : {}), ...(devTask ? { devTask } : {}), ...(canopyTools !== undefined ? { canopyTools } : {}) }),
+        body: JSON.stringify({ action, note, client, ...(branch !== undefined ? { branch } : {}), ...(pr ? { pr } : {}), ...(devTask ? { devTask } : {}), ...(canopyTools !== undefined ? { canopyTools } : {}), ...(loadout ? { loadout } : {}) }),
       }),
       qRun,
     );

@@ -9,6 +9,7 @@ import { agentFor, connOf, idText, landingAll, launchFor, prsAll, routesOf, task
 import { ciChip, mergeWhy, prLine, prOfRun, prWord } from "../prs";
 import { branchByDefault, runLanding, stoppedLandTitle } from "../landing";
 import { backendOf } from "../registry";
+import { equipTitle, loadoutLabel } from "../loadouts";
 import { planPriority, priorityTitle } from "../capacity";
 import { DEFAULT_CAPACITY, type CapacitySettings } from "../../../src/core/capacity";
 import { resolveAgent } from "../../../src/core/route";
@@ -303,6 +304,9 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   const [error, setError] = useState<string | null>(null);
   // null follows the route's setting, which may arrive after this sheet opens
   const [toolsPick, setToolsPick] = useState<boolean | null>(null);
+  // FR-065: a named loadout from kit.json, for one plain run only
+  const loadouts = useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts);
+  const [loadoutPick, setLoadoutPick] = useState("");
   const noteReady = !busy && (!spec.noteRequired || note.trim().length > 0);
   // a branch of its own: on for propose, off for the rest, never for a
   // workspace run or a checkout on another host or the forge; a coordinator
@@ -322,6 +326,9 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
   }, [branchable, repo.id, loadTasks]);
   const [devTask, setDevTask] = useState(false);
   const startDev = branchable && onBranch && times === 1 && hasDev && devTask;
+  const loadoutOffered = (loadouts?.length ?? 0) > 0 && !coordinate && !workspace && !repo.host && !repo.forge && times === 1;
+  // a pick that no longer fits (the list changed, or the run became a group) is not sent
+  const loadout = loadoutOffered ? loadouts?.find((l) => l.name === loadoutPick) : undefined;
   const ready = noteReady && (!branchable || !onBranch || times <= free);
   // a branch run whose note opens with #123 or an issue URL starts from
   // that GitHub issue; the backend reads it with gh (core/issue)
@@ -334,7 +341,7 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
     try {
       // the default is the backend's to apply, so a repo with no main yet keeps its propose in the checkout
       if (branchable && onBranch && times > 1) await startGroup(repo.id, action, note, times, groupProfiles(picks, times), autoLand, pr, reviewers === 2 ? 2 : undefined, raised ? "interactive" : undefined);
-      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined));
+      else await (workspace ? startWsRun(workspace, action, note) : startRun(repo.id, action, note, pr || startDev ? true : branchable && onBranch !== byDefault ? onBranch : undefined, pr ? true : undefined, startDev ? true : undefined, toolsPick ?? undefined, loadout?.name));
     } catch (err) {
       setError(errText(err));
       setBusy(false);
@@ -365,7 +372,11 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
               {f}
             </span>
           ))}
-          {!isDefaultAgent(agent) && (
+          {loadout ? (
+            <span className="branch" title={loadout.note || "The loadout this run starts with"}>
+              {loadoutLabel(loadout)}
+            </span>
+          ) : !isDefaultAgent(agent) && (
             <span className="branch" title="The agent this repo's jobs start with">
               {describeAgent(agent)}
             </span>
@@ -418,7 +429,20 @@ function Plan({ repo, action, workspace }: { repo: Repo; action: RunAction; work
             start the dev task in the worktree
           </label>
         )}
-        <ToolsPreflight show={!coordinate && !workspace && !repo.host && !repo.forge && !(branchable && onBranch && times > 1)} on={toolsPick ?? agent.canopyTools === true} onChange={setToolsPick} />
+        {loadoutOffered && loadouts && (
+          <label className="plan-branch plan-loadout" title="Start with a named set of model, effort, skills and servers from kit.json">
+            <span>loadout</span>
+            <select value={loadout?.name ?? ""} onChange={(e) => setLoadoutPick(e.target.value)} aria-label="Loadout">
+              <option value="">the repo's route</option>
+              {loadouts.map((l) => (
+                <option key={l.name} value={l.name} title={l.note}>
+                  {loadoutLabel(l)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <ToolsPreflight show={!coordinate && !workspace && !repo.host && !repo.forge && !(branchable && onBranch && times > 1)} on={toolsPick ?? (loadout ? loadout.canopyTools : agent.canopyTools === true)} onChange={setToolsPick} />
         <PriorityPreflight group={branchable && onBranch && times > 1} raised={raised} settings={capSettings} onRaise={setRaised} />
         {error && <p className="note err">{error}</p>}
       </div>
@@ -658,6 +682,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
           </div>
           <h2 className="sheet-title">
             {run.verb} <span className="sheet-repo">{idText(run.repoId)}</span>
+            {run.equip && <> <span className="branch" title={equipTitle(run.equip)}>{run.equip.loadout}</span></>}
           </h2>
         </div>
         <span className={`status st-${run.status}${noChange ? " no-change" : ""}`}>

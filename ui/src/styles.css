@@ -6431,6 +6431,15 @@ button.dl-gut.has {
   font-size: var(--t-md);
   color: var(--ink-dim);
 }
+.plan-loadout {
+  display: flex;
+}
+.plan-loadout select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  font-size: var(--t-md);
+}
 /* the start's priority (FR-036) and, for a group, its one-off raise */
 .plan-priority {
   display: flex;

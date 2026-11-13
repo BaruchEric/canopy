@@ -20,7 +20,7 @@ export function RunChip({ run, long = false }: { run: Run; long?: boolean }) {
     <button
       type="button"
       className={`run-chip st-${group ? group.state === "needs-you" || group.state === "picked" ? "waiting" : ["working", "scoring", "reviewing"].includes(group.state) ? "working" : "done" : run.status}${noChange ? " no-change" : ""}`}
-      title={group ? "Show the branch group" : `Show the run (${AGENT_NAME[harness]})`}
+      title={group ? "Show the branch group" : `Show the run (${AGENT_NAME[harness]})${run.equip ? `\nloadout ${run.equip.loadout}` : ""}`}
       onClick={(e) => {
         e.stopPropagation();
         if (group) showGroup(group.id);
