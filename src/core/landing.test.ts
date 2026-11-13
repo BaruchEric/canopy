@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   addNotice,
   advance,
+  BRANCH_BUSY,
   canLand,
   enqueue,
   entryFor,
@@ -251,6 +252,17 @@ describe("followupRefusal", () => {
   test("a branch outside the queue, ready or stopped, takes a follow-up", () => {
     expect(followupRefusal(run("f", { state: "ready" }), undefined, false, "f")).toBeNull();
     expect(followupRefusal(run("f", { state: "stopped" }), undefined, false, "f")).toBeNull();
+    expect(followupRefusal(run("f", { state: "ready" }), undefined, false, "f", { pr: false, flowStopped: false })).toBeNull();
+  });
+  test("a kept flow stopped on the branch refuses it, pointing at its pickup", () => {
+    expect(followupRefusal(run("f", { state: "stopped" }), undefined, false, "f", { flowStopped: true })).toEqual({ status: 409, error: "its flow is stopped; pick the flow up instead" });
+  });
+  test("a pull request the PR watch holds refuses it, pointing at the PR", () => {
+    expect(followupRefusal(run("f", { pr: 7 }), undefined, false, "f", { pr: true })).toEqual({ status: 409, error: "it has an open pull request; comment on the PR and the PR watch fixes it" });
+  });
+  test("a writer on the branch is named first, ahead of its flow, its PR or its entry", () => {
+    expect(followupRefusal(run("f"), entryIn("red"), true, "f", { pr: true, flowStopped: true })?.error).toBe(BRANCH_BUSY);
+    expect(BRANCH_BUSY).toBe("a run is working on this branch; say to it instead");
   });
 });
 

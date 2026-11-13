@@ -10,7 +10,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriveCtx, DriveExit, RunDriver } from "../core/driver";
-import { exec } from "../core/exec";
+import { exec, type ExecResult } from "../core/exec";
 import type { Harness, LandingInfo, Run } from "../core/types";
 import { startServer } from "./index";
 
@@ -65,6 +65,14 @@ class CommitDriver implements RunDriver {
 const prompts: { cwd: string; message: string; resume: string | undefined }[] = [];
 /** while set, a run the driver starts waits for it before it does its work */
 let hold: Promise<void> | null = null;
+
+/** gh as opening a PR calls it: logged in, and a create answers PR 7 */
+async function fakeGh(args: string[]): Promise<ExecResult> {
+  const [a, b] = args;
+  if (a === "auth") return { code: 0, stdout: "Logged in", stderr: "" };
+  if (a === "pr" && b === "create") return { code: 0, stdout: "https://github.com/o/r/pull/7\n", stderr: "" };
+  return { code: 1, stdout: "", stderr: `fake gh: no answer for ${args.join(" ")}` };
+}
 let scratch: string;
 let root: string;
 let previousConfig: string | undefined;
@@ -105,6 +113,8 @@ beforeAll(async () => {
     chan: null,
     harnesses: ["claude"],
     runner: { driver: (h) => new CommitDriver(h) },
+    // a PR opens against a fake GitHub and is never polled during a test
+    prs: { gh: fakeGh, slugOf: async () => "o/r", tickEvery: 3_600_000 },
   });
 });
 
@@ -275,6 +285,25 @@ describe("a follow-up on a branch", () => {
     expect([resume.note, resume.branch?.origin]).toEqual(["resume", origin]);
     expect((await nextPrompt(before)).message).toContain("Carry on with the task from where you stopped.");
     await readyAgain(resume.id);
+  });
+
+  test("a branch whose PR the PR watch holds answers 409 and starts nothing", async () => {
+    const proj = join(root, "proj");
+    const bare = join(scratch, "origin.git");
+    await exec(["git", "init", "-q", "--bare", bare]);
+    await git(proj, "remote", "add", "origin", bare);
+    try {
+      await git(proj, "push", "-q", "origin", "main");
+      const run = (await (await call("/api/repos/run?id=proj", { action: "ask", note: "open a pr", branch: true, pr: true })).json()) as Run;
+      const origin = run.branch!.origin;
+      await until(async () => (await landing()).runs.find((r) => r.id === origin && r.pr === 7), "the PR to open");
+      const runs = await runCount();
+      const res = await followUp({ id: origin, note: "one more thing" });
+      expect([res.status, await errorOf(res)]).toEqual([409, "it has an open pull request; comment on the PR and the PR watch fixes it"]);
+      expect(await runCount()).toBe(runs);
+    } finally {
+      await git(proj, "remote", "remove", "origin");
+    }
   });
 
   test("a branch in the landing queue answers 409 and starts nothing", async () => {

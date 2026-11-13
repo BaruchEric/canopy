@@ -175,14 +175,30 @@ export function rejoins(review: RunReview, entry: Pick<LandEntry, "auto" | "appr
   return { ok: false, why: entry.approved ? "the fix changed the sensitive files you approved; look again" : "the fix touches sensitive files; look at them and approve" };
 }
 
+/** the refusal while a writer works on a branch: a follow-up's, and a
+ *  stopped flow's pickup's */
+export const BRANCH_BUSY = "a run is working on this branch; say to it instead";
+
+/** What else keeps a follow-up off a branch, beside a writer working on
+ *  it: a pull request the PR watch holds, which takes its fixes from the
+ *  PR's comments, and a kept flow on the branch that stopped, which its
+ *  pickup carries on. */
+export interface FollowupHolds {
+  pr?: boolean;
+  flowStopped?: boolean;
+}
+
 /** Why a later run with a person's words may not start on a branch, or
  *  null when it may. A follow-up never puts a second writer on a branch:
- *  not beside a run or flow working on it, and not while the branch has a
- *  landing entry, which the queue or its own "fix it" works. `id` is the
- *  branch asked for, which the 404 names when canopy holds no record. */
-export function followupRefusal(rec: LandingRun | undefined, entry: LandEntry | undefined, busy: boolean, id: string): { status: 404 | 409; error: string } | null {
+ *  not beside a run or flow working on it, not on a branch its stopped
+ *  flow or its PR watch owns, and not while the branch has a landing
+ *  entry, which the queue or its own "fix it" works. `id` is the branch
+ *  asked for, which the 404 names when canopy holds no record. */
+export function followupRefusal(rec: LandingRun | undefined, entry: LandEntry | undefined, busy: boolean, id: string, holds: FollowupHolds = {}): { status: 404 | 409; error: string } | null {
   if (!rec) return { status: 404, error: `canopy holds no branch ${id}; it was dropped or never ran` };
-  if (busy) return { status: 409, error: "a run is working on this branch; say to it instead" };
+  if (busy) return { status: 409, error: BRANCH_BUSY };
+  if (holds.flowStopped) return { status: 409, error: "its flow is stopped; pick the flow up instead" };
+  if (holds.pr) return { status: 409, error: "it has an open pull request; comment on the PR and the PR watch fixes it" };
   if (!entry) return null;
   if (entry.state === "landed") return { status: 409, error: "it has landed" };
   if (inQueue(entry)) return { status: 409, error: `it is in the landing queue (${entry.state}); wait for it, or drop it from the queue first` };

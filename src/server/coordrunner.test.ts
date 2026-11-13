@@ -657,7 +657,9 @@ describe("a coordinator's card with a loadout", () => {
       expect(flowId).toMatch(/^[0-9a-f]{8}$/);
       liveFlows.push(flowId);
       const first = await stepRun(flowId, 0);
-      await writeFile(join(first.ctx.cwd, "card.txt"), "x\n");
+      // a file of its own: Review Focus 3's branch rejoins the queue when its
+      // fix is stopped and can land its card.txt on main before this cuts
+      await writeFile(join(first.ctx.cwd, "flow-card.txt"), "x\n");
       await commit(first.ctx.cwd, "card");
       finish(first.ctx, "built");
       finish((await stepRun(flowId, 1)).ctx, "checked");
@@ -687,6 +689,53 @@ describe("a coordinator's card with a loadout", () => {
     }
   }, 30_000);
 
+  test("a flow card stopped on its branch: a follow-up is sent to its pickup, and its pickup never goes beside a run on the branch", async () => {
+    const repo = join(scratch, "root", "app");
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    const answer = async (res: Response): Promise<[number, string | undefined]> => [res.status, ((await res.json()) as { error?: string }).error];
+    await userWorkflow("two-plain", "---\nname: two-plain\nverb: build twice\nblurb: Two steps.\n---\n\n## build\n\nBuild it.\n\n## check\n\nCheck it.\n");
+    // a red gate, so the stopped branch comes back from the queue and its fix runs on it
+    await mkdir(join(repo, ".canopy"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+    await commit(repo, "red gate");
+    try {
+      const { tasks } = await startCard({ workflow: "two-plain", equip: { loadout: "quick" } });
+      const flowId = tasks[0]?.flow ?? "";
+      const origin = tasks[0]?.branch ?? "";
+      liveFlows.push(flowId);
+      const first = await stepRun(flowId, 0);
+      await writeFile(join(first.ctx.cwd, "stopped-flow.txt"), "x\n");
+      await commit(first.ctx.cwd, "card");
+      expect((await postAs(s, "/api/flows/stop", { id: flowId }, s.page)).status).toBe(200);
+      await until(async () => (await flowNamed(flowId))?.status === "stopped", "the card's flow to stop");
+      // the stopped step's commit leaves the branch ready to land
+      await until(async () => {
+        const info = (await (await call(s, "/api/landing", s.page)).json()) as { runs: { id: string; state: string }[] };
+        return info.runs.some((r) => r.id === origin && r.state === "ready");
+      }, "the branch's record to read ready");
+      const drivers = s.made.length;
+      expect(await answer(await postAs(s, "/api/landing/followup", { id: origin, note: "rename the flag" }, s.page))).toEqual([409, "its flow is stopped; pick the flow up instead"]);
+      expect(s.made.length).toBe(drivers);
+      expect(await answer(await postAs(s, "/api/landing/land", { run: origin }, s.page))).toEqual([200, undefined]);
+      await until(async () => {
+        const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
+        return info.entries.some((e) => e.id === origin && e.state === "red");
+      }, "the red gate");
+      const res = await postAs(s, "/api/landing/fix", { id: origin }, s.page);
+      const fix = (await res.json()) as Run & { error?: string };
+      expect([res.status, fix.error]).toEqual([201, undefined]);
+      live.push(fix.id);
+      await ctxOf(fix.id);
+      const withFix = s.made.length;
+      expect(await answer(await postAs(s, "/api/flows/pickup", { id: flowId }, s.page))).toEqual([409, "a run is working on this branch; say to it instead"]);
+      expect((await flowNamed(flowId))?.status).toBe("stopped");
+      expect(s.made.length).toBe(withFix);
+    } finally {
+      await rm(join(repo, ".canopy", "gates.json"), { force: true });
+      await commit(repo, "no gate");
+    }
+  }, 30_000);
+
   test("a follow-up on a card's ready branch reopens the card with the card's loadout, and it settles again with a second note", async () => {
     const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
     /** the settle notes said into the coordinator's chat: a note waits for
@@ -705,7 +754,7 @@ describe("a coordinator's card with a loadout", () => {
     const id = tasks[0]?.run ?? "";
     live.push(id);
     const ctx = await ctxOf(id);
-    await writeFile(join(ctx.cwd, "card.txt"), "x\n");
+    await writeFile(join(ctx.cwd, "followup.txt"), "x\n");
     await commit(ctx.cwd, "card");
     finish(ctx, "First go.");
     const settled = await until(async () => {
@@ -742,6 +791,37 @@ describe("a coordinator's card with a loadout", () => {
     const notes = await settleNotes(coord, 2);
     expect(notes).toHaveLength(2);
     expect(notes[1]).toContain("result: Renamed it.");
+  }, 30_000);
+
+  test("two follow-ups sent together on a card's ready branch start one run; the second sees the first's start", async () => {
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    const { coord, tasks } = await startCard({ equip: { loadout: "quick" } });
+    const id = tasks[0]?.run ?? "";
+    live.push(id);
+    const ctx = await ctxOf(id);
+    await writeFile(join(ctx.cwd, "race.txt"), "x\n");
+    await commit(ctx.cwd, "card");
+    finish(ctx, "First go.");
+    const settled = await until(async () => {
+      const c = await cardOf(coord);
+      return c?.state === "done" && c.outcome === "ready" ? c : null;
+    }, "the card to settle ready");
+    const origin = settled.branch ?? "";
+    // the loadout's files are written between the check and the start, so
+    // without the in-flight mark both would pass the check
+    const drivers = s.made.length;
+    const both = await Promise.all([
+      postAs(s, "/api/landing/followup", { id: origin, note: "one way" }, s.page),
+      postAs(s, "/api/landing/followup", { id: origin, note: "the other way" }, s.page),
+    ]);
+    const answers = await Promise.all(both.map(async (res) => ({ status: res.status, body: (await res.json()) as { run?: Run; error?: string } })));
+    for (const a of answers) if (a.body.run) live.push(a.body.run.id);
+    expect(answers.map((a) => a.status).sort()).toEqual([201, 409]);
+    expect(answers.find((a) => a.status === 409)?.body.error).toBe("a run is working on this branch; say to it instead");
+    const started = answers.find((a) => a.status === 201)?.body.run;
+    if (!started) throw new Error("no follow-up started");
+    await ctxOf(started.id);
+    expect(s.made.length).toBe(drivers + 1);
   }, 30_000);
 
   const TWO_STEPS = `---
