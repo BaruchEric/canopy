@@ -583,7 +583,7 @@ describe("a coordinator's card with a loadout", () => {
     }
   });
 
-  test("Review Focus 3: a landing fix on a card's branch reopens the card, with the card's loadout and no child refusal", async () => {
+  test("Review Focus 3: a landing fix on a card's branch reopens the card, with the card's loadout and no child refusal, and a follow-up never goes beside it", async () => {
     const repo = join(scratch, "root", "app");
     const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
     // a red gate, so the queue sends the card's branch back and a fix applies
@@ -610,6 +610,15 @@ describe("a coordinator's card with a loadout", () => {
         const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
         return info.entries.some((e) => e.id === origin && e.state === "red");
       }, "the red gate");
+      // Review Focus 1: a follow-up never goes beside the queue's own fix,
+      // before it starts or while it runs, and nothing reaches a driver
+      const followUp = async (): Promise<[number, string | undefined]> => {
+        const r = await postAs(s, "/api/landing/followup", { id: origin, note: "rename the flag" }, s.page);
+        return [r.status, ((await r.json()) as { error?: string }).error];
+      };
+      const drivers = s.made.length;
+      expect(await followUp()).toEqual([409, "it was sent back (red); fix it from the landing queue instead"]);
+      expect(s.made.length).toBe(drivers);
       const res = await postAs(s, "/api/landing/fix", { id: origin }, s.page);
       const fix = (await res.json()) as Run & { error?: string };
       expect([res.status, fix.error]).toEqual([201, undefined]);
@@ -619,6 +628,9 @@ describe("a coordinator's card with a loadout", () => {
       expect(fix.branch?.origin).toBe(origin);
       expect(fix.equip?.loadout).toBe("quick");
       expect((await ctxOf(fix.id)).agent.model).toBe("haiku");
+      const withFix = s.made.length;
+      expect(await followUp()).toEqual([409, "a run is working on this branch; say to it instead"]);
+      expect(s.made.length).toBe(withFix);
       const card = await until(async () => {
         const c = await cardOf(coord);
         return c?.run === fix.id ? c : null;
