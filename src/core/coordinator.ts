@@ -4,8 +4,9 @@
  *  and calls these, and the UI may name a card's outcome with them. */
 
 import { GROUP_MAX, type RunGroup } from "./group";
+import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
-import { isRunActive, type CoordTask, type LandEntry, type ReviewVerdict, type Run, type RunBranchState } from "./types";
+import { isRunActive, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Run, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -33,60 +34,257 @@ function text(t: Record<string, unknown>, at: string, field: "title" | "note", m
   return s;
 }
 
+/** What a plan or an edit is checked against. */
+export interface PlanContext {
+  known: (repo: string) => "local" | "remote" | null;
+  /** every card the coordinator holds now */
+  cards: readonly CoordTask[];
+  /** the number the next new card takes: the plan's cards are t<next>, t<next+1>, ... */
+  next: number;
+  loadouts: LoadoutsInfo;
+  /** the workflows a card in this repo may name */
+  workflows: (repo: string) => readonly { name: string; fromRepo: boolean }[];
+  by: "coordinator" | "person";
+}
+
+const EQUIP_KEYS = ["loadout", "model", "effort", "skills", "mcp"] as const;
+
+/** A card's `equip` off the wire: a coordinator names a loadout and nothing
+ *  else; Eric may override the loadout's model, effort, skills and servers,
+ *  and only with what the loadout's harness takes. */
+function checkEquip(v: unknown, at: string, ctx: PlanContext): { equip: CardEquip | undefined } | { error: string } {
+  if (!isRecord(v)) return { error: `${at}.equip must be an object` };
+  for (const k of Object.keys(v)) {
+    if (!(EQUIP_KEYS as readonly string[]).includes(k)) return { error: `${at}.equip.${k}: not a card field` };
+  }
+  const given = Object.keys(v).filter((k) => v[k] !== undefined);
+  const fields = given.filter((k) => k !== "loadout");
+  if (ctx.by === "coordinator" && fields.length > 0) return { error: `${at}.equip: a coordinator names a loadout; its fields are Eric's` };
+  const name = v["loadout"];
+  if (name === undefined) {
+    if (fields.length > 0) return { error: `${at}.equip: name a loadout before changing its fields` };
+    return { equip: undefined };
+  }
+  if (typeof name !== "string" || !name) return { error: `${at}.equip.loadout must be a loadout name` };
+  const lo = ctx.loadouts.loadouts.find((l) => l.name === name);
+  if (!lo) return { error: `${at}.equip.loadout: no loadout ${name} in kit.json` };
+  const equip: CardEquip = { loadout: name };
+  if (lo.harness === "codex" && (v["skills"] !== undefined || v["mcp"] !== undefined)) {
+    return { error: `${at}.equip: a codex loadout takes no skills or servers` };
+  }
+  const model = v["model"];
+  if (model !== undefined) {
+    if (!takesModel(lo.harness, model)) return { error: `${at}.equip.model: ${lo.harness} does not take ${String(model)}` };
+    equip.model = model;
+  }
+  const effort = v["effort"];
+  if (effort !== undefined) {
+    if (!takesEffort(lo.harness, effort)) return { error: `${at}.equip.effort: ${lo.harness} does not take ${String(effort)}` };
+    equip.effort = effort;
+  }
+  for (const k of ["skills", "mcp"] as const) {
+    const l = v[k];
+    if (l === undefined) continue;
+    if (!Array.isArray(l) || l.some((x) => typeof x !== "string" || !x)) return { error: `${at}.equip.${k} must be a list of names` };
+    equip[k] = l as string[];
+  }
+  return { equip };
+}
+
+/** One card off the wire, checked on its own. `self` is the id it will have
+ *  and `ids` every id its `after` may name. */
+function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string>, ctx: PlanContext): PlannedTask | { error: string } {
+  if (!isRecord(t)) return { error: `${at} must be an object` };
+  const title = text(t, at, "title", MAX_TITLE);
+  if (typeof title !== "string") return title;
+  const note = text(t, at, "note", MAX_NOTE);
+  if (typeof note !== "string") return note;
+  const repo = t["repo"];
+  if (typeof repo !== "string" || !repo) return { error: `${at}.repo must be a repo id` };
+  const where = ctx.known(repo);
+  if (where === null) return { error: `${at}.repo: no repo ${repo} on this backend` };
+  if (where === "remote") return { error: `${at}.repo: ${repo} is on another host; a task runs in a local repo` };
+  const action = t["action"];
+  if (action !== "propose" && action !== "ask") return { error: `${at}.action must be propose or ask` };
+  const times = t["times"];
+  if (times !== undefined && (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX)) {
+    return { error: `${at}.times must be 1 to ${GROUP_MAX}` };
+  }
+  const out: PlannedTask = { title, repo, note, action, ...(typeof times === "number" && times > 1 ? { times } : {}) };
+
+  if (t["equip"] !== undefined) {
+    const got = checkEquip(t["equip"], at, ctx);
+    if ("error" in got) return got;
+    if (got.equip) out.equip = got.equip;
+  }
+
+  const workflow = t["workflow"];
+  if (workflow !== undefined) {
+    if (typeof workflow !== "string" || !workflow) return { error: `${at}.workflow must be a workflow name` };
+    const own = t["workflowRepo"];
+    if (own !== undefined && own !== true) return { error: `${at}.workflowRepo must be true` };
+    if (own === true && ctx.by === "coordinator") return { error: `${at}.workflowRepo: a repo's own workflow is Eric's to pick` };
+    const named = ctx.workflows(repo).filter((w) => w.name === workflow);
+    // a coordinator gets the bundled or user workflow of that name, never the repo's
+    const match = ctx.by === "coordinator" ? named.find((w) => !w.fromRepo) : own === true ? named.find((w) => w.fromRepo) : (named.find((w) => !w.fromRepo) ?? named[0]);
+    if (!match) return { error: `${at}.workflow: no workflow ${workflow} for ${repo}` };
+    if (out.times !== undefined) return { error: `${at}: a card with a workflow starts one run` };
+    out.workflow = workflow;
+    if (match.fromRepo) out.workflowRepo = true;
+  }
+
+  const after = t["after"];
+  if (after !== undefined) {
+    if (!Array.isArray(after) || after.some((x) => typeof x !== "string")) return { error: `${at}.after must be a list of card ids` };
+    const seen = new Set<string>();
+    for (const id of after as string[]) {
+      if (id === self) return { error: `${at}.after: a card cannot wait for itself` };
+      if (seen.has(id)) return { error: `${at}.after: ${id} is named twice` };
+      if (!ids.has(id)) return { error: `${at}.after: no card ${id}` };
+      seen.add(id);
+    }
+    if (after.length > 0) out.after = after as string[];
+  }
+  return out;
+}
+
+const andList = (ids: readonly string[]): string => (ids.length < 2 ? (ids[0] ?? "") : `${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]}`);
+
+/** The cards in a loop of `after`s that `start` is part of, in the order the
+ *  walk first finds them, or null when `start` waits for no loop through itself. */
+function waitLoop(start: string, after: ReadonlyMap<string, readonly string[]>): string[] | null {
+  const path: string[] = [];
+  const dead = new Set<string>();
+  const walk = (id: string): boolean => {
+    if (id === start && path.length > 0) return true;
+    if (dead.has(id) || path.includes(id)) return false;
+    path.push(id);
+    for (const n of after.get(id) ?? []) if (walk(n)) return true;
+    path.pop();
+    dead.add(id);
+    return false;
+  };
+  return walk(start) ? path : null;
+}
+
 /** A plan's tasks off the wire, checked against the limits: at most 8 in a
- *  call and 20 in all (`have` is how many the coordinator holds already), a
- *  title of at most 120 characters, a note of at most 4000, `propose` or
- *  `ask`, a repo this backend knows on this machine, and a `times` of 1 to
- *  `GROUP_MAX`. An error names the task's index and the field, so the
- *  coordinator can fix its plan. */
-export function validatePlan(
-  input: unknown,
-  ctx: { known: (repo: string) => "local" | "remote" | null; have: number },
-): { tasks: PlannedTask[] } | { error: string } {
+ *  call and 20 in all, a title of at most 120 characters, a note of at most
+ *  4000, `propose` or `ask`, a repo this backend knows on this machine, a
+ *  `times` of 1 to `GROUP_MAX`, and the card fields: an `equip` (a
+ *  coordinator names only a loadout), a `workflow` the repo can run (alone
+ *  in its card, never with `times`) and an `after` of cards that exist, in
+ *  the plan or already held, with no card waiting on itself or in a loop.
+ *  An error names the task's index and the field, so the coordinator can fix
+ *  its plan. */
+export function validatePlan(input: unknown, ctx: PlanContext): { tasks: PlannedTask[] } | { error: string } {
   if (!Array.isArray(input)) return { error: "tasks must be a list" };
   if (input.length === 0) return { error: "a plan needs at least one task" };
   if (input.length > MAX_PLAN) return { error: `at most ${MAX_PLAN} tasks per plan; this one has ${input.length}` };
-  if (ctx.have + input.length > MAX_TASKS) {
-    return { error: `a coordinator holds at most ${MAX_TASKS} tasks; it has ${ctx.have} and this plan adds ${input.length}` };
+  const have = ctx.cards.length;
+  if (have + input.length > MAX_TASKS) {
+    return { error: `a coordinator holds at most ${MAX_TASKS} tasks; it has ${have} and this plan adds ${input.length}` };
   }
+  const ids = new Set<string>([...ctx.cards.map((c) => c.id), ...input.map((_, i) => `t${ctx.next + i}`)]);
   const tasks: PlannedTask[] = [];
   for (const [i, t] of input.entries()) {
-    const at = `tasks[${i}]`;
-    if (!isRecord(t)) return { error: `${at} must be an object` };
-    const title = text(t, at, "title", MAX_TITLE);
-    if (typeof title !== "string") return title;
-    const note = text(t, at, "note", MAX_NOTE);
-    if (typeof note !== "string") return note;
-    const repo = t["repo"];
-    if (typeof repo !== "string" || !repo) return { error: `${at}.repo must be a repo id` };
-    const where = ctx.known(repo);
-    if (where === null) return { error: `${at}.repo: no repo ${repo} on this backend` };
-    if (where === "remote") return { error: `${at}.repo: ${repo} is on another host; a task runs in a local repo` };
-    const action = t["action"];
-    if (action !== "propose" && action !== "ask") return { error: `${at}.action must be propose or ask` };
-    const times = t["times"];
-    if (times !== undefined && (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX)) {
-      return { error: `${at}.times must be 1 to ${GROUP_MAX}` };
-    }
-    tasks.push({ title, repo, note, action, ...(typeof times === "number" && times > 1 ? { times } : {}) });
+    const got = checkCard(t, `tasks[${i}]`, `t${ctx.next + i}`, ids, ctx);
+    if ("error" in got) return got;
+    tasks.push(got);
+  }
+  const graph = new Map<string, readonly string[]>(ctx.cards.map((c) => [c.id, c.after ?? []]));
+  for (const [i, t] of tasks.entries()) graph.set(`t${ctx.next + i}`, t.after ?? []);
+  for (const i of tasks.keys()) {
+    const loop = waitLoop(`t${ctx.next + i}`, graph);
+    if (loop) return { error: `tasks[${i}].after: ${andList(loop)} wait for each other` };
   }
   return { tasks };
+}
+
+/** Edits to a card that has not started. A proposed card changes in every
+ *  field the plan has; a queued card only in its `equip` and `after`; any
+ *  other state changes nothing. `b` holds the fields to change (`null` clears
+ *  `equip`, `workflow` and `after`), and `ctx.cards` every card of the
+ *  coordinator, the edited one included. Errors name the card by its id. */
+export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanContext): { task: CoordTask } | { error: string } {
+  if (t.state !== "proposed" && t.state !== "queued") return { error: `${t.id} is ${t.state}; only a proposed or queued card changes` };
+  if (t.state === "queued") {
+    for (const k of ["title", "note", "repo", "action", "times", "workflow", "workflowRepo"]) {
+      if (b[k] !== undefined) return { error: `${t.id} is queued; only its loadout and after change` };
+    }
+  }
+  const pick = (k: keyof CoordTask): unknown => (b[k] === null ? undefined : (b[k] ?? t[k]));
+  const merged = {
+    title: b["title"] ?? t.title,
+    note: b["note"] ?? t.note,
+    repo: b["repo"] ?? t.repo,
+    action: b["action"] ?? t.action,
+    times: b["times"] ?? t.times,
+    equip: pick("equip"),
+    workflow: pick("workflow"),
+    workflowRepo: b["workflow"] !== undefined || b["workflowRepo"] !== undefined ? b["workflowRepo"] : t.workflowRepo,
+    after: pick("after"),
+  };
+  const ids = new Set(ctx.cards.map((c) => c.id));
+  ids.add(t.id);
+  const got = checkCard(merged, t.id, t.id, ids, ctx);
+  if ("error" in got) return got;
+  const graph = new Map<string, readonly string[]>(ctx.cards.map((c) => [c.id, c.after ?? []]));
+  graph.set(t.id, got.after ?? []);
+  const loop = waitLoop(t.id, graph);
+  if (loop) return { error: `${t.id}.after: ${andList(loop)} wait for each other` };
+  const { times: _t, equip: _e, workflow: _w, workflowRepo: _r, after: _a, ...kept } = t;
+  return { task: { ...kept, ...got } };
+}
+
+/** Whether a card has landed, the only state `after` waits for: its branch
+ *  landed or its PR merged. Ready, PR opened and a picked winner do not count. */
+export const cardLanded = (t: Pick<CoordTask, "state" | "outcome">): boolean => t.state === "done" && t.outcome === "landed";
+
+/** What a card waits for, in words, or null when it waits for nothing (no
+ *  `after`, or every card named has landed). `blocked` says a card it waits
+ *  for will not land by itself: it failed, was dropped or was removed. */
+export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean } | null {
+  const open = (task.after ?? []).filter((id) => {
+    const c = cards.find((x) => x.id === id);
+    return !c || !cardLanded(c);
+  });
+  if (open.length === 0) return null;
+  for (const id of open) {
+    const c = cards.find((x) => x.id === id);
+    if (!c) return { words: `waits for ${id}, which was removed`, blocked: true };
+    if (c.state === "failed") return { words: `waits for ${id}, which failed`, blocked: true };
+    if (c.state === "dropped") return { words: `waits for ${id}, which was dropped`, blocked: true };
+  }
+  return { words: `waits for ${andList(open)}`, blocked: false };
 }
 
 /** The queued cards to start now, in order, without passing 3 working. A
  *  card with `times` counts as that many children and needs that many branch
  *  slots. A card that does not fit, whether its repo is short of slots or the
  *  3 are short of room, waits for this pass, and a later card may go ahead of
- *  it. `repoFull` is read once per card, so two cards in a repo with one slot
- *  left both come back: the caller starts them one at a time and leaves a
- *  card queued when its start finds the repo full after all. */
-export function nextToStart(tasks: readonly CoordTask[], ctx: { working: number; repoFull: (repo: string, need?: number) => boolean }): CoordTask[] {
+ *  it. A card that waits for another card to land (`afterWait`) is passed
+ *  over, and a held coordinator starts none. `first` names cards to try
+ *  before the rest, in that order (a start with ids). `repoFull` is read once
+ *  per card, so two cards in a repo with one slot left both come back: the
+ *  caller starts them one at a time and leaves a card queued when its start
+ *  finds the repo full after all. */
+export function nextToStart(
+  tasks: readonly CoordTask[],
+  ctx: { working: number; repoFull: (repo: string, need?: number) => boolean; cards: readonly CoordTask[]; held?: boolean; first?: readonly string[] },
+): CoordTask[] {
+  if (ctx.held) return [];
+  const first = ctx.first ?? [];
+  const ordered = [...tasks].sort((a, b) => {
+    const x = first.indexOf(a.id);
+    const y = first.indexOf(b.id);
+    return (x < 0 ? first.length : x) - (y < 0 ? first.length : y);
+  });
   const out: CoordTask[] = [];
   let going = ctx.working;
-  for (const t of tasks) {
+  for (const t of ordered) {
     if (going >= COORD_AT_ONCE) break;
     const need = t.times ?? 1;
-    if (t.state !== "queued" || going + need > COORD_AT_ONCE || ctx.repoFull(t.repo, need)) continue;
+    if (t.state !== "queued" || afterWait(t, ctx.cards) || going + need > COORD_AT_ONCE || ctx.repoFull(t.repo, need)) continue;
     out.push(t);
     going += need;
   }
@@ -102,6 +300,8 @@ export interface ChildLanding {
   entries?: readonly LandEntry[];
   /** the PR the branch opened, by its address */
   prUrl?: string;
+  /** the PR was merged, which lands the card as the queue would */
+  prMerged?: true;
 }
 
 /** How a child settled, in the words a card and its note use. */
@@ -120,16 +320,21 @@ export function childOutcome(run: Run, landing: ChildLanding = {}): { state: "do
   if (run.status === "failed") return { state: "failed", outcome: "failed" };
   if (run.status === "stopped") return { state: "failed", outcome: "stopped" };
   if (run.status === "limited") return { state: "failed", outcome: "waiting for capacity" };
-  const b = run.branch?.state ?? "nothing";
+  return branchOutcome(run.branch?.state ?? "nothing", landing, run.proposalState === "turned down");
+}
+
+/** How a branch whose work has ended settles its card, shared by a run and a
+ *  flow. Null while the branch still works. */
+function branchOutcome(b: RunBranchState, landing: ChildLanding, turnedDown: boolean): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
   if (b === "working") return null;
   const e = landing.entry;
-  if (e?.state === "landed") return { state: "done", outcome: "landed" };
+  if (e?.state === "landed" || landing.prMerged) return { state: "done", outcome: "landed" };
   if (e && sentBack(e)) return { state: "failed", outcome: "sent back" };
   if (b === "ready" && landing.prUrl) return { state: "done", outcome: "PR opened" };
   if (b === "ready") return { state: "done", outcome: "ready" };
   if (b === "uncommitted") return { state: "failed", outcome: "uncommitted" };
   if (b === "stopped") return { state: "failed", outcome: "stopped" };
-  if (run.proposalState === "turned down") return { state: "failed", outcome: "plan turned down" };
+  if (turnedDown) return { state: "failed", outcome: "plan turned down" };
   return { state: "done", outcome: "no change" };
 }
 
@@ -153,12 +358,37 @@ export interface ChildBranch extends ChildLanding {
  *  entry still in the queue waits however long it takes. Null while it
  *  should wait. */
 export function childSettled(run: Run, b: ChildBranch, overdue: boolean): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
-  const out = childOutcome(run, b);
+  return readySettled(childOutcome(run, b), b, overdue);
+}
+
+/** The wait a ready branch adds to its outcome (see `childSettled`). */
+function readySettled(out: { state: "done" | "failed"; outcome: ChildOutcomeWord } | null, b: ChildBranch, overdue: boolean): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
   if (!out || out.outcome !== "ready") return out;
   if (b.entry && inQueue(b.entry)) return null;
   if (overdue) return out;
   if (b.openPr || b.verdict === undefined || b.verdict === "auto") return null;
   return out;
+}
+
+/** outcomes that may turn `landed` after the card settled, when Eric lands
+ *  the branch or merges its PR later */
+export const MAY_LAND_LATER: readonly ChildOutcomeWord[] = ["ready", "PR opened", "winner picked"];
+
+/** How a flow ended, as its card's outcome. Null while the flow works, waits
+ *  or sits at a gate. A done flow's branch settles as a run's does. */
+function flowOutcome(flow: Pick<Flow, "status" | "branch">, landing: ChildLanding): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
+  switch (flow.status) {
+    case "failed": return { state: "failed", outcome: "failed" };
+    case "stopped": return { state: "failed", outcome: "stopped" };
+    case "done": return branchOutcome(flow.branch?.state ?? "nothing", landing, false);
+    default: return null;
+  }
+}
+
+/** Whether a card's flow has settled it, by the same rules as `childSettled`
+ *  for the flow's branch. */
+export function flowSettled(flow: Pick<Flow, "status" | "branch">, b: ChildBranch, overdue: boolean): { state: "done" | "failed"; outcome: ChildOutcomeWord } | null {
+  return readySettled(flowOutcome(flow, b), b, overdue);
 }
 
 /** Whether a group card has settled, on the group's word. Null while the
@@ -238,3 +468,35 @@ export function settleNote(task: CoordTask, run: Run, landing: ChildLanding = {}
   }
   return lines.join("\n");
 }
+
+/** The user message a settled card's flow sends into its coordinator's chat,
+ *  in `settleNote`'s lines: the result is the workflow and its status, and the
+ *  last reason or summary a step left, with that step's name. */
+export function flowNote(task: CoordTask, flow: Flow, landing: ChildLanding = {}): string {
+  const how = flowOutcome(flow, landing);
+  const step = [...flow.steps].reverse().find((s) => s.reason?.trim() || s.summary?.trim());
+  const line = step ? oneLine(step.reason?.trim() || step.summary?.trim() || "") : "";
+  const lines = [
+    "canopy: a task you started has settled",
+    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `outcome: ${how?.outcome ?? flow.status}`,
+    `result: ${flow.workflow} ${flow.status}${step && line ? `, ${step.name}: ${line}` : ""}`,
+  ];
+  if (landing.prUrl) lines.push(`PR: ${landing.prUrl}`);
+  else if (flow.branch) {
+    const e = landing.entry;
+    lines.push(`branch: ${flow.branch.name}, ${e ? landWord(e, landing.entries ?? [e]) : BRANCH_WORD[flow.branch.state]}`);
+  }
+  return lines.join("\n");
+}
+
+/** The note a landed card sends: the cards that wait for it can start. */
+export const landedNote = (task: CoordTask): string => `canopy: task ${task.id} (${task.title}) landed; cards that wait for it can start`;
+
+/** The note for a queued card whose `after` can never be met. */
+export const blockedNote = (task: CoordTask, words: string): string =>
+  `canopy: task ${task.id} (${task.title}) ${words}; it stays queued until Eric takes its after off or removes it`;
+
+/** The note a hold or a resume sends. */
+export const holdNote = (held: boolean): string =>
+  held ? "canopy: Eric held the goal; no new card starts until he resumes it" : "canopy: Eric resumed the goal; queued cards start again";

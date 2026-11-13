@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { validatePlan, type ChildBranch } from "../core/coordinator";
+import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
 import type { CoordTask, LandEntry, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
@@ -516,7 +517,7 @@ describe("the brief", () => {
     const example = /<<'EOF'\n([\s\S]*?)\n\s*EOF\n/.exec(brief)?.[1];
     if (!example) throw new Error("no example in the brief");
     const body = JSON.parse(example) as { tasks: unknown };
-    expect("tasks" in validatePlan(body.tasks, { known: () => "local", have: 0 })).toBe(true);
+    expect("tasks" in validatePlan(body.tasks, { known: () => "local", cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person" })).toBe(true);
   });
 });
 

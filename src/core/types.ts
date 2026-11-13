@@ -1117,6 +1117,27 @@ export interface CoordTask {
    *  for the reset, 1 once the child resumed on its branch; a second limit
    *  fails the card */
   limited?: 0 | 1;
+  /** what the card starts with: a kit.json loadout and Eric's overrides of it */
+  equip?: CardEquip;
+  /** a workflow to run in place of a single run; the card starts one flow */
+  workflow?: string;
+  /** Eric picked the repo's own workflow of that name */
+  workflowRepo?: true;
+  /** ids of cards of the same coordinator this one waits for, until each has landed */
+  after?: string[];
+  /** the child flow's id, in place of `run` */
+  flow?: string;
+  /** the child's branch (`RunBranch.origin`), once it started */
+  branch?: string;
+}
+
+/** What a card starts with (FR-065): a kit.json loadout and Eric's overrides of it. */
+export interface CardEquip {
+  loadout?: string;
+  model?: string;
+  effort?: AgentEffort;
+  skills?: string[];
+  mcp?: string[];
 }
 
 export type RunStatus =
@@ -1324,6 +1345,8 @@ export interface WorkspaceScope {
 export interface Run {
   /** A persisted snapshot, shown read-only after its live run is gone. */
   kept?: true;
+  /** a coordinator Eric held: none of its cards starts until he resumes it */
+  held?: true;
   /** what the run's loadout resolved to at its start (FR-065) */
   equip?: RunEquip;
   id: string;

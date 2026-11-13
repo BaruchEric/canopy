@@ -9,6 +9,7 @@
  *  like the rest of it. The notes waiting for an idle turn live here. */
 
 import { isCapacityWords, limitedWords } from "../core/capacity";
+import { EMPTY_LOADOUTS } from "../core/loadout";
 import { childSettled, groupNote, groupSettled, nextToStart, settleNote, startNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import type { RunGroup } from "../core/group";
 import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type Priority, type Run } from "../core/types";
@@ -163,9 +164,9 @@ export class CoordinatorHub {
   plan(caller: Caller | null, b: Record<string, unknown>): { ok: true; added: CoordTask[] } {
     const coord = this.coordinator(b["run"], caller);
     const have = coord.tasks ?? [];
-    const got = validatePlan(b["tasks"], { known: this.deps.known, have: have.length });
-    if ("error" in got) throw new CoordError(got.error, 400);
     let last = Math.max(this.numbers.get(coord.id) ?? 0, ...have.map((t) => Number(t.id.slice(1)) || 0));
+    const got = validatePlan(b["tasks"], { known: this.deps.known, cards: have, next: last + 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: caller?.kind === "coordinator" ? "coordinator" : "person" });
+    if ("error" in got) throw new CoordError(got.error, 400);
     const added = got.tasks.map((t): CoordTask => ({ id: `t${++last}`, ...t, state: "proposed" }));
     this.numbers.set(coord.id, last);
     this.setTasks(coord, [...have, ...added]);
@@ -192,7 +193,7 @@ export class CoordinatorHub {
       return { ok: true, removed: id };
     }
     const merged = { title: b["title"] ?? t.title, note: b["note"] ?? t.note, repo: b["repo"] ?? t.repo, action: b["action"] ?? t.action, times: b["times"] ?? t.times };
-    const got = validatePlan([merged], { known: this.deps.known, have: 0 });
+    const got = validatePlan([merged], { known: this.deps.known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person" });
     if ("error" in got) throw new CoordError(got.error.replace(/^tasks\[0\]/, id), 400);
     const [fields] = got.tasks;
     if (!fields) throw new CoordError("the card did not check out", 400);
@@ -254,7 +255,7 @@ export class CoordinatorHub {
         }
         const [next] = nextToStart(
           tasks.filter((t) => !passed.has(t.id)),
-          { working: this.working(coord), repoFull: this.deps.repoFull },
+          { working: this.working(coord), repoFull: this.deps.repoFull, cards: tasks },
         );
         if (!next) return;
         const key = `${coordId}:${next.id}`;
