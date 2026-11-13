@@ -135,6 +135,18 @@ export function claudeBinary(): string | null {
  *  way they would on an interactive `claude`, except that yolo becomes the
  *  bypass permission mode: the interactive flag and the prompt tool are two
  *  ways of answering the same question, and print mode takes the mode. */
+/** The wanted servers an init says did not start, as "name (status)" in the
+ *  order asked: one missing from `mcp_servers` is "absent". */
+export function serversDown(init: Record<string, unknown>, want: readonly string[]): string[] {
+  const listed = Array.isArray(init["mcp_servers"]) ? init["mcp_servers"] : [];
+  const status = new Map<string, string>();
+  for (const e of listed) if (isRecord(e) && typeof e["name"] === "string") status.set(e["name"], str(e, "status") || "unknown");
+  return want.flatMap((name) => {
+    const s = status.get(name) ?? "absent";
+    return s === "connected" ? [] : [`${name} (${s})`];
+  });
+}
+
 export function cliArgs(spec: DriveSpec, agent: AgentSettings = DEFAULT_AGENT, stage = false): string[] {
   // a stage runs in a container without canopy's config dir, so a Claude
   // provider's settings file stays here and the stage keeps its own login
@@ -225,6 +237,7 @@ export class ClaudeDriver implements RunDriver {
   private fold: ClaudeFold = claudeFold("", homedir(), Date.now());
   /** the session id is taken from the first message that carries one */
   private sessionSeen = false;
+  private initChecked = false;
   /** live subagent task ids (spec P7): task_type local_agent only, since a
    *  background shell may run for good (a dev server) and must not hold a
    *  run open */
@@ -400,6 +413,15 @@ export class ClaudeDriver implements RunDriver {
         if (m["type"] === "system" && str(m, "subtype") === "init") {
           const cmds = m["slash_commands"];
           if (Array.isArray(cmds)) noteCliCommands("claude", cmds.filter((c): c is string => typeof c === "string"));
+          // the run's first init only: later turns' inits carry no server list
+          if (!this.initChecked) {
+            this.initChecked = true;
+            const down = serversDown(m, ctx.spec.servers ?? []);
+            if (down.length) {
+              proc.kill();
+              throw new Error(`a loadout server did not start here: ${down.join(", ")}`);
+            }
+          }
         }
         const session = str(m, "session_id");
         if (session && !this.sessionSeen) {

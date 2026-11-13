@@ -2,14 +2,14 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk, toolPaths } from "./claudedrive";
+import { ClaudeDriver, claudeAccounting, cliArgs, parseQuestions, permissionAsk, serversDown, toolPaths } from "./claudedrive";
 import { BUILTIN_MENTIONS, builtinMentions, noteCliCommands } from "./mentions";
 import type { RpcSpawn } from "./codexrpc";
 import { providerFile } from "./store";
 import { DEFAULT_AGENT, type RunStep } from "./types";
 import { replayWire } from "./wirereplay";
 import { WIRE_TICK } from "./runlog";
-import { RunCtx, type DriveRun } from "./driver";
+import { RunCtx, type DriveRun, type DriveSpec } from "./driver";
 import { STAGE_AWAY } from "./stagewire";
 
 /* The ClaudeDriver against a stand-in `claude` (testdata/fake-claude.ts),
@@ -37,6 +37,7 @@ async function drive(
     steerGraceMs?: number;
     requestMs?: number;
     agent?: typeof AGENT;
+    spec?: Partial<DriveSpec>;
     env?: Record<string, string>;
     emit?: (run: DriveRun) => void;
   } = {},
@@ -77,6 +78,7 @@ async function drive(
         ...(unattended ? { unattended } : {}),
         // a propose run starts in plan mode, which is what adds the launch flag a bypass needs
         ...(mode === "propose" ? { permissionMode: "plan" as const } : {}),
+        ...opts.spec,
       },
       env: { CANOPY_RUN: "r1", FAKE_CLAUDE_MODE: mode, FAKE_CLAUDE_LOG: logPath, ...opts.env },
       label: "Claude Code",
@@ -951,6 +953,44 @@ test("canopy's own tool call folds into a step like any other (probe P1)", async
   const run = await d.until(d.done, "the end");
   expect(run.status).toBe("done");
   expect(run.steps.find((s) => s.tool?.name === "mcp__canopy__canopy_status")?.tool).toMatchObject({ status: "ok", output: "app  main" });
+});
+
+describe("a loadout server that did not start (FR-065)", () => {
+  test("serversDown names each wanted server that is not connected", () => {
+    const init = { mcp_servers: [{ name: "pdfcraft", status: "connected" }, { name: "executor", status: "failed" }] };
+    expect(serversDown(init, ["pdfcraft", "executor", "wiki-memory"])).toEqual(["executor (failed)", "wiki-memory (absent)"]);
+    expect(serversDown({}, [])).toEqual([]);
+  });
+
+  test("a run whose loadout server failed ends failed, naming it", async () => {
+    const d = await drive("chat", "hi", undefined, { spec: { servers: ["executor"] }, env: { FAKE_CLAUDE_MCP: JSON.stringify([{ name: "executor", status: "failed" }]) } });
+    const run = await d.until((r) => r.status === "failed", "the failed run");
+    expect(run.error).toContain("a loadout server did not start here: executor (failed)");
+  });
+
+  test("a run whose loadout servers connected goes on", async () => {
+    const d = await drive("chat", "hi", undefined, { spec: { servers: ["executor"] }, env: { FAKE_CLAUDE_MCP: JSON.stringify([{ name: "executor", status: "connected" }]) } });
+    await d.until((r) => r.status === "idle", "the chat's first answer");
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  test("only the first init is checked: a later init with no servers never ends the run", async () => {
+    const d = await drive("steer", "hello", undefined, {
+      chat: true,
+      spec: { servers: ["executor"] },
+      env: { FAKE_STEER_MS: "300", FAKE_CLAUDE_MCP: JSON.stringify([{ name: "executor", status: "connected" }]) },
+    });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: hello"), "the reply");
+    d.driver.steer("and one more thing");
+    const run = await d.until((r) => r.status === "idle" && r.result?.text === "reply 2", "the steer's reply");
+    expect(run.status).toBe("idle");
+    expect(run.error).toBeUndefined();
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
 });
 
 describe("a person steering a Claude run (FR-066)", () => {

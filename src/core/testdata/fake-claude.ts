@@ -107,7 +107,7 @@ if (mode === "latenudge") {
   });
 }
 // the CLI's command list, less one built-in canopy offers (security-review)
-out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd(), slash_commands: ["compact", "clear", "init", "code-review", "simplify", "model", "rename"] });
+out({ type: "system", subtype: "init", session_id: "sess-1", cwd: process.cwd(), slash_commands: ["compact", "clear", "init", "code-review", "simplify", "model", "rename"], ...(process.env["FAKE_CLAUDE_MCP"] ? { mcp_servers: JSON.parse(process.env["FAKE_CLAUDE_MCP"]) } : {}) });
 
 let turns = 0;
 /** latenudge: whether the first turn ended on its own, and whether a
