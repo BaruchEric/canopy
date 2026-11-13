@@ -13,6 +13,7 @@ import { isCapacityWords, limitedWords } from "../core/capacity";
 import {
   afterWait,
   blockedNote,
+  cardLanded,
   childSettled,
   editCard,
   groupNote,
@@ -124,7 +125,9 @@ export class CoordinatorHub {
    *  so the manager hears a card blocked once per reason */
   private blockedSaid = new Map<string, string>();
   /** cards whose start is in flight, `<coordinator>:<card>`: still queued,
-   *  but neither edited nor removed, or the child would start with no card */
+   *  but neither edited nor removed, or the child would start with no card.
+   *  A resume after the limit holds it too, so the card takes no other run
+   *  on its branch meanwhile (`adopt`) and the resume's own run wins. */
   private starting = new Set<string>();
 
   constructor(private deps: CoordinatorDeps) {}
@@ -476,13 +479,36 @@ export class CoordinatorHub {
 
   /* ---------- children ---------- */
 
-  /** A child moved: its card settles when it has (see `childSettled`). */
+  /** A child moved: its card settles when it has (see `childSettled`). A run
+   *  no card has yet may be a later one on a card's branch, which the card
+   *  takes (`adopt`). */
   private follow(child: Run): void {
     if (!child.parent) return;
     const coord = this.deps.run(child.parent);
-    const task = coord?.tasks?.find((t) => t.run === child.id);
-    if (!coord || !task || task.state !== "running") return;
+    if (!coord) return;
+    const task = coord.tasks?.find((t) => t.run === child.id) ?? this.adopt(coord, child);
+    if (!task || task.state !== "running") return;
     this.settle(coord, task, child);
+  }
+
+  /** A later run on a card's branch that names the coordinator (a fix, a
+   *  follow-up) becomes the card's run: the card goes back to
+   *  running with no outcome and settles again on it, `limited` as it was.
+   *  Only a run that works now, for a coordinator still going, while the
+   *  card's own run does not, so an old run's late word never takes the
+   *  card back. A landed card stays closed, and a card whose start or
+   *  resume is in flight keeps that start's run. Not held to three at once:
+   *  it counts as working from then on. */
+  private adopt(coord: Run, run: Run): CoordTask | undefined {
+    const origin = run.branch?.origin;
+    if (!origin || !isRunActive(run) || coord.action !== "coordinate" || !isRunActive(coord)) return undefined;
+    const t = coord.tasks?.find((x) => x.branch === origin && (x.state === "running" || x.state === "done" || x.state === "failed"));
+    if (!t || cardLanded(t) || this.starting.has(`${coord.id}:${t.id}`)) return undefined;
+    const own = t.run ? this.deps.run(t.run) : undefined;
+    if (own && isRunActive(own)) return undefined;
+    if (t.run) this.cancel(t.run);
+    this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "running", run: run.id }, undefined));
+    return this.deps.run(coord.id)?.tasks?.find((x) => x.id === t.id);
   }
 
   /** When a child counts as settled is `childSettled`'s rule: at once for a
@@ -626,12 +652,16 @@ export class CoordinatorHub {
         return;
       }
       let out: ChildResume;
+      const key = `${coordId}:${taskId}`;
+      this.starting.add(key);
       try {
         out = await this.deps.resumeChild(coordId, task, child, priority);
       } catch (err) {
         this.update(coordId, taskId, (x) => withOutcome({ ...x, state: "failed" }, errText(err)));
         this.queueNote(coordId, startNote(task, errText(err)));
         return;
+      } finally {
+        this.starting.delete(key);
       }
       if ("busy" in out) {
         this.update(coordId, taskId, (x) => withOutcome(x, out.busy));

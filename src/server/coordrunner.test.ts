@@ -503,4 +503,52 @@ describe("a coordinator's card with a loadout", () => {
       await rescan(true);
     }
   });
+
+  test("Review Focus 3: a landing fix on a card's branch reopens the card, with the card's loadout and no child refusal", async () => {
+    const repo = join(scratch, "root", "app");
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    // a red gate, so the queue sends the card's branch back and a fix applies
+    await mkdir(join(repo, ".canopy"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+    await commit(repo, "red gate");
+    try {
+      const { coord, tasks } = await startCard({ equip: { loadout: "quick" } });
+      const id = tasks[0]?.run ?? "";
+      live.push(id);
+      const ctx = await ctxOf(id);
+      const dir = ctx.cwd;
+      await writeFile(join(dir, "card.txt"), "x\n");
+      await commit(dir, "card");
+      ctx.result({ text: "done", durationMs: 1, turns: 1 }, null);
+      ctx.exited({ code: 0, stderr: "" });
+      const ended = await until(async () => {
+        const r = (await runs()).find((x) => x.id === id);
+        return r && r.status !== "working" && r.branch?.state === "ready" ? r : null;
+      }, `card child ${id} to end ready`);
+      const origin = ended.branch?.origin ?? "";
+      expect((await postAs(s, "/api/landing/land", { run: origin }, s.page)).status).toBe(200);
+      await until(async () => {
+        const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
+        return info.entries.some((e) => e.id === origin && e.state === "red");
+      }, "the red gate");
+      const res = await postAs(s, "/api/landing/fix", { id: origin }, s.page);
+      const fix = (await res.json()) as Run & { error?: string };
+      expect([res.status, fix.error]).toEqual([201, undefined]);
+      live.push(fix.id);
+      expect(fix.parent).toBe(coord);
+      expect(fix.depth).toBeUndefined();
+      expect(fix.branch?.origin).toBe(origin);
+      expect(fix.equip?.loadout).toBe("quick");
+      expect((await ctxOf(fix.id)).agent.model).toBe("haiku");
+      const card = await until(async () => {
+        const c = await cardOf(coord);
+        return c?.run === fix.id ? c : null;
+      }, "the card to follow the fix");
+      expect(card).toMatchObject({ state: "running", run: fix.id, branch: origin, equip: { loadout: "quick" } });
+      expect(card.outcome).toBeUndefined();
+    } finally {
+      await rm(join(repo, ".canopy", "gates.json"), { force: true });
+      await commit(repo, "no gate");
+    }
+  }, 30_000);
 });

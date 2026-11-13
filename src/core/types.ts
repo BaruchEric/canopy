@@ -1847,7 +1847,9 @@ export interface LandingRun {
   canopyTools?: true;
   /** the loadout its run started with, so a fix starts with the same one */
   equip?: RunEquip;
-  /** a run's child: its chain, which a fix keeps so that it stays a child */
+  /** the run that started it, a run's (with its depth) or a coordinator's
+   *  (with none): a fix keeps them, so a run's child stays one and a
+   *  coordinator's card follows the fix */
   parent?: string;
   depth?: number;
 }

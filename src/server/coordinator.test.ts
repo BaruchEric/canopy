@@ -1077,3 +1077,168 @@ describe("after waits for landed", () => {
     expect(started).toEqual([]);
   });
 });
+
+describe("a card follows its branch", () => {
+  /** a later run on a card's branch (a fix, a follow-up, a resume) that
+   *  names the coordinator, as the runner tells everyone of it */
+  function onBranch(h: CoordinatorHub, taskId: string, over: Partial<Run> = {}): Run {
+    const was = child(taskId);
+    const r = { id: `f${++n}`, repoId: was.repoId, action: "ask", status: "working", startedAt: clock, steps: [], note: "fix it", parent: "co1", branch: { ...was.branch, state: "working" }, ...over } as unknown as Run;
+    runs.set(r.id, r);
+    h.onRun(r);
+    return r;
+  }
+  const settleNotes = (texts: string[]): string[] => texts.filter((t) => t.startsWith("canopy: a task you started has settled"));
+
+  test("a later run on its branch reopens a card that settled ready, and it settles again with a second note", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "approve" });
+    const first = end(h, "t1", { result: "First go." });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", run: "c1" });
+    const fix = onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: fix.id, branch: "br-c1", work: "w-test2345" });
+    expect(card("t1")?.outcome).toBeUndefined();
+    // the first child's later word does not take the card back
+    h.onRun(first);
+    await settled(h);
+    expect(card("t1")?.run).toBe(fix.id);
+    branches.set(fix.id, { verdict: "approve" });
+    end(h, "t1", { result: "Fixed it." });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", run: fix.id });
+    h.onRun(first);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", run: fix.id });
+    const notes = settleNotes(await hearAll(h));
+    expect(notes).toHaveLength(2);
+    expect(notes[0]).toContain("result: First go.");
+    expect(notes[1]).toContain("result: Fixed it.");
+  });
+
+  test("a card that landed stays closed", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "auto", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed", run: "c1" });
+    onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed", run: "c1" });
+  });
+
+  test("a card that failed reopens; the card after it waits for it again and starts only once it lands", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "auto", entry: entry("t1", "red"), entries: [entry("t1", "red")] });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "sent back" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    const fix = onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: fix.id });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    expect(started.map((s) => s.task)).toEqual(["t1"]);
+    branches.set(fix.id, { verdict: "auto", entry: entry("t1", "landed"), entries: [entry("t1", "landed")] });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed", run: fix.id });
+    expect(card("t2")?.state).toBe("running");
+    expect(started.map((s) => s.task)).toEqual(["t1", "t2"]);
+  });
+
+  test("a reopened card is not held to three at once, and counts as working after", async () => {
+    const h = hub();
+    await planFive(h);
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "approve" });
+    end(h, "t1");
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["done", "running", "running", "running", "queued"]);
+    onBranch(h, "t1");
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["running", "running", "running", "running", "queued"]);
+    end(h, "t2", { status: "failed" });
+    await settled(h);
+    expect(card("t5")?.state).toBe("queued");
+    end(h, "t3", { status: "failed" });
+    await settled(h);
+    expect(card("t5")?.state).toBe("running");
+  });
+
+  test("a card waiting on its ready child takes the fix and drops the child's timer; a run beside a working one is not taken", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "auto" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")?.state).toBe("running");
+    expect(h.waiting()).toBe(1);
+    const fix = onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: fix.id });
+    expect(h.waiting()).toBe(0);
+    onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")?.run).toBe(fix.id);
+  });
+
+  test("a run on its branch is not taken by a coordinator that ended, or under any other parent", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    branches.set("c1", { verdict: "approve" });
+    end(h, "t1");
+    await settled(h);
+    onBranch(h, "t1", { parent: "someone" });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", run: "c1" });
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.status = "stopped";
+    h.onRun(co);
+    onBranch(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "ready", run: "c1" });
+  });
+
+  test("a resume in flight keeps its own word: a resumed child that ends inside its start settles the card on it", async () => {
+    clock = Date.UTC(2026, 9, 26, 12);
+    const LIMIT = "You've hit your limit · resets 3pm";
+    const h = hub({
+      resumeChild: async (coordId, t, old) => {
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: { ...old.branch, state: "working" } } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        c.status = "failed";
+        c.endedAt = clock;
+        c.error = "it fell over";
+        c.branch = { ...(old.branch as RunBranch), state: "nothing" };
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    const first = child("t1");
+    first.status = "limited";
+    first.endedAt = clock;
+    first.error = LIMIT;
+    first.limited = { at: clock, text: LIMIT };
+    h.onRun(first);
+    await settled(h);
+    h.wake(() => true);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "failed", run: "c2", limited: 1 });
+  });
+});
