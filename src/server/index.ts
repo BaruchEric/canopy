@@ -280,7 +280,7 @@ import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, loopbackAuthWanted, loopbackBypass, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
-import { fixPrompt, landWord } from "../core/landing";
+import { fixPrompt, followupRefusal, landWord } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
 import { goingOf } from "../core/going";
 import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
@@ -2063,6 +2063,33 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
     if (isCapacityHeld(err)) throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
+}
+
+/** `POST /api/landing/followup`: a later run on a branch that settled
+ *  outside the landing queue (ready, stopped or failed), with Eric's words
+ *  as the reason, or with none to resume it. Refused while a run or flow
+ *  works on the branch and while the branch has a landing entry
+ *  (`followupRefusal`). It keeps the record's parent, so a coordinator's
+ *  card takes the run back, and its loadout, which `startBranchFix`
+ *  rebuilds from the record's equip. */
+async function startFollowup(state: ServerState, body: Record<string, unknown>): Promise<{ run: Run }> {
+  const id = body["id"];
+  const note = body["note"];
+  if (typeof id !== "string" || !id) throw new HttpError(400, "id is required");
+  if (note !== undefined && typeof note !== "string") throw new HttpError(400, "note must be text");
+  const rec = state.landing.record(id);
+  const origin = rec?.id ?? id;
+  const entry = state.landing.info().entries.find((e) => e.id === origin);
+  const busy =
+    state.runner.list().some((r) => r.branch?.origin === origin && isRunActive(r)) ||
+    state.flows.list().some((f) => f.branch?.origin === origin && isFlowActive(f));
+  const refused = followupRefusal(rec, entry, busy, id);
+  if (refused) throw new HttpError(refused.status, refused.error);
+  // the refusal above covers a missing record; this tells the types so
+  if (!rec) throw new HttpError(404, `canopy holds no branch ${id}`);
+  const said = note?.trim() ?? "";
+  const reason = said || "Carry on with the task from where you stopped.";
+  return { run: await startBranchFix(state, rec, reason, said ? "follow-up" : "resume", rec.pr === undefined, { priority: "interactive" }) };
 }
 
 /** How a trigger runs its workflow. A plain one-step workflow is the action
@@ -4315,6 +4342,9 @@ async function handleApi(
   const groupsRes = await state.groups.handle(req, url);
   if (groupsRes) return groupsRes;
   if (path === "/api/landing" && method === "GET") return json({ ...state.landing.info(), groups: state.groups.info() });
+  // a later run on a settled branch with Eric's words, or none to resume;
+  // here, ahead of the hub, since it starts through startBranchFix
+  if (path === "/api/landing/followup" && method === "POST") return json(await startFollowup(state, await objectBody(req)), 201);
   const landingRes = await state.landing.handle(req, url);
   if (landingRes) return landingRes;
   const worktreesRes = await state.warm.handle(req, url);

@@ -6,6 +6,7 @@ import {
   enqueue,
   entryFor,
   fixPrompt,
+  followupRefusal,
   landAllPick,
   MAX_NOTICES,
   rejoins,
@@ -223,6 +224,33 @@ describe("the queue", () => {
     const kept = pruneLanded(es);
     expect(kept).toHaveLength(10);
     expect(kept.some((e) => e.id === "r0" || e.id === "r1")).toBe(false);
+  });
+});
+
+describe("followupRefusal", () => {
+  const entryIn = (state: LandEntry["state"]): LandEntry => ({ ...entryFor(run("f"), 1), state });
+  test("no record is a 404 naming the id", () => {
+    expect(followupRefusal(undefined, undefined, false, "f")).toEqual({ status: 404, error: "canopy holds no branch f; it was dropped or never ran" });
+  });
+  test("a run or a flow working on the branch refuses it", () => {
+    expect(followupRefusal(run("f"), undefined, true, "f")).toEqual({ status: 409, error: "a run is working on this branch; say to it instead" });
+  });
+  test("an entry in the queue refuses it, naming the state", () => {
+    for (const state of ["queued", "waiting", "judge", "rebasing", "setup", "gate", "scenarios", "landing"] as const) {
+      expect(followupRefusal(run("f"), entryIn(state), false, "f")).toEqual({ status: 409, error: `it is in the landing queue (${state}); wait for it, or drop it from the queue first` });
+    }
+  });
+  test("a sent-back entry refuses it, pointing at the queue's fix", () => {
+    for (const state of ["conflict", "red", "moved"] as const) {
+      expect(followupRefusal(run("f"), entryIn(state), false, "f")).toEqual({ status: 409, error: `it was sent back (${state}); fix it from the landing queue instead` });
+    }
+  });
+  test("a landed entry refuses it", () => {
+    expect(followupRefusal(run("f"), entryIn("landed"), false, "f")).toEqual({ status: 409, error: "it has landed" });
+  });
+  test("a branch outside the queue, ready or stopped, takes a follow-up", () => {
+    expect(followupRefusal(run("f", { state: "ready" }), undefined, false, "f")).toBeNull();
+    expect(followupRefusal(run("f", { state: "stopped" }), undefined, false, "f")).toBeNull();
   });
 });
 

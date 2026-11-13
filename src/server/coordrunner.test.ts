@@ -675,6 +675,63 @@ describe("a coordinator's card with a loadout", () => {
     }
   }, 30_000);
 
+  test("a follow-up on a card's ready branch reopens the card with the card's loadout, and it settles again with a second note", async () => {
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    /** the settle notes said into the coordinator's chat: a note waits for
+     *  an idle turn, so each pass that finds it working ends its turn */
+    async function settleNotes(coord: string, n: number): Promise<string[]> {
+      const ctx = await ctxOf(coord);
+      return until(async () => {
+        const r = (await runs()).find((x) => x.id === coord);
+        const notes = (r?.steps ?? []).flatMap((st) => (st.kind === "user" && st.text?.startsWith("canopy: a task you started has settled") ? [st.text] : []));
+        if (notes.length >= n) return notes;
+        if (r?.status === "working") ctx.result({ text: "ok", durationMs: 1, turns: 1 }, null);
+        return null;
+      }, `${n} settle notes in the coordinator's chat`);
+    }
+    const { coord, tasks } = await startCard({ equip: { loadout: "quick" } });
+    const id = tasks[0]?.run ?? "";
+    live.push(id);
+    const ctx = await ctxOf(id);
+    await writeFile(join(ctx.cwd, "card.txt"), "x\n");
+    await commit(ctx.cwd, "card");
+    finish(ctx, "First go.");
+    const settled = await until(async () => {
+      const c = await cardOf(coord);
+      return c?.state === "done" && c.outcome === "ready" ? c : null;
+    }, "the card to settle ready");
+    const origin = settled.branch ?? "";
+    expect((await settleNotes(coord, 1))[0]).toContain("result: First go.");
+    const res = await postAs(s, "/api/landing/followup", { id: origin, note: "rename the flag" }, s.page);
+    const got = (await res.json()) as { run?: Run; error?: string };
+    expect([res.status, got.error]).toEqual([201, undefined]);
+    const later = got.run;
+    if (!later) throw new Error("the follow-up answered no run");
+    live.push(later.id);
+    expect(later.parent).toBe(coord);
+    expect(later.branch?.origin).toBe(origin);
+    expect(later.equip?.loadout).toBe("quick");
+    const laterCtx = await ctxOf(later.id);
+    expect(laterCtx.agent.model).toBe("haiku");
+    expect(s.made.find((d) => d.ctx === laterCtx)?.message).toContain("rename the flag");
+    const reopened = await until(async () => {
+      const c = await cardOf(coord);
+      return c?.run === later.id ? c : null;
+    }, "the card to follow the follow-up");
+    expect(reopened).toMatchObject({ state: "running", run: later.id, branch: origin, equip: { loadout: "quick" } });
+    expect(reopened.outcome).toBeUndefined();
+    await writeFile(join(laterCtx.cwd, "flag.txt"), "renamed\n");
+    await commit(laterCtx.cwd, "rename the flag");
+    finish(laterCtx, "Renamed it.");
+    await until(async () => {
+      const c = await cardOf(coord);
+      return c?.state === "done" && c.outcome === "ready" && c.run === later.id ? c : null;
+    }, "the card to settle again");
+    const notes = await settleNotes(coord, 2);
+    expect(notes).toHaveLength(2);
+    expect(notes[1]).toContain("result: Renamed it.");
+  }, 30_000);
+
   const TWO_STEPS = `---
 name: two-steps
 verb: build and check

@@ -28,6 +28,9 @@ class CommitDriver implements RunDriver {
     this.stopping = false;
     void (async () => {
       prompts.push({ cwd: ctx.cwd, message, resume: ctx.spec.resume });
+      const wait = hold;
+      if (wait) await wait;
+      if (this.finishIfStopped()) return;
       if (!message.includes("leave it")) {
         await writeFile(join(ctx.cwd, `work-${prompts.length}.txt`), "work\n");
         if (this.finishIfStopped()) return;
@@ -60,6 +63,8 @@ class CommitDriver implements RunDriver {
 }
 
 const prompts: { cwd: string; message: string; resume: string | undefined }[] = [];
+/** while set, a run the driver starts waits for it before it does its work */
+let hold: Promise<void> | null = null;
 let scratch: string;
 let root: string;
 let previousConfig: string | undefined;
@@ -223,3 +228,78 @@ describe("branch runs over the API", () => {
   });
 });
 
+
+describe("a follow-up on a branch", () => {
+  const followUp = (body: unknown) => call("/api/landing/followup", body);
+  const errorOf = async (res: Response) => ((await res.json()) as { error?: string }).error;
+  const runCount = async () => ((await (await fetch(url("/api/runs"))).json()) as Run[]).length;
+  const readyAgain = (id: string) => until(async () => {
+    const r = await runOf(id);
+    return r?.status === "done" && r.branch?.state === "ready" ? r : null;
+  }, `run ${id} to settle ready`);
+  /** the next message the driver is started with */
+  const nextPrompt = (after: number) => until(async () => prompts[after], "the run to reach the driver");
+
+  test("a ready branch takes one later run with Eric's words, or with none to resume, and never a second beside it", async () => {
+    const first = (await (await call("/api/repos/run?id=proj", { action: "ask", note: "add a flag", branch: true })).json()) as Run;
+    const origin = first.branch!.origin;
+    await readyAgain(first.id);
+    let letGo = () => {};
+    hold = new Promise((resolve) => {
+      letGo = resolve;
+    });
+    let said: Run;
+    try {
+      const before = prompts.length;
+      const res = await followUp({ id: origin, note: "  rename the flag  " });
+      expect(res.status).toBe(201);
+      said = ((await res.json()) as { run: Run }).run;
+      expect(said.branch?.origin).toBe(origin);
+      expect(said.note).toBe("follow-up");
+      const sent = await nextPrompt(before);
+      expect(sent.cwd).toBe(first.branch!.dir);
+      expect(sent.message).toContain("rename the flag");
+      // a Claude branch resumes its last session
+      expect(sent.resume).toBe("sess-1");
+      const again = await followUp({ id: origin, note: "and another" });
+      expect([again.status, await errorOf(again)]).toEqual([409, "a run is working on this branch; say to it instead"]);
+    } finally {
+      hold = null;
+      letGo();
+    }
+    await readyAgain(said.id);
+    const before = prompts.length;
+    const resumed = await followUp({ id: origin });
+    expect(resumed.status).toBe(201);
+    const resume = ((await resumed.json()) as { run: Run }).run;
+    expect([resume.note, resume.branch?.origin]).toEqual(["resume", origin]);
+    expect((await nextPrompt(before)).message).toContain("Carry on with the task from where you stopped.");
+    await readyAgain(resume.id);
+  });
+
+  test("a branch in the landing queue answers 409 and starts nothing", async () => {
+    const run = (await (await call("/api/repos/run?id=proj", { action: "ask", note: "queue it", branch: true })).json()) as Run;
+    const origin = run.branch!.origin;
+    await readyAgain(run.id);
+    // the main checkout off its target holds the entry in the queue, waiting
+    const proj = join(root, "proj");
+    await git(proj, "checkout", "-q", "-b", "aside");
+    try {
+      expect((await call("/api/landing/land", { run: run.id })).status).toBe(200);
+      await until(async () => (await landing()).entries.find((e) => e.id === origin && e.state === "waiting"), "the entry to wait");
+      const runs = await runCount();
+      const res = await followUp({ id: origin, note: "one more thing" });
+      expect([res.status, await errorOf(res)]).toEqual([409, "it is in the landing queue (waiting); wait for it, or drop it from the queue first"]);
+      expect(await runCount()).toBe(runs);
+    } finally {
+      await git(proj, "checkout", "-q", "main");
+    }
+  });
+
+  test("an unknown branch is a 404, and a body without an id or with a note not text is a 400", async () => {
+    const res = await followUp({ id: "nope", note: "x" });
+    expect([res.status, await errorOf(res)]).toEqual([404, "canopy holds no branch nope; it was dropped or never ran"]);
+    expect((await followUp({ note: "x" })).status).toBe(400);
+    expect((await followUp({ id: "nope", note: 3 })).status).toBe(400);
+  });
+});

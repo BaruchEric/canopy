@@ -175,6 +175,21 @@ export function rejoins(review: RunReview, entry: Pick<LandEntry, "auto" | "appr
   return { ok: false, why: entry.approved ? "the fix changed the sensitive files you approved; look again" : "the fix touches sensitive files; look at them and approve" };
 }
 
+/** Why a later run with a person's words may not start on a branch, or
+ *  null when it may. A follow-up never puts a second writer on a branch:
+ *  not beside a run or flow working on it, and not while the branch has a
+ *  landing entry, which the queue or its own "fix it" works. `id` is the
+ *  branch asked for, which the 404 names when canopy holds no record. */
+export function followupRefusal(rec: LandingRun | undefined, entry: LandEntry | undefined, busy: boolean, id: string): { status: 404 | 409; error: string } | null {
+  if (!rec) return { status: 404, error: `canopy holds no branch ${id}; it was dropped or never ran` };
+  if (busy) return { status: 409, error: "a run is working on this branch; say to it instead" };
+  if (!entry) return null;
+  if (entry.state === "landed") return { status: 409, error: "it has landed" };
+  if (inQueue(entry)) return { status: 409, error: `it is in the landing queue (${entry.state}); wait for it, or drop it from the queue first` };
+  if (sentBack(entry)) return { status: 409, error: `it was sent back (${entry.state}); fix it from the landing queue instead` };
+  return null;
+}
+
 /** Whether "land" may queue a run as sorted now; `approve` is the id the
  *  sheet was opened with. Throws a 409 that says to look again. */
 export function canLand(review: RunReview, approve?: string): void {
