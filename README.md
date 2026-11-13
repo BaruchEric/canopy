@@ -80,6 +80,8 @@ canopy capacity read               # read the windows now
 canopy capacity release <id>       # start one held start now, as interactive
 canopy capacity set --low 70% --normal 90% --weekly 85% --usd 40   # the governor's holds and the observed dollar figure
 canopy run <repo> <action> --priority low   # who goes first when the window runs low (interactive, normal, low)
+canopy loadouts [--json]          # the loadouts ~/.claude/kit.json offers a run (agent, skills, servers), the skills always on, and kit.json's errors
+canopy run <repo> <action> --loadout NAME   # start one run with that loadout; not with --times or --profiles
 canopy run <repo> <action> --tools   # this run holds canopy's tools: a run token and the canopy MCP server; off unless a start or a profile says so
 canopy runs child <repo> --note text --parent <run>   # a child of a live run, on its own branch at low priority
 canopy health [--bad] [--repo R] [--json]   # every check on every backend; exit 1 when anything is down

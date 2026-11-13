@@ -192,3 +192,12 @@ test("parseChildArgs wants a repo, a note and a parent", () => {
     expect(parseChildArgs(bad)).toBe(RUNS_USAGE);
   }
 });
+
+test("--loadout names the run's loadout", () => {
+  expect(parseRunArgs(["canopy", "ask", "--loadout", "docs"])).toMatchObject({ loadout: "docs" });
+});
+
+test.each([
+  [["canopy", "ask", "--loadout"], "--loadout needs a name"],
+  [["canopy", "ask", "--loadout", "docs", "--times", "2"], "--loadout starts one run; use --profiles for a group"],
+])("%j is refused", (argv, why) => expect(parseRunArgs(argv)).toBe(why));
