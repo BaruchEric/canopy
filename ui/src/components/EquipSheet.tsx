@@ -146,7 +146,9 @@ export function EquipSheet({ run, task, onDone }: { run: Run; task: CoordTask; o
                   <input type="checkbox" value={w.name} disabled={w.locked} checked={w.on} onChange={() => setPicks({ ...picks, skills: flip(picks.skills, w.name) })} />
                   <span>
                     <span className="mgr-equip-name">{w.name}</span>
-                    <span className="mgr-equip-line">{w.description}</span>
+                    <span className="mgr-equip-line mgr-equip-desc" title={w.description}>
+                      {w.description}
+                    </span>
                     {w.plugin && <span className="mgr-equip-line">{w.plugin}</span>}
                   </span>
                 </label>

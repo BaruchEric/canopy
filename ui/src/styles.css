@@ -7309,19 +7309,20 @@ button.dl-gut.has {
 .mgr-view.phone .mgr-ring-row {
   scroll-snap-type: x mandatory;
 }
+/* the smaller dial grows with the type, so its middle holds "3 cards" at
+   the small step on a wide screen's larger type too */
 .mgr-view.phone .mgr-ring {
-  width: 96px;
+  width: calc(96px * var(--ui));
 }
 .mgr-view.phone .mgr-dial {
-  width: 68px;
-  height: 68px;
+  width: calc(68px * var(--ui));
+  height: calc(68px * var(--ui));
 }
-/* the smaller dial's middle holds "3 cards" only at the small step */
 .mgr-view.phone .mgr-at {
   font-size: var(--t-xs);
 }
 .mgr-view.phone .mgr-wave {
-  margin-top: 40px;
+  margin-top: calc(34px * var(--ui) + 6px);
 }
 .mgr-view.phone .mgr-lane-facts {
   flex-basis: 100%;
@@ -18248,6 +18249,15 @@ button.clock-job + .clock-lane {
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+/* a skill's description runs to a page; two lines tell them apart, the
+   title holds the rest */
+.mgr-equip-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 .mgr-equip-foot {
   padding: 12px var(--gutter) 16px;

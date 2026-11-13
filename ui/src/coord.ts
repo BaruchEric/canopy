@@ -69,12 +69,30 @@ export interface CardStatus {
 
 const MAX_LINE = 140;
 
+/** Emphasis that wraps words, off: `**a**`, `__a__`, `*a*`, `_a_`. The
+ *  underscores inside a word (`end_of_line`), a glob's stars and the star
+ *  of a sum (`2 * 3`) stay. */
+const plainEmphasis = (s: string): string =>
+  s
+    .replace(/(\*\*|__)(?=\S)(.+?)(?<=\S)\1(?![\w*])/g, "$2")
+    .replace(/(^|[^\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])/g, "$1$2")
+    .replace(/(^|\W)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)/g, "$1$2");
+
+/** A line without markdown's emphasis. A code span loses its backticks and
+ *  keeps its text whole, `[*]` and `end_of_line` included. */
+function unmarked(line: string): string {
+  return line
+    .split(/(`+[^`]*`+)/)
+    .map((part, i) => (i % 2 === 1 ? part.replace(/^`+|`+$/g, "") : plainEmphasis(part)))
+    .join("");
+}
+
 /** One timeline entry on one line: a tool call's title, else the first
  *  non-blank line of its text, without markdown's emphasis. */
 export function stepLine(step: RunStep): string {
   const raw = step.kind === "tool" ? (step.tool?.title ?? step.tool?.name ?? "") : (step.text ?? "");
   const first = raw.split("\n").find((l) => l.trim()) ?? "";
-  const flat = first.replace(/[*_`]+/g, "").replace(/\s+/g, " ").trim();
+  const flat = unmarked(first).replace(/\s+/g, " ").trim();
   return flat.length > MAX_LINE ? `${flat.slice(0, MAX_LINE - 1)}…` : flat;
 }
 

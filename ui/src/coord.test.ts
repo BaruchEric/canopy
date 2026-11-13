@@ -63,6 +63,12 @@ describe("a step on one line", () => {
     expect(stepLine({ id: "x", at: 1, kind: "tool", tool: { name: "Bash", title: "bun test", status: "ok" } })).toBe("bun test");
     expect(stepLine(step("note", "x".repeat(200)))).toHaveLength(140);
   });
+  test("code keeps its stars and underscores, and so does a word joined by them", () => {
+    // a worker's summary on the mini, 2026-11-13, lost both
+    expect(stepLine(step("text", "a `[*]` section setting `end_of_line = lf`"))).toBe("a [*] section setting end_of_line = lf");
+    expect(stepLine(step("text", "set max_line_length and *keep* __this__ _one_"))).toBe("set max_line_length and keep this one");
+    expect(stepLine(step("text", "glob **/*.ts stays, 2 * 3 too"))).toBe("glob **/*.ts stays, 2 * 3 too");
+  });
   test("the child's newest main-thread step that says something", () => {
     const steps = [step("text", "first"), step("text", "under an agent", { parent: "a" }), step("text", "  ")];
     expect(childLine({ steps })).toBe("first");
