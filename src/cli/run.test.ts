@@ -256,3 +256,28 @@ test("a run without --loadout never asks for the loadouts", async () => {
   expect(got.failed).toBeNull();
   expect(got.requests).toEqual(["POST /api/repos/run"]);
 });
+
+test("canopy run pickup posts {id} and prints the flow's id and status", async () => {
+  resetCliApiState();
+  const requests: { method: string; path: string; body?: unknown }[] = [];
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const body = await request.json();
+      requests.push({ method: request.method, path: new URL(request.url).pathname, body });
+      return Response.json({ id: "f-1", status: "working" });
+    },
+  });
+  const lines: string[] = [];
+  const oldLog = console.log;
+  console.log = (line: string) => { lines.push(line); };
+  try {
+    await main(["run", "pickup", "f-1", "--backend", `http://127.0.0.1:${server.port}`]);
+  } finally {
+    resetCliApiState();
+    console.log = oldLog;
+    server.stop(true);
+  }
+  expect(requests).toEqual([{ method: "POST", path: "/api/flows/pickup", body: { id: "f-1" } }]);
+  expect(lines).toEqual(["f-1 working"]);
+});

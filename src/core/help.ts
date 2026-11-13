@@ -132,10 +132,19 @@ usage:
     --backend URL | --on NAME       select the backend that owns the repo
   canopy runs child <repo> --note text --parent <run> [--action ask|propose]   start a child of a live run, as its canopy_run_start would
     --backend URL | --on NAME       select the backend that owns the repo
+  canopy run pickup <flow>          take up a stopped flow; prints its id and status
+    --backend URL | --on NAME       select the backend that owns the flow
+  canopy coordinator [--json]       the live coordinators: id, repo, held, card counts, the goal's first line
+  canopy coordinator <run> [--json]   one coordinator's cards: id, state, repo, loadout, workflow, after, title
+  canopy coordinator hold <run>     start no card of the goal until resumed; running children go on
+  canopy coordinator resume <run>   lift a hold
+  canopy coordinator start <run> [id ...]   start these cards, or every proposed one
+    --backend URL | --on NAME       select the backend that owns the goal
   canopy groups [repo]              list best-of-N groups and each member's branch, state and profile
   canopy groups pick <group> <run>  choose a green member as the winner
     --backend URL | --on NAME       select the backend that owns the group
   canopy land <run>                  a ready branch run into its repo's landing queue: rebase, gates, fast-forward; never a push
+  canopy land followup <branch> [-m words]   send a ready, stopped or failed branch run back for another pass; prints the new run's id
   canopy queue [repo]                every landing queue: queued in order, sent back and why, ready to land
   canopy collisions [repo]           runs on one repo editing the same files right now, and what they share; never a hold
   canopy worktrees [repo] [--json]   every run and warm worktree on the backend, the failed refills, the orphans and the free disk

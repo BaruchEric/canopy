@@ -17,7 +17,8 @@ export const RUN_USAGE = `usage: canopy run <repo> <action> [-m note] [--times 1
        canopy run fork <id> [--at N] [--profile NAME] [-m note] [--backend URL]
        canopy run say <id> <words…> [--backend URL]
        canopy run interrupt <id> [words…] [--backend URL]
-       canopy run prune [--backend URL]`;
+       canopy run prune [--backend URL]
+       canopy run pickup <flow> [--backend URL] [--on NAME]`;
 
 /** One line per kept run, newest first. `now` is unix milliseconds. */
 export function keptLines(heads: readonly KeptRunHead[], now: number = Date.now()): string[] {

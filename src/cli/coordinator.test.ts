@@ -1,0 +1,69 @@
+import { expect, test } from "bun:test";
+import type { CoordTask, Run } from "../core/types";
+import { cardLines, coordinatorCommand, coordinatorLines } from "./coordinator";
+
+const card = (id: string, over: Partial<CoordTask> = {}): CoordTask => ({ id, title: `card ${id}`, repo: "playground/x", note: "", action: "propose", state: "proposed", ...over });
+const coord = (id: string, over: Partial<Run> = {}): Run => ({ id, action: "coordinate", status: "working", repoId: "playground/x", note: "ship the thing\nsecond line", tasks: [], ...over }) as Run;
+
+test("coordinatorLines lists only live coordinators: id, repo, held, counts, goal's first line", () => {
+  const runs = [
+    coord("c1", { held: true, tasks: [card("t1"), card("t2", { state: "running" })] }),
+    coord("c2", { status: "done" }),
+    { ...coord("r1"), action: "ask" } as Run,
+  ];
+  expect(coordinatorLines(runs)).toEqual(["c1  playground/x  held  2 cards · 1 proposed, 1 running  ship the thing"]);
+  expect(coordinatorLines([coord("c3")])).toEqual(["c3  playground/x  0 cards  ship the thing"]);
+});
+
+test("cardLines pads the columns: id, state, repo, loadout, workflow, after, title", () => {
+  const tasks = [
+    card("t1", { state: "queued", title: "sync the spec", workflow: "spec", after: ["t2"], equip: { loadout: "quick" } }),
+    card("t2", { title: "write it" }),
+  ];
+  expect(cardLines(coord("c1", { tasks }))).toEqual([
+    "t1  queued    playground/x  quick  spec  after t2  sync the spec",
+    "t2  proposed  playground/x"+" ".repeat(25)+"write it",
+  ]);
+  expect(cardLines(coord("c1"))).toEqual([]);
+});
+
+const serve = (posted: { path: string; body: unknown }[], runs: Run[]) =>
+  Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (req) => {
+    const path = new URL(req.url).pathname;
+    if (req.method === "GET") return Response.json(runs);
+    posted.push({ path, body: await req.json() });
+    return Response.json({ ok: true, held: true, tasks: [] });
+  } });
+
+async function run(argv: string[], server: ReturnType<typeof serve>): Promise<string[]> {
+  const log = console.log;
+  const lines: string[] = [];
+  try {
+    console.log = (line: unknown) => { lines.push(String(line)); };
+    await coordinatorCommand([...argv, "--backend", `http://127.0.0.1:${server.port}`], { fail: (m) => { throw Error(m); } });
+  } finally {
+    console.log = log;
+    server.stop(true);
+  }
+  return lines;
+}
+
+test("hold and resume post {run, held}; start posts ids or none", async () => {
+  const posted: { path: string; body: unknown }[] = [];
+  await run(["hold", "c1"], serve(posted, []));
+  await run(["resume", "c1"], serve(posted, []));
+  await run(["start", "c1"], serve(posted, []));
+  await run(["start", "c1", "t1", "t2"], serve(posted, []));
+  expect(posted).toEqual([
+    { path: "/api/coordinator/hold", body: { run: "c1", held: true } },
+    { path: "/api/coordinator/hold", body: { run: "c1", held: false } },
+    { path: "/api/coordinator/start", body: { run: "c1" } },
+    { path: "/api/coordinator/start", body: { run: "c1", ids: ["t1", "t2"] } },
+  ]);
+});
+
+test("coordinator <run> prints its cards; an unknown run fails", async () => {
+  const runs = [coord("c1", { tasks: [card("t1")] })];
+  expect(await run(["c1"], serve([], runs))).toEqual(["t1  proposed  playground/x  card t1"]);
+  await expect(run(["nope"], serve([], runs))).rejects.toThrow("no live coordinator nope");
+});

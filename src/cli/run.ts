@@ -162,11 +162,30 @@ export interface RunCommandDeps {
 export async function dispatchRunCommand(argv: string[], deps: RunCommandDeps): Promise<void> {
   const args = [...argv];
   const first = firstWord(args);
+  if (first === "pickup") return pickupCommand(args, deps);
   if (first === undefined || first === "show" || first === "export" || first === "fork" || first === "prune" || first === "say" || first === "interrupt") {
     if (deps.transcripts) return deps.transcripts(args, { fail: deps.fail });
     return deps.fail(RUN_USAGE);
   }
   return runStartCommand(args, deps);
+}
+
+/** `canopy run pickup <flow>`: take up a flow a restart or a stop left. */
+async function pickupCommand(argv: string[], { fail }: RunCommandDeps): Promise<void> {
+  const args = [...argv];
+  const backendFlag = args.includes("--backend");
+  const backend = take(args, "--backend");
+  const onFlag = args.includes("--on");
+  const on = take(args, "--on");
+  if (backendFlag && backend === undefined) return fail("--backend needs a value");
+  if (onFlag && on === undefined) return fail("--on needs a value");
+  if (backend !== undefined && on !== undefined) return fail("use either --backend URL or --on NAME");
+  if (args.shift() !== "pickup") return fail(RUN_USAGE);
+  const id = args.shift();
+  if (!id || args.length > 0) return fail(RUN_USAGE);
+  const target = await selectedTarget({ ...(backend !== undefined ? { backend } : {}), ...(on !== undefined ? { on } : {}) }, fail);
+  const flow = await ask<{ id: string; status: string }>(target, "POST", "/api/flows/pickup", { id }).catch(requestFailure(target, fail));
+  console.log(`${flow.id} ${flow.status}`);
 }
 
 /** Alias used by the top-level CLI. Transcript forms share the dispatcher

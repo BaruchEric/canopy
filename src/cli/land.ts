@@ -9,7 +9,7 @@ import type { BackendEntry, LandEntry, LandingInfo, LandingRun } from "../core/t
 import { ask, errText, has, take, targetsOf, Unreachable, type Target } from "./health";
 
 export const LAND_USAGE =
-  "usage: canopy land <run> [--approve <id>] [--skip-judge] [--backend URL]\n       canopy land --all [repo] [--backend URL]\n       canopy queue [repo] [--backend URL]\n       canopy collisions [repo] [--backend URL]";
+  "usage: canopy land <run> [--approve <id>] [--skip-judge] [--backend URL]\n       canopy land followup <branch> [-m words] [--backend URL]\n       canopy land --all [repo] [--backend URL]\n       canopy queue [repo] [--backend URL]\n       canopy collisions [repo] [--backend URL]";
 
 const backWords = (e: LandEntry): string => (e.state === "red" ? e.gate?.startsWith(SCORE_GATE) ? e.reason ?? e.gate : `${e.gate ?? "a gate"} failed` : (e.reason ?? e.state));
 
@@ -105,6 +105,17 @@ export async function landCommand(cmd: "land" | "queue" | "collisions", argv: st
       console.log(`${id}: ${got.queued.length} queued`);
       for (const s of got.skipped) console.log(`  left for you: ${s.branch}  ${s.why}`);
     }
+    return;
+  }
+  if (cmd === "land" && args[0] === "followup") {
+    args.shift();
+    const noteFlag = args.includes("-m");
+    const note = take(args, "-m");
+    if (noteFlag && note === undefined) return fail("-m needs words");
+    const id = args.shift();
+    if (!id || args.length > 0) return fail(LAND_USAGE);
+    const got = await ask<{ run: { id: string } }>(homeTarget, "POST", "/api/landing/followup", { id, ...(note !== undefined ? { note } : {}) }).catch(failed);
+    console.log(got.run.id);
     return;
   }
   if (cmd === "land") {

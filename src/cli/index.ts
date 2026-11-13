@@ -53,6 +53,7 @@ import { asksHelp, HELP_TEXT, verbHelp } from "../core/help";
 import { healthCommand } from "./health";
 import { costsCommand } from "./costs";
 import { capacityCommand } from "./capacity";
+import { coordinatorCommand } from "./coordinator";
 import { loadoutsCommand } from "./loadouts";
 import { kitCommand } from "./kit";
 import { pluginsCommand } from "./plugins";
@@ -133,6 +134,7 @@ export const COMMANDS = new Set([
   "costs",
   "capacity",
   "loadouts",
+  "coordinator",
   "kit",
   "plugins",
   "mcp",
@@ -931,6 +933,8 @@ export async function main(argv: string[]): Promise<void> {
       return capacityCommand(args, { fail });
     case "loadouts":
       return loadoutsCommand(args, { fail });
+    case "coordinator":
+      return coordinatorCommand(args, { fail });
     case "kit":
       return kitCommand(args, { fail });
     case "plugins":

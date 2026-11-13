@@ -643,3 +643,40 @@ export function withStandingRules(brief: string, rules: string | null): string {
   const text = rules?.trim();
   return text ? `${brief}\n\n## Eric's standing rules\n\n${text}` : brief;
 }
+
+/** Eric's overrides of a card's loadout, in words: "model sonnet". */
+function overrides(e: CardEquip): string[] {
+  const list = (l: readonly string[]): string => (l.length > 0 ? l.join(", ") : "none");
+  return [
+    e.model !== undefined ? `model ${e.model}` : "",
+    e.effort !== undefined ? `effort ${e.effort}` : "",
+    e.skills !== undefined ? `skills ${list(e.skills)}` : "",
+    e.mcp !== undefined ? `servers ${list(e.mcp)}` : "",
+  ].filter(Boolean);
+}
+
+/** The words a card's facts line adds: its loadout (with "changed" when
+ *  Eric overrode a field, the overrides in its title), its workflow, and
+ *  "after t1, t3" for the cards it waits for. */
+export function cardCarries(task: CoordTask): { loadout?: { word: string; title: string }; workflow?: string; after?: string } {
+  const out: { loadout?: { word: string; title: string }; workflow?: string; after?: string } = {};
+  const e = task.equip;
+  if (e?.loadout) {
+    const set = overrides(e);
+    out.loadout = { word: set.length > 0 ? `${e.loadout}, changed` : e.loadout, title: [`loadout ${e.loadout}`, ...set].join("; ") };
+  }
+  if (task.workflow) out.workflow = task.workflow;
+  if (task.after && task.after.length > 0) out.after = `after ${task.after.join(", ")}`;
+  return out;
+}
+
+/** The cards in a few words for the block's head: "3 cards · 1 proposed, 2 running". */
+export function cardCounts(tasks: readonly CoordTask[]): string {
+  const order: CoordTask["state"][] = ["proposed", "queued", "running", "done", "failed", "dropped"];
+  const parts = order
+    .map((state) => [state, tasks.filter((t) => t.state === state).length] as const)
+    .filter(([, n]) => n > 0)
+    .map(([state, n]) => `${n} ${state}`);
+  const head = `${tasks.length} ${tasks.length === 1 ? "card" : "cards"}`;
+  return parts.length ? `${head} · ${parts.join(", ")}` : head;
+}

@@ -130,3 +130,29 @@ test("land --skip-judge posts the explicit bypass flag", async () => {
   expect(posted).toEqual([{run:"a",skipJudge:true}]);
   expect(lines.join("\n")).toContain("queued again with the judge scenarios left out");
 });
+
+test("land followup posts {id, note} and prints the new run's id", async () => {
+  const posted: unknown[] = [];
+  const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch:async req => {posted.push({path:new URL(req.url).pathname,body:await req.json()});return Response.json({run:{id:"r9"}},{status:201});}});
+  const log = console.log;
+  const lines: string[] = [];
+  try {
+    console.log = (line: unknown) => {lines.push(String(line));};
+    await landCommand("land",["followup","run/x-a","-m","fix the edge case","--backend",`http://127.0.0.1:${server.port}`],{fail:message=>{throw Error(message);}});
+    await landCommand("land",["followup","run/x-b","--backend",`http://127.0.0.1:${server.port}`],{fail:message=>{throw Error(message);}});
+  } finally {
+    console.log=log;
+    server.stop(true);
+  }
+  expect(posted).toEqual([{path:"/api/landing/followup",body:{id:"run/x-a",note:"fix the edge case"}},{path:"/api/landing/followup",body:{id:"run/x-b"}}]);
+  expect(lines).toEqual(["r9","r9"]);
+});
+
+test("land followup prints the API's refusal", async () => {
+  const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch:() => Response.json({error:"a run works on that branch"},{status:409})});
+  try {
+    await expect(landCommand("land",["followup","run/x-a","--backend",`http://127.0.0.1:${server.port}`],{fail:message=>{throw Error(message);}})).rejects.toThrow("a run works on that branch");
+  } finally {
+    server.stop(true);
+  }
+});
