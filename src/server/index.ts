@@ -3972,6 +3972,7 @@ async function handleApi(
   if (registryRes) return registryRes;
   const rangerRes = await state.ranger.handle(req, url, caller?.kind === "run" ? caller.run ?? "" : undefined);
   if (rangerRes) return rangerRes;
+  if (path === "/api/loadouts" && method === "GET") return json(state.kit.loadouts());
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
   const groupsRes = await state.groups.handle(req, url);

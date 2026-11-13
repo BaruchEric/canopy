@@ -26,7 +26,7 @@ const MANIFEST = {
   skills: {},
 };
 
-async function setup(manifest: unknown = MANIFEST) {
+async function setup(manifest: unknown = MANIFEST, over: Partial<KitHubDeps> = {}) {
   const h = mkdtempSync(join(tmpdir(), "kithub-"));
   dirs.push(h);
   const store = join(h, ".claude");
@@ -42,7 +42,7 @@ async function setup(manifest: unknown = MANIFEST) {
   // gpd answers like a Tailscale SSH browser check; everything local runs for real
   const run = async (host: string | null, cmd: string[], opts?: { env?: Record<string, string>; timeoutMs?: number }) =>
     host === "gpd" ? { code: 255, stdout: "", stderr: "# Tailscale SSH requires an additional check." } : exec(cmd, opts);
-  const hub = new KitHub({ self: "mac", devRoot: join(h, "dev"), kitPath, broadcast: (e) => events.push(e), run, env: { HOME: h }, every: 0 });
+  const hub = new KitHub({ self: "mac", devRoot: join(h, "dev"), kitPath, broadcast: (e) => events.push(e), run, env: { HOME: h }, every: 0, ...over });
   hubs.push(hub);
   return { h, hub, events };
 }
@@ -100,6 +100,52 @@ describe("KitHub", () => {
     const { hub } = await setup();
     await hub.scan();
     await expect(hub.apply("mac", [{ kind: "remove", agent: "codex", name: "ship" }])).rejects.toThrow("not in the current plan");
+  });
+});
+
+const WITH_LOADOUTS = {
+  ...MANIFEST,
+  mcp: {
+    probe: { command: "~/bin/probe", machines: ["mac"] },
+    elsewhere: { command: "~/bin/else", machines: ["gpd"] },
+    needy: { command: "~/bin/needy", env: { TOKEN: "${env:LOADOUT_TEST_UNSET}" }, machines: ["mac"] },
+  },
+  loadouts: { docs: { note: "docs work", mcp: ["probe"] } },
+};
+
+describe("KitHub loadouts", () => {
+  test("the scan carries the parsed loadouts", async () => {
+    const { hub } = await setup(WITH_LOADOUTS, { hostHome: "/home/eric", procEnv: {} });
+    expect(hub.loadouts().loadouts).toEqual([]);
+    await hub.scan();
+    expect(hub.loadouts().loadouts.map((l) => l.name)).toEqual(["docs"]);
+    expect(hub.info().loadouts?.loadouts.map((l) => l.name)).toEqual(["docs"]);
+  });
+  test("a kit.json that does not parse leaves no loadouts and says why", async () => {
+    const { hub } = await setup("{ not json");
+    await hub.scan();
+    expect(hub.loadouts().loadouts).toEqual([]);
+    expect(hub.loadouts().errors[0]).toStartWith("kit.json: ");
+    expect(hub.info().loadouts?.errors[0]).toStartWith("kit.json: ");
+  });
+  test("runEntry builds the claude entry with the host's home", async () => {
+    const { hub } = await setup(WITH_LOADOUTS, { hostHome: "/home/eric", procEnv: {} });
+    await hub.scan();
+    expect(hub.machineName()).toBe("mac");
+    expect(hub.runEntry("probe")).toEqual({ entry: { type: "stdio", command: "/home/eric/bin/probe", args: [] } });
+    expect(hub.runEntry("elsewhere")).toEqual({ why: "the kit does not put elsewhere on mac" });
+    expect(hub.runEntry("nope")).toEqual({ why: "no server named nope in the kit" });
+  });
+  test("a backend that is no kit machine gets no entry", async () => {
+    const { hub } = await setup(WITH_LOADOUTS, { self: "stranger", hostHome: "/home/eric", procEnv: {} });
+    await hub.scan();
+    expect(hub.machineName()).toBeNull();
+    expect(hub.runEntry("probe")).toEqual({ why: "this backend is not a machine in kit.json" });
+  });
+  test("a server buildEntry refuses answers its why, without the state", async () => {
+    const { hub } = await setup(WITH_LOADOUTS, { hostHome: "/home/eric", procEnv: {} });
+    await hub.scan();
+    expect(hub.runEntry("needy")).toEqual({ why: "${env:LOADOUT_TEST_UNSET} is not set for canopy here" });
   });
 });
 

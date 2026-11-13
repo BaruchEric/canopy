@@ -3,7 +3,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { onHost } from "../core/exec";
-import { cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, pluginAgentsOn, secretsOf, wantLink, withCanopyServer } from "../core/kit";
+import { buildEntry, cellsOf, hasSecrets, maskEntry, needsSudo, OWNED_NOT_IGNORED, mcpDefOf, mcpHash, mcpTargets, mcpWanted, parseKit, planKit, planMcp, pluginAgentsOn, secretsOf, wantLink, withCanopyServer } from "../core/kit";
+import { EMPTY_LOADOUTS, parseLoadouts } from "../core/loadout";
 import { applyKit } from "../core/kitapply";
 import { seeKit, seeMcp, seeTools } from "../core/kitscan";
 import { catalogOf, changeLines, commitMessage, isPluginAgent, isPluginOp, jsonOf, opPlan, outcomeOf, parseCodexList, PLUGIN_ID, refusal, searchCatalog, settingsChange } from "../core/plugins";
@@ -13,7 +14,7 @@ import {
 import type {
   KitAction, KitApplyResult, KitInfo, KitInstallResult, KitManifest, KitMachineView, KitMcpCtx, KitMcpEntry, KitMcpFormat, KitMcpPreview, KitMcpSeen, KitMcpView, KitSeen,
   PluginAgent, PluginCatalog, PluginCatalogEntry, PluginCommitPreview, PluginCommitResult, PluginMachineSeen, PluginOpRequest, PluginOpResult, PluginOutcome,
-  SecretsInfo, ServerEvent,
+  LoadoutsInfo, SecretsInfo, ServerEvent,
 } from "../core/types";
 
 export const KIT_EVERY = 10 * 60_000;
@@ -63,6 +64,8 @@ interface View { seen: KitSeen; dev: string; mcp: KitMcpSeen | null; ssh: boolea
 export class KitHub {
   private last: KitInfo = { ok: false, error: "not scanned yet", machines: [], cells: [] };
   private kit: KitManifest | null = null;
+  /** kit.json's loadouts as the last scan parsed them (FR-065) */
+  private loadoutsInfo: LoadoutsInfo = EMPTY_LOADOUTS;
   private timer: ReturnType<typeof setInterval> | null = null;
   private scanning: Promise<KitInfo> | null = null;
   private views = new Map<string, View>();
@@ -97,6 +100,26 @@ export class KitHub {
     return this.last;
   }
 
+  loadouts(): LoadoutsInfo {
+    return this.loadoutsInfo;
+  }
+
+  /** the kit machine this backend is, or null when kit.json names none */
+  machineName(): string | null {
+    return this.kit?.machines.find((m) => m.backend === this.deps.self)?.name ?? null;
+  }
+
+  /** the claude entry a run on this backend gets for a kit server, or why it gets none */
+  runEntry(server: string): { entry: KitMcpEntry } | { why: string } {
+    const machine = this.machineName();
+    if (!this.kit || machine === null) return { why: "this backend is not a machine in kit.json" };
+    const s = this.kit.mcp.find((x) => x.name === server);
+    if (!s) return { why: `no server named ${server} in the kit` };
+    if (!mcpWanted(s, "claude", machine)) return { why: `the kit does not put ${server} on ${machine}` };
+    const r = buildEntry(s, "claude", "claude-json", this.deps.hostHome ?? homedir(), this.deps.procEnv ?? process.env);
+    return "entry" in r ? { entry: r.entry } : { why: r.why };
+  }
+
   /** the machines this backend reaches over ssh (gpd from the Mac): the
    *  secrets reader writes their sinks (phase 3) */
   sshMachines(): { name: string; host: string }[] {
@@ -112,7 +135,7 @@ export class KitHub {
     return out;
   }
 
-  private async read(): Promise<KitManifest> {
+  private async read(): Promise<{ kit: KitManifest; raw: unknown }> {
     let raw: unknown;
     try {
       raw = JSON.parse(await Bun.file(this.deps.kitPath).text());
@@ -121,7 +144,7 @@ export class KitHub {
     }
     const r = parseKit(raw);
     if ("errors" in r) throw new KitError(`kit.json: ${r.errors.join("; ")}`, 500);
-    return withCanopyServer(r.kit);
+    return { kit: withCanopyServer(r.kit), raw };
   }
 
   scan(): Promise<KitInfo> {
@@ -134,13 +157,16 @@ export class KitHub {
   private async doScan(): Promise<KitInfo> {
     let kit: KitManifest;
     try {
-      kit = await this.read();
+      const r = await this.read();
+      kit = r.kit;
+      this.loadoutsInfo = parseLoadouts(r.raw, kit);
     } catch (err) {
       this.kit = null;
+      this.loadoutsInfo = { ...EMPTY_LOADOUTS, errors: [err instanceof Error ? err.message : String(err)] };
       this.views.clear();
       this.entries.clear();
       this.mcpSeen.clear();
-      this.last = { ok: false, error: err instanceof Error ? err.message : String(err), machines: [], cells: [] };
+      this.last = { ok: false, error: err instanceof Error ? err.message : String(err), machines: [], cells: [], loadouts: this.loadoutsInfo };
       this.deps.broadcast({ type: "kit", kit: this.last });
       return this.last;
     }
@@ -244,7 +270,7 @@ export class KitHub {
       cellViews.push({ seen: v.seen, dev: v.dev, ctx, mcpError: v.mcpError });
     }
     const plugins = vs.flatMap((v) => (v.plugins ? [v.plugins] : []));
-    this.last = { ok: true, error: null, machines, cells: cellsOf(kit, cellViews), mcp: this.mcpViews(kit), ...((kit.plugins ?? []).length > 0 ? { plugins } : {}) };
+    this.last = { ok: true, error: null, machines, cells: cellsOf(kit, cellViews), mcp: this.mcpViews(kit), loadouts: this.loadoutsInfo, ...((kit.plugins ?? []).length > 0 ? { plugins } : {}) };
     this.deps.broadcast({ type: "kit", kit: this.last });
   }
 
@@ -405,7 +431,7 @@ export class KitHub {
       // kit.json and dotclaude's settings can change through a pull without
       // this backend scanning first. Base the safety check on what is there
       // now, not the last scan's commit permission or plugin declarations.
-      const kit = await this.read();
+      const kit = (await this.read()).kit;
       const m = this.mine(kit).find((x) => x.name === req.machine);
       if (!m) throw new KitError(`not a machine this backend reaches: ${req.machine}`, 400);
       const plan = opPlan(req);
