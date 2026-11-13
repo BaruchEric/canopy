@@ -8,10 +8,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { CoordTask, Flow, LandEntry, LandingRun, Run, RunBranch, RunReview } from "../../../src/core/types";
-import { useStore } from "../store";
+import { NO_ROUTES } from "../agents";
+import type { BackendState } from "../backends";
+import { registry, setRegistry } from "../registry";
+import { connOf, useStore, type Conn } from "../store";
 import { arcPath, ManagerView } from "./ManagerView";
 
 const pristine = useStore.getState();
+const pristineRegistry = registry();
 
 /** renders with the store as the test set it: a server render reads the initial state */
 function renderCurrent(node: ReactNode): string {
@@ -34,7 +38,25 @@ afterEach(() => {
   else Reflect.deleteProperty(globalThis, "matchMedia");
   Reflect.deleteProperty(globalThis, "location");
   useStore.setState({ runs: pristine.runs, flows: pristine.flows, landing: pristine.landing, prs: pristine.prs, repos: pristine.repos, kit: pristine.kit });
+  setRegistry(pristineRegistry.home, [...pristineRegistry.names]);
+  useStore.setState({ home: pristine.home, backendOrder: pristine.backendOrder, loaded: pristine.loaded, conns: pristine.conns, agents: pristine.agents, authByBackend: pristine.authByBackend });
 });
+
+const conn = (name: string, state: BackendState): Conn => ({ ...connOf(pristine, "none"), name, status: { state } });
+
+/** The page's backends: home ("mac") loaded and online, and the mini as
+ *  given (its state, and whether its runs have come in), or hidden. */
+function backends(mini: { state: BackendState; loaded: boolean } | "hidden" | null): void {
+  const shown = mini !== null && mini !== "hidden";
+  setRegistry("mac", mini === null ? ["mac"] : ["mac", "mini"]);
+  useStore.setState({
+    home: "mac",
+    backendOrder: shown ? ["mac", "mini"] : ["mac"],
+    loaded: true,
+    conns: { mac: conn("mac", "online"), ...(shown ? { mini: conn("mini", mini.state) } : {}) },
+    agents: { mac: NO_ROUTES, ...(shown && mini.loaded ? { mini: NO_ROUTES } : {}) },
+  });
+}
 
 /** useMedia reads matchMedia as it first renders, so this decides the layout. */
 function screen(phone: boolean): void {
@@ -205,6 +227,7 @@ describe("which goal", () => {
   test("a run the store does not hold says the goal ended and lists the live goals", () => {
     screen(false);
     at("?view=manager&run=mini%7Cgone");
+    backends({ state: "online", loaded: true });
     useStore.setState({ runs: { k: coord([]) } });
     const html = renderCurrent(<ManagerView />);
     expect(html).toContain("This goal has ended");
@@ -215,6 +238,7 @@ describe("which goal", () => {
   test("no run and one live coordinator opens that goal; none live asks to pick", () => {
     screen(false);
     at("?view=manager");
+    backends(null);
     useStore.setState({ runs: { k: coord([flowCard]) }, flows: { f1: gated } });
     const html = renderCurrent(<ManagerView />);
     expect(html).toContain(`>${GOAL}</h1>`);
@@ -223,6 +247,81 @@ describe("which goal", () => {
     const none = renderCurrent(<ManagerView />);
     expect(none).toContain("Pick a goal");
     expect(none).toContain("No coordinator is running.");
+  });
+
+  test("a goal on a backend still sending its runs is not called ended", () => {
+    screen(false);
+    at("?view=manager&run=mini%7Cx");
+    useStore.setState({ runs: { k: coord([]) } });
+    // connecting, and online at its first answer with the runs still on their way
+    for (const state of ["connecting", "online"] as const) {
+      backends({ state, loaded: false });
+      const html = renderCurrent(<ManagerView />);
+      expect(html).not.toContain("This goal has ended");
+      expect(html).toContain("Waiting for mini");
+      expect(html).toContain("This goal is on mini, which is still sending its runs.");
+      expect(html).toContain('href="/?view=manager&amp;run=k"');
+    }
+  });
+
+  test("a goal on a backend that is offline, asks for a sign-in or is hidden says so", () => {
+    screen(false);
+    at("?view=manager&run=mini%7Cx");
+    useStore.setState({ runs: { k: coord([]) } });
+    backends({ state: "offline", loaded: false });
+    const offline = renderCurrent(<ManagerView />);
+    expect(offline).not.toContain("This goal has ended");
+    expect(offline).toContain("This goal is on mini, which is not answering; its page waits for it.");
+    // once loaded, a backend that drops still holds the page rather than ending the goal
+    backends({ state: "offline", loaded: true });
+    expect(renderCurrent(<ManagerView />)).toContain("which is not answering");
+    backends({ state: "signin", loaded: false });
+    expect(renderCurrent(<ManagerView />)).toContain("This goal is on mini, which asks you to sign in; its page waits for that.");
+    backends({ state: "permission", loaded: false });
+    expect(renderCurrent(<ManagerView />)).toContain("This goal is on mini, which this browser cannot reach until you allow local network access.");
+    backends("hidden");
+    const hidden = renderCurrent(<ManagerView />);
+    expect(hidden).not.toContain("This goal has ended");
+    expect(hidden).toContain("This goal is on mini, which this page hides.");
+  });
+
+  test("no coordinator is running only once every backend has loaded or is known offline", () => {
+    screen(false);
+    at("?view=manager");
+    useStore.setState({ runs: {} });
+    backends({ state: "connecting", loaded: false });
+    const loading = renderCurrent(<ManagerView />);
+    expect(loading).not.toContain("No coordinator is running.");
+    expect(loading).toContain("Looking for goals on mini…");
+    backends({ state: "offline", loaded: false });
+    const away = renderCurrent(<ManagerView />);
+    expect(away).toContain("No coordinator is running.");
+    expect(away).toContain("Goals on mini are not listed until this page reaches it.");
+    backends({ state: "online", loaded: true });
+    const all = renderCurrent(<ManagerView />);
+    expect(all).toContain("No coordinator is running.");
+    expect(all).not.toContain("not listed");
+    // a backend that drops after loading still lists the goals it last sent
+    // (two goals, so the picker stays rather than opening the only one)
+    backends({ state: "offline", loaded: true });
+    useStore.setState({ runs: { k: coord([]), "mini|k2": { ...coord([]), id: "mini|k2" } } });
+    const dropped = renderCurrent(<ManagerView />);
+    expect(dropped).toContain("Pick a goal");
+    expect(dropped).toContain('href="/?view=manager&amp;run=mini%7Ck2"');
+    expect(dropped).not.toContain("not listed");
+  });
+
+  test("the one goal going opens by itself only once every backend has loaded", () => {
+    screen(false);
+    at("?view=manager");
+    useStore.setState({ runs: { k: coord([]) } });
+    backends({ state: "connecting", loaded: false });
+    const waiting = renderCurrent(<ManagerView />);
+    expect(waiting).not.toContain(`>${GOAL}</h1>`);
+    expect(waiting).toContain('href="/?view=manager&amp;run=k"');
+    expect(waiting).toContain("Looking for goals on mini…");
+    backends({ state: "online", loaded: true });
+    expect(renderCurrent(<ManagerView />)).toContain(`>${GOAL}</h1>`);
   });
 
   test("an ended goal the page still holds shows its rows, with no hold, add or end", () => {

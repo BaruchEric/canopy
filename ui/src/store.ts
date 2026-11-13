@@ -5687,6 +5687,15 @@ export function allRuns(s: CanopyState): Run[] {
  *  not known yet, so a selector over it is stable. */
 export const connOf = (s: Pick<CanopyState, "conns" | "home">, name: string = s.home): Conn => s.conns[name] ?? NO_CONN;
 
+/** Whether a backend's runs, flows, fleets and jobs have come in: home's
+ *  with the page's load, a peer's when it connects. Its status cannot say
+ *  this: it turns online at the first answer, while the rest of the load is
+ *  still on its way, and a refused token turns it online with none of it.
+ *  Its agent routing lands in the same set as those records and goes when
+ *  it is hidden, so that map stands in for a flag of its own. */
+export const recordsIn = (s: Pick<CanopyState, "home" | "loaded" | "agents">, backend: string): boolean =>
+  backend === s.home ? s.loaded : Object.hasOwn(s.agents, backend);
+
 /** The home backend's connection. */
 export const homeConn = (s: Pick<CanopyState, "conns" | "home">): Conn => connOf(s, s.home);
 

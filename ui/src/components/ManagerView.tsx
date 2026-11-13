@@ -25,7 +25,7 @@ import { PHONE, useMedia } from "../media";
 import { backendOf, isHome, plainOf } from "../registry";
 import { managerHere, managerUrl, openManager } from "../routes";
 import { harnessOf } from "../runs";
-import { idText, landingAll, prsAll, useStore } from "../store";
+import { connOf, idParts, idText, landingAll, prsAll, recordsIn, useStore, type CanopyState } from "../store";
 import { HoldButton } from "./CoordTasks";
 import { RunPromptForm } from "./Prompts";
 import { useNow } from "./Registry";
@@ -51,9 +51,11 @@ const NOTE_MAX = 4000;
 /**
  * The view: the goal the address names, or the goals going to pick from.
  * With no goal named and one going, that one opens and the address names
- * it. A goal the page no longer holds (it ended and left the runs, or nobody
- * knows the id) says so above the goals going; one it holds that ended
- * still shows its rows, whose landings may yet wait on Eric.
+ * it, once every backend has sent its runs or is known to be away. A goal
+ * the page does not hold is called ended only when its backend's runs are
+ * in; while they are on their way, or the backend is offline, asks for a
+ * sign-in or is hidden, the view says that instead. One the page holds
+ * that ended still shows its rows, whose landings may yet wait on Eric.
  */
 export function ManagerView() {
   const [runId, setRunId] = useState(() => managerHere(search()));
@@ -66,7 +68,15 @@ export function ManagerView() {
   const live = useMemo(() => liveCoordinators(runs), [runs]);
   const named = runId ? runs[runId] : undefined;
   const coord = named?.action === "coordinate" ? named : undefined;
-  const onlyId = runId === null && live.length === 1 ? live[0]?.id : undefined;
+  const on = runId === null ? "" : idParts(runId)[0];
+  // where the named run's backend stands, read only while the page lacks the run
+  const where = useStore((s) => (runId !== null && !s.runs[runId] ? reachOf(s, on) : "here"));
+  // the backends still sending their runs, and those kept from this page
+  // before any came, as words; one that dropped after loading still lists
+  // the goals it last sent, so it is not called missing
+  const waiting = useStore((s) => s.backendOrder.filter((b) => reachOf(s, b) === "loading").join(" "));
+  const away = useStore((s) => s.backendOrder.filter((b) => isAway(reachOf(s, b)) && !recordsIn(s, b)).join(" "));
+  const onlyId = runId === null && waiting === "" && live.length === 1 ? live[0]?.id : undefined;
   useEffect(() => {
     if (!onlyId) return;
     history.replaceState(null, "", managerUrl(onlyId));
@@ -74,8 +84,47 @@ export function ManagerView() {
   }, [onlyId]);
   const shown = coord ?? (onlyId ? runs[onlyId] : undefined);
   if (shown) return <GoalView key={shown.id} coord={shown} />;
-  return <GoalPicker live={live} why={runId === null ? "none" : named ? "not a goal" : "ended"} />;
+  const why: Why = runId === null ? "none" : named ? "not a goal" : where === "here" ? "ended" : where;
+  // a backend the heading names already is not named again below it
+  const others = (words: string): string[] => words.split(" ").filter((b) => b !== "" && (why === "none" || b !== on));
+  return <GoalPicker live={live} why={why} on={on} waiting={others(waiting)} away={others(away)} />;
 }
+
+/** Where a backend stands for this view: its runs in ("here"), on their
+ *  way, kept from this page (offline, asking for a sign-in, or behind the
+ *  browser's local network permission), or hidden. A backend that drops
+ *  after loading counts as away, so a goal it held waits for it rather than
+ *  reading as ended. */
+type Reach = "here" | "loading" | "offline" | "signin" | "permission" | "hidden";
+
+function reachOf(s: CanopyState, b: string): Reach {
+  if (b !== s.home && !s.backendOrder.includes(b)) return "hidden";
+  const state = connOf(s, b).status.state;
+  if (state === "offline" || state === "signin" || state === "permission") return state;
+  if (recordsIn(s, b)) return "here";
+  // canopy's own caller check refused this page's token: the backend
+  // answered, so it reads online, and its runs wait on a sign-in
+  const auth = s.authByBackend[b];
+  return auth && (auth.needed || (auth.mode === "enforce" && auth.you === "none")) ? "signin" : "loading";
+}
+
+const isAway = (r: Reach): boolean => r === "offline" || r === "signin" || r === "permission";
+
+/** Why the picker shows instead of a goal. */
+type Why = "none" | "ended" | "not a goal" | Exclude<Reach, "here">;
+
+/** What the picker says of a goal whose backend it is waiting for, after
+ *  "This goal is on <backend>, ". */
+const WAIT_WORDS: Record<Exclude<Reach, "here">, string> = {
+  loading: "which is still sending its runs.",
+  offline: "which is not answering; its page waits for it.",
+  signin: "which asks you to sign in; its page waits for that.",
+  permission: "which this browser cannot reach until you allow local network access.",
+  hidden: "which this page hides.",
+};
+
+/** backend names as a phrase: "a", "a and b", "a, b and c" */
+const names = (list: readonly string[]): string => (list.length < 2 ? (list[0] ?? "") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`);
 
 /** a link that opens a goal in place, and in a new tab when asked to */
 function follow(e: MouseEvent, runId: string | null): void {
@@ -84,15 +133,27 @@ function follow(e: MouseEvent, runId: string | null): void {
   openManager(runId);
 }
 
-function GoalPicker({ live, why }: { live: Run[]; why: "none" | "ended" | "not a goal" }) {
+function GoalPicker({ live, why, on, waiting, away }: { live: Run[]; why: Why; on: string; waiting: string[]; away: string[] }) {
   const now = useNow();
+  const heading = why === "ended" ? "This goal has ended" : why === "none" || why === "not a goal" || why === "hidden" ? "Pick a goal" : `Waiting for ${on}`;
   return (
     <main className="mgr-view mgr-pick">
-      <h1 className="mgr-goal-text">{why === "ended" ? "This goal has ended" : "Pick a goal"}</h1>
+      <h1 className="mgr-goal-text">{heading}</h1>
       {why === "ended" && <p className="mgr-sub">canopy no longer holds that coordinator. The goals going now are below.</p>}
       {why === "not a goal" && <p className="mgr-sub">That run is not a coordinator.</p>}
+      {why !== "none" && why !== "ended" && why !== "not a goal" && (
+        <p className="mgr-sub">
+          This goal is on {on}, {WAIT_WORDS[why]}
+        </p>
+      )}
+      {waiting.length > 0 && <p className="mgr-sub">Looking for goals on {names(waiting)}…</p>}
+      {away.length > 0 && (
+        <p className="mgr-sub">
+          Goals on {names(away)} are not listed until this page reaches {away.length === 1 ? "it" : "them"}.
+        </p>
+      )}
       {live.length === 0 ? (
-        <p className="mgr-empty">No coordinator is running.</p>
+        waiting.length === 0 && <p className="mgr-empty">No coordinator is running.</p>
       ) : (
         <ul className="mgr-goals">
           {live.map((c) => (
