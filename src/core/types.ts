@@ -4197,7 +4197,8 @@ export interface RunEquip {
   skills: string[];
   mcp: string[];
   /** how many of the machine's skills the run started without: the user
-   *  skills turned off and the skills of the plugins turned off */
+   *  skills turned off and the skills of the plugins turned off, counting
+   *  any the person's own settings already turn off */
   off: number;
   /** the plugins turned off whole (by name), since a plugin's skills cannot
    *  be turned off one by one; absent when none */
