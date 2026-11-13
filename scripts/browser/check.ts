@@ -2,9 +2,10 @@
 // the first load (what comes with the page, what is fetched once it is up),
 // every view from its URL and by switching inside one page, the runs pill's
 // menu with two runs going, a shell that answers, the two load failures
-// (a view's chunk and xterm's refused), and a phone: the top bar's first row
+// (a view's chunk and xterm's refused), a phone: the top bar's first row
 // on the screen, an open panel's section tabs, and no field small enough for
-// iOS to zoom the page onto.
+// iOS to zoom the page onto, and the manager's top view: a goal that ended,
+// and a goal going on a desktop, a tablet and a phone with its equip sheet.
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
@@ -19,9 +20,9 @@ if (!base || !shots) {
 }
 mkdirSync(shots, { recursive: true });
 
-const VIEWS = ["library", "ports", "sessions", "agents", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "secrets"];
+const VIEWS = ["library", "ports", "sessions", "agents", "manager", "incubator", "health", "costs", "triggers", "clock", "work", "kit", "secrets"];
 /** the chunks the page loads on demand, by the name vite gives each */
-const LAZY = ["Sessions", "Secrets", "Kit", "Costs", "Triggers", "Clock", "Library", "AgentsView", "Incubator", "Work", "xterm"];
+const LAZY = ["Sessions", "Secrets", "Kit", "Costs", "Triggers", "Clock", "Library", "AgentsView", "ManagerView", "Incubator", "Work", "xterm"];
 
 const browser = await launch();
 const failures: string[] = [];
@@ -49,6 +50,22 @@ async function fresh(block?: string, routed = Boolean(block), phone = false): Pr
 }
 
 const textOf = async (page: Page, sel: string) => (await page.locator(sel).innerText()).replace(/\s+/g, " ").trim();
+
+/** the fields on the page a finger types into whose text is under 16px, where iOS zooms the page */
+const smallFields = (page: Page) =>
+  page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="submit"], [type="button"], [type="color"], [type="hidden"]), textarea, select')]
+      .filter((el) => parseFloat(getComputedStyle(el).fontSize) < 16)
+      .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).trim().split(/\s+/).join(".")}` : ""} ${getComputedStyle(el).fontSize}`),
+  );
+
+/** the buttons on the screen under `sel` less than a finger (44px) tall, each as "class 'words' 30px" */
+const shortButtons = (page: Page, sel: string) =>
+  page.evaluate((sel) =>
+    [...document.querySelectorAll<HTMLElement>(`${sel} button`)]
+      .filter((el) => el.getClientRects().length > 0 && el.getBoundingClientRect().height < 43.5)
+      .map((el) => `${el.className || "button"} '${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 24)}' ${Math.round(el.getBoundingClientRect().height)}px`),
+  sel);
 
 async function openShell(page: Page) {
   await page.goto(`${base}/`, { waitUntil: "load" });
@@ -165,11 +182,7 @@ try {
     const height = shown ? ((await rail.boundingBox())?.height ?? 0) : 0;
     const tabs = shown ? await rail.locator('[role="tab"]').count() : 0;
     check(height >= 24 && tabs > 1, `on a phone an open panel shows its section tabs (${tabs} tabs in a rail ${Math.round(height)}px tall)`);
-    const small = await page.evaluate(() =>
-      [...document.querySelectorAll<HTMLElement>('input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="submit"], [type="button"], [type="color"], [type="hidden"]), textarea, select')]
-        .filter((el) => parseFloat(getComputedStyle(el).fontSize) < 16)
-        .map((el) => `${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).trim().split(/\s+/).join(".")}` : ""} ${getComputedStyle(el).fontSize}`),
-    );
+    const small = await smallFields(page);
     check(small.length === 0, `with a finger for a pointer no field is under 16px, where iOS zooms the page${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
     await page.screenshot({ path: `${shots}/phone-panel.png` });
     await page.close();
@@ -219,6 +232,236 @@ try {
       : "";
     check(sheet.includes("twin") && sheet.includes("the older chat"), `a pick opens that run and not the newest: "${sheet.replace(/\s+/g, " ").trim().slice(0, 60)}"`);
     await page.close();
+  }
+
+  {
+    // A goal that ended (FR-065). check.sh keeps a coordinator in the run
+    // log: it answers by its id and has left /api/runs, and the view says
+    // the goal ended and lists the goals going, never a blank page.
+    const page = await fresh();
+    const kept = await page.request.get(`${base}/api/runs/check-ended`);
+    const record = kept.ok() ? ((await kept.json()) as { action?: string; kept?: boolean }) : null;
+    const listed = (await (await page.request.get(`${base}/api/runs`)).json()) as { id: string }[];
+    await page.goto(`${base}/?view=manager&run=check-ended`, { waitUntil: "load" });
+    await page.waitForSelector(".mgr-view", { timeout: 20_000 });
+    await page.waitForTimeout(1000);
+    const text = await textOf(page, ".mgr-view");
+    check(
+      record?.action === "coordinate" && record.kept === true && !listed.some((r) => r.id === "check-ended") && text.startsWith("This goal has ended") && text.includes("No coordinator is running"),
+      `a coordinator kept in the run log (${kept.status()}, ${record ? "kept" : "not found"}) opens as ended: "${text.slice(0, 80)}"`,
+    );
+    await page.screenshot({ path: `${shots}/manager-ended.png` });
+    await page.close();
+  }
+
+  {
+    // A goal going, on a desktop, a tablet and a phone. A scratch server
+    // runs no coordinator, so the goal is made up and /api/runs, /api/flows,
+    // /api/kit and the skills list are answered here, as the runs pill's
+    // check answers /api/runs: a coordinator asking a question, with three
+    // cards, t1 a flow parked at its review gate, t2 queued after t1 and t3
+    // proposed, and three loadouts for the equip sheet.
+    const asker = await fresh();
+    const tree = (await (await asker.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    await asker.close();
+    const repo = (name: string) => tree.repos.find((r) => r.name === name)?.id ?? name;
+    const now = Date.now();
+    const ago = (min: number) => now - min * 60_000;
+    const base0 = { verb: "ask", progress: "", expectsChange: true, chat: false, harness: "claude", note: "", prompt: null };
+    const step = (id: string, at: number, kind: string, text: string) => ({ id, at, kind, text });
+    const coordinator = {
+      ...base0,
+      id: "check-coord",
+      repoId: repo("demo"),
+      action: "coordinate",
+      verb: "coordinate",
+      chat: true,
+      expectsChange: false,
+      status: "waiting",
+      startedAt: ago(42),
+      agentSettings: { harness: "claude", model: "opus", effort: "high" },
+      steps: [
+        step("c1", ago(42), "user", "Give the check page a manager section: a goal at three widths, its equip sheet, and a goal that ended"),
+        step("c2", ago(40), "text", "Three cards: the spec first, then the page, and t3 reads the copy on a phone once you start it."),
+      ],
+      prompt: {
+        id: "q1",
+        kind: "question",
+        questions: [{ question: "Should t3 wait for t2 to land, or start beside it?", header: "Order", multiSelect: false, options: [{ label: "wait for t2", description: "t3 starts once t2 has landed" }, { label: "beside it", description: "t3 starts as soon as you start it" }] }],
+      },
+      tasks: [
+        { id: "t1", title: "Write the spec for the check page", repo: repo("twin"), note: "Name what each check proves.", action: "ask", state: "running", flow: "check-flow", workflow: "spec", branch: "check-s1", equip: { loadout: "feature" } },
+        { id: "t2", title: "Build the page the spec asks for", repo: repo("demo"), note: "Build what t1's spec says.", action: "ask", state: "queued", after: ["t1"], equip: { loadout: "quick", model: "sonnet" } },
+        { id: "t3", title: "Read the copy aloud on a phone", repo: repo("demo"), note: "Every label in plain words.", action: "propose", state: "proposed" },
+      ],
+    };
+    const branch = { name: "canopy/t1-spec", target: "main", base: "0000000", dir: "/tmp/check-t1", origin: "check-s1", state: "working" };
+    const stepRun = (id: string, name: string, start: number, end: number) => ({
+      ...base0,
+      id,
+      repoId: repo("twin"),
+      action: "spec",
+      verb: "spec",
+      status: "done",
+      startedAt: start,
+      endedAt: end,
+      flowStep: { workflow: "spec", step: name, source: "bundled" },
+      agentSettings: { harness: "claude", model: "sonnet", effort: "medium" },
+      branch,
+      steps: [step(`${id}-1`, end, "text", name === "Draft" ? "Drafted the spec: six checks, one per view." : "Two questions stay open in the spec.")],
+    });
+    const runs = [coordinator, stepRun("check-s1", "Draft", ago(30), ago(22)), stepRun("check-s2", "Review", ago(22), ago(12))];
+    const flows = [
+      {
+        id: "check-flow",
+        repoId: repo("twin"),
+        workflow: "spec",
+        verb: "spec",
+        note: "Name what each check proves.",
+        status: "gated",
+        current: 1,
+        startedAt: ago(30),
+        branch,
+        steps: [
+          { name: "Draft", status: "passed", runId: "check-s1" },
+          { name: "Review", status: "gated", runId: "check-s2", reason: "Two questions stay open; answer them before Fill." },
+          { name: "Fill", status: "pending" },
+        ],
+      },
+    ];
+    const loadout = (name: string, note: string, model: string, effort: string, skills: string[], mcp: string[]) => ({ name, note, harness: "claude", model, effort, skills, mcp, canopyTools: false });
+    const kit = {
+      ok: true,
+      error: null,
+      machines: [],
+      cells: [],
+      loadouts: {
+        base: [],
+        errors: [],
+        loadouts: [
+          loadout("quick", "A small change: a typo, a rename, one test", "haiku", "low", [], []),
+          loadout("feature", "A change across a few files, with its tests", "sonnet", "medium", ["check-copy"], ["github"]),
+          loadout("deep", "A change that needs a plan first", "opus", "high", ["check-copy", "check-phone"], ["github", "linear"]),
+        ],
+        servers: [
+          { name: "github", here: true },
+          { name: "linear", here: false },
+        ],
+      },
+    };
+    const skill = (name: string, description: string, plugin?: string) => ({ name, kind: "skill", harness: "claude", from: plugin ? `plugin:${plugin.split("@")[0]}` : "user", description, ...(plugin ? { plugin } : {}) });
+    const mentions = [
+      skill("check-copy", "Reads a page's words for plain English"),
+      skill("check-phone", "Drives a page at a phone's width"),
+      skill("superpowers:brainstorming", "Turns an idea into a design before any code", "superpowers@claude-plugins-official"),
+    ];
+    const goalPage = async (width: number): Promise<Page> => {
+      const phone = width <= 390;
+      const page = await fresh(undefined, true, phone);
+      if (!phone) await page.setViewportSize({ width, height: 900 });
+      const get = (path: string, json: unknown) => page.route((u) => u.pathname === path, (r) => (r.request().method() === "GET" ? r.fulfill({ json }) : r.continue()));
+      await get("/api/runs", runs);
+      await get("/api/flows", flows);
+      await get("/api/kit", kit);
+      await get("/api/repos/mentions", mentions);
+      return page;
+    };
+    const settle = async (page: Page) => {
+      await page.waitForSelector(".mgr-view .mgr-head", { timeout: 20_000 });
+      await page.waitForTimeout(1200);
+    };
+
+    // with no goal named and one going, the view opens it and names it in the address
+    let at = "";
+    {
+      const page = await goalPage(1440);
+      await page.goto(`${base}/?view=manager`, { waitUntil: "load" });
+      await settle(page);
+      at = await page.evaluate(() => location.search);
+      const rows = await page.evaluate(() => ({
+        rings: document.querySelectorAll(".mgr-ring").length,
+        needs: document.querySelectorAll(".mgr-need").length,
+        lanes: document.querySelectorAll(".mgr-lane").length,
+        // wide: the chat sits beside the column of needs and workers
+        beside: (document.querySelector(".mgr-chat")?.getBoundingClientRect().left ?? 0) >= (document.querySelector(".mgr-main")?.getBoundingClientRect().right ?? Infinity) - 1,
+      }));
+      const head = await textOf(page, ".mgr-head");
+      check(
+        at.includes("run=check-coord") && head.startsWith("Give the check page") && rows.rings === 4 && rows.needs === 3 && rows.lanes === 3 && rows.beside,
+        `at 1440px the one goal going opens (${at}): ${rows.rings} rings, ${rows.needs} things that need you, ${rows.lanes} lanes, the chat ${rows.beside ? "beside them" : "not beside them"}`,
+      );
+      await page.screenshot({ path: `${shots}/manager-1440.png` });
+      await page.close();
+    }
+    {
+      const page = await goalPage(900);
+      await page.goto(`${base}/${at}`, { waitUntil: "load" });
+      await settle(page);
+      const order = await page.evaluate(() => {
+        const top = (sel: string) => document.querySelector(sel)?.getBoundingClientRect().top ?? -1;
+        return { rings: top(".mgr-rings"), needs: top(".mgr-needs"), workers: top(".mgr-workers"), chat: top(".mgr-chat"), wider: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+      });
+      check(
+        order.rings < order.needs && order.needs < order.workers && order.workers < order.chat && order.wider <= 0,
+        `at 900px one column: rings, needs you, workers, then the chat${order.wider > 0 ? ` (the page is ${order.wider}px wider than the screen)` : ""}`,
+      );
+      // the view scrolls inside itself, so the workers and the chat need a picture of their own
+      await page.screenshot({ path: `${shots}/manager-900.png` });
+      await page.evaluate(() => document.querySelector(".mgr-workers")?.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: `${shots}/manager-900-workers.png` });
+      await page.close();
+    }
+    {
+      const page = await goalPage(390);
+      await page.goto(`${base}/${at}`, { waitUntil: "load" });
+      await settle(page);
+      const fit = await page.evaluate(() => {
+        const view = document.querySelector<HTMLElement>(".mgr-view");
+        const strip = document.querySelector<HTMLElement>(".mgr-ring-row");
+        const needs = document.querySelector('section[aria-label="needs you"]');
+        const rings = document.querySelector('section[aria-label="rings"]');
+        return {
+          page: document.documentElement.scrollWidth,
+          view: view ? view.scrollWidth - view.clientWidth : -1,
+          strip: strip ? strip.scrollWidth - strip.clientWidth : 0,
+          first: Boolean(needs && rings && needs.compareDocumentPosition(rings) & Node.DOCUMENT_POSITION_FOLLOWING),
+        };
+      });
+      check(
+        fit.page <= 390 && fit.view <= 0 && fit.strip > 0 && fit.first,
+        `at 390px needs you comes ${fit.first ? "before" : "after"} the rings, the rings scroll sideways in their own strip (${fit.strip}px more), and the page is ${fit.page}px wide${fit.view > 0 ? ` (the view hides ${fit.view}px)` : ""}`,
+      );
+      const workers = await shortButtons(page, ".mgr-view");
+      check(workers.length === 0, `at 390px every button with the workers showing is a finger tall${workers.length ? `: ${workers.join(", ")}` : ""}`);
+      const fields = await smallFields(page);
+      await page.screenshot({ path: `${shots}/manager-390.png` });
+      await page.evaluate(() => document.querySelector(".mgr-rings")?.scrollIntoView({ block: "start" }));
+      await page.screenshot({ path: `${shots}/manager-390-workers.png` });
+      await page.locator(".mgr-switch").getByRole("button", { name: "chat" }).click();
+      await page.waitForTimeout(500);
+      const chat = await shortButtons(page, ".mgr-view");
+      check(chat.length === 0, `at 390px every button with the chat showing is a finger tall${chat.length ? `: ${chat.join(", ")}` : ""}`);
+      fields.push(...(await smallFields(page)));
+      await page.screenshot({ path: `${shots}/manager-390-chat.png` });
+      await page.locator(".mgr-switch").getByRole("button", { name: "workers" }).click();
+      await page.locator("#mgr-lane-t3").getByRole("button", { name: "equip" }).click();
+      const sheet = page.locator(".mgr-equip");
+      const open = await sheet.waitFor({ timeout: 5000 }).then(() => true, () => false);
+      await page.waitForTimeout(800);
+      const box = open ? await sheet.boundingBox() : null;
+      const picks = open ? await sheet.locator(".mgr-equip-pick").count() : 0;
+      const skills = open ? await sheet.locator('section[aria-label="skills"] .mgr-equip-opt').count() : 0;
+      check(
+        open && Math.round(box?.width ?? 0) === 390 && Math.round(box?.height ?? 0) === 844 && picks === 3 && skills === 3,
+        `at 390px t3's equip sheet fills the screen (${Math.round(box?.width ?? 0)} by ${Math.round(box?.height ?? 0)}) with ${picks} loadouts and ${skills} skills`,
+      );
+      const inSheet = await shortButtons(page, ".mgr-equip");
+      check(inSheet.length === 0, `at 390px every button in the equip sheet is a finger tall${inSheet.length ? `: ${inSheet.join(", ")}` : ""}`);
+      fields.push(...(await smallFields(page)));
+      check(fields.length === 0, `at 390px no field in the manager view is under 16px, where iOS zooms the page${fields.length ? `: ${[...new Set(fields)].join(", ")}` : ""}`);
+      await page.screenshot({ path: `${shots}/manager-390-equip.png` });
+      await page.close();
+    }
   }
 
   {

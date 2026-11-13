@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Status: written 2026-11-12 on branch `manager-top`.
+Status: built and reviewed 2026-11-13 on branch `manager-top`.
 
 **Goal:** Eric steers one goal from one screen. `?view=manager&run=<coordinator>` shows the goal's cards as rings, every item that waits on him with its answer in place, a lane per worker with its step strip and loadout, and the manager's chat, on a desktop, a tablet and a phone. Every steering action has a route the page and the CLI can call and a coordinator's token cannot.
 

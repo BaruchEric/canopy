@@ -307,28 +307,27 @@ PR fix carries it. An adopted run is not held to `COORD_AT_ONCE`.
 
 - **Say to a worker.**
   - A worker waiting on a prompt gets an answer (`POST /api/runs/answer`).
-  - A running Claude worker gets the words as a user message into its
-    running session, through the driver's `nudge` (the stall watchdog's way
-    in, `core/runner.ts`) and a new `POST /api/runs/nudge` with the operate
-    right. `runs/say` only takes a chat between turns, and a worker is a
-    job. A running Codex worker is refused in this version.
-  - A settled worker gets a follow-up run on its branch with Eric's words
-    (`startBranchFix`), which reopens the card.
+  - A running Claude worker gets the words as a steer through FR-066's
+    `POST /api/runs/say`: a person's token reaches a job at work, and the
+    run takes the words at its next step. There is no `runs/nudge`. A
+    running Codex worker is offered no box (Calls #8).
+  - A settled worker gets a follow-up run on its branch with Eric's words,
+    through `POST /api/landing/followup` (`startBranchFix`), which reopens
+    the card.
 - **Send back.** A branch whose landing verdict waits for Eric gets a
-  follow-up run with his note (`startBranchFix`), which reopens the card.
-  `POST /api/landing/fix` is not that path: it takes only a conflict, a red
-  check or a moved base.
+  follow-up run with his note through `POST /api/landing/followup`
+  (`startBranchFix`), which reopens the card. `POST /api/landing/fix` is
+  not that path: it takes only a conflict, a red check or a moved base.
 - **Land.** `POST /api/landing/land`.
 - **Release a gate, or stop at it.** `POST /api/flows/resume`, which takes a
   flow parked at a gate, or `POST /api/flows/stop`.
 - **Stop.** `POST /api/runs/stop` for a run, `POST /api/flows/stop` for a
   flow.
 - **Resume a stopped worker.** A run resumes on its branch through
-  `startBranchFix`. A stopped branch flow resumes through `Flows.pickUp`,
-  which only the trigger hub calls today, through a new
-  `POST /api/flows/pickup` with the operate right. Plan 2 does not add the
-  route (phase 3 does); the hub already puts a card back to running when its
-  flow is picked up.
+  `POST /api/landing/followup` with no note (`startBranchFix`). A stopped
+  branch flow resumes through `Flows.pickUp`, behind
+  `POST /api/flows/pickup` with the operate right, and the hub puts its card
+  back to running.
 - **Start now.** `POST /api/coordinator/start` with `ids` (shipped in plan
   2).
 
@@ -501,7 +500,7 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
 2. Cards: `equip`, `workflow`, `after`, flows as children and their
    settling, a card following its branch, hold, `start` with `ids`, the
    brief and the lane reads, `manager.md`. Shipped 2026-11-12 on branch
-   `manager-cards` (plan 2), built and reviewed, waiting on merge and deploy.
+   `manager-cards` (plan 2).
    Where it differs from this spec: adoption also takes a run with no parent
    on the card's branch (see "A card follows its branch"); the coordinator's
    workflows route answers no file path and no step prompt; a workflow card
@@ -510,15 +509,63 @@ init message read back. P4 read the mini's `canopy-canopy-1` container.
    plain branch run; there is no `POST /api/flows/pickup` yet, so a stopped
    card flow is not picked up from a route (phase 3); and a stalled run on a
    card's branch is not resumed while its coordinator runs (Calls #16).
-3. The steering routes (`runs/nudge`, `flows/pickup`, send back and resume
-   through `startBranchFix`) and the top view on desktop, tablet and phone,
-   with the equip sheet.
+3. The steering routes (`flows/pickup`, and `landing/followup` for send
+   back and resume through `startBranchFix`; a working worker takes words
+   through FR-066's `runs/say`) and the top view on desktop, tablet and
+   phone, with the equip sheet. Shipped 2026-11-13 on branch `manager-top`
+   (plan 3), with `canopy coordinator`, `canopy land followup`
+   and `canopy run pickup`. Where it differs from this spec:
+   - A follow-up also refuses a branch whose PR the watch holds ("comment
+     on the PR and the PR watch fixes it") and one whose kept flow is
+     stopped ("pick the flow up instead"), and any landing entry, sent back
+     and landed included, not only one in the queue.
+   - `POST /api/flows/pickup`, and a trigger event's resume, refuse while
+     another writer works on the flow's branch (`branchBusy`).
+   - `sayTarget` takes the PR watches as a fifth argument, so the say box
+     never offers a follow-up the server would refuse.
+   - Rings and chips take the view's palette rather than `cardStatus`'s
+     chips: a queued card is to come, a dropped one rust, and a settled one
+     that waits on Eric lichen.
+   - A group card's members' prompts show in "needs you" beside the card's
+     own.
+   - Equip and start now show only while the goal is going, and start
+     these only while the coordinator is going. Resume on a stopped run
+     shows only where the server would take a follow-up.
+   - The kit's server list leaves out canopy's own server, which a card
+     cannot take.
+   - In the equip sheet, a skill a base wildcard covers reads checked and
+     cannot be unchecked, and a server not on this backend is left out of
+     the save.
+   - A goal whose backend is still sending its runs, is offline or asks
+     for a sign-in is not called ended; the view says what it waits for.
+   - The manager's own prompt shows in "needs you" and in its chat, and
+     either answers it.
+   - The agents menu has one "manager" entry, whose view lists the live
+     coordinators, rather than an entry per coordinator.
+   - The CLI picks a flow up with `canopy run pickup`, beside the other
+     run verbs.
+   - Voice's open view tool can open it.
 
 Later, each its own request: saving a card's changes as a loadout (a commit
 to dotclaude through the kit's committing machine); a running worker's
 loadout changed at its next step; per-step loadouts; Codex skills and
 servers; holding a flow between steps; a compact repo index from the Library
 for the manager to plan by area.
+
+## Known gaps
+
+Plan 2 parked these, and plan 3 leaves them as they were:
+
+- A group card that settled "winner picked" turns failed when its group
+  later reads needs-you or dropped, and is not read again, so a winner Eric
+  lands afterwards is missed.
+- A landed entry pruned past `KEEP_LANDED` before a recheck reads as
+  dropped, so the card reads failed "dropped".
+- A pruned flow's card whose ready branch is not queued fails "its flow is
+  no longer kept" while its branch still waits for Eric.
+- A card that settled "waiting for capacity" has state failed, so a card
+  after it reads blocked "which failed" although the limit's resume revives
+  it.
 
 ## Calls Claude made
 

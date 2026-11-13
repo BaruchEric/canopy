@@ -7291,9 +7291,10 @@ button.dl-gut.has {
   }
 }
 /* a phone: the head's actions share the width, the dials shrink, and
-   every button and field takes a finger */
+   every button and field takes a finger, a lane's title too */
 .mgr-view.phone .mini,
-.mgr-view.phone .settings-input {
+.mgr-view.phone .settings-input,
+.mgr-view.phone .mgr-lane-title {
   min-height: 44px;
 }
 .mgr-view.phone .mgr-head-acts {
@@ -7314,6 +7315,10 @@ button.dl-gut.has {
 .mgr-view.phone .mgr-dial {
   width: 68px;
   height: 68px;
+}
+/* the smaller dial's middle holds "3 cards" only at the small step */
+.mgr-view.phone .mgr-at {
+  font-size: var(--t-xs);
 }
 .mgr-view.phone .mgr-wave {
   margin-top: 40px;
@@ -18215,6 +18220,8 @@ button.clock-job + .clock-lane {
   background: var(--bark0);
   color: var(--ink);
   font: inherit;
+  /* a step of the type scale, which a finger's pointer raises to 16px ("touch") */
+  font-size: var(--t-md);
 }
 .mgr-equip-opt {
   display: flex;

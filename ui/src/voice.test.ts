@@ -179,9 +179,11 @@ describe("runVoiceTool", () => {
   test("open_view takes only a real view; end_conversation hangs up", () => {
     const { a, seen } = acts();
     expect(runVoiceTool("open_view", JSON.stringify({ view: "agents" }), world(), a)).toEqual({ opened: "agents" });
+    // the manager's top view: with no goal named it lists the goals going, or opens the one
+    expect(runVoiceTool("open_view", JSON.stringify({ view: "manager" }), world(), a)).toEqual({ opened: "manager" });
     expect(runVoiceTool("open_view", JSON.stringify({ view: "settings" }), world(), a)).toMatchObject({ error: "no view named settings" });
     runVoiceTool("end_conversation", "", world(), a);
-    expect(seen).toEqual(["view agents", "hang up"]);
+    expect(seen).toEqual(["view agents", "view manager", "hang up"]);
   });
   test("a tool it does not have, or arguments that are not JSON", () => {
     expect(runVoiceTool("commit", "{}", world(), acts().a)).toEqual({ error: "there is no tool named commit" });

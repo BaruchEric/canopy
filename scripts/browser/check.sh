@@ -3,7 +3,8 @@
 # installs, building it first when it is missing or older than the source:
 # a scratch canopy server on a free port, scanning two throwaway
 # repos (the runs pill's check wants a run in each, and the phone's wants one
-# with work in it), with a clean environment
+# with work in it) and keeping one ended coordinator in its run log (the
+# manager view's), with a clean environment
 # (a canopy shell's own CANOPY_ settings would make it refuse the page), then
 # check.ts against it. Everything it starts goes when it ends; the
 # screenshots stay.
@@ -64,6 +65,19 @@ for i in 1 2 3 4 5 6 7 8; do
   printf 'export const part%s = %s;\n' "$i" "$i" >"$work/root/twin/part$i.ts"
 done
 printf 'changed\n' >>"$work/root/twin/README.md"
+
+# a coordinator that ended, kept in the run log the way canopy keeps one
+# (core/runlog.ts: runs/<id>/run.json, the folder 0700, the file 0600). It
+# answers by its id and is gone from /api/runs, so the manager view's check
+# opens it and wants "This goal has ended", never a blank page.
+kept="$work/config/runs/check-ended"
+mkdir -p "$kept"
+chmod 700 "$work/config/runs" "$kept"
+now=$(($(date +%s) * 1000))
+cat >"$kept/run.json" <<EOF
+{"id":"check-ended","repoId":"demo","action":"coordinate","verb":"coordinate","progress":"","expectsChange":false,"chat":true,"harness":"claude","note":"Tidy the README of every repo","status":"stopped","startedAt":$((now - 3600000)),"endedAt":$((now - 600000)),"steps":[{"id":"u1","at":$((now - 3600000)),"kind":"user","text":"Tidy the README of every repo"}],"prompt":null,"tasks":[{"id":"t1","title":"Tidy the README","repo":"demo","note":"Say what the repo is in its first line","action":"ask","state":"done","outcome":"landed"}]}
+EOF
+chmod 600 "$kept/run.json"
 
 port="$("$BUN" -e 'const s = Bun.serve({ port: 0, fetch: () => new Response() }); console.log(s.port); s.stop(true);')"
 env -i HOME="$work/home" PATH="$(dirname "$BUN"):/usr/local/bin:/usr/bin:/bin" SHELL=/bin/bash TERM=xterm-256color LANG=C.UTF-8 \
