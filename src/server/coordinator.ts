@@ -505,7 +505,7 @@ export class CoordinatorHub {
    *  no card has yet may be a later one on a card's branch, which the card
    *  takes (`adopt`). */
   private follow(child: Run): void {
-    if (!child.parent) return;
+    if (!child.parent) return this.followBranch(child);
     const coord = this.deps.run(child.parent);
     if (!coord) return;
     const task = coord.tasks?.find((t) => t.run === child.id) ?? this.adopt(coord, child);
@@ -513,11 +513,33 @@ export class CoordinatorHub {
     this.settle(coord, task, child);
   }
 
+  /** A run that names no coordinator but works on a card's branch: a
+   *  landing or PR fix on a flow card's branch, since the flow hands its
+   *  branch over by its last step's run, which names no parent. The card
+   *  that already follows it settles on it; else the first coordinator
+   *  whose card holds that branch adopts it on adopt's terms. */
+  private followBranch(child: Run): void {
+    if (!child.branch?.origin || child.flowStep) return;
+    const coords = this.deps.runs().filter((r) => r.action === "coordinate");
+    for (const coord of coords) {
+      const task = coord.tasks?.find((t) => t.run === child.id);
+      if (!task) continue;
+      if (task.state === "running") this.settle(coord, task, child);
+      return;
+    }
+    for (const coord of coords) {
+      const task = this.adopt(coord, child);
+      if (!task) continue;
+      if (task.state === "running") this.settle(coord, task, child);
+      return;
+    }
+  }
+
   /** A later run on a card's branch that names the coordinator (a fix, a
-   *  follow-up) becomes the card's run: the card goes back to
-   *  running with no outcome and settles again on it, `limited` as it was.
-   *  Only a run that works now, for a coordinator still going, while the
-   *  card's own run does not, so an old run's late word never takes the
+   *  follow-up), or names none (`followBranch`), becomes the card's run:
+   *  the card goes back to running with no outcome and settles again on
+   *  it, `limited` as it was. Only a run that works now, for a coordinator
+   *  still going, while the card's own run does not, so an old run's late word never takes the
    *  card back. A landed card stays closed, and a card whose start or
    *  resume is in flight keeps that start's run. A flow's step run is never
    *  taken, nor a card whose flow is still active; a card whose flow ended
@@ -587,14 +609,15 @@ export class CoordinatorHub {
   }
 
   /** A card's flow moved: a card that failed `stopped` goes back to running
-   *  when its flow is active again (picked up), and a running card settles
+   *  when its flow is active again (picked up) while its coordinator is
+   *  still going, and a running card settles
    *  when its flow has (`settleFlow`). */
   private followFlow(flow: Flow): void {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       const t = coord.tasks?.find((x) => x.flow === flow.id);
       if (!t) continue;
-      if (t.state === "failed" && t.outcome === "stopped" && isFlowActive(flow)) {
+      if (t.state === "failed" && t.outcome === "stopped" && isFlowActive(flow) && isRunActive(coord)) {
         this.update(coord.id, t.id, (x) => withOutcome({ ...x, state: "running" }, undefined));
       } else if (t.state === "running") this.settleFlow(coord, t, flow);
       return;
@@ -863,7 +886,7 @@ export class CoordinatorHub {
 
   /** The Runner's every change. */
   onRun(run: Run): void {
-    if (run.parent) this.follow(run);
+    if (run.parent || run.branch) this.follow(run);
     if (run.action === "coordinate") {
       if (!isRunActive(run)) this.end(run);
       else if (run.status === "idle" && this.notes.has(run.id)) this.flushSoon(run.id);

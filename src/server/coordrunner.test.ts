@@ -581,6 +581,50 @@ describe("a coordinator's card with a loadout", () => {
     }
   }, 30_000);
 
+  test("a landing fix on a flow card's branch, which names no coordinator, reopens the card and takes it off its flow", async () => {
+    const repo = join(scratch, "root", "app");
+    const commit = (cwd: string, msg: string) => Bun.$`git -C ${cwd} add -A && git -C ${cwd} -c user.name=t -c user.email=t@t commit -q -m ${msg}`.quiet();
+    await userWorkflow("two-plain", "---\nname: two-plain\nverb: build twice\nblurb: Two steps.\n---\n\n## build\n\nBuild it.\n\n## check\n\nCheck it.\n");
+    await mkdir(join(repo, ".canopy"), { recursive: true });
+    await writeFile(join(repo, ".canopy", "gates.json"), JSON.stringify({ gates: [{ name: "test", run: "false" }] }));
+    await commit(repo, "red gate");
+    try {
+      const { coord, tasks } = await startCard({ workflow: "two-plain", equip: { loadout: "quick" } });
+      const flowId = tasks[0]?.flow ?? "";
+      const origin = tasks[0]?.branch ?? "";
+      expect(flowId).toMatch(/^[0-9a-f]{8}$/);
+      liveFlows.push(flowId);
+      const first = await stepRun(flowId, 0);
+      await writeFile(join(first.ctx.cwd, "card.txt"), "x\n");
+      await commit(first.ctx.cwd, "card");
+      finish(first.ctx, "built");
+      finish((await stepRun(flowId, 1)).ctx, "checked");
+      await until(async () => (await flowNamed(flowId))?.status === "done", "the card's flow to end");
+      expect((await postAs(s, "/api/landing/land", { run: origin }, s.page)).status).toBe(200);
+      await until(async () => {
+        const info = (await (await call(s, "/api/landing", s.page)).json()) as { entries: { id: string; state: string }[] };
+        return info.entries.some((e) => e.id === origin && e.state === "red");
+      }, "the red gate");
+      const res = await postAs(s, "/api/landing/fix", { id: origin }, s.page);
+      const fix = (await res.json()) as Run & { error?: string };
+      expect([res.status, fix.error]).toEqual([201, undefined]);
+      live.push(fix.id);
+      expect(fix.parent).toBeUndefined();
+      expect(fix.flowStep).toBeUndefined();
+      expect(fix.branch?.origin).toBe(origin);
+      const card = await until(async () => {
+        const c = await cardOf(coord);
+        return c?.run === fix.id ? c : null;
+      }, "the card to follow the fix");
+      expect(card).toMatchObject({ state: "running", run: fix.id, branch: origin, workflow: "two-plain" });
+      expect(card.flow).toBeUndefined();
+      expect(card.outcome).toBeUndefined();
+    } finally {
+      await rm(join(repo, ".canopy", "gates.json"), { force: true });
+      await commit(repo, "no gate");
+    }
+  }, 30_000);
+
   const TWO_STEPS = `---
 name: two-steps
 verb: build and check
@@ -714,21 +758,27 @@ Check the thing.
     await s.stop();
     live.splice(0);
     s = await up("loadout", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"]);
-    // the boot sweep leaves a flow's files for its pick-up
-    expect(existsSync(settings)).toBe(true);
-    expect(existsSync(mcp)).toBe(true);
-    expect((await flowNamed(flowId))?.status).toBe("stopped");
-    s.pickUpFlow(flowId);
-    liveFlows.push(flowId);
-    const again = await until(async () => {
-      const f = await flowNamed(flowId);
-      const id = f?.steps[0]?.runId;
-      return id && id !== first.id ? id : null;
-    }, "the picked-up step to start a run");
-    const ctx = await ctxOf(again);
-    expect(ctx.spec).toMatchObject({ settings, mcpConfig: mcp, servers: ["probe"] });
-    expect(ctx.agent.model).toBe("haiku");
-    expect(ctx.agent.effort).toBe("low");
-    expect((await runs()).find((r) => r.id === again)?.equip).toMatchObject({ loadout: "probed", mcp: ["probe"] });
+    try {
+      // the boot sweep leaves a flow's files for its pick-up
+      expect(existsSync(settings)).toBe(true);
+      expect(existsSync(mcp)).toBe(true);
+      expect((await flowNamed(flowId))?.status).toBe("stopped");
+      s.pickUpFlow(flowId);
+      liveFlows.push(flowId);
+      const again = await until(async () => {
+        const f = await flowNamed(flowId);
+        const id = f?.steps[0]?.runId;
+        return id && id !== first.id ? id : null;
+      }, "the picked-up step to start a run");
+      const ctx = await ctxOf(again);
+      expect(ctx.spec).toMatchObject({ settings, mcpConfig: mcp, servers: ["probe"] });
+      expect(ctx.agent.model).toBe("haiku");
+      expect(ctx.agent.effort).toBe("low");
+      expect((await runs()).find((r) => r.id === again)?.equip).toMatchObject({ loadout: "probed", mcp: ["probe"] });
+    } finally {
+      // the new server's kit never scanned; later tests expect the loadouts
+      // as beforeAll left them, and the restore read the flow's own equip
+      await rescan(true);
+    }
   }, 30_000);
 });

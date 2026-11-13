@@ -8,7 +8,8 @@ import { uptime } from "node:os";
 import { join } from "node:path";
 import { FLOW_ID, isRequestId, type FlowRecord } from "./flow";
 import { configDir } from "./store";
-import { AGENT_EFFORTS, isHarness, type RunEquip } from "./types";
+import { parseEquip } from "./sweepstore";
+import { isHarness } from "./types";
 
 export const flowsDir = (): string => join(configDir(), "flows");
 
@@ -35,23 +36,11 @@ const isStep = (s: unknown): boolean =>
   (s["session"] === undefined || (typeof s["session"] === "string" && SESSION.test(s["session"]))) &&
   (s["harness"] === undefined || isHarness(s["harness"]));
 
-const isStrs = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string");
-
-/** A card flow's equip as `sweepstore.ts` reads a swept chat's, or null for
- *  one of another shape: its servers become the steps' `--allowedTools`. */
-function parseEquip(v: unknown): RunEquip | null {
-  if (!isObject(v)) return null;
-  const { loadout, model, effort, skills, mcp, off, pluginsOff } = v;
-  if (typeof loadout !== "string" || typeof model !== "string" || !(AGENT_EFFORTS as readonly unknown[]).includes(effort) || !isStrs(skills) || !isStrs(mcp) || typeof off !== "number") return null;
-  return { loadout, model, effort: effort as RunEquip["effort"], skills, mcp, off, ...(isStrs(pluginsOff) ? { pluginsOff } : {}) };
-}
-
 /** A record this canopy can run, or null. Checks the shape the engine relies
  *  on (an id fit for a filename, one flow step per workflow step, each an
  *  object with a name and a status, a current step in range, the repo's path
- *  and the root, and a session, harness and request of the right shape where
- *  there is one). A card flow's equip of another shape is dropped. The rest
- *  is the engine's own output. */
+ *  and the root, and a session, harness, request and card flow's equip of
+ *  the right shape where there is one); the rest is the engine's own output. */
 export function parseFlowRecord(text: string): FlowFile | null {
   let v: unknown;
   try {
@@ -73,11 +62,12 @@ export function parseFlowRecord(text: string): FlowFile | null {
   if (!steps.every(isStep)) return null;
   if (flow["request"] !== undefined && !isRequestId(flow["request"])) return null;
   if (typeof current !== "number" || !Number.isInteger(current) || current < 0 || current >= steps.length) return null;
-  // a malformed equip is dropped, not the record: the flow runs on without its loadout's extras
+  // a card flow's equip, whose servers become its steps' --allowedTools; a
+  // flow taken back without it would run every step without its loadout
   if (flow["equip"] !== undefined) {
     const equip = parseEquip(flow["equip"]);
-    if (equip) flow["equip"] = equip;
-    else delete flow["equip"];
+    if (!equip) return null;
+    flow["equip"] = equip;
   }
   // the checks above cover every field the engine and the server read before trusting it
   return v as unknown as FlowFile;

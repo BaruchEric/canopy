@@ -1397,6 +1397,93 @@ describe("a card that names a workflow", () => {
     expect(card("t1")?.run).toBeUndefined();
   });
 
+  /** a run on the card's flow's branch that names no parent: a landing or
+   *  PR fix, whose record the flow's last step run left with none */
+  function parentless(over: Partial<Run> = {}): Run {
+    const r = { id: `fx${++n}`, repoId: "web", action: "ask", status: "working", startedAt: clock, steps: [], note: "fix it", branch: { ...branch("fl1"), state: "working" }, ...over } as unknown as Run;
+    runs.set(r.id, r);
+    return r;
+  }
+
+  test("a flow card sent back reopens on a parentless run on its branch, settles again from that run, and the card after it starts once that run lands", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" }), task({ title: "two", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    branches.set("fl1", { verdict: "auto", entry: flowEntry("t1", "red"), entries: [flowEntry("t1", "red")] });
+    move(h, "t1", "done", "ready");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "sent back", flow: "fl1" });
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1, which failed" });
+    const landed = flowEntry("t1", "landed");
+    const fix = parentless();
+    h.onRun(fix);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: fix.id, branch: "br-fl1", work: "w-test2345" });
+    expect(card("t1")?.flow).toBeUndefined();
+    expect(card("t1")?.outcome).toBeUndefined();
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    // the flow's later word no longer reaches the card
+    const fl = flows.get("fl1");
+    if (!fl) throw new Error("no fl1");
+    h.onFlow({ ...fl, status: "done", endedAt: clock });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", run: fix.id });
+    fix.status = "done";
+    fix.endedAt = clock;
+    fix.branch = { ...branch("fl1"), state: "ready" };
+    fix.result = { text: "Fixed the gate.", durationMs: 1, turns: 1 };
+    branches.set(fix.id, { verdict: "auto", entry: landed, entries: [landed] });
+    h.onRun(fix);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "landed", run: fix.id });
+    expect(card("t2")?.state).toBe("running");
+    const notes = (await hearAll(h)).filter((x) => x.startsWith("canopy: a task you started has settled"));
+    expect(notes).toHaveLength(2);
+    expect(notes[1]).toContain("result: Fixed the gate.");
+  });
+
+  test("a parentless run is not adopted when it is a flow's step, on a branch no card holds, beside an active flow, or for a coordinator that ended", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    const before = JSON.stringify(cards());
+    // the card's flow is still active
+    h.onRun(parentless());
+    await settled(h);
+    expect(JSON.stringify(cards())).toBe(before);
+    move(h, "t1", "failed", "nothing");
+    await settled(h);
+    const failed = JSON.stringify(cards());
+    h.onRun(parentless({ flowStep: { workflow: "review", step: "Build", source: "bundled" } }));
+    h.onRun(parentless({ branch: { ...branch("elsewhere"), state: "working" } }));
+    await settled(h);
+    expect(JSON.stringify(cards())).toBe(failed);
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.status = "stopped";
+    h.onRun(co);
+    h.onRun(parentless());
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "failed", flow: "fl1" });
+    expect(card("t1")?.run).toBeUndefined();
+  });
+
+  test("a card flow picked up after its coordinator ended leaves the card as it settled", async () => {
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });
+    await post(h, "start", { run: "co1" });
+    move(h, "t1", "stopped", "uncommitted");
+    await settled(h);
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.status = "stopped";
+    h.onRun(co);
+    move(h, "t1", "working", "working");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "stopped" });
+  });
+
   test("a flow the backend no longer keeps fails its card on recheck", async () => {
     const h = hub();
     await post(h, "plan", { run: "co1", tasks: [task({ workflow: "review" })] });

@@ -49,14 +49,12 @@ describe("parseFlowRecord", () => {
     expect(back?.flow.request).toBe("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     expect(back?.flow.steps[0]).toMatchObject({ session: "s1", harness: "claude" });
   });
-  test("keeps a card flow's equip, and drops a malformed one rather than the record", () => {
+  test("keeps a card flow's equip, and refuses a record whose equip is malformed, since its steps would run without the loadout", () => {
     const r = rec("abcdef01");
     const equip: RunEquip = { loadout: "quick", model: "haiku", effort: "low", skills: ["a"], mcp: ["probe"], off: 2, pluginsOff: ["p"] };
     expect(parseFlowRecord(JSON.stringify({ ...r, flow: { ...r.flow, equip } }))?.flow.equip).toEqual(equip);
-    for (const bad of [{ ...equip, mcp: "probe" }, { ...equip, effort: "loud" }, { ...equip, off: "2" }, "quick"]) {
-      const back = parseFlowRecord(JSON.stringify({ ...r, flow: { ...r.flow, equip: bad } }));
-      expect(back?.flow.id).toBe("abcdef01");
-      expect(back?.flow.equip).toBeUndefined();
+    for (const bad of [{ ...equip, mcp: "probe" }, { ...equip, effort: "loud" }, { ...equip, off: "2" }, "quick", null]) {
+      expect(parseFlowRecord(JSON.stringify({ ...r, flow: { ...r.flow, equip: bad } }))).toBeNull();
     }
   });
   test.each<[string, string]>([

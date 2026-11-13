@@ -49,7 +49,9 @@ const RESULTS: readonly unknown[] = ["closed", "in use now", "gone", "failed"] s
 
 const isStrs = (v: unknown): v is string[] => Array.isArray(v) && v.every(isStr);
 
-function parseEquip(v: unknown): RunEquip | null {
+/** A run's equip as it was written (a swept chat's, a card flow's), or null
+ *  for one of another shape. */
+export function parseEquip(v: unknown): RunEquip | null {
   if (!isObj(v)) return null;
   const { loadout, model, effort, skills, mcp, off, pluginsOff } = v;
   if (!isStr(loadout) || !isStr(model) || !(AGENT_EFFORTS as readonly unknown[]).includes(effort) || !isStrs(skills) || !isStrs(mcp) || typeof off !== "number") return null;
