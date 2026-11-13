@@ -56,7 +56,7 @@ import { builtinCheck, isBuiltinCheck } from "../core/builtincheck";
 import { gatesCheck, gateTools, runCheck, runGate, runScenario } from "../core/check";
 import { exec, git, onHost, setSeedGit } from "../core/exec";
 import { fleetSkipReason, Flows, isRequestId, type StepExtras } from "../core/flow";
-import { applyModes } from "../core/flowmodes";
+import { applyModes, FLOW_MODES_FILE } from "../core/flowmodes";
 import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
@@ -2318,7 +2318,14 @@ async function startCoordWorkflow(state: ServerState, coordId: string, task: Coo
   const found = findWorkflow(await loadWorkflows(own ? repo : { path: "", host: "none" }), name);
   // the repo's own of that name may be gone, and the merged list would then answer the bundled one
   if (!found || found.listed === false || own !== (found.source === "repo")) throw new Error(own ? `${repo.name} has no workflow ${name} of its own` : `no workflow ${name}`);
-  const wf = await withRepoModes(repo, found);
+  let wf: Workflow;
+  try {
+    wf = await withRepoModes(repo, found);
+  } catch {
+    // the parser's words can quote the file, which is the repo's text and
+    // not the coordinator's to read; the page's workflows list shows them
+    throw new Error(`${repo.name}'s ${FLOW_MODES_FILE} does not read; the repo's workflows show why`);
+  }
   const plan = workflowPlan(wf);
   if (typeof plan === "string") throw new Error(plan);
   const cfg = await loadConfig();
