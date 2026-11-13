@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, Flow, FlowStep, LandEntry, LandingInfo, LandingRun, Loadout, PrWatch, Run, RunBranch, RunPrompt, RunReview, RunStep } from "../../src/core/types";
+import type { RunGroup } from "../../src/core/group";
 import { liveCoordinators, managerRows, sayTarget, waves, type ManagerInputs } from "./manager";
 
 // a run's branch id is b-<run id>, so a test that mixes up a run's id and
@@ -338,6 +339,53 @@ describe("needs you", () => {
     expect(needs(child("c1"), landing([rec("b-c1")], [entry("b-c1", "queued")]))).toEqual([]);
   });
 
+  test("a branch's landing item outlives its run once the page no longer holds the run", () => {
+    // the runner keeps only so many finished runs; the landing record stays
+    const pruned = (task: CoordTask, info: LandingInfo) => managerRows(coord([task]), at({ landing: info })).needs;
+    const done = child("c1", { state: "done", outcome: "ready" });
+    expect(pruned(done, landing([rec("b-c1", { review: review("land"), endedAt: 30 })]))).toEqual([
+      expect.objectContaining({ kind: "landing", card: "t1", landingId: "b-c1", runId: "c1", canLand: true, since: 40, detail: "needs your land" }),
+    ]);
+    const back = child("c1", { state: "failed", outcome: "sent back" });
+    expect(pruned(back, landing([rec("b-c1")], [entry("b-c1", "red", { gate: "test" })]))).toEqual([
+      expect.objectContaining({ kind: "landing", landingId: "b-c1", canLand: false, since: 60, detail: "test failed" }),
+    ]);
+    expect(pruned(child("c1"), landing([rec("b-c1")], [entry("b-c1", "judge", { reason: "scenario x needs a judge" })]))).toEqual([
+      expect.objectContaining({ kind: "landing", landingId: "b-c1", detail: "scenario x needs a judge" }),
+    ]);
+    expect(pruned(back, landing([rec("b-c1")], [entry("b-c1", "red", { fixing: "c2" })]))).toEqual([]);
+    expect(pruned(done, landing([rec("b-c1", { review: review("auto") })]))).toEqual([]);
+    // a branch that opened a PR lands there
+    expect(pruned(done, landing([rec("b-c1", { review: review("land"), pr: 12 })]))).toEqual([]);
+    // the card reads lichen, as its land arc does
+    const rows = managerRows(coord([done]), at({ landing: landing([rec("b-c1", { review: review("land") })]) }));
+    expect([rows.rings[1]?.tone, rows.rings[1]?.arcs[1]?.tone]).toEqual(["lichen", "lichen"]);
+  });
+
+  test("a prompt on a group member's run waits on Eric, with that member's run", () => {
+    const g: RunGroup = {
+      id: "g1",
+      repoId: "canopy",
+      repoPath: "/r/canopy",
+      action: "ask",
+      note: "n",
+      expectedMembers: 3,
+      members: [
+        { run: "m1", origin: "b-m1", profile: null },
+        { run: "m2", origin: "b-m2", profile: null },
+        { run: "m3", origin: "b-m3", profile: null },
+      ],
+      state: "working",
+      autoLand: false,
+      startedAt: 1,
+    };
+    const m2 = run("m2", { status: "waiting", prompt: { ...question, id: "p2" }, steps: [step("text", "may I", 15)] });
+    const task = card({ state: "running", times: 3, group: "g1" });
+    const rows = managerRows(coord([task]), at({ runs: runsOf(run("m1", { status: "working" }), m2), landing: { ...none, groups: [g] } }));
+    expect(rows.needs).toEqual([expect.objectContaining({ key: "prompt:m2:p2", kind: "prompt", card: "t1", runId: "m2", since: 15 })]);
+    expect(rows.rings[1]?.tone).toBe("lichen");
+  });
+
   test("the manager's turn is its proposed cards; prose in a message never counts", () => {
     const k = coord([card(), card({ id: "t2", title: "and the other" }), card({ id: "t3", state: "queued" })], { steps: [step("text", "Shall I start t1?", 9)] });
     expect(managerRows(k, at()).needs).toEqual([
@@ -473,8 +521,12 @@ describe("the lanes", () => {
       ["t2", true, false],
       ["t3", false, false],
     ]);
-    // an ended goal starts nothing
-    expect(lanes(coord(tasks, { status: "stopped" })).map((l) => l[2])).toEqual([false, false, false]);
+    // an ended goal starts and equips nothing: its cards no longer change
+    expect(lanes(coord(tasks, { status: "stopped" }))).toEqual([
+      ["t1", false, false],
+      ["t2", false, false],
+      ["t3", false, false],
+    ]);
   });
 
   test("stop while its run or flow works; resume a stopped run the server would follow up, or a stopped branch flow", () => {

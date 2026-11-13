@@ -29,7 +29,7 @@ import {
 } from "../../src/core/types";
 import { cardCarries, cardCounts, cardStatus, childLine, coordTurn, stepLine } from "./coord";
 import { gateWords, STEP_WORD } from "./flows";
-import { backLine, inQueue, runLanding, sentBack } from "./landing";
+import { backLine, inQueue, runLanding, sentBack, stoppedWhole, verdictWord } from "./landing";
 import { equipTitle } from "./loadouts";
 
 export type Tone = "sky" | "lichen" | "moss" | "rust" | "hair";
@@ -324,28 +324,65 @@ function gateNeed(task: CoordTask, flow: Flow, runs: Record<string, Run>): Need 
   };
 }
 
+/** Where a card's branch stands in the landing queue, as far as Eric's say
+ *  goes. `runLanding` reads it when the page holds the branch's run; once
+ *  the runner has let the run go (it keeps only so many finished ones), the
+ *  record and the entry the queue still holds say the same alone. */
+interface LandView {
+  canLand: boolean;
+  /** sent back with no fix going */
+  canFix: boolean;
+  entry: LandEntry | undefined;
+  /** the verdict in words, once sorted */
+  verdict: string | undefined;
+  /** the branch's latest run */
+  runId: string | undefined;
+  /** when the branch settled ready */
+  readyAt: number;
+}
+
+function landView(w: Work, landing: LandingInfo): LandView | null {
+  const { rec, entry } = w.branch;
+  const r = w.landed;
+  if (r) {
+    const rl = runLanding(r, landing);
+    if (!rl) return null;
+    return { canLand: rl.canLand, canFix: rl.canFix, entry: rl.entry, verdict: rl.verdict, runId: r.id, readyAt: rec?.review?.at ?? rec?.endedAt ?? r.endedAt ?? r.startedAt };
+  }
+  if (w.flow && isFlowActive(w.flow)) return null;
+  if (!rec && !entry) return null;
+  const readyAt = rec?.review?.at ?? rec?.endedAt ?? rec?.startedAt ?? 0;
+  if (entry) return { canLand: false, canFix: sentBack(entry) && entry.fixing === undefined, entry, verdict: undefined, runId: rec?.runId, readyAt };
+  if (!rec || rec.pr !== undefined) return null;
+  // a best-of-N member lands only as its group's picked winner
+  const group = rec.group ? landing.groups?.find((g) => g.id === rec.group) : undefined;
+  const outOfGroup = group !== undefined && (group.state !== "picked" || group.winner !== rec.id);
+  const canLand = !outOfGroup && (rec.state === "ready" || stoppedWhole(rec));
+  return { canLand, canFix: false, entry: undefined, verdict: canLand && rec.review ? verdictWord(rec) : undefined, runId: rec.runId, readyAt };
+}
+
 /** A card's branch the queue leaves to Eric: a verdict of land or approve,
  *  sent back with no fix going, or held for the judge. */
 function landingNeed(w: Work, landing: LandingInfo): Need | null {
-  const r = w.landed;
-  const rl = r ? runLanding(r, landing) : null;
-  const id = rl?.entry?.id ?? w.branch.origin;
-  if (!r || !rl || !id) return null;
-  const base = { key: `landing:${id}`, kind: "landing" as const, card: w.task.id, who: whoOf(w.task), runId: r.id, landingId: id };
-  const rec = w.branch.rec;
-  const verdict = rec?.review?.verdict;
-  if (rl.canLand && (verdict === "land" || verdict === "approve")) {
-    return { ...base, what: verdict === "approve" ? "Waits for your approval to land" : "Waits for your land", detail: rl.verdict ?? "", since: rec?.review?.at ?? rec?.endedAt ?? r.endedAt ?? r.startedAt, canLand: true };
+  const v = landView(w, landing);
+  const id = v?.entry?.id ?? w.branch.origin;
+  if (!v || !id) return null;
+  const base = { key: `landing:${id}`, kind: "landing" as const, card: w.task.id, who: whoOf(w.task), landingId: id, ...(v.runId ? { runId: v.runId } : {}) };
+  const verdict = w.branch.rec?.review?.verdict;
+  if (v.canLand && (verdict === "land" || verdict === "approve")) {
+    return { ...base, what: verdict === "approve" ? "Waits for your approval to land" : "Waits for your land", detail: v.verdict ?? "", since: v.readyAt, canLand: true };
   }
-  if (rl.canFix && rl.entry) return { ...base, what: "Sent back from the landing queue", detail: backLine(rl.entry), since: rl.entry.updatedAt, canLand: false };
-  if (rl.entry?.state === "judge") return { ...base, what: "A scenario waits for a judge", detail: rl.entry.reason ?? "", since: rl.entry.updatedAt, canLand: false };
+  if (v.canFix && v.entry) return { ...base, what: "Sent back from the landing queue", detail: backLine(v.entry), since: v.entry.updatedAt, canLand: false };
+  if (v.entry?.state === "judge") return { ...base, what: "A scenario waits for a judge", detail: v.entry.reason ?? "", since: v.entry.updatedAt, canLand: false };
   return null;
 }
 
-/** Everything of one card that waits on Eric: prompts on its run and its
- *  flow's step runs, its flow's gate, its branch's landing. */
+/** Everything of one card that waits on Eric: prompts on its run, its
+ *  group's member runs and its flow's step runs, its flow's gate, its
+ *  branch's landing. */
 function cardNeeds(w: Work, at: ManagerInputs): Need[] {
   const out: (Need | null)[] = [promptNeed(w.run, w.task)];
+  for (const m of w.group?.members ?? []) out.push(promptNeed(at.runs[m.run], w.task));
   if (w.flow) {
     const flowId = w.flow.id;
     for (const s of w.flow.steps) out.push(promptNeed(s.runId ? at.runs[s.runId] : undefined, w.task, flowId));
@@ -429,7 +466,8 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     runId: task.run ?? null,
     flowId: task.flow ?? null,
     landingId: w.branch.rec?.id ?? null,
-    canEquip: fresh,
+    // an ended goal's cards no longer change: no equip, no start
+    canEquip: fresh && isRunActive(coord),
     canStartNow: fresh && !coord.held && isRunActive(coord),
     canStop: (run !== undefined && isRunActive(run)) || (flow !== undefined && isFlowActive(flow)),
     // a resume is a follow-up with no words, so it applies where the server takes one
