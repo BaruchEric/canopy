@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, Flow, FlowStep, LandEntry, LandingInfo, LandingRun, Loadout, PrWatch, Run, RunBranch, RunPrompt, RunReview, RunStep } from "../../src/core/types";
 import type { RunGroup } from "../../src/core/group";
-import { liveCoordinators, managerRows, sayTarget, waves, type ManagerInputs } from "./manager";
+import { chatAim, liveCoordinators, managerRows, sayTarget, waves, type Lane, type ManagerInputs } from "./manager";
 
 // a run's branch id is b-<run id>, so a test that mixes up a run's id and
 // its branch's finds nothing
@@ -566,6 +566,44 @@ describe("the lanes", () => {
     const lane = (es: LandEntry[]) => managerRows(coord([card({ state: "failed", outcome: "stopped", flow: "f1", branch: "b-f1" })]), at({ flows: flowsOf(flow("f1", [fstep("Build", "failed")], { status: "stopped" })), landing: landing([rec("b-f1")], es) })).lanes[0];
     expect(lane([])?.canResume).toBe(true);
     for (const state of ["queued", "rebasing", "red", "landed"] as const) expect(lane([entry("b-f1", state)])?.canResume).toBe(false);
+  });
+
+  test("a stopped flow whose PR the PR watch holds offers no resume, since its pickup is refused", () => {
+    const lane = (prs: PrWatch[]) => managerRows(coord([card({ state: "failed", outcome: "stopped", flow: "f1", branch: "b-f1" })]), at({ flows: flowsOf(flow("f1", [fstep("Build", "failed")], { status: "stopped" })), landing: landing([rec("b-f1")]), prs })).lanes[0];
+    expect(lane([])?.canResume).toBe(true);
+    expect(lane([watch({ id: "b-f1", runId: "f1" })])?.canResume).toBe(false);
+    // a watch on another branch holds nothing here
+    expect(lane([watch()])?.canResume).toBe(true);
+  });
+});
+
+describe("whom the manager chat speaks to", () => {
+  const lanes = (): Lane[] =>
+    managerRows(
+      coord([child("c1"), child("c2", { id: "t2", branch: "b-c2" })]),
+      at({ runs: runsOf(run("c1", { status: "working" }), run("c2", { status: "working" })) }),
+    ).lanes;
+  test("nothing picked is the manager, and the list holds the lanes that take words", () => {
+    const got = chatAim(lanes(), "");
+    expect(got.lane).toBeUndefined();
+    expect(got.shut).toBeUndefined();
+    expect(got.options.map((l) => l.id)).toEqual(["t1", "t2"]);
+  });
+  test("a picked lane that takes words is where the words go", () => {
+    expect(chatAim(lanes(), "t2")).toMatchObject({ lane: { id: "t2" } });
+    expect(chatAim(lanes(), "t2").shut).toBeUndefined();
+  });
+  test("a picked lane that stops taking words stays picked and shut, so a draft never goes to the manager", () => {
+    const now = lanes().map((l) => (l.id === "t1" ? { ...l, say: { kind: "none" as const, why: "it has landed" } } : l));
+    const got = chatAim(now, "t1");
+    expect(got.lane?.id).toBe("t1");
+    expect(got.shut).toBe("t1 takes no words now: it has landed. Pick the manager or another worker to send this.");
+    expect(got.options.map((l) => l.id)).toEqual(["t1", "t2"]);
+    // not picked, a lane that takes no words is not offered
+    expect(chatAim(now, "").options.map((l) => l.id)).toEqual(["t2"]);
+  });
+  test("a picked card no longer on the goal leaves the manager", () => {
+    expect(chatAim(lanes(), "t9")).toEqual({ options: lanes() });
   });
 });
 

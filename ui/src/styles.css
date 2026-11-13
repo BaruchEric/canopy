@@ -7265,6 +7265,11 @@ button.dl-gut.has {
   min-width: 0;
   max-width: 260px;
 }
+/* a picked worker that takes no words now: why, over the box it refuses */
+.mgr-chat-shut {
+  flex: none;
+  margin: 0 var(--gutter) 6px;
+}
 @media (min-width: 1101px) {
   .mgr-view:not(.mgr-pick) {
     display: flex;

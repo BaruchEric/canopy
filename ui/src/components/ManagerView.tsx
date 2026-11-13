@@ -20,7 +20,7 @@ import { cardCounts } from "../coord";
 import { gateButtons, gateWords } from "../flows";
 import { scopeOffers } from "../inbox";
 import { needsApproval, sentBack } from "../landing";
-import { goalText, liveCoordinators, managerRows, type Goal, type Lane, type Need, type Ring, type SayTarget, type Tone } from "../manager";
+import { chatAim, goalText, liveCoordinators, managerRows, type Goal, type Lane, type Need, type Ring, type SayTarget, type Tone } from "../manager";
 import { PHONE, useMedia } from "../media";
 import { backendOf, isHome, plainOf } from "../registry";
 import { managerHere, managerUrl, openManager } from "../routes";
@@ -852,31 +852,38 @@ function SayBox({ lane, act, onDone }: { lane: Lane; act: Act; onDone: () => voi
 /* ---------- the manager's chat ---------- */
 
 /** The coordinator's chat, with a switch for whom the box speaks to: the
- *  manager, or one worker that takes words now (its lane's say target). */
+ *  manager, or one worker that takes words now (its lane's say target). A
+ *  picked worker that stops taking words stays picked and refuses the send
+ *  with why (`chatAim`), so a draft never goes to the manager unasked. */
 function Chat({ coord, lanes, on, hidden }: { coord: Run; lanes: readonly Lane[]; on: boolean; hidden: boolean }) {
   const repo = useStore((s) => s.repos.find((r) => r.id === coord.repoId));
   const [to, setTo] = useState("");
-  const open = lanes.filter((l) => l.say.kind !== "none");
-  const lane = open.find((l) => l.id === to);
+  const { options, lane, shut } = chatAim(lanes, to);
   return (
     <aside className={`mgr-chat${on ? " on" : ""}`} id="mgr-chat" aria-label="manager chat" hidden={hidden}>
       <div className="mgr-chat-head">
         <h2 className="mgr-h">manager</h2>
-        {open.length > 0 && (
+        {options.length > 0 && (
           <label className="mgr-to">
             to
             <select className="settings-input" value={lane ? lane.id : ""} aria-label="Whom the box speaks to" onChange={(e) => setTo(e.target.value)}>
               <option value="">the manager</option>
-              {open.map((l) => (
+              {options.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.id}: {l.title}
+                  {l.say.kind === "none" ? " (takes no words now)" : ""}
                 </option>
               ))}
             </select>
           </label>
         )}
       </div>
-      <RunPane run={coord} repo={repo} {...(lane ? { onSend: (text: string) => sayWith(lane.say, text), hint: sayHint(lane) } : {})} />
+      {shut && (
+        <p className="note err mgr-chat-shut" role="status">
+          {shut}
+        </p>
+      )}
+      <RunPane run={coord} repo={repo} {...(lane ? { onSend: (text: string) => (shut ? Promise.reject(new Error(shut)) : sayWith(lane.say, text)), hint: shut ?? sayHint(lane) } : {})} />
     </aside>
   );
 }

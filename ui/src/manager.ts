@@ -11,7 +11,7 @@
 import { SEP } from "../../src/core/backendid";
 import { cardLanded } from "../../src/core/coordinator";
 import type { RunGroup } from "../../src/core/group";
-import { entryRefusal, followupRefusal } from "../../src/core/landing";
+import { entryRefusal, followupRefusal, pickupRefusal } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
 import {
   isFlowActive,
@@ -115,6 +115,20 @@ export function sayTarget(task: CoordTask, run: Run | undefined, flow: Flow | un
   const refused = followupRefusal(rec, entry, false, origin, { pr: watchHolds(prs.find((w) => w.id === origin)) });
   if (refused || !rec) return none(refused?.error ?? `canopy holds no branch ${origin}`);
   return { kind: "followup", landingId: rec.id };
+}
+
+/** Whom the manager chat's box speaks to, from the card Eric picked in its
+ *  "to" list (`to`, "" for the manager). `options` are the lanes that take
+ *  words now, and the picked lane whatever it takes. A picked lane that
+ *  stops taking words stays picked, with `shut` saying why, so a draft
+ *  never goes to the manager unless Eric picks the manager. A picked card
+ *  no longer on the goal leaves the manager. */
+export function chatAim(lanes: readonly Lane[], to: string): { options: Lane[]; lane?: Lane; shut?: string } {
+  const lane = to ? lanes.find((l) => l.id === to) : undefined;
+  const options = lanes.filter((l) => l.say.kind !== "none" || l === lane);
+  if (!lane) return { options };
+  if (lane.say.kind !== "none") return { options, lane };
+  return { options, lane, shut: `${lane.id} takes no words now: ${lane.say.why}. Pick the manager or another worker to send this.` };
 }
 
 /** Each card's wave by `after`: 0 with nothing it waits for here, else one
@@ -479,8 +493,11 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     canStartNow: fresh && !coord.held && isRunActive(coord),
     canStop: (run !== undefined && isRunActive(run)) || (flow !== undefined && isFlowActive(flow)),
     // a resume is a follow-up with no words, so it applies where the server
-    // takes one; a stopped flow's pickup, while its branch has no landing entry
-    canResume: (run?.status === "stopped" && say.kind === "followup") || (flow?.status === "stopped" && flow.branch !== undefined && w.branch.entry === undefined),
+    // takes one; a stopped flow's pickup where the server takes that: no
+    // landing entry on its branch and no PR the PR watch holds
+    canResume:
+      (run?.status === "stopped" && say.kind === "followup") ||
+      (flow?.status === "stopped" && flow.branch !== undefined && pickupRefusal(w.branch.entry, false, watchHolds(at.prs.find((p) => p.id === w.branch.origin))) === null),
     say,
   };
 }

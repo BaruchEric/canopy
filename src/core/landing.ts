@@ -179,6 +179,10 @@ export function rejoins(review: RunReview, entry: Pick<LandEntry, "auto" | "appr
  *  flow's pickup's, a "fix it"'s and a card's resume after the limit's */
 export const BRANCH_BUSY = "a run is working on this branch; say to it instead";
 
+/** the refusal while the PR watch holds a branch's open pull request: a
+ *  follow-up's, a stopped flow's pickup's and a trigger's resume's */
+export const PR_HELD = "it has an open pull request; comment on the PR and the PR watch fixes it";
+
 /** What else keeps a follow-up off a branch, beside a writer working on
  *  it: a pull request the PR watch holds, which takes its fixes from the
  *  PR's comments, and a kept flow on the branch that stopped, which its
@@ -213,8 +217,17 @@ export function followupRefusal(rec: LandingRun | undefined, entry: LandEntry | 
   const held = entryRefusal(entry);
   if (held) return { status: 409, error: held };
   if (holds.flowStopped) return { status: 409, error: "its flow is stopped; pick the flow up instead" };
-  if (holds.pr) return { status: 409, error: "it has an open pull request; comment on the PR and the PR watch fixes it" };
+  if (holds.pr) return { status: 409, error: PR_HELD };
   return null;
+}
+
+/** Why a stopped branch flow may not be picked up now, or null, in a
+ *  follow-up's words: a writer working on its branch, its landing entry
+ *  (queued, sent back or landed), or its pull request, which the PR watch
+ *  fixes from the PR's comments. */
+export function pickupRefusal(entry: LandEntry | undefined, busy: boolean, prHeld: boolean): string | null {
+  if (busy) return BRANCH_BUSY;
+  return entryRefusal(entry) ?? (prHeld ? PR_HELD : null);
 }
 
 /** Whether "land" may queue a run as sorted now; `approve` is the id the

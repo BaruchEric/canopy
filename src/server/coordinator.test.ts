@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { blockedNote, flowGoneNote, flowNote, holdNote, landedNote, lateFailNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import { blockedNote, CARDS_NOW, flowGoneNote, flowNote, holdNote, landedNote, lateFailNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
 import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
@@ -9,7 +9,7 @@ import type { Caller } from "./callers";
 import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
 
 let runs: Map<string, Run>;
-let said: { id: string; text: string }[];
+let said: { id: string; text: string; cards?: string }[];
 let started: { coord: string; task: string }[];
 let full: Set<string>;
 let refuse: Map<string, string>;
@@ -77,7 +77,9 @@ function hub(over: Partial<CoordinatorDeps> = {}): CoordinatorHub {
     say: (id, text) => {
       const co = runs.get(id);
       if (co?.status !== "idle") throw new Error("still replying");
-      said.push({ id, text });
+      // each note ends with every card's state; the tests read the two apart
+      const at = text.lastIndexOf(`\n${CARDS_NOW}`);
+      said.push(at >= 0 ? { id, text: text.slice(0, at), cards: text.slice(at + 1) } : { id, text });
       co.status = "working";
       h.onRun(co);
     },
@@ -897,6 +899,30 @@ describe("card fields on the plan and tasks routes", () => {
     expect(card("t2")?.after).toBeUndefined();
     expect(await post(h, "tasks", { run: "co1", id: "t3", remove: true })).toEqual({ status: 200, body: { ok: true, removed: "t3" } });
     expect(cards().map((t) => t.id)).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("the cards line under each note", () => {
+  test("a card Eric started alone settles while the other stays proposed, and the note's last line says so", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });
+    expect((await post(h, "start", { run: "co1", ids: ["t2"] })).status).toBe(200);
+    expect(cards().map((t) => [t.id, t.state])).toEqual([["t1", "proposed"], ["t2", "running"]]);
+    end(h, "t2", { status: "failed" });
+    await settled(h);
+    expect(said.length).toBe(1);
+    expect(said[0]?.text.split("\n")[1]).toBe("task t2: two (repo web)");
+    expect(said[0]?.cards).toBe("cards now: t1 proposed, t2 failed");
+  });
+
+  test("a hold's note carries the line too, read when it is said", async () => {
+    coordinator({ status: "idle" });
+    const h = hub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });
+    await post(h, "hold", { run: "co1", held: true });
+    await settled(h);
+    expect(said.map((x) => [x.text, x.cards])).toEqual([[holdNote(true), "cards now: t1 proposed, t2 proposed"]]);
   });
 });
 

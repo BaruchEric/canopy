@@ -16,8 +16,9 @@ export const MAX_TASKS = 20;
 export const COORD_AT_ONCE = 3;
 export const MAX_TITLE = 120;
 export const MAX_NOTE = 4000;
-/** the characters of a child's result line a settle note keeps */
-export const RESULT_CHARS = 600;
+/** the characters of a child's result line a settle note keeps, its head
+ *  and its tail together (`oneLine`) */
+export const RESULT_CHARS = 1200;
 
 /** A card as the coordinator proposes it, before canopy numbers it. */
 export type PlannedTask = Omit<CoordTask, "id" | "state">;
@@ -509,10 +510,26 @@ const BRANCH_WORD: Record<RunBranchState, string> = {
   stopped: "stopped by a restart",
 };
 
-/** a result on one line, cut to `RESULT_CHARS` with an ellipsis */
+/** what a cut result puts between the head and the tail it keeps */
+const RESULT_GAP = " … ";
+
+/** A result on one line. A longer one keeps its head and its tail within
+ *  `RESULT_CHARS`, cut at words with `RESULT_GAP` between: a worker's
+ *  report opens with what it did and closes with what it checked, and a
+ *  cut that kept the head alone lost the tests it ran ("bun te…"). */
 function oneLine(s: string): string {
   const flat = s.replace(/\s+/g, " ").trim();
-  return flat.length > RESULT_CHARS ? `${flat.slice(0, RESULT_CHARS - 1)}…` : flat;
+  if (flat.length <= RESULT_CHARS) return flat;
+  const room = RESULT_CHARS - RESULT_GAP.length;
+  const headMax = Math.ceil(room * 0.6);
+  const tailMax = room - headMax;
+  // a word cut short at either end goes, unless that loses a fifth of the room
+  const end = flat.lastIndexOf(" ", headMax);
+  const head = end > headMax * 0.8 ? flat.slice(0, end) : flat.slice(0, headMax);
+  const from = flat.length - tailMax;
+  const space = flat.indexOf(" ", from - 1);
+  const tail = space >= 0 && space < from + tailMax * 0.2 ? flat.slice(space + 1) : flat.slice(from);
+  return `${head}${RESULT_GAP}${tail}`;
 }
 
 /** The user message a settled group card sends into its coordinator's chat:
@@ -603,6 +620,48 @@ export const lateFailNote = (task: CoordTask, outcome: ChildOutcomeWord): string
  *  branch may still reopen it (`afterWait`). */
 export const blockedNote = (task: CoordTask, words: string, reopens?: string): string =>
   `canopy: task ${task.id} (${task.title}) ${words}; it stays queued until Eric takes its after off or removes it${reopens ? `, or a new run on ${reopens}'s branch reopens ${reopens}` : ""}`;
+
+/** what a note's last line starts with: every card's state as it is said */
+export const CARDS_NOW = "cards now: ";
+
+const OUTCOME_WORDS: Record<ChildOutcomeWord, true> = {
+  landed: true,
+  ready: true,
+  "PR opened": true,
+  "PR closed": true,
+  "sent back": true,
+  failed: true,
+  stopped: true,
+  uncommitted: true,
+  "plan turned down": true,
+  "no change": true,
+  "waiting for capacity": true,
+  "winner picked": true,
+  "needs you": true,
+  dropped: true,
+};
+const OUTCOME_WORD_SET: ReadonlySet<string> = new Set(Object.keys(OUTCOME_WORDS));
+
+/** A card's state in a word for `cardsLine`: a settled card's outcome when
+ *  it is one of `childOutcome`'s words, else its state. */
+function cardWord(t: CoordTask): string {
+  if (t.state !== "done" && t.state !== "failed") return t.state;
+  return t.outcome !== undefined && OUTCOME_WORD_SET.has(t.outcome) ? t.outcome : t.state;
+}
+
+/** Every card's state on one line, "cards now: t1 proposed, t2 ready", or
+ *  "" with no cards. Each note ends with it, so the coordinator reads which
+ *  cards started: Eric may start one card at a time from his page, and a
+ *  card it heard nothing of may still be proposed. */
+export function cardsLine(tasks: readonly CoordTask[]): string {
+  return tasks.length > 0 ? `${CARDS_NOW}${tasks.map((t) => `${t.id} ${cardWord(t)}`).join(", ")}` : "";
+}
+
+/** A note with `cardsLine` under it, as the coordinator hears it. */
+export function withCards(note: string, tasks: readonly CoordTask[]): string {
+  const line = cardsLine(tasks);
+  return line ? `${note}\n${line}` : note;
+}
 
 /** The note a hold or a resume sends. */
 export const holdNote = (held: boolean): string =>

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -151,6 +151,23 @@ describe("childOutcome", () => {
   });
 });
 
+describe("cardsLine", () => {
+  const card = (id: string, state: CoordTask["state"], outcome?: string): CoordTask => ({ id, title: id, repo: "web", note: "n", action: "ask", state, ...(outcome ? { outcome } : {}) });
+  test("every card's state, a settled one by its outcome word", () => {
+    expect(cardsLine([card("t1", "proposed"), card("t2", "done", "ready"), card("t3", "running"), card("t4", "failed", "sent back"), card("t5", "queued", "the goal is held"), card("t6", "dropped")])).toBe(
+      "cards now: t1 proposed, t2 ready, t3 running, t4 sent back, t5 queued, t6 dropped",
+    );
+  });
+  test("an outcome that is a sentence reads as the card's state", () => {
+    expect(cardsLine([card("t1", "failed", "its flow is no longer kept"), card("t2", "failed", "waiting for capacity")])).toBe("cards now: t1 failed, t2 waiting for capacity");
+  });
+  test("no cards add no line", () => {
+    expect(cardsLine([])).toBe("");
+    expect(withCards("canopy: Eric held the goal", [])).toBe("canopy: Eric held the goal");
+    expect(withCards("canopy: Eric held the goal", [card("t1", "proposed")])).toBe("canopy: Eric held the goal\ncards now: t1 proposed");
+  });
+});
+
 describe("settleNote", () => {
   const t: CoordTask = { id: "t2", title: "fix the login", repo: "web", note: "n", action: "propose", state: "running", run: "c1" };
 
@@ -172,13 +189,33 @@ describe("settleNote", () => {
     expect(note).toContain("branch: run/fix-login-ab12cd34, red: test");
   });
 
-  test("a failed child gives its error for a result, cut to 600 characters", () => {
-    const note = settleNote(t, child({ status: "failed", result: undefined, error: `setup failed: ${"x".repeat(700)}`, branch: branch({ state: "nothing" }) }));
+  test("a failed child gives its error for a result, its head and tail kept within RESULT_CHARS", () => {
+    const note = settleNote(t, child({ status: "failed", result: undefined, error: `setup failed: ${"x".repeat(1300)} at the end`, branch: branch({ state: "nothing" }) }));
     expect(note).toContain("outcome: failed");
     const line = note.split("\n").find((l) => l.startsWith("result: ")) ?? "";
-    expect(line.length).toBe("result: ".length + 600);
-    expect(line.endsWith("…")).toBe(true);
+    expect(line.length).toBeLessThanOrEqual("result: ".length + RESULT_CHARS);
+    expect(line.startsWith("result: setup failed: xxx")).toBe(true);
+    expect(line).toContain(" … ");
+    expect(line.endsWith("at the end")).toBe(true);
     expect(note).toContain("branch: run/fix-login-ab12cd34, no commits");
+  });
+
+  test("a long report keeps the checks it ends with, and cuts at words", () => {
+    const words = (n: number, w: string) => Array.from({ length: n }, () => w).join(" ");
+    const text = `I added the file. ${words(300, "middle")} I ran bun test and bun run build; both pass.`;
+    const line = settleNote(t, child({ result: { text, durationMs: 1, turns: 1 } })).split("\n").find((l) => l.startsWith("result: ")) ?? "";
+    expect(line.length).toBeLessThanOrEqual("result: ".length + RESULT_CHARS);
+    expect(line.startsWith("result: I added the file. middle")).toBe(true);
+    expect(line.endsWith("I ran bun test and bun run build; both pass.")).toBe(true);
+    // no word is cut in two on either side of the gap
+    const [head, tail] = line.slice("result: ".length).split(" … ");
+    expect(head?.split(" ").every((w) => ["I", "added", "the", "file.", "middle"].includes(w))).toBe(true);
+    expect(tail?.split(" ").slice(0, -10).every((w) => w === "middle")).toBe(true);
+  });
+
+  test("a result that fits is kept whole", () => {
+    const text = "x".repeat(RESULT_CHARS);
+    expect(settleNote(t, child({ result: { text, durationMs: 1, turns: 1 } }))).toContain(`result: ${text}\n`);
   });
 
   test("a limited child note says it waits for capacity and keeps the limit text", () => {

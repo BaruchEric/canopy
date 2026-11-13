@@ -281,7 +281,7 @@ import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, loopbackAuthWanted, loopbackBypass, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
-import { BRANCH_BUSY, entryRefusal, fixPrompt, followupRefusal, landWord } from "../core/landing";
+import { BRANCH_BUSY, PR_HELD, fixPrompt, followupRefusal, landWord, pickupRefusal } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
 import { goingOf } from "../core/going";
 import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
@@ -2113,15 +2113,15 @@ async function startingOn(state: ServerState, origin: string, start: () => Promi
 
 /** Why a stopped branch flow may not be picked up now, or null, for the
  *  pickup route and a trigger event's resume alike: never while another
- *  writer works on its branch, and never while the branch has a landing
- *  entry (queued, sent back or landed), said in a follow-up's words.
- *  Anything else is `Flows.pickUp`'s to say. */
-function pickupRefusal(state: ServerState, id: string): string | null {
+ *  writer works on its branch, while the branch has a landing entry
+ *  (queued, sent back or landed), or while the PR watch holds its PR, said
+ *  in a follow-up's words (`pickupRefusal` in core). Anything else is
+ *  `Flows.pickUp`'s to say. */
+function flowPickupRefusal(state: ServerState, id: string): string | null {
   const flow = state.flows.get(id);
   if (!flow?.branch || flow.status !== "stopped") return null;
   const origin = state.landing.record(flow.branch.origin)?.id ?? flow.branch.origin;
-  if (branchBusy(state, origin)) return BRANCH_BUSY;
-  return entryRefusal(state.landing.info().entries.find((e) => e.id === origin));
+  return pickupRefusal(state.landing.info().entries.find((e) => e.id === origin), branchBusy(state, origin), state.prs.holds(origin));
 }
 
 /** `POST /api/landing/followup`: a later run on a branch that settled
@@ -5123,7 +5123,7 @@ async function handleApi(
   if (path === "/api/flows/pickup" && method === "POST") {
     const id = (await objectBody(req))["id"];
     if (typeof id !== "string") return json({ error: "missing flow id" }, 400);
-    const refused = pickupRefusal(state, id);
+    const refused = flowPickupRefusal(state, id);
     if (refused) return json({ error: refused }, 409);
     try {
       return json(state.flows.pickUp(id));
@@ -7175,14 +7175,16 @@ export async function startServer(opts: {
         // server has let go of leaves its branch to a run, like a branch run's
         const flow = event.flowId ? state.flows.get(event.flowId) : undefined;
         if (flow?.branch && flow.status === "stopped") {
-          const refused = pickupRefusal(state, flow.id);
+          const refused = flowPickupRefusal(state, flow.id);
           if (refused) throw new TriggerError(refused);
           return { flow: state.flows.pickUp(flow.id) };
         }
         const rec = event.branch ? state.landing.record(event.branch) : undefined;
         if (!rec) throw new HttpError(404, "its branch is gone, so start it again instead");
-        // never a second writer on the branch, as a follow-up
+        // never a second writer on the branch, as a follow-up: not beside a
+        // run on it, and not on a PR the PR watch fixes from its comments
         if (branchBusy(state, rec.id)) throw new TriggerError(BRANCH_BUSY);
+        if (state.prs.holds(rec.id)) throw new TriggerError(PR_HELD);
         // a resume by hand is interactive; the governor's wake resumes low
         return { run: await startingOn(state, rec.id, () => startBranchFix(state, rec, "Carry on with the task from where you stopped.", "resume", true, { priority: priority ?? "interactive" })) };
       },

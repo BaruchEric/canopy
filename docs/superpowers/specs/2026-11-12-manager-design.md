@@ -568,7 +568,7 @@ for the manager to plan by area.
 
 ## Known gaps
 
-Plan 2 parked these, and plan 3 leaves them as they were:
+Plan 2 parked these, and plan 3 leaves them as they were. Plan 3's own two parked gaps, pickup and resume beside the PR watch's hold and the chat re-aiming at the manager when a picked worker stopped taking words, were closed on 2026-11-13.
 
 - A group card that settled "winner picked" turns failed when its group
   later reads needs-you or dropped, and is not read again, so a winner Eric

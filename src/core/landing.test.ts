@@ -10,6 +10,8 @@ import {
   fixPrompt,
   followupRefusal,
   landAllPick,
+  pickupRefusal,
+  PR_HELD,
   MAX_NOTICES,
   rejoins,
   reviewWord,
@@ -271,6 +273,23 @@ describe("followupRefusal", () => {
     expect(followupRefusal(run("f"), entryIn("landed"), false, "f", { flowStopped: true })?.error).toBe("it has landed");
     expect(entryRefusal(entryIn("red"))).toBe("it was sent back (red); fix it from the landing queue instead");
     expect(entryRefusal(undefined)).toBeNull();
+  });
+});
+
+describe("pickupRefusal", () => {
+  const entryIn = (state: LandEntry["state"]): LandEntry => ({ ...entryFor(run("f"), 1), state });
+  test("a stopped flow's branch with nothing on it may be picked up", () => {
+    expect(pickupRefusal(undefined, false, false)).toBeNull();
+  });
+  test("a pull request the PR watch holds refuses the pickup in a follow-up's words", () => {
+    expect(pickupRefusal(undefined, false, true)).toBe(PR_HELD);
+    expect(PR_HELD).toBe("it has an open pull request; comment on the PR and the PR watch fixes it");
+    expect(followupRefusal(run("f", { pr: 7 }), undefined, false, "f", { pr: true })?.error).toBe(PR_HELD);
+  });
+  test("a writer on the branch comes first, then the landing entry, then the PR", () => {
+    expect(pickupRefusal(entryIn("red"), true, true)).toBe(BRANCH_BUSY);
+    expect(pickupRefusal(entryIn("red"), false, true)).toBe("it was sent back (red); fix it from the landing queue instead");
+    expect(pickupRefusal(entryIn("landed"), false, false)).toBe("it has landed");
   });
 });
 

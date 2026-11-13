@@ -32,6 +32,7 @@ import {
   settleNote,
   startNote,
   validatePlan,
+  withCards,
   type ChildBranch,
   type PlanContext,
 } from "../core/coordinator";
@@ -880,9 +881,10 @@ export class CoordinatorHub {
     this.flushSoon(coordId);
   }
 
-  /** Says the oldest waiting note when the coordinator is idle. It runs
-   *  after the change that called it has reached every listener, since
-   *  saying moves the run under them. */
+  /** Says the oldest waiting note when the coordinator is idle, with every
+   *  card's state as it is then under it (`withCards`). It runs after the
+   *  change that called it has reached every listener, since saying moves
+   *  the run under them. */
   private flushSoon(coordId: string): void {
     queueMicrotask(() => {
       const coord = this.deps.run(coordId);
@@ -895,7 +897,7 @@ export class CoordinatorHub {
       const text = list?.shift();
       if (!list || text === undefined) return;
       try {
-        this.deps.say(coordId, text);
+        this.deps.say(coordId, withCards(text, coord.tasks ?? []));
       } catch {
         // it was not idle after all; the note waits for the next turn
         list.unshift(text);
