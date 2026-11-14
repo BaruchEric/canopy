@@ -1,7 +1,7 @@
 /** The words for a kept worktree (FR-051), shared by the CLI and the page:
  *  pure, so the browser may import it (core/branchtrees.ts needs Bun). */
 
-import type { BranchTreeState } from "./types";
+import { isRunActive, type BranchTreeState, type Run } from "./types";
 
 /** Why a tree should not go without `force`: what it holds that would be
  *  lost or cut off. Null when nothing. */
@@ -61,4 +61,16 @@ export function isBranchName(name: string): boolean {
   if (name.includes("..") || name.includes("@{") || name.startsWith("-")) return false;
   if (name.endsWith(".") || name.endsWith("/")) return false;
   return name.split("/").every((part) => part !== "" && !part.startsWith(".") && !part.endsWith(".lock"));
+}
+
+/** The kept trees an active in-place run works in, by dir: a run with no
+ *  branch whose repo's path is that dir, named `run <id> (<verb>)`. A run
+ *  waiting on its model counts, which `treesAtWork` does not see. */
+export function runsInTrees(dirs: readonly string[], runs: readonly Run[], pathOf: (repoId: string) => string | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const dir of dirs) {
+    const run = runs.find((r) => isRunActive(r) && r.branch === undefined && pathOf(r.repoId) === dir);
+    if (run) out.set(dir, `run ${run.id} (${run.verb})`);
+  }
+  return out;
 }

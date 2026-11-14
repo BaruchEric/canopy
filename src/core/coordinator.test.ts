@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardCarries, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterMet, afterWait, blockedNote, cardCarries, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -860,5 +860,45 @@ describe("a card in a kept tree", () => {
   });
   test("the facts line names the tree", () => {
     expect(cardCarries({ id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "queued", tree: "feat/x" }).tree).toBe("in tree feat/x");
+  });
+});
+
+describe("tree cards: start, wait, settle", () => {
+  const tc = (over: Partial<CoordTask> = {}): CoordTask => ({ id: "t1", title: "try it", repo: "web", note: "n", action: "ask", state: "queued", tree: "feat/x", ...over });
+  const inPlace = (over: Partial<Run> = {}): Run => child({ branch: undefined, ...over });
+  test("the step a tree's state gives", () => {
+    expect(treeStep("feat/x", null, false)).toEqual({ add: true });
+    expect(treeStep("feat/x", { state: "preparing" }, false)).toEqual({ wait: "making tree feat/x" });
+    expect(treeStep("feat/x", { state: "merging" }, false)).toEqual({ wait: "waiting for tree feat/x to be free" });
+    expect(treeStep("feat/x", { state: "failed", why: "setup exited 3\nbroken\n" }, false)).toEqual({ fail: "tree feat/x failed: setup exited 3; broken" });
+    expect(treeStep("feat/x", { state: "failed" }, false)).toEqual({ fail: "tree feat/x failed: its setup failed" });
+    expect(treeStep("feat/x", { state: "ready" }, true)).toEqual({ wait: "waiting for tree feat/x to be free" });
+    expect(treeStep("feat/x", { state: "ready" }, false)).toEqual({ start: true });
+  });
+  test("its wait words", () => {
+    expect([isTreeWait("making tree feat/x"), isTreeWait("waiting for tree feat/x to be free"), isTreeWait("waiting for a branch slot in web"), isTreeWait(undefined)]).toEqual([true, true, false, false]);
+  });
+  test("a full repo never holds it", () => {
+    expect(nextToStart([tc(), tc({ id: "t2", tree: undefined })], { working: 0, repoFull: () => true, cards: [] }).map((t) => t.id)).toEqual(["t1"]);
+  });
+  test("done counts for after; cardLanded keeps its meaning; a failed tree card may reopen", () => {
+    const next = tc({ id: "t2", tree: undefined, after: ["t1"] });
+    const done = tc({ state: "done", outcome: "done in tree feat/x" });
+    expect(afterMet(done)).toBe(true);
+    expect(afterWait(next, [done, next])).toBeNull();
+    expect(cardLanded(done)).toBe(false);
+    expect(afterWait(next, [tc({ state: "failed", outcome: "failed" }), next])).toEqual({ words: "waits for t1, which failed", blocked: true, reopens: "t1" });
+  });
+  test("settles on its run alone", () => {
+    expect(treeSettled(inPlace(), "feat/x")).toEqual({ state: "done", outcome: "done in tree feat/x" });
+    expect(treeSettled(inPlace({ status: "failed" }), "feat/x")).toEqual({ state: "failed", outcome: "failed" });
+    expect(treeSettled(inPlace({ status: "stopped" }), "feat/x")).toEqual({ state: "failed", outcome: "stopped" });
+    expect(treeSettled(inPlace({ proposalState: "turned down" }), "feat/x")).toEqual({ state: "failed", outcome: "plan turned down" });
+    expect(treeSettled(inPlace({ status: "working" }), "feat/x")).toBeNull();
+  });
+  test("its note names the tree, not a branch to land", () => {
+    expect(treeNote(tc({ state: "running", run: "c1" }), inPlace(), "done in tree feat/x")).toBe(
+      ["canopy: a task you started has settled", "task t1: try it (repo web)", "outcome: done in tree feat/x", "result: Fixed the form and committed it.", "tree: feat/x, a kept worktree; Eric merges it from there"].join("\n"),
+    );
   });
 });

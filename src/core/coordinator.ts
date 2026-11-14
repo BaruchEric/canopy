@@ -7,7 +7,7 @@ import { GROUP_MAX, type RunGroup } from "./group";
 import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
 import { isBranchName } from "./treewords";
-import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Repo, type Run, type RunBranchState } from "./types";
+import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type BranchTreeState, type Repo, type Run, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -326,10 +326,16 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
  *  landed or its PR merged. Ready, PR opened and a picked winner do not count. */
 export const cardLanded = (t: Pick<CoordTask, "state" | "outcome">): boolean => t.state === "done" && t.outcome === "landed";
 
+/** Whether a card is done as far as `after` goes: it landed, or it ran in a
+ *  kept tree and settled done (there is nothing of it to land). `cardLanded`
+ *  keeps its own meaning for `adopt` and the page. */
+export const afterMet = (t: Pick<CoordTask, "state" | "outcome" | "tree">): boolean => cardLanded(t) || (t.tree !== undefined && t.state === "done");
+
 /** Whether a settled card may reopen: a later run on its branch takes it
  *  (the hub's `adopt`), so it needs a branch, one not dropped. A group card
- *  has no branch of its own to match. */
-const mayReopen = (c: CoordTask): boolean => c.branch !== undefined && c.outcome !== "dropped";
+ *  has no branch of its own to match. A tree card reopens on a follow-up
+ *  run in its tree, so a tree makes it reopenable too. */
+const mayReopen = (c: CoordTask): boolean => (c.branch !== undefined || c.tree !== undefined) && c.outcome !== "dropped";
 
 /** A group card that settled "needs you": its group waits on Eric, who may
  *  still pick a winner and land it, so the hub reads the card again. */
@@ -344,7 +350,7 @@ export const groupNeedsEric = (c: Pick<CoordTask, "group" | "state" | "outcome">
 export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean; reopens?: string } | null {
   const open = (task.after ?? []).filter((id) => {
     const c = cards.find((x) => x.id === id);
-    return !c || !cardLanded(c);
+    return !c || !afterMet(c);
   });
   if (open.length === 0) return null;
   for (const id of open) {
@@ -388,7 +394,7 @@ export function nextToStart(
   for (const t of ordered) {
     if (going >= COORD_AT_ONCE) break;
     const need = t.times ?? 1;
-    if (t.state !== "queued" || afterWait(t, ctx.cards) || going + need > COORD_AT_ONCE || ctx.repoFull(t.repo, need)) continue;
+    if (t.state !== "queued" || afterWait(t, ctx.cards) || going + need > COORD_AT_ONCE || (t.tree === undefined && ctx.repoFull(t.repo, need))) continue;
     out.push(t);
     going += need;
   }
@@ -561,6 +567,60 @@ export function startNote(task: CoordTask, error: string): string {
     `task ${task.id}: ${task.title} (repo ${task.repo})`,
     "outcome: failed",
     `result: ${oneLine(error) || "(none)"}`,
+  ].join("\n");
+}
+
+/** What a queued card says while its tree is made. */
+export const treeMakingWords = (branch: string): string => `making tree ${branch}`;
+/** What a queued card says while another run or a merge holds its tree. */
+export const treeBusyWords = (branch: string): string => `waiting for tree ${branch} to be free`;
+/** How a tree card settles done. */
+export const treeDoneWords = (branch: string): string => `done in tree ${branch}`;
+/** How a tree card fails when its tree does: the non-empty lines of `why`
+ *  joined with "; ", or that its setup failed when none is left. */
+export function treeFailWords(branch: string, why: string | undefined): string {
+  const lines = (why ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
+  return `tree ${branch} failed: ${lines.length > 0 ? lines.join("; ") : "its setup failed"}`;
+}
+
+/** Whether a card's outcome is a wait for its tree (making it, or busy). */
+export const isTreeWait = (outcome: string | undefined): boolean =>
+  outcome !== undefined && /^(making tree |waiting for tree .+ to be free$)/.test(outcome);
+
+/** What a queued tree card does next, from its tree's record (null when the
+ *  backend holds none) and whether a run or the coordinator's own work is in
+ *  it: make the tree, wait for it, fail with its words, or start the run. */
+export type TreeStep = { add: true } | { wait: string } | { fail: string } | { start: true };
+
+export function treeStep(branch: string, tree: { state: BranchTreeState; why?: string } | null, inUse: boolean): TreeStep {
+  if (!tree) return { add: true };
+  switch (tree.state) {
+    case "preparing": return { wait: treeMakingWords(branch) };
+    case "merging": return { wait: treeBusyWords(branch) };
+    case "failed": return { fail: treeFailWords(branch, tree.why) };
+    case "ready": return inUse ? { wait: treeBusyWords(branch) } : { start: true };
+  }
+}
+
+/** A tree card's run settled, on the run alone: no branch to land, so a done
+ *  run is done in its tree, and a failed, stopped or turned-down one fails as
+ *  `childOutcome` says. Null while the run is going. */
+export function treeSettled(run: Run, branch: string): { state: "done" | "failed"; outcome: string } | null {
+  const got = childOutcome(run);
+  if (!got) return null;
+  return got.state === "done" ? { state: "done", outcome: treeDoneWords(branch) } : { state: "failed", outcome: got.outcome };
+}
+
+/** The user message a settled tree card sends into its coordinator's chat,
+ *  in `settleNote`'s four lines, then the tree its worker left for Eric. */
+export function treeNote(task: CoordTask, run: Run, outcome: string): string {
+  const result = run.result?.text?.trim() || run.error?.trim() || "";
+  return [
+    "canopy: a task you started has settled",
+    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `outcome: ${outcome}`,
+    `result: ${result ? oneLine(result) : "(none)"}`,
+    `tree: ${task.tree ?? ""}, a kept worktree; Eric merges it from there`,
   ].join("\n");
 }
 
