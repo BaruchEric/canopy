@@ -52,7 +52,7 @@ export type SayTarget = { kind: "steer"; runId: string } | { kind: "followup"; l
  *  holds the trees list, and the tree's own card (a repo id) once there is one. */
 export interface LaneTree { branch: string; state: BranchTreeState | null; cardId: string | null }
 export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null;
-  /** a project card makes a new project: its sprout's id, null before it starts */
+  /** whether the card makes a new project (it carries no model, skills or servers), and its sprout's id, null before it starts */
   project: boolean; sprout: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget; tree: LaneTree | null }
 export interface Goal { text: string; model: string | null; effort: string | null; startedAt: number; working: number; waiting: number; held: boolean; ended: boolean }
 export interface ManagerRows { goal: Goal; rings: Ring[]; needs: Need[]; lanes: Lane[] }
