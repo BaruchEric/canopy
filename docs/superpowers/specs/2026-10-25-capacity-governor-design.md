@@ -294,6 +294,10 @@ For Eric:
 8. **P2's terms.** If reading the usage endpoint with the CLI's credential
    is not clearly within the Oct 7 2026 terms, the governor runs
    `observed` only and the chip says so. Eric's call once P2 is in.
+   Settled 2026-11-14: the terms still do not plainly cover it, so the
+   endpoint read stays unwired and the governor runs on `observed` and
+   the CLI's `rate_limit_event`. It is looked at again only if Anthropic's
+   terms name reading usage with the CLI's credential.
 9. **The observed dollar figure.** With no endpoint, `observedFiveHourUsd`
    is a guess at what one window is worth in Claude dollars; a week of
    ledger rows against the windows' resets gives a number.
