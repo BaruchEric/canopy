@@ -54,7 +54,7 @@ export interface PlanContext {
   by: "coordinator" | "person";
   /** the goal's file names, which a card's `files` may list (empty for a repo-card goal) */
   files: readonly string[];
-  /** whether a repo id is itself a kept worktree, which a card's `tree` may not name */
+  /** whether a repo id is itself a kept worktree, which no card may name as its repo */
   treeCard: (repo: string) => boolean;
 }
 

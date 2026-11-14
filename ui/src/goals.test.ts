@@ -1,10 +1,14 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { anchorWord, coordBackends, coordDefaults, goalLimitsWhy, goalRepoChoices, goalRepoRows, namedRepos, runRepo, runRepoId, runRepoName } from "./goals";
 import { setRegistry } from "./registry";
 import { NO_ROUTES } from "./agents";
 import { withDefaultProfile } from "../../src/core/route";
 import { DEFAULT_AGENT, type AgentRoutes, type Repo } from "../../src/core/types";
 import type { Conn } from "./store";
+
+// The registry is module state: put the page's default back, or a later file
+// in the same run reads "mac" as home (store.test.ts's shells and peers did).
+afterAll(() => setRegistry("", [""]));
 
 const repo = (id: string, over: Partial<Repo> = {}): Repo => ({ id, name: id.split("|").pop()?.split("/").pop() ?? id, path: `/dev/${id}`, group: "", source: "", status: null, ...over });
 

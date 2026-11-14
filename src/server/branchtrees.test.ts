@@ -433,6 +433,21 @@ test("clean removes the trees merged into their base that hold nothing, branch a
   expect((await post(w.trees, "/api/trees/clean", { repo: "nope" })).status).toBe(404);
 });
 
+test("clean leaves a tree a run is at work in, however clean it looks, and takes it once the run is gone", async () => {
+  const at = new Map<string, string>();
+  const w = await world({ runIn: (dir) => at.get(dir) }, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "card/x", caches: false }));
+  await w.trees.idle();
+  at.set(tree.dir, "run c1a2b3c4 (Ask)");
+  expect(await body<{ removed: unknown }>(await post(w.trees, "/api/trees/clean", { repo: w.repo.id }))).toEqual({ removed: [] });
+  expect(existsSync(tree.dir)).toBe(true);
+  at.clear();
+  expect(await body<{ removed: unknown }>(await post(w.trees, "/api/trees/clean", { repo: w.repo.id }))).toEqual({
+    removed: [{ repoId: w.repo.id, slug: tree.slug, branch: "card/x" }],
+  });
+  expect(existsSync(tree.dir)).toBe(false);
+});
+
 test("a record left merging by a crash comes back ready, saying so", async () => {
   const w = await world({}, "");
   const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat", caches: false }));

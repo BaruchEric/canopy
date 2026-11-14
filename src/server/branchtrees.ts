@@ -530,8 +530,10 @@ export class BranchTrees {
   }
 
   /** worktrunk's clean-up, for one repo or every one: each ready tree whose
-   *  base holds all its commits, with nothing changed or open in it, goes
-   *  with its branch. The trees removed. */
+   *  base holds all its commits, with nothing changed or open in it and no
+   *  run at work in it, goes with its branch. A coordinator's card that has
+   *  just started in a fresh tree looks clean until it writes, so the run
+   *  is what holds it. The trees removed. */
   async clean(repo: Repo | null): Promise<CleanedTree[]> {
     const removed: CleanedTree[] = [];
     for (const r of repo ? [repo] : this.local()) {
@@ -540,7 +542,7 @@ export class BranchTrees {
         const rec = this.record(r.path);
         const left: BranchTreeRecord[] = [];
         for (const t of rec.trees) {
-          if (!cleanable(await this.tree(r.path, t))) {
+          if (this.deps.runIn?.(treeDir(r.path, t.slug, this.root)) !== undefined || !cleanable(await this.tree(r.path, t))) {
             left.push(t);
             continue;
           }
