@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { runRepoName } from "../goals";
 import { useShallow } from "zustand/react/shallow";
 import { hitStands } from "../../../src/core/capacity";
 import type { CapacityInfo } from "../../../src/core/types";
@@ -137,7 +138,7 @@ export function CapacityChip() {
               <ul>
                 {limited.map((run) => (
                   <li key={run.id}>
-                    <span className="capacity-limited-name">{run.verb} · {repos.find((repo) => repo.id === run.repoId)?.name ?? idText(run.repoId)}</span>
+                    <span className="capacity-limited-name">{run.verb} · {runRepoName(repos, run.repoId)}</span>
                     {run.error && <span className="capacity-limited-error">{run.error}</span>}
                   </li>
                 ))}

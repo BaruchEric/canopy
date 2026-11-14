@@ -13,6 +13,7 @@
  * workers or the chat.
  */
 import { Fragment, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { runRepoName } from "../goals";
 import { isSeedId } from "../../../src/core/sprout";
 import type { CoordTask, Loadout, Run } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
@@ -507,6 +508,7 @@ function Needs({ coord, needs, act }: { coord: Run; needs: readonly Need[]; act:
 function PromptAnswer({ need, act }: { need: Need; act: Act }) {
   const run = useStore((s) => (need.runId ? s.runs[need.runId] : undefined));
   const repo = useStore((s) => s.repos.find((r) => r.id === run?.repoId));
+  const repoWord = useStore((s) => (run ? runRepoName(s.repos, run.repoId) : ""));
   const answerRun = useStore((s) => s.answerRun);
   const prompt = need.prompt;
   if (!run || !prompt) return null;
@@ -519,7 +521,7 @@ function PromptAnswer({ need, act }: { need: Need; act: Act }) {
       repoId={run.repoId}
       onAnswer={(a, promptId) => void act(() => answerRun(run.id, promptId, a))}
       {...(local ? { root: local.path } : {})}
-      scopes={scopeOffers({ ...(run.flowStep ? { flowStep: run.flowStep } : {}), repo: repo?.name ?? idText(run.repoId), ...(local ? { repoPath: local.path } : {}) })}
+      scopes={scopeOffers({ ...(run.flowStep ? { flowStep: run.flowStep } : {}), repo: repoWord, ...(local ? { repoPath: local.path } : {}) })}
     />
   );
 }

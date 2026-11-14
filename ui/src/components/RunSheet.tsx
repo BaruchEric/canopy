@@ -498,6 +498,7 @@ export function Timeline({
   const active = !run.kept && isRunActive(run);
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
   const harness = harnessOf(run);
+  const repoWord = useStore((s) => runRepoName(s.repos, run.repoId));
   const list = useRef<HTMLDivElement>(null);
   const stuck = useRef(true);
 
@@ -562,7 +563,7 @@ export function Timeline({
         {run.status === "working" && run.steps.length === 0 && (
           <li className="step k-note thinking">
             <span className="node" />
-            <span className="step-text shimmer">starting {AGENT_NAME[harness]} in {repo?.path ?? idText(run.repoId)}…</span>
+            <span className="step-text shimmer">starting {AGENT_NAME[harness]} {repo ? `in ${repo.path}` : isGoalAnchor(run.repoId) ? "for the goal" : `in ${idText(run.repoId)}`}…</span>
           </li>
         )}
         {run.status === "working" && run.steps.length > 0 && (
@@ -575,7 +576,7 @@ export function Timeline({
           <li className="step k-note">
             <span className="node" />
             <span className="step-text">
-              Your first message starts {AGENT_NAME[harness]} in {repo?.path ?? idText(run.repoId)}.
+              Your first message starts {AGENT_NAME[harness]} {repo ? `in ${repo.path}` : isGoalAnchor(run.repoId) ? "for the goal" : `in ${idText(run.repoId)}`}.
             </span>
           </li>
         )}
@@ -588,7 +589,7 @@ export function Timeline({
           repoId={run.repoId}
           onAnswer={onAnswer}
           {...(repo && !repo.host ? { root: repo.path } : {})}
-          scopes={scopeOffers({ ...(run.flowStep ? { flowStep: run.flowStep } : {}), repo: repo?.name ?? idText(run.repoId), ...(repo && !repo.host ? { repoPath: repo.path } : {}) })}
+          scopes={scopeOffers({ ...(run.flowStep ? { flowStep: run.flowStep } : {}), repo: repoWord, ...(repo && !repo.host ? { repoPath: repo.path } : {}) })}
         />
       )}
       {run.result && run.status === "done" && !chat && (
@@ -642,6 +643,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const sayRun = useStore((s) => s.sayRun);
   const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
+  const repoWord = useStore((s) => runRepoName(s.repos, run.repoId));
   const active = !run.kept && isRunActive(run);
   const chat = run.chat;
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
@@ -688,7 +690,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>
           <h2 className="sheet-title">
-            {run.verb} <span className="sheet-repo">{isGoalAnchor(run.repoId) ? "goal" : idText(run.repoId)}</span>
+            {run.verb} <span className="sheet-repo">{repoWord}</span>
             {run.equip && <> <span className="branch" title={equipTitle(run.equip)}>{run.equip.loadout}</span></>}
           </h2>
         </div>
