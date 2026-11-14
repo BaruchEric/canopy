@@ -221,6 +221,11 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
             {carries.after}
           </span>
         )}
+        {carries.files && (
+          <span className="branch" title={`the goal's files its worker gets: ${(task.files ?? []).join(", ")}`}>
+            {carries.files}
+          </span>
+        )}
       </div>
       {/* a proposed card's form edits its note; a queued card's keeps it in view */}
       {!(editing && editable && task.state === "proposed") && <p className="coord-note">{task.note}</p>}

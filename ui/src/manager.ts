@@ -38,7 +38,7 @@ export interface Ring { id: string; title: string; repo: string | null; word: st
 export type NeedKind = "prompt" | "gate" | "landing" | "cards";
 export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean }
 export type SayTarget = { kind: "steer"; runId: string } | { kind: "followup"; landingId: string } | { kind: "none"; why: string };
-export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; runId: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget }
+export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget }
 export interface Goal { text: string; model: string | null; effort: string | null; startedAt: number; working: number; waiting: number; held: boolean; ended: boolean }
 export interface ManagerRows { goal: Goal; rings: Ring[]; needs: Need[]; lanes: Lane[] }
 export interface ManagerInputs { runs: Record<string, Run>; flows: Record<string, Flow>; landing: LandingInfo; prs: readonly PrWatch[]; loadouts: readonly Loadout[] }
@@ -487,6 +487,8 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     skills: c.skills,
     servers: c.servers,
     equipTitle: c.title,
+    // the goal's files the card's worker takes (FR-067)
+    files: cardCarries(task).files ?? null,
     runId: task.run ?? null,
     flowId: task.flow ?? null,
     landingId: w.branch.rec?.id ?? null,

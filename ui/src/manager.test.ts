@@ -518,6 +518,10 @@ describe("the lanes", () => {
     expect(planned).toMatchObject({ loadout: "feature", model: "opus", effort: "high", skills: 0, servers: 1, equipTitle: "loadout feature; skills none" });
     expect(managerRows(coord([card()]), at()).lanes[0]).toMatchObject({ loadout: null, effort: null, skills: 0, servers: 0, equipTitle: "" });
   });
+  test("the goal's files its card takes, by name, else none", () => {
+    expect(managerRows(coord([card({ files: ["shot.png", "notes.md"] })]), at()).lanes[0]?.files).toBe("files: shot.png, notes.md");
+    expect(managerRows(coord([card()]), at()).lanes[0]?.files).toBeNull();
+  });
 
   test("its head: branch, start, newest step line and the ids its actions take", () => {
     const c1 = run("c1", { status: "working", startedAt: 20, steps: [step("text", "**Editing** src/server/notify.ts", 30)] });

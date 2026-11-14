@@ -834,11 +834,20 @@ function overrides(e: CardEquip): string[] {
   ].filter(Boolean);
 }
 
+/** what a card carries, in the words its facts line shows */
+export interface CardCarries {
+  loadout?: { word: string; title: string };
+  workflow?: string;
+  after?: string;
+  files?: string;
+}
+
 /** The words a card's facts line adds: its loadout (with "changed" when
- *  Eric overrode a field, the overrides in its title), its workflow, and
- *  "after t1, t3" for the cards it waits for. */
-export function cardCarries(task: CoordTask): { loadout?: { word: string; title: string }; workflow?: string; after?: string } {
-  const out: { loadout?: { word: string; title: string }; workflow?: string; after?: string } = {};
+ *  Eric overrode a field, the overrides in its title), its workflow,
+ *  "after t1, t3" for the cards it waits for, and "files: shot.png,
+ *  notes.md" for the goal's files its worker takes (FR-067). */
+export function cardCarries(task: CoordTask): CardCarries {
+  const out: CardCarries = {};
   const e = task.equip;
   if (e?.loadout) {
     const set = overrides(e);
@@ -846,6 +855,7 @@ export function cardCarries(task: CoordTask): { loadout?: { word: string; title:
   }
   if (task.workflow) out.workflow = task.workflow;
   if (task.after && task.after.length > 0) out.after = `after ${task.after.join(", ")}`;
+  if (task.files && task.files.length > 0) out.files = `files: ${task.files.join(", ")}`;
   return out;
 }
 

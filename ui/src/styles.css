@@ -7211,6 +7211,13 @@ button.dl-gut.has {
   color: var(--ink-dim);
   background: var(--wash);
 }
+/* a card's files can be long names: one line, cut, the whole list in its title */
+.mgr-files {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mgr-loadout {
   font-size: var(--t-sm);
   color: var(--ink-faint);

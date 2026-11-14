@@ -27,6 +27,14 @@ test("cardLines pads the columns: id, state, repo, loadout, workflow, after, tit
   expect(cardLines(coord("c1"))).toEqual([]);
 });
 
+test("cardLines shows the goal's files a card takes, after the cards it waits for", () => {
+  const tasks = [card("t1", { title: "favicon", files: ["shot.png", "notes.md"] }), card("t2", { title: "other" })];
+  expect(cardLines(coord("c1", { tasks }))).toEqual([
+    "t1  proposed  playground/x  files: shot.png, notes.md  favicon",
+    "t2  proposed  playground/x" + " ".repeat(29) + "other",
+  ]);
+});
+
 const serve = (posted: { path: string; body: unknown }[], runs: Run[]) =>
   Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (req) => {
     const path = new URL(req.url).pathname;

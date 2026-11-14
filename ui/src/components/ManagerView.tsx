@@ -782,6 +782,11 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
           </span>
           <span className="mgr-chip">{plural(lane.skills, "skill")}</span>
           <span className="mgr-chip">{plural(lane.servers, "server")}</span>
+          {lane.files && (
+            <span className="mgr-chip mgr-files" title={lane.files}>
+              {lane.files}
+            </span>
+          )}
           {lane.loadout && (
             <span className="mgr-loadout">
               loadout <span className="mono">{lane.loadout}</span>

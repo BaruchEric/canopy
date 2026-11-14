@@ -207,6 +207,10 @@ describe("what a card carries, for its facts line", () => {
     expect(cardCarries(card({ after: ["t1", "t3"] })).after).toBe("after t1, t3");
     expect(cardCarries(card())).toEqual({});
   });
+  test("the goal's files it takes, by name, and none for an empty list", () => {
+    expect(cardCarries(card({ files: ["shot.png", "notes.md"] })).files).toBe("files: shot.png, notes.md");
+    expect(cardCarries(card({ files: [] }))).toEqual({});
+  });
 });
 
 describe("what a card's form sends", () => {
