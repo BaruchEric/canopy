@@ -137,6 +137,15 @@ export function parkWords(s: Sprout, flow: Flow | undefined): GateWords {
   };
 }
 
+/** What stands behind the current park's reason (`SproutPark.detail`): a
+ *  run's raw error the reason says plainly, or the end of a failed check's
+ *  output. Null when the project is not parked or its park has none. */
+export function parkDetailOf(s: Sprout): string | null {
+  if (s.status !== "parked") return null;
+  const last = s.parks?.at(-1);
+  return last && last.at === s.parkedAt && last.detail ? last.detail : null;
+}
+
 export const needsYou = (s: Sprout): boolean => s.status === "parked" || (s.status === "clarifying" && (s.questions?.length ?? 0) > 0);
 
 /** What a card's motion says: `needs` waits on the user (a question, a

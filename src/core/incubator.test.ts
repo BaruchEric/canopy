@@ -675,8 +675,10 @@ describe("clarify's outcome", () => {
     await w.inc.idle();
     expect(now(w, a.id)).toMatchObject({
       status: "parked",
-      parked: "clarify's Clarify step failed: API Error: 529 overloaded. A resume runs that step again, and the steps before it stand",
+      parked: "clarify's Clarify step failed: Anthropic's API was overloaded. A resume runs that step again, and the steps before it stand",
     });
+    // the harness's own words stay on the park's record, behind the plain line
+    expect(now(w, a.id).parks?.at(-1)?.detail).toBe("API Error: 529 overloaded.");
     // the stage's flow is alive behind the park: nothing is recorded as its outcome, and the slot stays taken
     expect(now(w, a.id).flows[0]?.outcome).toBeUndefined();
     expect(holdsSlot(now(w, a.id), w.flows.get(id)?.status)).toBe(true);
@@ -698,6 +700,49 @@ describe("clarify's outcome", () => {
     expect(now(w, b.id).parked).toBe(
       "clarify's Clarify step failed: Failed to authenticate: OAuth session expired. log the stages in again. A resume runs that step again, and the steps before it stand",
     );
+    // words canopy has no plainer form of are the line; nothing waits behind them
+    expect(now(w, b.id).parks?.at(-1)?.detail).toBeUndefined();
+  });
+
+  test("a failed run's park says the harness's error plainly, its raw words behind it (incubator review, P2)", async () => {
+    const w = world();
+    const a = await clarifying(w);
+    const raw = "Claude Code exited (code 137) without a result: Killed\nstack line one\nstack line two";
+    w.flows.move(a.flows[0]?.flowId ?? "", { status: "failed", error: raw });
+    await w.inc.idle();
+    expect(now(w, a.id).parked).toBe("clarify failed: Claude Code was killed before it finished");
+    expect(now(w, a.id).parks?.at(-1)).toMatchObject({ reason: "clarify failed: Claude Code was killed before it finished", detail: raw });
+    // a long error canopy has no plainer form of keeps its first line on the park, the rest behind it
+    const b = await clarifying(w, "second idea");
+    const long = `${"something unexpected ".repeat(20)}\nmore of it`;
+    w.flows.move(b.flows[0]?.flowId ?? "", { status: "gated", parkedFor: "failed", steps: [{ name: "Clarify", status: "gated", reason: long }] });
+    await w.inc.idle();
+    const line = now(w, b.id).parked ?? "";
+    expect(line.startsWith("clarify's Clarify step failed: something unexpected")).toBe(true);
+    expect(line).not.toContain("more of it");
+    expect(line.endsWith("A resume runs that step again, and the steps before it stand")).toBe(true);
+    expect(now(w, b.id).parks?.at(-1)?.detail).toBe(long.trim());
+  });
+
+  test("a check out of retries parks with the end of its output on the park's record, secrets taken out (incubator review, P2)", async () => {
+    const w = world();
+    const a = await clarifying(w);
+    const output = `${"ok line\n".repeat(400)}push to https://eric:ghp_SECRET@github.com/eric/app\nFAIL src/a.test.ts`;
+    w.flows.move(a.flows[0]?.flowId ?? "", {
+      status: "gated",
+      steps: [{ name: "Clarify", status: "gated", reason: "check failed with exit 1", check: { command: "bun test", exit: 1, output } }],
+    });
+    await w.inc.idle();
+    expect(now(w, a.id).parked).toBe("clarify waits after Clarify: check failed with exit 1");
+    const detail = now(w, a.id).parks?.at(-1)?.detail ?? "";
+    expect(detail.endsWith("FAIL src/a.test.ts")).toBe(true);
+    expect(detail.length).toBeLessThan(output.length);
+    expect(detail).not.toContain("ghp_SECRET");
+    // a gate with no failed check behind it has nothing to add
+    const b = await clarifying(w, "second idea");
+    w.flows.move(b.flows[0]?.flowId ?? "", { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "budget spent: 2 runs" }] });
+    await w.inc.idle();
+    expect(now(w, b.id).parks?.at(-1)?.detail).toBeUndefined();
   });
 
   test("a commit the seed refuses parks the sprout and asks nothing", async () => {
@@ -826,6 +871,55 @@ describe("the vault", () => {
     const s = await w.inc.create(intake({ text: "x" }));
     await w.inc.idle();
     expect(now(w, s.id).noteRev).toBeUndefined();
+  });
+
+  test("a park equal to the last one puts no second line in the day (incubator review, P3)", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    const gate = () => w.flows.move(id, { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "the stage runner is not answering" }] });
+    gate();
+    await w.inc.idle();
+    w.flows.move(id, { status: "working", steps: [{ name: "Clarify", status: "running" }] });
+    await w.inc.idle();
+    gate();
+    await w.inc.idle();
+    expect(w.notes.lines.filter((l) => l.line.includes("parked:"))).toHaveLength(1);
+    // a park with other words is news
+    w.flows.move(id, { status: "working", steps: [{ name: "Clarify", status: "running" }] });
+    await w.inc.idle();
+    w.flows.move(id, { status: "gated", steps: [{ name: "Clarify", status: "gated", reason: "budget spent: 2 runs" }] });
+    await w.inc.idle();
+    expect(w.notes.lines.filter((l) => l.line.includes("parked:"))).toHaveLength(2);
+  });
+
+  test("a vault write that failed is tried again on the tick, the day's lines in order (incubator review, P3)", async () => {
+    const w = world();
+    w.notes.fail = true;
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    w.flows.move(now(w, s.id).flows[0]?.flowId ?? "", { status: "failed", error: "boom" });
+    await w.inc.idle();
+    expect(w.notes.lines).toEqual([]);
+    // owed on the record, so a restart still owes them
+    expect(w.store.records.get(s.id)?.vault?.owed?.map((l) => l.line.includes("started"))).toEqual([true, false]);
+    w.inc.tick();
+    await w.inc.idle();
+    expect(w.notes.lines).toEqual([]);
+    w.notes.fail = false;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(w.notes.lines.map((l) => (l.line.includes("started") ? "started" : l.line.includes("parked: clarify failed: boom") ? "parked" : l.line))).toEqual(["started", "parked"]);
+    expect(w.notes.puts.at(-1)?.text).toContain("Parked: clarify failed: boom");
+    expect(w.store.records.get(s.id)?.vault?.owed ?? []).toEqual([]);
+    expect(w.store.records.get(s.id)?.vault?.noteOwed).toBeUndefined();
+    // nothing owed, nothing written again
+    const puts = w.notes.puts.length;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(w.notes.puts.length).toBe(puts);
+    expect(w.notes.lines).toHaveLength(2);
   });
 });
 
@@ -1010,8 +1104,41 @@ describe("answers", () => {
     expect(last?.via).toBe("answer");
     expect(new TextDecoder().decode(w.store.inputs.get(s.id)?.get(last?.name ?? ""))).toContain("- Who counts?\n  staff");
     expect((await w.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "").toContain("Count coins.\n\n## Answers, ");
-    expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
     await w.inc.idle();
+    expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
+    expect(now(w, s.id).status).toBe("researching");
+  });
+
+  test("the answer returns while the seed is too busy to commit; the next stage waits for the commit (incubator review, P2)", async () => {
+    const w = world();
+    w.workflows.set("scout", SCOUT);
+    const s = await asking(w);
+    // a commit held, as inQuietSeed holds one while a stage runs (up to two hours)
+    let release: () => void = () => {};
+    const quiet = new Promise<void>((r) => {
+      release = r;
+    });
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      await quiet;
+      return commit(path, rels, message);
+    };
+    const answered = w.inc.answer(s.id, { "Who counts?": "staff" }).then(() => "answered");
+    const hung = new Promise<string>((r) => setTimeout(() => r("still waiting"), 50));
+    expect(await Promise.race([answered, hung])).toBe("answered");
+    // the answers are safe before the commit: in canopy's store, the record and the seed's intent
+    const after = now(w, s.id);
+    expect(after.status).toBe("queued");
+    expect(after.questions).toBeUndefined();
+    expect(after.inputs.filter((e) => e.kind === "answers")).toHaveLength(1);
+    expect(w.store.records.get(s.id)?.inputs.filter((e) => e.kind === "answers")).toHaveLength(1);
+    expect((await w.seeds.read(s.seedPath, ".canopy/intent.md")) ?? "").toContain("## Answers, ");
+    // and scout waits for the commit
+    await new Promise((r) => setTimeout(r, 10));
+    expect(w.flows.started.map((x) => x.workflow.name)).toEqual(["clarify"]);
+    release();
+    await w.inc.idle();
+    expect(w.seeds.commits.at(-1)?.message).toBe("answers: coin counter");
     expect(now(w, s.id).status).toBe("researching");
   });
 
@@ -1050,7 +1177,9 @@ describe("answers", () => {
     const w = world();
     const s = await asking(w);
     w.seeds.failCommit = ".canopy/intent.md is a symlink";
-    const after = await w.inc.answer(s.id, { "Who counts?": "staff" });
+    await w.inc.answer(s.id, { "Who counts?": "staff" });
+    await w.inc.idle();
+    const after = now(w, s.id);
     expect(after.status).toBe("parked");
     expect(after.parked).toBe("could not commit the answers: .canopy/intent.md is a symlink");
     w.seeds.failCommit = null;
@@ -2337,6 +2466,101 @@ describe("retro", () => {
     await w.inc.idle();
     const after = await finish(w, s.id);
     expect(after.retro?.state).toBe("done");
+  });
+
+  test("a retro held for capacity waits for the reset, and goes on when the governor lets its flow go (incubator review, P2)", async () => {
+    const w = retroWorld();
+    const s = await parked(w);
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    const id = retroFlow(w, s.id).id;
+    // a limited run, or a start the governor held, parks the flow for capacity
+    w.flows.move(id, { status: "gated", parkedFor: "capacity", steps: [{ name: "Retro", status: "gated", reason: "waiting for capacity (resets 3pm)" }] });
+    await w.inc.idle();
+    expect(w.flows.get(id)?.status).toBe("gated");
+    expect(now(w, s.id).retro?.state).toBe("running");
+    // a wait for capacity is no wait on a prompt: the backstop leaves it alone
+    clock += RETRO_WAIT_MAX * 4;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).retro?.state).toBe("running");
+    // what resumeCapacityParks does once the window resets
+    w.flows.move(id, { status: "working", parkedFor: undefined, steps: [{ name: "Retro", status: "running" }] });
+    await w.inc.idle();
+    const after = await finish(w, s.id);
+    expect(after.retro?.state).toBe("done");
+  });
+
+  test("a park retro's commit moves the accepted build with it, so a resume ships rather than reading the seed as moved (incubator review, P2)", async () => {
+    const ship = new FakeShip();
+    const w = retroWorld({ ship });
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("build-new", BUILD_STAGE);
+    const end = async (id: string, files: Record<string, string>) => {
+      const s = now(w, id);
+      for (const [rel, text] of Object.entries(files)) await w.seeds.write(s.seedPath, rel, text);
+      w.flows.move(s.flows.at(-1)?.flowId ?? "", { status: "done" });
+      await w.inc.idle();
+      return now(w, id);
+    };
+    const s = await clarifying(w);
+    await end(s.id, { ".canopy/questions.json": "[]" });
+    await end(s.id, { ".canopy/pick.json": PICK });
+    ship.failDeploy = "vercel deploy: Build failed";
+    const parkedAtShip = await end(s.id, { ".canopy/smoke.md": "status: 200" });
+    expect(parkedAtShip.parked).toBe("deploy: vercel deploy: Build failed");
+    expect(parkedAtShip.builtHead).toBe("h1");
+    // the retro's commit is a new HEAD on the seed
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      if (message.startsWith("retro:")) {
+        w.seeds.head = "h2";
+        ship.head = "h2";
+      }
+      return commit(path, rels, message);
+    };
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    const looked = await finish(w, s.id);
+    expect(looked.retro?.state).toBe("done");
+    expect(looked.builtHead).toBe("h2");
+    ship.failDeploy = null;
+    await w.inc.resume(s.id, "retry");
+    await w.inc.idle();
+    expect(now(w, s.id).parked).toBeUndefined();
+    expect(now(w, s.id).status).toBe("live");
+  });
+
+  test("a park retro on a seed that had moved already leaves the accepted build where it was", async () => {
+    const ship = new FakeShip();
+    const w = retroWorld({ ship });
+    w.workflows.set("scout", SCOUT_STAGE);
+    w.workflows.set("build-new", BUILD_STAGE);
+    const end = async (id: string, files: Record<string, string>) => {
+      const s = now(w, id);
+      for (const [rel, text] of Object.entries(files)) await w.seeds.write(s.seedPath, rel, text);
+      w.flows.move(s.flows.at(-1)?.flowId ?? "", { status: "done" });
+      await w.inc.idle();
+      return now(w, id);
+    };
+    const s = await clarifying(w);
+    await end(s.id, { ".canopy/questions.json": "[]" });
+    await end(s.id, { ".canopy/pick.json": PICK });
+    ship.failDeploy = "vercel deploy: Build failed";
+    await end(s.id, { ".canopy/smoke.md": "status: 200" });
+    // something else committed on the seed after the accept
+    w.seeds.head = "h2";
+    const commit = w.seeds.commit.bind(w.seeds);
+    w.seeds.commit = async (path, rels, message) => {
+      if (message.startsWith("retro:")) w.seeds.head = "h3";
+      return commit(path, rels, message);
+    };
+    clock += RETRO_PARK_WAIT;
+    w.inc.tick();
+    await w.inc.idle();
+    expect((await finish(w, s.id)).builtHead).toBe("h1");
   });
 
   test("one retro runs at a time; the next starts when it ends", async () => {

@@ -71,8 +71,9 @@ import {
   workspaceLine,
   type ParsedQuestions,
 } from "./sprout";
-import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, type NoteEvent } from "./sproutnote";
-import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
+import { PARK_LINE_MAX, parkDetail, plainRunError } from "./runerror";
+import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, takeDaily, type NoteEvent } from "./sproutnote";
+import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type FlowStep, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
 import { unattendedRefusal } from "./workflow";
 
@@ -233,6 +234,22 @@ const SEED_MOVED = "the seed moved after the build was accepted";
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const bytesOf = (data: Uint8Array | string): number => (typeof data === "string" ? enc.encode(data).byteLength : data.byteLength);
+
+/** A run's error as a park's line says it: plainly when runerror.ts knows
+ *  it, else its first line, cut short. The raw words go behind the line
+ *  as the park's detail whenever the line does not carry them whole. */
+function runWords(error: string): { line: string; detail?: string } {
+  const raw = error.trim() || "the run failed";
+  const plain = plainRunError(raw);
+  if (plain) return { line: plain, detail: parkDetail(raw) };
+  const first = (raw.split("\n")[0] ?? "").trim();
+  const line = first.length > PARK_LINE_MAX ? `${first.slice(0, PARK_LINE_MAX - 1).trimEnd()}…` : first;
+  return line === raw ? { line } : { line, detail: parkDetail(raw) };
+}
+
+/** the end of a failed check's output, for the park it brought */
+const checkDetail = (step: FlowStep | undefined): string | undefined =>
+  step?.check && step.check.exit !== 0 && step.check.output.trim() ? parkDetail(step.check.output) : undefined;
 
 export class Incubator {
   private readonly sprouts = new Map<string, Sprout>();
@@ -516,13 +533,25 @@ export class Incubator {
       }
       throw err;
     }
-    // a refused commit parks the sprout, which gives its slot back
-    if (!(await this.commit(s, `answers: ${s.title}`, "answers"))) return s;
     // a stop that landed while the answers were written stays a stop
     if (sproutEnded(s)) return s;
+    // The commit waits for the seeds to go quiet, up to two hours on an
+    // unisolated backend while any stage runs, and the route must not wait
+    // with it. The answers are safe already: the input in canopy's store,
+    // the record saved below, intent.md in the seed. So the answer returns
+    // now and the commit runs as the sprout's slow work, which the queue
+    // waits for before the next stage; a refused commit parks the sprout,
+    // as it did. A restart before the commit leaves intent.md for the next
+    // stage's own commit, which takes the seed's files.
     s.status = "queued";
-    await this.changed(s);
-    this.pump();
+    const saved = this.changed(s);
+    // busy from here, before anything awaits, so no pump starts the next
+    // stage; the commit goes after the save, so a park it brings is saved last
+    this.serial(s, async () => {
+      await saved;
+      await this.commit(s, `answers: ${s.title}`, "answers");
+    });
+    await saved;
     return s;
   }
 
@@ -997,9 +1026,12 @@ export class Incubator {
     this.retros(why);
   }
 
-  /** The server's clock: a park comes due a day on with nothing else happening. */
+  /** The server's clock: a park comes due a day on with nothing else
+   *  happening, and a vault write that failed is tried again. */
   tick(): void {
     this.pump();
+    if (this.detached) return;
+    for (const s of this.list()) if (s.vault?.noteOwed || s.vault?.owed?.length) this.note(s);
   }
 
   /* ---------- retro ---------- */
@@ -1112,8 +1144,12 @@ export class Incubator {
     this.retroWaiting.delete(flow.id);
     if (flow.status === "working") return;
     const step = flow.steps[flow.current];
-    // the stage runner was away: Flows runs the step again on its hello, as for any stage
-    if (flow.status === "gated" && flow.parkedFor === "stage") return;
+    // the stage runner was away: Flows runs the step again on its hello, as
+    // for any stage. Held for capacity (FR-036: a run that hit the plan's
+    // limit, or a start the governor held): `resumeCapacityParks` lets it go
+    // after the reset. Neither is a wait on a prompt, so the backstop's
+    // clock does not run.
+    if (flow.status === "gated" && (flow.parkedFor === "stage" || flow.parkedFor === "capacity")) return;
     if (flow.status === "gated") {
       // a retro never waits on the user at a gate: out of retries or budget,
       // or after a run that ended in an error, it ends
@@ -1127,7 +1163,13 @@ export class Incubator {
       if (text === null) return this.retroFailed(s, "the retro wrote no .canopy/advice.json");
       const parsed = parseAdvice(text);
       if (!parsed.ok) return this.retroFailed(s, `the retro wrote advice canopy cannot read: ${parsed.error}`);
-      await this.commitFiles(s, RETRO_FILES, `retro: ${s.title}`);
+      // The retro adds its two notes on top of the build accepted for the
+      // ship. The seed is the one accepted still, so `builtHead` moves with
+      // the retro's commit: left behind, the ship after a resume would read
+      // it as the seed moved. A seed that had moved already stays moved.
+      const before = s.builtHead !== undefined && s.work?.kind !== "extend" ? await this.deps.seeds.headOf(s.seedPath) : undefined;
+      const head = await this.commitFiles(s, RETRO_FILES, `retro: ${s.title}`);
+      if (head && before !== undefined && before === s.builtHead) s.builtHead = head;
       await this.deps.advice?.fold(parsed.advice, { id: s.id, title: s.title });
       if (this.gone(s) || s.retro !== r) return;
       r.state = "done";
@@ -1281,15 +1323,18 @@ export class Incubator {
       }
       if (flow.parkedFor === "failed") {
         // A step's run ended in an error and the flow waits at that step.
-        // The reason says which step, what the harness said, and what a
-        // resume does, since the error alone reads as the whole stage lost.
+        // The reason says which step, what went wrong in plain words, and
+        // what a resume does, since the error alone reads as the whole
+        // stage lost. The harness's own words stay behind it as the detail.
         const error = step?.reason ?? "the run failed";
         const hint = this.deps.failHint?.(error) ?? null;
         const on = "A resume runs that step again, and the steps before it stand";
-        return this.park(s, `${entry.workflow}'s ${step?.name ?? "current"} step failed: ${error.replace(/[.\s]+$/, "")}. ${hint ? `${hint}. ${on}` : on}`, false);
+        const said = runWords(error);
+        return this.park(s, `${entry.workflow}'s ${step?.name ?? "current"} step failed: ${said.line.replace(/[.\s]+$/, "")}. ${hint ? `${hint}. ${on}` : on}`, false, said.detail);
       }
-      // the flow lives on, waiting on the human: the sprout keeps its slot, so nothing is pumped
-      return this.park(s, `${entry.workflow} waits${step ? ` after ${step.name}` : ""}: ${step?.reason ?? "a gate"}`, false);
+      // the flow lives on, waiting on the human: the sprout keeps its slot,
+      // so nothing is pumped. A check out of retries keeps its output's end.
+      return this.park(s, `${entry.workflow} waits${step ? ` after ${step.name}` : ""}: ${step?.reason ?? "a gate"}`, false, checkDetail(step));
     }
     if (flow.status === "working" || flow.status === "waiting") {
       // back from a park, or on to the next step: the status follows the step in progress
@@ -1305,7 +1350,10 @@ export class Incubator {
     s.spent = { runs: s.spent.runs + (flow.spent?.runs ?? 0), workMs: s.spent.workMs + (flow.spent?.workMs ?? 0) };
     if (flow.status !== "done") {
       const hint = flow.error ? (this.deps.failHint?.(flow.error) ?? null) : null;
-      return this.park(s, `${entry.workflow} ${flow.status}${flow.error ? `: ${flow.error}` : ""}${hint ? `. ${hint}` : ""}`);
+      const said = flow.error ? runWords(flow.error) : null;
+      // a check that failed the flow with no retries keeps its output's end
+      const detail = said?.detail ?? (flow.status === "failed" ? checkDetail(step) : undefined);
+      return this.park(s, `${entry.workflow} ${flow.status}${said ? `: ${said.line}` : ""}${hint ? `. ${hint}` : ""}`, true, detail);
     }
     try {
       if (entry.workflow === "clarify") await this.clarified(s);
@@ -1578,14 +1626,16 @@ export class Incubator {
     }
   }
 
-  /** `pump` false for a gate: its flow still holds the slot */
-  private async park(s: Sprout, reason: string, pump = true): Promise<void> {
+  /** `pump` false for a gate: its flow still holds the slot. `detail` is
+   *  what stands behind the reason (`SproutPark.detail`), kept on the
+   *  park's record for the sheet and the retro. */
+  private async park(s: Sprout, reason: string, pump = true, detail?: string): Promise<void> {
     if (sproutEnded(s)) return;
     s.status = "parked";
     s.parked = reason;
     const at = this.now();
     s.parkedAt = at;
-    s.parks = [...(s.parks ?? []), { at, reason: reason.replace(/\s+/g, " ").trim().slice(0, 500) }].slice(-PARKS_KEPT);
+    s.parks = [...(s.parks ?? []), { at, reason: reason.replace(/\s+/g, " ").trim().slice(0, 500), ...(detail ? { detail } : {}) }].slice(-PARKS_KEPT);
     await this.changed(s, "parked");
     if (pump) this.pump();
   }
@@ -1611,28 +1661,65 @@ export class Incubator {
     this.note(s, event);
   }
 
-  /** the vault note, rewritten; a daily line for a start or a park */
+  /** The vault note, rewritten; a daily line for a start, a park or an
+   *  end, unless it equals the last one that day (`takeDaily`). A write
+   *  that fails is owed on the record (`Sprout.vault`), so the next change
+   *  or the tick tries it again, a restart included; the day's lines go in
+   *  the order they came. */
   private note(s: Sprout, event?: NoteEvent): void {
     const notes = this.deps.notes;
     if (!notes) return;
     const snap = structuredClone(s);
+    // taken now, in the order the changes came, and on record only once the write below saves it
+    let took = false;
+    if (event && DAILY_EVENTS.has(event)) {
+      const day = new Date(this.now());
+      const taken = takeDaily(s.vault, { path: dailyNotePath(day), line: dailyLine(snap, event), head: dailyNoteHead(day) });
+      if (taken) {
+        s.vault = taken;
+        took = true;
+      }
+    }
     const write = async (): Promise<void> => {
-      // a refused read (a planted link) leaves intent out rather than the whole note
-      const intent = snap.prepared ? await this.deps.seeds.read(snap.seedPath, ".canopy/intent.md").catch(() => null) : null;
-      const retro = snap.retro?.state === "done" ? await this.deps.seeds.read(snap.seedPath, ".canopy/retro.md").catch(() => null) : null;
-      const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent, retro), s.noteRev);
-      if (rev && rev !== s.noteRev) {
-        s.noteRev = rev;
-        if (!this.detached && !this.gone(s)) await this.deps.store.save(s);
+      const was = JSON.stringify([s.noteRev, s.vault]);
+      let failed: unknown = null;
+      try {
+        // a refused read (a planted link) leaves intent out rather than the whole note
+        const intent = snap.prepared ? await this.deps.seeds.read(snap.seedPath, ".canopy/intent.md").catch(() => null) : null;
+        const retro = snap.retro?.state === "done" ? await this.deps.seeds.read(snap.seedPath, ".canopy/retro.md").catch(() => null) : null;
+        const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent, retro), s.noteRev);
+        if (rev) s.noteRev = rev;
+        if (s.vault?.noteOwed) {
+          s.vault = { ...s.vault };
+          delete s.vault.noteOwed;
+        }
+      } catch (err) {
+        failed = err;
+        s.vault = { ...s.vault, noteOwed: true };
       }
-      if (event && DAILY_EVENTS.has(event)) {
-        const day = new Date(this.now());
-        await notes.append(dailyNotePath(day), dailyLine(snap, event), dailyNoteHead(day));
+      // the lines owed, oldest first; one that fails keeps its place for the
+      // next try. Each is taken off by itself, since a change while the
+      // append runs may add one behind it.
+      for (let l = s.vault?.owed?.[0]; l; l = s.vault?.owed?.[0]) {
+        try {
+          await notes.append(l.path, l.line, l.head);
+        } catch (err) {
+          failed ??= err;
+          break;
+        }
+        const sent = l;
+        s.vault = { ...s.vault, owed: (s.vault?.owed ?? []).filter((x) => x !== sent) };
       }
+      if (s.vault?.owed?.length === 0) {
+        s.vault = { ...s.vault };
+        delete s.vault.owed;
+      }
+      if ((took || JSON.stringify([s.noteRev, s.vault]) !== was) && !this.detached && !this.gone(s)) await this.deps.store.save(s);
+      if (failed !== null) throw failed;
     };
     const next = (this.noteChain.get(s.id) ?? Promise.resolve())
       .then(write)
-      .catch((err: unknown) => this.log(`the vault note for ${s.slug} was not written (${msg(err)}); it is tried again at the next change`));
+      .catch((err: unknown) => this.log(`the vault note for ${s.slug} was not written (${msg(err)}); it is tried again at the next change or the tick`));
     this.noteChain.set(s.id, next);
     this.track(next);
   }

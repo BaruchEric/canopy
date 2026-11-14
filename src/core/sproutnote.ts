@@ -1,10 +1,12 @@
 /**
  * The vault's view of a sprout: one note per project at
  * `02 - Dev/incubator/<slug>.md`, rewritten whole at each change, and a
- * line in that day's daily note when a project starts, parks, goes live, is handed off or is turned down. An index and summaries only: no raw input
- * and no transcript ever reaches the vault. Pure, so it is tested.
+ * line in that day's daily note when a project starts, parks, goes live,
+ * is handed off or is turned down, never one equal to the last that day
+ * (`takeDaily`). An index and summaries only: no raw input and no
+ * transcript ever reaches the vault. Pure, so it is tested.
  */
-import type { Sprout, SproutStatus } from "./types";
+import type { DailyNoteLine, Sprout, SproutStatus, SproutVault } from "./types";
 
 export type NoteEvent = "started" | "questions" | "input" | "parked" | "stopped" | "live" | "rejected" | "handed-off";
 
@@ -62,6 +64,19 @@ const eventWord = (s: Sprout, event: NoteEvent): string => {
 
 export function dailyLine(s: Sprout, event: NoteEvent): string {
   return `\n- **incubator: ${s.title}** - ${eventWord(s, event)}. Note: ${link(s)}\n`;
+}
+
+/** the daily lines a project may owe while the vault is unreachable; the oldest go first */
+export const DAILY_OWED_MAX = 20;
+
+/** The vault state with a daily line taken: owed until a write goes
+ *  through, and kept as the last one taken. Null for a line equal to the
+ *  last one taken for the project on the same day's note, which a flow
+ *  that parks again on the same words would bring. The next day's note
+ *  takes the same words as that day's news. */
+export function takeDaily(v: SproutVault | undefined, l: DailyNoteLine): SproutVault | null {
+  if (v?.last?.path === l.path && v.last.line === l.line) return null;
+  return { ...v, last: { path: l.path, line: l.line }, owed: [...(v?.owed ?? []), l].slice(-DAILY_OWED_MAX) };
 }
 
 const STATUS_WORD: Record<SproutStatus, string> = {

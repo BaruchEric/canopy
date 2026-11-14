@@ -12,7 +12,7 @@ import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { backendOf, plainOf } from "../registry";
 import { gateButtons } from "../flows";
-import { INPUT_GLYPH, STAGES, branchHref, cannotStart, parkWords, queuedWhy, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
+import { INPUT_GLYPH, STAGES, branchHref, cannotStart, parkDetailOf, parkWords, queuedWhy, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
 import { isOnline, multi, useStore } from "../store";
 import { recorderBlocked, useRecorder } from "../recorder";
 import { Questions } from "./Prompts";
@@ -471,6 +471,8 @@ export function SproutSheet({ id }: { id: string }) {
     );
   }
   const asking = sprout.status === "clarifying" && (sprout.questions?.length ?? 0) > 0;
+  // the raw error or the check's output behind the park's line
+  const parkDetail = parkDetailOf(sprout);
   const minutes = Math.round(sprout.spent.workMs / 60_000);
   return (
     <>
@@ -495,6 +497,12 @@ export function SproutSheet({ id }: { id: string }) {
           <div className="ask">
             <div className="eyebrow">parked</div>
             <p>{sprout.parked}</p>
+            {parkDetail && (
+              <details className="park-detail">
+                <summary>details</summary>
+                <pre className="ask-detail">{parkDetail}</pre>
+              </details>
+            )}
             <div className="ask-row">
               {gateButtons(parkWords(sprout, stageFlow)).map((b) => (
                 <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} disabled={busy} title={b.title} onClick={() => act(() => resumeSprout(id, b.choice))}>

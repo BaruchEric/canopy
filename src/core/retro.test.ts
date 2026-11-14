@@ -150,6 +150,15 @@ describe("retroRecord", () => {
     expect(text).toContain("https://github.com/a/b");
   });
 
+  test("a park's detail goes with it, cut to its end, its secrets stripped (incubator review, P2)", () => {
+    const detail = `${"y".repeat(2000)}\npush to https://u:tok@host/x failed\nexit 1`;
+    const rec = retroRecord(sprout({ parks: [{ at: 5, reason: "build waits after Test: check failed with exit 1", detail }, { at: 6, reason: "boom" }] }), new Map(), []);
+    expect(rec.parks[0]?.detail?.endsWith("failed exit 1")).toBe(true);
+    expect(rec.parks[0]?.detail?.length).toBeLessThanOrEqual(600);
+    expect(rec.parks[0]?.detail).not.toContain("u:tok");
+    expect(rec.parks[1]).toEqual({ at: 6, reason: "boom" });
+  });
+
   test("a flow with no digest takes one read now, else its workflow and outcome alone", () => {
     const s = sprout({
       flows: [

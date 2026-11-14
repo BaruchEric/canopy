@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath } from "./sproutnote";
+import { DAILY_EVENTS, DAILY_OWED_MAX, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, takeDaily } from "./sproutnote";
 import type { Sprout } from "./types";
 
 const day = new Date(2026, 9, 1, 9, 30);
@@ -84,6 +84,20 @@ describe("daily note", () => {
     const md = sproutNote(sprout({ status: "handed-off", branch }), null, null);
     expect(md).toContain(`Handed off as the branch ${branch}.`);
     expect(md).toContain(`- Branch: ${branch}`);
+  });
+  test("a line equal to the last one taken for the project that day is skipped; owed lines are capped, oldest dropped (incubator review, P3)", () => {
+    const path = dailyNotePath(day);
+    const line = dailyLine(sprout({ status: "parked", parked: "waits for capacity" }), "parked");
+    const first = takeDaily(undefined, { path, line, head: "h" });
+    expect(first).toEqual({ last: { path, line }, owed: [{ path, line, head: "h" }] });
+    expect(takeDaily(first ?? undefined, { path, line, head: "h" })).toBeNull();
+    // the same words on another day's note are that day's news
+    const next = dailyNotePath(new Date(2026, 9, 2));
+    expect(takeDaily(first ?? undefined, { path: next, line, head: "h" })?.owed).toHaveLength(2);
+    let v = first ?? undefined;
+    for (let i = 0; i < DAILY_OWED_MAX + 5; i++) v = takeDaily(v, { path, line: `line ${i}`, head: "h" }) ?? v;
+    expect(v?.owed).toHaveLength(DAILY_OWED_MAX);
+    expect(v?.owed?.at(-1)?.line).toBe(`line ${DAILY_OWED_MAX + 4}`);
   });
 });
 

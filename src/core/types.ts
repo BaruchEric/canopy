@@ -2697,6 +2697,30 @@ export interface FlowDigest {
 export interface SproutPark {
   at: number;
   reason: string;
+  /** what stands behind the reason, for the sheet: a run's raw error when
+   *  the reason says it plainly, or the end of a failed check's output
+   *  (`parkDetail` in runerror.ts: capped, a url's userinfo and canopy's
+   *  tokens taken out) */
+  detail?: string;
+}
+
+/** A line canopy owes a day's note in the vault (sproutnote.ts). */
+export interface DailyNoteLine {
+  path: string;
+  line: string;
+  /** what starts the note when canopy is the first to write that day */
+  head: string;
+}
+
+/** A sprout's vault writes still owed after one failed, tried again on the
+ *  incubator's tick, and the last daily line taken, so one equal to it is
+ *  not written twice. */
+export interface SproutVault {
+  /** the note's last write failed: the tick writes it again whole */
+  noteOwed?: true;
+  /** daily lines not written yet, oldest first, at most `DAILY_OWED_MAX` */
+  owed?: DailyNoteLine[];
+  last?: { path: string; line: string };
 }
 
 /** what a retro looks back on: the end the sprout reached, or a park left a day */
@@ -2830,6 +2854,8 @@ export interface Sprout {
   firebase?: SproutFirebase;
   /** the vault note's revision, for the next replace */
   noteRev?: string;
+  /** the vault writes a failed one left owed, and the last daily line */
+  vault?: SproutVault;
   createdAt: number;
   updatedAt: number;
 }

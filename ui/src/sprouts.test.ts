@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Flow, FlowStep, IncubatorStages, Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
 import { gateButtons } from "./flows";
-import { branchHref, cannotStart, needsYou, parkWords, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
+import { branchHref, cannotStart, needsYou, parkDetailOf, parkWords, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -289,6 +289,19 @@ describe("a card's activity", () => {
     expect(sproutActivity(sprout({ status: "live" }))).toBe("still");
     expect(sproutActivity(sprout({ status: "queued" }))).toBe("still");
     expect(sproutActivity(sprout({ status: "stopped" }))).toBe("still");
+  });
+});
+
+describe("parkDetailOf (incubator review, P2)", () => {
+  test("the current park's detail, and none once the project is not parked or for an older park", () => {
+    const parks = [
+      { at: 5, reason: "clarify failed: boom", detail: "old words" },
+      { at: 9, reason: "build waits after Test: check failed with exit 1", detail: "FAIL src/a.test.ts" },
+    ];
+    expect(parkDetailOf(sprout({ status: "parked", parkedAt: 9, parks }))).toBe("FAIL src/a.test.ts");
+    expect(parkDetailOf(sprout({ status: "queued", parkedAt: 9, parks }))).toBeNull();
+    // a park with no detail never shows an older one's
+    expect(parkDetailOf(sprout({ status: "parked", parkedAt: 12, parks: [...parks, { at: 12, reason: "the scout workflow is not installed" }] }))).toBeNull();
   });
 });
 

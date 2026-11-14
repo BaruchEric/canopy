@@ -102,7 +102,7 @@ export interface RetroRecord {
   };
   inputs: { n: number; kind: InputKind; summary: string; note?: string }[];
   flows: { workflow: string; outcome?: string; digest?: FlowDigest }[];
-  parks: { at: number; reason: string }[];
+  parks: { at: number; reason: string; detail?: string }[];
   known: KnownAdvice[];
 }
 
@@ -112,7 +112,8 @@ const KNOWN_MAX = 40;
 /** What the retro's agent reads: the sprout's facts, each input as its
  *  number, kind and summary (never its label, file or words), every flow
  *  with its digest (`now` holds digests read at retro time for flows that
- *  ended without one), every park, and the keys already on the list.
+ *  ended without one), every park with the end of its detail, and the keys
+ *  already on the list.
  *  Every string has any url's secret taken out. */
 export function retroRecord(s: Sprout, now: ReadonlyMap<string, FlowDigest>, known: readonly KnownAdvice[]): RetroRecord {
   const rec: RetroRecord = {
@@ -136,7 +137,8 @@ export function retroRecord(s: Sprout, now: ReadonlyMap<string, FlowDigest>, kno
       const digest = f.digest ?? now.get(f.flowId);
       return { workflow: f.workflow, ...(f.outcome ? { outcome: f.outcome } : {}), ...(digest ? { digest } : {}) };
     }),
-    parks: (s.parks ?? []).map((p) => ({ at: p.at, reason: oneLine(p.reason, 500) })),
+    // a park's detail is a raw error or a check's output: its end says what failed
+    parks: (s.parks ?? []).map((p) => ({ at: p.at, reason: oneLine(p.reason, 500), ...(p.detail ? { detail: tail(oneLine(p.detail, Infinity), 600) } : {}) })),
     known: known.slice(0, KNOWN_MAX).map((k) => ({ key: k.key, lesson: oneLine(k.lesson, LESSON_MAX), count: k.count })),
   };
   // the record is canopy's own shape, and withoutSecrets keeps it

@@ -2092,10 +2092,14 @@ div.waiting-row {
   font-size: var(--t-md);
   overflow-wrap: anywhere;
 }
-.advice-edit summary {
+.advice-edit summary,
+.park-detail summary {
   font-size: var(--t-sm);
   color: var(--ink-dim);
   cursor: pointer;
+}
+.park-detail pre {
+  margin-top: 6px;
 }
 .advice-file {
   margin-bottom: 8px;
