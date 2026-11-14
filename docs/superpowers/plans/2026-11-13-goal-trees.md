@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** built 2026-11-14 (c469be43..60fb4ef5), merged to main and deployed (FR-067 in FEATURES.md).
+
 **Goal:** A coordinator's card may carry `tree: "<branch>"`. It then runs in place in the kept worktree for that branch in its repo, one canopy finds or makes when Eric starts the card, and it settles when that run ends, outside the landing queue.
 
 **Architecture:**
@@ -63,7 +65,7 @@
   - `PlanContext.treeCard: (repo: string) => boolean`. `CoordinatorDeps.treeCard?: (repo: string) => boolean`; both hub literals pass `this.deps.treeCard ?? (() => false)`, and Task 4 wires the server's.
   - `CardCarries.tree?: string`, reading `in tree <branch>`.
 
-- [ ] **Step 1: Write the failing tests.** Add `treeCard: () => false` to `ctxOf`, then:
+- [x] **Step 1: Write the failing tests.** Add `treeCard: () => false` to `ctxOf`, then:
 
 ```ts
 describe("a card in a kept tree", () => {
@@ -95,13 +97,13 @@ describe("a card in a kept tree", () => {
 });
 ```
 
-- [ ] **Step 2: Run `bun test src/core/coordinator.test.ts -t "kept tree"`.** Expected: FAIL (the field is dropped; `treeCard` is not in `PlanContext`).
+- [x] **Step 2: Run `bun test src/core/coordinator.test.ts -t "kept tree"`.** Expected: FAIL (the field is dropped; `treeCard` is not in `PlanContext`).
 
-- [ ] **Step 3: Implement.** In `checkCard`, after the files block and before `harnessRefusal`: absent passes; not a string, then not `isBranchName`, then `out.times` or `out.workflow`, then `ctx.treeCard(repo)` each return the error above in that order; else keep `out.tree`. In `editCard`, `"tree"` joins a queued card's refused keys (:246), and `tree` is carried as `files` is (`null` clears, absent keeps).
+- [x] **Step 3: Implement.** In `checkCard`, after the files block and before `harnessRefusal`: absent passes; not a string, then not `isBranchName`, then `out.times` or `out.workflow`, then `ctx.treeCard(repo)` each return the error above in that order; else keep `out.tree`. In `editCard`, `"tree"` joins a queued card's refused keys (:246), and `tree` is carried as `files` is (`null` clears, absent keeps).
 
-- [ ] **Step 4: Run `bun test src/core/coordinator.test.ts src/core/branchtrees.test.ts src/server/coordinator.test.ts`, then `bun run typecheck`.** Expected: PASS.
+- [x] **Step 4: Run `bun test src/core/coordinator.test.ts src/core/branchtrees.test.ts src/server/coordinator.test.ts`, then `bun run typecheck`.** Expected: PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "Coordinator: a card may name a kept tree by branch; isBranchName moves to treewords"`
+- [x] **Step 5: Commit** `git commit -m "Coordinator: a card may name a kept tree by branch; isBranchName moves to treewords"`
 
 ---
 
@@ -122,7 +124,7 @@ describe("a card in a kept tree", () => {
   - `treeNote(task: CoordTask, run: Run, outcome: string): string`: the four lines `settleNote` writes for a run with no branch (widen its `outcome` parameter to `string` or build them alike), then `tree: <branch>, a kept worktree; Eric merges it from there`.
 - Produces, in `core/treewords.ts`: `runsInTrees(dirs: readonly string[], runs: readonly Run[], pathOf: (repoId: string) => string | undefined): Map<string, string>`, mapping each dir with an active in-place run (no `branch`) whose repo path is that dir to `run <id> (<verb>)`.
 
-- [ ] **Step 1: Write the failing tests.** In `src/core/coordinator.test.ts`, with the file's `child` helper (:79):
+- [x] **Step 1: Write the failing tests.** In `src/core/coordinator.test.ts`, with the file's `child` helper (:79):
 
 ```ts
 describe("tree cards: start, wait, settle", () => {
@@ -167,13 +169,13 @@ describe("tree cards: start, wait, settle", () => {
 
   In `src/core/treewords.test.ts` (Review Focus 5): dirs `["/c/trees/web/feat-x"]`; `pathOf` maps `trees:web/feat-x` to that dir and `web` to `/r/web`; runs are an active in-place `ask` run `c1` in `trees:web/feat-x`, a done one `c2` there, an active branch run `c3` there, and an active run `c4` in `web`. The map is exactly `/c/trees/web/feat-x` to `run c1 (ask)`.
 
-- [ ] **Step 2: Run `bun test src/core/coordinator.test.ts -t "tree cards" src/core/treewords.test.ts`.** Expected: FAIL (not exported).
+- [x] **Step 2: Run `bun test src/core/coordinator.test.ts -t "tree cards" src/core/treewords.test.ts`.** Expected: FAIL (not exported).
 
-- [ ] **Step 3: Implement.** `mayReopen` is also true for a card with `tree` whose outcome is not `dropped` (a follow-up reopens it). `nextToStart` reads `repoFull` only for a card with no `tree`.
+- [x] **Step 3: Implement.** `mayReopen` is also true for a card with `tree` whose outcome is not `dropped` (a follow-up reopens it). `nextToStart` reads `repoFull` only for a card with no `tree`.
 
-- [ ] **Step 4: Run both files.** Expected: PASS.
+- [x] **Step 4: Run both files.** Expected: PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "Coordinator: the pure rules for a tree card's start, wait, settle and after"`
+- [x] **Step 5: Commit** `git commit -m "Coordinator: the pure rules for a tree card's start, wait, settle and after"`
 
 ---
 
@@ -192,7 +194,7 @@ describe("tree cards: start, wait, settle", () => {
   - `CoordinatorHub.followup(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; run: Run }>`, reached as `POST /api/coordinator/followup {run, id, note?}`.
   - For a tree card, `startChild`'s `{ busy }` carries words the card keeps as its outcome.
 
-- [ ] **Step 1: Write the failing tests** in `src/server/coordinator.test.ts` with `hub()`, `coordinator()`, `said` and `sent`, overriding `startChild` to answer the tree card with an in-place child (`repoId: "trees:web/feat-x"`, no `branch`, `parent: coordId`) or a busy:
+- [x] **Step 1: Write the failing tests** in `src/server/coordinator.test.ts` with `hub()`, `coordinator()`, `said` and `sent`, overriding `startChild` to answer the tree card with an in-place child (`repoId: "trees:web/feat-x"`, no `branch`, `parent: coordId`) or a busy:
   - **Its own words.** With `full.add("web")`, a tree card answering `{ busy: "making tree feat/x" }` keeps that outcome while a plain card in `web` reads `waiting for a branch slot in web`. After `h.onTrees()` it still reads `making tree feat/x`. `onTrees` pumps a coordinator with a queued tree card and not one whose queued cards are all plain.
   - **Settling.** A started tree card is running with `treeRepo: "trees:web/feat-x"`. Its run ending done settles it done with `done in tree feat/x`; the note is `treeNote(card, run, "done in tree feat/x")` with the cards line under it, and `h.waiting()` is 0. Failed settles it failed with `failed`, stopped with `stopped`. A card `after: ["t1"]` starts once t1 is done.
   - **Adoption (Review Focus 2).** On a done tree card, a working run with `parent: "co1"`, `repoId: "trees:web/feat-x"` and no branch reopens it, running with that run. A run there with no `parent` changes nothing. With two tree cards on one tree, the later card takes the run.
@@ -211,9 +213,9 @@ describe("tree cards: start, wait, settle", () => {
 
   In `src/core/callers.test.ts`: `needs("POST", "/api/coordinator/followup")` is `operate`; it joins the coordinator's refused list (:239); `LANES.coordinator` has `GET /api/trees`.
 
-- [ ] **Step 2: Run `bun test src/server/coordinator.test.ts src/core/callers.test.ts`.** Expected: FAIL.
+- [x] **Step 2: Run `bun test src/server/coordinator.test.ts src/core/callers.test.ts`.** Expected: FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `pump`: for a tree card, a busy that is not capacity goes into `passed` and the outcome as given, not `slotWord`; a started run's update adds `treeRepo: child.repoId`.
   - `waitWords`: for a tree card, never read `repoFull`; keep an outcome `isTreeWait` or `isCapacityWords` matches.
   - `settle`: the limited note uses the tree's words; after the limited branch a tree card settles on `treeSettled` and says `treeNote`, never reading `deps.landing` and setting no timer.
@@ -221,9 +223,9 @@ describe("tree cards: start, wait, settle", () => {
   - Nothing new wakes a card held by the busy words: `onRun` (:968-974) already pumps every coordinator when any run ends, Eric's included.
   - `followup`: refuse in the order listed; run the start in `this.queue` with `starting` held, taking its answer out by the side as `resumeLimited` does; on a run set the card running (no outcome, no `limited`) and `this.follow(run)`; a busy or a throw is a `CoordError` 409 with its words.
 
-- [ ] **Step 4: Run both files, then `bun run typecheck`.** Expected: PASS.
+- [x] **Step 4: Run both files, then `bun run typecheck`.** Expected: PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "Coordinator hub: tree cards keep their words, settle on their run, adopt a later run in the tree; POST /api/coordinator/followup"`
+- [x] **Step 5: Commit** `git commit -m "Coordinator hub: tree cards keep their words, settle on their run, adopt a later run in the tree; POST /api/coordinator/followup"`
 
 ---
 
@@ -256,7 +258,7 @@ describe("tree cards: start, wait, settle", () => {
   - `followCoordTree(state, coordId, task, message: string, priority): Promise<ChildResume>`: throws `<repo> is no longer in the tree` when the card's repo is gone and `tree <branch> is no longer kept in <repo name>` when `treeFor` is null; otherwise the step as above, starting with `ACTIONS.ask` and `after` set to the card's run.
   - The hub's `followTree` passes the trimmed note, or `Carry on with the task from where you stopped.`; its `treeCard` is true for a repo in `state.result.repos` that `isTreeCard` matches.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `branchtrees.test.ts` (its `world()`): after `add` of `Feat/Login`, `treeFor(path, "Feat/Login")` is `preparing` with the tree's dir, then `ready` after `idle()`; `treeFor(path, "feat-login")` is null; after `remove` it is null.
   - `coordrunner.test.ts`: add `"/api/trees"` to the lane loop (:387). A new `describe("cards in kept worktrees")` on its own root (`up`'s `root` parameter) with `app` (one commit on main) and `bad` (`.canopy/gates.json` `{"gates":[],"setup":"echo broken; exit 3"}` committed), served by `up("trees", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"], root)`. Cards start as `startCard` does (:466-477) and end with `finish`; each test uses its own branch.
     1. **Making the tree (Review Focus 3).** `{tree: "feat/x"}` goes running; `GET /api/trees` lists `feat/x` for `app` as ready; the child's `repoId` starts with `trees:`, equals the `/api/tree` repo whose `path` is the tree's `dir`, and equals the card's `treeRepo`; its `parent` is the coordinator, `depth` and `branch` are undefined, `ctx.cwd` is the dir. `finish` settles it done with `done in tree feat/x`.
@@ -267,13 +269,13 @@ describe("tree cards: start, wait, settle", () => {
     6. **Follow-up and a removed tree (Review Focus 4).** After a card on `feat/f` settles done, the page's `POST /api/coordinator/followup {run, id: "t1", note: "also y"}` answers 200; the card runs with a new run whose `parent` is the coordinator, `ctx.cwd` is the dir, and message contains `also y`. Finish it, `POST /api/trees/remove {repo: "app", tree: "feat/f", force: true}`, and the follow-up answers 409 `tree feat/f is no longer kept in app`.
     7. **Main moving (Review Focus 5).** While a card works in `feat/s`, commit to `app`'s main; `GET /api/trees` comes to show `feat/s` with a `waiting` (`BranchTree.waiting`, `core/types.ts:1969`) starting `run ` (`until`, 10 s), and the tree's HEAD is unchanged.
 
-- [ ] **Step 2: Run `bun test src/server/branchtrees.test.ts src/server/coordrunner.test.ts -t "kept worktrees|treeFor|lane"`.** Expected: FAIL.
+- [x] **Step 2: Run `bun test src/server/branchtrees.test.ts src/server/coordrunner.test.ts -t "kept worktrees|treeFor|lane"`.** Expected: FAIL.
 
-- [ ] **Step 3: Implement** the pieces above.
+- [x] **Step 3: Implement** the pieces above.
 
-- [ ] **Step 4: Run `bun test src/server`, then all four gates.** Expected: PASS.
+- [x] **Step 4: Run `bun test src/server`, then all four gates.** Expected: PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "Coordinator: a tree card makes or finds its kept tree and runs in place there with parent set"`
+- [x] **Step 5: Commit** `git commit -m "Coordinator: a tree card makes or finds its kept tree and runs in place there with parent set"`
 
 ---
 
@@ -296,22 +298,22 @@ describe("tree cards: start, wait, settle", () => {
   - `treeSayTarget(task: CoordTask, run: Run | undefined, coord: Run): SayTarget`, in order: not started is none `it has not started`; run active is steer, or for Codex none `a Codex worker takes no message mid-turn`; `limited === 0` is none `it carries on after the reset`; coordinator ended is none `its goal has ended`; else tree.
   - `api.coordFollowup(runId: string, cardId: string, note?: string): Promise<{ ok: true; run: Run }>`, qualifying the answer as `api.followUp` does; the store's `coordFollowup(runId, cardId, note?): Promise<void>` adds the run to `s.runs`.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `manager.test.ts` (its `card`, `run`, `coord`, `at`, and a `BranchTree` at `/c/trees/canopy/feat-x`): a queued tree card with outcome `making tree feat/x`, given `trees` (state `preparing`) and `repos` (repo `trees:canopy/feat-x` at that dir), has lane `tree` `{ branch: "feat/x", state: "preparing", cardId: "trees:canopy/feat-x" }` and `live` `making tree feat/x`. A done tree card whose run `c1` is done (no branch) has say `{ kind: "tree", coordId: "k", cardId: "t1", branch: "feat/x" }` and `chatAim` offers its lane; `c1` stopped gives `canResume` true; `c1` working gives a steer; the coordinator ended gives none `its goal has ended`. A tree card's last arc is labelled `tree`, moss when done and hair while running.
   - `qualify.test.ts`: `qRun` turns a card's `treeRepo` `trees:app/feat-x` into `mini|trees:app/feat-x` and keeps `tree` `feat/x`.
   - `src/cli/coordinator.test.ts`: `cardLines` puts `in tree feat/x` after the files column of a card with `tree`.
 
-- [ ] **Step 2: Run `bun test ui/src/manager.test.ts ui/src/qualify.test.ts src/cli/coordinator.test.ts`.** Expected: FAIL.
+- [x] **Step 2: Run `bun test ui/src/manager.test.ts ui/src/qualify.test.ts src/cli/coordinator.test.ts`.** Expected: FAIL.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `laneOf`: a tree card takes `treeSayTarget`; `canResume` is also true for a stopped run with a tree say. `GoalView` passes `trees: s.trees, repos: s.repos`.
   - `sayWith`'s tree case calls `coordFollowup(say.coordId, say.cardId, text)`; `sayHint` reads `say to <id>; a run in tree <branch> starts with this`.
   - `LaneRow`: the facts show `in tree <branch>` (plus ` · <state>` when not `ready`) as `.mono .mgr-tree` in place of the branch. With `lane.tree.cardId`, an **open tree** button (title `Open the tree's own card: its changes, files, tasks, preview and shells`) calls `openView("git")` then `openPanel(cardId)`, as `App.tsx:305-309` does. Resume on a tree say calls `coordFollowup` with no words, titled `Start a run in its tree where this one stopped`.
   - `CoordTasks` shows `carries.tree`, titled `runs in place in the kept tree for <branch>`. `cardLines` adds the tree column after files and grows its widths to eight.
 
-- [ ] **Step 4: Run all four gates.** Expected: PASS.
+- [x] **Step 4: Run all four gates.** Expected: PASS.
 
-- [ ] **Step 5: Commit** `git commit -m "Manager view and cards: in tree, the tree's state, open tree, and a follow-up in the tree; the CLI's tree column"`
+- [x] **Step 5: Commit** `git commit -m "Manager view and cards: in tree, the tree's state, open tree, and a follow-up in the tree; the CLI's tree column"`
 
 ---
 
@@ -323,13 +325,13 @@ describe("tree cards: start, wait, settle", () => {
 **Interfaces:**
 - Consumes: Task 5's lane (`#mgr-lane-<id>`, `.mgr-tree`, the **open tree** button).
 
-- [ ] **Step 1: Extend the fixture.** Read each repo's `path` from `/api/tree` beside its `id`. Add card `t4`: `{ id: "t4", title: "Try the copy on a dev server", repo: repo("demo"), note: "Run the dev server and read the copy.", action: "ask", state: "queued", tree: "check/dev-server-for-the-copy-on-a-phone", outcome: "making tree check/dev-server-for-the-copy-on-a-phone" }`. In `goalPage`, fulfill `/api/trees` with one `BranchTreesInfo` whose `demo` holds that branch as `preparing`, its `dir` the `twin` repo's path so the lane finds a card to open, every `BranchTree` field filled. The fixture's comment says four cards.
+- [x] **Step 1: Extend the fixture.** Read each repo's `path` from `/api/tree` beside its `id`. Add card `t4`: `{ id: "t4", title: "Try the copy on a dev server", repo: repo("demo"), note: "Run the dev server and read the copy.", action: "ask", state: "queued", tree: "check/dev-server-for-the-copy-on-a-phone", outcome: "making tree check/dev-server-for-the-copy-on-a-phone" }`. In `goalPage`, fulfill `/api/trees` with one `BranchTreesInfo` whose `demo` holds that branch as `preparing`, its `dir` the `twin` repo's path so the lane finds a card to open, every `BranchTree` field filled. The fixture's comment says four cards.
 
-- [ ] **Step 2: Add the checks.** At 1440 px: 5 rings and 4 lanes (from 4 and 3), needs still 3 (a queued card raises none); `#mgr-lane-t4 .mgr-tree` reads `in tree check/dev-server-for-the-copy-on-a-phone · preparing`; the lane has **open tree**; after the screenshot, clicking it drops `view=manager` from `location.search`. At 390 px: the `.mgr-tree` right edge is within `#mgr-lane-t4`'s plus 0.5 px, the page's width check holds, and `manager-390-tree.png` shows the lane.
+- [x] **Step 2: Add the checks.** At 1440 px: 5 rings and 4 lanes (from 4 and 3), needs still 3 (a queued card raises none); `#mgr-lane-t4 .mgr-tree` reads `in tree check/dev-server-for-the-copy-on-a-phone · preparing`; the lane has **open tree**; after the screenshot, clicking it drops `view=manager` from `location.search`. At 390 px: the `.mgr-tree` right edge is within `#mgr-lane-t4`'s plus 0.5 px, the page's width check holds, and `manager-390-tree.png` shows the lane.
 
-- [ ] **Step 3: Run the check.** On the Mac, CLAUDE.md's `CANOPY_BROWSER_DIR` route with `bash scripts/browser/run.sh scripts/browser/check.ts`; elsewhere `bash scripts/browser/check.sh`. Expected: every check passes. Look at `manager-1440.png` and `manager-390-tree.png`.
+- [x] **Step 3: Run the check.** On the Mac, CLAUDE.md's `CANOPY_BROWSER_DIR` route with `bash scripts/browser/run.sh scripts/browser/check.ts`; elsewhere `bash scripts/browser/check.sh`. Expected: every check passes. Look at `manager-1440.png` and `manager-390-tree.png`.
 
-- [ ] **Step 4: Commit** `git commit -m "Browser check: a tree card's lane names its tree and state at 1440 px, stays inside its lane at 390 px, and open tree leaves the view"`
+- [x] **Step 4: Commit** `git commit -m "Browser check: a tree card's lane names its tree and state at 1440 px, stays inside its lane at 390 px, and open tree leaves the view"`
 
 ---
 
@@ -342,8 +344,8 @@ describe("tree cards: start, wait, settle", () => {
 - Modify: `SPEC.md`: `tree` and `treeRepo` among the card fields (:62); nothing else unless `grep -n -i "coordinat\|tree" SPEC.md` shows it wrong. `FEATURES.md` is the controller's.
 - Test: `src/server/coordinator.test.ts`, the brief test (:539-549).
 
-- [ ] **Step 1: Write the failing test.** The brief test also expects `$CANOPY_API/api/trees` and `"tree"` in the brief; its first example plan still passes `validatePlan` (with `treeCard: () => false` from Task 1).
-- [ ] **Step 2: Run `bun test src/server/coordinator.test.ts -t "the brief"`.** Expected: FAIL.
-- [ ] **Step 3: Write the docs** in the repo's plain style.
-- [ ] **Step 4: Run all four gates.** Expected: PASS.
-- [ ] **Step 5: Commit** `git commit -m "Docs: cards in kept worktrees in the brief, architecture, README and SPEC"`
+- [x] **Step 1: Write the failing test.** The brief test also expects `$CANOPY_API/api/trees` and `"tree"` in the brief; its first example plan still passes `validatePlan` (with `treeCard: () => false` from Task 1).
+- [x] **Step 2: Run `bun test src/server/coordinator.test.ts -t "the brief"`.** Expected: FAIL.
+- [x] **Step 3: Write the docs** in the repo's plain style.
+- [x] **Step 4: Run all four gates.** Expected: PASS.
+- [x] **Step 5: Commit** `git commit -m "Docs: cards in kept worktrees in the brief, architecture, README and SPEC"`

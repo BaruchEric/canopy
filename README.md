@@ -186,6 +186,12 @@ canopy run interrupt <id> [words…] # stop the turn a run is on and keep the ru
 canopy run pickup <flow>           # take a stopped branch flow up where it stopped; prints its id and status. Refused while another run works on its branch or the landing queue holds it, sent it back or landed it
 canopy run prune                   # remove kept runs past the sweep's transcript span (30 days); a live branch's or an open PR's stays
 canopy awake [off|always|working]  # keep this backend's machine from idle sleep: never, always, or while an agent of its own works
+canopy kit [status|apply] [--machine M] [--dry-run]   # the skills every agent has on every machine, and linking them; --dry-run says what apply would do and changes nothing
+canopy secrets [list] [--json]     # the secret store's names, tags, rotation dates and sinks; never a value
+canopy secrets status [--json]     # this backend's copy: commit, refusals, the key's lock, sink drift; exit 1 on drift
+canopy secrets unlock              # unlock this machine's key (asks for its passphrase); its sinks are written then
+canopy secrets pin <key> [--remote URL]   # trust the mini's signing key, and where to pull eric/secrets from
+canopy secrets recover <checkout> --breakglass FILE --out DIR   # rebuild the mini's keys from the break-glass identity; commits nothing
 canopy plugins [--machine M] [--agent claude|codex]   # every Claude Code and Codex plugin on every kit machine: on, off, wanted by settings.json and not installed, or failing, with the MCP servers it brings
 canopy plugins install|update|enable|disable|uninstall <name@marketplace> --machine M [--agent codex]   # through that agent's own CLI on that machine; codex has no update, and its enable and disable flip the enabled line in the plugin's own table in ~/.codex/config.toml
 canopy plugins search [words] --machine M [--agent codex]   # what the machine's marketplaces offer, most installed first
