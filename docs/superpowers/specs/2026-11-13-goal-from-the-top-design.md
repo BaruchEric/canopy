@@ -26,7 +26,7 @@ The goal is not tied to any repo, and the manager view is where he starts goals 
 ## Anti-goals
 
 - Anything starting before Eric presses start these or start on a card.
-- Attached files ending up in a commit. Files never go into a worktree; runs read them from a folder beside it.
+- Canopy copying attached files into a worktree. Runs read them from a folder beside it, and a worker copies one into its repo only when its task says to (a logo for the favicon).
 - A goal that disappears from the page because its anchor is not a repo in the tree.
 
 ## Constraints found
@@ -40,7 +40,11 @@ The goal is not tied to any repo, and the manager view is where he starts goals 
 - The incubator takes an intake as multipart (`readIntake`: `text`, `url`, `file`, `repo`), runs stages in its own container, and needs stages on the backend (`NO_STAGES`).
 - Run chats take no attachments today. Claude Code's Read tool reads images, so a file path the model is told about is enough.
 - The page never prunes runs by repo (`pruneByRepo` covers panels, folds and tabs only), and the server's lookups of a run's repo fall back to the id (`?? run.repoId`).
-- `ActionSpec.addDirs` already passes `--add-dir` to Claude (used by workspace runs).
+- `DriveSpec.addDirs` (core/driver.ts) passes `--add-dir` to Claude, but `Runner.start` sets it only from a workspace scope, which a coordinator refuses. The coordinator and a card's child get it through a new `StartExtras.addDirs`.
+- `POST /api/coordinator/start` and `canopy coordinator start <run> [id ...]` already exist: they start a goal's cards. The new route and verb are `new`.
+- `clipLabel` only shortens a name; it strips no `/` or `..`.
+- A coordinator's child is started with `parent` and never `child` (`startCoordChild`), since `child` caps a parent at 3 live children. Anything new a card starts keeps that rule.
+- The coord container's seeds mount is read-write and its runner runs as the host uid, so a coordinator can read and write every folder under `CANOPY_COORD_ROOT`.
 
 ## Approaches considered
 
@@ -78,15 +82,16 @@ new goal                                         runs on mini
 `POST /api/coordinator/new` as multipart, with right `operate` like the other coordinator writes (`/api/coordinator/start` already starts a goal's cards). A page or CLI token may use it; a coordinator's token may not.
 
 - **Fields:** `goal` (text, required, at most 20,000 characters), `repos[]` (repo ids, at most 20, each a local non-seed repo this backend holds), `file`/`files[]` (at most 10, 25 MB in all), and `model` and `effort` (optional, validated as the agent form validates them).
-- **Folder.** It makes the coordinator's folder as today, plus a files folder `<CANOPY_COORD_ROOT>/goal-files/<run id>/` (0700) that outlives the run. Names go through `clipLabel`, and duplicates get ` (2)`. A start that fails removes both folders.
+- **Folder.** It makes the coordinator's folder as today, plus a files folder `<CANOPY_COORD_ROOT>/goal-files/<run id>/` (0700) that outlives the run. `goalFileNames` names them: the last path part, `.`, `..` and empty become `file`, and a repeat gets ` (2)`. A start that fails removes both folders.
 - **Settings.** The agent is `agentFor(config, null, "coordinate")`: the role's route with no repo override. `model` and `effort` replace that route's, and harness, yolo and extra stay as today.
 - **The brief.** It ends with `goalTopLine(repos, files)` instead of `goalRepoLine`:
 
   > Eric started this goal from canopy's top, at no repo. He named these repos: a, b. Plan there first. His files are in <dir>: x.png, notes.md. Read each before you plan. A card may list the files its worker needs in `files`. When the goal leaves the repo open, ask which.
 
-  The coordinator is given `--add-dir <files dir>`.
+  The coordinator is given `--add-dir <files dir>` through `StartExtras.addDirs`.
+- **Who can touch the files (call).** The coordinator can read and rewrite its goal's files, and other goals' too, since the seeds mount is read-write. Accepted: the coordinator already writes each worker's whole instructions (the card note), so a file it could alter gives it nothing it lacks, and every goal is Eric's. A read-only mount would change compose, `redeploy.sh` and this path, for no gain in what a worker trusts.
 - **The anchor.** `GOAL_ANCHOR = "~goal"` in `core/coordinator.ts`. `goalAnchor(root)` builds the `Repo`. `Runner.start` and the route skip the one-coordinator check for it. `coordinatorFor(repoId)` still answers for real repos.
-- **Card files.** A card's `files` (names from its goal's files, checked in `validatePlan`) gives its child `addDirs: [files dir]` and a line under the note: "Files from Eric for this task: <absolute paths>". This works for a card of any goal, as long as the goal has files.
+- **Card files.** A card's `files` (names from its goal's files, checked in `validatePlan`; refused on a card with `times` or a `workflow`) gives its child `StartExtras.addDirs: [files dir]` and a line under the note: "Files from Eric for this task: <absolute paths>". This works for a card of any goal, as long as the goal has files.
 - **Pruning.** A goal-files folder whose coordinator is not live and whose newest file is older than 7 days is removed at each start and once at server start **(call)**.
 
 ### CLI
@@ -99,9 +104,9 @@ It prints the run id and the manager URL. It is `new`, since `canopy coordinator
 
 ### What the anchor changes in the UI
 
-- `repoWord(s, repoId)` answers "goal" for the anchor.
+- `runRepoName(repos, repoId)` (new, in `ui/src/goals.ts`; `repoWord` already names something in agentcards.ts) answers "goal" for the anchor.
 - Places that print a run's repo name use it: the run sheet head, the dock tab label, run solo, the section tab, agent focus, the inbox and the feed.
-- The manager view's goal head reads "goal from the top" in place of a repo.
+- The manager view's goal head adds the line "goal from the top" for an anchor goal (it shows no repo today).
 - `AddTask` already falls back to the first repo when the coordinator's repo is not among its choices.
 - The chat composer's mentions ask for no repo's commands when the repo is the anchor.
 
@@ -111,13 +116,15 @@ It prints the run id and the manager URL. It is `new`, since `canopy coordinator
 - **Validation.** `validatePlan` checks `isBranchName`, refuses `tree` with `times` or a `workflow` **(call: no flows in a tree in this version)**, and refuses a card whose repo is itself a tree card. The coordinator names the tree by branch on the main repo.
 - **Starting the card** (Eric's press, `startCoordChild`):
   1. Find the repo's tree for the branch (`BranchTrees` by branch).
-  2. If there is none, call `add(repo, branch, undefined, true)`.
+  2. If there is none, call `add(repo, branch, undefined, true)`. `add` runs `git worktree add` before it returns and can refuse at once (a branch checked out elsewhere is a 409); that refusal fails the card in its words.
   3. While the tree is `preparing`, the card reads "making tree <branch>" and holds its place.
   4. A tree that fails fails the card with the tree's `why`.
-  5. Once the tree is `ready`, start the card's action as an in-place run on the tree's own repo id (`startRepoRun`, no branch), with `parent` set.
+  5. Once the tree is `ready`, start the card's action as an in-place run on the tree's own repo id, no branch, with `parent` set and never `child` (as `startCoordChild` does; not through `startRepoRun`'s `how.parent`, which sets `child`).
+  6. A tree with another run going in it holds the card queued with "waiting for tree <branch> to be free", as a full branch slot does **(call)**.
 - **Settling.** The card settles when that run ends: done with the outcome "done in tree <branch>", or failed or stopped as today. It never goes through the landing queue. The tree's branch is Eric's to merge from the tree, as with any kept tree.
 - **For `after`.** A tree card counts as landed for its dependants once it settles done **(call)**.
-- **Pick-up and follow-up.** A later in-place run in the same tree (Eric's, or the manager chat aimed at the worker) is adopted the way a branch card adopts a run on its branch.
+- **Pick-up and follow-up (call).** An in-place run has no branch to match, so a tree card adopts only a later run in its tree's repo that names the card's coordinator as `parent` (the manager chat aimed at the worker starts one). Eric's own runs and chats in the tree are never adopted. A done tree card reopens on such a run; cards that already started after it are not affected.
+- **Where (call).** Only the coordinator's backend's kept trees, which today means the mini's. A worktree on the Mac is out of reach, as any Mac checkout is.
 - **The brief.** `GET /api/trees` joins the coordinator's lane (`core/callers.ts`, its route set), and the brief tells the coordinator about it (the kept trees, each with repo, branch and state) and when to use `tree`: Eric names a worktree or a branch to keep, or the work wants a long-lived checkout (a dev server, a branch to try by hand).
 - **The UI.** The card facts line gets "in tree <branch>". The lane shows the tree's state while it is being made, plus "open tree", which opens the tree's card.
 
@@ -125,10 +132,12 @@ It prints the run id and the manager URL. It is `new`, since `canopy coordinator
 
 - **The card.** `action: "project"` carries no `repo`. Its title and note are the idea, and its `files` go along as intake files.
 - **Validation.** `validatePlan` accepts it only when the backend's incubator can run stages (else `NO_STAGES` as the card's error). It refuses `times`, `workflow`, `tree` and a loadout.
-- **Starting the card.** Canopy calls the incubator's intake in process: text = title + note, the card's files, `via: "coordinator"`. The card holds `sprout` in place of `run`.
+- **Starting the card.** Canopy calls the incubator's intake in process: text = title + note, the card's files, and `via: "coordinator"` (new in `Intake.via` and `InputVia`). The card holds `sprout` in place of `run`.
+- **A leaf (call).** A live sprout's repo is still its seed `_incubator/<slug>`, which no card may run in, and nothing brings the shipped repo into the scan. A project card is therefore a leaf: no later card of the goal builds in the new project, and `after` on a project card gates only cards in other repos. Building in the new project is a new goal once it is in the scan.
 - **Following the sprout:**
   - waiting on clarify questions: "needs you", with a link to the sprout in the incubator view
-  - live or handed off: done, with the outcome naming the new repo id
+  - live or handed off: done, with the outcome naming the seed and the GitHub repo when one was made
+  - approving (an extend waiting for Eric's yes): "needs you"
   - rejected or stopped: failed
   - parked: "needs you"
 - **Places.** A project card does not count against `COORD_AT_ONCE`. The incubator's own concurrency (`SPROUT_CONCURRENCY`) holds it **(call)**.
