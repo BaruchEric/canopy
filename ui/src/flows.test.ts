@@ -148,4 +148,11 @@ describe("gateWords and gateButtons (incubator review, P1)", () => {
     // a failed run at a step whose earlier try was refused is still one way on
     expect(drawn(at(judged(false), { parkedFor: "failed", backTo: "Scaffold" }))).toEqual(["*continue: run the step again"]);
   });
+
+  test("a flow's stop says it stops the workflow here (FR-062)", () => {
+    for (const f of [flow({ status: "gated" }), flow({ status: "gated", parkedFor: "budget" }), at(judged(false), { backTo: "Scaffold" })]) {
+      expect(gateWords(f).stop).toBe("stop here");
+      expect(gateWords(f).stopTitle).toContain("The workflow stops at this step");
+    }
+  });
 });

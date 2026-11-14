@@ -52,18 +52,18 @@ describe("a park's and a gate's buttons, as drawn", () => {
     useStore.setState({ sprouts: pristine.sprouts, flows: pristine.flows });
   });
 
-  test("the project sheet at a build the judge refused: the way back first, the deploy second and named", () => {
+  test("the project sheet at a build the judge refused: the way back first, the deploy second and named, and its stop ends the project (FR-062)", () => {
     useStore.setState({ sprouts: { sp_000000000001: sprout() }, flows: { f9: flow() } });
     const drawn = buttons(renderCurrent(<SproutSheet id="sp_000000000001" />));
-    expect(drawn.slice(0, 3)).toEqual(["*send it back to Scaffold", "deploy it anyway", "stop"]);
+    expect(drawn.slice(0, 3)).toEqual(["*send it back to Scaffold", "deploy it anyway", "end the project"]);
     expect(drawn).not.toContain("*continue");
   });
 
   test("the project sheet at a step whose run failed, and at a park with no flow waiting: one way on", () => {
     useStore.setState({ sprouts: { sp_000000000001: sprout() }, flows: { f9: flow({ parkedFor: "failed", backTo: undefined }) } });
-    expect(buttons(renderCurrent(<SproutSheet id="sp_000000000001" />)).slice(0, 2)).toEqual(["*run the step again", "stop"]);
+    expect(buttons(renderCurrent(<SproutSheet id="sp_000000000001" />)).slice(0, 2)).toEqual(["*run the step again", "end the project"]);
     useStore.setState({ sprouts: { sp_000000000001: sprout({ parked: "deploy: no scope", flows: [{ workflow: "build-new", flowId: "f9", outcome: "done" }] }) }, flows: {} });
-    expect(buttons(renderCurrent(<SproutSheet id="sp_000000000001" />)).slice(0, 2)).toEqual(["*resume", "stop"]);
+    expect(buttons(renderCurrent(<SproutSheet id="sp_000000000001" />)).slice(0, 2)).toEqual(["*resume", "end the project"]);
   });
 
   test("the flow sheet's gate draws the same words", () => {

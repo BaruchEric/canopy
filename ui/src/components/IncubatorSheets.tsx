@@ -12,7 +12,7 @@ import type { SproutDetail, SproutRetro } from "../../../src/core/types";
 import { api } from "../api";
 import { backendOf, plainOf } from "../registry";
 import { gateButtons } from "../flows";
-import { INPUT_GLYPH, STAGES, branchHref, cannotStart, parkDetailOf, parkWords, queuedWhy, sproutBackend, sproutWord, stageStrip, stagesWord, workLine, type StageMark } from "../sprouts";
+import { branchHref, cannotStart, END_PROJECT, INPUT_GLYPH, intakeLoss, parkDetailOf, parkWords, queuedWhy, sproutBackend, sproutWord, STAGES, stagesChoice, stageStrip, stagesUnread, workLine, type StageMark } from "../sprouts";
 import { isOnline, multi, useStore } from "../store";
 import { recorderBlocked, useRecorder } from "../recorder";
 import { Questions } from "./Prompts";
@@ -128,7 +128,8 @@ function IntakeForm({
   /** why this cannot be sent as it stands, shown and held to; null to go */
   blocked?: string | null;
   submitLabel: string;
-  onSubmit: (form: FormData) => void;
+  /** `signal` is the send's: cancel, or the form going, calls it off */
+  onSubmit: (form: FormData, signal: AbortSignal) => void;
   onCancel: () => void;
 }) {
   const [text, setText] = useState(initial?.text ?? "");
@@ -139,6 +140,17 @@ function IntakeForm({
   const [over, setOver] = useState(false);
   const [recording, setRecording] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
+  // the send on its way, which cancel and the form's going call off
+  const sending = useRef<AbortController | null>(null);
+  useEffect(() => () => sending.current?.abort(), []);
+  // Escape or a click beside the sheet asks before it loses what is here
+  const holdSheet = useStore((s) => s.holdSheet);
+  const loss = intakeLoss({ text, links, repo: allowRepo ? repo : "", files: files.length, recording, sending: busy });
+  useEffect(() => {
+    if (loss === null) return;
+    holdSheet(loss);
+    return () => holdSheet(null);
+  }, [loss, holdSheet]);
   const add = (list: File[]) => {
     const ok: File[] = [];
     const bad: string[] = [];
@@ -160,7 +172,14 @@ function IntakeForm({
     if (allowRepo && repo.trim()) form.append("repo", repo.trim());
     for (const f of files) form.append("file", f, f.name);
     form.append("via", "sheet");
-    onSubmit(form);
+    sending.current?.abort();
+    const ctl = new AbortController();
+    sending.current = ctl;
+    onSubmit(form, ctl.signal);
+  };
+  const cancel = () => {
+    sending.current?.abort();
+    onCancel();
   };
   return (
     <>
@@ -237,7 +256,7 @@ function IntakeForm({
       </div>
       <footer className="sheet-foot">
         <span className="sheet-hint">Everything here is kept as it came, and only its index and summaries go to the vault.</span>
-        <button type="button" className="mini" onClick={onCancel}>
+        <button type="button" className="mini" title={busy ? "Stops the upload and closes the form" : undefined} onClick={cancel}>
           cancel
         </button>
         <button
@@ -316,21 +335,19 @@ function SheetHead({ eyebrow, title, sub }: { eyebrow: string; title: string; su
 function BackendPick({ value, onPick }: { value: string; onPick: (b: string) => void }) {
   const online = useStore(useShallow((s) => s.backendOrder.filter((b) => isOnline(s, b))));
   const stages = useStore((s) => s.stages);
-  const choices = online.map((b) => {
-    const st = Object.hasOwn(stages, b) ? stages[b] : undefined;
-    return { b, ...(st ? stagesWord(st) : { word: "stages unknown", warn: true }) };
-  });
+  const errs = useStore((s) => s.stagesErr);
+  const choices = online.map((b) => ({ b, ...stagesChoice(b, Object.hasOwn(stages, b) ? stages[b] : undefined, Object.hasOwn(errs, b) ? errs[b] : undefined) }));
   return (
     <div className="machines sprout-backends" role="radiogroup" aria-label="Runs on">
       <span className="dim">runs on</span>
-      {choices.map(({ b, word, warn }) => (
+      {choices.map(({ b, word, warn, title }) => (
         <button
           key={b}
           type="button"
           role="radio"
           aria-checked={b === value}
           className={`machine${b === value ? " on" : ""}`}
-          title={word}
+          title={title ?? word}
           onClick={() => onPick(b)}
         >
           <span className="machine-name">{b}</span>
@@ -352,14 +369,22 @@ export function NewSproutSheet({ draft }: { draft?: SproutDraft }) {
   const backend = picked ?? fallback;
   // a backend with stages off would hold the project queued for good
   const blocked = useStore((s) => cannotStart(backend, Object.hasOwn(s.stages, backend) ? s.stages[backend] : undefined));
+  // a read of its stages that failed, said, while nothing else has said (FR-062)
+  const unread = useStore((s) =>
+    stagesUnread(backend, Object.hasOwn(s.stages, backend) ? s.stages[backend] : undefined, Object.hasOwn(s.stagesErr, backend) ? s.stagesErr[backend] : undefined),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const submit = (form: FormData) => {
+  const submit = (form: FormData, signal: AbortSignal) => {
     setBusy(true);
     setError(null);
-    create(form, backend).then(
-      (s) => show(s.id),
+    create(form, backend, signal).then(
+      // a cancel that came as the answer did keeps the page where the user left it
+      (s) => {
+        if (!signal.aborted) show(s.id);
+      },
       (e: unknown) => {
+        if (signal.aborted) return;
         setError(errText(e));
         setBusy(false);
       },
@@ -370,7 +395,12 @@ export function NewSproutSheet({ draft }: { draft?: SproutDraft }) {
       <SheetHead eyebrow="incubator" title="a new project" />
       <IntakeForm
         lead={<p className="blurb">Clarify reads everything given here and asks at most four questions; research then looks for something to renovate or extend before anything new is built.</p>}
-        tail={many && <BackendPick value={backend} onPick={setPicked} />}
+        tail={
+          <>
+            {many && <BackendPick value={backend} onPick={setPicked} />}
+            {unread && <p className="note">{unread}</p>}
+          </>
+        }
         allowRepo
         initial={draft}
         busy={busy}
@@ -432,11 +462,14 @@ export function SproutSheet({ id }: { id: string }) {
       live = false;
     };
   }, [id, updatedAt]);
-  const act = (fn: () => Promise<unknown>) => {
+  const act = (fn: () => Promise<unknown>, signal?: AbortSignal) => {
     setBusy(true);
     setError(null);
     fn()
-      .catch((e: unknown) => setError(errText(e)))
+      // an upload the user called off is no error
+      .catch((e: unknown) => {
+        if (!signal?.aborted) setError(errText(e));
+      })
       .finally(() => setBusy(false));
   };
 
@@ -464,7 +497,7 @@ export function SproutSheet({ id }: { id: string }) {
           busy={busy}
           error={error}
           submitLabel="add"
-          onSubmit={(form) => act(() => addSproutInputs(id, form).then(() => setAdding(false)))}
+          onSubmit={(form, signal) => act(() => addSproutInputs(id, form, signal).then(() => setAdding(false)), signal)}
           onCancel={() => setAdding(false)}
         />
       </>
@@ -510,8 +543,8 @@ export function SproutSheet({ id }: { id: string }) {
                 </button>
               ))}
               <span className="spacer" />
-              <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
-                stop
+              <button type="button" className="mini" disabled={busy} title={END_PROJECT.stopTitle} onClick={() => act(() => stopSprout(id))}>
+                {END_PROJECT.stop}
               </button>
             </div>
           </div>
@@ -649,8 +682,8 @@ export function SproutSheet({ id }: { id: string }) {
               </button>
             )}
             {sprout.status !== "parked" && (
-              <button type="button" className="mini" disabled={busy} onClick={() => act(() => stopSprout(id))}>
-                stop
+              <button type="button" className="mini" disabled={busy} title={END_PROJECT.stopTitle} onClick={() => act(() => stopSprout(id))}>
+                {END_PROJECT.stop}
               </button>
             )}
           </>

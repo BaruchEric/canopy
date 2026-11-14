@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Flow, FlowStep, IncubatorStages, Sprout } from "../../src/core/types";
 import type { FeedSnapshot } from "./feed";
 import { gateButtons } from "./flows";
-import { branchHref, cannotStart, needsYou, parkDetailOf, parkWords, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stageStrip, stagesWord, staleSprout, workLine } from "./sprouts";
+import { branchHref, cannotStart, intakeLoss, needsYou, parkDetailOf, parkWords, queuedWhy, replaceSprouts, sortSprouts, sproutActivity, sproutBackend, sproutLines, sproutWord, stageAt, stagesChoice, stagesRetryIn, stageStrip, stagesUnread, stagesWord, staleSprout, workLine } from "./sprouts";
 
 const sprout = (over: Partial<Sprout> = {}): Sprout => ({
   id: "sp_000000000001",
@@ -361,6 +361,19 @@ describe("parkWords (incubator review, P1)", () => {
     expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(false), { parkedFor: "failed" }))).toEqual(["*continue: run the step again"]);
   });
 
+  test("a project's stop ends the project, and says so, whatever its gate (FR-062)", () => {
+    const words = [
+      parkWords(parked("build-new"), built("build-new", "Scaffold", accept(false), { backTo: "Scaffold" })),
+      parkWords(parked("build-new"), built("build-new", "Scaffold", accept(true))),
+      parkWords(parked("build-new"), built("build-new", "Scaffold", { name: "Accept", status: "pending" }, { current: 1 })),
+      parkWords(parked("build-new"), undefined),
+    ];
+    for (const w of words) {
+      expect(w.stop).toBe("end the project");
+      expect(w.stopTitle).toContain("no stage runs again");
+    }
+  });
+
   test("past scout's last step the build is next, and the words say so", () => {
     const scout = (last: FlowStep, o: Partial<Flow> = {}): Flow => ({
       id: "f9", repoId: "_incubator/coins", workflow: "scout", verb: "scout", note: "", status: "gated",
@@ -384,3 +397,38 @@ describe("parkWords (incubator review, P1)", () => {
     expect(drawn(parked("build-new"), built("build-new", "Scaffold", accept(false), { status: "working" }))).toEqual(["*continue: resume"]);
   });
 });
+
+describe("intakeLoss (FR-062)", () => {
+  const empty = { text: "", links: "", repo: "", files: 0, recording: false, sending: false };
+  test("an empty form closes without a word", () => {
+    expect(intakeLoss(empty)).toBeNull();
+    expect(intakeLoss({ ...empty, text: "  \n", links: " " })).toBeNull();
+  });
+  test("a form with something in it names what a close would lose", () => {
+    expect(intakeLoss({ ...empty, text: "a coin counter" })).toBe("Close the form and lose the idea?");
+    expect(intakeLoss({ ...empty, text: "x", links: "https://a.test\nhttps://b.test", files: 1 })).toBe("Close the form and lose the idea, 2 links and a file?");
+    expect(intakeLoss({ ...empty, repo: "https://github.com/me/app", files: 3 })).toBe("Close the form and lose the repo and 3 files?");
+    expect(intakeLoss({ ...empty, recording: true })).toBe("Close the form and lose the recording?");
+  });
+  test("one still sending says that closing stops the upload", () => {
+    expect(intakeLoss({ ...empty, text: "x", sending: true })).toBe("Close the form and lose the idea? It is still sending, and closing stops the upload.");
+  });
+});
+
+describe("a backend's stages read that failed (FR-062)", () => {
+  test("is asked again at growing waits, then every two minutes", () => {
+    expect([1, 2, 3, 4, 9].map(stagesRetryIn)).toEqual([5_000, 15_000, 45_000, 120_000, 120_000]);
+  });
+  test("the picker says the read failed, apart from a backend that has not said", () => {
+    const runner: IncubatorStages = { isolated: true, mode: "runner", waiting: null };
+    expect(stagesChoice("b", runner, "b did not answer")).toMatchObject({ word: "stages isolated", warn: false });
+    expect(stagesChoice("b", undefined, undefined)).toEqual({ word: "stages unknown", warn: true });
+    expect(stagesChoice("b", undefined, "b did not answer")).toEqual({ word: "stages unread", warn: true, title: "b did not say where it runs stages (b did not answer). The page asks again on its own." });
+  });
+  test("the sheet says so under the picker, only while nothing is known", () => {
+    expect(stagesUnread("b", undefined, "502 Bad Gateway")).toBe("b did not say where it runs stages (502 Bad Gateway). The page asks again on its own; a project started there still goes, and b refuses one it has nowhere to run.");
+    expect(stagesUnread("b", { isolated: true, mode: "runner", waiting: null }, "502 Bad Gateway")).toBeNull();
+    expect(stagesUnread("b", undefined, undefined)).toBeNull();
+  });
+});
+

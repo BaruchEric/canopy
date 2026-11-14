@@ -15,6 +15,7 @@ import type {
   Flow,
   FlowChoice,
   FlowStepName,
+  IncubatorStages,
   LandEntry,
   LandingInfo,
   PendingPair,
@@ -34,7 +35,7 @@ import { pct, shareTone, weekKey, type HarnessWeek } from "../../src/core/harnes
 import { repoOfCard, repoWord, whereWord } from "./agentcards";
 import { agentWord, harnessOf } from "./runs";
 import { gateWords, type GateWords } from "./flows";
-import { parkWords } from "./sprouts";
+import { parkWords, queuedWhy, sproutWord } from "./sprouts";
 import { chainWords } from "./coord";
 import { handOffText } from "../../src/core/sprout";
 import { SCORE_GATE, sentBack } from "../../src/core/landing";
@@ -74,7 +75,7 @@ export interface InboxItem {
   /** the broker's ask id (the home backend's), or a run's or flow's
    *  qualified id */
   id: string;
-  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep" | "group" | "trigger" | "reminder";
+  kind: "permission" | "question" | "proposal" | "guard" | "gate" | "clarify" | "park" | "held" | "advice" | "hand-off" | "sent-back" | "needs-judge" | "ci" | "gave-up" | "pair" | "sweep" | "group" | "trigger" | "reminder";
   /** the repo it is about, by the page's id, when the page has it */
   repoId: string | null;
   /** the repo in words: the checkout's name, else what the agent's card says */
@@ -106,6 +107,9 @@ export interface InboxItem {
   flowStep?: FlowStepName;
   /** a gate's or a park's ways on, as its buttons word them: what each will do */
   gate?: GateWords;
+  /** a gate in a project's stage: the project, which the gate's stop ends
+   *  as the project's sheet does, by the page's id */
+  sprout?: string;
   /** the retro lessons on offer, the advice item's alone */
   advice?: AdviceOffer[];
   /** a hand-off's: the commit a yes is for */
@@ -129,9 +133,14 @@ export interface InboxContext {
   /** the repos an ask's agent card is matched against, the home backend's
    *  (whose broker the asks are); `repos` when absent */
   askRepos?: readonly Repo[];
-  /** the incubator's sprouts, home's alone; one with open questions is an item */
+  /** every shown backend's incubator sprouts; one with open questions, a
+   *  park, a hand-off or a queue its backend holds back is an item */
   sprouts?: readonly Sprout[];
-  /** the retro lessons on offer, home's alone; any make one item */
+  /** where the backend a sprout is on runs its stages, by the sprout's
+   *  page id; undefined for one that has not said */
+  stagesOf?: (sproutId: string) => IncubatorStages | undefined;
+  /** every shown backend's retro lessons on offer, their keys qualified
+   *  by backend; each backend's make one item */
   advice?: readonly AdviceOffer[];
   /** every backend's landing queue: a sent-back branch with no fix going is an item */
   landing?: LandingInfo;
@@ -298,6 +307,7 @@ function flowItem(flow: Flow, runs: Readonly<Record<string, Run>>, ctx: InboxCon
     left: null,
     until: null,
     gate: sprout ? parkWords(sprout, flow) : gateWords(flow),
+    ...(sprout ? { sprout: sprout.id } : {}),
   };
 }
 
@@ -323,6 +333,11 @@ function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: Inbox
     if (cur && !cur.outcome && flows[cur.flowId]?.status === "gated") return null;
     return { ...base, kind: "park", who: "incubator", title: "is parked", detail: s.parked ?? "", at: s.updatedAt, gate: parkWords(s, undefined) };
   }
+  // a queue its backend holds back (the runner away, its fence unconfirmed,
+  // the stages' login dead, stages off) waits on someone to fix that: the
+  // same words the card and the sheet show
+  const held = queuedWhy(s, ctx.stagesOf?.(s.id));
+  if (held !== null) return { ...base, kind: "held", who: "incubator", title: `${sproutWord(s)}: ${held}`, detail: held, at: s.updatedAt };
   const n = s.questions?.length ?? 0;
   if (s.status !== "clarifying" || n === 0) return null;
   return {
@@ -336,20 +351,31 @@ function sproutItem(s: Sprout, flows: Readonly<Record<string, Flow>>, ctx: Inbox
   };
 }
 
-/** The lessons retros left that are on offer, as one item: accepting or
- *  dismissing goes key by key. Empty is none. */
-function adviceItem(advice: readonly AdviceOffer[]): InboxItem | null {
-  if (advice.length === 0) return null;
+/** The lessons retros left that are on offer, one item per backend that
+ *  keeps them (each backend's improvements list is its own): accepting or
+ *  dismissing goes key by key, to that backend. None is no item. */
+function adviceItems(advice: readonly AdviceOffer[], ctx: InboxContext): InboxItem[] {
+  const groups = new Map<string, AdviceOffer[]>();
+  for (const o of advice) {
+    const b = ctx.backendOf?.(o.key) ?? "";
+    groups.set(b, [...(groups.get(b) ?? []), o]);
+  }
+  return [...groups].map(([b, offers]) => adviceItem(b, offers));
+}
+
+function adviceItem(backend: string, advice: readonly AdviceOffer[]): InboxItem {
   const n = advice.length;
+  // the item's id is qualified the way its keys are: home's bare
+  const id = backend && advice.some((o) => o.key.startsWith(`${backend}|`)) ? `${backend}|incubator` : "incubator";
   return {
-    key: "advice:incubator",
+    key: `advice:${id}`,
     source: "advice",
-    id: "incubator",
+    id,
     kind: "advice",
     repoId: null,
     repo: "",
     who: "retro",
-    where: "canopy incubator",
+    where: `canopy incubator${backend ? ` on ${backend}` : ""}`,
     title: `${n} ${n === 1 ? "lesson" : "lessons"} from retros`,
     detail: "",
     at: Math.min(...advice.map((o) => o.lastAt)),
@@ -539,8 +565,7 @@ export function mergeInbox(
     const it = sproutItem(s, flows, ctx);
     if (it) items.push(it);
   }
-  const advice = adviceItem(ctx.advice ?? []);
-  if (advice) items.push(advice);
+  items.push(...adviceItems(ctx.advice ?? [], ctx));
   for (const group of ctx.landing?.groups ?? []) if (group.state === "needs-you") {
     const repo = ctx.repos.find(r => r.id === group.repoId);
     const backend = ctx.backendOf?.(group.id) ?? "";

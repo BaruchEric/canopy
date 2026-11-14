@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AdviceOffer, AgentCard, Ask, Flow, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
+import type { AdviceOffer, AgentCard, Ask, Flow, IncubatorStages, LandEntry, LandingInfo, PendingPair, PrState, PrWatch, Repo, Run, Sprout, SweepInfo, SweepItem, SweepSettings } from "../../src/core/types";
 import { rememberOffer } from "../../src/core/offer";
 import type { TriggerEvent } from "../../src/core/trigger";
 import type { QuickNote } from "../../src/core/notes";
@@ -420,7 +420,30 @@ describe("the incubator in the inbox", () => {
   test("a parked project with no gate behind it has one button", () => {
     const parked: Sprout = { ...sprout, status: "parked", questions: [], parked: "deploy: no scope" };
     const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [parked] });
-    expect(items[0]?.gate).toEqual({ go: "resume", retry: null, lead: "go" });
+    expect(items[0]?.gate).toMatchObject({ go: "resume", retry: null, lead: "go", stop: "end the project" });
+  });
+  test("a gate in a project's stage names the project its stop ends; a plain flow's stop stops the flow (FR-062)", () => {
+    const gated = flow({ id: "f", workflow: "scout", status: "gated" });
+    const parked: Sprout = { ...sprout, status: "parked", questions: [], parked: "x", flows: [{ workflow: "scout", flowId: "f" }] };
+    const items = mergeInbox([], {}, { f: gated }, 30_000, { ...ctx, sprouts: [parked] });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ source: "flow", sprout: parked.id, gate: { stop: "end the project" } });
+    const plain = mergeInbox([], {}, { f: gated }, 30_000, ctx);
+    expect(plain[0]?.sprout).toBeUndefined();
+    expect(plain[0]?.gate?.stop).toBe("stop here");
+  });
+  test("a queued project its backend holds back is an item that says why (FR-062)", () => {
+    const queued: Sprout = { ...sprout, status: "queued", questions: [], updatedAt: 26_000 };
+    const login = "the stages' claude login lapsed on 2026-11-01: run bun run stage-token mini stages";
+    const stagesOf = (id: string): IncubatorStages | undefined => (id === queued.id ? { isolated: true, mode: "runner", waiting: login, login } : undefined);
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [queued], stagesOf });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "sprout:sp_000000000001", source: "sprout", kind: "held", who: "incubator", repo: "Coin counter", where: "canopy incubator on mini", detail: login, at: 26_000 });
+    expect(items[0]?.title).toBe(`waiting its turn for research: ${login}`);
+    // nothing held, still being prepared, or bound for canopy's own deploy: no item
+    expect(mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [queued], stagesOf: () => ({ isolated: true, mode: "runner", waiting: null }) })).toEqual([]);
+    expect(mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [{ ...queued, prepared: false }], stagesOf })).toEqual([]);
+    expect(mergeInbox([], {}, {}, 30_000, { ...ctx, sprouts: [queued] })).toEqual([]);
   });
   test("going on assumptions is no answer to a run or an ask", () => {
     expect(toRunAnswer({ skip: true })).toBeNull();
@@ -431,11 +454,22 @@ describe("the incubator in the inbox", () => {
     expect(mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [] })).toEqual([]);
     const items = mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [offer("a", 12_000), offer("b", 9_000)] });
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ key: "advice:incubator", source: "advice", kind: "advice", who: "retro", repo: "", where: "canopy incubator", title: "2 lessons from retros", at: 9_000 });
+    expect(items[0]).toMatchObject({ key: "advice:incubator", source: "advice", kind: "advice", who: "retro", repo: "", where: "canopy incubator on mini", title: "2 lessons from retros", at: 9_000 });
     expect(items[0]?.advice?.map((o) => o.key)).toEqual(["a", "b"]);
     expect(mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [offer("a", 1)] })[0]?.title).toBe("1 lesson from retros");
     expect(toRunAnswer({ advice: "a", accept: true })).toBeNull();
     expect(toAskAnswer({ advice: "a", accept: false })).toBeNull();
+  });
+  test("each backend's lessons are an item of their own, named by where they are kept (FR-062)", () => {
+    const offer = (key: string, lastAt: number): AdviceOffer => ({ key, lesson: `Lesson ${key}.`, count: 2, titles: ["Coin counter"], lastAt });
+    const items = mergeInbox([], {}, {}, 30_000, { ...ctx, advice: [offer("a", 12_000), offer("mac|a", 9_000), offer("mac|b", 10_000)] });
+    expect(items.map((i) => [i.key, i.where, i.title, i.advice?.map((o) => o.key)])).toEqual([
+      ["advice:mac|incubator", "canopy incubator on mac", "2 lessons from retros", ["mac|a", "mac|b"]],
+      ["advice:incubator", "canopy incubator on mini", "1 lesson from retros", ["a"]],
+    ]);
+    // one backend on the page: one item, named as before
+    const one = mergeInbox([], {}, {}, 30_000, { ...ctx, backendOf: () => "", advice: [offer("a", 1)] });
+    expect(one.map((i) => [i.key, i.where])).toEqual([["advice:incubator", "canopy incubator"]]);
   });
 });
 

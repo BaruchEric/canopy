@@ -137,6 +137,7 @@ import { keyHeaders } from "./answerKey";
 import { carriesToken, dialPlan, isAuthInfo, originOf, readToken, TOKEN_HEADER, tokenHeaders, type AuthInfo, type DialPlan } from "./callerToken";
 import {
   qDevice,
+  qAdvice,
   qEvent,
   qFleet,
   qFlow,
@@ -217,7 +218,9 @@ async function req<T>(b: string, path: string, init: RequestInit = {}): Promise<
   let r: Response;
   try {
     r = await fetch(base + path, opts);
-  } catch {
+  } catch (err) {
+    // the page called it off (a cancelled upload): the backend did not fail to answer
+    if (opts.signal?.aborted) throw err;
     const reason = `${b || "canopy"} did not answer`;
     signal(b, { kind: "unreachable", reason });
     throw new Error(reason);
@@ -697,9 +700,11 @@ export const api = {
     return from(b, await req<SproutDetail>(b, `/api/incubator/one?id=${encodeURIComponent(plain)}`), qSproutDetail);
   },
   /** multipart, so a voice memo or an image goes as it is */
-  newSprout: async (form: FormData, b: string = homeName()) =>
-    from(b, await req<Sprout>(b, "/api/incubator", { method: "POST", body: form }), qSprout),
-  addSproutInputs: (id: string, form: FormData) => sproutReq(id, "/api/incubator/input", { method: "POST", body: form }),
+  /** `signal` calls the upload off, as the sheet's cancel does */
+  newSprout: async (form: FormData, b: string = homeName(), signal?: AbortSignal) =>
+    from(b, await req<Sprout>(b, "/api/incubator", { method: "POST", body: form, ...(signal ? { signal } : {}) }), qSprout),
+  addSproutInputs: (id: string, form: FormData, signal?: AbortSignal) =>
+    sproutReq(id, "/api/incubator/input", { method: "POST", body: form, ...(signal ? { signal } : {}) }),
   answerSprout: (id: string, body: { answers: Record<string, string> } | { skip: true }) =>
     sproutReq(id, "/api/incubator/answer", { method: "POST", body: JSON.stringify(body) }),
   stopSprout: (id: string) => sproutReq(id, "/api/incubator/stop", { method: "POST", body: "{}" }),
@@ -878,17 +883,20 @@ export const api = {
     const r = await req<{ gone: string[] }>(b, "/api/clips/clear", { method: "POST" });
     return b === homeName() ? r.gone : r.gone.map((id) => qual(b, id));
   },
-  /** the retro lessons on offer */
-  advice: () => req<AdviceOffer[]>(homeName(), "/api/incubator/advice"),
-  /** accepts or dismisses one; a chat it opened is named by the page's ids */
+  /** one backend's retro lessons on offer, keyed under its name */
+  advice: async (b: string = homeName()) => fromAll(b, await req<AdviceOffer[]>(b, "/api/incubator/advice"), qAdvice),
+  /** accepts or dismisses one on the backend its key names; the list that
+   *  comes back, and a chat it opened, by the page's ids */
   answerAdvice: async (key: string, accept: boolean) => {
-    const out = await req<{ advice: AdviceOffer[]; accepted?: AdviceAccepted }>(homeName(), "/api/incubator/advice", {
+    const [b, plain] = on(key);
+    const out = await req<{ advice: AdviceOffer[]; accepted?: AdviceAccepted }>(b, "/api/incubator/advice", {
       method: "POST",
-      body: JSON.stringify({ key, accept }),
+      body: JSON.stringify({ key: plain, accept }),
     });
+    const advice = fromAll(b, Array.isArray(out.advice) ? out.advice : [], qAdvice);
     const a = out.accepted;
-    if (a?.kind !== "chat") return out;
-    return { ...out, accepted: { ...a, runId: qual(homeName(), a.runId), repoId: qual(homeName(), a.repoId) } };
+    if (a?.kind !== "chat") return { ...out, advice };
+    return { ...out, advice, accepted: { ...a, runId: qual(b, a.runId), repoId: qual(b, a.repoId), ...(a.run ? { run: from(b, a.run, qRun) } : {}) } };
   },
   /** away pins until cleared; clearing it is being here */
   setAway: (away: boolean, key: string) =>

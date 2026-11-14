@@ -312,6 +312,44 @@ describe("a page with two backends", () => {
     ]);
   });
 
+  test("an upload the page calls off is stopped, and is no backend that failed to answer (FR-062)", async () => {
+    // a fetch that stays out until its signal says stop, as a browser's does
+    reply = (c) =>
+      new Promise<Response>((_, reject) => {
+        const signal = c.init?.signal;
+        if (!signal) return reject(new Error("the upload carried no signal"));
+        signal.addEventListener("abort", () => reject(new DOMException("The operation was aborted.", "AbortError")));
+      });
+    const form = new FormData();
+    form.append("text", "an idea");
+    const made = new AbortController();
+    const making = api.newSprout(form, "b", made.signal);
+    made.abort();
+    await expect(making).rejects.toThrow("aborted");
+    expect(calls[0]?.init?.signal).toBe(made.signal);
+    const added = new AbortController();
+    const adding = api.addSproutInputs("b|sp_000000000001", form, added.signal);
+    added.abort();
+    await expect(adding).rejects.toThrow("aborted");
+    expect(calls[1]?.url).toBe("http://b.test/api/incubator/input?id=sp_000000000001");
+    expect(calls[1]?.init?.signal).toBe(added.signal);
+    expect(signals).toEqual([]);
+  });
+
+  test("another backend's retro lessons are read and answered there, under its name (FR-062)", async () => {
+    const offer = { key: "clarify-asks-less", lesson: "Ask less.", count: 2, titles: ["Coin counter"], lastAt: 1 };
+    reply = () => json([offer]);
+    expect(await api.advice("b")).toEqual([{ ...offer, key: "b|clarify-asks-less" }]);
+    expect(calls[0]?.url).toBe("http://b.test/api/incubator/advice");
+    expect(await api.advice("a")).toEqual([offer]);
+    expect(calls[1]?.url).toBe("/api/incubator/advice");
+    reply = () => json({ advice: [], accepted: { kind: "chat", runId: "r9", repoId: "canopy", draft: "d" } });
+    const out = await api.answerAdvice("b|clarify-asks-less", true);
+    expect(calls[2]?.url).toBe("http://b.test/api/incubator/advice");
+    expect(JSON.parse(String(calls[2]?.init?.body))).toEqual({ key: "clarify-asks-less", accept: true });
+    expect(out.accepted).toMatchObject({ kind: "chat", runId: "b|r9", repoId: "b|canopy" });
+  });
+
   test("a frame from a backend names its ids under that backend", () => {
     expect(readFrame("b", JSON.stringify({ type: "run-gone", id: "r" }))).toEqual({ type: "run-gone", id: "b|r" });
     expect(readFrame("a", JSON.stringify({ type: "run-gone", id: "r" }))).toEqual({ type: "run-gone", id: "r" });

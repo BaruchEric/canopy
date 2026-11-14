@@ -108,6 +108,13 @@ export function workLine(s: Sprout): string | null {
   return null;
 }
 
+/** A project's stop, wherever it is offered (its sheet, its park and its
+ *  stage's gate in the inbox): it ends the project, which no resume undoes. */
+export const END_PROJECT = {
+  stop: "end the project",
+  stopTitle: "The project ends here and no stage runs again. Its seed, its inputs and its vault note stay; dismiss takes it off the list",
+} as const;
+
 /** A parked project's ways on, as its buttons word them. With the stage's
  *  flow waiting at a gate they are that gate's, in the project's terms:
  *  past a build's last step canopy deploys the project (an extend goes to
@@ -118,17 +125,22 @@ export function workLine(s: Sprout): string | null {
  *  stage again, so there is one button. */
 export function parkWords(s: Sprout, flow: Flow | undefined): GateWords {
   const cur = s.flows.at(-1);
-  if (!cur || cur.outcome || !flow || flow.id !== cur.flowId || flow.status !== "gated") return { go: "resume", retry: null, lead: "go" };
+  if (!cur || cur.outcome || !flow || flow.id !== cur.flowId || flow.status !== "gated") return { go: "resume", retry: null, lead: "go", ...END_PROJECT };
+  return { ...stageWords(cur.workflow, flow), ...END_PROJECT };
+}
+
+/** the gate's words for going on and back, in the project's terms */
+function stageWords(workflow: string, flow: Flow): GateWords {
   const words = gateWords(flow);
   const step = flow.steps[flow.current];
   const last = flow.current + 1 >= flow.steps.length;
   if (!last || flow.parkedFor || step?.status === "held") return words;
-  if (cur.workflow === "scout") {
+  if (workflow === "scout") {
     if (words.lead !== "retry") return { ...words, go: "accept the pick and build it" };
     return { ...words, go: "build it anyway", title: `${step?.name ?? "The last step"} did not accept the research; this takes the pick as it is and queues the build` };
   }
-  if (!isBuildWorkflow(cur.workflow)) return words;
-  const extend = cur.workflow === BUILD_WORKFLOW.extend;
+  if (!isBuildWorkflow(workflow)) return words;
+  const extend = workflow === BUILD_WORKFLOW.extend;
   if (words.lead !== "retry") return { ...words, go: extend ? "accept and hand it off" : "accept and deploy it" };
   return {
     ...words,
@@ -298,6 +310,30 @@ export function stagesWord(st: IncubatorStages): { word: string; title: string; 
   }
 }
 
+/** How long after its nth failed read (from 1) the page asks a backend
+ *  where it runs stages again: 5 s, 15 s and 45 s, then every two minutes
+ *  for as long as the backend is on the page and has not said. */
+export function stagesRetryIn(failures: number): number {
+  return [5_000, 15_000, 45_000][failures - 1] ?? 120_000;
+}
+
+/** A backend's word on the new project sheet's picker: where it runs
+ *  stages, or that its read failed (with why, for the tooltip), or that it
+ *  has not said. */
+export function stagesChoice(backend: string, st: IncubatorStages | undefined, err: string | undefined): { word: string; warn: boolean; title?: string } {
+  if (st) return stagesWord(st);
+  if (err !== undefined) return { word: "stages unread", warn: true, title: `${backend} did not say where it runs stages (${err}). The page asks again on its own.` };
+  return { word: "stages unknown", warn: true };
+}
+
+/** The sheet's line while the picked backend's stages read has failed and
+ *  nothing else has said: the start is not held, since the backend itself
+ *  refuses a project it has nowhere to run. Null otherwise. */
+export function stagesUnread(backend: string, st: IncubatorStages | undefined, err: string | undefined): string | null {
+  if (st || err === undefined) return null;
+  return `${backend} did not say where it runs stages (${err}). The page asks again on its own; a project started there still goes, and ${backend} refuses one it has nowhere to run.`;
+}
+
 /** Why a project started on this backend would never start, or is refused:
  *  it does not keep its incubator now, or its stages are off, with no
  *  runner and no unisolated switch. Null for any other mode (a runner away
@@ -335,3 +371,35 @@ export function sproutBackend(
   if (can(home)) return home;
   return order.find((b) => b !== home && online(b) && can(b)) ?? home;
 }
+
+/** What the intake form holds that a close would lose. */
+export interface IntakeState {
+  text: string;
+  /** the links box as typed */
+  links: string;
+  repo: string;
+  files: number;
+  recording: boolean;
+  /** the form's send is still on its way */
+  sending: boolean;
+}
+
+const andList = (parts: readonly string[]): string =>
+  parts.length < 2 ? (parts[0] ?? "") : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1) ?? ""}`;
+
+/** The question Escape or a click beside the sheet asks before it closes
+ *  the intake form, naming what the form holds; null for a form with
+ *  nothing in it, which closes without a word. */
+export function intakeLoss(f: IntakeState): string | null {
+  const parts: string[] = [];
+  if (f.text.trim()) parts.push("the idea");
+  const links = f.links.split(/\s+/).filter(Boolean).length;
+  if (links > 0) parts.push(links === 1 ? "a link" : `${links} links`);
+  if (f.repo.trim()) parts.push("the repo");
+  if (f.files > 0) parts.push(f.files === 1 ? "a file" : `${f.files} files`);
+  if (f.recording) parts.push("the recording");
+  if (parts.length === 0 && !f.sending) return null;
+  const lose = parts.length > 0 ? `Close the form and lose ${andList(parts)}?` : "Close the form?";
+  return f.sending ? `${lose} It is still sending, and closing stops the upload.` : lose;
+}
+

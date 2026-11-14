@@ -75,7 +75,7 @@ import { mergeLanding } from "./landing";
 import { isCoordinator, type CoordEdit } from "./coord";
 import { mergePrs } from "./prs";
 import { HARNESS_SAID_KEY, harnessNotice, mergeAsks, mergeInbox, replaceAsks, toAskAnswer, toRunAnswer, type HarnessNotice, type InboxAnswer, type InboxItem } from "./inbox";
-import { replaceSprouts, staleSprout } from "./sprouts";
+import { replaceSprouts, staleSprout, stagesRetryIn } from "./sprouts";
 import { cardsByRepoCard, markTrail, mergeCards, replaceCards, type TrailMark } from "./agentcards";
 import { factsFrom, mergePulses, statusFrom, type FactsOf, type StatusOf } from "./agentstatus";
 import { headingRuns, type Ids } from "./allagents";
@@ -844,6 +844,9 @@ export interface CanopyState {
   /** where each backend runs the incubator's stages, by backend name; one
    *  that has not said (an older backend never does) is missing */
   stages: Record<string, IncubatorStages>;
+  /** why the last read of a backend's stages failed, by backend name; gone
+   *  once a read or an event says (FR-062) */
+  stagesErr: Record<string, string>;
   /** the ranger on each backend that has said, by backend name (server/ranger) */
   rangers: Record<string, RangerInfo>;
   /** keep awake on each backend that has said, by backend name (core/awake) */
@@ -897,15 +900,17 @@ export interface CanopyState {
   authByBackend: Record<string, BackendAuth>;
   /** a sign-in on its way, or one that failed, by backend */
   signIns: Record<string, SignIn>;
-  /** the retro lessons home has on offer, which the inbox shows as one item */
-  advice: AdviceOffer[];
+  /** the retro lessons each backend has on offer, by backend name, their
+   *  keys qualified; the inbox shows each backend's as one item (FR-062) */
+  advice: Record<string, AdviceOffer[]>;
   /** the ISO week this browser last noted for the harness line */
   harnessSaid: string | null;
   /** an accepted lesson's text by chat run id, which that chat's message box
    *  starts with; the user sends it, or not */
   chatDrafts: Record<string, string>;
-  /** the user's own workflow file an accepted lesson named, until put away */
-  adviceFile: Extract<AdviceAccepted, { kind: "file" }> | null;
+  /** the user's own workflow file an accepted lesson named, until put away,
+   *  with the backend whose machine it is on */
+  adviceFile: (Extract<AdviceAccepted, { kind: "file" }> & { backend: string }) | null;
   /** whether the inbox popover is up, and the item it opened on */
   inboxOpen: boolean;
   inboxFocus: string | null;
@@ -1289,6 +1294,10 @@ export interface CanopyState {
   answerInbox: (item: InboxItem, answer: InboxAnswer) => Promise<void>;
   /** reads the incubator's list off one backend, home by default */
   loadSprouts: (backend?: string) => Promise<void>;
+  /** reads where one backend runs its stages, home by default. A failed
+   *  read is kept in `stagesErr` and asked again at `stagesRetryIn`'s
+   *  waits; an older backend with no such route says nothing (FR-062). */
+  loadStages: (backend?: string) => Promise<void>;
   /** reads one backend's ranger, home by default; an older backend has none */
   loadRanger: (backend?: string) => Promise<void>;
   /** reads one backend's pulses, home by default; an older backend has none */
@@ -1448,12 +1457,13 @@ export interface CanopyState {
    *  is answered for the inbox to name */
   answerAdvice: (key: string, accept: boolean) => Promise<AdviceAccepted | null>;
   /** a new project from the + project sheet or n; answers before the seed is made */
-  /** starts a project on the named backend, home by default */
-  createSprout: (form: FormData, backend?: string) => Promise<Sprout>;
+  /** starts a project on the named backend, home by default; `signal`
+   *  calls the upload off */
+  createSprout: (form: FormData, backend?: string, signal?: AbortSignal) => Promise<Sprout>;
   /** starts a coordinator at no repo (FR-067) on one backend; answers the
    *  run's id as this page holds it. A refusal throws the server's words. */
   newGoal: (backend: string, input: { goal: string; repos: string[]; files: File[]; model?: string; effort?: AgentEffort }) => Promise<string>;
-  addSproutInputs: (id: string, form: FormData) => Promise<Sprout>;
+  addSproutInputs: (id: string, form: FormData, signal?: AbortSignal) => Promise<Sprout>;
   /** clarify's questions answered, or null to go on assumptions */
   answerSprout: (id: string, answers: Record<string, string> | null) => Promise<void>;
   stopSprout: (id: string) => Promise<void>;
@@ -1597,6 +1607,16 @@ export interface CanopyState {
   reviewGroup: (groupId: string) => Promise<void>;
   dropGroup: (groupId: string, keep?: string[]) => Promise<void>;
   closeSheet: () => void;
+  /** The question Escape or a click beside the sheet asks before it closes:
+   *  a form on the sheet holds words, files or an upload the user would
+   *  lose (FR-062). Null when nothing is held. The sheet's own close and
+   *  cancel buttons never ask. */
+  sheetHold: string | null;
+  holdSheet: (question: string | null) => void;
+  /** Escape or the backdrop: closes the sheet unless a form holds
+   *  something and `ask` (the browser's confirm) says keep it; true when
+   *  the sheet closed */
+  leaveSheet: (ask?: (question: string) => boolean) => boolean;
   /** opens the search across every repo in view */
   openSearch: () => void;
   /** opens the sheet of every keyboard shortcut on a view */
@@ -1965,6 +1985,18 @@ const sproutHeard = new Map<string, number>();
 const sproutLoads = new Map<string, number>();
 /* and each backend's stages events, so a read on its way never undoes a newer one */
 const stagesEvents = new Map<string, number>();
+/* each backend's failed stages reads in a row, and the read waiting to ask again */
+const stagesRetries = new Map<string, { failures: number; timer: ReturnType<typeof setTimeout> | null }>();
+
+/** Cancel a backend's waiting stages read; `forget` also drops its count of
+ *  failures, for a backend that said or left the page. */
+function stopStagesRetry(name: string, forget: boolean): void {
+  const r = stagesRetries.get(name);
+  if (!r) return;
+  if (r.timer) clearTimeout(r.timer);
+  if (forget) stagesRetries.delete(name);
+  else r.timer = null;
+}
 /* and each backend's ranger events, the same */
 const rangerEvents = new Map<string, number>();
 /* and each backend's pulse events, the same */
@@ -2030,8 +2062,18 @@ export function setClaimEvery(ms: number): void {
 }
 /* and each backend's secrets events */
 const secretsEvents = new Map<string, number>();
-/** the same for the advice on offer */
-let adviceEvents = 0;
+/** the same for each backend's advice on offer */
+const adviceEvents = new Map<string, number>();
+
+/** The new project sheet's opening: every online backend that has not said
+ *  where it runs stages is asked again now, so the picker never shows
+ *  "stages unknown" until a reload (FR-062). */
+function stagesAgain(get: () => CanopyState): void {
+  const s = get();
+  for (const b of s.backendOrder) {
+    if (!Object.hasOwn(s.stages, b) && isOnline(s, b)) void s.loadStages(b);
+  }
+}
 
 /** an action's answer about a sprout, applied like its event unless an
  *  event already moved the sprout on past it (checked first, so a stale
@@ -2443,6 +2485,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   sprouts: {},
   sproutsReady: false,
   stages: {},
+  stagesErr: {},
   rangers: {},
   awake: {},
   sweep: null,
@@ -2464,7 +2507,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   authByBackend: {},
   signIns: {},
   secrets: {},
-  advice: [],
+  advice: {},
   harnessSaid: readHarnessSaid(),
   chatDrafts: {},
   adviceFile: null,
@@ -2503,6 +2546,7 @@ export const useStore = create<CanopyState>((set, get) => ({
   settings: loadSettings(),
   runs: {},
   sheet: null,
+  sheetHold: null,
   kbFocus: null,
   kbRing: false,
   searchQuery: "",
@@ -2758,6 +2802,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       if (epoch === e) onBackendSignal(() => {});
       dead.add(e);
       for (const [n, r] of retries) if (r.epoch === e) stopRetry(n, true);
+      for (const n of stagesRetries.keys()) stopStagesRetry(n, true);
       for (const [n, st] of streams) {
         if (st.epoch !== e) continue;
         st.off();
@@ -2989,6 +3034,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     const { [name]: _remembered, ...remembered } = s.remembered;
     const { [name]: _history, ...histories } = s.histories;
     const { [name]: _stages, ...stages } = s.stages;
+    const { [name]: _stagesErr, ...stagesErr } = s.stagesErr;
+    const { [name]: _advice, ...advice } = s.advice;
+    adviceEvents.set(name, (adviceEvents.get(name) ?? 0) + 1);
+    stopStagesRetry(name, true);
+    stagesEvents.set(name, (stagesEvents.get(name) ?? 0) + 1);
     const { [name]: _ranger, ...rangers } = s.rangers;
     const { [name]: _awake, ...awake } = s.awake;
     const { [name]: _pulses, ...pulses } = s.pulses;
@@ -3032,6 +3082,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       taskAll: s.taskAll.filter((t) => backendOf(t.repoId) !== name),
       sprouts: recordOut(s.sprouts, name),
       stages,
+      stagesErr,
+      advice,
       rangers,
       awake,
       pulses,
@@ -3493,8 +3545,8 @@ export const useStore = create<CanopyState>((set, get) => ({
     // a backend hidden since this was sent is not on the page any more
     if (!isShown(before, b)) return;
     beat();
-    // workspaces, tailchan, the agent registry, the asks and the retro lessons are the home backend's alone
-    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks" || ev.type === "advice") && b !== before.home) return;
+    // workspaces, tailchan, the agent registry and the asks are the home backend's alone
+    if ((ev.type === "chan" || ev.type === "workspaces" || ev.type === "registry" || ev.type === "asks") && b !== before.home) return;
     // The feed says what changed, so the lines come from the event against
     // the state before it is applied, as the backend that sent it saw it.
     // a message already held (a reconnect's replay, a post heard twice) is
@@ -3536,7 +3588,11 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     if (ev.type === "stages") {
       stagesEvents.set(b, (stagesEvents.get(b) ?? 0) + 1);
-      set((st) => ({ stages: { ...st.stages, [b]: ev.stages } }));
+      stopStagesRetry(b, true);
+      set((st) => {
+        const { [b]: _err, ...stagesErr } = st.stagesErr;
+        return { stages: { ...st.stages, [b]: ev.stages }, ...(_err === undefined ? {} : { stagesErr }) };
+      });
       return;
     }
     if (ev.type === "ranger") {
@@ -3664,8 +3720,8 @@ export const useStore = create<CanopyState>((set, get) => ({
       return;
     }
     if (ev.type === "advice") {
-      adviceEvents += 1;
-      set({ advice: ev.advice });
+      adviceEvents.set(b, (adviceEvents.get(b) ?? 0) + 1);
+      set((st) => ({ advice: { ...st.advice, [b]: ev.advice } }));
       return;
     }
     if (ev.type === "incubator") {
@@ -4526,26 +4582,17 @@ export const useStore = create<CanopyState>((set, get) => ({
     const b = backend ?? get().home;
     const load = (sproutLoads.get(b) ?? 0) + 1;
     sproutLoads.set(b, load);
-    const stagesMark = stagesEvents.get(b) ?? 0;
+    void get().loadStages(b);
+    // every backend keeps its own retros' lessons, answered there (FR-062)
+    const adviceMark = adviceEvents.get(b) ?? 0;
     void api
-      .incubatorStages(b)
-      .then((stages) => {
-        if ((stagesEvents.get(b) ?? 0) === stagesMark && isShown(get(), b)) set((s) => ({ stages: { ...s.stages, [b]: stages } }));
+      .advice(b)
+      .then((advice) => {
+        if ((adviceEvents.get(b) ?? 0) === adviceMark && isShown(get(), b) && Array.isArray(advice)) set((s) => ({ advice: { ...s.advice, [b]: advice } }));
       })
       .catch(() => {
-        // an older backend has no such route; the view says nothing then
+        // an older backend has no such route, and offers nothing
       });
-    if (b === get().home) {
-      const adviceMark = adviceEvents;
-      void api
-        .advice()
-        .then((advice) => {
-          if (adviceEvents === adviceMark && Array.isArray(advice)) set({ advice });
-        })
-        .catch(() => {
-          // an older backend has no such route, and offers nothing
-        });
-    }
     // events that land while the list is on its way are newer than it
     const mark = sproutEvents;
     try {
@@ -4562,6 +4609,38 @@ export const useStore = create<CanopyState>((set, get) => ({
       // a failed reload keeps what is held, so a blip does not drop the inbox's questions
     }
   },
+  loadStages: async (backend) => {
+    const b = backend ?? get().home;
+    const e = epoch;
+    // this read replaces any that was waiting; the count of failures stays
+    stopStagesRetry(b, false);
+    const mark = stagesEvents.get(b) ?? 0;
+    // an event that lands while the read is on its way is newer than it
+    const fresh = () => (stagesEvents.get(b) ?? 0) === mark && isShown(get(), b) && !dead.has(e);
+    try {
+      const stages = await api.incubatorStages(b);
+      if (!fresh()) return;
+      stopStagesRetry(b, true);
+      set((s) => {
+        const { [b]: _err, ...stagesErr } = s.stagesErr;
+        return { stages: { ...s.stages, [b]: stages }, ...(_err === undefined ? {} : { stagesErr }) };
+      });
+    } catch (err) {
+      // an older backend has no such route, and the view says nothing then
+      if (!fresh() || (err as { status?: unknown }).status === 404) return;
+      const r = stagesRetries.get(b) ?? { failures: 0, timer: null };
+      r.failures += 1;
+      // asked again on its own while the backend is on the page and has not said
+      r.timer = setTimeout(() => {
+        r.timer = null;
+        if (dead.has(e) || !isShown(get(), b)) return;
+        void get().loadStages(b);
+      }, stagesRetryIn(r.failures));
+      stagesRetries.set(b, r);
+      const why = err instanceof Error ? err.message : String(err);
+      set((s) => (s.stagesErr[b] === why ? {} : { stagesErr: { ...s.stagesErr, [b]: why } }));
+    }
+  },
   newGoal: async (backend, input) => {
     const form = new FormData();
     form.set("goal", input.goal);
@@ -4574,13 +4653,13 @@ export const useStore = create<CanopyState>((set, get) => ({
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
     return run.id;
   },
-  createSprout: async (form, backend) => {
-    const sp = await api.newSprout(form, backend ?? get().home);
+  createSprout: async (form, backend, signal) => {
+    const sp = await api.newSprout(form, backend ?? get().home, signal);
     sproutAnswered(get, sp);
     return sp;
   },
-  addSproutInputs: async (id, form) => {
-    const sp = await api.addSproutInputs(id, form);
+  addSproutInputs: async (id, form, signal) => {
+    const sp = await api.addSproutInputs(id, form, signal);
     sproutAnswered(get, sp);
     return sp;
   },
@@ -4601,12 +4680,21 @@ export const useStore = create<CanopyState>((set, get) => ({
     get().applyEvent({ type: "incubator-gone", id }, ownerOf(id));
   },
   showSprout: (id) => set({ sheet: { kind: "sprout", id } }),
-  openNewSprout: () => set({ sheet: { kind: "new-sprout" } }),
-  draftSprout: (draft) => set({ sheet: { kind: "new-sprout", draft } }),
+  openNewSprout: () => {
+    set({ sheet: { kind: "new-sprout" } });
+    stagesAgain(get);
+  },
+  draftSprout: (draft) => {
+    set({ sheet: { kind: "new-sprout", draft } });
+    stagesAgain(get);
+  },
   answerAdvice: async (key, accept) => {
+    // the backend that keeps the lesson answers it
+    const b = backendOf(key);
     const { advice, accepted } = await api.answerAdvice(key, accept);
-    adviceEvents += 1;
-    set({ advice });
+    if (!isShown(get(), b)) return null;
+    adviceEvents.set(b, (adviceEvents.get(b) ?? 0) + 1);
+    set((s) => ({ advice: { ...s.advice, [b]: advice } }));
     if (accepted?.kind === "chat") {
       // the run as the answer gave it, as startRun does, so its sheet never opens on nothing
       const run = accepted.run;
@@ -4618,7 +4706,7 @@ export const useStore = create<CanopyState>((set, get) => ({
       }));
       get().showRun(accepted.runId);
     }
-    if (accepted?.kind === "file") set({ adviceFile: accepted });
+    if (accepted?.kind === "file") set({ adviceFile: { ...accepted, backend: b } });
     return accepted ?? null;
   },
   answerInbox: async (item, answer) => {
@@ -4678,6 +4766,9 @@ export const useStore = create<CanopyState>((set, get) => ({
     }
     if (item.source === "flow") {
       if (!("choice" in answer)) throw new Error("a gate takes continue, retry or stop");
+      // a project's stage: its stop ends the project, as the button says and
+      // as the project's sheet does; the flow's stop alone would park it
+      if (answer.choice === "stop" && item.sprout) return get().stopSprout(item.sprout);
       await get().resumeFlow(item.id, answer.choice);
       return;
     }
@@ -5247,7 +5338,14 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   closeSheet: () => {
     ++runOpen;
-    set({ sheet: null });
+    set({ sheet: null, sheetHold: null });
+  },
+  holdSheet: (question) => set((s) => (s.sheetHold === question ? {} : { sheetHold: question })),
+  leaveSheet: (ask = (q) => window.confirm(q)) => {
+    const held = get().sheetHold;
+    if (held !== null && !ask(held)) return false;
+    get().closeSheet();
+    return true;
   },
   openSearch: () => set({ sheet: { kind: "search" } }),
   openKeys: (view) => set({ sheet: { kind: "keys", view } }),
@@ -5966,7 +6064,8 @@ let inboxIn: {
   repos: Repo[];
   registry: Record<string, AgentCard>;
   sprouts: Record<string, Sprout>;
-  advice: AdviceOffer[];
+  stages: Record<string, IncubatorStages>;
+  advice: Record<string, AdviceOffer[]>;
   landing: Record<string, LandingInfo>;
   prs: Record<string, PrWatch[]>;
   auth: Record<string, BackendAuth>;
@@ -5981,17 +6080,21 @@ let inboxOut: InboxItem[] = [];
  *  once per change of what it reads, so a selector over it settles; a
  *  countdown keeps its own time off each item's `until`. */
 export function inboxItems(s: CanopyState): InboxItem[] {
-  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep && inboxIn.triggers === s.triggers && inboxIn.quickNotes === s.quickNotes) {
+  if (inboxIn && inboxIn.asks === s.asks && inboxIn.runs === s.runs && inboxIn.flows === s.flows && inboxIn.repos === s.repos && inboxIn.registry === s.registry && inboxIn.sprouts === s.sprouts && inboxIn.stages === s.stages && inboxIn.advice === s.advice && inboxIn.landing === s.landing && inboxIn.prs === s.prs && inboxIn.auth === s.authByBackend && inboxIn.sweep === s.sweep && inboxIn.triggers === s.triggers && inboxIn.quickNotes === s.quickNotes) {
     return inboxOut;
   }
-  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep, triggers: s.triggers, quickNotes: s.quickNotes };
+  inboxIn = { asks: s.asks, runs: s.runs, flows: s.flows, repos: s.repos, registry: s.registry, sprouts: s.sprouts, stages: s.stages, advice: s.advice, landing: s.landing, prs: s.prs, auth: s.authByBackend, sweep: s.sweep, triggers: s.triggers, quickNotes: s.quickNotes };
   inboxOut = mergeInbox(Object.values(s.asks), s.runs, s.flows, Date.now(), {
     repos: s.repos,
     cards: s.registry,
     backendOf: (id) => (s.backendOrder.length > 1 ? backendOf(id) : ""),
     askRepos: s.repos.filter((r) => backendOf(r.id) === s.home),
     sprouts: Object.values(s.sprouts),
-    advice: s.advice,
+    stagesOf: (id) => {
+      const b = backendOf(id);
+      return Object.hasOwn(s.stages, b) ? s.stages[b] : undefined;
+    },
+    advice: Object.values(s.advice).flat(),
     landing: landingAll(s),
     prs: prsAll(s),
     pairs: pairsOf(s.authByBackend),

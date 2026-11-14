@@ -565,15 +565,16 @@ function GateAnswer({ need, act }: { need: Need; act: Act }) {
   const flow = useStore((s) => (need.flowId ? s.flows[need.flowId] : undefined));
   const resumeFlow = useStore((s) => s.resumeFlow);
   if (!flow) return null;
+  const words = gateWords(flow);
   return (
     <div className="mgr-need-acts">
-      {gateButtons(gateWords(flow)).map((b) => (
+      {gateButtons(words).map((b) => (
         <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} title={b.title} onClick={() => void act(() => resumeFlow(flow.id, b.choice))}>
           {b.word}
         </button>
       ))}
-      <button type="button" className="mini" onClick={() => void act(() => resumeFlow(flow.id, "stop"))}>
-        stop here
+      <button type="button" className="mini" title={words.stopTitle} onClick={() => void act(() => resumeFlow(flow.id, "stop"))}>
+        {words.stop}
       </button>
     </div>
   );

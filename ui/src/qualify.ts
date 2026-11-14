@@ -1,5 +1,6 @@
 import type { RunGroup } from "../../src/core/group";
 import type {
+  AdviceOffer,
   Device,
   Fleet,
   Flow,
@@ -36,6 +37,9 @@ export { mergeHistory } from "../../src/core/historymerge";
 
 /** An id mapper: `qualify` with the registry and a backend filled in. */
 export type Q = (id: string) => string;
+
+/** a retro lesson on offer, keyed under the backend that keeps it */
+export const qAdvice = (q: Q, o: AdviceOffer): AdviceOffer => ({ ...o, key: q(o.key) });
 
 export const qRepo = (q: Q, r: Repo): Repo => ({
   ...r,
@@ -250,10 +254,8 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
     // backend's)
     case "registry":
     case "asks":
-    // where a backend runs stages is kept per backend by the store; the
-    // retro lessons on offer are the home backend's alone
+    // where a backend runs stages is kept per backend by the store
     case "stages":
-    case "advice":
     // the ranger's ids are its backend's own; the store qualifies its tab
     case "ranger":
     // the sweep is the home backend's alone, like the ranger
@@ -261,6 +263,9 @@ export function qEvent(q: Q, ev: ServerEvent): ServerEvent {
       return ev;
     case "health":
       return { ...ev, checks: ev.checks.map((c) => qCheck(q, c)) };
+    // each backend keeps its own lessons, answered there by key (FR-062)
+    case "advice":
+      return { ...ev, advice: ev.advice.map((o) => qAdvice(q, o)) };
     case "capacity":
       return {
         ...ev,

@@ -298,7 +298,8 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
   const rewinds = rewindLines(flow);
   // what each button will do: a park with one way on has no retry, and a
   // gate that said no to the work leads with the way back
-  const buttons = gateButtons(gateWords(flow));
+  const words = gateWords(flow);
+  const buttons = gateButtons(words);
   return (
     <div className="gate">
       <p className="outcome-lead">{step.reason}</p>
@@ -323,7 +324,7 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
             {b.word}
           </button>
         ))}
-        <button type="button" className="mini" onClick={() => onChoose("stop")}>stop here</button>
+        <button type="button" className="mini" title={words.stopTitle} onClick={() => onChoose("stop")}>{words.stop}</button>
       </div>
     </div>
   );

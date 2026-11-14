@@ -52,14 +52,22 @@ export interface GateWords {
   lead: "go" | "retry";
   /** what going on does, for a tooltip, where the word leaves it out */
   title?: string;
+  /** The stop button and what it does. A flow's stops the workflow at
+   *  this step; a project's ends the project, which is more than its
+   *  stage's flow stopping (that parks it). */
+  stop: string;
+  stopTitle: string;
 }
+
+/** a flow's stop: the workflow ends at this step */
+const FLOW_STOP = { stop: "stop here", stopTitle: "The workflow stops at this step for good; what its steps made stays" } as const;
 
 /** whether the step a flow is parked at said no to the work */
 const refusedAt = (step: FlowStep | undefined): boolean =>
   step !== undefined && ((step.check !== undefined && step.check.exit !== 0) || step.verdict?.go === false || step.judgment?.go === false);
 
 export function gateWords(flow: Flow): GateWords {
-  const one = (go: string, title: string): GateWords => ({ go, retry: null, lead: "go", title });
+  const one = (go: string, title: string): GateWords => ({ go, retry: null, lead: "go", title, ...FLOW_STOP });
   if (flow.parkedFor === "budget") return one("allow one more step", "The budget is spent; this lets one more step run, then it parks again");
   if (flow.parkedFor === "stage") {
     const what = flow.stageCheck ? "check" : "step";
@@ -68,9 +76,9 @@ export function gateWords(flow: Flow): GateWords {
   if (flow.parkedFor === "failed") return one("run the step again", "The step's run ended in an error; this runs that step again, and the steps before it stand");
   if (flow.parkedFor === "capacity") return one("start anyway", "Held for Claude's usage limit; this starts the step now");
   const step = flow.steps[flow.current];
-  if (step?.status === "held") return { go: `start ${step.name}`, retry: "retry this step", lead: "go" };
+  if (step?.status === "held") return { go: `start ${step.name}`, retry: "retry this step", lead: "go", ...FLOW_STOP };
   const on = flow.current + 1 >= flow.steps.length ? "accept and finish" : `continue to ${flow.steps[flow.current + 1]?.name ?? "the next step"}`;
-  if (!refusedAt(step)) return { go: on, retry: "retry this step", lead: "go" };
+  if (!refusedAt(step)) return { go: on, retry: "retry this step", lead: "go", ...FLOW_STOP };
   // A retry of the refusing step alone would ask it about the same work, so
   // it goes back to the step that made the work when the workflow names one.
   return {
@@ -78,11 +86,12 @@ export function gateWords(flow: Flow): GateWords {
     retry: flow.backTo ? `send it back to ${flow.backTo}` : "retry this step",
     lead: "retry",
     title: `${step?.name ?? "This step"} did not accept the work; this goes on with the work as it is`,
+    ...FLOW_STOP,
   };
 }
 
 /** a gate nothing more is known about: go on, or the step again */
-export const PLAIN_GATE: GateWords = { go: "continue", retry: "retry this step", lead: "go" };
+export const PLAIN_GATE: GateWords = { go: "continue", retry: "retry this step", lead: "go", ...FLOW_STOP };
 
 /** The action a gate's continue button will actually take. */
 export const continueWord = (flow: Flow): string => gateWords(flow).go;

@@ -167,6 +167,8 @@ describe("qEvent", () => {
       [{ type: "clips", put: ["c-aaaaaaaa"], gone: ["c-bbbbbbbb"] }, (e) => (e.type === "clips" ? [...e.put, ...e.gone] : [])],
       [{ type: "incubator", sprout }, (e) => (e.type === "incubator" ? [e.sprout.id, e.sprout.repoId, ...e.sprout.flows.map((f) => f.flowId)] : [])],
       [{ type: "incubator-gone", id: "sp_000000000001" }, (e) => (e.type === "incubator-gone" ? [e.id] : [])],
+      // a retro lesson is answered on the backend that keeps it (FR-062)
+      [{ type: "advice", advice: [{ key: "clarify-asks-less", lesson: "Ask less.", count: 2, titles: ["a"], lastAt: 1 }] }, (e) => (e.type === "advice" ? e.advice.map((o) => o.key) : [])],
       [
         {
           type: "landing",

@@ -62,6 +62,7 @@ import { DEFAULT_CAPACITY, emptyCapacity } from "../../src/core/capacity";
 import { needs } from "../../src/core/callers";
 import {
   DEFAULT_AGENT,
+  type AdviceOffer,
   type AgentCard,
   type AgentSettings,
   type Ask,
@@ -918,6 +919,35 @@ const capacityInfo = (used: number): CapacityInfo => ({
   ],
   held: [],
   settings: DEFAULT_CAPACITY,
+});
+
+describe("a sheet a form holds (FR-062)", () => {
+  const pristine = useStore.getState();
+  afterEach(() => useStore.setState(pristine, true));
+
+  test("Escape or the backdrop asks first while a form holds the user's words, and a no keeps the sheet", () => {
+    const asked: string[] = [];
+    useStore.getState().openNewSprout();
+    useStore.getState().holdSheet("Close the form and lose the idea?");
+    expect(useStore.getState().leaveSheet((q) => (asked.push(q), false))).toBe(false);
+    expect(useStore.getState().sheet).toEqual({ kind: "new-sprout" });
+    expect(asked).toEqual(["Close the form and lose the idea?"]);
+    expect(useStore.getState().leaveSheet(() => true)).toBe(true);
+    expect(useStore.getState().sheet).toBeNull();
+    // the hold went with the sheet, so the next one closes without a word
+    expect(useStore.getState().sheetHold).toBeNull();
+    useStore.getState().openNewSprout();
+    expect(useStore.getState().leaveSheet(() => { throw new Error("asked with nothing held"); })).toBe(true);
+    expect(useStore.getState().sheet).toBeNull();
+  });
+
+  test("the sheet's own close and cancel never ask, and clear the hold", () => {
+    useStore.getState().openNewSprout();
+    useStore.getState().holdSheet("Close the form and lose the idea?");
+    useStore.getState().closeSheet();
+    expect(useStore.getState().sheet).toBeNull();
+    expect(useStore.getState().sheetHold).toBeNull();
+  });
 });
 
 describe("several backends", () => {
@@ -1807,6 +1837,109 @@ describe("several backends", () => {
     expect(useStore.getState().sproutsReady).toBe(true);
   });
 
+  test("stop on a gate in a project's stage ends the project, as its label says (FR-062)", async () => {
+    const gated = { id: "f1", repoId: "_incubator/sp_000000000001", workflow: "scout", verb: "scout", note: "", status: "gated", steps: [{ name: "Eval", status: "gated", reason: "a gate" }], current: 0, startedAt: 1 };
+    const parked: Sprout = { ...sproutOf("sp_000000000001", 5), status: "parked", parked: "scout waits after Eval: a gate", flows: [{ workflow: "scout", flowId: "f1" }] };
+    const posted: string[] = [];
+    await start(
+      (path, init) => {
+        if (init?.method === "POST") posted.push(path);
+        if (path.startsWith("/api/incubator/stop")) return { ...parked, status: "stopped", updatedAt: 6 };
+        return backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator": [parked], "/api/flows": [gated] })(path, init);
+      },
+      backendAnswers(scanOf("/b", [repo("proj")]), []),
+    );
+    await settle();
+    const item = inboxItems(useStore.getState()).find((i) => i.source === "flow");
+    if (!item) throw new Error("no gate in the inbox");
+    expect(item.gate?.stop).toBe("end the project");
+    await useStore.getState().answerInbox(item, { choice: "stop" });
+    expect(posted.filter((p) => p.startsWith("/api/incubator") || p.startsWith("/api/flows"))).toEqual([`/api/incubator/stop?id=${parked.id}`]);
+    expect(useStore.getState().sprouts[parked.id]?.status).toBe("stopped");
+  });
+
+  test("a failed stages read on another backend is said, and the new project sheet asks again (FR-062)", async () => {
+    let down = true;
+    let reads = 0;
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator/stages": { isolated: true, mode: "runner", waiting: null } }),
+      (path, init) => {
+        if (path === "/api/incubator/stages") {
+          reads += 1;
+          if (down) return new Response(JSON.stringify({ error: "the proxy timed out" }), { status: 504 });
+          return { isolated: true, mode: "runner", waiting: null };
+        }
+        return backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init);
+      },
+    );
+    await settle();
+    let s = useStore.getState();
+    expect(s.stages["b"]).toBeUndefined();
+    expect(s.stagesErr["b"]).toBe("the proxy timed out");
+    expect(reads).toBe(1);
+    down = false;
+    useStore.getState().openNewSprout();
+    await settle();
+    s = useStore.getState();
+    expect(reads).toBe(2);
+    expect(s.stages["b"]).toEqual({ isolated: true, mode: "runner", waiting: null });
+    expect(s.stagesErr["b"]).toBeUndefined();
+    // a backend whose stages are known is not asked again on open
+    useStore.getState().openNewSprout();
+    await settle();
+    expect(reads).toBe(2);
+  });
+
+  test("a stages event clears a failed read, and hiding the backend forgets it (FR-062)", async () => {
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends }),
+      (path, init) => (path === "/api/incubator/stages" ? new Response("{}", { status: 500 }) : backendAnswers(scanOf("/b", [repo("proj")]), [])(path, init)),
+    );
+    await settle();
+    expect(useStore.getState().stagesErr["b"]).toBeDefined();
+    useStore.getState().applyEvent({ type: "stages", stages: { isolated: false, mode: "unisolated", waiting: null } }, "b");
+    expect(useStore.getState().stagesErr["b"]).toBeUndefined();
+    await useStore.getState().loadStages("b");
+    expect(useStore.getState().stagesErr["b"]).toBeDefined();
+    useStore.getState().hideBackend("b", true);
+    expect(useStore.getState().stagesErr).toEqual({});
+    useStore.getState().hideBackend("b", false);
+  });
+
+  test("each backend's retro lessons are in the inbox and answered on their own backend (FR-062)", async () => {
+    const offer = (key: string, lastAt: number): AdviceOffer => ({ key, lesson: `Lesson ${key}.`, count: 2, titles: ["Coin counter"], lastAt });
+    const postedB: { path: string; body: unknown }[] = [];
+    await start(
+      backendAnswers(scanOf("/a", [repo("proj")]), [], { "/api/backends": twoBackends, "/api/incubator/advice": [offer("ask-less", 1)] }),
+      (path, init) => {
+        if (init?.method === "POST" && path === "/api/incubator/advice") {
+          postedB.push({ path, body: JSON.parse(String(init.body ?? "null")) });
+          return { advice: [] };
+        }
+        return backendAnswers(scanOf("/b", [repo("proj")]), [], { "/api/incubator/advice": [offer("test-first", 2)] })(path, init);
+      },
+    );
+    await settle();
+    const lessons = () => inboxItems(useStore.getState()).filter((i) => i.source === "advice");
+    expect(lessons().map((i) => [i.key, i.where, i.advice?.map((o) => o.key)])).toEqual([
+      ["advice:incubator", "canopy incubator on a", ["ask-less"]],
+      ["advice:b|incubator", "canopy incubator on b", ["b|test-first"]],
+    ]);
+    // b's lesson is answered on b, by the key b knows
+    const bItem = lessons()[1];
+    if (!bItem) throw new Error("no lessons from b");
+    await useStore.getState().answerInbox(bItem, { advice: "b|test-first", accept: false });
+    expect(postedB).toEqual([{ path: "/api/incubator/advice", body: { key: "test-first", accept: false } }]);
+    expect(lessons().map((i) => i.key)).toEqual(["advice:incubator"]);
+    // b's own event lands under b, and leaves home's alone
+    useStore.getState().applyEvent({ type: "advice", advice: [offer("b|again", 3)] }, "b");
+    expect(lessons().map((i) => i.key)).toEqual(["advice:incubator", "advice:b|incubator"]);
+    // hiding b takes its lessons off the page
+    useStore.getState().hideBackend("b", true);
+    expect(lessons().map((i) => i.key)).toEqual(["advice:incubator"]);
+    useStore.getState().hideBackend("b", false);
+  });
+
   test("every backend's incubator is on the page; its questions are in the inbox and answered on their own backend", async () => {
     const asking: Sprout = {
       id: "sp_000000000001",
@@ -1889,7 +2022,9 @@ describe("several backends", () => {
     s = useStore.getState();
     expect(s.sprouts[asking.id]?.status).toBe("queued");
     expect(s.sprouts["b|sp_000000000002"]?.status).toBe("queued");
-    expect(inboxItems(s).some((i) => i.source === "sprout")).toBe(false);
+    // a's stages are off, so its queued project waits on you and says why;
+    // b's runner answers, so b's waits its turn with no item (FR-062)
+    expect(inboxItems(s).filter((i) => i.source === "sprout").map((i) => [i.id, i.kind, i.detail])).toEqual([[asking.id, "held", "stages need the stage runner"]]);
     expect(s.feed.some((l) => l.kind === "incubator" && l.text === "waiting its turn for research")).toBe(true);
     useStore.getState().applyEvent({ type: "incubator-gone", id: asking.id });
     expect(Object.keys(useStore.getState().sprouts)).toEqual(["b|sp_000000000002"]);

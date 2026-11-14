@@ -17,9 +17,9 @@ import { pairAsk } from "../callerToken";
 import { HANGS_RIGHT, useFitPop } from "../pop";
 import { PopGrip, usePopEntries, type PopSpec } from "./PopGrip";
 import { POPUP_WORD } from "../sectiontabs";
-import { qual } from "../registry";
+import { plainOf, qual } from "../registry";
 import { INBOX_TEXT } from "../settings";
-import { canAnswer as canAnswerHere, harnessNoticeOf, inboxItems, prsAll, useStore } from "../store";
+import { canAnswer as canAnswerHere, harnessNoticeOf, inboxItems, multi, prsAll, useStore } from "../store";
 import { Gear, type GearEntry, type GearGroup } from "./Gear";
 import { LandingNotices } from "./Landing";
 import { digestRows } from "../triggers";
@@ -51,7 +51,7 @@ export function useNow(on: boolean, ms = 1000): number {
   return now;
 }
 
-export const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!", reminder: "◷" };
+export const KIND_GLYPH: Record<InboxItem["kind"], string> = { permission: "⚿", question: "?", proposal: "≡", guard: "⛨", gate: "⏸", clarify: "✎", park: "⏸", held: "◌", advice: "↺", "hand-off": "⇪", "sent-back": "↩", "needs-judge": "⏸", ci: "✗", "gave-up": "✗", pair: "⚷", sweep: "⌧", group: "≡", trigger: "!", reminder: "◷" };
 const SOURCE_WORD: Record<InboxItem["source"], string> = { ask: "agent", run: "run", flow: "workflow", sprout: "incubator", advice: "incubator", landing: "landing queue", pr: "PR watch", auth: "sign-in", sweep: "sweep", group: "comparison", trigger: "trigger", note: "note" };
 
 /** The retro lessons on offer, each with its own accept and dismiss.
@@ -65,7 +65,7 @@ function AdviceOffers({ offers, busy, onAnswer }: { offers: readonly AdviceOffer
       {offers.map((o) => (
         <li key={o.key} className="advice-offer">
           <div className="eyebrow">
-            {o.key}
+            {plainOf(o.key)}
             {o.file ? <span className="dim"> · {o.file}</span> : null}
           </div>
           <p className="advice-lesson">{o.lesson}</p>
@@ -103,10 +103,13 @@ function AdviceOffers({ offers, busy, onAnswer }: { offers: readonly AdviceOffer
  *  backend's desktop, or the path to open by hand, with the edit to make. */
 function AdviceFile() {
   const file = useStore((s) => s.adviceFile);
+  const many = useStore(multi);
   if (!file) return null;
+  // the file is on the machine of the backend that keeps the lesson
+  const on = many ? ` on ${file.backend}` : "";
   return (
     <div className="ask advice-file">
-      <div className="eyebrow">{file.opened ? "opened" : "open this file"}</div>
+      <div className="eyebrow">{file.opened ? `opened${on}` : `open this file${on}`}</div>
       <pre className="ask-detail">{file.path}</pre>
       {file.edit && <pre className="ask-detail">{file.edit}</pre>}
       <div className="ask-row">
@@ -118,6 +121,9 @@ function AdviceFile() {
     </div>
   );
 }
+
+/** a held project's lead line: what holds it, and that it starts on its own */
+const sproutHeldLead = "its backend holds it back; it starts on its own once this is fixed";
 
 /** Opens the sheet an inbox item is answered in, closing the inbox: a
  *  comparison's, a run's, a workflow's, a sprout's, the landing queue's or a
@@ -276,6 +282,12 @@ export function InboxRow({
                 </button>
               </div>
             </div>
+          ) : item.kind === "held" ? (
+            // nothing to answer here: the backend holds it until what it names is fixed
+            <div className="ask">
+              <div className="eyebrow">{sproutHeldLead}</div>
+              <pre className="ask-detail">{detail}</pre>
+            </div>
           ) : item.kind === "group" ? <p>{detail}</p> : item.kind === "sent-back" || item.kind === "needs-judge" ? (
             <div className="ask">
               <div className="eyebrow">
@@ -363,8 +375,8 @@ export function InboxRow({
                   </button>
                 ))}
                 <span className="spacer" />
-                <button type="button" className="mini" disabled={busy} onClick={() => answer({ choice: "stop" })}>
-                  stop
+                <button type="button" className="mini" disabled={busy} title={(item.gate ?? PLAIN_GATE).stopTitle} onClick={() => answer({ choice: "stop" })}>
+                  {(item.gate ?? PLAIN_GATE).stop}
                 </button>
               </div>
             </div>

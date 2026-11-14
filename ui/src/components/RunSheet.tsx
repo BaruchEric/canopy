@@ -106,7 +106,8 @@ function useTick(on: boolean): number {
 
 export function RunSheet() {
   const sheet = useStore((s) => s.sheet);
-  const close = useStore((s) => s.closeSheet);
+  // Escape and the backdrop ask first while a form holds the user's words (FR-062)
+  const leave = useStore((s) => s.leaveSheet);
   // a run's sheet (a chat or a coordinator) can become a tab (FR-030)
   const run = useStore((s) => (s.sheet?.kind === "run" ? s.runs[s.sheet.runId] : undefined));
   const repoName = useStore((s) => (run ? runRepoName(s.repos, run.repoId) : undefined));
@@ -118,7 +119,7 @@ export function RunSheet() {
       if (e.key !== "Escape") return;
       // taken, so a surface under the sheet stays when this runs first
       e.preventDefault();
-      close();
+      leave();
     };
     window.addEventListener("keydown", onKey);
     // Focus lands inside, so the keyboard user is in the dialog, not behind
@@ -129,7 +130,7 @@ export function RunSheet() {
       .find((el) => !el.closest(".coord-tasks") && !el.closest(".no-autofocus"))
       ?.focus();
     return () => window.removeEventListener("keydown", onKey);
-  }, [sheet, close]);
+  }, [sheet, leave]);
 
   if (!sheet) return null;
   // the tab finds the run again by the key the store keeps it under
@@ -137,7 +138,7 @@ export function RunSheet() {
   const pop = { name: `sheet ${sheet.kind}`, anchor: CENTERED, gap: 24, ...(tab ? { tab } : {}) };
   return (
     <div className="sheet-back" onPointerDown={(e) => {
-      if (e.target === e.currentTarget) close();
+      if (e.target === e.currentTarget) leave();
     }}>
       <div
         ref={ref}
