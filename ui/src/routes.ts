@@ -127,7 +127,7 @@ export function managerHere(search: string): string | null {
 }
 
 /** `?view=manager&new=1`: the goals to pick from with the new goal's box
- *  focused, the top bar's "+ goal" */
+ *  focused, the top bar's "new goal" */
 export function managerNew(search: string): boolean {
   const q = new URLSearchParams(search);
   return q.get("view") === "manager" && q.get("new") === "1";

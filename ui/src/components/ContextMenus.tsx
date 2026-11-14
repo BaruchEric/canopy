@@ -24,6 +24,7 @@ import { GLYPH, linkLabel, stateOf } from "../util";
 import { WAITING_PANEL } from "../waiting";
 import { closedIn, idText, inboxItems, isFavorite, multi, useStore, type CanopyState } from "../store";
 import { openView } from "../clirun";
+import { isGoalAnchor } from "../../../src/core/coordinator";
 import type { Repo } from "../../../src/core/types";
 import { ContextMenuHost, GearBlock, type CtxBlock, type CtxHead, type CtxQuick, type CtxSpec } from "./ContextMenu";
 import { Icon } from "./Icon";
@@ -343,7 +344,7 @@ function agentMenu(s: CanopyState, id: string, target: Element): Built | null {
   ];
   if (run) items.push({ kind: "run", id: "a:run", label: "open the run", run: () => s.showRun(run.id) });
   const repoId = run?.repoId;
-  if (repoId) items.push({ kind: "run", id: "a:repo", label: `open ${s.repos.find((r) => r.id === repoId)?.name ?? idText(repoId)}`, run: () => s.openRepo(repoId) });
+  if (repoId && !isGoalAnchor(repoId)) items.push({ kind: "run", id: "a:repo", label: `open ${s.repos.find((r) => r.id === repoId)?.name ?? idText(repoId)}`, run: () => s.openRepo(repoId) });
   const branch = card?.branch ?? run?.branch?.name;
   items.push({ kind: "sub", id: "copy", label: "copy", sub: [...(card?.cwd ? [copyRow("copy:cwd", "folder", card.cwd)] : []), copyRow("copy:branch", "branch", branch), copyRow("copy:id", "id", run?.id ?? id)] });
   const facts: CtxHead["facts"] = [];

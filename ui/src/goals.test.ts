@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { coordBackends, coordDefaults, goalLimitsWhy, goalRepoChoices, goalRepoRows, namedRepos, runRepo, runRepoName } from "./goals";
+import { anchorWord, coordBackends, coordDefaults, goalLimitsWhy, goalRepoChoices, goalRepoRows, namedRepos, runRepo, runRepoId, runRepoName } from "./goals";
 import { setRegistry } from "./registry";
 import { NO_ROUTES } from "./agents";
 import { withDefaultProfile } from "../../src/core/route";
@@ -22,6 +22,28 @@ describe("runRepoName", () => {
   test("an unknown one gives the id as text", () => {
     expect(runRepoName(repos, "gone")).toBe("gone");
     expect(runRepoName(repos, "mini|gone")).toBe("gone on mini");
+  });
+});
+
+describe("runRepoId", () => {
+  setRegistry("mac", ["mac", "mini"]);
+  test("the anchor is the goal, plain or qualified", () => {
+    expect(runRepoId("~goal")).toBe("goal");
+    expect(runRepoId("mini|~goal")).toBe("goal");
+  });
+  test("any other id keeps idText's words, its backend too, where runRepoName gives the name", () => {
+    expect(runRepoId("app")).toBe("app");
+    expect(runRepoId("mini|api")).toBe("api on mini");
+    expect(runRepoId("mini|dev-tools/canopy")).toBe("dev-tools/canopy on mini");
+    expect(runRepoName([repo("mini|api")], "mini|api")).toBe("api");
+  });
+});
+
+describe("anchorWord", () => {
+  test("the goal for the anchor, nothing for a repo", () => {
+    expect(anchorWord("mini|~goal")).toBe("goal");
+    expect(anchorWord("~goal")).toBe("goal");
+    expect(anchorWord("mini|api")).toBeUndefined();
   });
 });
 

@@ -60,7 +60,7 @@ import { openSectionElsewhere, parseRoute } from "../routes";
 import { nextGap, REPLAY_SPEEDS, replayClock, replayEnd, replayTime, replayTimeline, replayView, type ReplayJumpKind, type ReplaySpeed, type ReplayTimeline } from "../replay";
 
 import { GROUP_MAX } from "../../../src/core/group";
-import { runRepoName } from "../goals";
+import { runRepoId, runRepoName } from "../goals";
 import { isGoalAnchor } from "../../../src/core/coordinator";
 
 const STATUS_WORD: Record<Run["status"], string> = {
@@ -643,7 +643,6 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const sayRun = useStore((s) => s.sayRun);
   const interruptRun = useStore((s) => s.interruptRun);
   const draft = useStore((s) => s.chatDrafts[run.id]);
-  const repoWord = useStore((s) => runRepoName(s.repos, run.repoId));
   const active = !run.kept && isRunActive(run);
   const chat = run.chat;
   const noChange = run.status === "done" && run.outcome === "unchanged" && run.expectsChange;
@@ -690,7 +689,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>
           <h2 className="sheet-title">
-            {run.verb} <span className="sheet-repo">{repoWord}</span>
+            {run.verb} <span className="sheet-repo">{runRepoId(run.repoId)}</span>
             {run.equip && <> <span className="branch" title={equipTitle(run.equip)}>{run.equip.loadout}</span></>}
           </h2>
         </div>

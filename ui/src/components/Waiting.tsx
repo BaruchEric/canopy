@@ -2,6 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { joinTarget } from "../agentcards";
 import { api, staleOf } from "../api";
+import { anchorWord } from "../goals";
 import { inboxTick } from "../inbox";
 import { qual } from "../registry";
 import { attentionItems, behindItems, canAnswer as canAnswerHere, closedIn, failedItems, idText, inboxItems, turnItems, useStore } from "../store";
@@ -212,7 +213,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
     const st = useStore.getState();
     if (closedIn(st, repoId, "tasks")) st.toggleSection(repoId, "tasks");
   };
-  const repoName = (id: string) => nameOf.get(id) ?? idText(id);
+  const repoName = (id: string) => nameOf.get(id) ?? anchorWord(id) ?? idText(id);
   if (turns.length + items.length + attention.length + failed.length + behind.length === 0) {
     return (
       <>
@@ -236,7 +237,7 @@ export function WaitingBody({ hidden }: { hidden?: boolean }) {
                   <span className="glyph" aria-hidden="true">
                     ▸
                   </span>
-                  <span className="waiting-name">{t.kind !== "agent" ? <IdLabel id={t.repoId} /> : t.name}</span>
+                  <span className="waiting-name">{t.kind !== "agent" ? <IdLabel id={t.repoId} name={anchorWord(t.repoId)} /> : t.name}</span>
                   <span className="waiting-state">{t.kind === "group" ? "picked, waiting to land" : t.kind === "chat" ? "chat" : t.what}</span>
                   <span className="waiting-detail" title={t.kind !== "agent" ? t.what : undefined}>
                     {t.kind !== "agent" ? t.what : `${t.where}${t.repoId ? ` · ${repoName(t.repoId)}` : ""}`}

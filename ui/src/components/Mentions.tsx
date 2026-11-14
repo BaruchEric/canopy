@@ -6,6 +6,7 @@
  * half is ../mentions.ts.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { isGoalAnchor } from "../../../src/core/coordinator";
 import type { Harness, Mention } from "../../../src/core/types";
 import { api } from "../api";
 import { applyPick, mentionAt, rankFiles, rankWords, sigilsFor, withFolders, type MentionAt } from "../mentions";
@@ -82,6 +83,9 @@ export function useMentions({
    *  it (a note's); the caller places it in the DOM on that side */
   side?: "above" | "below";
 }): { menu: ReactNode; onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => boolean } {
+  // a goal from the top sits at the anchor, which is no repo: there are no
+  // commands or files of its own to ask for
+  const listed = repoId !== undefined && !isGoalAnchor(repoId) ? repoId : undefined;
   const [at, setAt] = useState<MentionAt | null>(null);
   const [focused, setFocused] = useState(false);
   const [wordList, setWordList] = useState<Mention[] | null>(null);
@@ -129,18 +133,18 @@ export function useMentions({
   useEffect(() => {
     setWordList(null);
     setFileList(null);
-  }, [repoId]);
+  }, [listed]);
   const sigil = at?.sigil ?? null;
   useEffect(() => {
-    if (!sigil || !repoId) return;
+    if (!sigil || !listed) return;
     let live = true;
     if (sigil === "@") {
-      void held(files, repoId, FILES_TTL, () => api.files(repoId).then((r) => withFolders(r.files))).then(
+      void held(files, listed, FILES_TTL, () => api.files(listed).then((r) => withFolders(r.files))).then(
         (f) => live && setFileList(f),
         () => live && setFileList([]),
       );
     } else {
-      void held(words, repoId, WORDS_TTL, () => api.mentions(repoId)).then(
+      void held(words, listed, WORDS_TTL, () => api.mentions(listed)).then(
         (w) => live && setWordList(w),
         () => live && setWordList([]),
       );
@@ -148,7 +152,7 @@ export function useMentions({
     return () => {
       live = false;
     };
-  }, [sigil, repoId]);
+  }, [sigil, listed]);
 
   const rows = useMemo(() => (at ? rowsOf(at, wordList ?? [], fileList ?? [], harness ?? null) : []), [at, wordList, fileList, harness]);
   // back to the first row when the rows change, not when they are recomputed

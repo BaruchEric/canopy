@@ -12,12 +12,23 @@ import type { Conn } from "./store";
 // this file and the store imports them
 const idWords = (id: string): string => (isHome(id) ? plainOf(id) : `${plainOf(id)} on ${backendOf(id)}`);
 
-/** the name to print for a run's repo: "goal" for the anchor, which is never
- *  in the repo list, the repo's name when known, else the id as text */
+/** the anchor's word wherever a run's repo is printed */
+export const GOAL_WORD = "goal";
+
+/** the goal's word for the anchor, which is never in the repo list, and
+ *  nothing for a repo: for a place that has its own way to name a repo */
+export const anchorWord = (repoId: string): string | undefined => (isGoalAnchor(repoId) ? GOAL_WORD : undefined);
+
+/** the name to print for a run's repo: "goal" for the anchor, the repo's
+ *  name when known, else the id as text */
 export function runRepoName(repos: readonly Repo[], repoId: string): string {
-  if (isGoalAnchor(repoId)) return "goal";
-  return repos.find((r) => r.id === repoId)?.name ?? idWords(repoId);
+  return anchorWord(repoId) ?? repos.find((r) => r.id === repoId)?.name ?? idWords(repoId);
 }
+
+/** a run's repo as its id reads, the backend's name with it as `idText`
+ *  gives it ("dev-tools/canopy on mini"), and "goal" for the anchor: for a
+ *  head that must say where the run is */
+export const runRepoId = (repoId: string): string => anchorWord(repoId) ?? idWords(repoId);
 
 /** the backends, in registry order, that can run a coordinator and answer now */
 export function coordBackends(conns: Record<string, Conn>, order: readonly string[]): string[] {

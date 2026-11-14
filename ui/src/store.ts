@@ -60,6 +60,7 @@ import { beat } from "./live";
 import { ownRun, pickable, selectable } from "./flows";
 import { unreadProposals, withSession } from "./secrets";
 import { boardOrder, invertPick, pickWhere, rangeIds, setPick, togglePick } from "./select";
+import { anchorWord } from "./goals";
 import { appendFeed, describeEvent, feedOnSide, feedPlaceOf, feedPlaceShown, sweepLine, DEFAULT_FEED_PLACE, type FeedEntry, type FeedPlace, type FeedSnapshot } from "./feed";
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
@@ -6132,7 +6133,7 @@ useStore.subscribe((s) => {
   if (n && n.turns === turns && n.inbox === inbox && n.failed === failed && n.runs === s.runs && n.repos === s.repos && n.conns === conns) return;
   notifyIn = { turns, inbox, failed, runs: s.runs, repos: s.repos, conns };
   const names = new Map(s.repos.map((r) => [r.id, r.name]));
-  const next = snapshot({ turns, inbox, failed, runs: Object.values(s.runs) }, (id) => names.get(id) ?? "");
+  const next = snapshot({ turns, inbox, failed, runs: Object.values(s.runs) }, (id) => names.get(id) ?? anchorWord(id) ?? "");
   const step = watch(notifyWatch, next, conns, Date.now());
   notifyWatch = step.watch;
   if (step.notes.length === 0 || !s.settings.notify || typeof Notification === "undefined") return;

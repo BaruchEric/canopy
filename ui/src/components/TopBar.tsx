@@ -13,6 +13,7 @@ import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type Run, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
 import { openManager } from "../routes";
+import { anchorWord } from "../goals";
 import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
 import { PAGE_BUILD } from "../build";
@@ -96,9 +97,9 @@ const RUN_DOT: Partial<Record<Run["status"], string>> = { waiting: "dot lichen",
  *  answer first: a click that chose one for you left the rest out of reach. */
 function RunsPill() {
   const runs = useStore(useShallow((s) => pillRuns(allRuns(s).filter((r) => isRunActive(r) && ownRun(s.flowRuns, r)))));
-  // each run's repo by name, in the runs' order: only a name changing draws
-  // the pill again, not every scan
-  const names = useStore(useShallow((s) => runs.map((r) => s.repos.find((x) => x.id === r.repoId)?.name)));
+  // each run's repo by name, in the runs' order, a goal's as the goal: only
+  // a name changing draws the pill again, not every scan
+  const names = useStore(useShallow((s) => runs.map((r) => anchorWord(r.repoId) ?? s.repos.find((x) => x.id === r.repoId)?.name)));
   const showRun = useStore((s) => s.showRun);
   // read again as the menu opens: a chat between turns sits unchanged for
   // hours, so nothing else would move the ages
