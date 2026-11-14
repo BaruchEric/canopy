@@ -42,6 +42,38 @@ export function previewable(port: unknown, own: number[]): port is number {
   return typeof port === "number" && Number.isInteger(port) && port > 0 && port < 65536 && !own.includes(port);
 }
 
+/** one preview port and the backend port it serves, as `previews.json` keeps them */
+export interface SlotPair {
+  slot: number;
+  port: number;
+}
+
+/**
+ * The pairs `previews.json` held that this backend can still serve: a slot
+ * in today's pool, a port a preview may dial (`reserved` is canopy's own and
+ * the slots), each slot and each port once, in the file's order (oldest
+ * first). Anything else, junk included, reads as none.
+ */
+export function savedSlots(raw: string, slots: number[], reserved: number[]): SlotPair[] {
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const list = v && typeof v === "object" ? (v as { previews?: unknown }).previews : undefined;
+  if (!Array.isArray(list)) return [];
+  const out: SlotPair[] = [];
+  for (const p of list) {
+    if (!p || typeof p !== "object") continue;
+    const { slot, port } = p as { slot?: unknown; port?: unknown };
+    if (typeof slot !== "number" || !slots.includes(slot) || !previewable(port, reserved)) continue;
+    if (out.some((o) => o.slot === slot || o.port === port)) continue;
+    out.push({ slot, port });
+  }
+  return out;
+}
+
 /**
  * Which preview port serves `port`: the one already on it, else a free one,
  * else the one used longest ago, which a preview elsewhere loses. `used`
@@ -215,6 +247,9 @@ export class PreviewProxy {
       host?: string | null;
       /** the loopback a port is known to listen on, when the caller knows it */
       hostFor?: (port: number) => Promise<string | undefined>;
+      /** the slots in use after `serve` put a port on a slot it was not on,
+       *  for `previews.json`, so a restart can `restore` them */
+      onChange?: (pairs: SlotPair[]) => void;
     },
   ) {
     this.slots = slots;
@@ -238,14 +273,45 @@ export class PreviewProxy {
   /** puts `port` on a preview port and starts its listener; null when every
    *  slot failed to bind or there are none */
   async serve(port: number): Promise<number | null> {
+    const had = [...this.map].find(([, p]) => p === port)?.[0];
     const tried = new Set<number>();
     for (;;) {
       const slot = pickSlot(this.map, this.used, this.slots.filter((s) => !tried.has(s)), port);
       if (slot === null) return null;
-      if (this.listen(slot)) return slot;
+      if (this.listen(slot)) {
+        if (slot !== had) this.opts.onChange?.(this.assigned());
+        return slot;
+      }
       tried.add(slot);
       this.map.delete(slot);
     }
+  }
+
+  /** the slots in use and their ports, the one used longest ago first */
+  assigned(): SlotPair[] {
+    return this.used.flatMap((slot) => {
+      const port = this.map.get(slot);
+      return port === undefined ? [] : [{ slot, port }];
+    });
+  }
+
+  /**
+   * Opens the slots a restart dropped, each on the port it served, so a
+   * preview's address (a tab, a `canopy-p<slot>` name through the tunnel)
+   * answers again without a panel asking for it first. A slot outside the
+   * pool, already taken, or that will not bind stays free. The slots opened.
+   */
+  restore(pairs: SlotPair[]): number[] {
+    const open: number[] = [];
+    for (const { slot, port } of pairs) {
+      if (!this.slots.includes(slot) || this.map.has(slot) || !previewable(port, this.reserved)) continue;
+      if ([...this.map.values()].includes(port)) continue;
+      if (!this.listen(slot)) continue;
+      this.map.set(slot, port);
+      this.used = [...this.used.filter((s) => s !== slot), slot];
+      open.push(slot);
+    }
+    return open;
   }
 
   stop() {

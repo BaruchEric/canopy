@@ -6,11 +6,11 @@ import { LibrarySync } from "./libsync";
 import { Awake, ownCard, workingCount } from "../core/awake";
 import { closeIssue, commentIssue, fetchIssue, listLabelledIssues, resolveIssueNote, trustedComments, type GhRun } from "../core/issue";
 import { handoffFence, titleOf, workBranchName, type WorkStart } from "../core/work";
-import { PreviewProxy, parsePortRange, previewHostOk, previewable } from "../core/preview";
+import { PreviewProxy, parsePortRange, previewHostOk, previewable, savedSlots, type SlotPair } from "../core/preview";
 import { parsePreviewHost, parsePreviewPublic } from "../core/previewPublic";
 import { listeningPorts, mayServeHttp, repoOfCwd, treeOfPort, type TreeFolder } from "../core/ports";
 import { mkdirSync, existsSync, watch, type FSWatcher } from "node:fs";
-import { chmod, lstat, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { arch, homedir, hostname } from "node:os";
 import { CANOPY_DIR, readBuild, readPkg } from "../core/build";
 import { AdviceFiles } from "../core/improvements";
@@ -7904,6 +7904,22 @@ export async function startServer(opts: {
   const slots = parsePortRange(process.env["CANOPY_PREVIEW_PORTS"]);
   const previewPublic = parsePreviewPublic(process.env["CANOPY_PREVIEW_PUBLIC"]);
   let boundPort = port;
+  // Which slot serves which port is kept in previews.json, so a restart
+  // (every redeploy) opens the same slots again: a tab or a canopy-p<slot>
+  // name through the tunnel otherwise fails until a panel asks for its
+  // preview again. Writes go one after another, each whole through a rename.
+  const previewsFile = join(configDir(), "previews.json");
+  let previewWrites: Promise<unknown> = Promise.resolve();
+  const keepPreviews = (pairs: SlotPair[]): void => {
+    previewWrites = previewWrites
+      .then(async () => {
+        await mkdir(dirname(previewsFile), { recursive: true, mode: 0o700 });
+        const tmp = `${previewsFile}.${process.pid}.tmp`;
+        await writeFile(tmp, `${JSON.stringify({ previews: pairs }, null, 2)}\n`, { mode: 0o600 });
+        await rename(tmp, previewsFile);
+      })
+      .catch((err) => console.error(`previews: ${previewsFile} not written: ${String(err instanceof Error ? err.message : err)}`));
+  };
   state.preview = slots.length
     ? new PreviewProxy(slots, {
         bind: bindHost,
@@ -7912,6 +7928,7 @@ export async function startServer(opts: {
         publicTemplate: previewPublic,
         host: parsePreviewHost(process.env["CANOPY_PREVIEW_HOST"]),
         hostFor: async (p) => (await listeningPorts()).find((l) => l.port === p)?.host,
+        onChange: keepPreviews,
       })
     : null;
   /** Every request on both listeners. `lane` is true on the coordinator's
@@ -8213,6 +8230,16 @@ export async function startServer(opts: {
   );
   boundPort = server.port ?? port;
   state.apiUrl = apiUrlFor(bindHost, boundPort);
+  // the slots the last run served, once canopy's own port is known, since a
+  // saved pair on it would proxy canopy to itself
+  if (state.preview) {
+    const saved = await readFile(previewsFile, "utf8").catch(() => null);
+    const pairs = saved === null ? [] : savedSlots(saved, state.preview.slots, state.preview.reserved);
+    const open = state.preview.restore(pairs);
+    if (open.length && process.env["NODE_ENV"] !== "test") {
+      console.log(`previews: ${pairs.filter((p) => open.includes(p.slot)).map((p) => `${p.slot} → ${p.port}`).join(", ")} open again`);
+    }
+  }
   // The coordinator's own listener, bound like the main one, where every
   // request is in its lane: which socket a call came in on is something
   // nothing in the coordinator's container can forge, unlike its source

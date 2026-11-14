@@ -11,6 +11,7 @@ import {
   previewHostOk,
   previewable,
   rewriteLocation,
+  savedSlots,
   upstreamHeaders,
 } from "./preview";
 import { PICK_PATH, PICK_SCRIPT, PICK_TAG } from "./pickscript";
@@ -58,6 +59,81 @@ describe("pickSlot", () => {
   });
   test("none without slots", () => {
     expect(pickSlot(new Map(), [], [], 1)).toBeNull();
+  });
+});
+
+describe("previews.json", () => {
+  const slots = [7860, 7861, 7862];
+  const reserved = [7850, ...slots];
+
+  test("keeps the pairs this backend can still serve, in order, each slot and port once", () => {
+    const raw = JSON.stringify({
+      previews: [
+        { slot: 7861, port: 5173 },
+        { slot: 7860, port: 7870 },
+        { slot: 7869, port: 3000 }, // out of today's pool
+        { slot: 7862, port: 7850 }, // canopy's own port
+        { slot: 7862, port: 7861 }, // a slot, which would proxy to itself
+        { slot: 7860, port: 8080 }, // the slot again
+        { slot: 7862, port: 5173 }, // the port again
+        { slot: "7862", port: 4000 },
+        null,
+      ],
+    });
+    expect(savedSlots(raw, slots, reserved)).toEqual([
+      { slot: 7861, port: 5173 },
+      { slot: 7860, port: 7870 },
+    ]);
+  });
+
+  test("junk reads as none", () => {
+    expect(savedSlots("", slots, reserved)).toEqual([]);
+    expect(savedSlots("{", slots, reserved)).toEqual([]);
+    expect(savedSlots("[]", slots, reserved)).toEqual([]);
+    expect(savedSlots('{"previews": {"slot": 7860}}', slots, reserved)).toEqual([]);
+  });
+});
+
+describe("a preview after a restart", () => {
+  const dev = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("dev here") });
+  const devPort = dev.port as number;
+  const slot = 20000 + Math.floor(Math.random() * 20000);
+  const opts = (onChange?: (p: { slot: number; port: number }[]) => void) => ({
+    bind: "127.0.0.1",
+    own: () => 1,
+    hostOk: (h: string) => h === "127.0.0.1",
+    ...(onChange ? { onChange } : {}),
+  });
+  afterAll(() => dev.stop(true));
+
+  test("serve says when a port lands on a new slot, and a second canopy opens that slot again", async () => {
+    const changes: { slot: number; port: number }[][] = [];
+    const first = new PreviewProxy([slot, slot + 1], opts((p) => changes.push(p)));
+    let saved: { slot: number; port: number }[] = [];
+    try {
+      expect(await first.serve(devPort)).toBe(slot);
+      // the same port again is no change
+      expect(await first.serve(devPort)).toBe(slot);
+      expect(changes).toEqual([[{ slot, port: devPort }]]);
+      saved = first.assigned();
+    } finally {
+      first.stop();
+    }
+    // the restart: nothing listens on the slot until the saved pairs come back
+    expect(await fetch(`http://127.0.0.1:${slot}/`).then(() => "up", () => "down")).toBe("down");
+    const second = new PreviewProxy([slot, slot + 1], opts());
+    try {
+      expect(second.restore(saved)).toEqual([slot]);
+      const r = await fetch(`http://127.0.0.1:${slot}/`);
+      expect(await r.text()).toBe("dev here");
+      expect(second.assigned()).toEqual([{ slot, port: devPort }]);
+      // a port a panel asks for again keeps its restored slot
+      expect(await second.serve(devPort)).toBe(slot);
+      // a pair for a slot already open, or for canopy's own port, opens nothing
+      expect(second.restore([{ slot, port: 4000 }, { slot: slot + 1, port: 1 }])).toEqual([]);
+    } finally {
+      second.stop();
+    }
   });
 });
 

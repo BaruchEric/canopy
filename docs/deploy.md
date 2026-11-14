@@ -331,6 +331,11 @@ only your own email) before the tunnel goes up, and leave it on.
    site (the Mac's `http://127.0.0.1:7850`, a `*.ts.net` address) gets the
    gate's sign-in, and a sign-in there never sticks. The panel uses the
    public names only on such a page.
+   canopy reopens the slots it served at its next start (`previews.json` in
+   the config dir), so a redeploy cuts a preview name off only while canopy
+   is replaced, as it does `canopy.beric.ca`. Before 2026-11-14 a slot stayed
+   shut until a panel asked for its preview again, and the tunnel answered
+   `dial tcp …:7860: connect: connection refused` meanwhile.
 
 The tunnel publishes no port, so it does not wait for the tailnet the way
 canopy does. Its `restart: unless-stopped` brings it back after a reboot, and
