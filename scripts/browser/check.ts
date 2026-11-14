@@ -298,7 +298,7 @@ try {
       tasks: [
         { id: "t1", title: "Write the spec for the check page", repo: repo("twin"), note: "Name what each check proves.", action: "ask", state: "running", flow: "check-flow", workflow: "spec", branch: "check-s1", equip: { loadout: "feature" } },
         { id: "t2", title: "Build the page the spec asks for", repo: repo("demo"), note: "Build what t1's spec says.", action: "ask", state: "queued", after: ["t1"], equip: { loadout: "quick", model: "sonnet" } },
-        { id: "t3", title: "Read the copy aloud on a phone", repo: repo("demo"), note: "Every label in plain words.", action: "propose", state: "proposed" },
+        { id: "t3", title: "Read the copy aloud on a phone", repo: repo("demo"), note: "Every label in plain words.", action: "propose", state: "proposed", files: ["shot.png", "the-copy-to-read-aloud-on-a-phone-every-label-in-plain-words.md"] },
       ],
     };
     const branch = { name: "canopy/t1-spec", target: "main", base: "0000000", dir: "/tmp/check-t1", origin: "check-s1", state: "working" };
@@ -401,6 +401,8 @@ try {
         at.includes("run=check-coord") && head.startsWith("Give the check page") && rows.rings === 4 && rows.needs === 3 && rows.lanes === 3 && rows.beside,
         `at 1440px the one goal going opens (${at}): ${rows.rings} rings, ${rows.needs} things that need you, ${rows.lanes} lanes, the chat ${rows.beside ? "beside them" : "not beside them"}`,
       );
+      const files = await textOf(page, "#mgr-lane-t3 .mgr-files");
+      check(files.startsWith("files: shot.png, the-copy-to-read-aloud"), `at 1440px a card's lane names the goal's files it takes: "${files.slice(0, 48)}"`);
       await page.screenshot({ path: `${shots}/manager-1440.png` });
       await page.close();
     }
@@ -442,6 +444,14 @@ try {
         fit.page <= 390 && fit.view <= 0 && fit.strip > 0 && fit.first,
         `at 390px needs you comes ${fit.first ? "before" : "after"} the rings, the rings scroll sideways in their own strip (${fit.strip}px more), and the page is ${fit.page}px wide${fit.view > 0 ? ` (the view hides ${fit.view}px)` : ""}`,
       );
+      // a long file name is cut on one line, never wider than the lane
+      const chip = await page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>("#mgr-lane-t3 .mgr-files");
+        const lane = document.querySelector<HTMLElement>("#mgr-lane-t3");
+        return el && lane ? { right: el.getBoundingClientRect().right, lane: lane.getBoundingClientRect().right, cut: el.scrollWidth > el.clientWidth } : null;
+      });
+      check(chip !== null && chip.right <= chip.lane + 0.5 && chip.cut, `at 390px a card's files chip stays inside its lane${chip ? ` (${Math.round(chip.right)}px of ${Math.round(chip.lane)}px${chip.cut ? ", cut" : ""})` : ": no chip"}`);
+      await page.locator("#mgr-lane-t3").screenshot({ path: `${shots}/manager-390-files.png` });
       // the view's root is .mgr-view; there is no .mgr, so a selector on that would see no button at all
       const workers = await shortButtons(page, ".mgr-view");
       check(
