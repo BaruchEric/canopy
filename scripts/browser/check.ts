@@ -264,13 +264,16 @@ try {
     // A goal going, on a desktop, a tablet and a phone. A scratch server
     // runs no coordinator, so the goal is made up and /api/runs, /api/flows,
     // /api/kit and the skills list are answered here, as the runs pill's
-    // check answers /api/runs: a coordinator asking a question, with three
-    // cards, t1 a flow parked at its review gate, t2 queued after t1 and t3
-    // proposed, and three loadouts for the equip sheet.
+    // check answers /api/runs: a coordinator asking a question, with four
+    // cards, t1 a flow parked at its review gate, t2 queued after t1, t3
+    // proposed and t4 queued while its kept tree is made, and three loadouts
+    // for the equip sheet.
     const asker = await fresh();
-    const tree = (await (await asker.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string }[] };
+    const tree = (await (await asker.request.get(`${base}/api/tree`)).json()) as { repos: { id: string; name: string; path: string }[] };
     await asker.close();
     const repo = (name: string) => tree.repos.find((r) => r.name === name)?.id ?? name;
+    const repoDir = (name: string) => tree.repos.find((r) => r.name === name)?.path ?? "";
+    const TREE_BRANCH = "check/dev-server-for-the-copy-on-a-phone";
     const now = Date.now();
     const ago = (min: number) => now - min * 60_000;
     const base0 = { verb: "ask", progress: "", expectsChange: true, chat: false, harness: "claude", note: "", prompt: null };
@@ -299,6 +302,7 @@ try {
         { id: "t1", title: "Write the spec for the check page", repo: repo("twin"), note: "Name what each check proves.", action: "ask", state: "running", flow: "check-flow", workflow: "spec", branch: "check-s1", equip: { loadout: "feature" } },
         { id: "t2", title: "Build the page the spec asks for", repo: repo("demo"), note: "Build what t1's spec says.", action: "ask", state: "queued", after: ["t1"], equip: { loadout: "quick", model: "sonnet" } },
         { id: "t3", title: "Read the copy aloud on a phone", repo: repo("demo"), note: "Every label in plain words.", action: "propose", state: "proposed", files: ["shot.png", "the-copy-to-read-aloud-on-a-phone-every-label-in-plain-words.md"] },
+        { id: "t4", title: "Try the copy on a dev server", repo: repo("demo"), note: "Run the dev server and read the copy.", action: "ask", state: "queued", tree: TREE_BRANCH, outcome: `making tree ${TREE_BRANCH}` },
       ],
     };
     const branch = { name: "canopy/t1-spec", target: "main", base: "0000000", dir: "/tmp/check-t1", origin: "check-s1", state: "working" };
@@ -361,6 +365,21 @@ try {
       skill("check-phone", "Drives a page at a phone's width"),
       skill("superpowers:brainstorming", "Turns an idea into a design before any code", "superpowers@claude-plugins-official"),
     ];
+    // one kept tree of demo, still being made; its dir is twin's path so the
+    // lane finds a card to open
+    const keptTrees = {
+      root: "/tmp/check-trees",
+      ports: "4100-4199",
+      repos: [
+        {
+          repoId: repo("demo"),
+          repoPath: repoDir("demo"),
+          trees: [
+            { slug: "check-dev-server-for-the-copy-on-a-phone", dir: repoDir("twin"), branch: TREE_BRANCH, base: "main", port: 4101, madeAt: ago(1), caches: false, state: "preparing", sync: false, head: "0000000", ahead: 0, behind: 0, files: 0, shells: 0 },
+          ],
+        },
+      ],
+    };
     const goalPage = async (width: number): Promise<Page> => {
       const phone = width <= 390;
       const page = await fresh(undefined, true, phone);
@@ -369,6 +388,7 @@ try {
       await get("/api/runs", runs);
       await get("/api/flows", flows);
       await get("/api/kit", kit);
+      await get("/api/trees", keptTrees);
       await get("/api/repos/mentions", mentions);
       return page;
     };
@@ -398,12 +418,23 @@ try {
       }));
       const head = await textOf(page, ".mgr-head");
       check(
-        at.includes("run=check-coord") && head.startsWith("Give the check page") && rows.rings === 4 && rows.needs === 3 && rows.lanes === 3 && rows.beside,
+        at.includes("run=check-coord") && head.startsWith("Give the check page") && rows.rings === 5 && rows.needs === 3 && rows.lanes === 4 && rows.beside,
         `at 1440px the one goal going opens (${at}): ${rows.rings} rings, ${rows.needs} things that need you, ${rows.lanes} lanes, the chat ${rows.beside ? "beside them" : "not beside them"}`,
       );
       const files = await textOf(page, "#mgr-lane-t3 .mgr-files");
       check(files.startsWith("files: shot.png, the-copy-to-read-aloud"), `at 1440px a card's lane names the goal's files it takes: "${files.slice(0, 48)}"`);
+      const tree = await textOf(page, "#mgr-lane-t4 .mgr-tree");
+      check(tree === `in tree ${TREE_BRANCH} · preparing`, `at 1440px t4's lane names its tree and the tree's state: "${tree}"`);
+      const openTree = page.locator("#mgr-lane-t4").getByRole("button", { name: "open tree" });
+      const hasOpen = (await openTree.count()) === 1;
+      check(hasOpen, `at 1440px t4's lane has an open tree button`);
       await page.screenshot({ path: `${shots}/manager-1440.png` });
+      if (hasOpen) {
+        await openTree.click();
+        await page.waitForTimeout(500);
+        const after = await page.evaluate(() => location.search);
+        check(!after.includes("view=manager"), `at 1440px open tree leaves the manager view (${after || "no query"})`);
+      }
       await page.close();
     }
     {
@@ -452,6 +483,14 @@ try {
       });
       check(chip !== null && chip.right <= chip.lane + 0.5 && chip.cut, `at 390px a card's files chip stays inside its lane${chip ? ` (${Math.round(chip.right)}px of ${Math.round(chip.lane)}px${chip.cut ? ", cut" : ""})` : ": no chip"}`);
       await page.locator("#mgr-lane-t3").screenshot({ path: `${shots}/manager-390-files.png` });
+      // the tree line is cut or wrapped inside its lane, never wider than it
+      const treeLine = await page.evaluate(() => {
+        const el = document.querySelector<HTMLElement>("#mgr-lane-t4 .mgr-tree");
+        const lane = document.querySelector<HTMLElement>("#mgr-lane-t4");
+        return el && lane ? { right: el.getBoundingClientRect().right, lane: lane.getBoundingClientRect().right } : null;
+      });
+      check(treeLine !== null && treeLine.right <= treeLine.lane + 0.5, `at 390px t4's tree line stays inside its lane${treeLine ? ` (${Math.round(treeLine.right)}px of ${Math.round(treeLine.lane)}px)` : ": no tree line"}`);
+      await page.locator("#mgr-lane-t4").screenshot({ path: `${shots}/manager-390-tree.png` });
       // the view's root is .mgr-view; there is no .mgr, so a selector on that would see no button at all
       const workers = await shortButtons(page, ".mgr-view");
       check(
