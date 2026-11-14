@@ -8,7 +8,8 @@
 
 import type { Dirent } from "node:fs";
 import { chmod, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import type { Run } from "../core/types";
 
 /** the folder under the seeds that holds every goal's files folder */
 const GOAL_FILES = "goal-files";
@@ -66,6 +67,41 @@ async function newestIn(dir: string): Promise<number | null> {
   } catch {
     return null;
   }
+}
+
+/** Removes the goal started as run `runId`'s files folder at once, and
+ *  answers whether it did: for a goal that ended before any card could
+ *  read it. Only a real folder named like a run id under absolute seeds is
+ *  taken, never a link or a file. */
+export async function dropGoalFiles(seeds: string, runId: string): Promise<boolean> {
+  if (!isAbsolute(seeds) || !RUN_ID.test(runId)) return false;
+  const dir = goalFilesDir(seeds, runId);
+  try {
+    if (!(await lstat(dir)).isDirectory()) return false;
+    await rm(dir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The run ids whose files folder a prune keeps, from the runs at work now:
+ *  every coordinator, and every goal whose folder a run reads through its
+ *  added folders. A card's child, and a fix or follow-up on a card's
+ *  branch, can run on after its goal ended. Only an added folder that is
+ *  exactly one goal's folder under these seeds counts. */
+export function liveGoalIds(seeds: string, active: readonly Pick<Run, "id" | "action" | "addDirs">[]): Set<string> {
+  const root = resolve(seeds, GOAL_FILES);
+  const live = new Set<string>();
+  for (const run of active) {
+    if (run.action === "coordinate") live.add(run.id);
+    for (const dir of run.addDirs ?? []) {
+      if (!isAbsolute(dir)) continue;
+      const full = resolve(dir);
+      if (dirname(full) === root && RUN_ID.test(basename(full))) live.add(basename(full));
+    }
+  }
+  return live;
 }
 
 /** Removes each goal's files folder whose run is not in `live` and whose

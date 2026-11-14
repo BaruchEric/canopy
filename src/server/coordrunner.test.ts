@@ -8,7 +8,7 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { selfName } from "../core/backends";
@@ -17,7 +17,7 @@ import type { StageClient } from "../core/stageclient";
 import { cardFilesLine, goalRepoLine, goalTopLine } from "../core/coordinator";
 import { DEFAULT_AGENT, isRunActive, type About, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Run } from "../core/types";
 import { CallerBook } from "./callers";
-import { startServer } from "./index";
+import { COORD_REFUSAL, startServer } from "./index";
 
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT", "CANOPY_KIT", "HOME"];
 const saved: Record<string, string | undefined> = {};
@@ -162,6 +162,16 @@ describe("without a coordinator's runner", () => {
   test("/api/about says no coordinator", async () => {
     expect(((await (await about(s)).json()) as About).coordinator).toBe(false);
   });
+
+  test("a new goal is refused before its form is read, in the refusal's words", async () => {
+    // a body that is no form, and one that is not multipart: either would
+    // answer 400 or 415 had the form been read first
+    const garbled = await call(s, "/api/coordinator/new", s.page, { method: "POST", headers: { "content-type": "multipart/form-data; boundary=x" }, body: "not a form" });
+    expect([garbled.status, ((await garbled.json()) as { error: string }).error]).toEqual([409, COORD_REFUSAL]);
+    const json = await postAs(s, "/api/coordinator/new", { goal: "x" }, s.page);
+    expect([json.status, ((await json.json()) as { error: string }).error]).toEqual([409, COORD_REFUSAL]);
+    expect(await readdir(s.seeds)).toEqual([]);
+  });
 });
 
 describe("with a coordinator's runner, outside enforce", () => {
@@ -173,6 +183,10 @@ describe("with a coordinator's runner, outside enforce", () => {
         const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "ship it" }, s.page);
         expect(res.status).toBe(409);
         expect(((await res.json()) as { error: string }).error).toContain("CANOPY_CALLERS=enforce");
+        // a new goal says the same before its form is read
+        const goal = await call(s, "/api/coordinator/new", s.page, { method: "POST", headers: { "content-type": "multipart/form-data; boundary=x" }, body: "not a form" });
+        expect(goal.status).toBe(409);
+        expect(((await goal.json()) as { error: string }).error).toContain("CANOPY_CALLERS=enforce");
         expect(await readdir(s.seeds)).toEqual([]);
       } finally {
         await s.stop();
@@ -1337,6 +1351,73 @@ describe("a goal from the top", () => {
     live.push(later.id);
     expect(later.branch?.origin).toBe(card.branch);
     expect((await driverOf(later.id)).ctx?.spec.addDirs).toEqual([dir]);
+  }, 30_000);
+
+  test("a card whose file left the goal's folder fails at its start naming the file, and starts no run", async () => {
+    const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"], ["notes.md", "# notes"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "favicon", repo: "a", note: "use the logo", action: "ask", files: ["shot.png", "notes.md"] }] }, token);
+    expect(plan.status).toBe(200);
+    // the coordinator can rewrite its goal's folder, since the seeds mount is read-write
+    await rm(join(dir, "shot.png"));
+    const before = (await runs()).length;
+    const begun = await postAs(s, "/api/coordinator/start", { run: run.id }, s.page);
+    expect(begun.status).toBe(200);
+    const card = await until(async () => {
+      const c = (await runs()).find((r) => r.id === run.id)?.tasks?.[0];
+      return c?.state === "failed" ? c : null;
+    }, "the card to fail");
+    expect(card.outcome).toBe("shot.png is no longer in the goal's files folder");
+    expect(card.run).toBeUndefined();
+    expect((await runs()).length).toBe(before);
+  });
+
+  test("a top goal whose coordinator fails before it planned a card takes its files folder with it", async () => {
+    const { run, driver } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    expect(await exists(dir)).toBe(true);
+    driver.ctx?.exited({ code: 1, stderr: "the runner refused the spawn" });
+    await until(async () => (await runs()).find((r) => r.id === run.id)?.status === "failed", "the coordinator to fail");
+    await until(async () => !(await exists(dir)), "the goal's files folder to go");
+    expect(await exists(join(s.seeds, run.id))).toBe(false);
+  });
+
+  test("a top goal whose coordinator fails after it planned a card keeps its files folder for the card", async () => {
+    const { run, driver, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "favicon", repo: "a", note: "use the logo", action: "ask", files: ["shot.png"] }] }, token);
+    expect(plan.status).toBe(200);
+    driver.ctx?.exited({ code: 1, stderr: "it fell over" });
+    await until(async () => (await runs()).find((r) => r.id === run.id)?.status === "failed", "the coordinator to fail");
+    // its own folder going is the end path having run
+    await until(async () => !(await exists(join(s.seeds, run.id))), "the coordinator's folder to go");
+    expect(await readdir(dir)).toEqual(["shot.png"]);
+  });
+
+  test("a new goal's prune keeps an old files folder a card's run still reads after its goal ended", async () => {
+    const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "favicon", repo: "a", note: "use the logo", action: "ask", files: ["shot.png"] }] }, token);
+    expect(plan.status).toBe(200);
+    const begun = await postAs(s, "/api/coordinator/start", { run: run.id }, s.page);
+    const childId = ((await begun.json()) as { tasks: CoordTask[] }).tasks[0]?.run ?? "";
+    expect(childId).not.toBe("");
+    live.push(childId);
+    await driverOf(childId);
+    // the goal ends; its card's run goes on
+    await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+    await until(async () => !(await exists(join(s.seeds, run.id))), "the coordinator's folder to go");
+    expect(isRunActive((await runs()).find((r) => r.id === childId) ?? ({ status: "done" } as Run))).toBe(true);
+    // both folders past the week; the decoy, read by nothing, shows the prune ran
+    const then = new Date(Date.now() - 9 * 24 * 60 * 60_000);
+    await utimes(join(dir, "shot.png"), then, then);
+    const decoy = join(s.seeds, "goal-files", "0000dec0");
+    await mkdir(decoy, { recursive: true });
+    await writeFile(join(decoy, "old.md"), "x");
+    await utimes(join(decoy, "old.md"), then, then);
+    await started({ goal: "another" });
+    await until(async () => !(await exists(decoy)), "the prune to take the decoy");
+    expect(await readdir(dir)).toEqual(["shot.png"]);
   }, 30_000);
 
   test("a goal started at a repo is as it was: its own last line, no files to name, and one at a time", async () => {

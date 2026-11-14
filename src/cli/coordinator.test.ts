@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { CoordTask, Run } from "../core/types";
-import { cardLines, coordinatorCommand, coordinatorLines, newGoalForm, parseNewArgs } from "./coordinator";
+import { cardLines, coordinatorCommand, coordinatorLines, NEW_GOAL_HINT, newGoalForm, newGoalRefusal, parseNewArgs } from "./coordinator";
 
 const card = (id: string, over: Partial<CoordTask> = {}): CoordTask => ({ id, title: `card ${id}`, repo: "playground/x", note: "", action: "propose", state: "proposed", ...over });
 const coord = (id: string, over: Partial<Run> = {}): Run => ({ id, action: "coordinate", status: "working", repoId: "playground/x", note: "ship the thing\nsecond line", tasks: [], ...over }) as Run;
@@ -107,4 +107,41 @@ test("newGoalForm puts goal, repos[], files[], model and effort in the form", as
   expect(await file.text()).toBe("hi");
   expect(form.get("model")).toBe("opus");
   expect(form.has("effort")).toBe(false);
+});
+
+test("newGoalRefusal adds the --on hint to a 409 when no backend was named, and nothing else", () => {
+  const why = "the coordinator runs only where an isolated coordinator runner is set up (docs/deploy.md, The coordinator)";
+  expect(newGoalRefusal(why, 409, false)).toBe(`${why}\n${NEW_GOAL_HINT}`);
+  expect(NEW_GOAL_HINT).toContain("--on <backend>");
+  expect(newGoalRefusal(why, 409, true)).toBe(why);
+  expect(newGoalRefusal("write the goal first", 400, false)).toBe("write the goal first");
+});
+
+test("coordinator new: a refusal from the home backend names --on, and one from a named backend does not", async () => {
+  const refuse = () =>
+    Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ error: "the coordinator runs only where an isolated coordinator runner is set up" }, { status: 409 }) });
+  const failOf = async (argv: string[]): Promise<string> => {
+    try {
+      await coordinatorCommand(argv, { fail: (m) => { throw Error(m); } });
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    return "";
+  };
+  const home = refuse();
+  const saved = process.env["CANOPY_API"];
+  process.env["CANOPY_API"] = `http://127.0.0.1:${home.port}`;
+  try {
+    expect(await failOf(["new", "ship it"])).toBe(`the coordinator runs only where an isolated coordinator runner is set up\n${NEW_GOAL_HINT}`);
+  } finally {
+    if (saved === undefined) delete process.env["CANOPY_API"];
+    else process.env["CANOPY_API"] = saved;
+    home.stop(true);
+  }
+  const named = refuse();
+  try {
+    expect(await failOf(["new", "ship it", "--backend", `http://127.0.0.1:${named.port}`])).toBe("the coordinator runs only where an isolated coordinator runner is set up");
+  } finally {
+    named.stop(true);
+  }
 });

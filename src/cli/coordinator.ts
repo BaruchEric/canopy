@@ -58,6 +58,16 @@ export function newGoalForm(args: { goal: string; repos: string[]; files: { name
   return form;
 }
 
+/** what to try when the backend asked runs no coordinator */
+export const NEW_GOAL_HINT = "hint: this backend runs no coordinator; name one that does with --on <backend>";
+
+/** A refused new goal in words: the server's, and the hint to name a
+ *  backend when the one asked runs no coordinator (its 409) and the command
+ *  named none. */
+export function newGoalRefusal(error: string, status: number, named: boolean): string {
+  return status === 409 && !named ? `${error}\n${NEW_GOAL_HINT}` : error;
+}
+
 /** the page that shows a goal; its own backend serves it, so the id stays bare */
 export const goalLink = (base: string, id: string): string => `${base.replace(/\/+$/, "")}/?view=manager&run=${encodeURIComponent(id)}`;
 
@@ -130,7 +140,7 @@ export async function coordinatorCommand(argv: string[], { fail }: { fail: (msg:
         continue;
       }
       const body = (await res.json().catch(() => ({}))) as { id?: string; error?: string };
-      if (!res.ok || !body.id) return fail(body.error ?? `${target.name} answered ${res.status}`);
+      if (!res.ok || !body.id) return fail(newGoalRefusal(body.error ?? `${target.name} answered ${res.status}`, res.status, given !== undefined || on !== undefined));
       console.log(`${body.id}  ${goalLink(url, body.id)}`);
       return;
     }

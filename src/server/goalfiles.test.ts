@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { GOAL_FILES_KEEP, goalFileList, goalFilesDir, pruneGoalFiles, writeGoalFiles } from "./goalfiles";
+import type { Run } from "../core/types";
+import { GOAL_FILES_KEEP, dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles } from "./goalfiles";
 
 /* A goal's files folder under the coordinator's seeds: where it is, what a
  * start writes there, what a plan may name from it, and which folders a
@@ -120,5 +121,56 @@ describe("pruning the goals' files", () => {
     expect(await pruneGoalFiles(seeds, new Set(), now)).toEqual([]);
     expect(await readdir(seeds)).toEqual([]);
     expect(await pruneGoalFiles("relative/seeds", new Set(), now)).toEqual([]);
+  });
+});
+
+describe("the goals a prune keeps", () => {
+  const run = (id: string, action: Run["action"], addDirs?: string[]): Pick<Run, "id" | "action" | "addDirs"> => ({ id, action, ...(addDirs ? { addDirs } : {}) });
+  test("every coordinator going, and every goal whose folder a run still at work reads", () => {
+    const active = [
+      run("c0000001", "coordinate"),
+      // a card's child, or a fix or follow-up on a card's branch, after its goal ended
+      run("r0000001", "ask", [goalFilesDir("/seeds", "0000000a")]),
+      run("r0000002", "ask", [`${goalFilesDir("/seeds", "0000000b")}/`]),
+      // a folder that is not one goal's under these seeds' goal-files
+      run("r0000003", "ask", ["/seeds/goal-files", "/seeds/0000000c", "/other/goal-files/0000000d", "/seeds/goal-files/keep-me", "/seeds/goal-files/0000000e/inner", "relative/0000000f"]),
+      run("r0000004", "ask"),
+    ];
+    expect([...liveGoalIds("/seeds", active)].sort()).toEqual(["0000000a", "0000000b", "c0000001"]);
+  });
+  test("a prune with that set keeps an old folder a running card reads", async () => {
+    const seeds = join(scratch, "kept-by-a-card");
+    const dir = goalFilesDir(seeds, "0000000a");
+    await writeGoalFiles(dir, [{ name: "shot.png", data: bytes("png") }]);
+    const then = new Date(Date.now() - 9 * DAY);
+    await utimes(join(dir, "shot.png"), then, then);
+    expect(await pruneGoalFiles(seeds, liveGoalIds(seeds, [run("r0000001", "ask", [dir])]), Date.now())).toEqual([]);
+    expect(existsSync(dir)).toBe(true);
+    expect(await pruneGoalFiles(seeds, liveGoalIds(seeds, []), Date.now())).toEqual(["0000000a"]);
+  });
+});
+
+describe("dropping one goal's files", () => {
+  test("removes that goal's folder and nothing else", async () => {
+    const seeds = join(scratch, "drop");
+    const dir = goalFilesDir(seeds, "0000000a");
+    const other = goalFilesDir(seeds, "0000000b");
+    await writeGoalFiles(dir, [{ name: "shot.png", data: bytes("png") }]);
+    await writeGoalFiles(other, [{ name: "shot.png", data: bytes("png") }]);
+    expect(await dropGoalFiles(seeds, "0000000a")).toBe(true);
+    expect([existsSync(dir), existsSync(other)]).toEqual([false, true]);
+    // gone already is nothing to do
+    expect(await dropGoalFiles(seeds, "0000000a")).toBe(false);
+  });
+  test("never a link, a file, a name that is no run id, or under relative seeds", async () => {
+    const seeds = join(scratch, "drop-guard");
+    const target = goalFilesDir(join(scratch, "drop-elsewhere"), "00000001");
+    await writeGoalFiles(target, [{ name: "keep.md", data: bytes("x") }]);
+    await mkdir(join(seeds, "goal-files"), { recursive: true });
+    await symlink(target, join(seeds, "goal-files", "00000002"));
+    await writeFile(join(seeds, "goal-files", "00000003"), "x");
+    for (const id of ["00000002", "00000003", "..", "../goal-files", "keep-me"]) expect(await dropGoalFiles(seeds, id)).toBe(false);
+    expect(await dropGoalFiles("relative/seeds", "00000001")).toBe(false);
+    expect([existsSync(join(target, "keep.md")), existsSync(join(seeds, "goal-files", "00000003"))]).toEqual([true, true]);
   });
 });

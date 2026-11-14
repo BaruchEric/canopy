@@ -262,7 +262,7 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
-import { goalFileList, goalFilesDir, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
+import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
 import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
@@ -1738,11 +1738,7 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
     if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; a coordinator starts at a repo on this machine`);
     if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
   }
-  if (!process.env["CANOPY_COORD_SOCKET"]) throw new HttpError(409, COORD_REFUSAL);
-  const unsafe = state.coordRefusal();
-  if (unsafe) throw new HttpError(409, unsafe);
-  const api = process.env["CANOPY_COORD_API"]?.trim();
-  if (!api) throw new HttpError(409, "CANOPY_COORD_API is not set, so a coordinator would have no address to reach canopy at");
+  const { api, seeds } = coordRunnerOrRefuse(state);
   if (!goal.trim()) throw new HttpError(400, "write the goal first");
   const going = top ? undefined : state.runner.coordinatorFor(repo.id);
   if (going) throw new HttpError(409, `${repo.name} already has a coordinator going`);
@@ -1756,8 +1752,6 @@ async function startCoordinator(state: ServerState, repo: Repo, goal: string, cl
   const id = crypto.randomUUID().slice(0, 8);
   // its own folder under the coord runner's seeds, the same path in both
   // containers: no checkout, nothing of the repo's
-  const seeds = coordSeeds();
-  if (!seeds) throw new HttpError(409, "CANOPY_COORD_ROOT is not set, so a coordinator would have no folder to start in");
   const cwd = join(seeds, id);
   const files = top ? (opts?.files ?? []) : [];
   // a files folder only for a goal that brings files
@@ -1799,6 +1793,21 @@ function coordSeeds(): string | null {
   return process.env["CANOPY_COORD_ROOT"]?.trim() || null;
 }
 
+/** This backend's coordinator runner, its address for canopy and its seeds,
+ *  or a 409 saying why it runs no coordinator: no runner's socket, callers
+ *  not enforced or the runner down, or no address or seeds set. A start
+ *  asks it first, and a new goal before it reads the form. */
+function coordRunnerOrRefuse(state: ServerState): { api: string; seeds: string } {
+  if (!process.env["CANOPY_COORD_SOCKET"]) throw new HttpError(409, COORD_REFUSAL);
+  const unsafe = state.coordRefusal();
+  if (unsafe) throw new HttpError(409, unsafe);
+  const api = process.env["CANOPY_COORD_API"]?.trim();
+  if (!api) throw new HttpError(409, "CANOPY_COORD_API is not set, so a coordinator would have no address to reach canopy at");
+  const seeds = coordSeeds();
+  if (!seeds) throw new HttpError(409, "CANOPY_COORD_ROOT is not set, so a coordinator would have no folder to start in");
+  return { api, seeds };
+}
+
 /** A goal's files folder and the plain files in it, for a coordinator
  *  started from the top; null for one started at a repo, which has none. */
 async function goalFolder(state: ServerState, coordId: string): Promise<{ dir: string; files: string[] } | null> {
@@ -1810,12 +1819,13 @@ async function goalFolder(state: ServerState, coordId: string): Promise<{ dir: s
 }
 
 /** Takes the goals' files folders a week past their newest file whose
- *  coordinator is not going (`pruneGoalFiles`): at each new goal and once
- *  at server start. A failure is logged and the next one tries again. */
+ *  coordinator is not going and that no run at work still reads
+ *  (`liveGoalIds`, `pruneGoalFiles`): at each new goal and once at server
+ *  start. A failure is logged and the next one tries again. */
 async function pruneGoals(state: ServerState): Promise<void> {
   const seeds = coordSeeds();
   if (!seeds) return;
-  const live = new Set(state.runner.list().filter((r) => r.action === "coordinate" && isRunActive(r)).map((r) => r.id));
+  const live = liveGoalIds(seeds, state.runner.list().filter(isRunActive));
   try {
     await pruneGoalFiles(seeds, live, Date.now());
   } catch (err) {
@@ -1831,8 +1841,11 @@ const GOAL_TOO_BIG = `a goal's files come to over ${GOAL_LIMITS.bytes / (1024 * 
  *  the composer and the CLI send it. `goal` is its text; `repos[]` the repos
  *  Eric named, each a local repo this backend holds and not a seed; `file`
  *  or `files[]` his files; `model` and `effort` Claude Code's, over the
- *  coordinate route's. Everything is checked before anything is made. */
+ *  coordinate route's. A backend that runs no coordinator refuses before
+ *  the form is read, and everything is checked before anything is made. */
 async function newGoal(state: ServerState, req: Request): Promise<Run> {
+  // a backend that runs no coordinator says so before it takes an upload
+  coordRunnerOrRefuse(state);
   const type = (req.headers.get("content-type") ?? "").toLowerCase();
   if (!type.startsWith("multipart/form-data")) throw new HttpError(415, "send a goal as multipart/form-data");
   if (Number(req.headers.get("content-length") ?? "0") > GOAL_FORM_MAX) throw new HttpError(413, GOAL_TOO_BIG);
@@ -2495,6 +2508,11 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   // times or a workflow, so only a card's one run gets here with them
   const folder = task.files?.length ? await goalFolder(state, coordId) : null;
   if (task.files?.length && !folder) throw new Error("the goal's files folder is gone");
+  // the coordinator can rewrite its goal's folder, so a name it planned with
+  // may be gone by the start: the card fails naming it, never starts with a
+  // path that is not there
+  const missing = folder ? (task.files ?? []).filter((name) => !folder.files.includes(name)) : [];
+  if (missing.length > 0) throw new Error(`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} no longer in the goal's files folder`);
   const note = folder && task.files?.length ? `${task.note}\n\n${cardFilesLine(folder.dir, task.files)}` : task.note;
   // a card's child names its parent and never `child`: the tool-child
   // refusal and depth are for runs a run starts through canopy's tools
@@ -6569,6 +6587,11 @@ export async function startServer(opts: {
       if (run.action === "coordinate" && !isRunActive(run)) {
         state.callers.dropRun(run.id).catch(() => {});
         void dropCoordFolder(run.id);
+        // a top goal's files outlive it for its cards, so they go with it
+        // only when it failed before it planned one: a start the runner
+        // refused after the run existed leaves no card to read them
+        const seeds = coordSeeds();
+        if (seeds && run.status === "failed" && isGoalAnchor(run.repoId) && !run.tasks?.length) void dropGoalFiles(seeds, run.id);
       }
       // so does a run's, and its mcp.json with it (FR-038), and a loadout
       // run's settings file and mcp.json (FR-065)
