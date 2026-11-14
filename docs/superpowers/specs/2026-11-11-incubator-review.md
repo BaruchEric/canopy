@@ -39,9 +39,9 @@ Two things follow from the last one. A project parked this way keeps its slot un
 
 The first live park after the deploy, a scout the judge was not sure of on the mini, showed two more things, fixed the same evening. A park kept by the engine from before the fix came back with no `backTo`, so its button read "retry this step" while the retry went back to Research; `restore` now reads it again. And going on past scout's last step read "accept and finish anyway", which sounds like the end of the project; it now reads "build it anyway", since canopy takes the pick and queues the build.
 
-## Still open
+## Still open, fixed 2026-11-14
 
-P2 misleads or strands a project. P3 is polish.
+P2 misleads or strands a project. P3 is polish. Every item below was checked against the code on 2026-11-14, found real, and fixed with a test that failed first (FR-062 in FEATURES.md names the commits). Two answers differ from what the review proposed: `@pick-check` now refuses on the host, the deploy setup, the license and the extend target before the judge runs, rather than undoing a pass after the flow ends; and `answer` returns at once and commits the answers as the sprout's serial work, rather than failing fast while the seed is busy.
 
 ### Intake
 
@@ -95,4 +95,4 @@ P2 misleads or strands a project. P3 is polish.
 
 ## What to do first
 
-With the P1s fixed, the stale `_devhub` manifest comes first, because scout reads it on every project.
+With the P1s fixed, the stale `_devhub` manifest came first, because scout read it on every project. Done 2026-11-14 with the rest.

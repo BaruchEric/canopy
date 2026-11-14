@@ -355,9 +355,16 @@ export function parseCommand(input: string[]): Parsed {
       const words: string[] = [];
       const urls: string[] = [];
       let repo = "";
+      let flagsDone = false;
       for (let i = 0; i < args.length; i++) {
         const a = args[i] ?? "";
-        if (a !== "--file" && a !== "--url" && a !== "--repo" && a !== "--backend") {
+        if (!flagsDone && a === "--") {
+          flagsDone = true;
+          continue;
+        }
+        if (flagsDone || (a !== "--file" && a !== "--url" && a !== "--repo" && a !== "--backend")) {
+          // a mistyped flag would go in as words of the idea, as the terminal's canopy new refuses too
+          if (!flagsDone && a.startsWith("--")) return { kind: "error", text: `unknown flag ${a} (put -- before words that start with --)`, usage: usageOf("new") };
           words.push(a);
           continue;
         }

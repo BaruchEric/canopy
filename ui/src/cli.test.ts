@@ -105,6 +105,9 @@ describe("parseCommand", () => {
     expect(parse("new")).toEqual({ kind: "view", view: "incubator", sprout: { text: "", urls: [], repo: "" } });
     expect(parse("new idea --file notes.md")).toMatchObject({ kind: "error", text: expect.stringContaining("drop the file") });
     expect(parse("new idea --url")).toMatchObject({ kind: "error", text: "--url needs a value" });
+    // a mistyped flag is an error, as in the terminal, not words of the idea; -- ends the flags
+    expect(parse("new idea --rep https://git.example/x")).toMatchObject({ kind: "error", text: expect.stringContaining("--rep") });
+    expect(parse("new -- an idea --with dashes")).toEqual({ kind: "view", view: "incubator", sprout: { text: "an idea --with dashes", urls: [], repo: "" } });
     expect(parse("help spec")).toEqual({ kind: "help", verb: "spec" });
     expect(parse("--bogus")).toMatchObject({ kind: "error" });
   });

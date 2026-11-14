@@ -2,11 +2,6 @@
 
 ## Open
 
-### FR-062 · The incubator review's open findings
-P2 · added 2026-11-11 · source: Eric ("incubator review full PROCCES", 2026-11-11)
-The 2026-11-11 review fixed the dead stage login, the GitHub page url taken as a repo and the project that queued for good on a backend with no stages. A second pass the same day fixed its five P1s: "continue" at a judge's park deploying what the judge refused, Accept's "no" reaching the builder with no reason, a ship cut short making a second GitHub repo and Vercel project, a crash during prepare stranding a voice memo, and one failed run failing a whole stage. 26 findings stay open, all P2 or P3. Most are read from the code and not yet reproduced, so each needs a failing test first.
-Spec: docs/superpowers/specs/2026-11-11-incubator-review.md (2026-11-11).
-
 ### FR-061 · Change a schedule rule's line from the clock
 P3 · added 2026-11-10 · source: Claude (follow-up to FR-060)
 The clock view fires a schedule rule and shows its line, but the line is changed only by editing `triggers.json` on the backend. A route that rewrites one rule's `cron` or `poll` (admin right, the file's other keys and its order kept, the same checks `parseRules` makes) would let the clock's line editor save a rule the way it saves a wake. Decide first whether the file should stay hand-written only: it also names the env vars that hold hook secrets.
@@ -62,6 +57,11 @@ Spec: docs/superpowers/specs/2026-10-24-library-sync-design.md (2026-10-24). Pha
 The 2026-10-24 review found four ways a pull could lose data, fixed 2026-11-01: a CLI pull merged while librarySync was off; `--accept` stayed armed when the peer was away and let a later mass deletion through; a Library file missing on disk was rebuilt from the merged keys only and the next stamping pass tombstoned the rest, spreading the deletion to the peer (`--adopt` before the Library had ever run hit the same path); `--adopt` had no already-joined guard. The mini runs the fix, and librarySync went back on for the Mac on 2026-11-03.
 
 ## Shipped
+
+### FR-062 · The incubator review's open findings
+P2 · added 2026-11-11 · source: Eric ("incubator review full PROCCES", 2026-11-11) · shipped 2026-11-14
+The 2026-11-11 review fixed the dead stage login, the GitHub page url taken as a repo and the project that queued for good on a backend with no stages. A second pass the same day fixed its five P1s: "continue" at a judge's park deploying what the judge refused, Accept's "no" reaching the builder with no reason, a ship cut short making a second GitHub repo and Vercel project, a crash during prepare stranding a voice memo, and one failed run failing a whole stage. The 27 findings left open, all P2 or P3, were fixed on 2026-11-14 in five trees, each with a test that failed first: the CLI's intake and its answers, resume, stop, dismiss, add and hand-off (3ecde5aa); retros that wait for capacity, parks in plain words with the raw error and a check's output kept as detail, answers that return at once, and vault writes owed and tried again (657e0a1a); scout reading the Library's manifest, a bounded intake clone, clarify's and pick-check's checks, input that stops scout or a build, Baseline's time and retries, and stage runs that wait on a prompt (ad8d222c); a daily login check with Anthropic, stage health that never stays unknown, vault notes kept apart by sprout, the stages answer of a server that does not keep the incubator, and a leftovers sweep (4a3b9465); and the intake form that keeps a typed idea, stages read again, "end the project", and the inbox's queued projects and every backend's lessons (24cfbf2f).
+Spec: docs/superpowers/specs/2026-11-11-incubator-review.md (2026-11-11).
 
 ### FR-065 · A manager that equips its workers, and a top view to steer them
 P2 · added 2026-11-12 · source: Eric ("adapt: https://www.aihero.dev/the-home-repo-pattern to create manager who orchestrate, coordinate etc new canopy worktrees providing them model,skills, tools etc", then "focus on the goal user steering workflows and UI from top view", 2026-11-12) · shipped 2026-11-13
