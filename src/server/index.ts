@@ -264,7 +264,7 @@ import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
 import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
-import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, isProjectCard, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
+import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, isRunCard, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -2464,7 +2464,6 @@ async function coordWorkflowNames(state: ServerState, repoId: string, withRepo: 
 /** A card that starts a run of its own: any card but a project card, whose
  *  action is no run's (FR-067 plan 3). */
 type RunCard = CoordTask & { action: RunCardAction };
-const isRunCard = (task: CoordTask): task is RunCard => !isProjectCard(task);
 
 /** A coordinator's card as a branch run (FR-010): the repo's agent on its
  *  job route, `by` coordinator and `parent` the coordinator, set before the

@@ -1089,9 +1089,11 @@ export type RunAction = (typeof RUN_ACTIONS)[number] | "compare";
 export const isRunAction = (v: unknown): v is RunAction => typeof v === "string" && (v === "compare" || RUN_ACTIONS.some((action) => action === v));
 
 /** One card a coordinator proposed (FR-010): a branch run's worth of work in
- *  one repo. It waits as `proposed` until the user presses start these, then
- *  `queued` until a slot frees, `running` as its child run, and settles
- *  `done` or `failed`; `dropped` when the coordinator ended first. */
+ *  one repo, or, with action `project`, a new project made in the incubator.
+ *  It waits as `proposed` until the user presses start these, then `queued`
+ *  until a slot frees, `running` as its child run (a project card, as its
+ *  sprout), and settles `done` or `failed`; `dropped` when the coordinator
+ *  ended first. */
 export interface CoordTask {
   /** `t1`, `t2`, ... in the order the coordinator proposed them */
   id: string;

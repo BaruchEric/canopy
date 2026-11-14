@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterMet, afterWait, blockedNote, cardCarries, isProjectCard, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterMet, afterWait, isRunCard, projectNote, projectStep, PROJECT_GONE, blockedNote, cardCarries, isProjectCard, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -1014,5 +1014,58 @@ describe("a project card (FR-067 plan 3)", () => {
     expect(isProjectCard(held("t2"))).toBe(false);
     expect(cardCarries(proj()).project).toBe("new project");
     expect(cardCarries(held("t2")).project).toBeUndefined();
+  });
+});
+
+describe("a project card", () => {
+  const proj = (id: string, state: CoordTask["state"] = "queued", over: Partial<CoordTask> = {}): CoordTask => ({ id, title: "a tide chart app", repo: "~goal", note: "n", action: "project", state, ...over });
+  const sp = (over: Record<string, unknown> = {}) => ({ status: "building" as const, slug: "tides", ...over });
+
+  test("projectStep maps each sprout status", () => {
+    expect(projectStep(sp({ status: "clarifying", questions: [{ id: "q", text: "which?" }] }))).toEqual({ wait: "the project waits on your answers in the incubator", needsYou: true });
+    expect(projectStep(sp({ status: "clarifying" }))).toEqual({ wait: "in the incubator: clarifying", needsYou: false });
+    expect(projectStep(sp({ status: "clarifying", questions: [] }))).toEqual({ wait: "in the incubator: clarifying", needsYou: false });
+    expect(projectStep(sp({ status: "approving" }))).toEqual({ wait: "the project waits on your yes in the incubator", needsYou: true });
+    expect(projectStep(sp({ status: "parked", parked: "tests failed" }))).toEqual({ wait: "the project is parked: tests failed", needsYou: true });
+    expect(projectStep(sp({ status: "parked" }))).toEqual({ wait: "the project is parked: see the incubator", needsYou: true });
+    expect(projectStep(sp({ status: "live" }))).toEqual({ done: "live as tides" });
+    expect(projectStep(sp({ status: "live", privateRepo: "eric/tides" }))).toEqual({ done: "live as tides, eric/tides" });
+    expect(projectStep(sp({ status: "handed-off", privateRepo: "eric/tides" }))).toEqual({ done: "handed off as tides, eric/tides" });
+    expect(projectStep(sp({ status: "handed-off" }))).toEqual({ done: "handed off as tides" });
+    expect(projectStep(sp({ status: "rejected" }))).toEqual({ fail: "the project was rejected" });
+    expect(projectStep(sp({ status: "stopped" }))).toEqual({ fail: "the project was stopped" });
+    expect(projectStep(sp({ status: "building" }))).toEqual({ wait: "in the incubator: building", needsYou: false });
+    expect(PROJECT_GONE).toBe("the project was dismissed");
+  });
+
+  test("nextToStart takes no place and never reads repoFull for it", () => {
+    const tasks = [card("t1", "web", "running"), card("t2", "web", "running"), card("t3", "api", "running"), proj("t4")];
+    const repoFull = (repo: string): boolean => {
+      if (repo === "~goal") throw new Error("repoFull read for a project card");
+      return false;
+    };
+    expect(nextToStart(tasks, { working: 3, repoFull, cards: tasks }).map((t) => t.id)).toEqual(["t4"]);
+  });
+
+  test("afterMet and afterWait", () => {
+    expect(afterMet(proj("t1", "done"))).toBe(true);
+    expect(afterMet(proj("t1", "running"))).toBe(false);
+    const failed = proj("t1", "failed", { outcome: "the project was rejected", sprout: "sp_aaaaaaaaaaaa" });
+    const after = { ...card("t2", "web"), after: ["t1"] };
+    expect(afterWait(after, [failed, after])).toEqual({ words: "waits for t1, which failed", blocked: true });
+  });
+
+  test("isRunCard tells the two kinds apart", () => {
+    expect(isRunCard(proj("t1"))).toBe(false);
+    expect(isRunCard(card("t2", "web"))).toBe(true);
+  });
+
+  test("the notes name new project where a repo goes", () => {
+    expect(projectNote(proj("t1"), "the project waits on your yes in the incubator", "waits")).toBe('t1 (new project "a tide chart app") the project waits on your yes in the incubator');
+    expect(projectNote(proj("t1"), "live as tides", "done")).toBe(
+      ["canopy: a task you started has settled", "task t1: a tide chart app (new project)", "outcome: done", "result: live as tides"].join("\n"),
+    );
+    expect(projectNote(proj("t1"), "the project was rejected", "failed")).toContain("outcome: failed");
+    expect(startNote(proj("t1"), "no stages")).toContain("task t1: a tide chart app (new project)");
   });
 });

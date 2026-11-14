@@ -8,7 +8,7 @@ import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
 import { inputType, isSeedId } from "./sprout";
 import { isBranchName } from "./treewords";
-import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type BranchTreeState, type Repo, type Run, type RunBranchState } from "./types";
+import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type RunCardAction, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type BranchTreeState, type Repo, type Run, type Sprout, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -30,6 +30,12 @@ export const RESULT_CHARS = 1200;
 /** Whether a card makes a new project in the incubator rather than starting
  *  a run (FR-067 plan 3). */
 export const isProjectCard = (t: Pick<CoordTask, "action">): boolean => t.action === "project";
+
+/** Whether a card starts a run of its own: any card but a project card. */
+export const isRunCard = (t: CoordTask): t is CoordTask & { action: RunCardAction } => !isProjectCard(t);
+
+/** Where a card works, in a note's words: its repo, or that it makes a new project. */
+const cardWhere = (t: Pick<CoordTask, "action" | "repo">): string => (isProjectCard(t) ? "new project" : `repo ${t.repo}`);
 
 /** A card as the coordinator proposes it, before canopy numbers it. */
 export type PlannedTask = Omit<CoordTask, "id" | "state">;
@@ -388,7 +394,8 @@ export const cardLanded = (t: Pick<CoordTask, "state" | "outcome">): boolean => 
 /** Whether a card is done as far as `after` goes: it landed, or it ran in a
  *  kept tree and settled done (there is nothing of it to land). `cardLanded`
  *  keeps its own meaning for `adopt` and the page. */
-export const afterMet = (t: Pick<CoordTask, "state" | "outcome" | "tree">): boolean => cardLanded(t) || (t.tree !== undefined && t.state === "done");
+export const afterMet = (t: Pick<CoordTask, "state" | "outcome" | "tree"> & { action?: CoordTask["action"] }): boolean =>
+  cardLanded(t) || ((t.tree !== undefined || t.action === "project") && t.state === "done");
 
 /** Whether a settled card may reopen: a later run on its branch takes it
  *  (the hub's `adopt`), so it needs a branch, one not dropped. A group card
@@ -396,7 +403,7 @@ export const afterMet = (t: Pick<CoordTask, "state" | "outcome" | "tree">): bool
  *  in its tree that names its coordinator (`adoptInTree`), so it needs to
  *  have run there (`treeRepo`): one whose tree failed while being made
  *  never did, and nothing reopens it. */
-const mayReopen = (c: CoordTask): boolean => (c.tree !== undefined ? c.treeRepo !== undefined : c.branch !== undefined) && c.outcome !== "dropped";
+const mayReopen = (c: CoordTask): boolean => !isProjectCard(c) && (c.tree !== undefined ? c.treeRepo !== undefined : c.branch !== undefined) && c.outcome !== "dropped";
 
 /** A group card that settled "needs you": its group waits on Eric, who may
  *  still pick a winner and land it, so the hub reads the card again. */
@@ -455,9 +462,10 @@ export function nextToStart(
   const out: CoordTask[] = [];
   let going = ctx.working;
   for (const t of ordered) {
-    if (going >= COORD_AT_ONCE) break;
-    const need = t.times ?? 1;
-    if (t.state !== "queued" || afterWait(t, ctx.cards) || going + need > COORD_AT_ONCE || (t.tree === undefined && ctx.repoFull(t.repo, need))) continue;
+    // a project card works in the incubator, which holds it to its own limit
+    const need = isProjectCard(t) ? 0 : (t.times ?? 1);
+    if (t.state !== "queued" || afterWait(t, ctx.cards) || going + need > COORD_AT_ONCE) continue;
+    if (!isProjectCard(t) && t.tree === undefined && ctx.repoFull(t.repo, need)) continue;
     out.push(t);
     going += need;
   }
@@ -627,7 +635,7 @@ export function groupSettled(group: Pick<RunGroup, "state">): { state: "done" | 
 export function startNote(task: CoordTask, error: string): string {
   return [
     "canopy: a task you started could not start",
-    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
     "outcome: failed",
     `result: ${oneLine(error) || "(none)"}`,
   ].join("\n");
@@ -644,6 +652,40 @@ export const treeDoneWords = (branch: string): string => `done in tree ${branch}
 export function treeFailWords(branch: string, why: string | undefined): string {
   const lines = (why ?? "").split("\n").map((l) => l.trim()).filter(Boolean);
   return `tree ${branch} failed: ${lines.length > 0 ? lines.join("; ") : "its setup failed"}`;
+}
+
+/** What a project card does next, from its sprout's status: wait (and whether
+ *  the wait is on Eric), settle done, or fail. */
+export type ProjectStep = { wait: string; needsYou: boolean } | { done: string } | { fail: string };
+
+/** How a project card reads when its sprout is dismissed. */
+export const PROJECT_GONE = "the project was dismissed";
+
+export function projectStep(s: Pick<Sprout, "status" | "questions" | "parked" | "slug" | "privateRepo">): ProjectStep {
+  const where = s.privateRepo ? `, ${s.privateRepo}` : "";
+  switch (s.status) {
+    case "clarifying":
+      return s.questions?.length ? { wait: "the project waits on your answers in the incubator", needsYou: true } : { wait: "in the incubator: clarifying", needsYou: false };
+    case "approving": return { wait: "the project waits on your yes in the incubator", needsYou: true };
+    case "parked": return { wait: `the project is parked: ${s.parked ?? "see the incubator"}`, needsYou: true };
+    case "live": return { done: `live as ${s.slug}${where}` };
+    case "handed-off": return { done: `handed off as ${s.slug}${where}` };
+    case "rejected": return { fail: "the project was rejected" };
+    case "stopped": return { fail: "the project was stopped" };
+    default: return { wait: `in the incubator: ${s.status}`, needsYou: false };
+  }
+}
+
+/** The note a project card sends into its coordinator's chat: one line while
+ *  it waits, `settleNote`'s four lines once it is done or failed. */
+export function projectNote(task: CoordTask, words: string, state: "waits" | "done" | "failed"): string {
+  if (state === "waits") return `${task.id} (new project "${task.title}") ${words}`;
+  return [
+    "canopy: a task you started has settled",
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
+    `outcome: ${state}`,
+    `result: ${oneLine(words) || "(none)"}`,
+  ].join("\n");
 }
 
 /** Whether a card's outcome is a wait for its tree (making it, or busy). */
@@ -680,7 +722,7 @@ export function treeNote(task: CoordTask, run: Run, outcome: string): string {
   const result = run.result?.text?.trim() || run.error?.trim() || "";
   return [
     "canopy: a task you started has settled",
-    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
     `outcome: ${outcome}`,
     `result: ${result ? oneLine(result) : "(none)"}`,
     `tree: ${task.tree ?? ""}, a kept worktree; Eric merges it from there`,
@@ -726,7 +768,7 @@ export function groupNote(task: CoordTask, group: RunGroup, outcome: ChildOutcom
   const result = group.reason ?? why ?? "";
   const lines = [
     "canopy: a task you started has settled",
-    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
     `outcome: ${outcome}`,
     `result: best of ${group.expectedMembers}${result ? `, ${oneLine(result)}` : ""}`,
   ];
@@ -746,7 +788,7 @@ export function settleNote(task: CoordTask, run: Run, landing: ChildLanding = {}
     : run.result?.text?.trim() || run.error?.trim() || "";
   const lines = [
     "canopy: a task you started has settled",
-    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
     `outcome: ${how?.outcome ?? run.status}`,
     `result: ${result ? oneLine(result) : "(none)"}`,
   ];
@@ -767,7 +809,7 @@ export function flowNote(task: CoordTask, flow: Flow, landing: ChildLanding = {}
   const line = step ? oneLine(step.reason?.trim() || step.summary?.trim() || "") : "";
   const lines = [
     "canopy: a task you started has settled",
-    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
     `outcome: ${how?.outcome ?? flow.status}`,
     `result: ${flow.workflow} ${flow.status}${step && line ? `, ${step.name}: ${line}` : ""}`,
   ];
@@ -784,7 +826,7 @@ export function flowNote(task: CoordTask, flow: Flow, landing: ChildLanding = {}
 export function flowGoneNote(task: CoordTask, outcome: ChildOutcomeWord, landing: ChildLanding = {}): string {
   const lines = [
     "canopy: a task you started has settled",
-    `task ${task.id}: ${task.title} (repo ${task.repo})`,
+    `task ${task.id}: ${task.title} (${cardWhere(task)})`,
     `outcome: ${outcome}`,
     `result: ${task.workflow ?? "its workflow"} ended; its flow is no longer kept`,
   ];
