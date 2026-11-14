@@ -170,8 +170,18 @@ export const PANE_FORMAT = "#{pane_current_command}\t#{pane_title}\t#{alternate_
 
 export const paneArgs = (base: string[], id: string): string[] => [...base, "display-message", "-p", "-t", sessionName(id), PANE_FORMAT];
 
-/** a line typed into a shell, Enter and all */
-export const sendLineArgs = (base: string[], id: string, line: string): string[] => [...base, "send-keys", "-t", sessionName(id), line, "Enter"];
+/** A line typed into a shell, ended with C-j rather than Enter. Both are
+ *  accept-line in bash, zsh and fish, but ble.sh (loaded in the shells
+ *  container since 2026-11-11) turns an Enter into a newline whenever five
+ *  or more characters wait behind it, and the page's terminal answers
+ *  tmux's queries just as a new shell's line goes in. That left codex's
+ *  line sitting in `-- MULTILINE --` mode, never run. ble.sh runs on C-j
+ *  whatever waits (`LINE_END`, also the pty path's). */
+export const sendLineArgs = (base: string[], id: string, line: string): string[] => [...base, "send-keys", "-t", sessionName(id), line, "C-j"];
+
+/** what ends a line canopy types into a shell on a plain pty: C-j, for the
+ *  same reason as `sendLineArgs` */
+export const LINE_END = "\n";
 
 /** keys to the pane: tmux key names (Escape, Enter), or with `literal` text typed as is */
 export const keysArgs = (base: string[], id: string, keys: string[], literal = false): string[] => [

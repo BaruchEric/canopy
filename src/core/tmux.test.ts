@@ -27,6 +27,8 @@ import {
   respawnArgs,
   interruptArgs,
   keysArgs,
+  LINE_END,
+  sendLineArgs,
   parseTaskPanes,
   taskCommand,
   setupFirst,
@@ -388,6 +390,43 @@ test("keysArgs: named keys as they are, literal text after -l", () => {
   expect(keysArgs(base, "ab", ["Escape"])).toEqual([...base, "send-keys", "-t", sessionName("ab"), "Escape"]);
   expect(keysArgs(base, "ab", ["/exit"], true)).toEqual([...base, "send-keys", "-t", sessionName("ab"), "-l", "/exit"]);
 });
+
+test("a line typed into a shell ends with C-j, which ble.sh runs even with input waiting behind it", () => {
+  const base = ["tmux", "-S", "/s"];
+  expect(sendLineArgs(base, "ab", "codex --no-daemon")).toEqual([...base, "send-keys", "-t", sessionName("ab"), "codex --no-daemon", "C-j"]);
+  expect(LINE_END).toBe("\n");
+});
+
+const blesh = join(process.env["HOME"] ?? "", ".local/share/blesh/ble.sh");
+test.skipIf(!Bun.which("tmux") || !(await Bun.file(blesh).exists()))(
+  "ble.sh runs the line when a terminal reply lands right behind it, where an Enter would only add a newline",
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cl-"));
+    const real = [Bun.which("tmux") ?? "tmux", "-S", join(dir, "s"), "-f", "/dev/null"];
+    const rc = join(dir, "rc");
+    await writeFile(rc, `source ${shellQuote(blesh)} --noattach\nPS1='$ '\nble-attach\n`);
+    const screen = () => Bun.spawnSync([...real, "capture-pane", "-p", "-t", sessionName(ID)]).stdout.toString();
+    const send = (args: string[]) => Bun.spawnSync(args).exitCode;
+    try {
+      const shell = `bash --rcfile ${shellQuote(rc)} -i`;
+      expect(send([...real, "new-session", "-d", "-s", sessionName(ID), "-x", "120", "-y", "20", "-e", `USER=${process.env["USER"] || "t"}`, shell])).toBe(0);
+      for (let i = 0; i < 100 && !screen().includes("$ "); i++) await Bun.sleep(50);
+      // the page's terminal answering tmux's DA2 query, just behind the line
+      expect(send([...sendLineArgs(real, ID, "echo RAN-$((40+2))"), "\x1b[>0;276;0c"])).toBe(0);
+      let out = "";
+      for (let i = 0; i < 60 && !out.includes("RAN-42"); i++) {
+        await Bun.sleep(50);
+        out = screen();
+      }
+      expect(out).toContain("RAN-42");
+      expect(out).not.toContain("MULTILINE");
+    } finally {
+      send([...real, "kill-server"]);
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+  15_000,
+);
 
 describe("parseActivity", () => {
   test("parseActivity reads seconds into ms and skips junk", () => {

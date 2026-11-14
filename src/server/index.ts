@@ -60,7 +60,7 @@ import { applyModes, FLOW_MODES_FILE } from "../core/flowmodes";
 import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
-import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
+import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, LINE_END, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
 import { choiceOnScreen, codexAgentListOnScreen, steerWords } from "../core/steer";
 import { isPerson } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
@@ -3038,7 +3038,7 @@ async function resumeTerm(
   } else {
     live = openPtyTerm(state, { repo, path: repo.path, tree: null, id, place, attach: false, start: null, refused: null, prompt: "", label: "", device: null, caller: null, ...size }, size);
     await Bun.sleep(400);
-    live.pty?.session.write(`${line}\r`);
+    live.pty?.session.write(`${line}${LINE_END}`);
   }
   return termInfo(state, live);
 }
@@ -3222,7 +3222,7 @@ async function typeAgent(state: ServerState, live: LiveTerm, repo: Repo, agent: 
   const line = prompt ? `${base} ${shellQuote(prompt)}` : base;
   await Bun.sleep(400);
   if (state.tmux) await sendLine(state.tmux, live.info.id, line);
-  else live.pty?.session.write(`${line}\r`);
+  else live.pty?.session.write(`${line}${LINE_END}`);
 }
 
 /** What the agent in a canopy shell hands its own commands, beside what the
