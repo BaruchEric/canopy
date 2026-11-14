@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { startStageRunner, type RunnerOptions as StageRunnerOptions } from "../stage/runner";
 import { ACTIONS } from "./actions";
 import { ClaudeDriver } from "./claudedrive";
+import { goalAnchor } from "./coordinator";
 import { bunSpawn, type RpcSpawn } from "./codexrpc";
 import { CodexDriver } from "./codexrun";
 import { Flows } from "./flow";
@@ -182,6 +183,16 @@ describe("a coordinate run", () => {
     expect(() => runner.start(repo("a"), "coordinate", coord, "more", DEFAULT_AGENT)).toThrow("a already has a coordinator going");
     runner.start(repo("b"), "coordinate", coord, "ship it", DEFAULT_AGENT);
     runner.stop(co.id);
+  });
+
+  test("goals from the top are not one at a time: several start at the anchor, while a repo keeps one", () => {
+    const { runner } = setup();
+    const one = runner.start(goalAnchor("/r"), "coordinate", coord, "ship it", DEFAULT_AGENT, undefined, undefined, undefined, { cwd: "/seeds/one" });
+    const two = runner.start(goalAnchor("/r"), "coordinate", coord, "and this", DEFAULT_AGENT, undefined, undefined, undefined, { cwd: "/seeds/two" });
+    expect([one.repoId, two.repoId]).toEqual(["~goal", "~goal"]);
+    expect([isRunActive(one), isRunActive(two)]).toEqual([true, true]);
+    runner.start(repo("a"), "coordinate", coord, "ship it", DEFAULT_AGENT, undefined, undefined, undefined, { cwd: "/seeds/three" });
+    expect(() => runner.start(repo("a"), "coordinate", coord, "more", DEFAULT_AGENT, undefined, undefined, undefined, { cwd: "/seeds/four" })).toThrow("a already has a coordinator going");
   });
 
   test("its prompt is the brief and the goal, and its end reads no status", async () => {

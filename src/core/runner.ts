@@ -14,6 +14,7 @@ import { branchPrompt, buildPrompt, busyWith, type ActionSpec } from "./actions"
 import { normalizeAgent } from "./agent";
 import { CapacityHeldError, type Decision } from "./capacity";
 import { ClaudeDriver, cliArgs } from "./claudedrive";
+import { isGoalAnchor } from "./coordinator";
 import type { RpcProc } from "./codexrpc";
 import { appServerArgs, CodexDriver, runsInside } from "./codexrun";
 import { answerMisfit, RunCtx, type DriveSpec, type RememberHook, type RunDriver } from "./driver";
@@ -406,7 +407,9 @@ export class Runner {
     }
     if (coordinate) {
       if (scope || branch) throw new Error("a coordinator starts at a repo, not on a workspace or a branch");
-      if (this.coordinatorFor(repo.id)) throw new Error(`${repo.name} already has a coordinator going`);
+      // a repo has one coordinator at a time; goals started from the top
+      // share the anchor, and any number of them may run
+      if (!isGoalAnchor(repo.id) && this.coordinatorFor(repo.id)) throw new Error(`${repo.name} already has a coordinator going`);
     } else if (branch) {
       if (scope) throw new Error("a workspace run works in its folders, not on a branch");
       const sibling = extras.flowOwner !== undefined && [...this.live.values()].some((live) =>
