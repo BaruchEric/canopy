@@ -693,6 +693,13 @@ describe("a card in a kept tree", () => {
     expect(lane(tcard({ limited: 0 }), { runs: runsOf({ ...tr, status: "limited" }) })?.say).toEqual({ kind: "none", why: "it carries on after the reset" });
   });
 
+  test("a tree card that never ran in its tree takes no words and offers no resume", () => {
+    const failed = card({ state: "failed", tree: "feat/x", outcome: "tree feat/x failed: setup exited 3" });
+    expect(lane(failed)).toMatchObject({ say: { kind: "none", why: "it never ran in its tree" }, canResume: false });
+    // a run with no treeRepo is the same to the server
+    expect(lane(tcard({ treeRepo: undefined }), { runs: runsOf({ ...tr, status: "stopped" }) })).toMatchObject({ say: { kind: "none", why: "it never ran in its tree" }, canResume: false });
+  });
+
   test("its last arc is the tree: moss when done, hair while running", () => {
     const last = (task: CoordTask, r: Run) => lane(task, { runs: runsOf(r) })?.steps.at(-1);
     expect(last(tcard(), tr)).toEqual({ label: "tree", tone: "moss" });

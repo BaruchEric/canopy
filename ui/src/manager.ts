@@ -134,6 +134,8 @@ export function sayTarget(task: CoordTask, run: Run | undefined, flow: Flow | un
 export function treeSayTarget(task: CoordTask, run: Run | undefined, coord: Run): SayTarget {
   const none = (why: string): SayTarget => ({ kind: "none", why });
   if (notStarted(task)) return none("it has not started");
+  // the server answers 409 for a card with no run or no tree of its own
+  if (!task.run || !task.treeRepo) return none("it never ran in its tree");
   if (run && isRunActive(run)) return run.harness === "codex" ? none("a Codex worker takes no message mid-turn") : { kind: "steer", runId: run.id };
   if (task.limited === 0) return none("it carries on after the reset");
   if (!isRunActive(coord)) return none("its goal has ended");
