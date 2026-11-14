@@ -126,6 +126,8 @@ function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string
   const where = ctx.known(repo);
   if (where === null) return { error: `${at}.repo: no repo ${repo} on this backend` };
   if (where === "remote") return { error: `${at}.repo: ${repo} is on another host; a task runs in a local repo` };
+  // a tree's own card is no checkout to cut a branch from or to name a tree on
+  if (ctx.treeCard(repo)) return { error: `${at}.repo: ${repo} is a kept worktree; name its repo and put the branch in "tree"` };
   const action = t["action"];
   if (action !== "propose" && action !== "ask") return { error: `${at}.action must be propose or ask` };
   const times = t["times"];
@@ -186,7 +188,6 @@ function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string
     if (typeof tree !== "string") return { error: `${at}.tree must be a branch name` };
     if (!isBranchName(tree)) return { error: `${at}.tree: ${tree} is not a branch name git accepts` };
     if (out.times !== undefined || out.workflow !== undefined) return { error: `${at}.tree: a card in a tree runs once, without a workflow` };
-    if (ctx.treeCard(repo)) return { error: `${at}.repo: ${repo} is a kept worktree; name its repo and put the branch in "tree"` };
     out.tree = tree;
   }
   const refused = harnessRefusal(at, out.equip?.loadout, out.action, out.workflow, ctx);
@@ -278,8 +279,13 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
     ...(filesSet ? (b["files"] !== null ? { files: b["files"] } : {}) : t.files ? { files: t.files } : {}),
     ...(treeSet ? (b["tree"] !== null ? { tree: b["tree"] } : {}) : t.tree ? { tree: t.tree } : {}),
   };
+  // `merged` carries the stored workflow only when the edit names one, so a
+  // stored workflow is checked against new files or a new tree here
   if (filesSet && b["files"] !== null && !flowSet && t.workflow !== undefined) {
     return { error: `${t.id}.files: a card with files runs once, without a workflow` };
+  }
+  if (treeSet && b["tree"] !== null && !flowSet && t.workflow !== undefined) {
+    return { error: `${t.id}.tree: a card in a tree runs once, without a workflow` };
   }
   if (!flowSet && t.workflow !== undefined && typeof merged["times"] === "number" && merged["times"] > 1) {
     return { error: `${t.id}: a card with a workflow starts one run` };
@@ -287,8 +293,15 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   const ids = new Set(ctx.cards.map((c) => c.id));
   ids.add(t.id);
   const repoGone = !has("repo") ? t.repo : null;
-  // files the card already keeps stay valid even when the context no longer lists them
-  const check: PlanContext = { ...ctx, files: [...ctx.files, ...(filesSet ? [] : (t.files ?? []))], known: (r) => (r === repoGone ? "local" : ctx.known(r)) };
+  // files the card already keeps stay valid even when the context no longer
+  // lists them, and so does the repo it keeps, even a tree's card it was
+  // given before a card there was refused; moving it onto one is refused
+  const check: PlanContext = {
+    ...ctx,
+    files: [...ctx.files, ...(filesSet ? [] : (t.files ?? []))],
+    known: (r) => (r === repoGone ? "local" : ctx.known(r)),
+    treeCard: (r) => r !== repoGone && ctx.treeCard(r),
+  };
   const got = checkCard(merged, t.id, t.id, ids, check);
   if ("error" in got) return got;
   // a new action or workflow is checked against the loadout the card keeps
@@ -333,21 +346,25 @@ export const afterMet = (t: Pick<CoordTask, "state" | "outcome" | "tree">): bool
 
 /** Whether a settled card may reopen: a later run on its branch takes it
  *  (the hub's `adopt`), so it needs a branch, one not dropped. A group card
- *  has no branch of its own to match. A tree card reopens on a follow-up
- *  run in its tree, so a tree makes it reopenable too. */
-const mayReopen = (c: CoordTask): boolean => (c.branch !== undefined || c.tree !== undefined) && c.outcome !== "dropped";
+ *  has no branch of its own to match. A tree card reopens on a later run
+ *  in its tree that names its coordinator (`adoptInTree`), so it needs to
+ *  have run there (`treeRepo`): one whose tree failed while being made
+ *  never did, and nothing reopens it. */
+const mayReopen = (c: CoordTask): boolean => (c.tree !== undefined ? c.treeRepo !== undefined : c.branch !== undefined) && c.outcome !== "dropped";
 
 /** A group card that settled "needs you": its group waits on Eric, who may
  *  still pick a winner and land it, so the hub reads the card again. */
 export const groupNeedsEric = (c: Pick<CoordTask, "group" | "state" | "outcome">): boolean => c.group !== undefined && c.state === "failed" && c.outcome === "needs you";
 
 /** What a card waits for, in words, or null when it waits for nothing (no
- *  `after`, or every card named has landed). `blocked` says a card it waits
- *  for will not land by itself: it failed, ended done without landing (no
- *  change), was dropped or was removed. A group card that needs Eric is not
- *  blocked, since he may still pick its winner and land it. `reopens` names
- *  that card when a new run on its branch may still reopen it. */
-export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean; reopens?: string } | null {
+ *  `after`, or every card named is done as `afterMet` counts it: landed, or
+ *  done in its kept tree). `blocked` says a card it waits for will not get
+ *  there by itself: it failed, ended done without landing (no change), was
+ *  dropped or was removed. A group card that needs Eric is not blocked,
+ *  since he may still pick its winner and land it. `reopens` names that
+ *  card when a new run may still reopen it (`mayReopen`): on its branch,
+ *  or, for a tree card, in its tree, which `reopensTree` then names. */
+export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words: string; blocked: boolean; reopens?: string; reopensTree?: string } | null {
   const open = (task.after ?? []).filter((id) => {
     const c = cards.find((x) => x.id === id);
     return !c || !afterMet(c);
@@ -356,7 +373,7 @@ export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words
   for (const id of open) {
     const c = cards.find((x) => x.id === id);
     if (!c) return { words: `waits for ${id}, which was removed`, blocked: true };
-    const reopens = mayReopen(c) ? { reopens: id } : {};
+    const reopens = mayReopen(c) ? { reopens: id, ...(c.tree !== undefined ? { reopensTree: c.tree } : {}) } : {};
     // Eric picks a winner, or lands one, and the card is read again
     if (c.state === "failed" && groupNeedsEric(c)) return { words: `waits for ${id}, whose group needs Eric`, blocked: false };
     if (c.state === "failed") return { words: `waits for ${id}, which failed`, blocked: true, ...reopens };
@@ -740,10 +757,14 @@ export const lateFailNote = (task: CoordTask, outcome: ChildOutcomeWord): string
   `canopy: task ${task.id} (${task.title}) settled ${task.outcome ?? "done"}, then failed: ${outcome}`;
 
 /** The note for a queued card whose `after` can never be met by itself.
- *  `reopens` names the card it waits for when a new run on that card's
- *  branch may still reopen it (`afterWait`). */
-export const blockedNote = (task: CoordTask, words: string, reopens?: string): string =>
-  `canopy: task ${task.id} (${task.title}) ${words}; it stays queued until Eric takes its after off or removes it${reopens ? `, or a new run on ${reopens}'s branch reopens ${reopens}` : ""}`;
+ *  `reopens` names the card it waits for when a new run may still reopen
+ *  it (`afterWait`): one on its branch, or, when `tree` names its kept
+ *  tree, a follow-up there, since only a run that names the coordinator
+ *  reopens a tree card. */
+export const blockedNote = (task: CoordTask, words: string, reopens?: string, tree?: string): string => {
+  const reopen = !reopens ? "" : tree !== undefined ? `, or a follow-up in ${reopens}'s tree ${tree} reopens ${reopens}` : `, or a new run on ${reopens}'s branch reopens ${reopens}`;
+  return `canopy: task ${task.id} (${task.title}) ${words}; it stays queued until Eric takes its after off or removes it${reopen}`;
+};
 
 /** what a note's last line starts with: every card's state as it is said */
 export const CARDS_NOW = "cards now: ";

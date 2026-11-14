@@ -106,8 +106,9 @@ export interface CoordinatorDeps {
   /** the names in a goal's files folder, which a card's `files` may list:
    *  none for a goal started at a repo, and none when absent (FR-067) */
   goalFiles?: (coordId: string) => Promise<readonly string[]>;
-  /** whether a repo id is a kept worktree of this backend, which a card's
-   *  `tree` may not name; absent counts none (FR-067) */
+  /** whether a repo id is a kept worktree of this backend, which no card
+   *  may name as its repo, with a `tree` or without; absent counts none
+   *  (FR-067) */
   treeCard?: (repo: string) => boolean;
   /** a coordinator's cards changed: send its run out again */
   broadcast: (run: Run) => void;
@@ -501,7 +502,9 @@ export class CoordinatorHub {
    *  held, the cards its `after` names have not landed, this pass's words,
    *  its repo has no slot, or the governor's window it waited on. A card in
    *  a kept tree holds no branch slot, so it keeps the words its last start
-   *  answered while its tree is made or busy (FR-067). */
+   *  answered while its tree is made or busy, through the pass; a pass that
+   *  ends without trying it drops them (`pump`), since it then waits for a
+   *  place in the goal (FR-067). */
   private waitWords(t: CoordTask, tasks: readonly CoordTask[], held: boolean, passed: ReadonlyMap<string, string>): string | undefined {
     if (held) return HELD_WORD;
     const wait = afterWait(t, tasks);
@@ -523,7 +526,7 @@ export class CoordinatorHub {
     }
     if (this.blockedSaid.get(key) === wait.words) return;
     this.blockedSaid.set(key, wait.words);
-    this.queueNote(coordId, blockedNote(t, wait.words, wait.reopens));
+    this.queueNote(coordId, blockedNote(t, wait.words, wait.reopens, wait.reopensTree));
   }
 
   /** the cards a start with ids named that still wait in the queue */
@@ -562,7 +565,16 @@ export class CoordinatorHub {
           tasks.filter((t) => !passed.has(t.id)),
           { working: this.working(coord), repoFull: this.deps.repoFull, cards: tasks, first: this.firstFor(coordId, tasks) },
         );
-        if (!next) return;
+        if (!next) {
+          // a tree card this pass never tried waits for a place in the goal,
+          // not for its tree: the tree's words from an earlier pass may no
+          // longer be true, so it says nothing, as a plain card in a full goal does
+          for (const t of tasks) {
+            if (t.state !== "queued" || t.tree === undefined || passed.has(t.id)) continue;
+            this.update(coordId, t.id, (x) => (x.state === "queued" && isTreeWait(x.outcome) ? withOutcome(x, undefined) : x));
+          }
+          return;
+        }
         const key = `${coordId}:${next.id}`;
         const priority: Priority = this.released.delete(key) ? "interactive" : "normal";
         let out: ChildStart;
@@ -908,15 +920,17 @@ export class CoordinatorHub {
     }
   }
 
-  /** "Start anyway" on a held card, once as interactive. */
+  /** "Start anyway" on a held card, once as interactive. A limited tree
+   *  card whose resume still finds its tree busy started nothing, so it
+   *  answers 409 with the tree's words. */
   async release(coordId: string, taskId: string): Promise<void> {
     const coord = this.deps.run(coordId);
     const task = coord?.tasks?.find((t) => t.id === taskId);
     if (!coord || !task || !(isCapacityWords(task.outcome) || waitsForTree(task))) throw new CoordError(`card ${taskId} is not waiting for capacity`, 404);
     if (task.state === "running") {
-      const why = await this.resumeLimited(coordId, taskId, "interactive");
-      if (why !== null) throw new CoordError(`card ${taskId} cannot resume: ${why}`);
-      return;
+      const got = await this.resumeLimited(coordId, taskId, "interactive");
+      if (got === null) return;
+      throw new CoordError("busy" in got ? got.busy : `card ${taskId} cannot resume: ${got.why}`);
     }
     this.released.add(`${coordId}:${taskId}`);
     await this.pump(coordId);
@@ -924,13 +938,15 @@ export class CoordinatorHub {
 
   /** The child that hit the limit carries on on its branch: a new run, the
    *  card following it, its count kept so a second limit fails the card.
-   *  Null once the card carries on (resumed, or held again); else why it
-   *  does not. A limited child the runner no longer has (the run memory
-   *  went with a restart) fails the card with that why, since nothing
-   *  would ever resume it and the chip would list it for good. */
-  private async resumeLimited(coordId: string, taskId: string, priority: Priority): Promise<string | null> {
+   *  Null once the card carries on (resumed, or held again by the
+   *  governor); `busy` with the tree's words when a tree card's tree is
+   *  still busy, so nothing started; else why it does not. A limited child
+   *  the runner no longer has (the run memory went with a restart) fails
+   *  the card with that why, since nothing would ever resume it and the
+   *  chip would list it for good. */
+  private async resumeLimited(coordId: string, taskId: string, priority: Priority): Promise<{ why: string } | { busy: string } | null> {
     // the queue keeps its errors; the answer comes out by the side
-    const answer = { why: null as string | null };
+    const answer: { why: string | null; busy?: string } = { why: null };
     await this.queue(async () => {
       const coord = this.deps.run(coordId);
       const task = coord?.tasks?.find((t) => t.id === taskId);
@@ -970,14 +986,17 @@ export class CoordinatorHub {
         this.starting.delete(key);
       }
       if ("busy" in out) {
-        this.update(coordId, taskId, (x) => withOutcome(x, out.busy));
+        const busy = out.busy;
+        this.update(coordId, taskId, (x) => withOutcome(x, busy));
+        if (task.tree !== undefined && isTreeWait(busy)) answer.busy = busy;
         return;
       }
       const next = out.run;
       this.update(coordId, taskId, (x) => ({ ...withOutcome(x, undefined), run: next.id, limited: 1, ...(next.branch ? { branch: next.branch.origin } : {}) }));
       this.follow(next);
     });
-    return answer.why;
+    if (answer.busy !== undefined) return { busy: answer.busy };
+    return answer.why === null ? null : { why: answer.why };
   }
 
   /** Every card waiting on a child or a flow that ended is looked at again:

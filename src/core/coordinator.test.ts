@@ -846,10 +846,34 @@ describe("a card in a kept tree", () => {
     expect(one({ tree: "feat/x", times: 2 })).toEqual({ error: "tasks[0].tree: a card in a tree runs once, without a workflow" });
     expect(one({ tree: "feat/x", workflow: "review" }, { workflows: () => [{ name: "review", fromRepo: false }] })).toEqual({ error: "tasks[0].tree: a card in a tree runs once, without a workflow" });
   });
-  test("refuses a tree on a tree card's own repo; a plain card there passes", () => {
+  test("refuses any card on a tree card's own repo, with a tree or without", () => {
     const ctx: Partial<PlanContext> = { known: (r) => (r === "trees:web/feat-x" ? "local" : known(r)), treeCard: (r) => r.startsWith("trees:") };
-    expect(one({ repo: "trees:web/feat-x", tree: "feat/y" }, ctx)).toEqual({ error: 'tasks[0].repo: trees:web/feat-x is a kept worktree; name its repo and put the branch in "tree"' });
-    expect("tasks" in one({ repo: "trees:web/feat-x" }, ctx)).toBe(true);
+    const words = 'tasks[0].repo: trees:web/feat-x is a kept worktree; name its repo and put the branch in "tree"';
+    expect(one({ repo: "trees:web/feat-x", tree: "feat/y" }, ctx)).toEqual({ error: words });
+    expect(one({ repo: "trees:web/feat-x" }, ctx)).toEqual({ error: words });
+  });
+  test("an edit that moves a card onto a tree card's own repo is refused; one that keeps a stored repo is not", () => {
+    const ctx = ctxOf({ known: (r) => (r === "trees:web/feat-x" ? "local" : known(r)), treeCard: (r) => r.startsWith("trees:") });
+    const plain: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "proposed" };
+    const words = 't1.repo: trees:web/feat-x is a kept worktree; name its repo and put the branch in "tree"';
+    expect(editCard(plain, { repo: "trees:web/feat-x" }, ctx)).toEqual({ error: words });
+    expect(editCard({ ...plain, tree: "feat/x" }, { repo: "trees:web/feat-x" }, ctx)).toEqual({ error: words });
+    // a card made before the rule keeps its repo through an edit of its after
+    const old: CoordTask = { ...plain, id: "t2", repo: "trees:web/feat-x", state: "queued" };
+    expect(editCard(old, { after: ["t1"] }, ctxOf({ ...ctx, cards: [plain, old] }))).toEqual({ task: { ...old, after: ["t1"] } });
+  });
+  test("an edit never gives a card both a tree and a workflow or times, in either order", () => {
+    const ctx = ctxOf({ workflows: () => [{ name: "review", fromRepo: false }] });
+    const flow: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "proposed", workflow: "review" };
+    const inTree: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "proposed", tree: "feat/x" };
+    const many: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "proposed", times: 2 };
+    const words = { error: "t1.tree: a card in a tree runs once, without a workflow" };
+    expect(editCard(flow, { tree: "feat/x" }, ctx)).toEqual(words);
+    expect(editCard(inTree, { workflow: "review" }, ctx)).toEqual(words);
+    expect(editCard(many, { tree: "feat/x" }, ctx)).toEqual(words);
+    expect(editCard(inTree, { times: 2 }, ctx)).toEqual(words);
+    // the workflow taken off in the same edit lets the tree on
+    expect(editCard(flow, { tree: "feat/x", workflow: null }, ctx)).toEqual({ task: inTree });
   });
   test("an edit keeps, clears or refuses the tree", () => {
     const t: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "proposed", tree: "feat/x" };
@@ -881,13 +905,23 @@ describe("tree cards: start, wait, settle", () => {
   test("a full repo never holds it", () => {
     expect(nextToStart([tc(), tc({ id: "t2", tree: undefined })], { working: 0, repoFull: () => true, cards: [] }).map((t) => t.id)).toEqual(["t1"]);
   });
-  test("done counts for after; cardLanded keeps its meaning; a failed tree card may reopen", () => {
+  test("done counts for after; cardLanded keeps its meaning; a failed tree card that ran in its tree may reopen, one that never did may not", () => {
     const next = tc({ id: "t2", tree: undefined, after: ["t1"] });
     const done = tc({ state: "done", outcome: "done in tree feat/x" });
     expect(afterMet(done)).toBe(true);
     expect(afterWait(next, [done, next])).toBeNull();
     expect(cardLanded(done)).toBe(false);
-    expect(afterWait(next, [tc({ state: "failed", outcome: "failed" }), next])).toEqual({ words: "waits for t1, which failed", blocked: true, reopens: "t1" });
+    expect(afterWait(next, [tc({ state: "failed", outcome: "failed", treeRepo: "trees:web/feat-x" }), next])).toEqual({ words: "waits for t1, which failed", blocked: true, reopens: "t1", reopensTree: "feat/x" });
+    expect(afterWait(next, [tc({ state: "failed", outcome: "tree feat/x failed: setup exited 3" }), next])).toEqual({ words: "waits for t1, which failed", blocked: true });
+  });
+  test("the blocked note says a follow-up in its tree reopens a tree card, and nothing of reopening for one that never ran there", () => {
+    const next = tc({ id: "t2", title: "tidy the docs", tree: undefined, after: ["t1"] });
+    const ran = afterWait(next, [tc({ state: "failed", outcome: "failed", treeRepo: "trees:web/feat-x" }), next]);
+    expect(blockedNote(next, ran?.words ?? "", ran?.reopens, ran?.reopensTree)).toBe(
+      "canopy: task t2 (tidy the docs) waits for t1, which failed; it stays queued until Eric takes its after off or removes it, or a follow-up in t1's tree feat/x reopens t1",
+    );
+    const never = afterWait(next, [tc({ state: "failed", outcome: "tree feat/x failed: setup exited 3" }), next]);
+    expect(blockedNote(next, never?.words ?? "", never?.reopens, never?.reopensTree)).toBe("canopy: task t2 (tidy the docs) waits for t1, which failed; it stays queued until Eric takes its after off or removes it");
   });
   test("settles on its run alone", () => {
     expect(treeSettled(inPlace(), "feat/x")).toEqual({ state: "done", outcome: "done in tree feat/x" });

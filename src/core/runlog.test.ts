@@ -582,14 +582,26 @@ test("a kept coordinator keeps its cards' times and group", async () => {
   expect((await readKeptRun(dir, value.id))?.tasks).toEqual([{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "running", times: 3, group: "g-a1b2c3d4" }]);
 });
 
-test("a kept coordinator keeps each card's loadout, workflow, after, flow, branch and limit", async () => {
+test("a kept coordinator keeps each card's loadout, workflow, after, flow, branch, limit, files and tree", async () => {
   const dir = join(root, "cardfacts");
   const cards: CoordTask[] = [
     { id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "done", outcome: "ready", equip: { loadout: "feature", model: "opus", effort: "high", skills: ["tdd"], mcp: ["probe"] }, workflow: "build-and-check", workflowRepo: true, flow: "f1a2b3c4", branch: "b9c8d7e6", limited: 1 },
     { id: "t2", title: "u", repo: "repo", note: "m", action: "propose", state: "queued", equip: { loadout: "quick" }, after: ["t1"] },
+    { id: "t3", title: "v", repo: "repo", note: "o", action: "ask", state: "done", outcome: "done in tree feat/x", run: "c1d2e3f4", files: ["shot.png", "spec.md"], tree: "feat/x", treeRepo: "trees:repo-1a2b3c4d/feat-x" },
   ];
   const value = run({ id: "coordfacts", action: "coordinate", tasks: cards });
   const log = open(dir, value);
   await log.settle(value);
   expect((await readKeptRun(dir, value.id))?.tasks).toEqual(cards);
+});
+
+test("a kept coordinator written before cards had files or a tree still reads", async () => {
+  const dir = join(root, "cardsold");
+  const value = run({ id: "coordold", action: "coordinate", tasks: [{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "done", outcome: "landed", run: "c1d2e3f4" }] });
+  const log = open(dir, value);
+  await log.settle(value);
+  // as an older canopy wrote it: no files, tree or treeRepo on any card
+  const raw = await readFile(join(log.folder, RUN_FILE), "utf8");
+  for (const key of ['"files"', '"tree"', '"treeRepo"']) expect(raw).not.toContain(key);
+  expect((await readKeptRun(dir, value.id))?.tasks).toEqual([{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "done", outcome: "landed", run: "c1d2e3f4" }]);
 });

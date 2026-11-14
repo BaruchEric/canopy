@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseTreesRecord, treeDir } from "../core/branchtrees";
+import { treeStep } from "../core/coordinator";
 import { exec } from "../core/exec";
 import type { BranchTree, BranchTreesInfo, Repo, ServerEvent } from "../core/types";
 import { BranchTrees, type TreesDeps } from "./branchtrees";
@@ -225,6 +226,32 @@ test("remove refuses work and open shells unless forced, and takes the branch on
   expect((await sh(w.repo.path, "branch", "--list", "feat")).trim()).toBe("");
 });
 
+test("merge, and remove without force, refuse while a run is at work in the tree; force still removes it", async () => {
+  const at = new Map<string, string>();
+  const w = await world({ runIn: (dir) => at.get(dir) }, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat/x", caches: false }));
+  await w.trees.idle();
+  at.set(tree.dir, "run c1a2b3c4 (Ask)");
+  const words = "run c1a2b3c4 (Ask) is at work in tree feat/x; stop it first";
+  const merge = await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat/x" });
+  expect(merge.status).toBe(409);
+  expect((await body<{ error: string }>(merge)).error).toBe(words);
+  const remove = await post(w.trees, "/api/trees/remove", { repo: w.repo.id, tree: "feat/x" });
+  expect(remove.status).toBe(409);
+  expect((await body<{ error: string }>(remove)).error).toBe(words);
+  // nothing moved: the tree is still there and still ready
+  expect(existsSync(tree.dir)).toBe(true);
+  expect((await body<BranchTreesInfo>(await get(w.trees))).repos[0]?.trees[0]?.state).toBe("ready");
+  // a run in another folder holds nothing here
+  at.clear();
+  at.set(join(w.root, "elsewhere"), "run d5e6f7a8 (Ask)");
+  expect((await post(w.trees, "/api/trees/merge", { repo: w.repo.id, tree: "feat/x", keep: true })).status).toBe(202);
+  await w.trees.idle();
+  at.set(tree.dir, "run c1a2b3c4 (Ask)");
+  expect((await post(w.trees, "/api/trees/remove", { repo: w.repo.id, tree: "feat/x", force: true })).status).toBe(200);
+  expect(existsSync(tree.dir)).toBe(false);
+});
+
 test("adopt reads the record back, drops a tree whose folder went, and takes in a worktree made by hand", async () => {
   const w = await world({}, "");
   await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "kept", caches: false });
@@ -417,6 +444,22 @@ test("a record left merging by a crash comes back ready, saying so", async () =>
   await second.adopt();
   const info = await body<BranchTreesInfo>(await get(second));
   expect(info.repos[0]?.trees[0]).toMatchObject({ state: "ready", stopped: "merge stopped: the server restarted during the merge; merge again" });
+});
+
+test("a record left preparing by a restart comes back failed, saying so, and a card on its branch fails in those words", async () => {
+  const w = await world({}, "");
+  const { tree } = await body<{ tree: BranchTree }>(await post(w.trees, "/api/trees/add", { repo: w.repo.id, branch: "feat/x", caches: false }));
+  await w.trees.idle();
+  const file = join(w.root, tree.dir.split("/").slice(-2, -1)[0] ?? "", "trees.json");
+  const rec = parseTreesRecord(await readFile(file, "utf8"));
+  await writeFile(file, JSON.stringify({ trees: rec.trees.map((t) => ({ ...t, state: "preparing" })) }));
+  const second = new BranchTrees(w.deps);
+  await second.adopt();
+  const why = "the server restarted while the tree was being prepared; remove it and add it again";
+  const info = await body<BranchTreesInfo>(await get(second));
+  expect(info.repos[0]?.trees[0]).toMatchObject({ state: "failed", why });
+  expect(parseTreesRecord(await readFile(file, "utf8")).trees[0]).toMatchObject({ state: "failed", why });
+  expect(treeStep("feat/x", second.treeFor(w.repo.path, "feat/x"), false)).toEqual({ fail: `tree feat/x failed: ${why}` });
 });
 
 test("sync rebases a tree onto its base with its uncommitted work put back, and a conflict stops it with a note until the base moves again", async () => {

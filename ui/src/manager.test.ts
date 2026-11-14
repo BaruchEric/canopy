@@ -680,6 +680,16 @@ describe("a card in a kept tree", () => {
     expect(lane(tcard(), { runs: runsOf(tr) })?.tree).toEqual({ branch: "feat/x", state: null, cardId: "trees:canopy/feat-x" });
   });
 
+  test("a queued tree card on another backend, with no treeRepo yet, finds its tree's card on that backend and not a home repo at the same folder", () => {
+    const remote: Record<string, BranchTreesInfo> = { mini: { root: "/c/trees", ports: "", repos: [{ repoId: "mini|canopy", repoPath: "/r/canopy", trees: [tree({ state: "ready" })] }] } };
+    // the home backend's bare card comes first, so only the backend check passes it over
+    const both = [{ id: "trees:canopy/feat-x", path: "/c/trees/canopy/feat-x" }, { id: "mini|trees:canopy/feat-x", path: "/c/trees/canopy/feat-x" }] as unknown as Repo[];
+    const queued = card({ repo: "mini|canopy", state: "queued", tree: "feat/x" });
+    expect(lane(queued, { trees: remote, repos: both })?.tree).toEqual({ branch: "feat/x", state: "ready", cardId: "mini|trees:canopy/feat-x" });
+    // with only the home card at that folder there is none of the mini's to open
+    expect(lane(queued, { trees: remote, repos: both.slice(0, 1) })?.tree).toEqual({ branch: "feat/x", state: "ready", cardId: null });
+  });
+
   test("a tree removed after its card ran has no card to open: repos without it give cardId null", () => {
     const l = lane(tcard(), { runs: runsOf(tr), repos: [] });
     expect(l?.tree).toEqual({ branch: "feat/x", state: null, cardId: null });

@@ -68,6 +68,10 @@ export interface TreesDeps {
    *  what in words ("bun test"); a tree that follows waits on it. Left out,
    *  or failing, nothing is taken to be at work. */
   working?: (dirs: readonly string[]) => Promise<ReadonlyMap<string, string>>;
+  /** the run at work in place in a tree folder, in words (`run <id>
+   *  (<verb>)`), Eric's own runs included; a merge, and a remove without
+   *  force, refuse while one is. Left out, none is. */
+  runIn?: (dir: string) => string | undefined;
   broadcast: (ev: ServerEvent) => void;
   /** the port range, in place of `CANOPY_TREE_PORTS` */
   ports?: number[];
@@ -106,6 +110,8 @@ const settled = (t: BranchTreeRecord, why: string): BranchTreeRecord => {
   return why ? { ...kept, state: "failed", why: tail(why) } : { ...kept, state: "ready" };
 };
 const SYNC_NOTE = "sync stopped: ";
+/** why a tree left preparing by a restart failed */
+const PREPARE_CUT = "the server restarted while the tree was being prepared; remove it and add it again";
 
 export class BranchTrees {
   private readonly root: string;
@@ -221,6 +227,11 @@ export class BranchTrees {
           // and the tree says so until the merge is run again
           if (await midRebase(dir)) await git(dir, ["rebase", "--abort"]);
           kept.push({ ...settled(t, ""), stopped: "merge stopped: the server restarted during the merge; merge again" });
+          changed = true;
+        } else if (t.state === "preparing") {
+          // the server went down mid-setup: nothing runs the setup again, so
+          // the tree fails, and a card waiting on it fails in these words
+          kept.push(settled(t, PREPARE_CUT));
           changed = true;
         } else kept.push(t);
       }
@@ -380,12 +391,22 @@ export class BranchTrees {
       if (!t) throw new TreesError(404, `${repo.name} keeps no tree named ${name}`);
       if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait for it");
       if (t.state === "merging") throw new TreesError(409, "the tree is being merged already");
+      this.refuseRunIn(repo.path, t);
       const entry: BranchTreeRecord = { ...settled(t, ""), state: "merging" };
       await this.save(repo.path, { trees: rec.trees.map((x) => (x === t ? entry : x)) });
       this.spawn(this.runMerge(repo, entry, t, opts));
       void this.publish();
       return this.tree(repo.path, entry);
     });
+  }
+
+  /** A merge commits, rebases and removes the folder, and a remove takes
+   *  it away: neither goes while a run works in place in the tree, which
+   *  would fail with its files gone. Synchronous, so a merge marks its
+   *  record merging in the same stretch as this check. */
+  private refuseRunIn(repoPath: string, t: BranchTreeRecord): void {
+    const work = this.deps.runIn?.(treeDir(repoPath, t.slug, this.root));
+    if (work !== undefined) throw new TreesError(409, `${work} is at work in tree ${t.branch}; stop it first`);
   }
 
   private async runMerge(repo: Repo, entry: BranchTreeRecord, prior: BranchTreeRecord, opts: MergeOptions): Promise<void> {
@@ -543,6 +564,7 @@ export class BranchTrees {
       if (!force) {
         if (t.state === "preparing") throw new TreesError(409, "the tree is still being prepared; wait, or remove it with force");
         if (t.state === "merging") throw new TreesError(409, "the tree is being merged; wait, or remove it with force");
+        this.refuseRunIn(repo.path, t);
         const live = await this.tree(repo.path, t);
         const refusal = removeRefusal(live);
         if (refusal) throw new TreesError(409, refusal);

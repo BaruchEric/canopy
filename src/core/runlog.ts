@@ -177,7 +177,8 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
   if (run.tasks) safe.tasks = run.tasks.map((task) => ({ id: t(task.id), title: r(task.title), repo: t(task.repo), note: r(task.note), action: t(task.action), state: t(task.state), ...(task.run ? { run: t(task.run) } : {}), ...(task.work ? { work: t(task.work) } : {}), ...(task.times !== undefined ? { times: task.times } : {}), ...(task.group ? { group: t(task.group) } : {}), ...(task.outcome !== undefined ? { outcome: r(task.outcome) } : {}),
     ...(task.limited !== undefined ? { limited: task.limited } : {}), ...(task.equip ? { equip: cardEquip(task.equip) } : {}),
     ...(task.workflow !== undefined ? { workflow: r(task.workflow) } : {}), ...(task.workflowRepo ? { workflowRepo: true as const } : {}),
-    ...(task.after ? { after: task.after.map(t) } : {}), ...(task.flow ? { flow: t(task.flow) } : {}), ...(task.branch ? { branch: t(task.branch) } : {}) }));
+    ...(task.after ? { after: task.after.map(t) } : {}), ...(task.flow ? { flow: t(task.flow) } : {}), ...(task.branch ? { branch: t(task.branch) } : {}),
+    ...(task.files ? { files: task.files.map(r) } : {}), ...(task.tree !== undefined ? { tree: r(task.tree) } : {}), ...(task.treeRepo ? { treeRepo: t(task.treeRepo) } : {}) }));
   const prompt = run.prompt;
   if (prompt?.kind === "proposal") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), plan: r(prompt.plan), auto: prompt.auto };
   if (prompt?.kind === "permission") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), tool: r(prompt.tool), title: r(prompt.title), detail: r(prompt.detail),

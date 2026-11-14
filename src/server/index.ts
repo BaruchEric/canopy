@@ -7347,6 +7347,8 @@ export async function startServer(opts: {
         const runs = runsInTrees(dirs, state.runner.list(), (id) => state.result.repos.find((r) => r.id === id)?.path);
         return new Map([...procs, ...runs]);
       },
+      // the same runs, alone: a merge or a remove without force waits for them
+      runIn: (dir) => runsInTrees([dir], state.runner.list(), (id) => state.result.repos.find((r) => r.id === id)?.path).get(dir),
       broadcast: (ev) => {
         broadcast(state, ev);
         // a tree made, or a merge ended: a card waiting for its tree may go

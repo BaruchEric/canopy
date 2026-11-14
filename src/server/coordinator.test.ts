@@ -7,7 +7,7 @@ import type { RunGroup } from "../core/group";
 import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import type { WorkState } from "../core/work";
-import { CoordinatorHub, type ChildResume, type CoordinatorDeps } from "./coordinator";
+import { CoordError, CoordinatorHub, type ChildResume, type CoordinatorDeps } from "./coordinator";
 
 let runs: Map<string, Run>;
 let said: { id: string; text: string; cards?: string }[];
@@ -2009,6 +2009,30 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       ]);
     });
 
+    test("a tree card the pass never tries, since the goal's places are full, drops its tree's words, and starts once a place frees", async () => {
+      making.set("feat/x", "making tree feat/x");
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two" }), task({ title: "three" }), task({ title: "four" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+        ["t1", "queued", "making tree feat/x"],
+        ["t2", "running", undefined],
+        ["t3", "running", undefined],
+        ["t4", "running", undefined],
+      ]);
+      // the tree is ready, but the three places are taken: nothing tries t1
+      making.delete("feat/x");
+      h.onTrees();
+      await settled(h);
+      expect(tried).toEqual(["co1:t1", "co1:t2", "co1:t3", "co1:t4"]);
+      expect(card("t1")?.state).toBe("queued");
+      expect(card("t1")?.outcome).toBeUndefined();
+      end(h, "t2");
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", treeRepo: FEAT_X });
+    });
+
     test("a tree card waiting for its tree to be free keeps those words, and starts once the run there ends", async () => {
       const h = treeHub();
       const his = mine(h, FEAT_X);
@@ -2059,6 +2083,41 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       expect(notes).toHaveLength(2);
       expect(notes[0]).toContain("tree: feat/x, a kept worktree");
       expect(notes[1]).toContain("outcome: stopped");
+    });
+
+    test("a card after a tree card that failed in its tree hears that a follow-up there may reopen it", async () => {
+      coordinator({ status: "idle" });
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", after: ["t1"] })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      end(h, "t1", { status: "failed" });
+      await settled(h);
+      const t2 = card("t2");
+      if (!t2) throw new Error("no t2");
+      expect(card("t1")).toMatchObject({ state: "failed", treeRepo: FEAT_X });
+      const note = blockedNote(t2, "waits for t1, which failed", "t1", "feat/x");
+      expect(note).toEndWith("or a follow-up in t1's tree feat/x reopens t1");
+      expect((await hearAll(h)).filter((t) => t === note)).toHaveLength(1);
+    });
+
+    test("a card after a tree card that never ran in its tree hears no word of reopening", async () => {
+      coordinator({ status: "idle" });
+      const h = treeHub({
+        startChild: async () => {
+          throw new Error("tree feat/x failed: setup exited 3");
+        },
+      });
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", after: ["t1"] })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "failed", outcome: "tree feat/x failed: setup exited 3" });
+      expect(card("t1")?.treeRepo).toBeUndefined();
+      const t2 = card("t2");
+      if (!t2) throw new Error("no t2");
+      const heard = await hearAll(h);
+      expect(heard.filter((t) => t === blockedNote(t2, "waits for t1, which failed"))).toHaveLength(1);
+      expect(heard.some((t) => t.includes("reopens t1"))).toBe(false);
     });
 
     test("a card after it, on the same tree, starts once it is done, and that start leaves the first card its own run", async () => {
@@ -2233,13 +2292,25 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       expect(limitNotes).toEqual(["canopy: task t1 (fix the login) stopped at the plan's usage limit; it carries on in tree feat/x after the reset"]);
     });
 
-    test("Fix 1: such a card stays on the held chip, and start anyway tries its resume as interactive", async () => {
-      const { h, resumed } = await limitedTreeBusy();
+    test("Fix 1: such a card stays on the held chip, and start anyway tries its resume as interactive, answering 409 with the tree's words while it is still busy", async () => {
+      const { h, resumed, his } = await limitedTreeBusy();
       expect(h.heldStarts().map((x) => [x.id, x.why])).toEqual([["card:co1:t1", "waiting for tree feat/x to be free"]]);
-      await h.release("co1", "t1");
+      const refused = await h.release("co1", "t1").then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(refused).toBeInstanceOf(CoordError);
+      expect(refused instanceof CoordError ? [refused.status, refused.message] : null).toEqual([409, "waiting for tree feat/x to be free"]);
       await settled(h);
       expect(resumed).toEqual(["t1 normal", "t1 interactive"]);
       expect(card("t1")).toMatchObject({ state: "running", limited: 0, outcome: "waiting for tree feat/x to be free" });
+      // with the tree free, start anyway carries it on and answers OK
+      his.status = "stopped";
+      his.endedAt = clock;
+      runs.set(his.id, his);
+      await expect(h.release("co1", "t1")).resolves.toBeUndefined();
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", limited: 1 });
     });
 
     test("Fix 1: the run that held its tree ending tries the resume again, and the card carries on", async () => {
