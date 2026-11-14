@@ -1110,6 +1110,10 @@ export interface CoordTask {
   times?: number;
   /** names of the goal's files the card's worker needs; a goal from the top only (FR-067) */
   files?: string[];
+  /** a branch of the card's own repo whose kept worktree the card runs in, in place; never qualified (FR-067) */
+  tree?: string;
+  /** the kept tree's own repo id (`trees:<repo key>/<slug>`), set when the card's run starts */
+  treeRepo?: string;
   /** the group this card started, in place of `run` */
   group?: string;
   /** how it settled, in a word or two: "landed", "sent back", or a start's

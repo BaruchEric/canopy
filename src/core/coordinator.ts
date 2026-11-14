@@ -6,6 +6,7 @@
 import { GROUP_MAX, type RunGroup } from "./group";
 import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
+import { isBranchName } from "./treewords";
 import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Repo, type Run, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
@@ -53,6 +54,8 @@ export interface PlanContext {
   by: "coordinator" | "person";
   /** the goal's file names, which a card's `files` may list (empty for a repo-card goal) */
   files: readonly string[];
+  /** whether a repo id is itself a kept worktree, which a card's `tree` may not name */
+  treeCard: (repo: string) => boolean;
 }
 
 const EQUIP_KEYS = ["loadout", "model", "effort", "skills", "mcp"] as const;
@@ -178,6 +181,14 @@ function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string
       out.files = [...new Set(names)];
     }
   }
+  const tree = t["tree"];
+  if (tree !== undefined) {
+    if (typeof tree !== "string") return { error: `${at}.tree must be a branch name` };
+    if (!isBranchName(tree)) return { error: `${at}.tree: ${tree} is not a branch name git accepts` };
+    if (out.times !== undefined || out.workflow !== undefined) return { error: `${at}.tree: a card in a tree runs once, without a workflow` };
+    if (ctx.treeCard(repo)) return { error: `${at}.repo: ${repo} is a kept worktree; name its repo and put the branch in "tree"` };
+    out.tree = tree;
+  }
   const refused = harnessRefusal(at, out.equip?.loadout, out.action, out.workflow, ctx);
   if (refused) return { error: refused };
   return out;
@@ -243,7 +254,7 @@ export function validatePlan(input: unknown, ctx: PlanContext): { tasks: Planned
 export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanContext): { task: CoordTask } | { error: string } {
   if (t.state !== "proposed" && t.state !== "queued") return { error: `${t.id} is ${t.state}; only a proposed or queued card changes` };
   if (t.state === "queued") {
-    for (const k of ["title", "note", "repo", "action", "times", "workflow", "workflowRepo", "files"]) {
+    for (const k of ["title", "note", "repo", "action", "times", "workflow", "workflowRepo", "files", "tree"]) {
       if (b[k] !== undefined) return { error: `${t.id} is queued; only its loadout and after change` };
     }
   }
@@ -254,6 +265,7 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   const flowSet = has("workflow") || has("workflowRepo");
   const afterSet = has("after");
   const filesSet = has("files");
+  const treeSet = has("tree");
   const merged: Record<string, unknown> = {
     title: b["title"] ?? t.title,
     note: b["note"] ?? t.note,
@@ -264,6 +276,7 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
     ...(flowSet && b["workflow"] !== null ? { workflow: b["workflow"] ?? t.workflow, workflowRepo: has("workflow") ? b["workflowRepo"] : (b["workflowRepo"] ?? t.workflowRepo) } : {}),
     ...(afterSet && b["after"] !== null ? { after: b["after"] } : {}),
     ...(filesSet ? (b["files"] !== null ? { files: b["files"] } : {}) : t.files ? { files: t.files } : {}),
+    ...(treeSet ? (b["tree"] !== null ? { tree: b["tree"] } : {}) : t.tree ? { tree: t.tree } : {}),
   };
   if (filesSet && b["files"] !== null && !flowSet && t.workflow !== undefined) {
     return { error: `${t.id}.files: a card with files runs once, without a workflow` };
@@ -288,9 +301,10 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   graph.set(t.id, after ?? []);
   const loop = afterSet ? waitLoop(t.id, graph) : null;
   if (loop) return { error: `${t.id}.after: ${andList(loop)} wait for each other` };
-  const { times: _t, equip: _e, workflow: _w, workflowRepo: _r, after: _a, files: _f, ...kept } = t;
-  const { equip: _ge, workflow: _gw, workflowRepo: _gr, after: _ga, files: _gf, ...fields } = got;
+  const { times: _t, equip: _e, workflow: _w, workflowRepo: _r, after: _a, files: _f, tree: _tr, treeRepo: _trr, ...kept } = t;
+  const { equip: _ge, workflow: _gw, workflowRepo: _gr, after: _ga, files: _gf, tree: _gt, ...fields } = got;
   const files = filesSet ? got.files : t.files;
+  const tree = treeSet ? got.tree : t.tree;
   const equip = equipSet ? got.equip : t.equip;
   const workflow = flowSet ? got.workflow : t.workflow;
   const workflowRepo = flowSet ? got.workflowRepo : t.workflowRepo;
@@ -303,6 +317,7 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
       ...(workflowRepo ? { workflowRepo } : {}),
       ...(after && after.length > 0 ? { after } : {}),
       ...(files && files.length > 0 ? { files } : {}),
+      ...(tree ? { tree, ...(t.treeRepo && !treeSet ? { treeRepo: t.treeRepo } : {}) } : {}),
     },
   };
 }
@@ -840,12 +855,14 @@ export interface CardCarries {
   workflow?: string;
   after?: string;
   files?: string;
+  tree?: string;
 }
 
 /** The words a card's facts line adds: its loadout (with "changed" when
  *  Eric overrode a field, the overrides in its title), its workflow,
  *  "after t1, t3" for the cards it waits for, and "files: shot.png,
- *  notes.md" for the goal's files its worker takes (FR-067). */
+ *  notes.md" for the goal's files its worker takes (FR-067), and "in tree
+ *  feat/x" for a card that runs in a kept worktree. */
 export function cardCarries(task: CoordTask): CardCarries {
   const out: CardCarries = {};
   const e = task.equip;
@@ -856,6 +873,7 @@ export function cardCarries(task: CoordTask): CardCarries {
   if (task.workflow) out.workflow = task.workflow;
   if (task.after && task.after.length > 0) out.after = `after ${task.after.join(", ")}`;
   if (task.files && task.files.length > 0) out.files = `files: ${task.files.join(", ")}`;
+  if (task.tree) out.tree = `in tree ${task.tree}`;
   return out;
 }
 

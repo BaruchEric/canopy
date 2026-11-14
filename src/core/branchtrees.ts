@@ -123,21 +123,6 @@ export function treeSlug(branch: string): string {
   return s === TREES_RECORD || s.includes("..") ? "" : s;
 }
 
-/** git's own rules for a branch name (check-ref-format --branch), the ones
- *  worth refusing before git does: no spaces or control characters, none of
- *  `~ ^ : ? * [ \`, no `..` or `@{`, no leading dash, no component that
- *  starts with a dot or ends in `.lock`, no empty component, no trailing
- *  dot or slash, and not `@` alone. */
-export function isBranchName(name: string): boolean {
-  if (name === "" || name === "@" || name.length > 200) return false;
-  // control characters are the point of this check
-  // eslint-disable-next-line no-control-regex
-  if (/[\s~^:?*[\\\u0000-\u001f\u007f]/.test(name)) return false;
-  if (name.includes("..") || name.includes("@{") || name.startsWith("-")) return false;
-  if (name.endsWith(".") || name.endsWith("/")) return false;
-  return name.split("/").every((part) => part !== "" && !part.startsWith(".") && !part.endsWith(".lock"));
-}
-
 /** the ports trees draw from, as `CANOPY_TREE_PORTS` says */
 export const treePorts = (spec: string | undefined = process.env["CANOPY_TREE_PORTS"]): number[] =>
   parsePortRange(spec ?? TREE_PORTS_DEFAULT);
@@ -476,4 +461,4 @@ export async function listTreeDirs(repoPath: string, root = treesRoot()): Promis
   return dirs.sort();
 }
 
-export { removeRefusal, treeWords } from "./treewords";
+export { isBranchName, removeRefusal, treeWords } from "./treewords";

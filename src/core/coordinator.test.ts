@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardCarries, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -8,7 +8,7 @@ import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch,
 const known = (repo: string): "local" | "remote" | null => (repo === "web" || repo === "api" ? "local" : repo === "mini:box" ? "remote" : null);
 const task = (over: Record<string, unknown> = {}) => ({ title: "fix the login", repo: "web", note: "the login form drops the email", action: "propose", ...over });
 const filler = (n: number): CoordTask[] => Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, title: "x", repo: "web", note: "n", action: "ask", state: "done" }));
-const ctxOf = (over: Partial<PlanContext> = {}): PlanContext => ({ known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", files: [], ...over });
+const ctxOf = (over: Partial<PlanContext> = {}): PlanContext => ({ known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", files: [], treeCard: () => false, ...over });
 const plan = (tasks: unknown, have = 0) => validatePlan(tasks, ctxOf({ cards: filler(have), next: have + 1 }));
 
 describe("validatePlan", () => {
@@ -832,5 +832,33 @@ describe("a card's files", () => {
     expect(editCard(set.task, { title: "y" }, ctxOf({ cards: [set.task] }))).toEqual({ task: { ...set.task, title: "y" } });
     expect(editCard(set.task, { files: null }, ctx)).toEqual({ task: card });
     expect(editCard(card, { files: ["nope.png"] }, ctx)).toEqual({ error: "t1.files: the goal has no file nope.png" });
+  });
+});
+
+describe("a card in a kept tree", () => {
+  const one = (over: Record<string, unknown>, ctx: Partial<PlanContext> = {}) => validatePlan([task({ action: "ask", ...over })], ctxOf(ctx));
+  test("keeps the branch on the card", () => {
+    expect(one({ tree: "feat/login" })).toEqual({ tasks: [{ title: "fix the login", repo: "web", note: "the login form drops the email", action: "ask", tree: "feat/login" }] });
+  });
+  test("refuses what is not a branch, and a tree with times or a workflow", () => {
+    expect(one({ tree: 5 })).toEqual({ error: "tasks[0].tree must be a branch name" });
+    expect(one({ tree: "has space" })).toEqual({ error: "tasks[0].tree: has space is not a branch name git accepts" });
+    expect(one({ tree: "feat/x", times: 2 })).toEqual({ error: "tasks[0].tree: a card in a tree runs once, without a workflow" });
+    expect(one({ tree: "feat/x", workflow: "review" }, { workflows: () => [{ name: "review", fromRepo: false }] })).toEqual({ error: "tasks[0].tree: a card in a tree runs once, without a workflow" });
+  });
+  test("refuses a tree on a tree card's own repo; a plain card there passes", () => {
+    const ctx: Partial<PlanContext> = { known: (r) => (r === "trees:web/feat-x" ? "local" : known(r)), treeCard: (r) => r.startsWith("trees:") };
+    expect(one({ repo: "trees:web/feat-x", tree: "feat/y" }, ctx)).toEqual({ error: 'tasks[0].repo: trees:web/feat-x is a kept worktree; name its repo and put the branch in "tree"' });
+    expect("tasks" in one({ repo: "trees:web/feat-x" }, ctx)).toBe(true);
+  });
+  test("an edit keeps, clears or refuses the tree", () => {
+    const t: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "proposed", tree: "feat/x" };
+    expect(editCard(t, { note: "m" }, ctxOf())).toMatchObject({ task: { tree: "feat/x", note: "m" } });
+    const cleared = editCard(t, { tree: null }, ctxOf());
+    expect("task" in cleared ? cleared.task.tree : "refused").toBeUndefined();
+    expect(editCard({ ...t, state: "queued" }, { tree: "feat/y" }, ctxOf())).toEqual({ error: "t1 is queued; only its loadout and after change" });
+  });
+  test("the facts line names the tree", () => {
+    expect(cardCarries({ id: "t1", title: "x", repo: "web", note: "n", action: "ask", state: "queued", tree: "feat/x" }).tree).toBe("in tree feat/x");
   });
 });

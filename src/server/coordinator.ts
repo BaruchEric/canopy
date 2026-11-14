@@ -96,6 +96,9 @@ export interface CoordinatorDeps {
   /** the names in a goal's files folder, which a card's `files` may list:
    *  none for a goal started at a repo, and none when absent (FR-067) */
   goalFiles?: (coordId: string) => Promise<readonly string[]>;
+  /** whether a repo id is a kept worktree of this backend, which a card's
+   *  `tree` may not name; absent counts none (FR-067) */
+  treeCard?: (repo: string) => boolean;
   /** a coordinator's cards changed: send its run out again */
   broadcast: (run: Run) => void;
   /** the work item's settle line; absent for pre-ledger cards */
@@ -272,7 +275,7 @@ export class CoordinatorHub {
     const coord = this.coordinator(b["run"], caller);
     const have = coord.tasks ?? [];
     let last = this.last(coord);
-    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by, files });
+    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by, files, treeCard: this.deps.treeCard ?? (() => false) });
     if ("error" in got) throw new CoordError(got.error, 400);
     const added = got.tasks.map((t): CoordTask => ({ id: `t${++last}`, ...t, state: "proposed" }));
     this.numbers.set(coord.id, last);
@@ -314,7 +317,7 @@ export class CoordinatorHub {
     const workflows = await this.flowsFor([{ ...b, repo: b["repo"] ?? first.t.repo }], true);
     // the card may have moved while the workflows were read
     const { coord, tasks, t } = find();
-    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files });
+    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files, treeCard: this.deps.treeCard ?? (() => false) });
     // a field a queued card does not change is a conflict with its state, like a running card's
     if ("error" in got) throw new CoordError(got.error, got.error.startsWith(`${t.id} is `) ? 409 : 400);
     this.setTasks(
