@@ -476,7 +476,8 @@ function RingButton({ ring, on, onPick }: { ring: Ring; on: boolean; onPick: (id
       <span className="mgr-ring-id">{ring.id}</span>
       <span className="mgr-ring-repo">{ring.repo ? plainOf(ring.repo) : "the goal"}</span>
       <span className={`mgr-word ${ring.tone}`}>{ring.word}</span>
-      <span className="mgr-ring-model">{ring.model ?? "default model"}</span>
+      {/* a project card starts no run, so it has no model to name */}
+      {!ring.project && <span className="mgr-ring-model">{ring.model ?? "default model"}</span>}
     </button>
   );
 }
@@ -820,12 +821,17 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
       )}
       <div className="mgr-lane-foot">
         <span className="mgr-chips" title={lane.equipTitle || undefined}>
-          <span className="mgr-chip">
-            {lane.model ?? "default model"}
-            {lane.effort ? `, ${lane.effort} effort` : ""}
-          </span>
-          <span className="mgr-chip">{plural(lane.skills, "skill")}</span>
-          <span className="mgr-chip">{plural(lane.servers, "server")}</span>
+          {/* a project card starts no run: no model, skills or servers */}
+          {!lane.project && (
+            <>
+              <span className="mgr-chip">
+                {lane.model ?? "default model"}
+                {lane.effort ? `, ${lane.effort} effort` : ""}
+              </span>
+              <span className="mgr-chip">{plural(lane.skills, "skill")}</span>
+              <span className="mgr-chip">{plural(lane.servers, "server")}</span>
+            </>
+          )}
           {lane.files && (
             <span className="mgr-chip mgr-files" title={lane.files}>
               {lane.files}

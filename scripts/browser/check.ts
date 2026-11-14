@@ -53,6 +53,22 @@ async function fresh(block?: string, routed = Boolean(block), phone = false): Pr
 
 const textOf = async (page: Page, sel: string) => (await page.locator(sel).innerText()).replace(/\s+/g, " ").trim();
 
+/** a manager lane's stage strip: its labels, the ones cut short (wider than
+ *  their segment), and how many rows it takes */
+const stripOf = (page: Page, lane: string) =>
+  page.evaluate((lane) => {
+    const segs = [...document.querySelectorAll<HTMLElement>(`${lane} .mgr-steps .step-seg`)];
+    return {
+      labels: segs.map((el) => el.textContent?.trim() ?? ""),
+      cut: segs.filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => `${el.textContent?.trim() ?? ""} (${el.clientWidth} of ${el.scrollWidth}px)`),
+      rows: new Set(segs.map((el) => Math.round(el.getBoundingClientRect().top))).size,
+    };
+  }, lane);
+
+/** "t5's 8 stages ... on 2 rows": what a strip check says, with what was cut */
+const stripWords = (who: string, strip: { labels: string[]; cut: string[]; rows: number }) =>
+  `${who}'s ${strip.labels.length} steps (${strip.labels.join(", ")}) read whole on ${strip.rows} ${strip.rows === 1 ? "row" : "rows"}${strip.cut.length ? `; cut: ${strip.cut.join(", ")}` : ""}`;
+
 /** the fields on the page a finger types into whose text is under 16px, where iOS zooms the page */
 const smallFields = (page: Page) =>
   page.evaluate(() =>
@@ -456,6 +472,11 @@ try {
         return { facts: lane?.querySelector(".mgr-lane-facts .mono")?.textContent?.trim() ?? "", word: lane?.querySelector(".mgr-word")?.textContent?.trim() ?? "", buttons };
       });
       check(project.facts === "new project" && project.word === "needs you" && project.buttons.includes("open in incubator"), `at 1440px t5's lane reads "${project.facts}", shows "${project.word}" and has ${project.buttons.includes("open in incubator") ? "" : "no "}open in incubator`);
+      // the eight stages and a workflow's three steps share one row, none cut
+      for (const [who, want] of [["t5", 8], ["t1", 3]] as const) {
+        const strip = await stripOf(page, `#mgr-lane-${who}`);
+        check(strip.labels.length === want && strip.cut.length === 0 && strip.rows === 1, `at 1440px ${stripWords(who, strip)}`);
+      }
       await page.screenshot({ path: `${shots}/manager-1440.png` });
       if (hasOpen) {
         await openTree.click();
@@ -467,7 +488,11 @@ try {
       await page.goto(`${base}/${at}`, { waitUntil: "load" });
       await settle(page);
       await page.locator("#mgr-lane-t5").getByRole("button", { name: "open in incubator" }).click();
-      await page.waitForTimeout(800);
+      // the sprout's sheet says it is open; the check below names what it found if it never does
+      await page
+        .locator(".sheet-title", { hasText: "A shop for the copy" })
+        .waitFor({ timeout: 10_000 })
+        .catch(() => {});
       const opened = await page.evaluate(() => ({ search: location.search, sheet: document.querySelector(".sheet-title")?.textContent?.trim() ?? "", eyebrow: document.querySelector(".sheet-head .eyebrow")?.textContent?.trim() ?? "" }));
       check(opened.search.includes("view=incubator") && opened.sheet.startsWith("A shop for the copy") && opened.eyebrow.startsWith("incubator"), `at 1440px open in incubator lands on ${opened.search} with the sprout's sheet open ("${opened.eyebrow}", "${opened.sheet}")`);
       await page.screenshot({ path: `${shots}/manager-1440-project-sheet.png` });
@@ -485,6 +510,10 @@ try {
         order.rings < order.needs && order.needs < order.workers && order.workers < order.chat && order.wider <= 0,
         `at 900px one column: rings, needs you, workers, then the chat${order.wider > 0 ? ` (the page is ${order.wider}px wider than the screen)` : ""}`,
       );
+      for (const [who, want] of [["t5", 8], ["t1", 3]] as const) {
+        const strip = await stripOf(page, `#mgr-lane-${who}`);
+        check(strip.labels.length === want && strip.cut.length === 0, `at 900px ${stripWords(who, strip)}`);
+      }
       // the view scrolls inside itself, so the workers and the chat need a picture of their own
       await page.screenshot({ path: `${shots}/manager-900.png` });
       await page.evaluate(() => document.querySelector(".mgr-workers")?.scrollIntoView({ block: "start" }));
@@ -536,6 +565,26 @@ try {
         return { out, text: lane.querySelector(".mgr-lane-facts")?.textContent?.trim() ?? "" };
       });
       check(projectLane !== null && projectLane.out.length === 0 && projectLane.text.startsWith("new project"), `at 390px t5's lane keeps its facts inside it ("${projectLane?.text ?? "no lane"}"${projectLane?.out.length ? `, past the edge: ${projectLane.out.join(", ")}` : ""})`);
+      // every stage label reads whole on a phone: the strip wraps, it never cuts
+      const stages = await stripOf(page, "#mgr-lane-t5");
+      check(stages.labels.length === 8 && stages.cut.length === 0, `at 390px ${stripWords("t5", stages)}`);
+      // a workflow's three steps and a plain card's two arcs still fit one row
+      for (const [who, want] of [["t1", 3], ["t2", 2]] as const) {
+        const strip = await stripOf(page, `#mgr-lane-${who}`);
+        check(strip.labels.length === want && strip.cut.length === 0 && strip.rows === 1, `at 390px ${stripWords(who, strip)}`);
+      }
+      const waits = await page.evaluate(() => {
+        const lane = document.querySelector("#mgr-lane-t5");
+        return {
+          live: lane?.querySelector(".mgr-live")?.textContent?.trim() ?? "",
+          word: lane?.querySelector(".mgr-lane-head .mgr-word")?.textContent?.trim() ?? "",
+          open: [...(lane?.querySelectorAll("button") ?? [])].some((b) => b.textContent?.trim() === "open in incubator" && b.getClientRects().length > 0),
+        };
+      });
+      check(
+        waits.live === "the project waits on your answers in the incubator" && waits.word === "needs you" && waits.open,
+        `at 390px t5's lane says "${waits.live}", reads "${waits.word}" and ${waits.open ? "shows" : "has no"} open in incubator`,
+      );
       await page.locator("#mgr-lane-t5").screenshot({ path: `${shots}/manager-390-project.png` });
       // the view's root is .mgr-view; there is no .mgr, so a selector on that would see no button at all
       const workers = await shortButtons(page, ".mgr-view");

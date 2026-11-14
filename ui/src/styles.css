@@ -7183,9 +7183,17 @@ button.dl-gut.has {
   color: var(--ink-dim);
   overflow-wrap: anywhere;
 }
+/* a lane's stages never cut a label: a segment is at least its label's
+   width, and the strip wraps to a second row where they do not fit on one,
+   as a project card's eight stages do on a phone. Where every label fits,
+   the segments share the row evenly as the sheet's strip does. */
 .mgr-steps.step-strip {
+  flex-wrap: wrap;
   margin-left: 18px;
   padding: 0;
+}
+.mgr-steps.step-strip li {
+  min-width: auto;
 }
 .mgr-steps .step-seg {
   cursor: default;

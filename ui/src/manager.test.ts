@@ -776,4 +776,64 @@ describe("a project card", () => {
     expect(arcs.length).toBeGreaterThan(1);
     expect(arcs.every((a) => a.tone === "moss")).toBe(true);
   });
+
+  test("a failed project card's stuck stage is rust, not the lichen of a wait on Eric", () => {
+    // turned down at eval, which the strip shows at research
+    const sp = sprout({ status: "rejected", flows: [{ workflow: "scout", flowId: "f1", outcome: "failed" }] });
+    const strip = stageStrip(sp);
+    const stuck = strip.find((x) => x.mark === "stuck")?.stage;
+    expect(stuck).toBe("research");
+    const arcs = rows(proj({ state: "failed", outcome: "the project was rejected" }), { [SP]: sp }).rings.find((x) => x.id === "t1")?.arcs ?? [];
+    expect(arcs.find((a) => a.label === stuck)?.tone).toBe("rust");
+    expect(arcs.some((a) => a.tone === "lichen")).toBe(false);
+    // stopped while building: the stage it stopped at is rust too
+    const stopped = sprout({ status: "stopped", flows: [{ workflow: "build-new", flowId: "f2", outcome: "stopped" }] });
+    const at2 = rows(proj({ state: "failed", outcome: "the project was stopped" }), { [SP]: stopped }).rings.find((x) => x.id === "t1")?.arcs ?? [];
+    expect(at2.find((a) => a.label === "build")?.tone).toBe("rust");
+    // a parked card still running waits on Eric, so its stuck stage stays lichen
+    const parked = sprout({ status: "parked", parked: "tests failed", flows: [{ workflow: "build-new", flowId: "f3", outcome: "failed" }] });
+    const at3 = rows(proj({ outcome: "the project is parked: tests failed" }), { [SP]: parked }).rings.find((x) => x.id === "t1")?.arcs ?? [];
+    expect(at3.find((a) => a.label === "build")?.tone).toBe("lichen");
+  });
+
+  test("a project card carries no model, skills or servers: its ring and lane say it is a project", () => {
+    const r = rows(proj(), { [SP]: sprout() });
+    expect(r.rings.find((x) => x.id === "t1")).toMatchObject({ project: true, model: null });
+    expect(r.lanes[0]).toMatchObject({ project: true, model: null, effort: null, skills: 0, servers: 0, loadout: null });
+    // the manager's ring and a run card's are not projects
+    const plain = managerRows(coord([card({ id: "t2", state: "queued" })]), at());
+    expect(plain.rings.map((x) => x.project)).toEqual([false, false]);
+  });
+
+  test("a project need is dated from when its wait began, which a later change to the sprout leaves alone", () => {
+    const q = [{ question: "which?", header: "", options: [], multiSelect: false }];
+    const since = (t: CoordTask, sp?: Sprout) => rows(t, sp ? { [SP]: sp } : {}).needs.find((n) => n.kind === "project")?.since;
+    const answers = proj({ outcome: "the project waits on your answers in the incubator" });
+    expect(since(answers, sprout({ status: "clarifying", clarified: false, questions: q, questionsAt: 40, updatedAt: 90 }))).toBe(40);
+    expect(since(answers, sprout({ status: "clarifying", clarified: false, questions: q, questionsAt: 40, updatedAt: 120 }))).toBe(40);
+    const park = proj({ outcome: "the project is parked: tests failed" });
+    expect(since(park, sprout({ status: "parked", parked: "tests failed", parkedAt: 50, updatedAt: 95 }))).toBe(50);
+    const yes = proj({ outcome: "the project waits on your yes in the incubator" });
+    const handOff = { head: "h", base: "b", remote: "r", branch: "new/shop", commits: [], moreCommits: 0, files: [], moreFiles: 0, flagged: [], at: 60 };
+    expect(since(yes, sprout({ status: "approving", handOff, updatedAt: 99 }))).toBe(60);
+    // a record from before these times were kept falls back to the sprout's last change
+    expect(since(park, sprout({ status: "parked", parked: "tests failed", updatedAt: 95 }))).toBe(95);
+    // with no sprout in the page the wait's start is not known: after every wait that is, never first
+    const unknown = since(yes);
+    expect(unknown).toBe(since(yes));
+    const both = managerRows(coord([yes, child("c1", { id: "t2" })], { status: "working" }), at({ runs: runsOf(run("c1", { status: "working", prompt: question, steps: [step("text", "hi", 70)] })) }));
+    expect(both.needs.map((n) => n.card)).toEqual(["t2", "t1"]);
+  });
+
+  test("the goal's head counts a running project card as working while it waits on no one, and not while it waits on Eric", () => {
+    const working = (t: CoordTask, sp?: Sprout) => rows(t, sp ? { [SP]: sp } : {}).goal.working;
+    expect(working(proj(), sprout())).toBe(1);
+    // the page holds no sprout yet: its outcome says it is at work
+    expect(working(proj())).toBe(1);
+    const q = [{ question: "which?", header: "", options: [], multiSelect: false }];
+    expect(working(proj({ outcome: "the project waits on your answers in the incubator" }), sprout({ status: "clarifying", clarified: false, questions: q }))).toBe(0);
+    expect(working(proj({ outcome: "the project waits on your yes in the incubator" }))).toBe(0);
+    expect(working(proj({ state: "queued", sprout: undefined, outcome: undefined }))).toBe(0);
+    expect(working(proj({ state: "done", outcome: "live as shop" }), sprout({ status: "live" }))).toBe(0);
+  });
 });

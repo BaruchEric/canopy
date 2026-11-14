@@ -40,7 +40,9 @@ import { equipTitle } from "./loadouts";
 
 export type Tone = "sky" | "lichen" | "moss" | "rust" | "hair";
 export interface Arc { label: string; tone: Tone }
-export interface Ring { id: string; title: string; repo: string | null; word: string; tone: Tone; model: string | null; arcs: Arc[]; at: string | null; wave: number }
+export interface Ring { id: string; title: string; repo: string | null; word: string; tone: Tone; model: string | null; arcs: Arc[]; at: string | null; wave: number;
+  /** a project card's ring: it starts no run, so it names no model */
+  project: boolean }
 export type NeedKind = "prompt" | "gate" | "landing" | "cards" | "project";
 export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean;
   /** a project card's sprout, the lane to open in the incubator */
@@ -326,12 +328,13 @@ function inHand(arcs: readonly Arc[]): string | null {
 const MARK_TONE: Record<StageMark, Tone> = { done: "moss", now: "sky", stuck: "lichen", todo: "hair" };
 
 /** A project card's arcs: its sprout's stages, all moss once the card is
- *  done, the running one rust once it failed. Before the page holds the
- *  sprout, one hair arc. */
+ *  done, and once it failed the stage it ended at rust (a rejected or
+ *  stopped sprout marks that stage stuck, which is lichen only while a
+ *  park waits on Eric). Before the page holds the sprout, one hair arc. */
 function projectArcs(w: Work): Arc[] {
   if (!w.sprout) return [{ label: "incubator", tone: w.task.state === "done" ? "moss" : w.task.state === "failed" ? "rust" : "hair" }];
   const { state } = w.task;
-  return stageStrip(w.sprout).map(({ stage, mark }) => ({ label: stage, tone: state === "done" ? "moss" : state === "failed" && mark === "now" ? "rust" : MARK_TONE[mark] }));
+  return stageStrip(w.sprout).map(({ stage, mark }) => ({ label: stage, tone: state === "done" ? "moss" : state === "failed" && (mark === "now" || mark === "stuck") ? "rust" : MARK_TONE[mark] }));
 }
 
 /** The words a project card waits on Eric with, or null: the sprout's own
@@ -343,6 +346,25 @@ function projectAsk(w: Work): string | null {
     return "wait" in step && step.needsYou ? step.wait : null;
   }
   return isProjectWait(w.task.outcome) ? (w.task.outcome ?? null) : null;
+}
+
+/** When a project card's wait on Eric began: the questions' arrival, the
+ *  park's start or the hand-off's review, else the sprout's last change for
+ *  a record from before those were kept. With no sprout in the page the
+ *  start is not known, so the need sorts after every one whose start is. */
+function projectSince(w: Work): number {
+  const s = w.sprout;
+  if (!s) return Number.MAX_SAFE_INTEGER;
+  switch (s.status) {
+    case "clarifying":
+      return s.questionsAt ?? s.updatedAt;
+    case "parked":
+      return s.parkedAt ?? s.updatedAt;
+    case "approving":
+      return s.handOff?.at ?? s.updatedAt;
+    default:
+      return s.updatedAt;
+  }
 }
 
 /** A card's arcs: its flow's steps, else its lifecycle. */
@@ -483,7 +505,7 @@ function landingNeed(w: Work, landing: LandingInfo): Need | null {
  *  branch's landing. */
 function cardNeeds(w: Work, at: ManagerInputs): Need[] {
   const ask = projectAsk(w);
-  if (ask !== null) return [{ key: `project:${w.task.id}`, kind: "project", card: w.task.id, who: whoOf(w.task), what: ask, detail: "", since: w.sprout?.updatedAt ?? 0, ...(w.task.sprout !== undefined ? { sprout: w.task.sprout } : {}) }];
+  if (ask !== null) return [{ key: `project:${w.task.id}`, kind: "project", card: w.task.id, who: whoOf(w.task), what: ask, detail: "", since: projectSince(w), ...(w.task.sprout !== undefined ? { sprout: w.task.sprout } : {}) }];
   const out: (Need | null)[] = [promptNeed(w.run, w.task)];
   for (const m of w.group?.members ?? []) out.push(promptNeed(at.runs[m.run], w.task));
   if (w.flow) {
@@ -512,8 +534,12 @@ interface Carried {
   title: string;
 }
 
+/** what a project card carries: it starts no run, so nothing */
+const NO_CARRY: Carried = { loadout: null, model: null, effort: null, skills: 0, servers: 0, title: "" };
+
 function carriedOf(w: Work, loadouts: readonly Loadout[]): Carried {
   const { task, worker } = w;
+  if (isProjectCard(task)) return NO_CARRY;
   const equip = worker?.equip;
   const name = equip?.loadout ?? task.equip?.loadout;
   const lo = name ? loadouts.find((l) => l.name === name) : undefined;
@@ -588,9 +614,11 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
   };
 }
 
-/** Whether a card's worker is at work: its run, or its flow short of a
- *  gate, which waits on Eric and counts there instead. */
-const atWork = (w: Work): boolean => (w.run !== undefined && isRunActive(w.run)) || (w.flow !== undefined && isFlowActive(w.flow) && w.flow.status !== "gated");
+/** Whether a card's worker is at work: its run, its flow short of a gate,
+ *  or a running project card's sprout. A gate and a project's wait on Eric
+ *  count under waiting instead. */
+const atWork = (w: Work): boolean =>
+  (w.run !== undefined && isRunActive(w.run)) || (w.flow !== undefined && isFlowActive(w.flow) && w.flow.status !== "gated") || (isProjectCard(w.task) && w.task.state === "running" && projectAsk(w) === null);
 
 /** The manager's own state in a word: ended, held, waiting on Eric, or at work. */
 function managerLook(coord: Run, asks: boolean): { word: string; tone: Tone } {
@@ -640,10 +668,11 @@ export function managerRows(coord: Run, at: ManagerInputs): ManagerRows {
     arcs: cards.map(({ w, look }) => ({ label: w.task.id, tone: look.tone })),
     at: `${n} ${n === 1 ? "card" : "cards"}`,
     wave: 0,
+    project: false,
   };
   const rings: Ring[] = [
     manager,
-    ...cards.map(({ w, look }): Ring => ({ id: w.task.id, title: w.task.title, repo: isProjectCard(w.task) ? "new project" : w.task.repo, word: look.word, tone: look.tone, model: look.carried.model, arcs: look.arcs, at: look.at, wave: wave.get(w.task.id) ?? 0 })),
+    ...cards.map(({ w, look }): Ring => ({ id: w.task.id, title: w.task.title, repo: isProjectCard(w.task) ? "new project" : w.task.repo, word: look.word, tone: look.tone, model: look.carried.model, arcs: look.arcs, at: look.at, wave: wave.get(w.task.id) ?? 0, project: isProjectCard(w.task) })),
   ];
   const lanes = cards.map(({ w, look }) => laneOf(w, coord, at, look));
   return {

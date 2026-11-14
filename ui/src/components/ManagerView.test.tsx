@@ -373,6 +373,26 @@ describe("rings and lanes", () => {
     expect(t2).toEqual(["say", "stop", "open run"]);
     expect(workers).toContain('<ol class="step-strip mgr-steps" aria-label="Steps">');
   });
+
+  test("a project card's ring and lane name no model, skills or servers; a run card's still do", () => {
+    screen(false);
+    at("?view=manager&run=k");
+    const project = card("t1", "running", { action: "project", repo: "~goal", title: "A shop", sprout: "sp_0123456789ab", outcome: "in the incubator: building" });
+    useStore.setState({ runs: { k: coord([project, card("t2", "proposed")]) } });
+    const html = renderCurrent(<ManagerView />);
+    const rings = section(html, "rings");
+    const t1Ring = rings.slice(rings.indexOf('aria-label="t1,'), rings.indexOf('aria-label="t2,'));
+    const t2Ring = rings.slice(rings.indexOf('aria-label="t2,'));
+    expect(t1Ring).not.toContain("mgr-ring-model");
+    expect(t2Ring).toContain('<span class="mgr-ring-model">default model</span>');
+    const workers = section(html, "workers");
+    const t1Lane = workers.slice(workers.indexOf('id="mgr-lane-t1"'), workers.indexOf('id="mgr-lane-t2"'));
+    const t2Lane = workers.slice(workers.indexOf('id="mgr-lane-t2"'));
+    expect(t1Lane).not.toMatch(/class="mgr-chip[ "]/);
+    expect(t1Lane).not.toContain("default model");
+    expect(t1Lane).toContain("open in incubator");
+    expect(t2Lane).toContain('<span class="mgr-chip">0 skills</span>');
+  });
 });
 
 describe("the layout", () => {
