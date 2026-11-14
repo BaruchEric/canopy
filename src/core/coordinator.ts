@@ -766,14 +766,41 @@ export function goalTopLine(repos: readonly string[], filesDir: string | null, f
   return parts.join(" ");
 }
 
-/** Plain, unique names for the files a goal brings: each label cut to its last
- *  path part, an empty or dot name made `file`, a repeat `name (2).ext`. Same
- *  length and order as the input. */
+/** the most characters, and the most UTF-8 bytes, a goal's file name keeps
+ *  before a repeat's number: a disk takes 255 bytes a name, and the bytes
+ *  left over hold " (10)" */
+const NAME_CHARS = 200;
+const NAME_BYTES = 240;
+/** the longest tail a cut name keeps as its extension */
+const EXT_CHARS = 16;
+const utf8 = new TextEncoder();
+const nameFits = (s: string): boolean => [...s].length <= NAME_CHARS && utf8.encode(s).length <= NAME_BYTES;
+/** a name without the dots and spaces it ends in, which some disks drop */
+const trimTail = (s: string): string => s.replace(/[. ]+$/, "");
+
+/** A name cut to `NAME_CHARS` and `NAME_BYTES`, a whole character at a time,
+ *  its extension kept when it is a short one. */
+function clampName(name: string): string {
+  if (nameFits(name)) return name;
+  const dot = name.lastIndexOf(".");
+  const ext = dot > 0 && name.length - dot <= EXT_CHARS ? name.slice(dot) : "";
+  // by code point, so a character outside the BMP is never cut in half
+  const stem = Array.from(name.slice(0, name.length - ext.length)).slice(0, NAME_CHARS - Array.from(ext).length);
+  while (stem.length > 0 && !nameFits(stem.join("") + ext)) stem.pop();
+  return trimTail(stem.join("")) + ext;
+}
+
+/** Plain, unique names for the files a goal brings: each label stripped of
+ *  control characters, cut to its last path part, its trailing dots and
+ *  spaces dropped, an empty name made `file`, a long one cut to fit
+ *  (`clampName`), and a repeat `name (2).ext`. Same length and order as the
+ *  input. */
 export function goalFileNames(labels: readonly string[]): string[] {
   const seen = new Set<string>();
   return labels.map((label) => {
-    const last = label.split(/[/\\]/).pop() ?? "";
-    const base = last === "" || last === "." || last === ".." ? "file" : last;
+    const last = label.replace(/\p{Cc}/gu, "").split(/[/\\]/).pop() ?? "";
+    const plain = clampName(trimTail(last));
+    const base = plain === "" ? "file" : plain;
     const dot = base.lastIndexOf(".");
     const stem = dot > 0 ? base.slice(0, dot) : base;
     const ext = dot > 0 ? base.slice(dot) : "";

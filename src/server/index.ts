@@ -72,7 +72,7 @@ import { readEvidence } from "../core/evidence";
 import { FlowFiles, flowsDir, loadFlowRecords, lockFlows, type FlowsLock } from "../core/flowstore";
 import { hasGatewayKey, jev, jevJudge, jevScenario } from "../core/jev";
 import { isDefaultAgent, normalizeAgent } from "../core/agent";
-import { takesProvider, type AgentEnv } from "../core/harness";
+import { takesEffort, takesModel, takesProvider, type AgentEnv } from "../core/harness";
 import { paneAgent } from "../core/procs";
 import { effectiveAgents, hasProfile, isAgentScopeName, isProfileName, launchPick, resolveAgent, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
@@ -226,7 +226,7 @@ import {
   TERM_GONE,
   type TaskTree,
 } from "../core/types";
-import type { About, AdviceAccepted, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus } from "../core/types";
+import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus } from "../core/types";
 import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
@@ -262,7 +262,8 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
-import { coordWorkflows, goalRepoLine, withStandingRules, type ChildBranch } from "../core/coordinator";
+import { goalFileList, goalFilesDir, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
+import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -1676,8 +1677,10 @@ export const COORD_REFUSAL = "the coordinator runs only where an isolated coordi
 const COORD_BRIEF = join(import.meta.dir, "../../lib/coordinator.md");
 
 /** The coordinator's brief, the prompt it starts from: the config dir's
- *  copy, else the bundled one, else the action's own line. */
-async function coordinatorBrief(repo: Repo): Promise<string> {
+ *  copy, else the bundled one, else the action's own line. Its last line
+ *  says where Eric started the goal: at the repo, or from the top (`top`),
+ *  with the repos he named and the files he brought. */
+async function coordinatorBrief(repo: Repo, top?: { repos: readonly string[]; dir: string | null; files: readonly string[] }): Promise<string> {
   let brief = "";
   for (const file of [join(configDir(), "coordinator.md"), COORD_BRIEF]) {
     try {
@@ -1687,7 +1690,8 @@ async function coordinatorBrief(repo: Repo): Promise<string> {
     }
     if (brief) break;
   }
-  return withStandingRules(`${brief || ACTIONS.coordinate.task}\n\n${goalRepoLine(repo.id)}`, await standingRules());
+  const last = top ? goalTopLine(top.repos, top.dir, top.files) : goalRepoLine(repo.id);
+  return withStandingRules(`${brief || ACTIONS.coordinate.task}\n\n${last}`, await standingRules());
 }
 
 /** Eric's standing rules for every manager, `~/.claude/manager.md`, read at
@@ -1707,51 +1711,167 @@ async function standingRules(): Promise<string | null> {
   }
 }
 
-/** Starts a coordinator at a repo (FR-010). It holds no repo, so no busy or
- *  workflow check applies, but a repo has one at a time. It runs only
- *  through the isolated coordinator runner, on Claude Code with its
- *  permissions bypassed inside that sandbox, and gets a `coordinator`
+/** What a goal started from the top brings beyond its text (FR-067): the
+ *  repos Eric named, his files (named by `goalFileNames`), and the model and
+ *  effort he picked over the coordinate route's. */
+interface GoalStart {
+  repos?: readonly string[];
+  files?: readonly GoalFile[];
+  model?: string;
+  effort?: AgentEffort;
+}
+
+/** Starts a coordinator at a repo (FR-010), or from the top at the goal
+ *  anchor (FR-067). It holds no repo, so no busy or workflow check applies,
+ *  but a repo has one at a time; goals at the anchor go any number at once.
+ *  It runs only through the isolated coordinator runner, on Claude Code with
+ *  its permissions bypassed inside that sandbox, and gets a `coordinator`
  *  token bound to its run (read and plan, nothing more) and the address it
  *  reaches canopy at. The token is minted for the run's id before the run
- *  exists, and revoked if the start fails. */
-async function startCoordinator(state: ServerState, repo: Repo, goal: string, client?: unknown): Promise<Run> {
-  if (repo.host) throw new HttpError(400, `a coordinator runs only on this machine; ${repo.name} is on ${repo.host}`);
-  if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; a coordinator starts at a repo on this machine`);
-  if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+ *  exists. A goal from the top that brings files gets them in its own folder
+ *  (`goalFilesDir`), which the agent is given and which outlives the run. A
+ *  start that fails revokes the token and removes both folders. */
+async function startCoordinator(state: ServerState, repo: Repo, goal: string, client?: unknown, opts?: GoalStart): Promise<Run> {
+  const top = isGoalAnchor(repo.id);
+  if (!top) {
+    if (repo.host) throw new HttpError(400, `a coordinator runs only on this machine; ${repo.name} is on ${repo.host}`);
+    if (repo.forge) throw new HttpError(400, `${repo.name} is on the forge; a coordinator starts at a repo on this machine`);
+    if (isSeedPath(state.root, repo.path)) throw new HttpError(400, SEED_AGENT_REFUSAL);
+  }
   if (!process.env["CANOPY_COORD_SOCKET"]) throw new HttpError(409, COORD_REFUSAL);
   const unsafe = state.coordRefusal();
   if (unsafe) throw new HttpError(409, unsafe);
   const api = process.env["CANOPY_COORD_API"]?.trim();
   if (!api) throw new HttpError(409, "CANOPY_COORD_API is not set, so a coordinator would have no address to reach canopy at");
   if (!goal.trim()) throw new HttpError(400, "write the goal first");
-  const going = state.runner.coordinatorFor(repo.id);
+  const going = top ? undefined : state.runner.coordinatorFor(repo.id);
   if (going) throw new HttpError(409, `${repo.name} already has a coordinator going`);
   // Claude Code alone, in bypass mode; a route's extra flags are dropped,
-  // since they could change the mode or bring MCP servers in
-  const agent: AgentSettings = { ...agentFor(await loadConfig(), repo.path, "coordinate"), harness: "claude", yolo: true, extra: "" };
-  const spec: ActionSpec = { ...ACTIONS.coordinate, task: await coordinatorBrief(repo) };
+  // since they could change the mode or bring MCP servers in. A goal from
+  // the top takes the coordinate route with no repo's override (no path
+  // matches ""), and the model and effort Eric picked over it.
+  const routed = agentFor(await loadConfig(), top ? "" : repo.path, "coordinate");
+  const agent: AgentSettings = { ...routed, harness: "claude", yolo: true, extra: "", ...(opts?.model ? { model: opts.model } : {}), ...(opts?.effort ? { effort: opts.effort } : {}) };
   const by = deviceNameOf(state, typeof client === "string" ? client : null) ?? undefined;
   const id = crypto.randomUUID().slice(0, 8);
   // its own folder under the coord runner's seeds, the same path in both
   // containers: no checkout, nothing of the repo's
-  const seeds = process.env["CANOPY_COORD_ROOT"]?.trim();
+  const seeds = coordSeeds();
   if (!seeds) throw new HttpError(409, "CANOPY_COORD_ROOT is not set, so a coordinator would have no folder to start in");
   const cwd = join(seeds, id);
+  const files = top ? (opts?.files ?? []) : [];
+  // a files folder only for a goal that brings files
+  const filesDir = files.length > 0 ? goalFilesDir(seeds, id) : null;
+  const spec: ActionSpec = { ...ACTIONS.coordinate, task: await coordinatorBrief(repo, top ? { repos: opts?.repos ?? [], dir: filesDir, files: files.map((f) => f.name) } : undefined) };
   try {
     await mkdir(cwd, { mode: 0o700 });
     await chmod(cwd, 0o700);
   } catch (err) {
     throw new HttpError(500, `could not make the coordinator's folder ${cwd}: ${String(err instanceof Error ? err.message : err)}`);
   }
-  const { token, caller } = state.callers.mint("coordinator", { label: `coordinator ${repo.id}`, run: id });
+  let wrote = false;
+  let minted: string | null = null;
   try {
-    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, cwd, env: { CANOPY_API: api, CANOPY_TOKEN: token } });
+    if (filesDir) {
+      try {
+        await writeGoalFiles(filesDir, files);
+      } catch (err) {
+        throw new HttpError(500, `could not write the goal's files to ${filesDir}: ${String(err instanceof Error ? err.message : err)}`);
+      }
+      wrote = true;
+    }
+    const { token, caller } = state.callers.mint("coordinator", { label: `coordinator ${repo.id}`, run: id });
+    minted = caller.id;
+    return state.runner.start(repo, "coordinate", spec, goal, agent, by, undefined, undefined, { id, cwd, env: { CANOPY_API: api, CANOPY_TOKEN: token }, ...(filesDir ? { addDirs: [filesDir] } : {}) });
   } catch (err) {
-    state.callers.revoke(caller.id).catch(() => {});
+    if (minted) state.callers.revoke(minted).catch(() => {});
     await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    // writeGoalFiles removes a folder it made when it throws itself
+    if (filesDir && wrote) await rm(filesDir, { recursive: true, force: true }).catch(() => {});
     if (err instanceof Error && err.name === "StageAwayError") throw err;
+    if (err instanceof HttpError) throw err;
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
+}
+
+/** the coordinator runner's seeds, `CANOPY_COORD_ROOT`, when it is set */
+function coordSeeds(): string | null {
+  return process.env["CANOPY_COORD_ROOT"]?.trim() || null;
+}
+
+/** A goal's files folder and the plain files in it, for a coordinator
+ *  started from the top; null for one started at a repo, which has none. */
+async function goalFolder(state: ServerState, coordId: string): Promise<{ dir: string; files: string[] } | null> {
+  const run = state.runner.get(coordId);
+  const seeds = coordSeeds();
+  if (!run || run.action !== "coordinate" || !isGoalAnchor(run.repoId) || !seeds) return null;
+  const dir = goalFilesDir(seeds, coordId);
+  return { dir, files: await goalFileList(dir) };
+}
+
+/** Takes the goals' files folders a week past their newest file whose
+ *  coordinator is not going (`pruneGoalFiles`): at each new goal and once
+ *  at server start. A failure is logged and the next one tries again. */
+async function pruneGoals(state: ServerState): Promise<void> {
+  const seeds = coordSeeds();
+  if (!seeds) return;
+  const live = new Set(state.runner.list().filter((r) => r.action === "coordinate" && isRunActive(r)).map((r) => r.id));
+  try {
+    await pruneGoalFiles(seeds, live, Date.now());
+  } catch (err) {
+    console.error(`coordinator: could not prune the goals' files: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/** a goal's form over its bytes cap, with room for the form's own framing */
+const GOAL_FORM_MAX = GOAL_LIMITS.bytes + 1024 * 1024;
+const GOAL_TOO_BIG = `a goal's files come to over ${GOAL_LIMITS.bytes / (1024 * 1024)} MB`;
+
+/** `POST /api/coordinator/new` (FR-067): a goal from the top, multipart, as
+ *  the composer and the CLI send it. `goal` is its text; `repos[]` the repos
+ *  Eric named, each a local repo this backend holds and not a seed; `file`
+ *  or `files[]` his files; `model` and `effort` Claude Code's, over the
+ *  coordinate route's. Everything is checked before anything is made. */
+async function newGoal(state: ServerState, req: Request): Promise<Run> {
+  const type = (req.headers.get("content-type") ?? "").toLowerCase();
+  if (!type.startsWith("multipart/form-data")) throw new HttpError(415, "send a goal as multipart/form-data");
+  if (Number(req.headers.get("content-length") ?? "0") > GOAL_FORM_MAX) throw new HttpError(413, GOAL_TOO_BIG);
+  const form = await req.formData().catch(() => null);
+  if (!form) throw new HttpError(400, "the form could not be read");
+  const text = (name: string): string => {
+    const v = form.get(name);
+    return typeof v === "string" ? v.trim() : "";
+  };
+  const goal = form.get("goal");
+  const goalText = typeof goal === "string" ? goal : "";
+  if (goalText.length > GOAL_LIMITS.goal) throw new HttpError(400, `the goal is over ${GOAL_LIMITS.goal} characters`);
+  const named = form.getAll("repos[]").flatMap((v) => (typeof v === "string" && v.trim() ? [v.trim()] : []));
+  if (named.length > GOAL_LIMITS.repos) throw new HttpError(400, `at most ${GOAL_LIMITS.repos} repos`);
+  const repos = [...new Set(named)];
+  for (const id of repos) {
+    const repo = state.result.repos.find((r) => r.id === id);
+    if (!repo) throw new HttpError(400, `no repo ${id} on this backend`);
+    if (repo.host || repo.forge) throw new HttpError(400, `${id} is not a folder on this machine`);
+    if (isSeedPath(state.root, repo.path)) throw new HttpError(400, `${id} is an incubator seed; a goal names repos`);
+  }
+  const uploads = [...form.getAll("file"), ...form.getAll("files[]")].flatMap((v) => (typeof v === "string" ? [] : [v]));
+  if (uploads.length > GOAL_LIMITS.files) throw new HttpError(400, `at most ${GOAL_LIMITS.files} files`);
+  if (uploads.reduce((n, f) => n + f.size, 0) > GOAL_LIMITS.bytes) throw new HttpError(413, GOAL_TOO_BIG);
+  const model = text("model");
+  if (model && !takesModel("claude", model)) throw new HttpError(400, `claude does not take model ${model}`);
+  const asked = text("effort");
+  if (asked && !takesEffort("claude", asked)) throw new HttpError(400, `claude does not take effort ${asked}`);
+  const effort: AgentEffort | undefined = asked && takesEffort("claude", asked) ? asked : undefined;
+  const names = goalFileNames(uploads.map((f) => f.name));
+  const files = await Promise.all(uploads.map(async (f, i): Promise<GoalFile> => ({ name: names[i] ?? "file", data: new Uint8Array(await f.arrayBuffer()) })));
+  const run = await startCoordinator(state, goalAnchor(state.root), goalText, text("client") || undefined, {
+    repos,
+    files,
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  });
+  void pruneGoals(state);
+  return run;
 }
 
 /** Removes a coordinator's folder, `<CANOPY_COORD_ROOT>/<run id>`, once its
@@ -2368,9 +2488,15 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   const harness = loadout?.harness ?? routed.harness;
   if (task.action === "propose" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, harness, repo.path);
+  // a card that lists its goal's files gets their folder and a line under
+  // its note naming each (FR-067); validatePlan keeps files off a card with
+  // times or a workflow, so only a card's one run gets here with them
+  const folder = task.files?.length ? await goalFolder(state, coordId) : null;
+  if (task.files?.length && !folder) throw new Error("the goal's files folder is gone");
+  const note = folder && task.files?.length ? `${task.note}\n\n${cardFilesLine(folder.dir, task.files)}` : task.note;
   // a card's child names its parent and never `child`: the tool-child
   // refusal and depth are for runs a run starts through canopy's tools
-  const base: StartExtras = { parent: coordId, ...(priority !== "interactive" ? { priority } : {}) };
+  const base: StartExtras = { parent: coordId, ...(priority !== "interactive" ? { priority } : {}), ...(folder ? { addDirs: [folder.dir] } : {}) };
   let release = async (): Promise<void> => {};
   try {
     // the governor before the loadout's files, so a held card writes none
@@ -2379,7 +2505,7 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
     const loaded = loadout ? await withLoadout(state, repo, loadout, routed, base, false) : { agent: routed, extras: base, release };
     release = loaded.release;
     return {
-      run: await startBranchRun(state, repo, task.action, task.note, loaded.agent, "coordinator", false, ACTIONS[task.action], loaded.extras, work),
+      run: await startBranchRun(state, repo, task.action, note, loaded.agent, "coordinator", false, ACTIONS[task.action], loaded.extras, work),
     };
   } catch (err) {
     await release();
@@ -4401,6 +4527,8 @@ async function handleApi(
     return json(loadoutsView(state.kit.loadouts(), caller?.kind));
   }
   if (path === "/api/coordinator/workflows" && method === "GET") return json(coordWorkflows(await loadWorkflows({ path: "", host: "none" })));
+  // a goal from the top (FR-067), ahead of the hub, since it starts the coordinator
+  if (path === "/api/coordinator/new" && method === "POST") return json(await newGoal(state, req), 201);
   const kitRes = await state.kit.handle(req, url);
   if (kitRes) return kitRes;
   const groupsRes = await state.groups.handle(req, url);
@@ -7318,6 +7446,7 @@ export async function startServer(opts: {
       branch: (origin) => branchFacts(state, origin),
       loadouts: () => state.kit.loadouts(),
       workflows: (repo, withRepo) => coordWorkflowNames(state, repo, withRepo),
+      goalFiles: async (id) => (await goalFolder(state, id))?.files ?? [],
       flow: (id) => state.flows.get(id),
       broadcast: (run) => {
         broadcast(state, { type: "run", run });
@@ -8013,6 +8142,8 @@ export async function startServer(opts: {
   // the Mac's own simulators are read now, so the first page's /api/client
   // already lists them (FR-050)
   if (hostOpeners() && process.env["NODE_ENV"] !== "test") hostEmulators();
+  // the goals' files a week past their newest, once at start (FR-067)
+  void pruneGoals(state);
   // the coordinator's runner redials on a watch of its own, so harnessesNow
   // and the fence stay fresh for a coordinate run's start and /api/about
   const stopCoordWatch = coord

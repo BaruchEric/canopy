@@ -93,6 +93,9 @@ export interface CoordinatorDeps {
   loadouts: () => LoadoutsInfo;
   /** the workflows a card in this repo may name: bundled and user ones, and the repo's own when `withRepo` */
   workflows: (repo: string, withRepo: boolean) => Promise<{ name: string; fromRepo: boolean }[]>;
+  /** the names in a goal's files folder, which a card's `files` may list:
+   *  none for a goal started at a repo, and none when absent (FR-067) */
+  goalFiles?: (coordId: string) => Promise<readonly string[]>;
   /** a coordinator's cards changed: send its run out again */
   broadcast: (run: Run) => void;
   /** the work item's settle line; absent for pre-ledger cards */
@@ -235,6 +238,11 @@ export class CoordinatorHub {
     return Math.max(this.numbers.get(coord.id) ?? 0, ...(coord.tasks ?? []).map((t) => Number(t.id.slice(1)) || 0));
   }
 
+  /** the names in the coordinator's goal's files folder, read before the checks, which are not async */
+  private async goalFiles(coordId: string): Promise<readonly string[]> {
+    return (await this.deps.goalFiles?.(coordId)) ?? [];
+  }
+
   /** The workflows each repo the cards name may run, read before the checks,
    *  which are not async. A repo the cards do not name a workflow for, or
    *  one not on this machine, reads none. */
@@ -256,7 +264,7 @@ export class CoordinatorHub {
    *  coordinator's token names a loadout and a bundled or user workflow,
    *  and Eric's may set the loadout's fields and pick the repo's own. */
   async plan(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; added: CoordTask[] }> {
-    this.coordinator(b["run"], caller);
+    const files = await this.goalFiles(this.coordinator(b["run"], caller).id);
     const by = this.by(caller);
     const input = b["tasks"];
     const workflows = await this.flowsFor(Array.isArray(input) ? input : [], by === "person");
@@ -264,7 +272,7 @@ export class CoordinatorHub {
     const coord = this.coordinator(b["run"], caller);
     const have = coord.tasks ?? [];
     let last = this.last(coord);
-    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by, files: [] });
+    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by, files });
     if ("error" in got) throw new CoordError(got.error, 400);
     const added = got.tasks.map((t): CoordTask => ({ id: `t${++last}`, ...t, state: "proposed" }));
     this.numbers.set(coord.id, last);
@@ -302,10 +310,11 @@ export class CoordinatorHub {
       if (tasks.some((x) => x.state === "queued" && x.id !== id)) await this.pump(coord.id);
       return { ok: true, removed: first.t.id };
     }
+    const files = await this.goalFiles(first.coord.id);
     const workflows = await this.flowsFor([{ ...b, repo: b["repo"] ?? first.t.repo }], true);
     // the card may have moved while the workflows were read
     const { coord, tasks, t } = find();
-    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files: [] });
+    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files });
     // a field a queued card does not change is a conflict with its state, like a running card's
     if ("error" in got) throw new CoordError(got.error, got.error.startsWith(`${t.id} is `) ? 409 : 400);
     this.setTasks(

@@ -444,6 +444,7 @@ describe("a coordinator at the gate", () => {
     for (const [m, p] of [
       ["POST", "/api/coordinator/tasks"],
       ["POST", "/api/coordinator/start"],
+      ["POST", "/api/coordinator/new"],
       ["POST", "/api/repos/run"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
@@ -514,6 +515,7 @@ describe("the coordinator's lane", () => {
       ["GET", "/api/coordinator/plan"],
       ["POST", "/api/coordinator/start"],
       ["POST", "/api/coordinator/tasks"],
+      ["POST", "/api/coordinator/new"],
       ["POST", "/api/repos/run"],
     ] as const) {
       expect([m, p, laneAllows("coordinator", m, p)]).toEqual([m, p, false]);

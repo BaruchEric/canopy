@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { selfName } from "../core/backends";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
-import { DEFAULT_AGENT, type About, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Run } from "../core/types";
+import { cardFilesLine, goalRepoLine, goalTopLine } from "../core/coordinator";
+import { DEFAULT_AGENT, isRunActive, type About, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Run } from "../core/types";
 import { CallerBook } from "./callers";
 import { startServer } from "./index";
 
@@ -86,7 +87,7 @@ type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; m
  *  with a page token minted into its book before it starts. The
  *  coordinator's listener takes any free port unless `coordPort` is
  *  null, which leaves it to CANOPY_COORD_PORT. */
-async function up(name: string, client: StageClient | null, env: Record<string, string> = {}, coordPort: number | null = 0, harnesses?: Harness[]): Promise<Up> {
+async function up(name: string, client: StageClient | null, env: Record<string, string> = {}, coordPort: number | null = 0, harnesses?: Harness[], root = join(scratch, "root")): Promise<Up> {
   const config = join(scratch, name);
   process.env["CANOPY_CONFIG_DIR"] = config;
   const book = new CallerBook({ file: join(config, "callers.json") });
@@ -99,7 +100,7 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
   Object.assign(process.env, { CANOPY_CALLERS: "enforce", CANOPY_COORD_ROOT: seeds, ...env });
   const made: Recorder[] = [];
   const s = await startServer({
-    root: join(scratch, "root"),
+    root,
     port: 0,
     coordinator: { client, ...(coordPort !== null ? { port: coordPort } : {}) },
     ...(harnesses ? { harnesses } : {}),
@@ -1146,4 +1147,181 @@ describe("a card whose child hit the plan's usage limit", () => {
     expect(s.made.length).toBe(drivers + 1);
     expect((await runs()).filter((r) => r.branch?.origin === origin && r.status === "working").map((r) => r.id)).toEqual([card.run ?? ""]);
   }, 30_000);
+});
+
+describe("a goal from the top", () => {
+  const state = { answers: true, fenced: true };
+  let s: Up;
+  /** runs to stop when the test ends, children first */
+  const live: string[] = [];
+  const runs = async (): Promise<Run[]> => (await (await call(s, "/api/runs", s.page)).json()) as Run[];
+  const driverOf = (id: string): Promise<Recorder> => until(async () => s.made.find((d) => d.ctx?.env["CANOPY_RUN"] === id), `run ${id} to reach the driver`);
+  type Goal = { goal?: string; repos?: readonly string[]; files?: readonly (readonly [string, string])[]; model?: string; effort?: string };
+  /** `POST /api/coordinator/new` as the composer and the CLI send it, multipart */
+  const newGoal = (g: Goal, token: string | undefined = s.page, port = s.port): Promise<Response> => {
+    const form = new FormData();
+    if (g.goal !== undefined) form.append("goal", g.goal);
+    for (const r of g.repos ?? []) form.append("repos[]", r);
+    for (const [name, text] of g.files ?? []) form.append("files[]", new File([text], name));
+    if (g.model !== undefined) form.append("model", g.model);
+    if (g.effort !== undefined) form.append("effort", g.effort);
+    return call(s, "/api/coordinator/new", token, { method: "POST", body: form }, port);
+  };
+  /** a goal that started, kept to stop when the test ends */
+  async function started(g: Goal): Promise<{ run: Run; driver: Recorder; token: string }> {
+    const res = await newGoal(g);
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    live.push(run.id);
+    const driver = await driverOf(run.id);
+    return { run, driver, token: driver.ctx?.pass?.["CANOPY_TOKEN"] ?? "" };
+  }
+  /** every run's folder under the seeds and under its goal-files, so a
+   *  refused start shows it left none; goal-files itself holds them all */
+  const folders = async (): Promise<string[]> => {
+    const top = (await readdir(s.seeds)).filter((f) => f !== "goal-files");
+    const kept = await readdir(join(s.seeds, "goal-files")).catch((): string[] => []);
+    return [...top, ...kept.map((f) => `goal-files/${f}`)].sort();
+  };
+
+  beforeAll(async () => {
+    const root = join(scratch, "goal-root");
+    for (const name of ["a", "b"]) {
+      const repo = join(root, name);
+      await Bun.$`mkdir -p ${repo} && git -C ${repo} init -q -b main && git -C ${repo} -c user.name=t -c user.email=t@t commit -q --allow-empty -m one`.quiet();
+    }
+    // no ~/.claude/manager.md, so a brief ends with its own last line
+    const home = join(scratch, "goal-home");
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
+    process.env["HOME"] = home;
+    s = await up("goal", fakeRunner(state), COORD_ENV, 0, ["claude"], root);
+  });
+  afterEach(async () => {
+    for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
+  });
+  afterAll(() => s.stop());
+
+  test("a full start: the anchor, the files in a folder of their own, the repos and files in the brief, the model and effort, and the folder added", async () => {
+    const goal = "make the shop's logo the favicon";
+    const { run, driver } = await started({ goal, repos: ["a", "b"], files: [["shot.png", "png bytes"], ["../notes.md", "# notes"]], model: "sonnet", effort: "high" });
+    expect(run.repoId).toBe("~goal");
+    expect(run.action).toBe("coordinate");
+    const dir = join(s.seeds, "goal-files", run.id);
+    expect((await readdir(dir)).sort()).toEqual(["notes.md", "shot.png"]);
+    expect(await Bun.file(join(dir, "notes.md")).text()).toBe("# notes");
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    expect((await stat(join(dir, "shot.png"))).mode & 0o777).toBe(0o600);
+    expect(driver.message).toContain(`\n\n${goalTopLine(["a", "b"], dir, ["shot.png", "notes.md"])}\n\nFirst message from the user:\n${goal}`);
+    expect(driver.message).not.toContain(goalRepoLine("~goal"));
+    expect(driver.ctx?.agent.model).toBe("sonnet");
+    expect(driver.ctx?.agent.effort).toBe("high");
+    expect(driver.ctx?.agent.yolo).toBe(true);
+    expect(driver.ctx?.spec.addDirs).toEqual([dir]);
+    expect(driver.ctx?.cwd).toBe(join(s.seeds, run.id));
+    // the run's own folder goes when it ends, and its files stay for the cards still at work
+    await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+    await until(async () => !(await exists(join(s.seeds, run.id))), "the coordinator's folder to go");
+    expect(await readdir(dir)).toHaveLength(2);
+  });
+
+  test("two at once, each without files: no files folder and no folder added", async () => {
+    const one = await started({ goal: "one" });
+    const two = await started({ goal: "two" });
+    expect([one.run.repoId, two.run.repoId]).toEqual(["~goal", "~goal"]);
+    const going = (await runs()).filter((r) => r.repoId === "~goal" && isRunActive(r)).map((r) => r.id);
+    expect(going).toEqual(expect.arrayContaining([one.run.id, two.run.id]));
+    for (const { run, driver } of [one, two]) {
+      expect(await exists(join(s.seeds, "goal-files", run.id))).toBe(false);
+      expect(driver.ctx?.spec.addDirs).toBeUndefined();
+      expect(driver.message).toContain(`\n\n${goalTopLine([], null, [])}\n\nFirst message from the user:\n`);
+    }
+  });
+
+  test("a refused start leaves no folder behind", async () => {
+    const before = await folders();
+    const eleven = Array.from({ length: 11 }, (_, i): [string, string] => [`f${i}.md`, "x"]);
+    for (const [g, status, error] of [
+      [{ goal: "x", repos: ["x"] }, 400, "no repo x on this backend"],
+      [{ goal: "x", files: eleven }, 400, "at most 10 files"],
+      [{ goal: "  ", files: [["shot.png", "x"]] }, 400, "write the goal first"],
+      [{ files: [["shot.png", "x"]] }, 400, "write the goal first"],
+      [{ goal: "x", effort: "wild" }, 400, "claude does not take effort wild"],
+      [{ goal: "x", model: "gpt-9" }, 400, "claude does not take model gpt-9"],
+      [{ goal: "x".repeat(20001) }, 400, "the goal is over 20000 characters"],
+      [{ goal: "x", repos: Array.from({ length: 21 }, () => "a") }, 400, "at most 20 repos"],
+    ] as const) {
+      const res = await newGoal(g);
+      expect([res.status, ((await res.json()) as { error: string }).error]).toEqual([status, error]);
+      expect(await folders()).toEqual(before);
+    }
+    const json = await postAs(s, "/api/coordinator/new", { goal: "x" }, s.page);
+    expect(json.status).toBe(415);
+    expect(await folders()).toEqual(before);
+  });
+
+  test("a start that fails after its folders are made removes both", async () => {
+    const before = await folders();
+    state.fenced = false;
+    try {
+      const res = await newGoal({ goal: "x", files: [["shot.png", "png"]] });
+      expect(res.status).toBe(503);
+      expect(((await res.json()) as { error: string }).error).toContain("the fence is unchecked");
+      expect(await folders()).toEqual(before);
+    } finally {
+      state.fenced = true;
+    }
+  });
+
+  test("a coordinator's token may not start a goal, on either listener", async () => {
+    const { token } = await started({ goal: "one" });
+    expect(token).toMatch(/\S/);
+    const before = await folders();
+    expect((await newGoal({ goal: "two", files: [["shot.png", "x"]] }, token)).status).toBe(403);
+    expect((await newGoal({ goal: "two" }, token, lanePort(s))).status).toBe(403);
+    expect(await folders()).toEqual(before);
+  });
+
+  test("a card that lists the goal's files: its child gets the folder and a line under its note", async () => {
+    const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const card = { title: "favicon", repo: "a", note: "use the logo for the favicon", action: "ask" };
+    const unknown = await postAs(s, "/api/coordinator/plan", { tasks: [{ ...card, files: ["nope.png"] }] }, token);
+    expect(await unknown.json()).toEqual({ error: "tasks[0].files: the goal has no file nope.png" });
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ ...card, files: ["shot.png"] }, { ...card, title: "later" }] }, token);
+    expect(plan.status).toBe(200);
+    expect(((await plan.json()) as { added: CoordTask[] }).added.map((t) => t.files)).toEqual([["shot.png"], undefined]);
+    // Eric's edit may give a card the goal's files too
+    const edit = await postAs(s, "/api/coordinator/tasks", { run: run.id, id: "t2", files: ["shot.png"] }, s.page);
+    expect(edit.status).toBe(200);
+    expect(((await edit.json()) as { task: CoordTask }).task.files).toEqual(["shot.png"]);
+    const begun = await postAs(s, "/api/coordinator/start", { run: run.id, ids: ["t1"] }, s.page);
+    expect(begun.status).toBe(200);
+    const task = ((await begun.json()) as { tasks: CoordTask[] }).tasks.find((t) => t.id === "t1");
+    expect(task?.state).toBe("running");
+    const childId = task?.run ?? "";
+    live.push(childId);
+    const child = (await runs()).find((r) => r.id === childId);
+    expect(child?.parent).toBe(run.id);
+    expect(child?.note.endsWith(`use the logo for the favicon\n\n${cardFilesLine(dir, ["shot.png"])}`)).toBe(true);
+    const driver = await driverOf(childId);
+    expect(driver.ctx?.spec.addDirs).toEqual([dir]);
+  }, 30_000);
+
+  test("a goal started at a repo is as it was: its own last line, no files to name, and one at a time", async () => {
+    const res = await postAs(s, "/api/repos/run?id=a", { action: "coordinate", note: "ship it" }, s.page);
+    expect(res.status).toBe(201);
+    const run = (await res.json()) as Run;
+    live.push(run.id);
+    expect(run.repoId).toBe("a");
+    const driver = await driverOf(run.id);
+    expect(driver.message).toContain(`\n\n${goalRepoLine("a")}\n\nFirst message from the user:\nship it`);
+    expect(driver.ctx?.spec.addDirs).toBeUndefined();
+    const token = driver.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "t", repo: "a", note: "n", action: "ask", files: ["shot.png"] }] }, token);
+    expect(await plan.json()).toEqual({ error: "tasks[0].files: the goal has no files" });
+    const again = await postAs(s, "/api/repos/run?id=a", { action: "coordinate", note: "more" }, s.page);
+    expect(again.status).toBe(409);
+    expect(((await again.json()) as { error: string }).error).toBe("a already has a coordinator going");
+  });
 });

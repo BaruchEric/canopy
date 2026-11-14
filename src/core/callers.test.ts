@@ -216,6 +216,12 @@ describe("the coordinator's routes", () => {
     expect(needs("POST", "/api/coordinator/start")).toBe("operate");
   });
 
+  test("a new goal from the top needs operate: a page, the CLI or a shell may start one, and a coordinator or a run may not", () => {
+    expect(needs("POST", "/api/coordinator/new")).toBe("operate");
+    for (const kind of ["page", "cli", "shell"] as const) expect([kind, allows(kind, needs("POST", "/api/coordinator/new"))]).toEqual([kind, true]);
+    for (const kind of ["coordinator", "run", "none"] as const) expect([kind, allows(kind, needs("POST", "/api/coordinator/new"))]).toEqual([kind, false]);
+  });
+
   test("picking a stopped flow up needs operate", () => {
     expect(needs("POST", "/api/flows/pickup")).toBe("operate");
   });
@@ -233,6 +239,7 @@ describe("the coordinator's routes", () => {
       ["POST", "/api/coordinator/tasks"],
       ["POST", "/api/coordinator/start"],
       ["POST", "/api/coordinator/hold"],
+      ["POST", "/api/coordinator/new"],
       ["POST", "/api/repos/run"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],

@@ -232,6 +232,16 @@ describe("a workspace run", () => {
     expect(run.steps[0]).toMatchObject({ kind: "note", text: "left out of this run: ssh://mini/x (on mini)" });
   });
 
+  test("folders the server adds join the workspace's, and a run with neither has none", () => {
+    const { runner, ctxOf } = setup();
+    runner.start(repo("a"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, scope, undefined, { addDirs: ["/seeds/goal-files/ab12cd34"] });
+    expect(ctxOf(0).spec.addDirs).toEqual(["/w/trips-analysis", "/seeds/goal-files/ab12cd34"]);
+    runner.start(repo("b"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, undefined, undefined, { addDirs: ["/seeds/goal-files/ab12cd34"] });
+    expect(ctxOf(1).spec.addDirs).toEqual(["/seeds/goal-files/ab12cd34"]);
+    runner.start(repo("c"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, undefined, undefined, { addDirs: [] });
+    expect("addDirs" in ctxOf(2).spec).toBe(false);
+  });
+
   test("a chat opened empty keeps the workspace wording in its first prompt", () => {
     const { runner, made } = setup();
     const run = runner.start(repo("a"), "chat", ACTIONS.chat, "", DEFAULT_AGENT, undefined, scope);

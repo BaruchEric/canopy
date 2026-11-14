@@ -137,7 +137,8 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["runs/child", "runs/say", "ranger/wakes", "work/note"], right: "plan" },
   // what a card may name: the workflows a coordinator is allowed, a plain read
   { methods: ["GET"], paths: ["coordinator/workflows"], right: "read" },
-  { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold"], right: "operate" },
+  // a new goal from the top is the user's as well: a coordinator never starts one
+  { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold", "coordinator/new"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
   { methods: POST, paths: ["flows/resume", "flows/stop", "flows/pickup", "fleet/stop", "jobs/stop"], right: "operate" },
   { methods: POST_DEL, paths: ["fleet", "repos/health", "incubator", "layouts"], right: "operate" },

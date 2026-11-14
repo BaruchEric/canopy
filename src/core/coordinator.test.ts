@@ -775,6 +775,30 @@ describe("a goal from the top", () => {
   test("file names stay plain and unique", () => {
     expect(goalFileNames(["../x.png", "a/b.png", "", "..", "b.png", "b.png"])).toEqual(["x.png", "b.png", "file", "file (2)", "b (2).png", "b (3).png"]);
   });
+  test("a file name loses its control characters, NUL among them", () => {
+    expect(goalFileNames(["sh\u0000ot.png", "no\ntes\r.md", "\u0007\u001b\u007f.png", "tab\there.txt"])).toEqual(["shot.png", "notes.md", ".png", "tabhere.txt"]);
+    expect(goalFileNames(["\u0000", "\u0000/\u0000"])).toEqual(["file", "file (2)"]);
+  });
+  test("a file name loses its trailing dots and spaces", () => {
+    expect(goalFileNames(["notes.md. . ", "plan.  ", "...", ". .", "a/.. "])).toEqual(["notes.md", "plan", "file", "file (2)", "file (3)"]);
+  });
+  test("a long file name is cut to 200 characters, its extension kept", () => {
+    const [kept, plain, longExt] = goalFileNames([`${"a".repeat(300)}.png`, "b".repeat(250), `c.${"d".repeat(300)}`]);
+    expect(kept).toBe(`${"a".repeat(196)}.png`);
+    expect(plain).toBe("b".repeat(200));
+    expect(longExt?.length).toBe(200);
+    expect(longExt?.startsWith("c.ddd")).toBe(true);
+    // a cut that ends in a dot or a space loses those too
+    expect(goalFileNames([`${"e".repeat(198)}. ${"f".repeat(50)}`])).toEqual(["e".repeat(198)]);
+    // and to 240 bytes, since a disk takes 255 bytes a name, never splitting
+    // a character outside the BMP in half
+    expect(goalFileNames(["\u{1F600}".repeat(250)])).toEqual(["\u{1F600}".repeat(60)]);
+    const [kana] = goalFileNames([`${"あ".repeat(100)}.pdf`]);
+    expect(kana).toBe(`${"あ".repeat(78)}.pdf`);
+    expect(new TextEncoder().encode(kana).length).toBeLessThanOrEqual(240);
+    // the cut comes before the repeat's number
+    expect(goalFileNames([`${"a".repeat(300)}.png`, `${"a".repeat(301)}.png`])).toEqual([`${"a".repeat(196)}.png`, `${"a".repeat(196)} (2).png`]);
+  });
   test("a card's files line", () => {
     expect(cardFilesLine("/c/goal-files/ab12cd34", ["shot.png"])).toBe("Files from Eric for this task: /c/goal-files/ab12cd34/shot.png");
   });
