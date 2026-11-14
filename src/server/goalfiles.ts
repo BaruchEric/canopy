@@ -6,8 +6,8 @@
  *  newest file once the run is gone. Node's fs, so the server's alone; the
  *  names come from `goalFileNames` in core/coordinator.ts. */
 
-import type { Dirent } from "node:fs";
-import { chmod, lstat, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { constants, type Dirent } from "node:fs";
+import { chmod, lstat, mkdir, open, readdir, realpath, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Run } from "../core/types";
 
@@ -56,6 +56,44 @@ export async function goalFileList(dir: string): Promise<string[]> {
     return [];
   }
   return entries.filter((e) => e.isFile()).map((e) => e.name).sort();
+}
+
+const MB = 1024 * 1024;
+const errCode = (e: unknown): string | undefined => (e instanceof Error && "code" in e && typeof e.code === "string" ? e.code : undefined);
+
+/** One goal file's bytes, for a project card's intake in the incubator
+ *  (FR-067). The coordinator can rewrite its goal's folder, and the bytes
+ *  leave its reach for the incubator's, so nothing is read through a link:
+ *  the folder must be the goal's own under the seeds, and the file a plain
+ *  file of its own, opened without following a link swapped in after the
+ *  list. A file over `max` bytes is refused before it is read. Each refusal
+ *  names the file, in words a card's outcome carries. */
+export async function readGoalFile(seeds: string, runId: string, name: string, max: number): Promise<Uint8Array> {
+  if (!plainName(name)) throw new Error(`not a plain file name: ${name}`);
+  const dir = goalFilesDir(seeds, runId);
+  const real = await realpath(dir).catch(() => null);
+  if (real === null) throw new Error("the goal's files folder is gone");
+  if (real !== goalFilesDir(await realpath(seeds), runId)) throw new Error("the goal's files folder is a link; canopy reads no goal file through one");
+  let fh: FileHandle;
+  try {
+    // non-blocking, so a fifo swapped in cannot hang the read
+    fh = await open(join(real, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    if (errCode(e) === "ELOOP") throw new Error(`${name} is a link; canopy reads no goal file through one`);
+    if (errCode(e) === "ENOENT") throw new Error(`${name} is no longer in the goal's files folder`);
+    throw e;
+  }
+  try {
+    const st = await fh.stat();
+    if (!st.isFile()) throw new Error(`${name} is not a plain file`);
+    const over = `${name} is over ${max % MB === 0 ? `${max / MB} MB` : `${max} bytes`}`;
+    if (st.size > max) throw new Error(over);
+    const data = await fh.readFile();
+    if (data.byteLength > max) throw new Error(over);
+    return data;
+  } finally {
+    await fh.close();
+  }
 }
 
 /** the newest mtime of anything in `dir`, or its own when it is empty; null when it does not read */

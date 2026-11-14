@@ -156,6 +156,16 @@ export class IncubatorHub {
     this.inc.detach();
   }
 
+  /** Why a coordinator's project card cannot make its sprout here, in the
+   *  words a new project from the page is refused with, or null when it
+   *  can: this server does not keep the incubator, or stages are off with
+   *  the queue live, so the sprout would sit queued for good (FR-067). */
+  takesProjects(): string | null {
+    if (this.keeping.kind !== "owner") return notKeeping(this.keeping);
+    if (this.stages().mode === "off" && this.inc.starts()) return NO_STAGES;
+    return null;
+  }
+
   /** the owner's records as they are on disk, newest first */
   private async onDisk(): Promise<Sprout[]> {
     return (await this.records()).sort((a, b) => b.createdAt - a.createdAt);

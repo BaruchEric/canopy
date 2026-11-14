@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Run } from "../core/types";
-import { GOAL_FILES_KEEP, dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles } from "./goalfiles";
+import { GOAL_FILES_KEEP, dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, readGoalFile, writeGoalFiles } from "./goalfiles";
 
 /* A goal's files folder under the coordinator's seeds: where it is, what a
  * start writes there, what a plan may name from it, and which folders a
@@ -65,6 +65,35 @@ describe("a goal's files folder", () => {
     await mkdir(dir, { recursive: true });
     await expect(writeGoalFiles(dir, [{ name: "shot.png", data: bytes("x") }])).rejects.toThrow();
     expect(await readdir(dir)).toEqual([]);
+  });
+});
+
+describe("reading a goal file for a project card", () => {
+  test("a plain file in the goal's own folder reads; a missing one, a link, a folder or one over the cap is refused naming it", async () => {
+    const seeds = join(scratch, "read");
+    const dir = goalFilesDir(seeds, "ab12cd34");
+    await writeGoalFiles(dir, [{ name: "idea.md", data: bytes("# idea") }, { name: "big.md", data: bytes("x".repeat(11)) }]);
+    const secret = join(scratch, "secret.md");
+    await writeFile(secret, "not the goal's");
+    await symlink(secret, join(dir, "link.md"));
+    await mkdir(join(dir, "sub.md"));
+    expect(new TextDecoder().decode(await readGoalFile(seeds, "ab12cd34", "idea.md", 10))).toBe("# idea");
+    await expect(readGoalFile(seeds, "ab12cd34", "gone.md", 10)).rejects.toThrow("gone.md is no longer in the goal's files folder");
+    await expect(readGoalFile(seeds, "ab12cd34", "link.md", 10)).rejects.toThrow("link.md is a link; canopy reads no goal file through one");
+    await expect(readGoalFile(seeds, "ab12cd34", "sub.md", 10)).rejects.toThrow("sub.md is not a plain file");
+    await expect(readGoalFile(seeds, "ab12cd34", "big.md", 10)).rejects.toThrow("big.md is over 10 bytes");
+    await expect(readGoalFile(seeds, "ab12cd34", "../secret.md", 10)).rejects.toThrow("not a plain file name: ../secret.md");
+  });
+
+  test("a goal folder that is a link to one elsewhere is never read through, and one that is gone says so", async () => {
+    const seeds = join(scratch, "read-link");
+    const elsewhere = join(scratch, "elsewhere");
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(elsewhere, "idea.md"), "not the goal's");
+    await mkdir(join(seeds, "goal-files"), { recursive: true });
+    await symlink(elsewhere, goalFilesDir(seeds, "ab12cd34"));
+    await expect(readGoalFile(seeds, "ab12cd34", "idea.md", 100)).rejects.toThrow("the goal's files folder is a link; canopy reads no goal file through one");
+    await expect(readGoalFile(seeds, "00000000", "idea.md", 100)).rejects.toThrow("the goal's files folder is gone");
   });
 });
 

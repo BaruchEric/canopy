@@ -8,15 +8,16 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { selfName } from "../core/backends";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
 import { cardFilesLine, goalRepoLine, goalTopLine } from "../core/coordinator";
-import { DEFAULT_AGENT, isRunActive, type About, type BranchTree, type BranchTreesInfo, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Repo, type Run, type ScanResult } from "../core/types";
+import { DEFAULT_AGENT, isRunActive, type About, type BranchTree, type BranchTreesInfo, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Repo, type Run, type ScanResult, type Sprout, type SproutDetail } from "../core/types";
 import { CallerBook } from "./callers";
+import { NO_STAGES } from "./incubator";
 import { COORD_REFUSAL, startServer } from "./index";
 
 const ENV = ["CANOPY_CONFIG_DIR", "CANOPY_TMUX", "CANOPY_BIND", "CANOPY_CALLERS", "CANOPY_COORD_SOCKET", "CANOPY_COORD_API", "CANOPY_COORD_ROOT", "CANOPY_COORD_PORT", "CANOPY_KIT", "HOME"];
@@ -86,8 +87,17 @@ type Up = { port: number; coordPort: number | null; stop: () => Promise<void>; m
 /** A server with its own config dir, in enforce unless `env` says otherwise,
  *  with a page token minted into its book before it starts. The
  *  coordinator's listener takes any free port unless `coordPort` is
- *  null, which leaves it to CANOPY_COORD_PORT. */
-async function up(name: string, client: StageClient | null, env: Record<string, string> = {}, coordPort: number | null = 0, harnesses?: Harness[], root = join(scratch, "root")): Promise<Up> {
+ *  null, which leaves it to CANOPY_COORD_PORT. `incubator` is passed to
+ *  the server as it is. */
+async function up(
+  name: string,
+  client: StageClient | null,
+  env: Record<string, string> = {},
+  coordPort: number | null = 0,
+  harnesses?: Harness[],
+  root = join(scratch, "root"),
+  incubator?: Parameters<typeof startServer>[0]["incubator"],
+): Promise<Up> {
   const config = join(scratch, name);
   process.env["CANOPY_CONFIG_DIR"] = config;
   const book = new CallerBook({ file: join(config, "callers.json") });
@@ -104,6 +114,7 @@ async function up(name: string, client: StageClient | null, env: Record<string, 
     port: 0,
     coordinator: { client, ...(coordPort !== null ? { port: coordPort } : {}) },
     ...(harnesses ? { harnesses } : {}),
+    ...(incubator ? { incubator } : {}),
     runner: {
       driver: (h) => {
         const d = new Recorder(h);
@@ -1209,7 +1220,8 @@ describe("a goal from the top", () => {
     await mkdir(home, { recursive: true });
     await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
     process.env["HOME"] = home;
-    s = await up("goal", fakeRunner(state), COORD_ENV, 0, ["claude"], root);
+    // the incubator holds its queue, so a project card's sprout stays queued and no stage runs
+    s = await up("goal", fakeRunner(state), COORD_ENV, 0, ["claude"], root, { autostart: false, stage: null, transcribe: null, notes: null, ship: null });
   });
   afterEach(async () => {
     for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
@@ -1454,6 +1466,110 @@ describe("a goal from the top", () => {
     const again = await postAs(s, "/api/repos/run?id=a", { action: "coordinate", note: "more" }, s.page);
     expect(again.status).toBe(409);
     expect(((await again.json()) as { error: string }).error).toBe("a already has a coordinator going");
+  });
+
+  describe("a project card", () => {
+    const FILES: [string, string][] = [
+      ["idea.md", "# a tiny shop\nsells socks\n"],
+      ["data.json", "{}"],
+    ];
+    const shop = { action: "project", title: "Shop", note: "a tiny shop", files: ["idea.md"] };
+    const sprouts = async (): Promise<Sprout[]> => (await (await call(s, "/api/incubator", s.page)).json()) as Sprout[];
+    const detail = async (id: string): Promise<SproutDetail> => (await (await call(s, `/api/incubator/one?id=${id}`, s.page)).json()) as SproutDetail;
+    const cardOf = (runId: string, id = "t1") =>
+      until(async () => {
+        const c = (await runs()).find((r) => r.id === runId)?.tasks?.find((t) => t.id === id);
+        return c && c.state !== "queued" && c.state !== "proposed" ? c : null;
+      }, `card ${id} to leave the queue`);
+    /** a top goal with the two files, its project card planned and started, running with its sprout */
+    async function begun(): Promise<{ run: Run; card: CoordTask }> {
+      const { run, token } = await started({ goal: "a shop", files: FILES });
+      const plan = await postAs(s, "/api/coordinator/plan", { tasks: [shop] }, token);
+      expect([plan.status, await plan.json()]).toMatchObject([200, { added: [{ id: "t1", action: "project", repo: "~goal", files: ["idea.md"] }] }]);
+      expect((await postAs(s, "/api/coordinator/start", { run: run.id }, s.page)).status).toBe(200);
+      const card = await cardOf(run.id);
+      expect(card.state).toBe("running");
+      expect(card.sprout).toMatch(/^sp_[0-9a-f]{12}$/);
+      // its seed made, so no background work of the incubator's runs into the next test
+      await until(async () => (await detail(card.sprout ?? "")).sprout.prepared, "the sprout prepared");
+      return { run, card };
+    }
+
+    test("starts: the card runs with its sprout, which the incubator lists queued with the idea and the goal's file from a coordinator's card", async () => {
+      const { card } = await begun();
+      expect(card.run).toBeUndefined();
+      expect(card.outcome).toBe("in the incubator: queued");
+      const sp = (await sprouts()).find((x) => x.id === card.sprout);
+      expect(sp).toMatchObject({ title: "Shop", status: "queued" });
+      expect(sp?.inputs.map((e) => [e.kind, e.label, e.type, e.via])).toEqual([
+        ["text", "text", "text/markdown", "coordinator"],
+        ["file", "idea.md", "text/markdown", "coordinator"],
+      ]);
+      expect((await detail(card.sprout ?? "")).brief).toContain("# Shop");
+    }, 30_000);
+
+    test("a goal file the incubator cannot take is refused at plan with its name", async () => {
+      const { token } = await started({ goal: "a shop", files: FILES });
+      const res = await postAs(s, "/api/coordinator/plan", { tasks: [{ ...shop, files: ["data.json"] }] }, token);
+      expect([res.status, await res.json()]).toEqual([400, { error: "tasks[0].files: the incubator takes audio, images, pdf, text and markdown; data.json is none of them" }]);
+    });
+
+    test("a card whose file left the goal's folder fails at its start naming the file, and makes no sprout", async () => {
+      const { run, token } = await started({ goal: "a shop", files: FILES });
+      expect((await postAs(s, "/api/coordinator/plan", { tasks: [shop] }, token)).status).toBe(200);
+      await rm(join(s.seeds, "goal-files", run.id, "idea.md"));
+      const before = (await sprouts()).map((x) => x.id);
+      expect((await postAs(s, "/api/coordinator/start", { run: run.id }, s.page)).status).toBe(200);
+      const card = await cardOf(run.id);
+      expect([card.state, card.outcome, card.sprout]).toEqual(["failed", "idea.md is no longer in the goal's files folder", undefined]);
+      expect((await sprouts()).map((x) => x.id)).toEqual(before);
+    });
+
+    test("stopping the project fails the card, and dismissing it leaves the card as it settled", async () => {
+      const { run, card } = await begun();
+      const id = card.sprout ?? "";
+      expect((await postAs(s, `/api/incubator/stop?id=${id}`, {}, s.page)).status).toBe(200);
+      const stopped = await until(async () => {
+        const c = (await runs()).find((r) => r.id === run.id)?.tasks?.[0];
+        return c?.state === "failed" ? c : null;
+      }, "the card to fail");
+      expect(stopped.outcome).toBe("the project was stopped");
+      expect((await call(s, `/api/incubator?id=${id}`, s.page, { method: "DELETE" })).status).toBe(200);
+      expect((await sprouts()).some((x) => x.id === id)).toBe(false);
+      expect((await runs()).find((r) => r.id === run.id)?.tasks?.[0]).toMatchObject({ state: "failed", outcome: "the project was stopped", sprout: id });
+    }, 30_000);
+
+    test("a backend with stages off and its queue live refuses the plan with NO_STAGES", async () => {
+      const root = join(scratch, "goal-stages-root");
+      await mkdir(root, { recursive: true });
+      const back = { config: process.env["CANOPY_CONFIG_DIR"], seeds: process.env["CANOPY_COORD_ROOT"] };
+      const other = await up("goal-stages", fakeRunner(state), COORD_ENV, 0, ["claude"], root, { autostart: true, stage: null, transcribe: null, notes: null, ship: null });
+      try {
+        const form = new FormData();
+        form.append("goal", "a shop");
+        form.append("files[]", new File(["# idea"], "idea.md"));
+        const res = await call(other, "/api/coordinator/new", other.page, { method: "POST", body: form });
+        expect(res.status).toBe(201);
+        const run = (await res.json()) as Run;
+        const driver = await until(async () => other.made.find((d) => d.ctx?.env["CANOPY_RUN"] === run.id), "the coordinator to reach its driver");
+        const token = driver.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+        const plan = await postAs(other, "/api/coordinator/plan", { tasks: [shop] }, token);
+        expect([plan.status, await plan.json()]).toEqual([400, { error: `tasks[0]: ${NO_STAGES}` }]);
+        await postAs(other, "/api/runs/stop", { id: run.id }, other.page);
+      } finally {
+        await other.stop();
+        process.env["CANOPY_CONFIG_DIR"] = back.config;
+        process.env["CANOPY_COORD_ROOT"] = back.seeds;
+      }
+    }, 30_000);
+
+    test("the coordinator ends, and its kept run.json holds the project card with its sprout", async () => {
+      const { run, card } = await begun();
+      await postAs(s, "/api/runs/stop", { id: run.id }, s.page);
+      const file = join(scratch, "goal", "runs", run.id, "run.json");
+      const kept = await until(async () => existsSync(file) && (JSON.parse(await readFile(file, "utf8")) as Run), "the kept run.json");
+      expect(kept.tasks?.[0]).toMatchObject({ id: "t1", action: "project", repo: "~goal", title: "Shop", state: "running", sprout: card.sprout });
+    }, 30_000);
   });
 });
 

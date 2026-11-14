@@ -10,10 +10,10 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { IncubatorError } from "../core/incubator";
-import type { AdviceOffer, Repo, ScanResult, ServerEvent, Sprout, SproutDetail, WorkflowEntry } from "../core/types";
+import { Incubator, IncubatorError } from "../core/incubator";
+import type { AdviceOffer, IncubatorStages, Repo, ScanResult, ServerEvent, Sprout, SproutDetail, WorkflowEntry } from "../core/types";
 import { startServer } from "./index";
-import { canopyRepoOf, clipLabel, notKeeping, sproutFlow } from "./incubator";
+import { canopyRepoOf, clipLabel, IncubatorHub, NO_STAGES, notKeeping, sproutFlow } from "./incubator";
 
 let scratch: string;
 let root: string;
@@ -317,6 +317,53 @@ describe("who keeps the incubator", () => {
     expect(sproutFlow({ id: "f2", repoId: "app" }, none)).toBe(false);
     expect(sproutFlow({ id: "f3", repoId: "app" }, (id) => id === "f3")).toBe(true);
     expect(sproutFlow({ id: "f4", repoId: "src:_incubator/x" }, none)).toBe(false);
+  });
+});
+
+describe("whether a coordinator's project card may start here", () => {
+  const never = async (): Promise<never> => {
+    throw new Error("this incubator makes nothing");
+  };
+  /** an incubator with no records that makes nothing, its queue held or live */
+  const bare = (autostart: boolean): Incubator =>
+    new Incubator({
+      root: join(tmpdir(), "canopy-no-root"),
+      store: { list: async () => [], save: never, writeInput: never, removeInput: never, readInput: never, inputsDir: () => "", writeIndex: never, readRunAnswers: never, writeRunAnswers: never, dismiss: never },
+      seeds: { make: never, read: never, write: never, commit: never, headOf: never, exists: () => false },
+      flows: { start: never, get: () => undefined, resume: () => { throw new Error("no flows"); }, stop: () => { throw new Error("no flows"); } },
+      workflow: async () => undefined,
+      rescan: async () => {},
+      repo: () => undefined,
+      transcribe: null,
+      notes: null,
+      onChange: () => {},
+      onGone: () => {},
+      autostart,
+    });
+  const stages = (mode: IncubatorStages["mode"]) => (): IncubatorStages => ({ isolated: mode === "runner", mode, waiting: null });
+
+  test("the owner takes one with its queue held, even with stages off", async () => {
+    const hub = new IncubatorHub(bare(false), async () => [], stages("off"));
+    await hub.restore();
+    expect(hub.takesProjects()).toBeNull();
+  });
+
+  test("the owner with stages off and its queue live refuses with NO_STAGES; with stages on it takes one", async () => {
+    const off = new IncubatorHub(bare(true), async () => [], stages("off"));
+    await off.restore();
+    expect(off.takesProjects()).toBe(NO_STAGES);
+    const on = new IncubatorHub(bare(true), async () => [], stages("runner"));
+    await on.restore();
+    expect(on.takesProjects()).toBeNull();
+  });
+
+  test("a server that does not keep the incubator refuses in notKeeping's words, starting or after", () => {
+    const hub = new IncubatorHub(bare(false), async () => [], stages("off"));
+    expect(hub.takesProjects()).toBe(notKeeping({ kind: "starting" }));
+    hub.notKeeping(0);
+    expect(hub.takesProjects()).toBe(notKeeping({ kind: "unlocked" }));
+    hub.notKeeping(42);
+    expect(hub.takesProjects()).toBe("this canopy is not keeping the incubator right now: canopy pid 42 keeps it for this config folder");
   });
 });
 

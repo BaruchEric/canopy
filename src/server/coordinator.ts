@@ -73,6 +73,8 @@ export type CardSprout = Pick<Sprout, "id" | "status" | "questions" | "parked" |
  *  started, the sprout a project card made in the incubator, or the repo's
  *  branch slots are full. */
 export type ChildStart = { run: Run } | { group: RunGroup } | { flow: Flow } | { sprout: CardSprout } | { busy: string };
+/** What starting a run card came to: anything but a sprout. */
+export type RunStart = Exclude<ChildStart, { sprout: CardSprout }>;
 /** What resuming a child came to: a child resumes alone, as a run. */
 export type ChildResume = Exclude<ChildStart, { group: RunGroup } | { flow: Flow } | { sprout: CardSprout }>;
 
@@ -84,7 +86,7 @@ export interface CoordinatorDeps {
    *  `by` coordinator; throws when it cannot start at all. `priority` is
    *  normal unless a held card is released (FR-036); a start the governor
    *  holds answers busy with its words. */
-  startChild: (coordId: string, task: CoordTask, priority?: Priority) => Promise<ChildStart>;
+  startChild: (coordId: string, task: CoordTask, priority?: Priority) => Promise<RunStart>;
   /** resumes a child that ended `limited` on its own branch, its session
    *  carried on, as a new run with the same parent (FR-036) */
   resumeChild?: (coordId: string, task: CoordTask, child: Run, priority: Priority) => Promise<ChildResume>;
@@ -98,7 +100,9 @@ export interface CoordinatorDeps {
    *  idea and goal files its intake; throws with the incubator's words when
    *  it cannot take one. Absent, a project card fails at start (FR-067). */
   startProject?: (coordId: string, task: CoordTask) => Promise<{ sprout: CardSprout }>;
-  /** a sprout by its id while the incubator keeps it, undefined once it is gone */
+  /** a sprout by its id while it is on the incubator's list, undefined
+   *  off it: once dismissed, and for a moment while a dismiss is under way,
+   *  which puts it back if its record cannot move */
   sprout?: (id: string) => CardSprout | undefined;
   /** why this backend's incubator cannot take a project card now, in the
    *  server's words, or null when it can; absent reads null (FR-067) */
@@ -978,15 +982,21 @@ export class CoordinatorHub {
     this.queueNote(coordId, projectNote(t, PROJECT_GONE, "failed"));
   }
 
-  /** A running project card read again off its sprout: one the incubator
-   *  no longer keeps fails it, else the card takes the sprout's step. A
+  /** A running project card read again off its sprout, which it then
+   *  takes the step of. A sprout off the incubator's list leaves the card as
+   *  it is: a dismiss takes it off before its record moves and puts it back
+   *  if that fails, so only `onSproutGone`, told once the dismiss went
+   *  through, fails the card. A card holding no sprout fails at once. A
    *  backend that cannot read a sprout leaves the card to `onSprout`. */
   private recheckProject(coordId: string, t: CoordTask): void {
     const read = this.deps.sprout;
     if (!read) return;
-    const s = t.sprout === undefined ? undefined : read(t.sprout);
+    if (t.sprout === undefined) {
+      this.projectGone(coordId, t);
+      return;
+    }
+    const s = read(t.sprout);
     if (s) this.stepProject(coordId, t, s);
-    else this.projectGone(coordId, t);
   }
 
   /** The incubator's every change to a sprout: the running project card

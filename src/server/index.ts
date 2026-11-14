@@ -76,7 +76,7 @@ import { takesEffort, takesModel, takesProvider, type AgentEnv } from "../core/h
 import { paneAgent } from "../core/procs";
 import { effectiveAgents, hasProfile, isAgentScopeName, isProfileName, launchPick, resolveAgent, normalizePick, normalizeRepoAgent, pickRefusal, repoAgentRefusal } from "../core/route";
 import { selfName } from "../core/backends";
-import { Incubator, IncubatorError, incubatorWorkflow, type NoteSink, type Transcriber } from "../core/incubator";
+import { Incubator, IncubatorError, incubatorWorkflow, type IntakeFile, type NoteSink, type Transcriber } from "../core/incubator";
 import { seedOps } from "../core/seed";
 import { SproutFiles } from "../core/sproutstore";
 import { hearer, transcribeConfig, transcriber } from "../core/transcribe";
@@ -160,7 +160,7 @@ import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, U
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
 import { canopyMcpCommand, flowToolsId, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
-import { ANSWERS_FILE, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, STAGE_WORKFLOWS, withStoredAnswers } from "../core/sprout";
+import { ANSWERS_FILE, INPUT_FILE_MAX, inputType, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, STAGE_WORKFLOWS, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
 import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedBusyFor, seedHeld, seedRootsNow, setSeedBusy, setSeedRoots } from "../core/seedgit";
@@ -227,7 +227,7 @@ import {
   TERM_GONE,
   type TaskTree,
 } from "../core/types";
-import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, RunCardAction, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus } from "../core/types";
+import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, RunCardAction, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus, Sprout } from "../core/types";
 import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
@@ -262,8 +262,8 @@ import { GROUP_MAX, memberProfiles, type RunGroup } from "../core/group";
 import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
-import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
-import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
+import { CoordinatorHub, type ChildResume, type RunStart } from "./coordinator";
+import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, readGoalFile, writeGoalFiles, type GoalFile } from "./goalfiles";
 import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, isRunCard, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
@@ -1809,14 +1809,15 @@ function coordRunnerOrRefuse(state: ServerState): { api: string; seeds: string }
   return { api, seeds };
 }
 
-/** A goal's files folder and the plain files in it, for a coordinator
- *  started from the top; null for one started at a repo, which has none. */
-async function goalFolder(state: ServerState, coordId: string): Promise<{ dir: string; files: string[] } | null> {
+/** A goal's files folder, the seeds it sits under and the plain files in
+ *  it, for a coordinator started from the top; null for one started at a
+ *  repo, which has none. */
+async function goalFolder(state: ServerState, coordId: string): Promise<{ seeds: string; dir: string; files: string[] } | null> {
   const run = state.runner.get(coordId);
   const seeds = coordSeeds();
   if (!run || run.action !== "coordinate" || !isGoalAnchor(run.repoId) || !seeds) return null;
   const dir = goalFilesDir(seeds, coordId);
-  return { dir, files: await goalFileList(dir) };
+  return { seeds, dir, files: await goalFileList(dir) };
 }
 
 /** Takes the goals' files folders a week past their newest file whose
@@ -2473,7 +2474,7 @@ type RunCard = CoordTask & { action: RunCardAction };
  *  answers busy, and the card waits. A card that names a kept tree runs in
  *  place there instead (`startCoordTree`, FR-067). A project card starts no
  *  run: it is refused here, since it starts in the incubator. */
-async function startCoordChild(state: ServerState, coordId: string, task: CoordTask, priority: Priority = "normal"): Promise<ChildStart> {
+async function startCoordChild(state: ServerState, coordId: string, task: CoordTask, priority: Priority = "normal"): Promise<RunStart> {
   if (!isRunCard(task)) throw new Error(`${task.id} is a project card; it starts in the incubator`);
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
@@ -2546,11 +2547,41 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
  *  starts with a path that is not there. */
 async function cardFiles(state: ServerState, coordId: string, task: CoordTask): Promise<{ line: string | null; dirs: string[] }> {
   if (!task.files?.length) return { line: null, dirs: [] };
+  const { dir } = await goalFolderWith(state, coordId, task.files);
+  return { line: cardFilesLine(dir, task.files), dirs: [dir] };
+}
+
+/** The goal's files folder when it still holds every name a card lists;
+ *  throws naming what is gone, the folder or the files. */
+async function goalFolderWith(state: ServerState, coordId: string, names: readonly string[]): Promise<{ seeds: string; dir: string }> {
   const folder = await goalFolder(state, coordId);
   if (!folder) throw new Error("the goal's files folder is gone");
-  const missing = task.files.filter((name) => !folder.files.includes(name));
+  const missing = names.filter((name) => !folder.files.includes(name));
   if (missing.length > 0) throw new Error(`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} no longer in the goal's files folder`);
-  return { line: cardFilesLine(folder.dir, task.files), dirs: [folder.dir] };
+  return folder;
+}
+
+/** A project card's start (FR-067): its sprout, made in this process's
+ *  incubator with the card's title and note as the idea and its goal files
+ *  as intake files, each marked as from a coordinator's card. Every
+ *  refusal comes before `create`, so a card that fails leaves no sprout
+ *  behind: the incubator cannot take a project here (the words a project
+ *  from the page is refused with), the goal's folder or a file is gone, or
+ *  a file is one the incubator does not take. The incubator's own checks on
+ *  the intake run before it makes anything too. */
+async function startCoordProject(state: ServerState, coordId: string, task: CoordTask): Promise<{ sprout: Sprout }> {
+  const refused = state.incubator.takesProjects();
+  if (refused) throw new Error(refused);
+  const files: IntakeFile[] = [];
+  if (task.files?.length) {
+    const { seeds } = await goalFolderWith(state, coordId, task.files);
+    for (const name of task.files) {
+      const type = inputType("", name);
+      if (!type) throw new Error(`the incubator takes audio, images, pdf, text and markdown; ${name} is none of them`);
+      files.push({ label: name, type, data: await readGoalFile(seeds, coordId, name, INPUT_FILE_MAX) });
+    }
+  }
+  return { sprout: await state.incubator.inc.create({ text: `${task.title}\n\n${task.note}`, urls: [], files, via: "coordinator" }) };
 }
 
 /** The trees source's scanned card at a kept tree's folder (FR-067). A
@@ -2669,7 +2700,7 @@ async function stepInTree(
  *  branch checked out elsewhere) fails the card in git's words and leaves no
  *  record; one refused because another add made the tree meanwhile waits
  *  for that one. */
-async function startCoordTree(state: ServerState, coordId: string, task: RunCard, repo: Repo, priority: Priority): Promise<ChildStart> {
+async function startCoordTree(state: ServerState, coordId: string, task: RunCard, repo: Repo, priority: Priority): Promise<RunStart> {
   const branch = task.tree ?? "";
   const tree = state.trees.treeFor(repo.path, branch);
   if (tree) return stepInTree(state, coordId, task, tree, { action: task.action, message: treeTaskMessage(task), priority });
@@ -2706,7 +2737,7 @@ async function followCoordTree(state: ServerState, coordId: string, task: CoordT
  *  workflow), and the loadout's settings file and servers cover every step,
  *  kept under the flow's own id (`flowToolsId`) until the flow ends. Every
  *  refusal comes before anything is written. */
-async function startCoordWorkflow(state: ServerState, coordId: string, task: CoordTask, repo: Repo, loadout: Loadout | null, work: WorkStart, priority: Priority): Promise<ChildStart> {
+async function startCoordWorkflow(state: ServerState, coordId: string, task: CoordTask, repo: Repo, loadout: Loadout | null, work: WorkStart, priority: Priority): Promise<RunStart> {
   const name = task.workflow ?? "";
   const own = task.workflowRepo === true;
   const found = findWorkflow(await loadWorkflows(own ? repo : { path: "", host: "none" }), name);
@@ -7232,13 +7263,17 @@ export async function startServer(opts: {
         advice: adviceFiles,
         // through the runner, a stage's claude signs in with the stages' own login: its refusal names that fix
         ...(stage ? { failHint: (error: string) => loginRefusedHint(error) } : {}),
+        // a coordinator's project card follows its sprout; the guard is
+        // there since the coordinator's hub is built after the incubator here
         onChange: (sprout) => {
           broadcast(state, { type: "incubator", sprout });
           state.chan.onSprout(sprout);
+          state.coordinator?.onSprout(sprout);
         },
         onGone: (id) => {
           broadcast(state, { type: "incubator-gone", id });
           state.chan.forget(id);
+          state.coordinator?.onSproutGone(id);
         },
         // CANOPY_INCUBATOR_AUTOSTART=0 holds every sprout queued: a scratch
         // server for a UI check, or a pause while something is wrong
@@ -7635,6 +7670,10 @@ export async function startServer(opts: {
       run: (id) => state.runner.get(id),
       runs: () => state.runner.list(),
       startChild: (coordId, task, priority) => startCoordChild(state, coordId, task, priority),
+      // a project card makes its sprout in this process's incubator and follows it by its own id
+      startProject: (coordId, task) => startCoordProject(state, coordId, task),
+      sprout: (id) => state.incubator.inc.get(id),
+      projects: () => state.incubator.takesProjects(),
       // a tree card's child carries on in its tree, never on a branch (FR-067)
       resumeChild: (coordId, task, child, priority) => (task.tree !== undefined ? followCoordTree(state, coordId, task, AFTER_LIMIT, priority) : resumeCoordChild(state, coordId, child, priority)),
       followTree: (coordId, task, note, priority) => followCoordTree(state, coordId, task, note?.trim() || CARRY_ON, priority),

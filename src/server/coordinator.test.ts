@@ -2548,8 +2548,34 @@ describe("a project card (FR-067 plan 3)", () => {
     expect(card("t5")?.run).toBeUndefined();
     expect(projects).toEqual(["co1:t5"]);
     expect(started.map((s) => s.task)).toEqual(["t1", "t2", "t3"]);
-    // a queued project card waits with no words of a repo's slots
+    // the fourth plain card waits for a place in the goal, which has no words
     expect(card("t4")?.outcome).toBeUndefined();
+  });
+
+  test("a queued project card's wait words come only from held and after: a full ~goal never gives it a slot's words", async () => {
+    full.add("~goal");
+    /** a project card's own outcome as its start is asked for */
+    const asked: (string | undefined)[] = [];
+    const h = projectHub({
+      startProject: async (coordId, t) => {
+        asked.push(card(t.id, coordId)?.outcome);
+        const s: CardSprout = { id: `sp_${String(++k).padStart(12, "0")}`, slug: "shop", status: "queued" };
+        sprouts.set(s.id, s);
+        return { sprout: s };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [task(), project({ after: ["t1"] }), project({ title: "Blog" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(asked).toEqual([undefined]);
+    expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+      ["t1", "running", undefined],
+      ["t2", "queued", "waits for t1"],
+      ["t3", "running", "in the incubator: queued"],
+    ]);
+    await post(h, "hold", { run: "co1", held: true });
+    await settled(h);
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "the goal is held" });
   });
 
   test("a sprout already clarifying with questions when create answers leaves the card running with the needs-you words and one note", async () => {
@@ -2614,6 +2640,9 @@ describe("a project card (FR-067 plan 3)", () => {
       ["done", "live as shop"],
       ["dropped", undefined],
     ]);
+    // were a note kept for the ended goal, it would be said once the goal is idle
+    goIdle(h);
+    await settled(h);
     expect(said).toEqual([]);
     expect(projects).toEqual(["co1:t1"]);
   });
@@ -2657,7 +2686,7 @@ describe("a project card (FR-067 plan 3)", () => {
     expect(heard).toContain(["canopy: a task you started has settled", "task t2: Blog (new project)", "outcome: failed", "result: the project was dismissed"].join("\n"));
   });
 
-  test("recheck fails a card whose sprout is gone and settles one whose sprout is live; a running project card never fails for a run no longer kept", async () => {
+  test("recheck settles a card whose sprout went live or handed off; a running project card never fails for a run no longer kept", async () => {
     const h = projectHub();
     await post(h, "plan", { run: "co1", tasks: [project(), project({ title: "Blog" })] });
     await post(h, "start", { run: "co1" });
@@ -2668,13 +2697,40 @@ describe("a project card (FR-067 plan 3)", () => {
       ["running", "in the incubator: queued"],
     ]);
     // the incubator moved and the hub never heard: recheck reads it again
-    sprouts.delete("sp_000000000001");
-    const s2 = sprouts.get("sp_000000000002");
-    if (!s2) throw new Error("no sp_000000000002");
-    sprouts.set(s2.id, { ...s2, status: "handed-off" });
+    for (const [id, status] of [
+      ["sp_000000000001", "live"],
+      ["sp_000000000002", "handed-off"],
+    ] as const) {
+      const s = sprouts.get(id);
+      if (!s) throw new Error(`no ${id}`);
+      sprouts.set(id, { ...s, status, privateRepo: "BaruchEric/shop" });
+    }
     h.recheck();
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "live as shop, BaruchEric/shop" });
+    expect(card("t2")).toMatchObject({ state: "done", outcome: "handed off as shop, BaruchEric/shop" });
+  });
+
+  test("a sprout off the incubator's list on recheck leaves its card running: a dismiss under way may still put it back, and only onSproutGone fails the card", async () => {
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const s = sprouts.get("sp_000000000001");
+    if (!s) throw new Error("no sp_000000000001");
+    // a dismiss takes the sprout off the list before its record moves
+    sprouts.delete(s.id);
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "running", outcome: "in the incubator: queued" });
+    // the move failed, so the sprout is back, and the next recheck reads it
+    sprouts.set(s.id, { ...s, status: "building" });
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "running", outcome: "in the incubator: building" });
+    // a dismiss that went through tells the hub
+    sprouts.delete(s.id);
+    h.recheck();
+    expect(card("t1")?.state).toBe("running");
+    h.onSproutGone(s.id);
     expect(card("t1")).toMatchObject({ state: "failed", outcome: "the project was dismissed" });
-    expect(card("t2")).toMatchObject({ state: "done", outcome: "handed off as shop" });
   });
 
   test("a start that throws fails the card with its words; a hub with no startProject fails it in its own words", async () => {
