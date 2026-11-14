@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { blockedNote, CARDS_NOW, flowGoneNote, flowNote, holdNote, landedNote, lateFailNote, validatePlan, type ChildBranch } from "../core/coordinator";
+import { blockedNote, CARDS_NOW, flowGoneNote, flowNote, holdNote, landedNote, lateFailNote, treeNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
 import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import type { WorkState } from "../core/work";
-import { CoordinatorHub, type CoordinatorDeps } from "./coordinator";
+import { CoordinatorHub, type ChildResume, type CoordinatorDeps } from "./coordinator";
 
 let runs: Map<string, Run>;
 let said: { id: string; text: string; cards?: string }[];
@@ -1864,5 +1864,441 @@ describe("a card that names a workflow", () => {
     branches.set("fl1", { verdict: "approve", entry: flowEntry("t1", "landed"), entries: [flowEntry("t1", "landed")] });
     h.recheck();
     expect(card("t1")).toMatchObject({ state: "done", outcome: "landed" });
+  });
+});
+
+describe("a card in a kept tree (FR-067 plan 2)", () => {
+  const LIMIT = "You've hit your limit · resets 3pm";
+  const FEAT_X = "trees:web/feat-x";
+  /** the words a tree's start answers with while it is made, by branch */
+  let making: Map<string, string>;
+  /** every start the hub tried, `<coordinator>:<card>` */
+  let tried: string[];
+
+  beforeEach(() => {
+    making = new Map();
+    tried = [];
+  });
+
+  const treeRepo = (tree: string): string => `trees:web/${tree.replace(/\//g, "-")}`;
+
+  /** an in-place run in a kept tree: no branch, `parent` the coordinator
+   *  unless `over` says otherwise, as the runner tells everyone of it */
+  function inTree(h: CoordinatorHub, repoId: string, over: Partial<Run> = {}): Run {
+    const r = { id: `c${++n}`, repoId, action: "ask", status: "working", startedAt: clock, steps: [], note: "n", by: "coordinator", parent: "co1", ...over } as unknown as Run;
+    runs.set(r.id, r);
+    h.onRun(r);
+    return r;
+  }
+
+  /** Eric's own run in a tree: it names no coordinator */
+  function mine(h: CoordinatorHub, repoId: string): Run {
+    const r = { id: `m${++n}`, repoId, action: "ask", status: "working", startedAt: clock, steps: [], note: "mine", by: "person" } as unknown as Run;
+    runs.set(r.id, r);
+    h.onRun(r);
+    return r;
+  }
+
+  /** A hub whose start runs a tree card in place in its tree, busy while
+   *  `making` names the branch or another run works there, and a plain card
+   *  as a branch run. */
+  function treeHub(over: Partial<CoordinatorDeps> = {}): CoordinatorHub {
+    const h: CoordinatorHub = hub({
+      startChild: async (coordId, t) => {
+        tried.push(`${coordId}:${t.id}`);
+        if (!t.tree) {
+          started.push({ coord: coordId, task: t.id });
+          const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: branch(`c${n}`) } as unknown as Run;
+          runs.set(c.id, c);
+          h.onRun(c);
+          return { run: c };
+        }
+        const repoId = treeRepo(t.tree);
+        const held = making.get(t.tree) ?? ([...runs.values()].some((r) => r.repoId === repoId && r.status === "working") ? `waiting for tree ${t.tree} to be free` : undefined);
+        if (held) return { busy: held };
+        started.push({ coord: coordId, task: t.id });
+        return { run: inTree(h, repoId, { parent: coordId, action: t.action, note: t.note }) };
+      },
+      ...over,
+    });
+    return h;
+  }
+
+  /** one tree card on feat/x, started and settled done in its tree */
+  async function doneInTree(h: CoordinatorHub): Promise<void> {
+    await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+    await post(h, "start", { run: "co1" });
+    end(h, "t1");
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "done in tree feat/x", run: "c1", treeRepo: FEAT_X });
+  }
+
+  describe("its own words", () => {
+    test("a tree card keeps the words its start answered while a plain card in a full repo waits for a slot; onTrees tries it again", async () => {
+      full.add("web");
+      making.set("feat/x", "making tree feat/x");
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+        ["t1", "queued", "making tree feat/x"],
+        ["t2", "queued", "waiting for a branch slot in web"],
+      ]);
+      expect(tried).toEqual(["co1:t1"]);
+      h.onTrees();
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "queued", outcome: "making tree feat/x" });
+      expect(tried).toEqual(["co1:t1", "co1:t1"]);
+      // the tree is ready: the next word from the trees starts it, in place
+      making.delete("feat/x");
+      h.onTrees();
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c1", treeRepo: FEAT_X });
+      expect(card("t1")?.outcome).toBeUndefined();
+      expect(card("t1")?.branch).toBeUndefined();
+      expect(card("t2")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in web" });
+    });
+
+    test("onTrees pumps a coordinator with a queued tree card, and not one whose queued cards are all plain", async () => {
+      full.add("api");
+      making.set("feat/x", "making tree feat/x");
+      coordinator({ id: "co2", repoId: "api" });
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await post(h, "plan", { run: "co2", tasks: [task({ repo: "api" })] });
+      await post(h, "start", { run: "co2" });
+      await settled(h);
+      expect(card("t1", "co2")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in api" });
+      // a slot frees in api with no run ending: only a pump of co2 would start its card
+      full.delete("api");
+      h.onTrees();
+      await settled(h);
+      expect(tried).toEqual(["co1:t1", "co1:t1"]);
+      expect(card("t1", "co2")?.state).toBe("queued");
+    });
+
+    test("a tree card waiting for its tree to be free keeps those words, and starts once the run there ends", async () => {
+      const h = treeHub();
+      const his = mine(h, FEAT_X);
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "queued", outcome: "waiting for tree feat/x to be free" });
+      his.status = "stopped";
+      his.endedAt = clock;
+      h.onRun(his);
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", treeRepo: FEAT_X });
+      expect(card("t1")?.run).not.toBe(his.id);
+    });
+  });
+
+  describe("settling", () => {
+    test("a started tree card settles on its run alone: done in its tree, with the tree's note and no timer", async () => {
+      coordinator({ status: "idle" });
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c1", treeRepo: FEAT_X });
+      const was = card("t1");
+      if (!was) throw new Error("no t1");
+      const run = end(h, "t1", { result: "Made the login keep the email." });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", outcome: "done in tree feat/x", run: "c1" });
+      expect(h.waiting()).toBe(0);
+      expect(said).toEqual([{ id: "co1", text: treeNote(was, run, "done in tree feat/x"), cards: "cards now: t1 done" }]);
+    });
+
+    test("a failed run settles its card failed, and a stopped one stopped", async () => {
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", tree: "feat/y" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      end(h, "t1", { status: "failed" });
+      end(h, "t2", { status: "stopped" });
+      await settled(h);
+      expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+        ["t1", "failed", "failed"],
+        ["t2", "failed", "stopped"],
+      ]);
+      expect(h.waiting()).toBe(0);
+      const notes = (await hearAll(h)).filter((x) => x.startsWith("canopy: a task you started has settled"));
+      expect(notes).toHaveLength(2);
+      expect(notes[0]).toContain("tree: feat/x, a kept worktree");
+      expect(notes[1]).toContain("outcome: stopped");
+    });
+
+    test("a card after it, on the same tree, starts once it is done, and that start leaves the first card its own run", async () => {
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", tree: "feat/x", after: ["t1"] })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+      end(h, "t1");
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", outcome: "done in tree feat/x", run: "c1" });
+      expect(card("t2")).toMatchObject({ state: "running", run: "c2", treeRepo: FEAT_X });
+      expect(started.map((s) => s.task)).toEqual(["t1", "t2"]);
+    });
+  });
+
+  describe("adoption (Review Focus 2)", () => {
+    test("a later run in its tree that names its coordinator reopens a done card; Eric's run there, with no parent, changes nothing", async () => {
+      coordinator({ status: "idle" });
+      const h = treeHub();
+      await doneInTree(h);
+      const his = mine(h, FEAT_X);
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", outcome: "done in tree feat/x", run: "c1" });
+      his.status = "done";
+      his.endedAt = clock;
+      h.onRun(his);
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", run: "c1" });
+      // a run there for another coordinator is not its either
+      inTree(h, FEAT_X, { parent: "someone", status: "done" });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", run: "c1" });
+      const later = inTree(h, FEAT_X);
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", run: later.id, treeRepo: FEAT_X });
+      expect(card("t1")?.outcome).toBeUndefined();
+      end(h, "t1", { result: "Also kept the name." });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", outcome: "done in tree feat/x", run: later.id });
+      const notes = (await hearAll(h)).filter((x) => x.startsWith("canopy: a task you started has settled"));
+      expect(notes).toHaveLength(2);
+      expect(notes[1]).toContain("result: Also kept the name.");
+    });
+
+    test("a failed tree card reopens on a later run in its tree; a run in another tree takes nothing", async () => {
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      end(h, "t1", { status: "failed" });
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "failed", outcome: "failed" });
+      inTree(h, treeRepo("feat/y"));
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "failed", run: "c1" });
+      const later = inTree(h, FEAT_X);
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", run: later.id });
+    });
+
+    test("with two cards on one tree, the later card takes a later run there", async () => {
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(card("t2")).toMatchObject({ state: "queued", outcome: "waiting for tree feat/x to be free" });
+      end(h, "t1");
+      await settled(h);
+      expect(card("t2")).toMatchObject({ state: "running", run: "c2" });
+      expect(card("t1")).toMatchObject({ state: "done", run: "c1" });
+      end(h, "t2");
+      await settled(h);
+      const later = inTree(h, FEAT_X);
+      await settled(h);
+      expect(card("t2")).toMatchObject({ state: "running", run: later.id });
+      expect(card("t1")).toMatchObject({ state: "done", run: "c1" });
+    });
+
+    test("a follow-up on the first of two cards on one tree goes to that card, not to the later one", async () => {
+      const h = treeHub({ followTree: async (coordId) => ({ run: inTree(h, FEAT_X, { parent: coordId }) }) });
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      end(h, "t1");
+      await settled(h);
+      end(h, "t2");
+      await settled(h);
+      expect((await post(h, "followup", { run: "co1", id: "t1" })).status).toBe(200);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c3" });
+      expect(card("t2")).toMatchObject({ state: "done", run: "c2" });
+    });
+  });
+
+  describe("the limit", () => {
+    test("a tree card's child that hits the limit carries on in its tree after the reset: the note says so, and a wake resumes it with that card", async () => {
+      clock = Date.UTC(2026, 9, 26, 12);
+      coordinator({ status: "idle" });
+      const resumed: [string, string | undefined, string, string][] = [];
+      const h = treeHub({
+        resumeChild: async (coordId, t, old, priority) => {
+          resumed.push([t.id, t.tree, old.id, priority]);
+          return { run: inTree(h, FEAT_X, { parent: coordId }) };
+        },
+      });
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      const limit = (r: Run): void => {
+        r.status = "limited";
+        r.endedAt = clock;
+        r.error = LIMIT;
+        r.limited = { at: clock, text: LIMIT };
+        h.onRun(r);
+      };
+      const first = child("t1");
+      limit(first);
+      await settled(h);
+      expect([card("t1")?.state, card("t1")?.outcome, card("t1")?.limited]).toEqual(["running", "waiting for capacity (resets 15:00)", 0]);
+      expect(said.map((s) => s.text)).toEqual(["canopy: task t1 (fix the login) stopped at the plan's usage limit; it carries on in tree feat/x after the reset"]);
+      h.wake(() => true);
+      await settled(h);
+      expect(resumed).toEqual([["t1", "feat/x", first.id, "normal"]]);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c2", limited: 1 });
+      expect(card("t1")?.outcome).toBeUndefined();
+      // limited again after its resume: it fails, with the tree's note
+      limit(child("t1"));
+      await settled(h);
+      expect([card("t1")?.state, card("t1")?.outcome]).toEqual(["failed", "the plan's usage limit, twice in a row"]);
+      const note = (await hearAll(h)).find((x) => x.startsWith("canopy: a task you started has settled"));
+      expect(note).toContain("tree: feat/x, a kept worktree");
+    });
+  });
+
+  describe("the follow-up route", () => {
+    test("the page's follow-up on a done tree card starts a run in its tree as interactive, and the card runs with it and settles again", async () => {
+      const calls: [string, CoordTask, string | undefined, string][] = [];
+      const h = treeHub({
+        followTree: async (coordId, t, note, priority) => {
+          calls.push([coordId, t, note, priority]);
+          return { run: inTree(h, FEAT_X, { parent: coordId }) };
+        },
+      });
+      await doneInTree(h);
+      const before = card("t1");
+      if (!before) throw new Error("no t1");
+      const got = await post(h, "followup", { run: "co1", id: "t1", note: "also y" });
+      expect(got.status).toBe(200);
+      expect(got.body["ok"]).toBe(true);
+      expect(got.body["run"]).toMatchObject({ id: "c2", parent: "co1", repoId: FEAT_X });
+      expect(calls).toEqual([["co1", before, "also y", "interactive"]]);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c2", treeRepo: FEAT_X });
+      expect(card("t1")?.outcome).toBeUndefined();
+      end(h, "t1");
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "done", outcome: "done in tree feat/x", run: "c2" });
+      // a follow-up with no note leaves the words to the server
+      expect((await post(h, "followup", { run: "co1", id: "t1" })).status).toBe(200);
+      expect(calls.at(-1)?.[2]).toBeUndefined();
+    });
+
+    test("a failed tree card takes a follow-up too", async () => {
+      const h = treeHub({ followTree: async (coordId) => ({ run: inTree(h, FEAT_X, { parent: coordId }) }) });
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      end(h, "t1", { status: "failed" });
+      await settled(h);
+      expect((await post(h, "followup", { run: "co1", id: "t1", note: "try again" })).status).toBe(200);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c2" });
+    });
+
+    test("refuses in order: a coordinator's token, a branch card, a card at the limit, one at work, one not settled, one that never ran in its tree, a long note", async () => {
+      const calls: string[] = [];
+      const h = hub({
+        followTree: async (_c, t) => {
+          calls.push(t.id);
+          throw new Error("not reached");
+        },
+      });
+      const co = runs.get("co1");
+      if (!co) throw new Error("no co1");
+      const base: CoordTask = { id: "t1", title: "fix the login", repo: "web", note: "n", action: "ask", state: "done", outcome: "done in tree feat/x", tree: "feat/x", treeRepo: FEAT_X, run: "c1" };
+      const own = (status: Run["status"], over: Partial<Run> = {}): void => {
+        runs.set("c1", { id: "c1", repoId: FEAT_X, action: "ask", status, startedAt: 1, steps: [], note: "n", parent: "co1", ...over } as unknown as Run);
+      };
+      const ask = async (t: CoordTask, body: Record<string, unknown> = {}, caller: Caller = page) => {
+        co.tasks = [t];
+        return post(h, "followup", { run: "co1", id: "t1", note: "also y", ...body }, caller);
+      };
+      const long = "x".repeat(4001);
+      const { tree: _tree, treeRepo: _treeRepo, ...plain } = base;
+      own("done");
+      expect(await ask({ ...plain, outcome: "ready", branch: "br-c1" }, {}, coordCaller("co1"))).toEqual({ status: 403, body: { error: "a coordinator proposes; a follow-up is Eric's" } });
+      expect(await ask({ ...plain, outcome: "ready", branch: "br-c1" }, { note: long })).toEqual({ status: 400, body: { error: "t1 is not in a tree; follow a branch card up on its branch" } });
+      expect(await ask({ ...plain, state: "proposed" })).toEqual({ status: 400, body: { error: "t1 is not in a tree; follow a branch card up on its branch" } });
+      own("limited", { endedAt: 5, error: LIMIT, limited: { at: 5, text: LIMIT } });
+      expect(await ask({ ...base, state: "running", outcome: "waiting for capacity (resets 15:00)", limited: 0 }, { note: long })).toEqual({ status: 409, body: { error: "t1 carries on after the reset" } });
+      own("working");
+      expect(await ask({ ...base, state: "running" }, { note: long })).toEqual({ status: 409, body: { error: "t1's run is at work; say it to the run" } });
+      const { treeRepo: _r, run: _run, outcome: _o, ...fresh } = base;
+      expect(await ask({ ...fresh, state: "proposed" }, { note: long })).toEqual({ status: 409, body: { error: "t1 is proposed; only a settled card in a tree takes a follow-up" } });
+      expect(await ask({ ...fresh, state: "queued" })).toEqual({ status: 409, body: { error: "t1 is queued; only a settled card in a tree takes a follow-up" } });
+      expect(await ask({ ...base, state: "dropped" })).toEqual({ status: 409, body: { error: "t1 is dropped; only a settled card in a tree takes a follow-up" } });
+      // the carried finding: a tree card that failed before its tree started
+      expect(await ask({ ...fresh, state: "failed", outcome: "tree feat/x failed: setup exited 3" }, { note: long })).toEqual({ status: 409, body: { error: "t1 never ran in its tree; start it again from the plan" } });
+      own("done");
+      expect(await ask(base, { note: long })).toEqual({ status: 400, body: { error: "note must be text of at most 4000 characters" } });
+      expect(await ask(base, { note: 7 })).toEqual({ status: 400, body: { error: "note must be text of at most 4000 characters" } });
+      expect(await ask(base, { id: "t9" })).toEqual({ status: 404, body: { error: "no card t9" } });
+      expect(await ask(base, { run: "nope" })).toEqual({ status: 404, body: { error: "no run nope" } });
+      expect(calls).toEqual([]);
+    });
+
+    test("a card whose follow-up is in flight answers that it is starting, and the first follow-up's run wins", async () => {
+      let open = (): void => {};
+      const gate = new Promise<void>((r) => {
+        open = r;
+      });
+      let reached = (): void => {};
+      const inside = new Promise<void>((r) => {
+        reached = r;
+      });
+      const h = treeHub({
+        followTree: async (coordId) => {
+          reached();
+          await gate;
+          return { run: inTree(h, FEAT_X, { parent: coordId }) };
+        },
+      });
+      await doneInTree(h);
+      const first = post(h, "followup", { run: "co1", id: "t1" });
+      await inside;
+      expect(await post(h, "followup", { run: "co1", id: "t1", note: "x".repeat(4001) })).toEqual({ status: 409, body: { error: "t1 is starting" } });
+      open();
+      expect((await first).status).toBe(200);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c2" });
+    });
+
+    test("Review Focus 4: a follow-up the tree cannot take answers 409 with its words and leaves the card as it was", async () => {
+      let answer = async (): Promise<ChildResume> => ({ busy: "waiting for tree feat/x to be free" });
+      const h = treeHub({ followTree: () => answer() });
+      await doneInTree(h);
+      const before = card("t1");
+      expect(await post(h, "followup", { run: "co1", id: "t1", note: "also y" })).toEqual({ status: 409, body: { error: "waiting for tree feat/x to be free" } });
+      expect(card("t1")).toEqual(before);
+      answer = async () => {
+        throw new Error("tree feat/x is no longer kept in web");
+      };
+      expect(await post(h, "followup", { run: "co1", id: "t1", note: "also y" })).toEqual({ status: 409, body: { error: "tree feat/x is no longer kept in web" } });
+      expect(card("t1")).toEqual(before);
+    });
+  });
+
+  test("a goal that ends while its tree is made drops the queued tree card, and a later onTrees starts nothing", async () => {
+    making.set("feat/x", "making tree feat/x");
+    const h = treeHub();
+    await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "queued", outcome: "making tree feat/x" });
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.status = "stopped";
+    h.onRun(co);
+    await settled(h);
+    expect(card("t1")?.state).toBe("dropped");
+    making.delete("feat/x");
+    const before = tried.length;
+    h.onTrees();
+    await settled(h);
+    expect(tried.length).toBe(before);
+    expect(card("t1")?.state).toBe("dropped");
   });
 });

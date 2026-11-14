@@ -44,13 +44,14 @@ export const KIND_RIGHTS: Record<CallerKind, readonly Right[]> = {
 
 /** What a kind held to a lane may call, method and exact path; a kind with no
  *  entry is held by the table alone. A coordinator gets the reads its brief
- *  (lib/coordinator.md) names, /api/about, and its plan. A run gets the reads
- *  its tools make and the four plan routes, each of which also holds a run's
- *  token to its own run in its handler (FR-038). */
+ *  (lib/coordinator.md) names, /api/about, the kept trees, and its plan. A
+ *  run gets the reads its tools make and the four plan routes, each of which
+ *  also holds a run's token to its own run in its handler (FR-038). */
 export const LANES: Partial<Record<CallerKind, ReadonlySet<string>>> = {
   coordinator: new Set([
     "GET /api/about",
     "GET /api/tree",
+    "GET /api/trees",
     "GET /api/runs",
     "GET /api/landing",
     "GET /api/loadouts",
@@ -137,8 +138,9 @@ const RULES: readonly Rule[] = [
   { methods: POST, paths: ["runs/child", "runs/say", "ranger/wakes", "work/note"], right: "plan" },
   // what a card may name: the workflows a coordinator is allowed, a plain read
   { methods: ["GET"], paths: ["coordinator/workflows"], right: "read" },
-  // a new goal from the top is the user's as well: a coordinator never starts one
-  { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold", "coordinator/new"], right: "operate" },
+  // a new goal from the top is the user's as well: a coordinator never starts
+  // one, nor follows a card in a kept tree up (FR-067)
+  { methods: POST, paths: ["coordinator/tasks", "coordinator/start", "coordinator/hold", "coordinator/new", "coordinator/followup"], right: "operate" },
   { methods: DEL, paths: ["runs", "flows", "jobs"], right: "operate" },
   { methods: POST, paths: ["flows/resume", "flows/stop", "flows/pickup", "fleet/stop", "jobs/stop"], right: "operate" },
   { methods: POST_DEL, paths: ["fleet", "repos/health", "incubator", "layouts"], right: "operate" },

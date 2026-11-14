@@ -27,11 +27,15 @@ import {
   landedNote,
   lateFailNote,
   laterOutcome,
+  isTreeWait,
+  MAX_NOTE,
   MAX_PLAN,
   MAY_LAND_LATER,
   nextToStart,
   settleNote,
   startNote,
+  treeNote,
+  treeSettled,
   validatePlan,
   withCards,
   type ChildBranch,
@@ -75,6 +79,12 @@ export interface CoordinatorDeps {
   /** resumes a child that ended `limited` on its own branch, its session
    *  carried on, as a new run with the same parent (FR-036) */
   resumeChild?: (coordId: string, task: CoordTask, child: Run, priority: Priority) => Promise<ChildResume>;
+  /** Eric's follow-up on a settled card in a kept tree: a new run in place
+   *  in its tree with the coordinator as `parent`, carrying on the card's
+   *  run with `note` (the server's own words when absent); busy while the
+   *  tree is made or another run holds it, and throws when the tree or its
+   *  repo is gone (FR-067) */
+  followTree?: (coordId: string, task: CoordTask, note: string | undefined, priority: Priority) => Promise<ChildResume>;
   /** the next user message into a chat (`Runner.say`); throws when it is not idle */
   say: (runId: string, text: string) => void;
   /** whether the repo has fewer than `need` branch slots free, one when absent */
@@ -381,6 +391,88 @@ export class CoordinatorHub {
     return { ok: true, held };
   }
 
+  /** Why a card takes no follow-up in its kept tree, in the order Eric
+   *  most needs to hear it: it is not in a tree, it waits on the usage
+   *  reset, its start is in flight, its run is at work, it has not settled,
+   *  or it never ran in its tree (its tree failed before its run started).
+   *  Null when it takes one. */
+  private followRefusal(coord: Run, t: CoordTask): CoordError | null {
+    if (t.tree === undefined) return new CoordError(`${t.id} is not in a tree; follow a branch card up on its branch`, 400);
+    const own = t.run ? this.deps.run(t.run) : undefined;
+    if (t.state === "running" && t.limited === 0 && own?.status === "limited" && !isRunActive(own)) return new CoordError(`${t.id} carries on after the reset`);
+    if (this.starting.has(`${coord.id}:${t.id}`)) return new CoordError(`${t.id} is starting`);
+    if (t.state === "running" && own && isRunActive(own)) return new CoordError(`${t.id}'s run is at work; say it to the run`);
+    if (t.state !== "done" && t.state !== "failed") return new CoordError(`${t.id} is ${t.state}; only a settled card in a tree takes a follow-up`);
+    if (t.treeRepo === undefined || t.run === undefined) return new CoordError(`${t.id} never ran in its tree; start it again from the plan`);
+    return null;
+  }
+
+  /** `POST /api/coordinator/followup {run, id, note?}` (FR-067): Eric's
+   *  follow-up on a settled card in a kept tree starts a new run in place
+   *  there (`followTree`, as interactive) and the card runs with it, with
+   *  no outcome and no `limited`, and settles again on it. The checks run
+   *  before the start and again on the serial chain, since the card may
+   *  move in between; the start holds `starting`, so the run it makes is
+   *  never adopted by another card of the tree. A busy tree or a start that
+   *  throws (the tree removed or merged since) answers 409 with its words
+   *  and leaves the card as it was. Eric's alone. */
+  async followup(caller: Caller | null, b: Record<string, unknown>): Promise<{ ok: true; run: Run }> {
+    if (caller?.kind === "coordinator") throw new CoordError("a coordinator proposes; a follow-up is Eric's", 403);
+    const id = b["id"];
+    const note = b["note"];
+    const find = (): { coord: Run; t: CoordTask } => {
+      const coord = this.coordinator(b["run"], caller);
+      if (typeof id !== "string" || !id) throw new CoordError("missing card id", 400);
+      const t = coord.tasks?.find((x) => x.id === id);
+      if (!t) throw new CoordError(`no card ${id}`, 404);
+      const refused = this.followRefusal(coord, t);
+      if (refused) throw refused;
+      if (note !== undefined && (typeof note !== "string" || note.length > MAX_NOTE)) throw new CoordError(`note must be text of at most ${MAX_NOTE} characters`, 400);
+      return { coord, t };
+    };
+    find();
+    const followTree = this.deps.followTree;
+    if (!followTree) throw new CoordError("this backend cannot follow a card up in its tree");
+    // the queue keeps its errors; the answer comes out by the side
+    const answer: { run: Run | null; error: CoordError | null } = { run: null, error: null };
+    await this.queue(async () => {
+      let found: { coord: Run; t: CoordTask };
+      try {
+        found = find();
+      } catch (err) {
+        answer.error = err instanceof CoordError ? err : new CoordError(errText(err));
+        return;
+      }
+      const { coord, t } = found;
+      const key = `${coord.id}:${t.id}`;
+      let out: ChildResume;
+      this.starting.add(key);
+      try {
+        out = await followTree(coord.id, t, typeof note === "string" ? note : undefined, "interactive");
+      } catch (err) {
+        answer.error = new CoordError(errText(err));
+        return;
+      } finally {
+        this.starting.delete(key);
+      }
+      if ("busy" in out) {
+        answer.error = new CoordError(out.busy);
+        return;
+      }
+      const run = out.run;
+      this.update(coord.id, t.id, (x) => {
+        const { limited: _limited, ...rest } = x;
+        return withOutcome({ ...rest, state: "running", run: run.id, treeRepo: run.repoId }, undefined);
+      });
+      // a run can end inside its own start, before its card knew its id
+      this.follow(run);
+      answer.run = run;
+    });
+    if (answer.error) throw answer.error;
+    if (!answer.run) throw new CoordError("the follow-up started nothing", 500);
+    return { ok: true, run: answer.run };
+  }
+
   /* ---------- the queue ---------- */
 
   /** children still working: a card whose child ended but waits on the
@@ -404,12 +496,17 @@ export class CoordinatorHub {
 
   /** The words a queued card waits with, most telling first: the goal is
    *  held, the cards its `after` names have not landed, this pass's words,
-   *  its repo has no slot, or the governor's window it waited on. */
+   *  its repo has no slot, or the governor's window it waited on. A card in
+   *  a kept tree holds no branch slot, so it keeps the words its last start
+   *  answered while its tree is made or busy (FR-067). */
   private waitWords(t: CoordTask, tasks: readonly CoordTask[], held: boolean, passed: ReadonlyMap<string, string>): string | undefined {
     if (held) return HELD_WORD;
     const wait = afterWait(t, tasks);
     if (wait) return wait.words;
-    return passed.get(t.id) ?? (this.deps.repoFull(t.repo, t.times ?? 1) ? slotWord(t.repo) : isCapacityWords(t.outcome) ? t.outcome : undefined);
+    const now = passed.get(t.id);
+    if (now !== undefined) return now;
+    if (t.tree !== undefined) return isTreeWait(t.outcome) || isCapacityWords(t.outcome) ? t.outcome : undefined;
+    return this.deps.repoFull(t.repo, t.times ?? 1) ? slotWord(t.repo) : isCapacityWords(t.outcome) ? t.outcome : undefined;
   }
 
   /** A queued card whose `after` can never be met by itself: the manager
@@ -438,7 +535,10 @@ export class CoordinatorHub {
    *  three of its children work and their repos have a slot. A card whose
    *  repo is full stays queued and says so, as does a card waiting for the
    *  cards its `after` names to land; a held coordinator starts none. A
-   *  start that throws fails its card and queues a note saying why. */
+   *  start that throws fails its card and queues a note saying why. A card
+   *  in a kept tree whose start answers busy keeps those words, since its
+   *  tree is being made or another run holds it, and its started run's
+   *  repo becomes its `treeRepo` (FR-067). */
   pump(coordId: string): Promise<void> {
     return this.queue(async () => {
       /** cards looked at this pass, with the words they wait with */
@@ -481,8 +581,9 @@ export class CoordinatorHub {
             for (const [id, words] of passed) this.update(coordId, id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
             return;
           }
-          passed.set(next.id, slotWord(next.repo));
-          this.update(coordId, next.id, (x) => withOutcome(x, slotWord(x.repo)));
+          const words = next.tree !== undefined ? out.busy : slotWord(next.repo);
+          passed.set(next.id, words);
+          this.update(coordId, next.id, (x) => withOutcome(x, words));
           continue;
         }
         if ("group" in out) {
@@ -506,7 +607,7 @@ export class CoordinatorHub {
         const child = out.run;
         this.update(coordId, next.id, (x) => {
           const { work: _work, branch: _branch, ...rest } = x;
-          return withOutcome({ ...rest, state: "running", run: child.id, ...(child.branch ? { branch: child.branch.origin } : {}), ...(child.branch?.work ? { work: child.branch.work } : {}) }, undefined);
+          return withOutcome({ ...rest, state: "running", run: child.id, ...(child.branch ? { branch: child.branch.origin } : {}), ...(child.branch?.work ? { work: child.branch.work } : {}), ...(x.tree !== undefined ? { treeRepo: child.repoId } : {}) }, undefined);
         });
         // a child can end inside its own start, before its card knew its id
         this.follow(child);
@@ -519,6 +620,16 @@ export class CoordinatorHub {
   private pumpAll(): void {
     for (const r of this.deps.runs()) {
       if (r.action === "coordinate" && isRunActive(r) && r.tasks?.some((t) => t.state === "queued")) void this.pump(r.id);
+    }
+  }
+
+  /** The kept trees moved (a tree's setup settled): pumps every coordinator
+   *  still going with a card queued for a tree, which may now start in it
+   *  (FR-067). A coordinator whose queued cards are all plain waits for a
+   *  run's end as before. */
+  onTrees(): void {
+    for (const r of this.deps.runs()) {
+      if (r.action === "coordinate" && isRunActive(r) && r.tasks?.some((t) => t.state === "queued" && t.tree !== undefined)) void this.pump(r.id);
     }
   }
 
@@ -568,9 +679,11 @@ export class CoordinatorHub {
    *  resume is in flight keeps that start's run. A flow's step run is never
    *  taken, nor a card whose flow is still active; a card whose flow ended
    *  follows the run from then on. Not held to three at once: it counts as
-   *  working from then on. */
+   *  working from then on. A run with no branch is one in place, which only
+   *  a card in a kept tree takes (`adoptInTree`). */
   private adopt(coord: Run, run: Run): CoordTask | undefined {
-    const origin = run.branch?.origin;
+    if (!run.branch) return this.adoptInTree(coord, run);
+    const origin = run.branch.origin;
     if (!origin || run.flowStep || !isRunActive(run) || coord.action !== "coordinate" || !isRunActive(coord)) return undefined;
     const t = coord.tasks?.find((x) => x.branch === origin && (x.state === "running" || x.state === "done" || x.state === "failed"));
     if (!t || cardLanded(t) || this.starting.has(`${coord.id}:${t.id}`)) return undefined;
@@ -582,6 +695,38 @@ export class CoordinatorHub {
     if (t.flow) this.cancel(flowKey(t.flow));
     this.update(coord.id, t.id, (x) => {
       const { flow: _flow, limited: _limited, ...rest } = x;
+      return withOutcome({ ...rest, state: "running", run: run.id }, undefined);
+    });
+    return this.deps.run(coord.id)?.tasks?.find((x) => x.id === t.id);
+  }
+
+  /** A later run in place in a card's kept tree (FR-067): one that works
+   *  now, is no flow's step, and names this coordinator, still going, as
+   *  its `parent`, so Eric's own runs there never take a card. The cards it
+   *  may go to ran in that tree (`treeRepo` is the run's repo) and are
+   *  running, done or failed; with several on one tree, the last whose own
+   *  run is not at work takes it. While any card of that tree is starting
+   *  (a first start, a follow-up or a resume after the limit) the run is
+   *  that start's own and nothing is adopted. A card that is starting for
+   *  the first time has no `treeRepo` yet, so the tree is matched on the
+   *  candidates' repo and branch as well. The card goes back to running
+   *  with no outcome and no `limited`. */
+  private adoptInTree(coord: Run, run: Run): CoordTask | undefined {
+    if (run.flowStep || !isRunActive(run) || run.parent !== coord.id || coord.action !== "coordinate" || !isRunActive(coord)) return undefined;
+    const tasks = coord.tasks ?? [];
+    const ran = tasks.filter((x) => x.tree !== undefined && x.treeRepo === run.repoId);
+    if (ran.length === 0) return undefined;
+    const ofTree = (x: CoordTask): boolean => x.tree !== undefined && (x.treeRepo === run.repoId || ran.some((c) => c.repo === x.repo && c.tree === x.tree));
+    if (tasks.some((x) => ofTree(x) && this.starting.has(`${coord.id}:${x.id}`))) return undefined;
+    const t = ran.filter((x) => {
+      if (x.state !== "running" && x.state !== "done" && x.state !== "failed") return false;
+      const own = x.run ? this.deps.run(x.run) : undefined;
+      return !own || !isRunActive(own);
+    }).at(-1);
+    if (!t) return undefined;
+    if (t.run) this.cancel(t.run);
+    this.update(coord.id, t.id, (x) => {
+      const { limited: _limited, ...rest } = x;
       return withOutcome({ ...rest, state: "running", run: run.id }, undefined);
     });
     return this.deps.run(coord.id)?.tasks?.find((x) => x.id === t.id);
@@ -605,17 +750,20 @@ export class CoordinatorHub {
       // until the child resumes on its branch (FR-036)
       if (task.limited === undefined || !isCapacityWords(task.outcome)) {
         this.update(coord.id, task.id, (x) => ({ ...withOutcome(x, limitedWords(child.limited, this.now())), limited: 0 }));
-        this.queueNote(coord.id, `canopy: task ${task.id} (${task.title}) stopped at the plan's usage limit; it carries on on its branch after the reset`);
+        const where = task.tree !== undefined ? `in tree ${task.tree}` : "on its branch";
+        this.queueNote(coord.id, `canopy: task ${task.id} (${task.title}) stopped at the plan's usage limit; it carries on ${where} after the reset`);
       }
       return;
     }
     if (child.status === "limited") {
       // limited again after its resume: it fails, so a misread text cannot loop
+      const twice = "the plan's usage limit, twice in a row";
       this.cancel(child.id);
-      this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: "failed" }, "the plan's usage limit, twice in a row"));
-      this.queueNote(coord.id, settleNote(task, child, this.deps.landing(child), "failed"));
+      this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: "failed" }, twice));
+      this.queueNote(coord.id, task.tree !== undefined ? treeNote(task, child, twice) : settleNote(task, child, this.deps.landing(child), "failed"));
       return;
     }
+    if (task.tree !== undefined) return this.settleInTree(coord, task, child, task.tree);
     const branch = this.deps.landing(child);
     const ended = child.endedAt ?? this.now();
     const wait = this.deps.readyWait ?? READY_WAIT;
@@ -630,6 +778,17 @@ export class CoordinatorHub {
     this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
     if (task.work) this.deps.work?.note(task.work, `card ${task.id} settled: ${got.outcome}`);
     this.queueNote(coord.id, settleNote(task, child, branch));
+  }
+
+  /** A card in a kept tree settles on its run alone (`treeSettled`): there
+   *  is no branch to land, so the landing queue is never read and no timer
+   *  waits. The note is `treeNote` (FR-067). */
+  private settleInTree(coord: Run, task: CoordTask, child: Run, tree: string): void {
+    const got = treeSettled(child, tree);
+    if (!got) return;
+    this.cancel(child.id);
+    this.update(coord.id, task.id, (x) => withOutcome({ ...x, state: got.state }, got.outcome));
+    this.queueNote(coord.id, treeNote(task, child, got.outcome));
   }
 
   /** A card's flow moved: a card that failed `stopped` goes back to running
@@ -992,7 +1151,7 @@ export class CoordinatorHub {
     const path = url.pathname.replace(/\/+$/, "");
     if (req.method !== "POST" || !path.startsWith("/api/coordinator/")) return null;
     const act = path.slice("/api/coordinator/".length);
-    if (act !== "plan" && act !== "tasks" && act !== "start" && act !== "hold") return null;
+    if (act !== "plan" && act !== "tasks" && act !== "start" && act !== "hold" && act !== "followup") return null;
     try {
       if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY) return json({ error: "body too large" }, 413);
       const text = await req.text();
@@ -1007,6 +1166,7 @@ export class CoordinatorHub {
       if (act === "plan") return json(await this.plan(caller, b));
       if (act === "tasks") return json(await this.edit(caller, b));
       if (act === "hold") return json(await this.hold(caller, b));
+      if (act === "followup") return json(await this.followup(caller, b));
       return json(await this.begin(caller, b));
     } catch (err) {
       return json({ error: errText(err) }, err instanceof CoordError ? err.status : 500);

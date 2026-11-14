@@ -226,6 +226,14 @@ describe("the coordinator's routes", () => {
     expect(needs("POST", "/api/flows/pickup")).toBe("operate");
   });
 
+  test("a follow-up on a card in a kept tree needs operate; the trees are a read in the coordinator's lane (FR-067)", () => {
+    expect(needs("POST", "/api/coordinator/followup")).toBe("operate");
+    expect(allows("page", needs("POST", "/api/coordinator/followup"))).toBe(true);
+    expect(LANES.coordinator?.has("GET /api/trees")).toBe(true);
+    expect(LANES.coordinator?.has("POST /api/coordinator/followup")).toBe(false);
+    expect(allows("coordinator", needs("GET", "/api/trees"))).toBe(true);
+  });
+
   test("holding a goal needs operate, which a coordinator's token lacks", () => {
     expect(needs("POST", "/api/coordinator/hold")).toBe("operate");
     expect(allows("coordinator", needs("POST", "/api/coordinator/hold"))).toBe(false);
@@ -240,6 +248,7 @@ describe("the coordinator's routes", () => {
       ["POST", "/api/coordinator/start"],
       ["POST", "/api/coordinator/hold"],
       ["POST", "/api/coordinator/new"],
+      ["POST", "/api/coordinator/followup"],
       ["POST", "/api/repos/run"],
       ["POST", "/api/runs/stop"],
       ["POST", "/api/runs/answer"],
