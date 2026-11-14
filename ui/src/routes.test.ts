@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { managerHere, parseRoute, popupFeatures, runUrl, soloUrl, sproutHere } from "./routes";
+import { managerHere, managerNew, managerUrl, parseRoute, popupFeatures, runUrl, soloUrl, sproutHere } from "./routes";
 
 const features = (w: number, h: number): Record<string, number> => {
   const out: Record<string, number> = {};
@@ -188,5 +188,28 @@ describe("managerHere", () => {
 
   test("a manager link is not a chat's window", () => {
     expect(parseRoute("?view=manager&run=mini%7Ced71ddfb").run).toBeNull();
+  });
+});
+
+describe("managerNew", () => {
+  test("the manager view's new goal, and nothing else", () => {
+    expect(managerNew("?view=manager&new=1")).toBe(true);
+    expect(managerNew("?view=manager")).toBe(false);
+    expect(managerNew("?view=manager&new=0")).toBe(false);
+    expect(managerNew("?view=git&new=1")).toBe(false);
+  });
+
+  test("the address that opens it", () => {
+    // managerUrl builds on this page's path, and bun test has no location
+    const g = globalThis as unknown as { location?: unknown };
+    g.location = { pathname: "/" };
+    try {
+      expect(managerUrl(null, { new: true }).endsWith("?view=manager&new=1")).toBe(true);
+      expect(managerNew(new URL(managerUrl(null, { new: true }), "http://x").search)).toBe(true);
+      expect(managerUrl(null)).toBe("/?view=manager");
+      expect(managerUrl("mini|ed71ddfb")).toBe("/?view=manager&run=mini%7Ced71ddfb");
+    } finally {
+      delete g.location;
+    }
   });
 });

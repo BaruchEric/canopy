@@ -19,6 +19,8 @@ test("shortcutFor finds a press on the views it works on and nowhere else", () =
   expect(shortcutFor("d", "library")).toBeNull();
   expect(shortcutFor("n", "incubator")?.action).toBe("new");
   expect(shortcutFor("n", "health")).toBeNull();
+  expect(shortcutFor("n", "manager")?.action).toBe("goal");
+  expect(shortcutFor("n", "git")?.action).toBe("new");
   expect(shortcutFor("?", "costs")?.action).toBe("help");
   expect(shortcutFor("mod+k", "kit")?.anywhere).toBe(true);
   expect(shortcutFor("mod+shift+f", "triggers")).toBeNull();
@@ -27,7 +29,10 @@ test("shortcutFor finds a press on the views it works on and nowhere else", () =
 });
 
 test("shortcutsOn lists every shortcut on git and only the everywhere ones and the view's own elsewhere", () => {
-  expect(shortcutsOn("git")).toHaveLength(SHORTCUTS.length);
+  // every one but the manager's new goal, which shares git's n
+  expect(shortcutsOn("git")).toHaveLength(SHORTCUTS.length - 1);
+  expect(shortcutsOn("git").some((s) => s.action === "goal")).toBe(false);
+  expect(shortcutsOn("manager").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "n"]);
   expect(shortcutsOn("library").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y"]);
   expect(shortcutsOn("incubator").map((s) => s.press)).toEqual(["?", "mod+k", ":", "g", "y", "n"]);
 });

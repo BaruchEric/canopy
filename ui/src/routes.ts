@@ -126,18 +126,26 @@ export function managerHere(search: string): string | null {
   return q.get("view") === "manager" && id && RUN_ID.test(id) ? id : null;
 }
 
+/** `?view=manager&new=1`: the goals to pick from with the new goal's box
+ *  focused, the top bar's "+ goal" */
+export function managerNew(search: string): boolean {
+  const q = new URLSearchParams(search);
+  return q.get("view") === "manager" && q.get("new") === "1";
+}
+
 /** The top view's address on this page: a coordinator's goal, or with no
- *  id the goals to pick from. */
-export function managerUrl(runId: string | null): string {
-  return `${location.pathname}?view=manager${runId ? `&run=${encodeURIComponent(runId)}` : ""}`;
+ *  id the goals to pick from, `new` with the new goal's box focused. */
+export function managerUrl(runId: string | null, opts?: { new?: true }): string {
+  const tail = runId ? `&run=${encodeURIComponent(runId)}` : opts?.new ? "&new=1" : "";
+  return `${location.pathname}?view=manager${tail}`;
 }
 
 /** Opens the top view of a coordinator's goal, or the goals to pick from.
  *  The whole page changes in place and hears it as it hears back and
  *  forward (App and ManagerView follow popstate); a window of one thing
  *  shows only what its address named when it opened, so it loads anew. */
-export function openManager(runId: string | null): void {
-  const url = managerUrl(runId);
+export function openManager(runId: string | null, opts?: { new?: true }): void {
+  const url = managerUrl(runId, opts);
   const r = parseRoute(location.search);
   if (r.run || r.agent || (r.repo && (r.solo || r.shell || r.section))) {
     location.assign(url);

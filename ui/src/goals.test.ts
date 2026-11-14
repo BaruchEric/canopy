@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { coordBackends, coordDefaults, goalRepoChoices, runRepo, runRepoName } from "./goals";
+import { coordBackends, coordDefaults, goalLimitsWhy, goalRepoChoices, goalRepoRows, namedRepos, runRepo, runRepoName } from "./goals";
 import { setRegistry } from "./registry";
 import { NO_ROUTES } from "./agents";
 import { withDefaultProfile } from "../../src/core/route";
@@ -78,5 +78,50 @@ describe("runRepo", () => {
   test("a known repo is itself, an unknown one is nothing", () => {
     expect(runRepo(repos, "app")).toBe(repos[0]);
     expect(runRepo(repos, "gone")).toBeUndefined();
+  });
+});
+
+describe("namedRepos", () => {
+  setRegistry("mac", ["mac", "mini"]);
+  const choices = [repo("mini|demo"), repo("mini|dev-tools/canopy"), repo("mini|src:app"), repo("mini|.")];
+  test("every @ token that is a choice's plain id, qualified, in order, once each", () => {
+    expect(namedRepos("fix @dev-tools/canopy then @demo and @demo again", choices)).toEqual(["mini|dev-tools/canopy", "mini|demo"]);
+    expect(namedRepos("@src:app first", choices)).toEqual(["mini|src:app"]);
+    expect(namedRepos("the root @. too", choices)).toEqual(["mini|."]);
+  });
+  test("a word's trailing stop or comma does not hide the repo", () => {
+    expect(namedRepos("in @demo, then (@src:app).", choices)).toEqual(["mini|demo"]);
+    expect(namedRepos("in @demo. and @src:app!", choices)).toEqual(["mini|demo", "mini|src:app"]);
+  });
+  test("a token that is no choice, or an @ inside a word, names nothing", () => {
+    expect(namedRepos("mail eric@demo or @dem or @twin", choices)).toEqual([]);
+    expect(namedRepos("", choices)).toEqual([]);
+  });
+});
+
+describe("goalRepoRows", () => {
+  setRegistry("mac", ["mac", "mini"]);
+  const choices = [repo("mini|demo"), repo("mini|twin"), repo("mini|dev-tools/canopy")];
+  test("a query finds a repo by its id's start, its name, or its letters", () => {
+    expect(goalRepoRows(choices, "de").map((r) => r.name)[0]).toBe("demo");
+    expect(goalRepoRows(choices, "can").map((r) => r.name)).toEqual(["dev-tools/canopy"]);
+    expect(goalRepoRows(choices, "zz")).toEqual([]);
+  });
+  test("no query lists them all, by id", () => {
+    expect(goalRepoRows(choices, "").map((r) => r.name)).toEqual(["demo", "dev-tools/canopy", "twin"]);
+  });
+});
+
+describe("goalLimitsWhy", () => {
+  const file = (size: number) => ({ size });
+  test("nothing over the limits says nothing", () => {
+    expect(goalLimitsWhy({ text: "x", repos: 20, files: Array.from({ length: 10 }, () => file(1)) })).toBeNull();
+    expect(goalLimitsWhy({ text: "x", repos: 0, files: [file(25 * 1024 * 1024)] })).toBeNull();
+  });
+  test("each limit says why when crossed", () => {
+    expect(goalLimitsWhy({ text: "x".repeat(20001), repos: 0, files: [] })).toBe("The goal is over 20000 characters.");
+    expect(goalLimitsWhy({ text: "x", repos: 21, files: [] })).toBe("A goal names at most 20 repos; this one names 21.");
+    expect(goalLimitsWhy({ text: "x", repos: 0, files: Array.from({ length: 12 }, () => file(1)) })).toBe("At most 10 files go with a goal; remove 2.");
+    expect(goalLimitsWhy({ text: "x", repos: 0, files: [file(20 * 1024 * 1024), file(10 * 1024 * 1024)] })).toBe("The files come to 30.0 MB; a goal takes 25 MB in all.");
   });
 });

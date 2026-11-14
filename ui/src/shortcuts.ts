@@ -13,6 +13,7 @@ export type KeyAction =
   | "go"
   | "yank"
   | "new"
+  | "goal"
   | "filter"
   | "filters"
   | "tree"
@@ -54,6 +55,7 @@ export const SHORTCUTS: readonly Shortcut[] = [
   { action: "yank", press: "y", what: "Then a letter, copy from the ringed card or row, or the open run sheet (below)" },
   { action: "find", press: "mod+shift+f", what: "Search the files of every repo in view", views: GIT, anywhere: true },
   { action: "new", press: "n", what: "A new project", views: ["git", "incubator"] },
+  { action: "goal", press: "n", what: "A new goal: its box, focused", views: ["manager"] },
   { action: "filter", press: "/", what: "Filter the repos", views: GIT },
   { action: "filters", press: "f", what: "The filters menu", views: GIT },
   { action: "tree", press: "[", what: "Show or hide the tree", views: GIT },

@@ -12,6 +12,7 @@ import { CLI_GLYPH } from "../cli";
 import { NARROW, PHONE, useMedia } from "../media";
 import { effectivePrimary, isRunActive, WS_COLORS, type Run, type RunAction, type Workspace } from "../../../src/core/types";
 import { isHome } from "../registry";
+import { openManager } from "../routes";
 import { baseName } from "../elsewhere";
 import { primaryRefusal } from "../workspaces";
 import { PAGE_BUILD } from "../build";
@@ -675,6 +676,16 @@ function CliButton() {
   );
 }
 
+/** The manager view's new goal box, focused (FR-067): a goal, its files
+ *  and the repos it names, which a coordinator plans into cards. */
+function NewGoalButton() {
+  return (
+    <button type="button" className="mini new-goal" title="New goal: plan cards across repos from a goal, files and the repos you name" onClick={() => openManager(null, { new: true })}>
+      new goal
+    </button>
+  );
+}
+
 /** Opens the "waiting on you" panel in the dock, or brings it forward when
  *  it is open: everything that needs you in one place, counted beside its
  *  flag as the inbox chip counts its own. `w` does the same. */
@@ -869,6 +880,7 @@ function PhoneBar({ nav }: { nav?: ReactNode }) {
           <div ref={scroller} className="tb-line tb-tools tb-scroll">
             <Cluster label="Make">
               <NewProjectButton />
+              <NewGoalButton />
               <SelectPill />
             </Cluster>
             <Cluster label="Show">
@@ -946,6 +958,7 @@ function WideBar({ nav }: { nav?: ReactNode }) {
           </Cluster>
           <Cluster label="Make">
             <NewProjectButton />
+            <NewGoalButton />
             <SelectPill />
           </Cluster>
         </span>

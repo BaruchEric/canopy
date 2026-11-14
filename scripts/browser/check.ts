@@ -5,7 +5,9 @@
 // (a view's chunk and xterm's refused), a phone: the top bar's first row
 // on the screen, an open panel's section tabs, and no field small enough for
 // iOS to zoom the page onto, and the manager's top view: a goal that ended,
-// and a goal going on a desktop, a tablet and a phone with its equip sheet.
+// a goal going on a desktop, a tablet and a phone with its equip sheet, and
+// the new goal's box at 1440 and 390px, opened from its address and from the
+// top bar.
 // check.sh starts a scratch server and runs this; it copies the file into
 // the browser folder first, where "playwright" resolves.
 //   check.ts <base url> <screenshot folder>
@@ -479,6 +481,94 @@ try {
       fields.push(...(await smallFields(page)));
       check(fields.length === 0, `at 390px no field in the manager view is under 16px, where iOS zooms the page${fields.length ? `: ${[...new Set(fields)].join(", ")}` : ""}`);
       await page.screenshot({ path: `${shots}/manager-390-equip.png` });
+      await page.close();
+    }
+
+    // The new goal's box (FR-067). `?view=manager&new=1` shows it focused over
+    // the goals going, and the one goal going, which the plain address opens,
+    // stays shut. A scratch server runs no coordinator, so its about is
+    // answered here as one that does, which gives the box its backend, model
+    // and effort. Typing `@de` offers the repo demo, a pick writes it, and a
+    // small PNG attached shows as a chip. Start goal is never pressed.
+    const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
+    const composerPage = async (width: number): Promise<Page> => {
+      const page = await goalPage(width);
+      await page.route(
+        (u) => u.pathname === "/api/about",
+        async (r) => {
+          const res = await r.fetch();
+          await r.fulfill({ response: res, json: { ...(await res.json()), coordinator: true } });
+        },
+      );
+      return page;
+    };
+    for (const width of [1440, 390]) {
+      const page = await composerPage(width);
+      await page.goto(`${base}/?view=manager&new=1`, { waitUntil: "load" });
+      const box = page.locator(".mgr-new textarea");
+      await box.waitFor({ timeout: 20_000 });
+      await page.waitForTimeout(1200);
+      const state = await page.evaluate(() => ({
+        search: location.search,
+        focused: document.activeElement instanceof HTMLTextAreaElement && document.activeElement.closest(".mgr-new") !== null,
+        on: document.querySelector(".mgr-new-on")?.textContent?.trim() ?? "",
+        goals: document.querySelectorAll(".mgr-goal-row").length,
+        line: document.querySelector(".mgr-new-from")?.textContent?.trim() ?? "",
+      }));
+      check(
+        state.focused && !state.search.includes("run=") && state.goals === 1 && state.on.startsWith("runs on ") && state.line.endsWith("coordinate route)"),
+        `at ${width}px ?view=manager&new=1 shows the new goal's box ${state.focused ? "focused" : "not focused"} over ${state.goals} goal going and stays there (${state.search}); "${state.on}", "${state.line}"`,
+      );
+      await box.pressSequentially("Tidy the READMEs in @de");
+      const rows = page.locator(".mgr-new .mention-menu .mention-name");
+      const menu = await rows.first().waitFor({ timeout: 5000 }).then(() => true, () => false);
+      const names = menu ? await rows.allInnerTexts() : [];
+      check(names.includes("demo"), `at ${width}px typing @de offers the repo demo (${names.join(", ") || "no rows"})`);
+      await page.screenshot({ path: `${shots}/manager-new-${width}-menu.png` });
+      await page.keyboard.press("Enter");
+      const text = await box.inputValue();
+      check(text === "Tidy the READMEs in @demo ", `at ${width}px a pick writes the repo into the box: "${text}"`);
+      await page.locator('.mgr-new input[type="file"]').setInputFiles({ name: "shot.png", mimeType: "image/png", buffer: PNG });
+      const chip = page.locator(".mgr-new-file");
+      const chipped = await chip.first().waitFor({ timeout: 5000 }).then(() => true, () => false);
+      const chipText = chipped ? await textOf(page, ".mgr-new-file") : "";
+      const start = page.locator(".mgr-new").getByRole("button", { name: "start goal" });
+      const on = await start.isEnabled();
+      check(chipped && chipText.includes("shot.png") && on, `at ${width}px an attached PNG shows as a chip ("${chipText}") and start goal is ${on ? "on" : "off"}`);
+      const fit = await page.evaluate(() => {
+        const view = document.querySelector<HTMLElement>(".mgr-view");
+        return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, view: view ? view.scrollWidth - view.clientWidth : -1 };
+      });
+      check(fit.page <= 0 && fit.view <= 0, `at ${width}px the page with the new goal's box has no side scroll${fit.page > 0 || fit.view > 0 ? ` (${Math.max(fit.page, fit.view)}px past the edge)` : ""}`);
+      if (width <= 390) {
+        // the chip's remove, attach and start goal
+        const buttons = await shortButtons(page, ".mgr-new");
+        check(buttons.seen >= 3 && buttons.short.length === 0, `at 390px every button in the new goal's box is a finger tall (${buttons.seen} of them)${buttons.short.length ? `: ${buttons.short.join(", ")}` : ""}`);
+        const fields = await page.evaluate(() =>
+          [...document.querySelectorAll<HTMLElement>(".mgr-new textarea, .mgr-new select")]
+            .filter((el) => el.getClientRects().length > 0)
+            .map((el) => ({ what: `${el.tagName.toLowerCase()} '${el.getAttribute("aria-label") ?? ""}'`, h: el.getBoundingClientRect().height })),
+        );
+        const low = fields.filter((f) => f.h < 43.5).map((f) => `${f.what} ${Math.round(f.h)}px`);
+        check(fields.length >= 3 && low.length === 0, `at 390px every field in the new goal's box is a finger tall (${fields.length} of them)${low.length ? `: ${low.join(", ")}` : ""}`);
+        const small = await smallFields(page);
+        check(small.length === 0, `at 390px no field with the new goal's box is under 16px, where iOS zooms the page${small.length ? `: ${[...new Set(small)].join(", ")}` : ""}`);
+      }
+      await page.screenshot({ path: `${shots}/manager-new-${width}.png` });
+      await page.close();
+    }
+    {
+      // the top bar's entry: from the board, its "new goal" opens the box focused
+      const page = await composerPage(1440);
+      await page.goto(`${base}/`, { waitUntil: "load" });
+      await page.locator(".topbar button.new-goal").click({ timeout: 20_000 });
+      const shown = await page.locator(".mgr-new textarea").waitFor({ timeout: 15_000 }).then(() => true, () => false);
+      await page.waitForTimeout(800);
+      const state = await page.evaluate(() => ({
+        search: location.search,
+        focused: document.activeElement instanceof HTMLTextAreaElement && document.activeElement.closest(".mgr-new") !== null,
+      }));
+      check(shown && state.focused && state.search === "?view=manager&new=1", `the top bar's new goal opens the box ${state.focused ? "focused" : "not focused"} (${state.search})`);
       await page.close();
     }
   }

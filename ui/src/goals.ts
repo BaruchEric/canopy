@@ -1,9 +1,10 @@
 // Pure helpers for a goal started from the top: a coordinator held at the
 // anchor, which is no repo. Browser-safe.
-import { goalAnchor, isGoalAnchor } from "../../src/core/coordinator";
+import { GOAL_LIMITS, goalAnchor, isGoalAnchor } from "../../src/core/coordinator";
 import { resolveAgent } from "../../src/core/route";
-import { isSeedId } from "../../src/core/sprout";
-import type { AgentEffort, AgentRoutes, Repo } from "../../src/core/types";
+import { isSeedId, sizeWord } from "../../src/core/sprout";
+import type { AgentEffort, AgentRoutes, Mention, Repo } from "../../src/core/types";
+import { rankWords } from "./mentions";
 import { backendOf, isHome, plainOf } from "./registry";
 import type { Conn } from "./store";
 
@@ -44,4 +45,43 @@ export function runRepo(repos: readonly Repo[], repoId: string): Repo | undefine
   const found = repos.find((r) => r.id === repoId);
   if (found || !isGoalAnchor(repoId)) return found;
   return { ...goalAnchor(""), id: repoId, name: runRepoName(repos, repoId) };
+}
+
+/** what may close a word after a repo's id: "@app," and "@app." name app */
+const TRAILING = /[,.;:!?)]+$/;
+
+/** The repos a goal's text names: every `@<id>` at the start of a word
+ *  whose id is one of `choices`' plain ids, exactly or once a closing stop
+ *  or comma is off it. Qualified, in the order written, once each. */
+export function namedRepos(text: string, choices: readonly Repo[]): string[] {
+  const byPlain = new Map(choices.map((r) => [plainOf(r.id), r.id]));
+  const out: string[] = [];
+  for (const m of text.matchAll(/(?:^|\s)@(\S+)/g)) {
+    const word = m[1] ?? "";
+    const id = byPlain.get(word) ?? byPlain.get(word.replace(TRAILING, ""));
+    if (id !== undefined && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** The composer's `@` menu over a backend's repos, best first: each repo as
+ *  a row `rankWords` can rank, named by its plain id, which is what a pick
+ *  writes, with its name beside it when the id is a path. */
+export function goalRepoRows(choices: readonly Repo[], query: string): Mention[] {
+  const rows = choices.map((r): Mention => {
+    const name = plainOf(r.id);
+    return { name, kind: "builtin", harness: "claude", from: "builtin", description: r.name === name ? "" : r.name };
+  });
+  return rankWords(rows, query);
+}
+
+/** Why a goal cannot start as it stands against the server's limits
+ *  (`GOAL_LIMITS`), the first one crossed, or null. */
+export function goalLimitsWhy(goal: { text: string; repos: number; files: readonly { size: number }[] }): string | null {
+  if (goal.text.length > GOAL_LIMITS.goal) return `The goal is over ${GOAL_LIMITS.goal} characters.`;
+  if (goal.repos > GOAL_LIMITS.repos) return `A goal names at most ${GOAL_LIMITS.repos} repos; this one names ${goal.repos}.`;
+  if (goal.files.length > GOAL_LIMITS.files) return `At most ${GOAL_LIMITS.files} files go with a goal; remove ${goal.files.length - GOAL_LIMITS.files}.`;
+  const bytes = goal.files.reduce((n, f) => n + f.size, 0);
+  if (bytes > GOAL_LIMITS.bytes) return `The files come to ${sizeWord(bytes)}; a goal takes ${GOAL_LIMITS.bytes / 1024 / 1024} MB in all.`;
+  return null;
 }

@@ -31,7 +31,7 @@ import { KbWatch, kbCopy, kbEnter, kbHide, kbMove, kbPeek, kbZone } from "./comp
 import { Said } from "./components/Said";
 import { noteCopied, onCopied, pageCopyText } from "./clipsink";
 import { runPanel } from "./itempanel";
-import { dropAskHere, parseRoute } from "./routes";
+import { dropAskHere, openManager, parseRoute } from "./routes";
 import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, landingAll, prsAll, statusOf, useStore, type CanopyState } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -592,6 +592,13 @@ export function App() {
           // only while the ring shows, and never from a focused button
           if (!whole || !st.kbRing || st.sheet || over || !ringTakes(press as RingPress, t)) return;
           if (sc.action === "peek" ? kbPeek() : kbEnter(showRepo)) e.preventDefault();
+          return;
+        case "goal":
+          // the new goal's box, over the goals going, focused
+          if (whole && !st.sheet && !over) {
+            e.preventDefault();
+            openManager(null, { new: true });
+          }
           return;
         case "select-all":
           // a select box owns ⌘A

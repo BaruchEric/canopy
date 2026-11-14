@@ -7351,6 +7351,118 @@ button.dl-gut.has {
 .mgr-view.phone .mgr-chat {
   height: 75vh;
 }
+/* a goal started at no repo says so under the head's facts */
+.mgr-top {
+  margin: 4px 0 0;
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+
+/* the new goal's box over the goals going (FR-067, GoalComposer.tsx): its
+   head names the backend the coordinator runs on; the box takes the words,
+   an @ menu of that backend's repos under it, and dropped or pasted files;
+   then the files' chips with attach, the model and effort with where their
+   defaults come from, and start goal at the right. A phone gives every
+   field and button a finger (the .mgr-view.phone rules above) and start
+   goal the full width. */
+.mgr-new {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 18px 0 8px;
+}
+.mgr-new-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+}
+.mgr-new-head > .mgr-h {
+  margin: 0;
+}
+.mgr-new-on {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-dim);
+}
+.mgr-new-on > select,
+.mgr-new-agent select {
+  width: auto;
+  max-width: 100%;
+}
+.mgr-new .mgr-new-none,
+.mgr-new .note {
+  margin: 0;
+}
+.mgr-new-box {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--r);
+}
+.mgr-new-box.over {
+  outline: 1px dashed var(--sky);
+  outline-offset: 3px;
+  background: color-mix(in srgb, var(--sky) 8%, transparent);
+}
+.mgr-new-text {
+  min-height: 5.5em;
+}
+.mgr-new-files {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.mgr-new-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  padding-right: 2px;
+}
+.mgr-new-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mgr-new-file > .mini {
+  flex: none;
+  padding: 0 6px;
+}
+.mgr-new-agent {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  color: var(--ink-dim);
+}
+.mgr-new-agent label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.mgr-new-from {
+  font-size: var(--t-sm);
+  color: var(--ink-faint);
+}
+.mgr-new-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+.mgr-view.phone .mgr-new-foot > .mini {
+  flex: 1;
+  justify-content: center;
+}
+.mgr-view.phone .mgr-new .mention-row {
+  padding-block: 12px;
+}
 
 /* a repo's landing queue: the card's word, its panel section */
 .landing-card.queued {

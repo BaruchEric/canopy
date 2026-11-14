@@ -14,6 +14,7 @@
  */
 import { Fragment, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { runRepoName } from "../goals";
+import { isGoalAnchor } from "../../../src/core/coordinator";
 import { isSeedId } from "../../../src/core/sprout";
 import type { CoordTask, Loadout, Run } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
@@ -24,11 +25,12 @@ import { needsApproval, sentBack } from "../landing";
 import { chatAim, goalText, liveCoordinators, managerRows, type Goal, type Lane, type Need, type Ring, type SayTarget, type Tone } from "../manager";
 import { PHONE, useMedia } from "../media";
 import { backendOf, isHome, plainOf } from "../registry";
-import { managerHere, managerUrl, openManager } from "../routes";
+import { managerHere, managerNew, managerUrl, openManager } from "../routes";
 import { harnessOf } from "../runs";
 import { connOf, idParts, idText, landingAll, prsAll, recordsIn, useStore, type CanopyState } from "../store";
 import { HoldButton } from "./CoordTasks";
 import { EquipSheet } from "./EquipSheet";
+import { GoalComposer } from "./GoalComposer";
 import { RunPromptForm } from "./Prompts";
 import { useNow } from "./Registry";
 import { RunPane } from "./RunSheet";
@@ -51,9 +53,10 @@ const TITLE_MAX = 120;
 const NOTE_MAX = 4000;
 
 /**
- * The view: the goal the address names, or the goals going to pick from.
- * With no goal named and one going, that one opens and the address names
- * it, once every backend has sent its runs or is known to be away. A goal
+ * The view: the goal the address names, or the goals going to pick from
+ * under the new goal's box. With no goal named and one going, that one
+ * opens and the address names it, once every backend has sent its runs or
+ * is known to be away, unless the address asks for a new goal (`new=1`). A goal
  * the page does not hold is called ended only when its backend's runs are
  * in; while they are on their way, or the backend is offline, asks for a
  * sign-in or is hidden, the view says that instead. One the page holds
@@ -61,8 +64,13 @@ const NOTE_MAX = 4000;
  */
 export function ManagerView() {
   const [runId, setRunId] = useState(() => managerHere(search()));
+  // the address asks for a new goal: the box is focused and the one goal going does not open
+  const [fresh, setFresh] = useState(() => managerNew(search()));
   useEffect(() => {
-    const pop = () => setRunId(managerHere(search()));
+    const pop = () => {
+      setRunId(managerHere(search()));
+      setFresh(managerNew(search()));
+    };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
   }, []);
@@ -78,7 +86,7 @@ export function ManagerView() {
   // the goals it last sent, so it is not called missing
   const waiting = useStore((s) => s.backendOrder.filter((b) => reachOf(s, b) === "loading").join(" "));
   const away = useStore((s) => s.backendOrder.filter((b) => isAway(reachOf(s, b)) && !recordsIn(s, b)).join(" "));
-  const onlyId = runId === null && waiting === "" && live.length === 1 ? live[0]?.id : undefined;
+  const onlyId = runId === null && !fresh && waiting === "" && live.length === 1 ? live[0]?.id : undefined;
   useEffect(() => {
     if (!onlyId) return;
     history.replaceState(null, "", managerUrl(onlyId));
@@ -89,7 +97,7 @@ export function ManagerView() {
   const why: Why = runId === null ? "none" : named ? "not a goal" : where === "here" ? "ended" : where;
   // a backend the heading names already is not named again below it
   const others = (words: string): string[] => words.split(" ").filter((b) => b !== "" && (why === "none" || b !== on));
-  return <GoalPicker live={live} why={why} on={on} waiting={others(waiting)} away={others(away)} />;
+  return <GoalPicker live={live} why={why} on={on} waiting={others(waiting)} away={others(away)} fresh={fresh} />;
 }
 
 /** Where a backend stands for this view: its runs in ("here"), on their
@@ -128,18 +136,19 @@ const WAIT_WORDS: Record<Exclude<Reach, "here">, string> = {
 /** backend names as a phrase: "a", "a and b", "a, b and c" */
 const names = (list: readonly string[]): string => (list.length < 2 ? (list[0] ?? "") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`);
 
-/** a link that opens a goal in place, and in a new tab when asked to */
-function follow(e: MouseEvent, runId: string | null): void {
+/** a link that opens a goal (or the new goal's box) in place, and in a new tab when asked to */
+function follow(e: MouseEvent, runId: string | null, opts?: { new?: true }): void {
   if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
-  openManager(runId);
+  openManager(runId, opts);
 }
 
-function GoalPicker({ live, why, on, waiting, away }: { live: Run[]; why: Why; on: string; waiting: string[]; away: string[] }) {
+function GoalPicker({ live, why, on, waiting, away, fresh }: { live: Run[]; why: Why; on: string; waiting: string[]; away: string[]; fresh: boolean }) {
   const now = useNow();
+  const phone = useMedia(PHONE);
   const heading = why === "ended" ? "This goal has ended" : why === "none" || why === "not a goal" || why === "hidden" ? "Pick a goal" : `Waiting for ${on}`;
   return (
-    <main className="mgr-view mgr-pick">
+    <main className={`mgr-view mgr-pick${phone ? " phone" : ""}`}>
       <h1 className="mgr-goal-text">{heading}</h1>
       {why === "ended" && <p className="mgr-sub">canopy no longer holds that coordinator. The goals going now are below.</p>}
       {why === "not a goal" && <p className="mgr-sub">That run is not a coordinator.</p>}
@@ -154,6 +163,7 @@ function GoalPicker({ live, why, on, waiting, away }: { live: Run[]; why: Why; o
           Goals on {names(away)} are not listed until this page reaches {away.length === 1 ? "it" : "them"}.
         </p>
       )}
+      <GoalComposer autoFocus={fresh} />
       {live.length === 0 ? (
         waiting.length === 0 && <p className="mgr-empty">No coordinator is running.</p>
       ) : (
@@ -294,6 +304,7 @@ function GoalHead({ coord, goal, act }: { coord: Run; goal: Goal; act: Act }) {
             {goal.waiting} {goal.waiting === 1 ? "waits" : "wait"} on you
           </span>
         </p>
+        {isGoalAnchor(coord.repoId) && <p className="mgr-top">goal from the top</p>}
       </div>
       {going && (
         <div className="mgr-head-acts">
@@ -301,6 +312,9 @@ function GoalHead({ coord, goal, act }: { coord: Run; goal: Goal; act: Act }) {
           <button type="button" className="mini" aria-expanded={adding} title="Put a card of your own in this goal's plan" onClick={() => setAdding(!adding)}>
             add a task
           </button>
+          <a className="mini" href={managerUrl(null, { new: true })} title="Start another goal from the top" onClick={(e) => follow(e, null, { new: true })}>
+            new goal
+          </a>
           <button
             type="button"
             className={`mini mgr-end${ending ? " on" : ""}`}
