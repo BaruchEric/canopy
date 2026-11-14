@@ -678,6 +678,11 @@ export function projectStep(s: Pick<Sprout, "status" | "questions" | "parked" | 
   }
 }
 
+/** Whether a project card's outcome is a wait on Eric: the answers, the yes
+ *  or a park. The page reads it where it holds no sprout. */
+export const isProjectWait = (outcome: string | undefined): boolean =>
+  outcome === "the project waits on your answers in the incubator" || outcome === "the project waits on your yes in the incubator" || (outcome !== undefined && outcome.startsWith("the project is parked: "));
+
 /** The note a project card sends into its coordinator's chat: one line while
  *  it waits, `settleNote`'s four lines once it is done or failed. */
 export function projectNote(task: CoordTask, words: string, state: "waits" | "done" | "failed"): string {

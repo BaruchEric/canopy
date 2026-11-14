@@ -4,7 +4,7 @@
 
 import type { RunGroup } from "../../src/core/group";
 import { isFlowActive, isRunActive, type CardEquip, type CoordTask, type Flow, type LandingInfo, type PrWatch, type Run, type RunStep } from "../../src/core/types";
-import { cardCarries, cardCounts } from "../../src/core/coordinator";
+import { cardCarries, cardCounts, isProjectCard, isProjectWait } from "../../src/core/coordinator";
 import { flowWord } from "./flows";
 import { groupWord } from "./groups";
 import { SEP } from "../../src/core/backendid";
@@ -138,6 +138,8 @@ export function cardStatus(
         const asks = flow.status === "gated" || flow.status === "waiting";
         return { word: asks ? "needs you" : "running", tone: asks ? "lichen" : "sky", line: flowWord(flow, true) };
       }
+      // a project card follows its sprout: it waits on Eric while the outcome says so
+      if (isProjectCard(task)) return isProjectWait(task.outcome) ? { word: "needs you", tone: "lichen", line: task.outcome ?? "" } : { word: "running", tone: "sky", line: task.outcome ?? "" };
       if (!child) return { word: "running", tone: "sky", line: task.outcome ?? "" };
       if (isRunActive(child)) return { word: child.status === "waiting" ? "needs you" : "running", tone: child.status === "waiting" ? "lichen" : "sky", line, ...withPr };
       const word = pr ? prWord(pr) : (runLanding(child, landing)?.word ?? "settling");
@@ -195,6 +197,8 @@ export function cardEdit(task: CoordTask, d: CardDraft): CoordEdit {
   if (task.state !== "proposed") return out;
   const title = d.title.trim();
   const note = d.note.trim();
+  // a project card takes only title, note and after; the server refuses the rest
+  if (isProjectCard(task)) return { ...(title !== task.title ? { title } : {}), ...(note !== task.note ? { note } : {}), ...(!sameList(after, task.after ?? []) ? { after: after.length > 0 ? after : null } : {}) };
   // a workflow goes again with a new repo, so the server checks the new repo has it
   const flowSame =
     d.workflow === null ? task.workflow === undefined : d.workflow.name === task.workflow && d.workflow.fromRepo === (task.workflowRepo === true) && d.repo === task.repo;

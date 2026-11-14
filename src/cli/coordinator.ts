@@ -80,13 +80,14 @@ export function coordinatorLines(runs: Run[]): string[] {
     .map((run) => [run.id, run.repoId, run.held ? "held" : "", cardCounts(run.tasks ?? []), firstLine(run.note)].filter((field) => field !== "").join("  "));
 }
 
-/** one coordinator's cards, columns padded: id, state, repo, loadout, workflow, after, files, tree, title */
+/** one coordinator's cards, columns padded: id, state, repo, loadout, workflow, after, files, tree, sprout, title.
+ *  A project card's repo reads new project, and its sprout's id gets a column. */
 export function cardLines(run: Run): string[] {
   const rows = (run.tasks ?? []).map((task) => {
     const carries = cardCarries(task);
-    return [task.id, task.state, task.repo, carries.loadout?.word ?? "", carries.workflow ?? "", carries.after ?? "", carries.files ?? "", carries.tree ?? ""];
+    return [task.id, task.state, carries.project ?? task.repo, carries.loadout?.word ?? "", carries.workflow ?? "", carries.after ?? "", carries.files ?? "", carries.tree ?? "", task.sprout ? `sprout ${task.sprout}` : ""];
   });
-  const widths = [0, 1, 2, 3, 4, 5, 6, 7].map((col) => Math.max(0, ...rows.map((row) => row[col]?.length ?? 0)));
+  const widths = [0, 1, 2, 3, 4, 5, 6, 7, 8].map((col) => Math.max(0, ...rows.map((row) => row[col]?.length ?? 0)));
   return (run.tasks ?? []).map((task, i) => {
     const row = rows[i] ?? [];
     const cells = row.map((cell, col) => cell.padEnd(widths[col] ?? 0)).filter((_, col) => (widths[col] ?? 0) > 0);

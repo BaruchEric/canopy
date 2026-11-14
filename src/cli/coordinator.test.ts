@@ -35,6 +35,14 @@ test("cardLines shows the goal's files a card takes, after the cards it waits fo
   ]);
 });
 
+test("cardLines reads new project for a project card's repo and adds its sprout column", () => {
+  const tasks = [card("t1", { title: "a shop", repo: "~goal", action: "project", sprout: "sp_0123456789ab" }), card("t2", { title: "other" })];
+  expect(cardLines(coord("c1", { tasks }))).toEqual([
+    "t1  proposed  new project   sprout sp_0123456789ab  a shop",
+    "t2  proposed  playground/x" + " ".repeat(26) + "other",
+  ]);
+});
+
 test("cardLines puts the tree a card runs in after the files column", () => {
   const tasks = [card("t1", { title: "tree work", files: ["a.md"], tree: "feat/x" }), card("t2", { title: "other" })];
   expect(cardLines(coord("c1", { tasks }))).toEqual([

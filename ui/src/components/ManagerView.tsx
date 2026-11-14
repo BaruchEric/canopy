@@ -201,7 +201,8 @@ function GoalView({ coord }: { coord: Run }) {
   const loadouts = useStore((s) => s.kit[backendOf(coord.id)]?.loadouts?.loadouts) ?? NO_LOADOUTS;
   const trees = useStore((s) => s.trees);
   const repos = useStore((s) => s.repos);
-  const rows = useMemo(() => managerRows(coord, { runs, flows, landing, prs, loadouts, trees, repos }), [coord, runs, flows, landing, prs, loadouts, trees, repos]);
+  const sprouts = useStore((s) => s.sprouts);
+  const rows = useMemo(() => managerRows(coord, { runs, flows, landing, prs, loadouts, trees, repos, sprouts }), [coord, runs, flows, landing, prs, loadouts, trees, repos, sprouts]);
   // the ring and lane picked: a card's id, or "manager" for the chat
   const [picked, setPicked] = useState<string | null>(null);
   // the card whose equip sheet is open
@@ -506,6 +507,21 @@ function Needs({ coord, needs, act }: { coord: Run; needs: readonly Need[]; act:
                 <GateAnswer need={n} act={act} />
               ) : n.kind === "landing" ? (
                 <LandingAnswer need={n} act={act} />
+              ) : n.kind === "project" ? (
+                <div className="mgr-need-acts">
+                  <button
+                    type="button"
+                    className="mini strong"
+                    title="Open the project in the incubator"
+                    onClick={() => {
+                      if (!n.sprout) return;
+                      openView("incubator");
+                      useStore.getState().showSprout(n.sprout);
+                    }}
+                  >
+                    open in incubator
+                  </button>
+                </div>
               ) : (
                 <div className="mgr-need-acts">
                   <button type="button" className="mini strong" title="Every proposed card joins the queue; at most 3 run at once" onClick={() => void act(() => useStore.getState().coordStart(coord.id))}>
@@ -754,6 +770,12 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
     openView("git");
     useStore.getState().openPanel(cardId);
   };
+  // a project card's sprout opens its sheet in the incubator view
+  const openProject = () => {
+    if (!lane.sprout) return;
+    openView("incubator");
+    useStore.getState().showSprout(lane.sprout);
+  };
   const open = () => {
     const s = useStore.getState();
     if (flowId) s.showFlow(flowId);
@@ -842,6 +864,11 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
           {lane.tree?.cardId && (
             <button type="button" className="mini" title="Open the tree's own card: its changes, files, tasks, preview and shells" onClick={openTree}>
               open tree
+            </button>
+          )}
+          {lane.sprout && (
+            <button type="button" className="mini" title="Open the project in the incubator" onClick={openProject}>
+              open in incubator
             </button>
           )}
           {(runId || flowId) && (

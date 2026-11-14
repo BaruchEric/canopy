@@ -93,6 +93,9 @@ describe("shapes", () => {
     // a card's flow and branch are the backend's ids; after names cards, not ids
     expect(coord.tasks?.[2]).toMatchObject({ flow: "mac|f1", branch: "mac|b1", after: ["t1"] });
     expect(coord.tasks?.[0]?.flow).toBeUndefined();
+    // a project card's sprout is the backend's, like the store's sprout keys
+    const proj = qRun(q, { ...run, tasks: [{ id: "t1", title: "x", repo: "~goal", note: "n", action: "project", state: "running", sprout: "sp_0123456789ab" }] } as Run);
+    expect(proj.tasks?.[0]).toMatchObject({ repo: "mac|~goal", sprout: "mac|sp_0123456789ab" });
     // a tree card's own repo id is the backend's; its branch is a git name and stays
     const treed = qRun(q, { ...run, tasks: [{ id: "t1", title: "x", repo: "a/b", note: "n", action: "ask", state: "running", tree: "feat/x", treeRepo: "trees:app/feat-x" }] } as Run);
     expect(treed.tasks?.[0]).toMatchObject({ tree: "feat/x", treeRepo: "mac|trees:app/feat-x" });

@@ -88,6 +88,12 @@ describe("a card's status", () => {
     expect(cardStatus(t, child, none, [])).toMatchObject({ word: "running", tone: "sky", line: "reading the tests" });
     expect(cardStatus(t, { ...child, status: "waiting" }, none, []).word).toBe("needs you");
   });
+  test("a running project card reads needs you while its outcome waits on Eric, else running", () => {
+    const t = card({ action: "project", repo: "~goal", sprout: "sp_0123456789ab", state: "running" });
+    expect(cardStatus({ ...t, outcome: "the project waits on your answers in the incubator" }, undefined, none, [])).toEqual({ word: "needs you", tone: "lichen", line: "the project waits on your answers in the incubator" });
+    expect(cardStatus({ ...t, outcome: "the project is parked: no key" }, undefined, none, []).word).toBe("needs you");
+    expect(cardStatus({ ...t, outcome: "in the incubator: building" }, undefined, none, [])).toEqual({ word: "running", tone: "sky", line: "in the incubator: building" });
+  });
   test("a running flow card says needs you while its flow is parked at a gate or waits on a prompt", () => {
     const flow: Flow = { id: "f1", repoId: "canopy", workflow: "review", verb: "review", note: "n", status: "working", steps: [{ name: "Build", status: "running" }, { name: "Check", status: "pending" }], current: 0, startedAt: 1 };
     const t = card({ state: "running", flow: "f1", branch: "b1" });
@@ -214,6 +220,11 @@ describe("what a card carries, for its facts line", () => {
 });
 
 describe("what a card's form sends", () => {
+  test("a project card's edit never sends repo, action, times or workflow", () => {
+    const t = card({ action: "project", repo: "~goal", sprout: undefined });
+    const d = { ...cardDraft(t), title: "a shop", note: "sell things", repo: "canopy", action: "ask" as const, times: 3, workflow: { name: "review", fromRepo: false }, after: "t2" };
+    expect(cardEdit(t, d)).toEqual({ title: "a shop", note: "sell things", after: ["t2"] });
+  });
   test("nothing while nothing changed, whatever the card carries", () => {
     const t = card({ equip: { loadout: "feature", model: "sonnet" }, workflow: "review", workflowRepo: true, after: ["t2", "t3"] });
     expect(cardEdit(t, cardDraft(t))).toEqual({});

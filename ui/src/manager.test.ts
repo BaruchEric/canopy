@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { BranchTree, BranchTreesInfo, CoordTask, Flow, FlowStep, LandEntry, LandingInfo, LandingRun, Loadout, PrWatch, Run, RunBranch, RunPrompt, RunReview, RunStep } from "../../src/core/types";
 import type { RunGroup } from "../../src/core/group";
 import type { Repo } from "../../src/core/types";
+import type { Sprout } from "../../src/core/types";
+import { stageStrip } from "./sprouts";
 import { chatAim, liveCoordinators, managerRows, sayTarget, waves, type Lane, type ManagerInputs } from "./manager";
 
 // a run's branch id is b-<run id>, so a test that mixes up a run's id and
@@ -720,5 +722,58 @@ describe("a card in a kept tree", () => {
     const last = (task: CoordTask, r: Run) => lane(task, { runs: runsOf(r) })?.steps.at(-1);
     expect(last(tcard(), tr)).toEqual({ label: "tree", tone: "moss" });
     expect(last(tcard({ state: "running" }), { ...tr, status: "working" })).toEqual({ label: "tree", tone: "hair" });
+  });
+});
+
+
+describe("a project card", () => {
+  const SP = "sp_0123456789ab";
+  const sprout = (over: Partial<Sprout> = {}): Sprout => ({
+    id: SP, slug: "shop", title: "A shop", status: "building", repoId: "_incubator/shop", seedPath: "/r/_incubator/shop", prepared: true,
+    inputs: [], clarified: true, reclarify: false, flows: [], spent: { runs: 0, workMs: 0 }, createdAt: 1, updatedAt: 1, ...over,
+  });
+  const proj = (over: Partial<CoordTask> = {}): CoordTask => card({ id: "t1", title: "a shop", repo: "~goal", action: "project", state: "running", sprout: SP, outcome: "in the incubator: building", ...over });
+  const rows = (t: CoordTask, sprouts: Record<string, Sprout> = {}) => managerRows(coord([t]), at({ sprouts }));
+
+  test("its ring and lane follow the sprout's stages, with no run and no say", () => {
+    const sp = sprout();
+    const r = rows(proj(), { [SP]: sp });
+    const strip = stageStrip(sp);
+    const ring = r.rings.find((x) => x.id === "t1");
+    expect(ring?.arcs.map((a) => a.label)).toEqual(strip.map((x) => x.stage));
+    expect(ring?.arcs.find((a) => a.label === strip.find((x) => x.mark === "now")?.stage)?.tone).toBe("sky");
+    expect(ring?.repo).toBe("new project");
+    const lane = r.lanes[0];
+    expect(lane?.sprout).toBe(SP);
+    expect(lane?.runId).toBeNull();
+    expect(lane?.repo).toBe("new project");
+    expect(lane?.say).toEqual({ kind: "none", why: "its project is in the incubator; answer it there" });
+    expect(lane?.canStop).toBe(false);
+  });
+
+  test("a sprout waiting on answers makes the card lichen and adds one need", () => {
+    const sp = sprout({ status: "clarifying", clarified: false, questions: [{ question: "which?", header: "", options: [], multiSelect: false }] });
+    const r = rows(proj({ outcome: "the project waits on your answers in the incubator" }), { [SP]: sp });
+    expect(r.rings.find((x) => x.id === "t1")?.tone).toBe("lichen");
+    expect(r.needs).toHaveLength(1);
+    expect(r.needs[0]).toMatchObject({ card: "t1", kind: "project", sprout: SP, what: "the project waits on your answers in the incubator" });
+  });
+
+  test("the outcome alone says it waits when the page holds no sprout yet, with one hair arc", () => {
+    const r = rows(proj({ outcome: "the project waits on your yes in the incubator" }));
+    expect(r.rings.find((x) => x.id === "t1")?.tone).toBe("lichen");
+    expect(r.rings.find((x) => x.id === "t1")?.arcs).toEqual([{ label: "incubator", tone: "hair" }]);
+    expect(r.needs).toHaveLength(1);
+    const quiet = rows(proj());
+    expect(quiet.needs).toHaveLength(0);
+    expect(quiet.rings.find((x) => x.id === "t1")?.arcs).toEqual([{ label: "incubator", tone: "hair" }]);
+  });
+
+  test("a done project card has every arc moss", () => {
+    const sp = sprout({ status: "live" });
+    const r = rows(proj({ state: "done", outcome: "live as shop" }), { [SP]: sp });
+    const arcs = r.rings.find((x) => x.id === "t1")?.arcs ?? [];
+    expect(arcs.length).toBeGreaterThan(1);
+    expect(arcs.every((a) => a.tone === "moss")).toBe(true);
   });
 });

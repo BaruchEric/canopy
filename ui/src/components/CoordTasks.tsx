@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { isProjectCard } from "../../../src/core/coordinator";
 import { isSeedId } from "../../../src/core/sprout";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
+import { openView } from "../clirun";
 import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, parentCard, type CardDraft, type CoordView, chainWords } from "../coord";
 import { groupReviews } from "../groups";
 import { loadoutLabel, loadoutsFor } from "../loadouts";
@@ -179,6 +181,27 @@ export function FlowButton({ task }: { task: CoordTask }) {
   );
 }
 
+/** A project card's way to its sprout: the incubator view with its sheet
+ *  open, by the card's `sprout`, which `qRun` qualified. Hook-free like
+ *  FlowButton. */
+export function ProjectButton({ task }: { task: CoordTask }) {
+  const id = task.sprout;
+  if (!id) return null;
+  return (
+    <button
+      type="button"
+      className="mini"
+      title="Open the project in the incubator"
+      onClick={() => {
+        openView("incubator");
+        useStore.getState().showSprout(id);
+      }}
+    >
+      open in incubator
+    </button>
+  );
+}
+
 function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) {
   const child = useStore((s) => (task.run ? s.runs[task.run] : undefined));
   const flow = useStore((s) => (task.flow ? s.flows[task.flow] : undefined));
@@ -204,7 +227,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
         <span className={`coord-chip ${status.tone}`}>{status.word}</span>
       </div>
       <div className="facts">
-        <span className="branch">{idText(task.repo)}</span>
+        {!isProjectCard(task) && <span className="branch">{idText(task.repo)}</span>}
         <span className="branch">{ACTION_WORD[task.action]}</span>
         {task.times !== undefined && task.times > 1 && <span className="branch">best of {task.times}</span>}
         {carries.loadout && (
@@ -237,7 +260,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
       {!(editing && editable && task.state === "proposed") && <p className="coord-note">{task.note}</p>}
       {editing && editable && <CardForm run={run} task={task} act={act} onDone={() => setEditing(false)} />}
       {status.line && <p className={task.state === "failed" ? "coord-line err" : "coord-line"}>{status.line}</p>}
-      {(status.pr || (editable && !editing) || child || group || task.flow) && (
+      {(status.pr || (editable && !editing) || child || group || task.flow || task.sprout) && (
         <div className="coord-actions">
           {status.pr && (
             <a className="run-pr-link" href={status.pr.url} target="_blank" rel="noreferrer" title={`${status.pr.slug} #${status.pr.number}`}>
@@ -263,6 +286,7 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
             </button>
           )}
           <FlowButton task={task} />
+          <ProjectButton task={task} />
           {group && (
             <button type="button" className="mini" title="Open the group this card started" onClick={() => showGroup(group.id)}>
               open the group
@@ -294,6 +318,8 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
   const kitLoadouts = useStore((s) => s.kit[backend]?.loadouts?.loadouts);
   const choices = repos.filter((r) => backendOf(r.id) === backend && !r.host && !r.forge && !isSeedId(r.id));
   const proposed = task.state === "proposed";
+  // a project card takes title, note and after; the server refuses the rest
+  const project = isProjectCard(task);
   const first = cardDraft(task);
   const [title, setTitle] = useState(first.title);
   const [note, setNote] = useState(first.note);
@@ -308,11 +334,11 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
   // the card's repo's files at @; the child run's harness is the repo's
   // routing's, not known here, so no commands
   const mentions = useMentions({ box: noteBox, text: note, setText: setNote, repoId: repo, side: "below" });
-  const entries = useStore((s) => (proposed ? s.workflows[repo] : undefined));
+  const entries = useStore((s) => (proposed && !project ? s.workflows[repo] : undefined));
   useEffect(() => {
     // an older backend, or a repo it cannot read, offers no workflow beyond the card's own
-    if (proposed) loadWorkflows(repo).catch(() => {});
-  }, [proposed, repo, loadWorkflows]);
+    if (proposed && !project) loadWorkflows(repo).catch(() => {});
+  }, [proposed, project, repo, loadWorkflows]);
 
   const flows = (entries ?? []).flatMap((e) => (e.ok && e.workflow.listed !== false ? [{ name: e.workflow.name, fromRepo: e.workflow.source === "repo" }] : []));
   if (workflow && !flows.some((w) => flowKey(w) === flowKey(workflow))) flows.unshift(workflow);
@@ -378,6 +404,7 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
             aria-label="Card title"
             onChange={(e) => setTitle(e.target.value)}
           />
+          {!project && (
           <div className="coord-form-row">
             <select className="settings-input" value={repo} aria-label="Repo" onChange={(e) => setRepo(e.target.value)}>
               {!choices.some((r) => r.id === task.repo) && <option value={task.repo}>{plainOf(task.repo)}</option>}
@@ -404,11 +431,12 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
               <option value={3}>best of 3</option>
             </select>
           </div>
+          )}
         </>
       )}
       <div className="coord-form-row">
-        {loadoutPick}
-        {proposed && (
+        {!project && loadoutPick}
+        {proposed && !project && (
           <select
             className="settings-input"
             value={flowKey(workflow)}

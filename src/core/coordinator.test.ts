@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterMet, afterWait, isRunCard, projectNote, projectStep, PROJECT_GONE, blockedNote, cardCarries, isProjectCard, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterMet, afterWait, isProjectWait, isRunCard, projectNote, projectStep, PROJECT_GONE, blockedNote, cardCarries, isProjectCard, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -1020,6 +1020,17 @@ describe("a project card (FR-067 plan 3)", () => {
 describe("a project card", () => {
   const proj = (id: string, state: CoordTask["state"] = "queued", over: Partial<CoordTask> = {}): CoordTask => ({ id, title: "a tide chart app", repo: "~goal", note: "n", action: "project", state, ...over });
   const sp = (over: Record<string, unknown> = {}) => ({ status: "building" as const, slug: "tides", ...over });
+
+  test("isProjectWait is true for the three needs-you outcomes only", () => {
+    for (const status of ["clarifying", "approving", "parked"] as const) {
+      const step = projectStep(sp({ status, questions: [{ id: "q", text: "which?" }], parked: "no key" }));
+      expect("wait" in step && isProjectWait(step.wait)).toBe(true);
+    }
+    expect(isProjectWait("in the incubator: building")).toBe(false);
+    expect(isProjectWait("in the incubator: clarifying")).toBe(false);
+    expect(isProjectWait("live as tides")).toBe(false);
+    expect(isProjectWait(undefined)).toBe(false);
+  });
 
   test("projectStep maps each sprout status", () => {
     expect(projectStep(sp({ status: "clarifying", questions: [{ id: "q", text: "which?" }] }))).toEqual({ wait: "the project waits on your answers in the incubator", needsYou: true });

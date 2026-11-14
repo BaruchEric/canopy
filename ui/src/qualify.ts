@@ -79,6 +79,8 @@ export const qRun = (q: Q, r: Run): Run => ({
           ...t,
           repo: q(t.repo),
           ...(t.run !== undefined ? { run: q(t.run) } : {}),
+          // a project card's sprout is the backend's, like the store's sprout keys
+          ...(t.sprout !== undefined ? { sprout: q(t.sprout) } : {}),
           ...(t.group !== undefined ? { group: q(t.group) } : {}),
           ...(t.flow !== undefined ? { flow: q(t.flow) } : {}),
           ...(t.branch !== undefined ? { branch: q(t.branch) } : {}),

@@ -9,7 +9,7 @@
  *  (to come), a dropped one (rust) and a settled one that waits on Eric. */
 
 import { SEP } from "../../src/core/backendid";
-import { cardLanded } from "../../src/core/coordinator";
+import { cardLanded, isProjectCard, isProjectWait, projectStep } from "../../src/core/coordinator";
 import type { RunGroup } from "../../src/core/group";
 import { entryRefusal, followupRefusal, pickupRefusal } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
@@ -28,9 +28,11 @@ import {
   type Repo,
   type Run,
   type RunPrompt,
+  type Sprout,
   type StepStatus,
 } from "../../src/core/types";
 import { repoTrees } from "./trees";
+import { stageStrip, type StageMark } from "./sprouts";
 import { cardCarries, cardCounts, cardStatus, childLine, coordTurn, stepLine } from "./coord";
 import { gateWords, STEP_WORD } from "./flows";
 import { backLine, inQueue, runLanding, sentBack, stoppedWhole, verdictWord } from "./landing";
@@ -39,18 +41,24 @@ import { equipTitle } from "./loadouts";
 export type Tone = "sky" | "lichen" | "moss" | "rust" | "hair";
 export interface Arc { label: string; tone: Tone }
 export interface Ring { id: string; title: string; repo: string | null; word: string; tone: Tone; model: string | null; arcs: Arc[]; at: string | null; wave: number }
-export type NeedKind = "prompt" | "gate" | "landing" | "cards";
-export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean }
+export type NeedKind = "prompt" | "gate" | "landing" | "cards" | "project";
+export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean;
+  /** a project card's sprout, the lane to open in the incubator */
+  sprout?: string }
 export type SayTarget = { kind: "steer"; runId: string } | { kind: "followup"; landingId: string } | { kind: "tree"; coordId: string; cardId: string; branch: string } | { kind: "none"; why: string };
 /** The kept tree a card runs in: its branch, the tree's state once the page
  *  holds the trees list, and the tree's own card (a repo id) once there is one. */
 export interface LaneTree { branch: string; state: BranchTreeState | null; cardId: string | null }
-export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget; tree: LaneTree | null }
+export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null;
+  /** a project card makes a new project: its sprout's id, null before it starts */
+  project: boolean; sprout: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget; tree: LaneTree | null }
 export interface Goal { text: string; model: string | null; effort: string | null; startedAt: number; working: number; waiting: number; held: boolean; ended: boolean }
 export interface ManagerRows { goal: Goal; rings: Ring[]; needs: Need[]; lanes: Lane[] }
 export interface ManagerInputs { runs: Record<string, Run>; flows: Record<string, Flow>; landing: LandingInfo; prs: readonly PrWatch[]; loadouts: readonly Loadout[];
   /** the kept trees by backend and the page's repos: without them a tree card's lane knows no state and no card */
-  trees?: Readonly<Record<string, BranchTreesInfo>>; repos?: readonly Repo[] }
+  trees?: Readonly<Record<string, BranchTreesInfo>>; repos?: readonly Repo[];
+  /** the incubator's sprouts by qualified id, for a project card's ring */
+  sprouts?: Readonly<Record<string, Sprout>> }
 
 const STEP_TONE: Record<StepStatus, Tone> = {
   running: "sky",
@@ -66,7 +74,7 @@ const STEP_TONE: Record<StepStatus, Tone> = {
 const notStarted = (t: Pick<CoordTask, "state">): boolean => t.state === "proposed" || t.state === "queued";
 
 /** "t2, homelab": the card and its repo as a person reads it, without the backend's name. */
-const whoOf = (t: CoordTask): string => `${t.id}, ${t.repo.split(SEP).pop() ?? t.repo}`;
+const whoOf = (t: CoordTask): string => `${t.id}, ${isProjectCard(t) ? "new project" : (t.repo.split(SEP).pop() ?? t.repo)}`;
 
 /** When a run last did something: its newest step, else its start. */
 const lastAt = (r: Run): number => r.steps[r.steps.length - 1]?.at ?? r.startedAt;
@@ -216,6 +224,8 @@ interface Work {
    *  over by its last step's run) */
   landed: Run | undefined;
   group: RunGroup | undefined;
+  /** a project card's sprout, once the page holds it */
+  sprout: Sprout | undefined;
 }
 
 function workOf(task: CoordTask, at: ManagerInputs): Work {
@@ -225,7 +235,8 @@ function workOf(task: CoordTask, at: ManagerInputs): Work {
   const branch = branchOf(task, worker, flow, at.landing);
   const landed = flow && isFlowActive(flow) ? undefined : (run ?? (branch.rec ? at.runs[branch.rec.runId] : undefined));
   const group = task.group ? at.landing.groups?.find((g) => g.id === task.group) : undefined;
-  return { task, run, flow, worker, branch, landed, group };
+  const sprout = task.sprout !== undefined ? at.sprouts?.[task.sprout] : undefined;
+  return { task, run, flow, worker, branch, landed, group, sprout };
 }
 
 /* ---------- rings ---------- */
@@ -312,8 +323,34 @@ function inHand(arcs: readonly Arc[]): string | null {
   return `${i < 0 ? arcs.length : i + 1}/${arcs.length}`;
 }
 
+const MARK_TONE: Record<StageMark, Tone> = { done: "moss", now: "sky", stuck: "lichen", todo: "hair" };
+
+/** A project card's arcs: its sprout's stages, all moss once the card is
+ *  done, the running one rust once it failed. Before the page holds the
+ *  sprout, one hair arc. */
+function projectArcs(w: Work): Arc[] {
+  if (!w.sprout) return [{ label: "incubator", tone: w.task.state === "done" ? "moss" : w.task.state === "failed" ? "rust" : "hair" }];
+  const { state } = w.task;
+  return stageStrip(w.sprout).map(({ stage, mark }) => ({ label: stage, tone: state === "done" ? "moss" : state === "failed" && mark === "now" ? "rust" : MARK_TONE[mark] }));
+}
+
+/** The words a project card waits on Eric with, or null: the sprout's own
+ *  when the page holds it, else the card's outcome. */
+function projectAsk(w: Work): string | null {
+  if (!isProjectCard(w.task) || w.task.state !== "running") return null;
+  if (w.sprout) {
+    const step = projectStep(w.sprout);
+    return "wait" in step && step.needsYou ? step.wait : null;
+  }
+  return isProjectWait(w.task.outcome) ? (w.task.outcome ?? null) : null;
+}
+
 /** A card's arcs: its flow's steps, else its lifecycle. */
 function arcsOf(w: Work, prs: readonly PrWatch[]): { arcs: Arc[]; at: string | null } {
+  if (isProjectCard(w.task)) {
+    const arcs = projectArcs(w);
+    return { arcs, at: notStarted(w.task) ? null : inHand(arcs) };
+  }
   const f = w.flow;
   if (f && f.steps.length > 0) return { arcs: f.steps.map((s) => ({ label: s.name, tone: STEP_TONE[s.status] })), at: `${Math.min(f.current, f.steps.length - 1) + 1}/${f.steps.length}` };
   const watch = w.branch.origin ? prs.find((p) => p.id === w.branch.origin) : undefined;
@@ -445,6 +482,8 @@ function landingNeed(w: Work, landing: LandingInfo): Need | null {
  *  group's member runs and its flow's step runs, its flow's gate, its
  *  branch's landing. */
 function cardNeeds(w: Work, at: ManagerInputs): Need[] {
+  const ask = projectAsk(w);
+  if (ask !== null) return [{ key: `project:${w.task.id}`, kind: "project", card: w.task.id, who: whoOf(w.task), what: ask, detail: "", since: w.sprout?.updatedAt ?? 0, ...(w.task.sprout !== undefined ? { sprout: w.task.sprout } : {}) }];
   const out: (Need | null)[] = [promptNeed(w.run, w.task)];
   for (const m of w.group?.members ?? []) out.push(promptNeed(at.runs[m.run], w.task));
   if (w.flow) {
@@ -508,7 +547,7 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     const line = sr ? childLine(sr) : "";
     return s && line ? `${s.name}: ${line}` : look.line;
   })();
-  const say = task.tree ? treeSayTarget(task, worker, coord) : sayTarget(task, worker, flow, at.landing, at.prs);
+  const say = isProjectCard(task) ? { kind: "none" as const, why: "its project is in the incubator; answer it there" } : task.tree ? treeSayTarget(task, worker, coord) : sayTarget(task, worker, flow, at.landing, at.prs);
   const fresh = notStarted(task);
   const c = look.carried;
   return {
@@ -516,7 +555,7 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     title: task.title,
     word: look.word,
     tone: look.tone,
-    repo: task.repo,
+    repo: isProjectCard(task) ? "new project" : task.repo,
     branch: run?.branch?.name ?? flow?.branch?.name ?? w.branch.rec?.branch ?? null,
     startedAt: run?.startedAt ?? flow?.startedAt ?? null,
     live: live || null,
@@ -530,10 +569,12 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     // the goal's files the card's worker takes (FR-067)
     files: cardCarries(task).files ?? null,
     runId: task.run ?? null,
+    project: isProjectCard(task),
+    sprout: task.sprout ?? null,
     flowId: task.flow ?? null,
     landingId: w.branch.rec?.id ?? null,
     // an ended goal's cards no longer change: no equip, no start
-    canEquip: fresh && isRunActive(coord),
+    canEquip: fresh && !isProjectCard(task) && isRunActive(coord),
     canStartNow: fresh && !coord.held && isRunActive(coord),
     canStop: (run !== undefined && isRunActive(run)) || (flow !== undefined && isFlowActive(flow)),
     // a resume is a follow-up with no words, so it applies where the server
@@ -602,7 +643,7 @@ export function managerRows(coord: Run, at: ManagerInputs): ManagerRows {
   };
   const rings: Ring[] = [
     manager,
-    ...cards.map(({ w, look }): Ring => ({ id: w.task.id, title: w.task.title, repo: w.task.repo, word: look.word, tone: look.tone, model: look.carried.model, arcs: look.arcs, at: look.at, wave: wave.get(w.task.id) ?? 0 })),
+    ...cards.map(({ w, look }): Ring => ({ id: w.task.id, title: w.task.title, repo: isProjectCard(w.task) ? "new project" : w.task.repo, word: look.word, tone: look.tone, model: look.carried.model, arcs: look.arcs, at: look.at, wave: wave.get(w.task.id) ?? 0 })),
   ];
   const lanes = cards.map(({ w, look }) => laneOf(w, coord, at, look));
   return {
