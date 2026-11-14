@@ -7,7 +7,7 @@ import type { RunGroup } from "../core/group";
 import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import type { WorkState } from "../core/work";
-import { CoordError, CoordinatorHub, type ChildResume, type CoordinatorDeps } from "./coordinator";
+import { CoordError, CoordinatorHub, type CardSprout, type ChildResume, type CoordinatorDeps } from "./coordinator";
 
 let runs: Map<string, Run>;
 let said: { id: string; text: string; cards?: string }[];
@@ -2486,5 +2486,261 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
     await settled(h);
     expect(tried.length).toBe(before);
     expect(card("t1")?.state).toBe("dropped");
+  });
+});
+
+describe("a project card (FR-067 plan 3)", () => {
+  const HOLD = "waiting for capacity: the 5-hour window is spent (resets 15:00)";
+  /** the sprouts the fake incubator holds, by id */
+  let sprouts: Map<string, CardSprout>;
+  /** how the next sprout a start makes reads when create answers */
+  let making: Omit<Partial<CardSprout>, "id">;
+  /** every card a start made a project of, `<coordinator>:<card>` */
+  let projects: string[];
+  let k: number;
+
+  beforeEach(() => {
+    sprouts = new Map();
+    making = {};
+    projects = [];
+    k = 0;
+  });
+
+  const project = (over: Record<string, unknown> = {}) => ({ title: "Shop", note: "a tiny shop", action: "project", ...over });
+
+  /** A hub whose start makes a sprout in a fake incubator, `sp_000000000001`
+   *  first, and whose `sprout` reads that incubator. */
+  function projectHub(over: Partial<CoordinatorDeps> = {}): CoordinatorHub {
+    return hub({
+      startProject: async (coordId, t) => {
+        projects.push(`${coordId}:${t.id}`);
+        const s: CardSprout = { id: `sp_${String(++k).padStart(12, "0")}`, slug: "shop", status: "queued", ...making };
+        sprouts.set(s.id, s);
+        return { sprout: s };
+      },
+      sprout: (id) => sprouts.get(id),
+      ...over,
+    });
+  }
+
+  /** the incubator moves a sprout and tells the hub, as its onChange does */
+  function move(h: CoordinatorHub, id: string, over: Omit<Partial<CardSprout>, "id">): void {
+    const s = sprouts.get(id);
+    if (!s) throw new Error(`no sprout ${id}`);
+    const next = { ...s, ...over };
+    sprouts.set(id, next);
+    h.onSprout(next);
+  }
+
+  test("start: the card goes running with its sprout and no run, and starts while three plain cards work", async () => {
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" }), task({ title: "three", repo: "api" }), task({ title: "four" }), project()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(cards().map((t) => [t.id, t.state])).toEqual([
+      ["t1", "running"],
+      ["t2", "running"],
+      ["t3", "running"],
+      ["t4", "queued"],
+      ["t5", "running"],
+    ]);
+    expect(card("t5")).toMatchObject({ action: "project", repo: "~goal", sprout: "sp_000000000001", outcome: "in the incubator: queued" });
+    expect(card("t5")?.run).toBeUndefined();
+    expect(projects).toEqual(["co1:t5"]);
+    expect(started.map((s) => s.task)).toEqual(["t1", "t2", "t3"]);
+    // a queued project card waits with no words of a repo's slots
+    expect(card("t4")?.outcome).toBeUndefined();
+  });
+
+  test("a sprout already clarifying with questions when create answers leaves the card running with the needs-you words and one note", async () => {
+    making = { status: "clarifying", questions: [{ question: "who buys?", header: "buyer", options: [], multiSelect: false }] };
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const WAITS = "the project waits on your answers in the incubator";
+    expect(card("t1")).toMatchObject({ state: "running", sprout: "sp_000000000001", outcome: WAITS });
+    // the same status again, as onChange sends on every change, says nothing more
+    move(h, "sp_000000000001", {});
+    h.recheck();
+    const heard = (await hearAll(h)).filter((x) => x.startsWith("t1 (new project"));
+    expect(heard).toEqual([`t1 (new project "Shop") ${WAITS}`]);
+    // a wait that is not on Eric says nothing; the next one on him says it again
+    move(h, "sp_000000000001", { status: "building", questions: [] });
+    expect(card("t1")?.outcome).toBe("in the incubator: building");
+    move(h, "sp_000000000001", { status: "parked", parked: "tests failed" });
+    expect((await hearAll(h)).filter((x) => x.startsWith("t1 (new project"))).toEqual([`t1 (new project "Shop") ${WAITS}`, 't1 (new project "Shop") the project is parked: tests failed']);
+  });
+
+  test("Review Focus 2: a sprout that moved after create answered, before the card held its id, is read again at the start", async () => {
+    const h = projectHub({
+      startProject: async (coordId, t) => {
+        projects.push(`${coordId}:${t.id}`);
+        const s: CardSprout = { id: "sp_000000000001", slug: "shop", status: "queued" };
+        // the incubator moved on and told a hub that had no card holding it yet
+        const moved: CardSprout = { ...s, status: "approving" };
+        sprouts.set(s.id, moved);
+        h.onSprout(moved);
+        return { sprout: s };
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [project()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", sprout: "sp_000000000001", outcome: "the project waits on your yes in the incubator" });
+    // dismissed before the card held its id: the card fails at once
+    coordinator({ id: "co2" });
+    const gone = projectHub({ startProject: async () => ({ sprout: { id: "sp_00000000000f", slug: "blog", status: "queued" } }) });
+    await post(gone, "plan", { run: "co2", tasks: [project()] });
+    await post(gone, "start", { run: "co2" });
+    await settled(gone);
+    expect(card("t1", "co2")).toMatchObject({ state: "failed", sprout: "sp_00000000000f", outcome: "the project was dismissed" });
+  });
+
+  test("a goal that ends leaves its running project card to settle on its sprout, with nothing said", async () => {
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project(), project({ title: "Blog", after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.status = "stopped";
+    h.onRun(co);
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["running", "dropped"]);
+    move(h, "sp_000000000001", { status: "live" });
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([
+      ["done", "live as shop"],
+      ["dropped", undefined],
+    ]);
+    expect(said).toEqual([]);
+    expect(projects).toEqual(["co1:t1"]);
+  });
+
+  test("onSprout live settles the card done with a note, and the card after it starts", async () => {
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project(), task({ after: ["t1"] })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waits for t1" });
+    move(h, "sp_000000000001", { status: "live", privateRepo: "BaruchEric/shop" });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "done", outcome: "live as shop, BaruchEric/shop" });
+    expect(card("t2")).toMatchObject({ state: "running", run: "c1" });
+    expect(await hearAll(h)).toContain(["canopy: a task you started has settled", "task t1: Shop (new project)", "outcome: done", "result: live as shop, BaruchEric/shop"].join("\n"));
+  });
+
+  test("onSprout rejected fails its card and onSproutGone fails a running one dismissed; neither touches another card or another goal", async () => {
+    coordinator({ id: "co2" });
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project(), project({ title: "Blog" })] });
+    await post(h, "start", { run: "co1" });
+    await post(h, "plan", { run: "co2", tasks: [project({ title: "Wiki" })] });
+    await post(h, "start", { run: "co2" });
+    await settled(h);
+    expect([card("t1")?.sprout, card("t2")?.sprout, card("t1", "co2")?.sprout]).toEqual(["sp_000000000001", "sp_000000000002", "sp_000000000003"]);
+    move(h, "sp_000000000001", { status: "rejected" });
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "the project was rejected" });
+    expect(card("t2")).toMatchObject({ state: "running", outcome: "in the incubator: queued" });
+    expect(card("t1", "co2")).toMatchObject({ state: "running", outcome: "in the incubator: queued" });
+    sprouts.delete("sp_000000000002");
+    h.onSproutGone("sp_000000000002");
+    expect(card("t2")).toMatchObject({ state: "failed", outcome: "the project was dismissed" });
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "the project was rejected" });
+    expect(card("t1", "co2")).toMatchObject({ state: "running", outcome: "in the incubator: queued" });
+    // a settled card holding a sprout that goes stays as it settled
+    h.onSproutGone("sp_000000000001");
+    expect(card("t1")?.outcome).toBe("the project was rejected");
+    const heard = await hearAll(h);
+    expect(heard).toContain(["canopy: a task you started has settled", "task t1: Shop (new project)", "outcome: failed", "result: the project was rejected"].join("\n"));
+    expect(heard).toContain(["canopy: a task you started has settled", "task t2: Blog (new project)", "outcome: failed", "result: the project was dismissed"].join("\n"));
+  });
+
+  test("recheck fails a card whose sprout is gone and settles one whose sprout is live; a running project card never fails for a run no longer kept", async () => {
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project(), project({ title: "Blog" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    h.recheck();
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([
+      ["running", "in the incubator: queued"],
+      ["running", "in the incubator: queued"],
+    ]);
+    // the incubator moved and the hub never heard: recheck reads it again
+    sprouts.delete("sp_000000000001");
+    const s2 = sprouts.get("sp_000000000002");
+    if (!s2) throw new Error("no sp_000000000002");
+    sprouts.set(s2.id, { ...s2, status: "handed-off" });
+    h.recheck();
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "the project was dismissed" });
+    expect(card("t2")).toMatchObject({ state: "done", outcome: "handed off as shop" });
+  });
+
+  test("a start that throws fails the card with its words; a hub with no startProject fails it in its own words", async () => {
+    const h = projectHub({
+      startProject: async () => {
+        throw new Error("NO");
+      },
+    });
+    await post(h, "plan", { run: "co1", tasks: [project()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "failed", outcome: "NO" });
+    expect(card("t1")?.sprout).toBeUndefined();
+    expect(await hearAll(h)).toContain(["canopy: a task you started could not start", "task t1: Shop (new project)", "outcome: failed", "result: NO"].join("\n"));
+
+    coordinator({ id: "co2" });
+    const bare = hub();
+    await post(bare, "plan", { run: "co2", tasks: [project()] });
+    await post(bare, "start", { run: "co2" });
+    await settled(bare);
+    expect(card("t1", "co2")).toMatchObject({ state: "failed", outcome: "this backend cannot make a project" });
+    expect(started).toEqual([]);
+  });
+
+  test("the governor holding a plain card leaves a project card free to start, and the capacity chip never lists it", async () => {
+    const h = projectHub({ startChild: async () => ({ busy: HOLD }) });
+    await post(h, "plan", { run: "co1", tasks: [task(), project(), task({ title: "two" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([
+      ["queued", HOLD],
+      ["running", "in the incubator: queued"],
+      ["queued", HOLD],
+    ]);
+    expect(h.heldStarts().map((x) => x.id)).toEqual(["card:co1:t1", "card:co1:t3"]);
+    await expect(h.release("co1", "t2")).rejects.toThrow("card t2 is not waiting for capacity");
+  });
+
+  test("a held goal starts no project card, and its queued one says the goal is held", async () => {
+    const h = projectHub();
+    await post(h, "plan", { run: "co1", tasks: [project()] });
+    await post(h, "hold", { run: "co1", held: true });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "queued", outcome: "the goal is held" });
+    expect(projects).toEqual([]);
+  });
+
+  test("the follow-up route refuses a project card", async () => {
+    const h = projectHub({ followTree: async () => ({ busy: "not reached" }) });
+    await post(h, "plan", { run: "co1", tasks: [project()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(await post(h, "followup", { run: "co1", id: "t1" })).toEqual({ status: 409, body: { error: "t1 is a project; answer it in the incubator" } });
+    move(h, "sp_000000000001", { status: "live" });
+    expect(await post(h, "followup", { run: "co1", id: "t1", note: "also y" })).toEqual({ status: 409, body: { error: "t1 is a project; answer it in the incubator" } });
+  });
+
+  test("the plan and tasks routes refuse a project card in the backend's own words", async () => {
+    const NO = "the incubator's stages are off";
+    const h = projectHub({ projects: () => NO });
+    expect(await post(h, "plan", { run: "co1", tasks: [task(), project()] })).toEqual({ status: 400, body: { error: `tasks[1]: ${NO}` } });
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.tasks = [{ id: "t1", title: "Shop", repo: "~goal", note: "a tiny shop", action: "project", state: "proposed" }];
+    expect(await post(h, "tasks", { run: "co1", id: "t1", title: "Store" })).toEqual({ status: 400, body: { error: `t1: ${NO}` } });
+    expect((await post(h, "plan", { run: "co1", tasks: [task()] })).status).toBe(200);
   });
 });

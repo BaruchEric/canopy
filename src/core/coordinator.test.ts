@@ -1047,6 +1047,18 @@ describe("a project card", () => {
     expect(nextToStart(tasks, { working: 3, repoFull, cards: tasks }).map((t) => t.id)).toEqual(["t4"]);
   });
 
+  test("with three plain cards working a queued plain card waits while a queued project card starts; held and first treat it as any card", () => {
+    const repoFull = (): boolean => false;
+    const tasks = [card("t1", "web", "running"), card("t2", "web", "running"), card("t3", "api", "running"), card("t4", "web"), proj("t5"), card("t6", "api")];
+    expect(nextToStart(tasks, { working: 3, repoFull, cards: tasks }).map((t) => t.id)).toEqual(["t5"]);
+    expect(nextToStart(tasks, { working: 3, repoFull, cards: tasks, held: true })).toEqual([]);
+    const queued = [card("t1", "web"), card("t2", "api"), proj("t3")];
+    expect(nextToStart(queued, { working: 0, repoFull, cards: queued, held: true })).toEqual([]);
+    expect(nextToStart(queued, { working: 0, repoFull, cards: queued, first: ["t3"] }).map((t) => t.id)).toEqual(["t3", "t1", "t2"]);
+    expect(nextToStart(queued, { working: 2, repoFull, cards: queued, first: ["t3"] }).map((t) => t.id)).toEqual(["t3", "t1"]);
+    expect(nextToStart(queued, { working: 2, repoFull, cards: queued, first: ["t2"] }).map((t) => t.id)).toEqual(["t2", "t3"]);
+  });
+
   test("afterMet and afterWait", () => {
     expect(afterMet(proj("t1", "done"))).toBe(true);
     expect(afterMet(proj("t1", "running"))).toBe(false);

@@ -27,11 +27,15 @@ import {
   landedNote,
   lateFailNote,
   laterOutcome,
+  isProjectCard,
   isTreeWait,
   MAX_NOTE,
   MAX_PLAN,
   MAY_LAND_LATER,
   nextToStart,
+  PROJECT_GONE,
+  projectNote,
+  projectStep,
   settleNote,
   startNote,
   treeNote,
@@ -42,7 +46,7 @@ import {
   type PlanContext,
 } from "../core/coordinator";
 import type { RunGroup } from "../core/group";
-import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type LoadoutsInfo, type Priority, type Run } from "../core/types";
+import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type LoadoutsInfo, type Priority, type Run, type Sprout } from "../core/types";
 import type { WorkSink, WorkState } from "../core/work";
 import type { Caller } from "./callers";
 
@@ -61,17 +65,22 @@ export class CoordError extends Error {
   }
 }
 
+/** What the hub reads of a project card's sprout in the incubator (FR-067). */
+export type CardSprout = Pick<Sprout, "id" | "status" | "questions" | "parked" | "slug" | "privateRepo">;
+
 /** What starting a card came to: its child run, the group a card with
  *  `times` started, the flow on a branch a card that names a workflow
- *  started, or the repo's branch slots are full. */
-export type ChildStart = { run: Run } | { group: RunGroup } | { flow: Flow } | { busy: string };
+ *  started, the sprout a project card made in the incubator, or the repo's
+ *  branch slots are full. */
+export type ChildStart = { run: Run } | { group: RunGroup } | { flow: Flow } | { sprout: CardSprout } | { busy: string };
 /** What resuming a child came to: a child resumes alone, as a run. */
-export type ChildResume = Exclude<ChildStart, { group: RunGroup } | { flow: Flow }>;
+export type ChildResume = Exclude<ChildStart, { group: RunGroup } | { flow: Flow } | { sprout: CardSprout }>;
 
 export interface CoordinatorDeps {
   run: (id: string) => Run | undefined;
   runs: () => Run[];
-  /** starts a card as a branch run with `parent` set to the coordinator and
+  /** starts a run card (never a project card, which goes to `startProject`)
+   *  as a branch run with `parent` set to the coordinator and
    *  `by` coordinator; throws when it cannot start at all. `priority` is
    *  normal unless a held card is released (FR-036); a start the governor
    *  holds answers busy with its words. */
@@ -85,6 +94,15 @@ export interface CoordinatorDeps {
    *  tree is made or another run holds it, and throws when the tree or its
    *  repo is gone (FR-067) */
   followTree?: (coordId: string, task: CoordTask, note: string | undefined, priority: Priority) => Promise<ChildResume>;
+  /** makes a project card's sprout in this backend's incubator, the card's
+   *  idea and goal files its intake; throws with the incubator's words when
+   *  it cannot take one. Absent, a project card fails at start (FR-067). */
+  startProject?: (coordId: string, task: CoordTask) => Promise<{ sprout: CardSprout }>;
+  /** a sprout by its id while the incubator keeps it, undefined once it is gone */
+  sprout?: (id: string) => CardSprout | undefined;
+  /** why this backend's incubator cannot take a project card now, in the
+   *  server's words, or null when it can; absent reads null (FR-067) */
+  projects?: () => string | null;
   /** the next user message into a chat (`Runner.say`); throws when it is not idle */
   say: (runId: string, text: string) => void;
   /** whether the repo has fewer than `need` branch slots free, one when absent */
@@ -133,6 +151,9 @@ const mayLandLater = (outcome: string | undefined): boolean => outcome !== undef
 /** A tree card whose child hit the limit and whose resume found its tree
  *  busy: it still waits after the limit, with the tree's words (FR-067). */
 const waitsForTree = (t: CoordTask): boolean => t.tree !== undefined && t.state === "running" && t.limited === 0 && isTreeWait(t.outcome);
+
+/** what a project card fails with when this backend has no incubator to make it in */
+const NO_PROJECTS = "this backend cannot make a project";
 
 /** a card with its outcome set, or taken off when `outcome` is undefined */
 function withOutcome(t: CoordTask, outcome: string | undefined): CoordTask {
@@ -289,7 +310,7 @@ export class CoordinatorHub {
     const coord = this.coordinator(b["run"], caller);
     const have = coord.tasks ?? [];
     let last = this.last(coord);
-    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by, files, treeCard: this.deps.treeCard ?? (() => false), projects: () => null });
+    const got = validatePlan(input, { known: this.deps.known, cards: have, next: last + 1, loadouts: this.deps.loadouts(), workflows, by, files, treeCard: this.deps.treeCard ?? (() => false), projects: this.deps.projects ?? (() => null) });
     if ("error" in got) throw new CoordError(got.error, 400);
     const added = got.tasks.map((t): CoordTask => ({ id: `t${++last}`, ...t, state: "proposed" }));
     this.numbers.set(coord.id, last);
@@ -331,7 +352,7 @@ export class CoordinatorHub {
     const workflows = await this.flowsFor([{ ...b, repo: b["repo"] ?? first.t.repo }], true);
     // the card may have moved while the workflows were read
     const { coord, tasks, t } = find();
-    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files, treeCard: this.deps.treeCard ?? (() => false), projects: () => null });
+    const got = editCard(t, b, { known: this.deps.known, cards: tasks, next: this.last(coord) + 1, loadouts: this.deps.loadouts(), workflows, by: this.by(caller), files, treeCard: this.deps.treeCard ?? (() => false), projects: this.deps.projects ?? (() => null) });
     // a field a queued card does not change is a conflict with its state, like a running card's
     if ("error" in got) throw new CoordError(got.error, got.error.startsWith(`${t.id} is `) ? 409 : 400);
     this.setTasks(
@@ -396,11 +417,13 @@ export class CoordinatorHub {
   }
 
   /** Why a card takes no follow-up in its kept tree, in the order Eric
-   *  most needs to hear it: it is not in a tree, it waits on the usage
+   *  most needs to hear it: it is a project card, which Eric answers in
+   *  the incubator, it is not in a tree, it waits on the usage
    *  reset, its start is in flight, its run is at work, it has not settled,
    *  or it never ran in its tree (its tree failed before its run started).
    *  Null when it takes one. */
   private followRefusal(coord: Run, t: CoordTask): CoordError | null {
+    if (isProjectCard(t)) return new CoordError(`${t.id} is a project; answer it in the incubator`);
     if (t.tree === undefined) return new CoordError(`${t.id} is not in a tree; follow a branch card up on its branch`, 400);
     const own = t.run ? this.deps.run(t.run) : undefined;
     if (t.state === "running" && t.limited === 0 && own?.status === "limited" && !isRunActive(own)) return new CoordError(`${t.id} carries on after the reset`);
@@ -500,7 +523,9 @@ export class CoordinatorHub {
 
   /** The words a queued card waits with, most telling first: the goal is
    *  held, the cards its `after` names have not landed, this pass's words,
-   *  its repo has no slot, or the governor's window it waited on. A card in
+   *  its repo has no slot, or the governor's window it waited on. A project
+   *  card holds no slot and asks no governor, so it says only the first two
+   *  (FR-067). A card in
    *  a kept tree holds no branch slot, so it keeps the words its last start
    *  answered while its tree is made or busy, through the pass; a pass that
    *  ends without trying it drops them (`pump`), since it then waits for a
@@ -509,6 +534,7 @@ export class CoordinatorHub {
     if (held) return HELD_WORD;
     const wait = afterWait(t, tasks);
     if (wait) return wait.words;
+    if (isProjectCard(t)) return undefined;
     const now = passed.get(t.id);
     if (now !== undefined) return now;
     if (t.tree !== undefined) return isTreeWait(t.outcome) || isCapacityWords(t.outcome) ? t.outcome : undefined;
@@ -545,7 +571,11 @@ export class CoordinatorHub {
    *  in a kept tree whose start answers busy keeps those words, since its
    *  tree is being made or another run holds it, and the later cards on
    *  that tree wait behind it with them for this pass; its started run's
-   *  repo becomes its `treeRepo` (FR-067). */
+   *  repo becomes its `treeRepo` (FR-067). A project card starts a sprout
+   *  in the incubator (`startProject`) and holds its id, and takes the
+   *  sprout's step at once, since the sprout may have moved before the card
+   *  held its id; it takes no place and asks no governor, so it may start
+   *  while three children work or the governor holds the rest (FR-067). */
   pump(coordId: string): Promise<void> {
     return this.queue(async () => {
       /** cards looked at this pass, with the words they wait with */
@@ -580,7 +610,7 @@ export class CoordinatorHub {
         let out: ChildStart;
         this.starting.add(key);
         try {
-          out = await this.deps.startChild(coordId, next, priority);
+          out = isProjectCard(next) ? await this.startProject(coordId, next) : await this.deps.startChild(coordId, next, priority);
         } catch (err) {
           this.update(coordId, next.id, (x) => withOutcome({ ...x, state: "failed" }, errText(err)));
           this.queueNote(coordId, startNote(next, errText(err)));
@@ -589,13 +619,15 @@ export class CoordinatorHub {
           this.starting.delete(key);
         }
         if ("busy" in out) {
-          // the governor holds every card at once: they share its window,
+          // the governor holds every run card at once: they share its window,
           // so the rest wait with the same words and none is tried this pass
           if (isCapacityWords(out.busy)) {
-            // a card waiting on its after keeps saying so
-            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id) && !afterWait(t, tasks)) passed.set(t.id, out.busy);
+            // a card waiting on its after keeps saying so, and a project
+            // card, which asks no governor, may still start this pass
+            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id) && !isProjectCard(t) && !afterWait(t, tasks)) passed.set(t.id, out.busy);
             for (const [id, words] of passed) this.update(coordId, id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
-            return;
+            if (!tasks.some((t) => t.state === "queued" && isProjectCard(t) && !passed.has(t.id))) return;
+            continue;
           }
           const words = next.tree !== undefined ? out.busy : slotWord(next.repo);
           passed.set(next.id, words);
@@ -609,6 +641,18 @@ export class CoordinatorHub {
               passed.set(t.id, words);
               this.update(coordId, t.id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
             }
+          }
+          continue;
+        }
+        if ("sprout" in out) {
+          const made = out.sprout;
+          this.update(coordId, next.id, (x) => withOutcome({ ...x, state: "running", sprout: made.id }, undefined));
+          // the sprout may have moved before the card held its id: read it again
+          const s = this.deps.sprout ? this.deps.sprout(made.id) : made;
+          const now = this.deps.run(coordId)?.tasks?.find((t) => t.id === next.id);
+          if (now?.state === "running") {
+            if (s) this.stepProject(coordId, now, s);
+            else this.projectGone(coordId, now);
           }
           continue;
         }
@@ -639,6 +683,14 @@ export class CoordinatorHub {
         this.follow(child);
       }
     });
+  }
+
+  /** A project card's start: its sprout, made in the incubator, or the
+   *  words of a backend that has no incubator to make it in. */
+  private async startProject(coordId: string, t: CoordTask): Promise<ChildStart> {
+    const start = this.deps.startProject;
+    if (!start) throw new Error(NO_PROJECTS);
+    return start(coordId, t);
   }
 
   /** Pumps every coordinator still going with a card queued: any branch
@@ -887,16 +939,80 @@ export class CoordinatorHub {
     this.queueNote(coord.id, groupNote(task, group, got.outcome));
   }
 
+  /* ---------- project cards (FR-067) ---------- */
+
+  /** The running project cards that hold a sprout, in every coordinator: a
+   *  coordinator that ended still has its card settle, with nothing said,
+   *  as a child's card does. */
+  private holding(id: string): { coordId: string; t: CoordTask }[] {
+    const out: { coordId: string; t: CoordTask }[] = [];
+    for (const coord of this.deps.runs()) {
+      if (coord.action !== "coordinate") continue;
+      for (const t of coord.tasks ?? []) if (t.state === "running" && isProjectCard(t) && t.sprout === id) out.push({ coordId: coord.id, t });
+    }
+    return out;
+  }
+
+  /** A running project card takes its sprout's step (`projectStep`). A wait
+   *  sets its words, and the manager hears it each time the card comes to
+   *  wait on Eric with new words, never twice for the same wait, since the
+   *  incubator tells every change. Done or failed settles it with its note,
+   *  and a card whose `after` names it may then start (`update`). */
+  private stepProject(coordId: string, t: CoordTask, s: CardSprout): void {
+    const step = projectStep(s);
+    if ("wait" in step) {
+      if (t.outcome === step.wait) return;
+      this.update(coordId, t.id, (x) => withOutcome(x, step.wait));
+      if (step.needsYou) this.queueNote(coordId, projectNote(t, step.wait, "waits"));
+      return;
+    }
+    const state = "done" in step ? "done" : "failed";
+    const words = "done" in step ? step.done : step.fail;
+    this.update(coordId, t.id, (x) => withOutcome({ ...x, state }, words));
+    this.queueNote(coordId, projectNote(t, words, state));
+  }
+
+  /** A running project card whose sprout the incubator no longer keeps fails. */
+  private projectGone(coordId: string, t: CoordTask): void {
+    this.update(coordId, t.id, (x) => withOutcome({ ...x, state: "failed" }, PROJECT_GONE));
+    this.queueNote(coordId, projectNote(t, PROJECT_GONE, "failed"));
+  }
+
+  /** A running project card read again off its sprout: one the incubator
+   *  no longer keeps fails it, else the card takes the sprout's step. A
+   *  backend that cannot read a sprout leaves the card to `onSprout`. */
+  private recheckProject(coordId: string, t: CoordTask): void {
+    const read = this.deps.sprout;
+    if (!read) return;
+    const s = t.sprout === undefined ? undefined : read(t.sprout);
+    if (s) this.stepProject(coordId, t, s);
+    else this.projectGone(coordId, t);
+  }
+
+  /** The incubator's every change to a sprout: the running project card
+   *  holding it takes its step. */
+  onSprout(s: CardSprout): void {
+    for (const { coordId, t } of this.holding(s.id)) this.stepProject(coordId, t, s);
+  }
+
+  /** The incubator dismissed a sprout: the running project card holding it
+   *  fails `PROJECT_GONE`, with its note. */
+  onSproutGone(id: string): void {
+    for (const { coordId, t } of this.holding(id)) this.projectGone(coordId, t);
+  }
+
   /* ---------- capacity (FR-036) ---------- */
 
   /** The cards waiting for capacity, as the chip lists them: queued ones the
    *  governor holds and running ones whose child hit the limit, a tree card
-   *  whose resume waits for its tree to be free among them. */
+   *  whose resume waits for its tree to be free among them. A project card
+   *  asks no governor and is never listed. */
   heldStarts(): HeldStart[] {
     const out: HeldStart[] = [];
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate" || !isRunActive(coord)) continue;
       for (const t of coord.tasks ?? []) {
+        if (isProjectCard(t)) continue;
         const waits = ((t.state === "queued" || t.state === "running") && isCapacityWords(t.outcome)) || waitsForTree(t);
         if (!waits) continue;
         const child = t.run ? this.deps.run(t.run) : undefined;
@@ -1003,13 +1119,18 @@ export class CoordinatorHub {
    *  the landing queue or the PR watch moved, or a ready child's wait ran
    *  out. So is every card that settled ready, PR opened or with a winner
    *  picked, which Eric may land long after, or drop (`landLater`), a card
-   *  failed on a closed PR, whose branch may still land, and a group card
-   *  whose group needs Eric, who may still pick and land a winner. */
+   *  failed on a closed PR, whose branch may still land, a group card
+   *  whose group needs Eric, who may still pick and land a winner, and a
+   *  running project card, read off its sprout (it has no run). */
   recheck(): void {
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate") continue;
       for (const t of coord.tasks ?? []) {
         if ((t.state === "done" && mayLandLater(t.outcome)) || (t.state === "failed" && (t.outcome === "PR closed" || groupNeedsEric(t)))) this.landLater(coord, t);
+        if (t.state === "running" && isProjectCard(t)) {
+          this.recheckProject(coord.id, t);
+          continue;
+        }
         if (t.state === "running" && t.flow) {
           const flow = this.deps.flow?.(t.flow);
           if (flow) this.settleFlow(coord, t, flow);

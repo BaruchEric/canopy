@@ -440,14 +440,16 @@ export function afterWait(task: CoordTask, cards: readonly CoordTask[]): { words
 
 /** The queued cards to start now, in order, without passing 3 working. A
  *  card with `times` counts as that many children and needs that many branch
- *  slots. A card that does not fit, whether its repo is short of slots or the
- *  3 are short of room, waits for this pass, and a later card may go ahead of
- *  it. A card that waits for another card to land (`afterWait`) is passed
- *  over, and a held coordinator starts none. `first` names cards to try
- *  before the rest, in that order (a start with ids). `repoFull` is read once
- *  per card, so two cards in a repo with one slot left both come back: the
- *  caller starts them one at a time and leaves a card queued when its start
- *  finds the repo full after all. */
+ *  slots. A project card takes no place among the 3 and no branch slot, so
+ *  `repoFull` is never read for it and it may start while 3 work: the
+ *  incubator holds it to its own limit. A card that does not fit, whether its
+ *  repo is short of slots or the 3 are short of room, waits for this pass,
+ *  and a later card may go ahead of it. A card that waits for another card
+ *  to land (`afterWait`) is passed over, and a held coordinator starts none.
+ *  `first` names cards to try before the rest, in that order (a start with
+ *  ids). `repoFull` is read once per card, so two cards in a repo with one
+ *  slot left both come back: the caller starts them one at a time and leaves
+ *  a card queued when its start finds the repo full after all. */
 export function nextToStart(
   tasks: readonly CoordTask[],
   ctx: { working: number; repoFull: (repo: string, need?: number) => boolean; cards: readonly CoordTask[]; held?: boolean; first?: readonly string[] },
