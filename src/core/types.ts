@@ -1108,6 +1108,8 @@ export interface CoordTask {
   work?: string;
   /** 2 or 3 starts a best-of-N group in place of one child (FR-033); absent is one */
   times?: number;
+  /** names of the goal's files the card's worker needs; a goal from the top only (FR-067) */
+  files?: string[];
   /** the group this card started, in place of `run` */
   group?: string;
   /** how it settled, in a word or two: "landed", "sent back", or a start's

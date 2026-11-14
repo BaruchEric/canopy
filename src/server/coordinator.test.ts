@@ -545,7 +545,7 @@ describe("the brief", () => {
     const example = /<<'EOF'\n([\s\S]*?)\n\s*EOF\n/.exec(brief)?.[1];
     if (!example) throw new Error("no example in the brief");
     const body = JSON.parse(example) as { tasks: unknown };
-    expect("tasks" in validatePlan(body.tasks, { known: () => "local", cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person" })).toBe(true);
+    expect("tasks" in validatePlan(body.tasks, { known: () => "local", cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", files: [] })).toBe(true);
   });
 });
 

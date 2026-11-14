@@ -6,7 +6,7 @@
 import { GROUP_MAX, type RunGroup } from "./group";
 import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
-import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Run, type RunBranchState } from "./types";
+import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type Repo, type Run, type RunBranchState } from "./types";
 
 /** tasks one plan call may add */
 export const MAX_PLAN = 8;
@@ -16,6 +16,11 @@ export const MAX_TASKS = 20;
 export const COORD_AT_ONCE = 3;
 export const MAX_TITLE = 120;
 export const MAX_NOTE = 4000;
+/** what a goal started from the top may carry: its text, the repos it names,
+ *  the files it brings, and their bytes in all (25 MB) */
+export const GOAL_LIMITS = { goal: 20000, repos: 20, files: 10, bytes: 26214400 } as const;
+/** the repo id a goal started from the top is held at: no repo, a fixed anchor */
+export const GOAL_ANCHOR = "~goal";
 /** the characters of a child's result line a settle note keeps, its head
  *  and its tail together (`oneLine`) */
 export const RESULT_CHARS = 1200;
@@ -46,6 +51,8 @@ export interface PlanContext {
   /** the workflows a card in this repo may name */
   workflows: (repo: string) => readonly { name: string; fromRepo: boolean }[];
   by: "coordinator" | "person";
+  /** the goal's file names, which a card's `files` may list (empty for a repo-card goal) */
+  files: readonly string[];
 }
 
 const EQUIP_KEYS = ["loadout", "model", "effort", "skills", "mcp"] as const;
@@ -157,6 +164,20 @@ function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string
     }
     if (after.length > 0) out.after = after as string[];
   }
+  const files = t["files"];
+  if (files !== undefined) {
+    if (!Array.isArray(files) || files.some((x) => typeof x !== "string")) return { error: `${at}.files must be a list of the goal's file names` };
+    const names = files as string[];
+    if (names.length > GOAL_LIMITS.files) return { error: `${at}.files: at most ${GOAL_LIMITS.files} files` };
+    for (const name of names) {
+      if (ctx.files.length === 0) return { error: `${at}.files: the goal has no files` };
+      if (!ctx.files.includes(name)) return { error: `${at}.files: the goal has no file ${name}` };
+    }
+    if (names.length > 0) {
+      if (out.times !== undefined || out.workflow !== undefined) return { error: `${at}.files: a card with files runs once, without a workflow` };
+      out.files = [...new Set(names)];
+    }
+  }
   const refused = harnessRefusal(at, out.equip?.loadout, out.action, out.workflow, ctx);
   if (refused) return { error: refused };
   return out;
@@ -222,7 +243,7 @@ export function validatePlan(input: unknown, ctx: PlanContext): { tasks: Planned
 export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanContext): { task: CoordTask } | { error: string } {
   if (t.state !== "proposed" && t.state !== "queued") return { error: `${t.id} is ${t.state}; only a proposed or queued card changes` };
   if (t.state === "queued") {
-    for (const k of ["title", "note", "repo", "action", "times", "workflow", "workflowRepo"]) {
+    for (const k of ["title", "note", "repo", "action", "times", "workflow", "workflowRepo", "files"]) {
       if (b[k] !== undefined) return { error: `${t.id} is queued; only its loadout and after change` };
     }
   }
@@ -232,6 +253,7 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   const equipSet = has("equip");
   const flowSet = has("workflow") || has("workflowRepo");
   const afterSet = has("after");
+  const filesSet = has("files");
   const merged: Record<string, unknown> = {
     title: b["title"] ?? t.title,
     note: b["note"] ?? t.note,
@@ -241,14 +263,19 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
     ...(equipSet && b["equip"] !== null ? { equip: b["equip"] } : {}),
     ...(flowSet && b["workflow"] !== null ? { workflow: b["workflow"] ?? t.workflow, workflowRepo: has("workflow") ? b["workflowRepo"] : (b["workflowRepo"] ?? t.workflowRepo) } : {}),
     ...(afterSet && b["after"] !== null ? { after: b["after"] } : {}),
+    ...(filesSet ? (b["files"] !== null ? { files: b["files"] } : {}) : t.files ? { files: t.files } : {}),
   };
+  if (filesSet && b["files"] !== null && !flowSet && t.workflow !== undefined) {
+    return { error: `${t.id}.files: a card with files runs once, without a workflow` };
+  }
   if (!flowSet && t.workflow !== undefined && typeof merged["times"] === "number" && merged["times"] > 1) {
     return { error: `${t.id}: a card with a workflow starts one run` };
   }
   const ids = new Set(ctx.cards.map((c) => c.id));
   ids.add(t.id);
   const repoGone = !has("repo") ? t.repo : null;
-  const check: PlanContext = { ...ctx, known: (r) => (r === repoGone ? "local" : ctx.known(r)) };
+  // files the card already keeps stay valid even when the context no longer lists them
+  const check: PlanContext = { ...ctx, files: [...ctx.files, ...(filesSet ? [] : (t.files ?? []))], known: (r) => (r === repoGone ? "local" : ctx.known(r)) };
   const got = checkCard(merged, t.id, t.id, ids, check);
   if ("error" in got) return got;
   // a new action or workflow is checked against the loadout the card keeps
@@ -261,8 +288,9 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   graph.set(t.id, after ?? []);
   const loop = afterSet ? waitLoop(t.id, graph) : null;
   if (loop) return { error: `${t.id}.after: ${andList(loop)} wait for each other` };
-  const { times: _t, equip: _e, workflow: _w, workflowRepo: _r, after: _a, ...kept } = t;
-  const { equip: _ge, workflow: _gw, workflowRepo: _gr, after: _ga, ...fields } = got;
+  const { times: _t, equip: _e, workflow: _w, workflowRepo: _r, after: _a, files: _f, ...kept } = t;
+  const { equip: _ge, workflow: _gw, workflowRepo: _gr, after: _ga, files: _gf, ...fields } = got;
+  const files = filesSet ? got.files : t.files;
   const equip = equipSet ? got.equip : t.equip;
   const workflow = flowSet ? got.workflow : t.workflow;
   const workflowRepo = flowSet ? got.workflowRepo : t.workflowRepo;
@@ -274,6 +302,7 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
       ...(workflow ? { workflow } : {}),
       ...(workflowRepo ? { workflowRepo } : {}),
       ...(after && after.length > 0 ? { after } : {}),
+      ...(files && files.length > 0 ? { files } : {}),
     },
   };
 }
@@ -714,6 +743,50 @@ export function coordWorkflows(entries: readonly WorkflowEntry[]): CoordWorkflow
  *  plans there instead of asking. */
 export function goalRepoLine(repoId: string): string {
   return `Eric started this goal at the repo ${repoId}. Plan its cards there unless the goal names other repos; do not ask which repo.`;
+}
+
+/** Whether a repo id is the goal anchor, bare or qualified `<backend>|~goal`. */
+export const isGoalAnchor = (repoId: string): boolean => repoId === GOAL_ANCHOR || repoId.endsWith(`|${GOAL_ANCHOR}`);
+
+/** The stand-in repo a top goal's coordinator is held at: `root` is the folder
+ *  its chat runs in, and every other field is empty. */
+export function goalAnchor(root: string): Repo {
+  return { id: GOAL_ANCHOR, name: "goal", path: root, group: "", source: "", status: null };
+}
+
+/** The last line of a top goal's brief: where Eric started it, which repos he
+ *  named and where his files are. */
+export function goalTopLine(repos: readonly string[], filesDir: string | null, files: readonly string[]): string {
+  const parts = ["Eric started this goal from canopy's top, at no repo."];
+  if (repos.length > 0) parts.push(`He named these repos: ${repos.join(", ")}. Plan there first.`);
+  if (filesDir !== null && files.length > 0) {
+    parts.push(`His files are in ${filesDir}: ${files.join(", ")}. Read each before you plan, and list the ones a card's worker needs in its "files".`);
+  }
+  parts.push("When the goal leaves the repo open, ask which.");
+  return parts.join(" ");
+}
+
+/** Plain, unique names for the files a goal brings: each label cut to its last
+ *  path part, an empty or dot name made `file`, a repeat `name (2).ext`. Same
+ *  length and order as the input. */
+export function goalFileNames(labels: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return labels.map((label) => {
+    const last = label.split(/[/\\]/).pop() ?? "";
+    const base = last === "" || last === "." || last === ".." ? "file" : last;
+    const dot = base.lastIndexOf(".");
+    const stem = dot > 0 ? base.slice(0, dot) : base;
+    const ext = dot > 0 ? base.slice(dot) : "";
+    let name = base;
+    for (let n = 2; seen.has(name); n++) name = `${stem} (${n})${ext}`;
+    seen.add(name);
+    return name;
+  });
+}
+
+/** The line that tells a card's worker where Eric's files for it are. */
+export function cardFilesLine(dir: string, files: readonly string[]): string {
+  return `Files from Eric for this task: ${files.map((f) => `${dir}/${f}`).join(", ")}`;
 }
 
 /** The brief with Eric's standing rules from ~/.claude/manager.md under

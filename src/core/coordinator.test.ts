@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterWait, blockedNote, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterWait, blockedNote, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -8,7 +8,7 @@ import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch,
 const known = (repo: string): "local" | "remote" | null => (repo === "web" || repo === "api" ? "local" : repo === "mini:box" ? "remote" : null);
 const task = (over: Record<string, unknown> = {}) => ({ title: "fix the login", repo: "web", note: "the login form drops the email", action: "propose", ...over });
 const filler = (n: number): CoordTask[] => Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, title: "x", repo: "web", note: "n", action: "ask", state: "done" }));
-const ctxOf = (over: Partial<PlanContext> = {}): PlanContext => ({ known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", ...over });
+const ctxOf = (over: Partial<PlanContext> = {}): PlanContext => ({ known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", files: [], ...over });
 const plan = (tasks: unknown, have = 0) => validatePlan(tasks, ctxOf({ cards: filler(have), next: have + 1 }));
 
 describe("validatePlan", () => {
@@ -755,5 +755,58 @@ describe("the coordinator's brief", () => {
     const text = await Bun.file(new URL("../../lib/coordinator.md", import.meta.url)).text();
     expect(text).not.toContain('"run": "<your run id>"');
     expect(text).toContain('leave "run" out');
+  });
+});
+
+describe("a goal from the top", () => {
+  test("the anchor", () => {
+    expect(isGoalAnchor("~goal")).toBe(true);
+    expect(isGoalAnchor("mini|~goal")).toBe(true);
+    expect(isGoalAnchor("canopy")).toBe(false);
+    const a = goalAnchor("/home/eric/dev");
+    expect([a.id, a.name, a.path]).toEqual(["~goal", "goal", "/home/eric/dev"]);
+  });
+  test("the brief's last line names the repos and the files", () => {
+    expect(goalTopLine([], null, [])).toBe("Eric started this goal from canopy's top, at no repo. When the goal leaves the repo open, ask which.");
+    expect(goalTopLine(["web/shop", "canopy"], "/c/goal-files/ab12cd34", ["shot.png", "notes.md"])).toBe(
+      "Eric started this goal from canopy's top, at no repo. He named these repos: web/shop, canopy. Plan there first. His files are in /c/goal-files/ab12cd34: shot.png, notes.md. Read each before you plan, and list the ones a card's worker needs in its \"files\". When the goal leaves the repo open, ask which.",
+    );
+  });
+  test("file names stay plain and unique", () => {
+    expect(goalFileNames(["../x.png", "a/b.png", "", "..", "b.png", "b.png"])).toEqual(["x.png", "b.png", "file", "file (2)", "b (2).png", "b (3).png"]);
+  });
+  test("a card's files line", () => {
+    expect(cardFilesLine("/c/goal-files/ab12cd34", ["shot.png"])).toBe("Files from Eric for this task: /c/goal-files/ab12cd34/shot.png");
+  });
+});
+
+describe("a card's files", () => {
+  const withFiles = (tasks: unknown, files: readonly string[] = ["shot.png"]) => validatePlan(tasks, ctxOf({ files }));
+  test("are kept on the planned task", () => {
+    expect(withFiles([task({ files: ["shot.png"] })])).toEqual({ tasks: [{ title: "fix the login", repo: "web", note: "the login form drops the email", action: "propose", files: ["shot.png"] }] });
+  });
+  test("must be files the goal has", () => {
+    expect(withFiles([task({ files: ["nope.png"] })])).toEqual({ error: "tasks[0].files: the goal has no file nope.png" });
+    expect(withFiles([task({ files: ["shot.png"] })], [])).toEqual({ error: "tasks[0].files: the goal has no files" });
+  });
+  test("must be a list of names, at most 10", () => {
+    expect(withFiles([task({ files: "shot.png" })])).toEqual({ error: "tasks[0].files must be a list of the goal's file names" });
+    const many = Array.from({ length: 11 }, (_, i) => `f${i}.png`);
+    expect(withFiles([task({ files: many })], many)).toEqual({ error: "tasks[0].files: at most 10 files" });
+  });
+  test("a card with files runs once, without a workflow", () => {
+    const flows = { workflows: () => [{ name: "ship", fromRepo: false }] };
+    expect(validatePlan([task({ files: ["shot.png"], times: 2 })], ctxOf({ files: ["shot.png"] }))).toEqual({ error: "tasks[0].files: a card with files runs once, without a workflow" });
+    expect(validatePlan([task({ files: ["shot.png"], workflow: "ship" })], ctxOf({ files: ["shot.png"], ...flows }))).toEqual({ error: "tasks[0].files: a card with files runs once, without a workflow" });
+  });
+  test("editCard changes and clears a proposed card's files", () => {
+    const card: CoordTask = { id: "t1", title: "x", repo: "web", note: "n", action: "propose", state: "proposed" };
+    const ctx = ctxOf({ cards: [card], files: ["shot.png", "b.png"] });
+    const set = editCard(card, { files: ["b.png"] }, ctx);
+    expect(set).toEqual({ task: { ...card, files: ["b.png"] } });
+    if (!("task" in set)) throw new Error("no task");
+    expect(editCard(set.task, { title: "y" }, ctxOf({ cards: [set.task] }))).toEqual({ task: { ...set.task, title: "y" } });
+    expect(editCard(set.task, { files: null }, ctx)).toEqual({ task: card });
+    expect(editCard(card, { files: ["nope.png"] }, ctx)).toEqual({ error: "t1.files: the goal has no file nope.png" });
   });
 });
