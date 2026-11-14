@@ -6,6 +6,7 @@
 import { GROUP_MAX, type RunGroup } from "./group";
 import { takesEffort, takesModel } from "./harness";
 import { inQueue, landWord, sentBack } from "./landing";
+import { inputType, isSeedId } from "./sprout";
 import { isBranchName } from "./treewords";
 import { isRunActive, type GateKind, type StepMode, type WorkflowEntry, type CardEquip, type CoordTask, type Flow, type LandEntry, type LoadoutsInfo, type ReviewVerdict, type BranchTreeState, type Repo, type Run, type RunBranchState } from "./types";
 
@@ -25,6 +26,10 @@ export const GOAL_ANCHOR = "~goal";
 /** the characters of a child's result line a settle note keeps, its head
  *  and its tail together (`oneLine`) */
 export const RESULT_CHARS = 1200;
+
+/** Whether a card makes a new project in the incubator rather than starting
+ *  a run (FR-067 plan 3). */
+export const isProjectCard = (t: Pick<CoordTask, "action">): boolean => t.action === "project";
 
 /** A card as the coordinator proposes it, before canopy numbers it. */
 export type PlannedTask = Omit<CoordTask, "id" | "state">;
@@ -56,7 +61,19 @@ export interface PlanContext {
   files: readonly string[];
   /** whether a repo id is itself a kept worktree, which no card may name as its repo */
   treeCard: (repo: string) => boolean;
+  /** why this backend's incubator cannot take a new project now, in the
+   *  server's own words, or null when it can; every project card is refused
+   *  with them (FR-067 plan 3) */
+  projects: () => string | null;
 }
+
+/** What one card is checked against: the plan's context, and for an edit
+ *  the repo the card already holds, which no rule for a repo it may name
+ *  (another host, a kept worktree, an incubator seed) refuses. */
+type CardContext = PlanContext & { holds?: string };
+
+/** the fields a project card refuses: it starts no run, so nothing shapes one */
+const NOT_ON_A_PROJECT = ["times", "workflow", "workflowRepo", "tree", "equip"] as const;
 
 const EQUIP_KEYS = ["loadout", "model", "effort", "skills", "mcp"] as const;
 
@@ -113,23 +130,42 @@ function harnessRefusal(at: string, loadout: string | undefined, action: unknown
   return null;
 }
 
+/** The repo a card runs in, or why it cannot be. A project card names
+ *  none (or the goal's anchor) and takes no field that shapes a run; it is
+ *  kept at the anchor. Any other card names a local repo that is neither
+ *  an incubator seed nor a kept worktree, and asks or plans, then builds. */
+function cardRepo(t: Record<string, unknown>, at: string, ctx: CardContext): { repo: string; action: CoordTask["action"] } | { error: string } {
+  const repo = t["repo"];
+  const action = t["action"];
+  if (action === "project") {
+    if (repo !== undefined && repo !== GOAL_ANCHOR) return { error: `${at}.repo: a project card names no repo` };
+    if (NOT_ON_A_PROJECT.some((k) => t[k] !== undefined)) return { error: `${at}: a project card takes no times, workflow, tree or loadout` };
+    return { repo: GOAL_ANCHOR, action };
+  }
+  if (typeof repo !== "string" || !repo) return { error: `${at}.repo must be a repo id` };
+  const held = repo === ctx.holds;
+  const where = held ? "local" : ctx.known(repo);
+  if (where === null) return { error: `${at}.repo: no repo ${repo} on this backend` };
+  if (where === "remote") return { error: `${at}.repo: ${repo} is on another host; a task runs in a local repo` };
+  // the incubator's agents build a seed; nothing of a goal does (the leaf rule)
+  if (!held && isSeedId(repo)) return { error: `${at}.repo: ${repo} is an incubator seed; a card cannot work in it` };
+  // a tree's own card is no checkout to cut a branch from or to name a tree on
+  if (!held && ctx.treeCard(repo)) return { error: `${at}.repo: ${repo} is a kept worktree; name its repo and put the branch in "tree"` };
+  if (action !== "propose" && action !== "ask") return { error: `${at}.action must be propose, ask or project` };
+  return { repo, action };
+}
+
 /** One card off the wire, checked on its own. `self` is the id it will have
  *  and `ids` every id its `after` may name. */
-function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string>, ctx: PlanContext): PlannedTask | { error: string } {
+function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string>, ctx: CardContext): PlannedTask | { error: string } {
   if (!isRecord(t)) return { error: `${at} must be an object` };
   const title = text(t, at, "title", MAX_TITLE);
   if (typeof title !== "string") return title;
   const note = text(t, at, "note", MAX_NOTE);
   if (typeof note !== "string") return note;
-  const repo = t["repo"];
-  if (typeof repo !== "string" || !repo) return { error: `${at}.repo must be a repo id` };
-  const where = ctx.known(repo);
-  if (where === null) return { error: `${at}.repo: no repo ${repo} on this backend` };
-  if (where === "remote") return { error: `${at}.repo: ${repo} is on another host; a task runs in a local repo` };
-  // a tree's own card is no checkout to cut a branch from or to name a tree on
-  if (ctx.treeCard(repo)) return { error: `${at}.repo: ${repo} is a kept worktree; name its repo and put the branch in "tree"` };
-  const action = t["action"];
-  if (action !== "propose" && action !== "ask") return { error: `${at}.action must be propose or ask` };
+  const placed = cardRepo(t, at, ctx);
+  if ("error" in placed) return placed;
+  const { repo, action } = placed;
   const times = t["times"];
   if (times !== undefined && (typeof times !== "number" || !Number.isInteger(times) || times < 1 || times > GROUP_MAX)) {
     return { error: `${at}.times must be 1 to ${GROUP_MAX}` };
@@ -190,6 +226,13 @@ function checkCard(t: unknown, at: string, self: string, ids: ReadonlySet<string
     if (out.times !== undefined || out.workflow !== undefined) return { error: `${at}.tree: a card in a tree runs once, without a workflow` };
     out.tree = tree;
   }
+  if (isProjectCard(out)) {
+    for (const name of out.files ?? []) {
+      if (inputType("", name) === null) return { error: `${at}.files: the incubator takes audio, images, pdf, text and markdown; ${name} is none of them` };
+    }
+    const no = ctx.projects();
+    if (no !== null) return { error: `${at}: ${no}` };
+  }
   const refused = harnessRefusal(at, out.equip?.loadout, out.action, out.workflow, ctx);
   if (refused) return { error: refused };
   return out;
@@ -216,8 +259,10 @@ function waitLoop(start: string, after: ReadonlyMap<string, readonly string[]>):
 
 /** A plan's tasks off the wire, checked against the limits: at most 8 in a
  *  call and 20 in all, a title of at most 120 characters, a note of at most
- *  4000, `propose` or `ask`, a repo this backend knows on this machine, a
- *  `times` of 1 to `GROUP_MAX`, and the card fields: an `equip` (a
+ *  4000, `propose` or `ask` in a repo this backend knows on this machine
+ *  (never a seed or a kept worktree), or `project` with no repo, which the
+ *  incubator must be able to take and which carries only `files` it reads
+ *  and `after`; a `times` of 1 to `GROUP_MAX`, and the card fields: an `equip` (a
  *  coordinator names only a loadout), a `workflow` the repo can run (alone
  *  in its card, never with `times`) and an `after` of cards that exist, in
  *  the plan or already held, with no card waiting on itself or in a loop.
@@ -249,9 +294,11 @@ export function validatePlan(input: unknown, ctx: PlanContext): { tasks: Planned
 
 /** Edits to a card that has not started. A proposed card changes in every
  *  field the plan has; a queued card only in its `equip` and `after`; any
- *  other state changes nothing. `b` holds the fields to change (`null` clears
- *  `equip`, `workflow` and `after`), and `ctx.cards` every card of the
- *  coordinator, the edited one included. Errors name the card by its id. */
+ *  other state changes nothing. No edit turns a card into a project card or
+ *  back, since the two carry different fields. `b` holds the fields to
+ *  change (`null` clears `equip`, `workflow` and `after`), and `ctx.cards`
+ *  every card of the coordinator, the edited one included. Errors name the
+ *  card by its id. */
 export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanContext): { task: CoordTask } | { error: string } {
   if (t.state !== "proposed" && t.state !== "queued") return { error: `${t.id} is ${t.state}; only a proposed or queued card changes` };
   if (t.state === "queued") {
@@ -259,6 +306,7 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
       if (b[k] !== undefined) return { error: `${t.id} is queued; only its loadout and after change` };
     }
   }
+  if (b["action"] !== undefined && (b["action"] === "project") !== isProjectCard(t)) return { error: `${t.id}: a card's action cannot change to or from project` };
   // only what `b` supplies is checked; every other field is carried as stored,
   // so a loadout, workflow or repo gone since the card was made does not stop an edit of `after`
   const has = (k: string): boolean => b[k] !== undefined;
@@ -292,15 +340,13 @@ export function editCard(t: CoordTask, b: Record<string, unknown>, ctx: PlanCont
   }
   const ids = new Set(ctx.cards.map((c) => c.id));
   ids.add(t.id);
-  const repoGone = !has("repo") ? t.repo : null;
   // files the card already keeps stay valid even when the context no longer
-  // lists them, and so does the repo it keeps, even a tree's card it was
-  // given before a card there was refused; moving it onto one is refused
-  const check: PlanContext = {
+  // lists them, and so does the repo it keeps, even a tree's card or a seed
+  // it was given before a card there was refused; moving it onto one is refused
+  const check: CardContext = {
     ...ctx,
     files: [...ctx.files, ...(filesSet ? [] : (t.files ?? []))],
-    known: (r) => (r === repoGone ? "local" : ctx.known(r)),
-    treeCard: (r) => r !== repoGone && ctx.treeCard(r),
+    ...(!has("repo") ? { holds: t.repo } : {}),
   };
   const got = checkCard(merged, t.id, t.id, ids, check);
   if ("error" in got) return got;
@@ -937,13 +983,15 @@ export interface CardCarries {
   after?: string;
   files?: string;
   tree?: string;
+  project?: string;
 }
 
 /** The words a card's facts line adds: its loadout (with "changed" when
  *  Eric overrode a field, the overrides in its title), its workflow,
  *  "after t1, t3" for the cards it waits for, and "files: shot.png,
- *  notes.md" for the goal's files its worker takes (FR-067), and "in tree
- *  feat/x" for a card that runs in a kept worktree. */
+ *  notes.md" for the goal's files its worker takes (FR-067), "in tree
+ *  feat/x" for a card that runs in a kept worktree, and "new project" for
+ *  a card that makes one in the incubator. */
 export function cardCarries(task: CoordTask): CardCarries {
   const out: CardCarries = {};
   const e = task.equip;
@@ -955,6 +1003,7 @@ export function cardCarries(task: CoordTask): CardCarries {
   if (task.after && task.after.length > 0) out.after = `after ${task.after.join(", ")}`;
   if (task.files && task.files.length > 0) out.files = `files: ${task.files.join(", ")}`;
   if (task.tree) out.tree = `in tree ${task.tree}`;
+  if (isProjectCard(task)) out.project = "new project";
   return out;
 }
 

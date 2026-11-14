@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { afterMet, afterWait, blockedNote, cardCarries, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
+import { afterMet, afterWait, blockedNote, cardCarries, isProjectCard, isTreeWait, treeNote, treeSettled, treeStep, cardLanded, cardsLine, childOutcome, childSettled, COORD_AT_ONCE, editCard, flowGoneNote, flowGoneSettled, flowNote, flowSettled, groupNote, groupSettled, groupNeedsEric, holdNote, landedNote, lateFailNote, laterOutcome, MAX_PLAN, MAX_TASKS, MAY_LAND_LATER, nextToStart, RESULT_CHARS, settleNote, startNote, validatePlan, coordWorkflows, goalRepoLine, goalAnchor, goalTopLine, goalFileNames, cardFilesLine, isGoalAnchor, withCards, withStandingRules, type ChildLanding, type PlanContext } from "./coordinator";
 import { FLEET_CONCURRENCY } from "./flow";
 import type { RunGroup } from "./group";
 import { EMPTY_LOADOUTS } from "./loadout";
@@ -8,7 +8,7 @@ import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch,
 const known = (repo: string): "local" | "remote" | null => (repo === "web" || repo === "api" ? "local" : repo === "mini:box" ? "remote" : null);
 const task = (over: Record<string, unknown> = {}) => ({ title: "fix the login", repo: "web", note: "the login form drops the email", action: "propose", ...over });
 const filler = (n: number): CoordTask[] => Array.from({ length: n }, (_, i) => ({ id: `t${i + 1}`, title: "x", repo: "web", note: "n", action: "ask", state: "done" }));
-const ctxOf = (over: Partial<PlanContext> = {}): PlanContext => ({ known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", files: [], treeCard: () => false, ...over });
+const ctxOf = (over: Partial<PlanContext> = {}): PlanContext => ({ known, cards: [], next: 1, loadouts: EMPTY_LOADOUTS, workflows: () => [], by: "person", files: [], treeCard: () => false, projects: () => null, ...over });
 const plan = (tasks: unknown, have = 0) => validatePlan(tasks, ctxOf({ cards: filler(have), next: have + 1 }));
 
 describe("validatePlan", () => {
@@ -37,8 +37,8 @@ describe("validatePlan", () => {
   test("names the task and the field it refuses", () => {
     expect(plan([task(), task({ repo: "nowhere" })])).toEqual({ error: "tasks[1].repo: no repo nowhere on this backend" });
     expect(plan([task({ repo: "mini:box" })])).toEqual({ error: "tasks[0].repo: mini:box is on another host; a task runs in a local repo" });
-    expect(plan([task({ action: "chat" })])).toEqual({ error: "tasks[0].action must be propose or ask" });
-    expect(plan([task({ action: undefined })])).toEqual({ error: "tasks[0].action must be propose or ask" });
+    expect(plan([task({ action: "chat" })])).toEqual({ error: "tasks[0].action must be propose, ask or project" });
+    expect(plan([task({ action: undefined })])).toEqual({ error: "tasks[0].action must be propose, ask or project" });
     expect(plan([task({ title: "   " })])).toEqual({ error: "tasks[0].title is empty" });
     expect(plan([task({ title: "x".repeat(121) })])).toEqual({ error: "tasks[0].title is over 120 characters" });
     expect(plan([task({ note: "" })])).toEqual({ error: "tasks[0].note is empty" });
@@ -934,5 +934,85 @@ describe("tree cards: start, wait, settle", () => {
     expect(treeNote(tc({ state: "running", run: "c1" }), inPlace(), "done in tree feat/x")).toBe(
       ["canopy: a task you started has settled", "task t1: try it (repo web)", "outcome: done in tree feat/x", "result: Fixed the form and committed it.", "tree: feat/x, a kept worktree; Eric merges it from there"].join("\n"),
     );
+  });
+});
+
+describe("a project card (FR-067 plan 3)", () => {
+  const idea = (over: Record<string, unknown> = {}) => ({ title: "a change counter", note: "count the coins per machine", action: "project", ...over });
+  const stored = { title: "a change counter", repo: "~goal", note: "count the coins per machine", action: "project" as const };
+  const goal = (over: Partial<PlanContext> = {}) => ctxOf({ files: ["notes.md", "logo.png", "data.json"], ...over });
+  const proj = (over: Partial<CoordTask> = {}): CoordTask => ({ id: "t1", title: "a change counter", repo: "~goal", note: "n", action: "project", state: "proposed", ...over });
+  const NO = "this backend has nowhere to run a stage";
+
+  test("names no repo and is kept at the goal's anchor; any other repo is refused", () => {
+    expect(validatePlan([idea()], goal())).toEqual({ tasks: [stored] });
+    expect(validatePlan([idea({ repo: "~goal" })], goal())).toEqual({ tasks: [stored] });
+    expect(validatePlan([idea({ repo: "web" })], goal())).toEqual({ error: "tasks[0].repo: a project card names no repo" });
+    expect(validatePlan([idea({ repo: "" })], goal())).toEqual({ error: "tasks[0].repo: a project card names no repo" });
+  });
+
+  test("takes no times, workflow, tree or loadout", () => {
+    const ctx = goal({ loadouts: kit, workflows: () => [{ name: "x", fromRepo: false }] });
+    for (const over of [{ times: 2 }, { workflow: "x" }, { tree: "feat/x" }, { equip: { loadout: "quick" } }]) {
+      expect(validatePlan([idea(over)], ctx)).toEqual({ error: "tasks[0]: a project card takes no times, workflow, tree or loadout" });
+    }
+  });
+
+  test("takes the goal's files the incubator reads, and names one it does not", () => {
+    expect(validatePlan([idea({ files: ["notes.md", "logo.png"] })], goal())).toEqual({ tasks: [{ ...stored, files: ["notes.md", "logo.png"] }] });
+    expect(validatePlan([idea({ files: ["data.json"] })], goal())).toEqual({ error: "tasks[0].files: the incubator takes audio, images, pdf, text and markdown; data.json is none of them" });
+    expect(validatePlan([idea({ files: ["nope.md"] })], goal())).toEqual({ error: "tasks[0].files: the goal has no file nope.md" });
+  });
+
+  test("waits for other cards like any card", () => {
+    expect(validatePlan([task(), idea({ after: ["t1"] })], goal())).toEqual({ tasks: [{ title: "fix the login", repo: "web", note: "the login form drops the email", action: "propose" }, { ...stored, after: ["t1"] }] });
+    expect(validatePlan([idea({ after: ["t1"] })], goal())).toEqual({ error: "tasks[0].after: a card cannot wait for itself" });
+  });
+
+  test("an incubator that cannot take a project refuses the card in the server's words; a plain card in the plan still passes", () => {
+    expect(validatePlan([task(), idea()], goal({ projects: () => NO }))).toEqual({ error: `tasks[1]: ${NO}` });
+    expect("tasks" in validatePlan([task()], goal({ projects: () => NO }))).toBe(true);
+    // its own field checks speak first
+    expect(validatePlan([idea({ times: 2 })], goal({ projects: () => NO }))).toEqual({ error: "tasks[0]: a project card takes no times, workflow, tree or loadout" });
+  });
+
+  test("a plain card in an incubator seed is refused, after the other host's", () => {
+    const seeds = goal({ known: (r) => (r === "_incubator/shop" ? "local" : r === "mini|_incubator/shop" ? "remote" : known(r)) });
+    expect(validatePlan([task({ repo: "_incubator/shop" })], seeds)).toEqual({ error: "tasks[0].repo: _incubator/shop is an incubator seed; a card cannot work in it" });
+    expect(validatePlan([task({ repo: "mini|_incubator/shop" })], seeds)).toEqual({ error: "tasks[0].repo: mini|_incubator/shop is on another host; a task runs in a local repo" });
+    const plain = held("t1", { state: "proposed" });
+    expect(editCard(plain, { repo: "_incubator/shop" }, { ...seeds, cards: [plain] })).toEqual({ error: "t1.repo: _incubator/shop is an incubator seed; a card cannot work in it" });
+    // a card made before the rule keeps its repo through an edit of its after
+    const old = held("t2", { repo: "_incubator/shop" });
+    expect(editCard(old, { after: ["t1"] }, { ...seeds, cards: [plain, old] })).toEqual({ task: { ...old, after: ["t1"] } });
+  });
+
+  test("an edit never changes a card's action to or from project", () => {
+    const plain = held("t1", { state: "proposed" });
+    const words = { error: "t1: a card's action cannot change to or from project" };
+    expect(editCard(plain, { action: "project" }, goal({ cards: [plain] }))).toEqual(words);
+    expect(editCard(proj(), { action: "ask" }, goal({ cards: [proj()] }))).toEqual(words);
+    expect(editCard(proj(), { action: "propose" }, goal({ cards: [proj()] }))).toEqual(words);
+  });
+
+  test("a proposed project card takes a new title and note; a queued one an after; neither a loadout", () => {
+    const t = proj();
+    expect(editCard(t, { title: "coins", note: "a tally per machine" }, goal({ cards: [t] }))).toEqual({ task: { ...t, title: "coins", note: "a tally per machine" } });
+    expect(editCard(t, { files: ["notes.md"] }, goal({ cards: [t] }))).toEqual({ task: { ...t, files: ["notes.md"] } });
+    expect(editCard(t, { files: ["data.json"] }, goal({ cards: [t] }))).toEqual({ error: "t1.files: the incubator takes audio, images, pdf, text and markdown; data.json is none of them" });
+    expect(editCard(t, { equip: { loadout: "quick" } }, goal({ cards: [t], loadouts: kit }))).toEqual({ error: "t1: a project card takes no times, workflow, tree or loadout" });
+    expect(editCard(t, { times: 2 }, goal({ cards: [t] }))).toEqual({ error: "t1: a project card takes no times, workflow, tree or loadout" });
+    const queued = proj({ state: "queued" });
+    const other = held("t2", { state: "done" });
+    expect(editCard(queued, { after: ["t2"] }, goal({ cards: [queued, other] }))).toEqual({ task: { ...queued, after: ["t2"] } });
+    // an incubator that cannot take a project refuses an edit of one in its words too
+    expect(editCard(t, { title: "coins" }, goal({ cards: [t], projects: () => NO }))).toEqual({ error: `t1: ${NO}` });
+  });
+
+  test("isProjectCard, and the facts line says new project", () => {
+    expect(isProjectCard(proj())).toBe(true);
+    expect(isProjectCard(held("t2"))).toBe(false);
+    expect(cardCarries(proj()).project).toBe("new project");
+    expect(cardCarries(held("t2")).project).toBeUndefined();
   });
 });

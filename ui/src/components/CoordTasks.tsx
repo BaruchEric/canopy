@@ -17,6 +17,7 @@ type Act = (fn: () => Promise<void>, propagate?: boolean) => Promise<void>;
 const ACTION_WORD: Record<CoordTask["action"], string> = {
   propose: "plan, then build",
   ask: "ask",
+  project: "new project",
 };
 
 /** The limits the server holds a card to (core/coordinator.ts). */
@@ -315,8 +316,9 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
 
   const flows = (entries ?? []).flatMap((e) => (e.ok && e.workflow.listed !== false ? [{ name: e.workflow.name, fromRepo: e.workflow.source === "repo" }] : []));
   if (workflow && !flows.some((w) => flowKey(w) === flowKey(workflow))) flows.unshift(workflow);
-  // plan, then build needs Claude Code, and so does every step of a card's flow
-  const offered = loadoutsFor(action, kitLoadouts).filter((l) => !workflow || l.harness === "claude");
+  // plan, then build needs Claude Code, and so does every step of a card's
+  // flow; a project card starts no run, so it takes no loadout
+  const offered = action === "project" ? [] : loadoutsFor(action, kitLoadouts).filter((l) => !workflow || l.harness === "claude");
   const change = cardEdit(task, { title, note, repo, action, times, loadout, workflow, after });
   const changed = Object.keys(change).length > 0;
   const ok = !proposed || (title.trim().length > 0 && note.trim().length > 0);

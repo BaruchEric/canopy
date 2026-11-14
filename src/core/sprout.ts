@@ -190,7 +190,7 @@ export function sizeWord(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const VIA_WORD: Record<InputVia, string> = { sheet: "from the page", cli: "from the command line", answer: "an answer in the inbox" };
+const VIA_WORD: Record<InputVia, string> = { sheet: "from the page", cli: "from the command line", answer: "an answer in the inbox", coordinator: "from a coordinator's card" };
 const NO_SUMMARY = "not summarized yet";
 
 export const INPUTS_HEAD =

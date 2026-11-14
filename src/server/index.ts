@@ -227,7 +227,7 @@ import {
   TERM_GONE,
   type TaskTree,
 } from "../core/types";
-import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus } from "../core/types";
+import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, RunCardAction, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus } from "../core/types";
 import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
 import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
@@ -264,7 +264,7 @@ import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
 import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
-import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
+import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, isProjectCard, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -2461,14 +2461,21 @@ async function coordWorkflowNames(state: ServerState, repoId: string, withRepo: 
   return [...shared, ...own];
 }
 
+/** A card that starts a run of its own: any card but a project card, whose
+ *  action is no run's (FR-067 plan 3). */
+type RunCard = CoordTask & { action: RunCardAction };
+const isRunCard = (task: CoordTask): task is RunCard => !isProjectCard(task);
+
 /** A coordinator's card as a branch run (FR-010): the repo's agent on its
  *  job route, `by` coordinator and `parent` the coordinator, set before the
  *  run is first heard of. It lands through the landing queue, never opening
  *  a PR on its own: canopy has no per-repo setting for that yet, and "open
  *  PR" on the ready run still can. A repo whose branch slots are full
  *  answers busy, and the card waits. A card that names a kept tree runs in
- *  place there instead (`startCoordTree`, FR-067). */
+ *  place there instead (`startCoordTree`, FR-067). A project card starts no
+ *  run: it is refused here, since it starts in the incubator. */
 async function startCoordChild(state: ServerState, coordId: string, task: CoordTask, priority: Priority = "normal"): Promise<ChildStart> {
+  if (!isRunCard(task)) throw new Error(`${task.id} is a project card; it starts in the incubator`);
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
   if (repo.host || repo.forge) throw new Error(`${repo.name} is not a folder on this machine`);
@@ -2572,7 +2579,7 @@ const treeTaskMessage = (task: CoordTask): string => task.note;
 /** How a tree card's run starts: the action it runs (whose spec it takes),
  *  its message, its priority, and the card's run it comes after, if any. */
 interface TreeRunHow {
-  action: CoordTask["action"];
+  action: RunCardAction;
   message: string;
   priority: Priority;
   after?: Run;
@@ -2663,7 +2670,7 @@ async function stepInTree(
  *  branch checked out elsewhere) fails the card in git's words and leaves no
  *  record; one refused because another add made the tree meanwhile waits
  *  for that one. */
-async function startCoordTree(state: ServerState, coordId: string, task: CoordTask, repo: Repo, priority: Priority): Promise<ChildStart> {
+async function startCoordTree(state: ServerState, coordId: string, task: RunCard, repo: Repo, priority: Priority): Promise<ChildStart> {
   const branch = task.tree ?? "";
   const tree = state.trees.treeFor(repo.path, branch);
   if (tree) return stepInTree(state, coordId, task, tree, { action: task.action, message: treeTaskMessage(task), priority });

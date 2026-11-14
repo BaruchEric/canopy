@@ -93,7 +93,7 @@ function isRun(v: unknown): v is Run {
     optional(v, "equip", (x) => record(x) && strFields(x, ["loadout", "model"]) && oneOf(x["effort"], AGENT_EFFORTS) && strings(x["skills"]) && strings(x["mcp"]) && number(x["off"]) && optional(x, "pluginsOff", strings)) &&
     optional(v, "todos", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "subject"]) && oneOf(t["status"], ["pending", "in_progress", "completed"]) && optional(t, "active", text))) &&
     optional(v, "result", (x) => record(x) && text(x["text"]) && number(x["durationMs"]) && number(x["turns"]) && optional(x, "costUsd", number) && optStrFields(x, ["model", "provider"]) && optional(x, "tokens", (t) => record(t) && ["input", "cachedInput", "output", "reasoning", "total"].every((key) => number(t[key])))) &&
-    optional(v, "tasks", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "title", "repo", "note"]) && oneOf(t["action"], ["propose", "ask"]) && oneOf(t["state"], ["proposed", "queued", "running", "done", "failed", "dropped"]) && optStrFields(t, ["run", "work", "outcome", "group"]) && optional(t, "times", number)));
+    optional(v, "tasks", (x) => Array.isArray(x) && x.every((t: unknown) => record(t) && strFields(t, ["id", "title", "repo", "note"]) && oneOf(t["action"], ["propose", "ask", "project"]) && oneOf(t["state"], ["proposed", "queued", "running", "done", "failed", "dropped"]) && optStrFields(t, ["run", "work", "outcome", "group", "sprout"]) && optional(t, "times", number)));
 }
 
 function credentialName(name: string): boolean {
@@ -178,7 +178,8 @@ function snapshot(run: Run, privacy: RunLogPrivacy): Run {
     ...(task.limited !== undefined ? { limited: task.limited } : {}), ...(task.equip ? { equip: cardEquip(task.equip) } : {}),
     ...(task.workflow !== undefined ? { workflow: r(task.workflow) } : {}), ...(task.workflowRepo ? { workflowRepo: true as const } : {}),
     ...(task.after ? { after: task.after.map(t) } : {}), ...(task.flow ? { flow: t(task.flow) } : {}), ...(task.branch ? { branch: t(task.branch) } : {}),
-    ...(task.files ? { files: task.files.map(r) } : {}), ...(task.tree !== undefined ? { tree: r(task.tree) } : {}), ...(task.treeRepo ? { treeRepo: t(task.treeRepo) } : {}) }));
+    ...(task.files ? { files: task.files.map(r) } : {}), ...(task.tree !== undefined ? { tree: r(task.tree) } : {}), ...(task.treeRepo ? { treeRepo: t(task.treeRepo) } : {}),
+    ...(task.sprout ? { sprout: t(task.sprout) } : {}) }));
   const prompt = run.prompt;
   if (prompt?.kind === "proposal") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), plan: r(prompt.plan), auto: prompt.auto };
   if (prompt?.kind === "permission") safe.prompt = { id: t(prompt.id), kind: t(prompt.kind), tool: r(prompt.tool), title: r(prompt.title), detail: r(prompt.detail),

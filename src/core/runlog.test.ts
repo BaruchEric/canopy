@@ -605,3 +605,17 @@ test("a kept coordinator written before cards had files or a tree still reads", 
   for (const key of ['"files"', '"tree"', '"treeRepo"']) expect(raw).not.toContain(key);
   expect((await readKeptRun(dir, value.id))?.tasks).toEqual([{ id: "t1", title: "t", repo: "repo", note: "n", action: "ask", state: "done", outcome: "landed", run: "c1d2e3f4" }]);
 });
+
+test("a kept coordinator keeps a project card's action, the goal's anchor and its sprout", async () => {
+  const dir = join(root, "cardproject");
+  const cards: CoordTask[] = [{ id: "t1", title: "a change counter", repo: "~goal", note: "n", action: "project", state: "done", sprout: "sp_0123456789ab", outcome: "live as shop" }];
+  const value = run({ id: "coordproject", action: "coordinate", repoId: "~goal", tasks: cards });
+  const log = open(dir, value);
+  await log.settle(value);
+  expect((await readKeptRun(dir, value.id))?.tasks).toEqual(cards);
+  // a sprout that is not text, and an action canopy does not know, are refused
+  for (const invalid of [{ ...cards[0], sprout: 7 }, { ...cards[0], action: "build" }]) {
+    await writeFile(join(log.folder, RUN_FILE), JSON.stringify({ ...value, tasks: [invalid] }));
+    expect(await readKeptRun(dir, value.id)).toBeNull();
+  }
+});

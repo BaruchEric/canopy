@@ -1096,11 +1096,15 @@ export interface CoordTask {
   /** `t1`, `t2`, ... in the order the coordinator proposed them */
   id: string;
   title: string;
-  /** a repo id this backend knows, a local one */
+  /** a repo id this backend knows, a local one; a project card's is the
+   *  goal anchor `~goal`, since it works in no repo */
   repo: string;
-  /** the whole of what the child is told: it sees nothing else */
+  /** the whole of what the child is told: it sees nothing else; a project
+   *  card's title and note are the idea the incubator is given */
   note: string;
-  action: "propose" | "ask";
+  /** `project` makes a new project in this backend's incubator in place of
+   *  a run (FR-067 plan 3) */
+  action: "propose" | "ask" | "project";
   state: "proposed" | "queued" | "running" | "done" | "failed" | "dropped";
   /** the child run's id, once it started */
   run?: string;
@@ -1135,7 +1139,13 @@ export interface CoordTask {
   flow?: string;
   /** the child's branch (`RunBranch.origin`), once it started */
   branch?: string;
+  /** a project card's sprout in the incubator (`sp_` and 12 hex), once it
+   *  started; it holds this in place of `run` */
+  sprout?: string;
 }
+
+/** the actions a card's run takes: every card's but a project card's, which starts no run */
+export type RunCardAction = Exclude<CoordTask["action"], "project">;
 
 /** What a card starts with (FR-065): a kit.json loadout and Eric's overrides of it. */
 export interface CardEquip {
@@ -2618,7 +2628,7 @@ export const SPROUT_STATUSES = [
 export type SproutStatus = (typeof SPROUT_STATUSES)[number];
 
 export type InputKind = "text" | "audio" | "image" | "url" | "file" | "transcript" | "answers";
-export type InputVia = "sheet" | "cli" | "answer";
+export type InputVia = "sheet" | "cli" | "answer" | "coordinator";
 
 /** One thing the user gave a sprout. The raw file stays under the sprout's
  *  inputs/ folder on the backend; only this entry and its summary go further. */

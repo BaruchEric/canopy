@@ -358,6 +358,13 @@ describe("parseSproutRecord", () => {
     noteRev: "7",
   });
 
+  test("an input from a coordinator's card reads back, and the index says where it came from", () => {
+    const card = entry(1, "text", "001-text.md", { label: "text", type: "text/markdown", via: "coordinator" });
+    const withCard = { ...full, inputs: [card] };
+    expect(parseSproutRecord(JSON.stringify(withCard))).toEqual(withCard);
+    expect(inputsIndex([card])).toContain("  2 KB, from a coordinator's card, 2026-10-01 14:03");
+  });
+
   test("a whole record round-trips, and the root it was written for passes through", () => {
     expect(parseSproutRecord(JSON.stringify(full))).toEqual(full);
     const stamped = { ...full, root: "/root" };

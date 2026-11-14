@@ -16,7 +16,7 @@ import { Fragment, useEffect, useMemo, useState, type MouseEvent } from "react";
 import { runRepoName } from "../goals";
 import { isGoalAnchor } from "../../../src/core/coordinator";
 import { isSeedId } from "../../../src/core/sprout";
-import type { CoordTask, Loadout, Run } from "../../../src/core/types";
+import type { CoordTask, Loadout, Run, RunCardAction } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { cardCounts } from "../coord";
 import { gateButtons, gateWords } from "../flows";
@@ -354,7 +354,7 @@ function AddTask({ coord, act, onDone }: { coord: Run; act: Act; onDone: () => v
   const [title, setTitle] = useState("");
   const [repo, setRepo] = useState(() => (choices.some((r) => r.id === coord.repoId) ? coord.repoId : (choices[0]?.id ?? "")));
   const [note, setNote] = useState("");
-  const [action, setAction] = useState<CoordTask["action"]>("ask");
+  const [action, setAction] = useState<RunCardAction>("ask");
   const [busy, setBusy] = useState(false);
   const ok = title.trim() !== "" && note.trim() !== "" && repo !== "";
   const add = async () => {
