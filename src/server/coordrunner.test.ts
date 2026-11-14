@@ -1616,7 +1616,9 @@ describe("cards in kept worktrees", () => {
     const again = await running(coord, "t1", first.run.id);
     expect(again.run.parent).toBe(coord);
     expect(again.run.repoId).toBe(first.run.repoId);
+    // a resumed session read the card's task when it began, so it is not sent again
     expect(again.run.note).toBe("also y");
+    expect(again.message).not.toContain("do the thing");
     expect(again.ctx.cwd).toBe(first.ctx.cwd);
     expect(again.ctx.spec.resume).toBe(session);
     expect(again.message).toContain("also y");
@@ -1627,7 +1629,9 @@ describe("cards in kept worktrees", () => {
     for (const note of ["", "  \n "]) {
       expect((await postAs(s, "/api/coordinator/followup", { run: coord, id: "t1", note }, s.page)).status).toBe(200);
       const next = await running(coord, "t1", last);
-      expect(next.message).toContain("Carry on with the task from where you stopped.");
+      // a fresh session needs the card's task again, then the carry-on line
+      expect(next.run.note).toBe("do the thing\n\nCarry on with the task from where you stopped.");
+      expect(next.message).toContain("do the thing\n\nCarry on with the task from where you stopped.");
       // the run before said no session, so this one starts fresh
       expect(next.ctx.spec.resume).toBeUndefined();
       finish(next.ctx);

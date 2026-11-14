@@ -2565,6 +2565,10 @@ async function treeCardFor(state: ServerState, dir: string): Promise<Repo | null
   return find();
 }
 
+/** The task a tree card's first run is sent, which a later run that starts
+ *  a fresh session is sent again ahead of its own words. */
+const treeTaskMessage = (task: CoordTask): string => task.note;
+
 /** How a tree card's run starts: the action it runs (whose spec it takes),
  *  its message, its priority, and the card's run it comes after, if any. */
 interface TreeRunHow {
@@ -2583,7 +2587,8 @@ const checkoutInUse = (state: ServerState, repoId: string): boolean => (state.fl
  *  follow-up, as a branch fix is. The agent is the card repo's job route
  *  for the card's action with the card's loadout over it, never holding
  *  canopy's tools. A run after the card's own
- *  (`after`) resumes its Claude session when both are Claude Code's. The
+ *  (`after`) resumes its Claude session when both are Claude Code's, and
+ *  is sent the card's task again ahead of its words when it cannot. The
  *  in-use check and the start share one synchronous stretch after the last
  *  await, so the runner's one-run-per-repo refusal never races it: a tree
  *  in use, or a start the governor holds, answers busy, and anything else
@@ -2599,8 +2604,11 @@ async function startTreeRun(state: ServerState, coordId: string, task: CoordTask
   await needHarness(state, harness, treeRepo.path);
   const files = await cardFiles(state, coordId, task);
   const resume = how.after?.session !== undefined && how.after.harness === "claude" && harness === "claude" ? how.after.session : undefined;
-  // a resumed session has the card's note and its files' line already
-  const note = resume || !files.line ? how.message : `${how.message}\n\n${files.line}`;
+  // a resumed session read the card's task when it began, so it gets the
+  // message alone; a fresh one needs the task again, ahead of a later run's
+  // words, and the goal's files line
+  const message = !resume && how.after ? `${treeTaskMessage(task)}\n\n${how.message}` : how.message;
+  const note = resume || !files.line ? message : `${message}\n\n${files.line}`;
   const base: StartExtras = {
     parent: coordId,
     ...(how.priority !== "interactive" ? { priority: how.priority } : {}),
@@ -2658,7 +2666,7 @@ async function stepInTree(
 async function startCoordTree(state: ServerState, coordId: string, task: CoordTask, repo: Repo, priority: Priority): Promise<ChildStart> {
   const branch = task.tree ?? "";
   const tree = state.trees.treeFor(repo.path, branch);
-  if (tree) return stepInTree(state, coordId, task, tree, { action: task.action, message: task.note, priority });
+  if (tree) return stepInTree(state, coordId, task, tree, { action: task.action, message: treeTaskMessage(task), priority });
   try {
     await state.trees.add(repo, branch, undefined, true);
   } catch (err) {
