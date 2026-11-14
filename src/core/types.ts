@@ -2860,6 +2860,9 @@ export interface Sprout {
   noteRev?: string;
   /** the vault writes a failed one left owed, and the last daily line */
   vault?: SproutVault;
+  /** the note is at the slug with the sprout's id (`noteElsewhere`): another
+   *  project's note held the slug's own path */
+  noteMoved?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -2941,6 +2944,13 @@ export interface IncubatorStages {
    *  is back. Null for a good login; absent from a backend older than the
    *  check. */
   login?: string | null;
+  /** This canopy does not keep the incubator (another on the same config
+   *  folder holds the flows lock, or it is still taking its projects back),
+   *  so it takes no project and the fields above are its own view, not the
+   *  keeper's: why, naming the keeper's pid when it knows it, in the words
+   *  a write here is refused with. Null on the canopy that keeps it; absent
+   *  from a backend older than the field. */
+  notKeeping?: string | null;
 }
 
 /* ---------- flows: one workflow running on one repo ---------- */

@@ -225,6 +225,16 @@ describe("stagesWord", () => {
     expect(w.title).toContain("Neither CANOPY_STAGE_SOCKET nor CANOPY_INCUBATOR_UNISOLATED=1 is set");
   });
 
+  test("a canopy that does not keep its incubator says so whatever its mode, with the words and the pid that keeps it", () => {
+    const why = "this canopy is not keeping the incubator right now: canopy pid 42 keeps it for this config folder";
+    for (const mode of ["runner", "unisolated", "off"] as const) {
+      const w = stagesWord({ isolated: mode === "runner", mode, waiting: null, notKeeping: why });
+      expect(w).toMatchObject({ word: "incubator kept elsewhere", warn: true });
+      expect(w.title).toContain(why);
+    }
+    expect(stagesWord({ isolated: true, mode: "runner", waiting: null, notKeeping: null }).word).toBe("stages isolated");
+  });
+
   test("every mode has its own word", () => {
     const words = (["runner", "unisolated", "off"] as const).map((mode) => stagesWord({ isolated: false, mode, waiting: null }).word);
     expect(new Set(words).size).toBe(3);
@@ -256,6 +266,13 @@ describe("where a new project goes", () => {
     expect(cannotStart("mac", off)).toBe("mac has nowhere to run a stage, so a project started there would never start. Pick another backend, or set CANOPY_INCUBATOR_UNISOLATED=1 on mac and restart it.");
     // a runner away starts its projects once it answers, and a backend that has not said is asked by the server
     for (const st of [isolated, unisolated, away, undefined]) expect(cannotStart("mini", st)).toBe(null);
+  });
+  test("a backend that does not keep its incubator is one a project cannot start on, and is passed over", () => {
+    const why = "this canopy is not keeping the incubator right now: canopy pid 42 keeps it for this config folder";
+    const elsewhere: IncubatorStages = { ...isolated, notKeeping: why };
+    expect(cannotStart("mac", elsewhere)).toBe(`mac cannot take a project now: ${why}. Pick another backend.`);
+    expect(sproutBackend(order, "mac", { mac: elsewhere, mini: isolated }, all)).toBe("mini");
+    expect(sproutBackend(order, "mac", { mac: off, mini: elsewhere }, all)).toBe("mac");
   });
 });
 

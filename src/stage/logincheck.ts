@@ -11,12 +11,18 @@
  * root: each is opened without following a link and without blocking, must
  * be a plain file with one name, and is read to a fixed size and no
  * further. Only a state and a time ever leave in a hello, never a token.
- * Bun.
+ *
+ * What is on file says nothing of a token revoked at claude.ai or a copied
+ * login whose source refreshed first, so the runner also checks the login
+ * with Anthropic (`LoginProber`): one `claude -p` turn, as a stage's claude
+ * would sign in, at most once a day while the login on file stays the same.
+ * Its result rides in the hello; a token never does. Bun.
  */
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { join } from "node:path";
-import { LOGIN_TOKEN_FILE, type StageLogin } from "../core/stagewire";
+import { LOGIN_TOKEN_FILE, PROBE_WORDS_MAX, refusesLogin, type LoginProbe, type StageLogin } from "../core/stagewire";
 
 /** a login file past this size is not one */
 const LOGIN_MAX = 64 * 1024;
@@ -115,4 +121,83 @@ export async function claudeLogin(env: Record<string, string | undefined>, now: 
   if (text === undefined) return undefined;
   if (text === null && platform !== "linux") return undefined;
   return loginOf(text, now);
+}
+
+/** The check's command line after `claude`: one turn of the cheapest model,
+ *  with the stages' own user settings (as a stage reads them) and no MCP
+ *  server, asking for one word back. */
+export const PROBE_ARGS: readonly string[] = ["-p", "--model", "haiku", "--max-turns", "1", "--setting-sources", "user", "--strict-mcp-config", "Reply with the one word ok."];
+/** a check that took the login holds this long while the login stays the same */
+export const PROBE_EVERY = 24 * 3600_000;
+/** a refused check, or one that could not run, is tried again after this:
+ *  a refused turn spends nothing, and a fix that keeps the same login (an
+ *  account put right) is seen within the hour */
+export const PROBE_AGAIN = 3600_000;
+/** how long the check's claude may take */
+export const PROBE_MS = 120_000;
+
+/** a token, or anything shaped like one, in claude's words */
+const TOKENISH = /sk-ant-[A-Za-z0-9_-]+/g;
+
+/** What one check's claude said, as the hello carries it: exit 0 is a turn
+ *  that came back; claude's words for a refused login are a refusal; any
+ *  other end could not say either way. Words are one line, with anything
+ *  shaped like a token taken out, and cut short. Pure. */
+export function probeResult(r: { code: number | null; out: string; err: string; timedOut?: boolean }, at: number): LoginProbe {
+  if (r.timedOut) return { said: "unrun", at, words: `claude -p did not answer within ${Math.round(PROBE_MS / 1000)} s` };
+  if (r.code === 0) return { said: "ok", at };
+  const words = `${r.err}\n${r.out}`.replace(TOKENISH, "(a token)").replace(/\s+/g, " ").trim().slice(0, PROBE_WORDS_MAX);
+  if (refusesLogin(words)) return { said: "refused", at, words };
+  return { said: "unrun", at, words: words || `claude -p ended with exit ${r.code ?? "unknown"} and said nothing` };
+}
+
+/** Which login a check is of, so a new one is checked at once and an old
+ *  check never speaks for it: a token by a hash of it (kept in the runner,
+ *  never sent), a `/login` by when it lapses (a new one lapses on a new
+ *  day; a refresh keeps the day). Null when there is nothing to check: a
+ *  login on file that is dead or missing already says so, and a runner
+ *  that cannot tell says nothing. Pure. */
+export function loginKey(login: StageLogin | undefined, token: string | null): string | null {
+  if (login?.how === "token") return `token:${token ? createHash("sha256").update(token).digest("hex").slice(0, 16) : ""}`;
+  if (login?.how === "login") return `login:${login.until ?? ""}`;
+  return null;
+}
+
+/** The runner's check of its login with Anthropic: `observe`, called at
+ *  each hello with the login on file now, answers the last check of that
+ *  login and starts a new one when it is due, one at a time. `run` makes
+ *  one check, or answers null when it may not run now (the fence is not
+ *  confirmed), which keeps nothing and is asked again at the next hello. */
+export class LoginProber {
+  private last: { key: string; probe: LoginProbe } | null = null;
+  private running: Promise<void> | null = null;
+
+  constructor(
+    private readonly run: () => Promise<LoginProbe | null>,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  observe(key: string | null): LoginProbe | undefined {
+    if (key === null) return undefined;
+    const last = this.last?.key === key ? this.last.probe : undefined;
+    const wait = last?.said === "ok" ? PROBE_EVERY : PROBE_AGAIN;
+    if (!this.running && (last === undefined || this.now() - last.at >= wait)) {
+      this.running = this.run()
+        .then((probe) => {
+          if (probe) this.last = { key, probe };
+        })
+        .catch(() => {
+          // a check that threw is no word; the next hello asks again
+        })
+        .finally(() => {
+          this.running = null;
+        });
+    }
+    return last;
+  }
+
+  /** the check under way, if any, settled; tests */
+  async settled(): Promise<void> {
+    await this.running;
+  }
 }

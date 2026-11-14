@@ -72,9 +72,10 @@ import {
   type ParsedQuestions,
 } from "./sprout";
 import { PARK_LINE_MAX, parkDetail, plainRunError } from "./runerror";
-import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, takeDaily, type NoteEvent } from "./sproutnote";
+import { DAILY_EVENTS, dailyLine, dailyNoteHead, dailyNotePath, noteElsewhere, noteMark, notePathOf, sproutNote, sproutNotePath, takeDaily, type NoteEvent } from "./sproutnote";
 import { isFlowActive, type Advice, type Flow, type FlowChoice, type FlowDigest, type FlowStep, type InputEntry, type InputKind, type InputVia, type PendingRework, type Repo, type RunAnswerRecord, type RunQuestion, type Sprout, type SproutDetail, type SproutFlow, type SproutPick, type Workflow } from "./types";
 import { findWorkflow, loadWorkflows } from "./workflows";
+import type { NoteOwner } from "./vault";
 import { unattendedRefusal } from "./workflow";
 
 export class IncubatorError extends Error {
@@ -141,8 +142,10 @@ export interface IncubatorFlows {
 }
 
 export interface NoteSink {
-  /** the whole note; answers the revision to replace next, undefined when queued */
-  put(path: string, text: string, rev: string | undefined): Promise<string | undefined>;
+  /** the whole note, at `path` unless another's note holds it (then at
+   *  `owner.elsewhere`); answers where it went and the revision to replace
+   *  next, undefined when queued */
+  put(path: string, text: string, rev: string | undefined, owner: NoteOwner): Promise<{ rev: string | undefined; path: string }>;
   /** a line at the end; `head` starts a note that is not there yet */
   append(path: string, line: string, head: string): Promise<void>;
 }
@@ -1778,14 +1781,21 @@ export class Incubator {
       }
     }
     const write = async (): Promise<void> => {
-      const was = JSON.stringify([s.noteRev, s.vault]);
+      const was = JSON.stringify([s.noteRev, s.noteMoved, s.vault]);
       let failed: unknown = null;
       try {
         // a refused read (a planted link) leaves intent out rather than the whole note
         const intent = snap.prepared ? await this.deps.seeds.read(snap.seedPath, ".canopy/intent.md").catch(() => null) : null;
         const retro = snap.retro?.state === "done" ? await this.deps.seeds.read(snap.seedPath, ".canopy/retro.md").catch(() => null) : null;
-        const rev = await notes.put(sproutNotePath(snap.slug), sproutNote(snap, intent, retro), s.noteRev);
-        if (rev) s.noteRev = rev;
+        // another backend's note on the same slug is left alone: the note
+        // moves to the sprout's own path, and stays there
+        const put = await notes.put(notePathOf(s), sproutNote(snap, intent, retro), s.noteRev, { mark: noteMark(s), elsewhere: noteElsewhere(s) });
+        if (put.path !== notePathOf(s)) {
+          s.noteMoved = snap.noteMoved = true;
+          // the revision was the old path's
+          if (!put.rev) delete s.noteRev;
+        }
+        if (put.rev) s.noteRev = put.rev;
         if (s.vault?.noteOwed) {
           s.vault = { ...s.vault };
           delete s.vault.noteOwed;
@@ -1796,10 +1806,13 @@ export class Incubator {
       }
       // the lines owed, oldest first; one that fails keeps its place for the
       // next try. Each is taken off by itself, since a change while the
-      // append runs may add one behind it.
+      // append runs may add one behind it. A line taken before the note
+      // moved links to where the note is now.
+      const slugLink = `[[${sproutNotePath(s.slug).replace(/\.md$/, "")}|`;
+      const ownLink = `[[${notePathOf(s).replace(/\.md$/, "")}|`;
       for (let l = s.vault?.owed?.[0]; l; l = s.vault?.owed?.[0]) {
         try {
-          await notes.append(l.path, l.line, l.head);
+          await notes.append(l.path, s.noteMoved ? l.line.replace(slugLink, ownLink) : l.line, l.head);
         } catch (err) {
           failed ??= err;
           break;
@@ -1811,7 +1824,7 @@ export class Incubator {
         s.vault = { ...s.vault };
         delete s.vault.owed;
       }
-      if ((took || JSON.stringify([s.noteRev, s.vault]) !== was) && !this.detached && !this.gone(s)) await this.deps.store.save(s);
+      if ((took || JSON.stringify([s.noteRev, s.noteMoved, s.vault]) !== was) && !this.detached && !this.gone(s)) await this.deps.store.save(s);
       if (failed !== null) throw failed;
     };
     const next = (this.noteChain.get(s.id) ?? Promise.resolve())

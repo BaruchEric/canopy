@@ -18,6 +18,17 @@ export type Fenced = true | false | "unchecked";
  *  `/login` lasts about 30 days from the day it was made, used or not. */
 export type StageLogin = { how: "token" } | { how: "login"; until?: number } | { how: "expired"; until?: number } | { how: "none" };
 
+/** What the runner's own check of that login with Anthropic said, never a
+ *  token: one `claude -p` turn, at most once a day while the login on file
+ *  stays the same (src/stage/logincheck.ts). `ok` is a turn that came back,
+ *  `refused` is claude's words for a login Anthropic turned down, `unrun` a
+ *  check that could not run (no claude, the stages' settings refused, the
+ *  network, a timeout), with why. `at` is when it ran, ms. A hello carries
+ *  the check of the login it reports, and none while that one has not run. */
+export type LoginProbe = { said: "ok" | "refused" | "unrun"; at: number; words?: string };
+/** a check's words past this are cut, on both sides of the wire */
+export const PROBE_WORDS_MAX = 300;
+
 export type StageRequest =
   | { t: "hello" }
   | { t: "spawn"; argv: string[]; cwd: string; env: Record<string, string> }
@@ -38,7 +49,7 @@ export type StageFrame =
   | { t: "refused"; reason: string; fenced?: false | "unchecked" }
   /** `claude` is there from a runner that reads its login; an older one
    *  says nothing, which no one takes for a good or a bad login */
-  | { t: "hello"; harnesses: string[]; fenced: Fenced; reason?: string; claude?: StageLogin }
+  | { t: "hello"; harnesses: string[]; fenced: Fenced; reason?: string; claude?: StageLogin; probe?: LoginProbe }
   | { t: "busy"; busy: boolean };
 
 export const STAGE_PROGRAMS: readonly string[] = ["claude", "codex", "sh"];
@@ -65,6 +76,16 @@ function parseLogin(v: unknown): StageLogin | null {
   if (how !== "login" && how !== "expired") return null;
   const until = v["until"];
   return typeof until === "number" && Number.isFinite(until) ? { how, until } : { how };
+}
+
+/** a hello's `probe`, held to its three words, a time and words of its own; anything else is no word at all */
+function parseProbe(v: unknown): LoginProbe | null {
+  if (!isRecord(v)) return null;
+  const said = v["said"];
+  const at = v["at"];
+  if ((said !== "ok" && said !== "refused" && said !== "unrun") || typeof at !== "number" || !Number.isFinite(at)) return null;
+  const words = v["words"];
+  return typeof words === "string" && words ? { said, at, words: words.slice(0, PROBE_WORDS_MAX) } : { said, at };
 }
 
 /** the day a time falls on, UTC, for a line a person reads */
@@ -104,6 +125,25 @@ export function loginRefusal(login: StageLogin | undefined, site: LoginSite = ST
 /** claude's own words for a login it could not sign in with */
 const LOGIN_REFUSED = /failed to authenticate|oauth (?:session|token)[^.\n]*(?:expired|revoked)|authentication_error|invalid (?:api key|bearer token)/i;
 
+/** whether these are claude's words for a login it could not sign in with */
+export const refusesLogin = (text: string): boolean => LOGIN_REFUSED.test(text);
+
+/** Why no claude can run on what the runner's check with Anthropic said,
+ *  with claude's words and what to do, or null: the check took the login,
+ *  could not run, or has not. Pure. */
+export function probeRefusal(probe: LoginProbe | undefined, site: LoginSite = STAGES_LOGIN): string | null {
+  if (probe?.said !== "refused") return null;
+  const has = site.whose.endsWith("s") ? `${site.whose}'` : `${site.whose}'s`;
+  return `Anthropic refused ${has} claude login when the runner checked it on ${day(probe.at)}${probe.words ? ` (${probe.words})` : ""}: save a fresh token from claude setup-token as ${site.folder}/${LOGIN_TOKEN_FILE} on the host, or log in again ${site.where}`;
+}
+
+/** the check in a few words beside a good login's, for the health page; null for a refusal or no check */
+export function probeWord(probe: LoginProbe | undefined): string | null {
+  if (probe?.said === "ok") return `Anthropic took it on ${day(probe.at)}`;
+  if (probe?.said === "unrun") return `not checked with Anthropic on ${day(probe.at)}${probe.words ? `: ${probe.words}` : ""}`;
+  return null;
+}
+
 /** What to do when a run ended on claude's words for a login it could not
  *  use, or null for any other error. The hello reads what is on file, so a
  *  token revoked at claude.ai, or a copied login whose source refreshed
@@ -140,7 +180,15 @@ export function parseFrame(line: string): StageFrame | StageRequest | null {
     const f = o["fenced"];
     const reason = o["reason"];
     const claude = parseLogin(o["claude"]);
-    return { t, harnesses: h, fenced: f === true || f === false ? f : "unchecked", ...(isStr(reason) ? { reason } : {}), ...(claude ? { claude } : {}) };
+    const probe = parseProbe(o["probe"]);
+    return {
+      t,
+      harnesses: h,
+      fenced: f === true || f === false ? f : "unchecked",
+      ...(isStr(reason) ? { reason } : {}),
+      ...(claude ? { claude } : {}),
+      ...(probe ? { probe } : {}),
+    };
   }
   if (t === "busy") {
     const seed = o["seed"];

@@ -7,7 +7,8 @@
  * it reads the seed's status.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { appendFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { appendFile, mkdir, mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DriveCtx, RunDriver } from "../core/driver";
@@ -237,7 +238,7 @@ describe("through a stage runner that comes and goes", () => {
   });
 
   test("a queued idea waits while the runner is away and starts on its own when it answers", async () => {
-    expect(await stages()).toEqual({ isolated: false, mode: "runner", waiting: null, unfenced: null, login: null });
+    expect(await stages()).toEqual({ isolated: false, mode: "runner", waiting: null, unfenced: null, login: null, notKeeping: null });
     const res = await intake("a tip jar");
     const s = (await res.json()) as Sprout;
     await until(async () => (await stages()).waiting === "the stage runner is not answering", "the runner's absence");
@@ -246,7 +247,7 @@ describe("through a stage runner that comes and goes", () => {
     await heard.ready;
     await startRunner();
     await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "clarify to start");
-    expect(await stages()).toEqual({ isolated: true, mode: "runner", waiting: null, unfenced: null, login: null });
+    expect(await stages()).toEqual({ isolated: true, mode: "runner", waiting: null, unfenced: null, login: null, notKeeping: null });
     await until(() => heard.events.some((e) => e.type === "stages" && e.stages.isolated && e.stages.waiting === null), "the stages event");
     // the runner going away is said too, with nothing queued behind it
     await stopRunner?.();
@@ -255,6 +256,98 @@ describe("through a stage runner that comes and goes", () => {
     heard.stop();
     expect((await stages()).isolated).toBe(false);
   }, 30_000);
+});
+
+describe("the leftovers sweep at start", () => {
+  afterAll(done);
+  test("the canopy that keeps the incubator takes old leftovers away when it starts, and leaves young ones", async () => {
+    await fresh();
+    const old = (Date.now() - 2 * 24 * 3600_000) / 1000;
+    const making = join(scratch, "root", ".canopy-making", "tip.sp_aaaaaaaaaaaa");
+    const tmp = join(root, "_incubator", ".shared", ".tmp-1-abcdef");
+    const young = join(root, "_incubator", ".shared", ".tmp-2-abcdef");
+    for (const p of [making, tmp, young]) await mkdir(p, { recursive: true });
+    await utimes(making, old, old);
+    await utimes(tmp, old, old);
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      incubator: { autostart: false, transcribe: null, notes: null, ship: null, stage: null, unisolated: true },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+    await until(() => !existsSync(making) && !existsSync(tmp), "the sweep");
+    expect(existsSync(young)).toBe(true);
+  });
+});
+
+/** one check off the health page */
+const healthOf = async (id: string): Promise<HealthCheck | undefined> =>
+  ((await (await fetch(url("/api/health"))).json()) as { checks: HealthCheck[] }).checks.find((c) => c.id === id);
+
+describe("a runner that never answered since canopy started", () => {
+  beforeAll(async () => {
+    await fresh();
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      // nothing listens on this socket, from the start
+      incubator: { autostart: true, transcribe: null, notes: null, ship: null, stage: new StageClient(join(scratch, "none.sock")), stageEvery: 50, stageGrace: 300 },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+  });
+  afterAll(done);
+
+  test("the stage runner check goes down with why once the grace is up, never unknown for good", async () => {
+    await until(async () => (await healthOf("canopy:stages"))?.state === "down", "the check to go down");
+    expect((await healthOf("canopy:stages"))?.why).toBe(
+      "the stage runner has not answered since canopy started: check that the stages container is up (docker compose ps, docker compose logs stages)",
+    );
+    expect(await stages()).toMatchObject({ isolated: false, mode: "runner" });
+  }, 15_000);
+});
+
+describe("a runner that can start no harness", () => {
+  let sock = "";
+  let stopRunner: (() => Promise<void>) | null = null;
+  const NONE = "the stage runner answers but can start neither claude nor codex: both must be installed on its PATH, outside the stage root, where the stage user cannot change them";
+  beforeAll(async () => {
+    await fresh();
+    sock = join(scratch, "s.sock");
+    const { stop } = await startStageRunner({
+      socket: sock,
+      root: join(root, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
+      probe: blocked,
+      login: noLogin,
+      programs: { claude: "/nonexistent/claude", codex: "/nonexistent/codex" },
+    });
+    stopRunner = stop;
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      incubator: { autostart: true, transcribe: null, notes: null, ship: null, stage: new StageClient(sock), stageEvery: 50 },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+  });
+  afterAll(async () => {
+    await stopRunner?.();
+    await done();
+  });
+
+  test("its check is down with why, and a project waits with the same words instead of starting", async () => {
+    await until(async () => (await healthOf("canopy:stages"))?.state === "down", "the check to go down");
+    expect((await healthOf("canopy:stages"))?.why).toBe(NONE);
+    const s = (await (await intake("a jar")).json()) as Sprout;
+    await until(async () => (await stages()).waiting === NONE, "the queue to say why it waits");
+    expect((await sprouts()).find((x) => x.id === s.id)?.status).toBe("queued");
+    expect((await (await fetch(url("/api/flows"))).json()) as Flow[]).toEqual([]);
+  }, 15_000);
 });
 
 describe("a runner that blinks between two beats", () => {
@@ -457,6 +550,70 @@ describe("a runner whose claude login is dead", () => {
   }, 30_000);
 });
 
+describe("a runner whose login Anthropic refuses though the file reads well", () => {
+  let sock = "";
+  let stopRunner: (() => Promise<void>) | null = null;
+  /** what the runner's file says of its login */
+  let login: StageLogin = { how: "token" };
+  const says = () => join(scratch, "claude-says");
+  const code = () => join(scratch, "claude-code");
+  const check = () => healthOf("canopy:stage-login");
+  beforeAll(async () => {
+    await fresh();
+    sock = join(scratch, "s.sock");
+    // a stand-in for the check's claude, answering with what the test writes
+    const claude = join(scratch, "fake-claude");
+    await writeFile(claude, `#!/bin/sh\ncat '${says()}' 2>/dev/null\nexit "$(cat '${code()}' 2>/dev/null || echo 0)"\n`);
+    await Bun.$`chmod 755 ${claude}`.quiet();
+    await writeFile(says(), "Failed to authenticate. API Error: 401 OAuth token has been revoked.\n");
+    await writeFile(code(), "1\n");
+    const { stop } = await startStageRunner({
+      socket: sock,
+      root: join(root, "_incubator"),
+      env: { PATH: process.env["PATH"], HOME: scratch, ...FENCE },
+      probe: blocked,
+      programs: { claude, codex: "/nonexistent/codex" },
+      // the stand-in sits in the test's own temp folder
+      writable: async () => false,
+      login: async () => login,
+      loginProbe: {},
+    });
+    stopRunner = stop;
+    server = await startServer({
+      root,
+      port: 0,
+      chan: null,
+      harnesses: ["claude"],
+      incubator: { autostart: true, transcribe: null, notes: null, ship: null, stage: new StageClient(sock), stageEvery: 50 },
+      runner: { driver: (h) => new HoldingDriver(h) },
+    });
+  });
+  afterAll(async () => {
+    await stopRunner?.();
+    await done();
+  });
+
+  test("health goes down with claude's words, a project waits on them, and a new login checked good lets it start", async () => {
+    await until(async () => (await check())?.state === "down", "the check to go down");
+    const why = (await check())?.why ?? "";
+    expect(why).toStartWith("Anthropic refused the stages' claude login when the runner checked it on ");
+    expect(why).toContain("(Failed to authenticate. API Error: 401 OAuth token has been revoked.)");
+    expect(why).toEndWith("save a fresh token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7)");
+    expect((await stages()).login).toBe(why);
+    const s = (await (await intake("a tip jar")).json()) as Sprout;
+    await until(async () => (await stages()).waiting === why, "the queue to say why it waits");
+    expect((await sprouts()).find((x) => x.id === s.id)?.status).toBe("queued");
+    // a fresh login on file is checked at once, and taken
+    await writeFile(says(), "ok\n");
+    await writeFile(code(), "0\n");
+    login = { how: "login", until: Date.now() + 30 * 24 * 3600_000 };
+    await until(async () => (await sprouts()).find((x) => x.id === s.id)?.status === "clarifying", "clarify to start");
+    await until(async () => ((await check())?.detail ?? "").includes("Anthropic took it on"), "the check's word");
+    expect((await check())?.state).toBe("ok");
+    expect((await check())?.detail).toMatch(/^logged in until \d{4}-\d{2}-\d{2}; Anthropic took it on \d{4}-\d{2}-\d{2}$/);
+  }, 30_000);
+});
+
 describe("stage routing with an unchanged dead claude login", () => {
   test.each<StageLogin>([{ how: "expired", until: 0 }, { how: "none" }])("codex stages start and routing changes refresh the queue (%j)", async (login) => {
     await fresh();
@@ -516,7 +673,7 @@ describe("a stage process alive after its run ended", () => {
   afterAll(done);
 
   test("the stages say they run here, unisolated", async () => {
-    expect(await stages()).toEqual({ isolated: false, mode: "unisolated", waiting: null, unfenced: null, login: null });
+    expect(await stages()).toEqual({ isolated: false, mode: "unisolated", waiting: null, unfenced: null, login: null, notKeeping: null });
   });
 
   test("keeps the seed busy once the run is done, until the process is gone", async () => {

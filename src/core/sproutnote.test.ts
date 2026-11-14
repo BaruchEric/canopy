@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { DAILY_EVENTS, DAILY_OWED_MAX, dailyLine, dailyNoteHead, dailyNotePath, sproutNote, sproutNotePath, takeDaily } from "./sproutnote";
+import { DAILY_EVENTS, DAILY_OWED_MAX, dailyLine, dailyNoteHead, dailyNotePath, noteElsewhere, noteMark, notePathOf, sproutNote, sproutNotePath, takeDaily } from "./sproutnote";
+import { marked } from "./vault";
 import type { Sprout } from "./types";
 
 const day = new Date(2026, 9, 1, 9, 30);
@@ -104,6 +105,18 @@ describe("daily note", () => {
 describe("sproutNote", () => {
   test("the path", () => {
     expect(sproutNotePath("change-counter")).toBe("02 - Dev/incubator/change-counter.md");
+  });
+  test("the note carries its sprout's id in its frontmatter, so a write knows its own note from another backend's", () => {
+    const md = sproutNote(sprout(), null);
+    expect(noteMark(sprout())).toBe("sprout: sp_0123456789ab");
+    expect(marked(md, noteMark(sprout()))).toBe(true);
+    expect(marked(md, "sprout: sp_ffffffffffff")).toBe(false);
+  });
+  test("a note moved off its slug's path: the slug and the sprout's id, and the daily line links there", () => {
+    expect(noteElsewhere(sprout())).toBe("02 - Dev/incubator/change-counter-0123456789ab.md");
+    expect(notePathOf(sprout())).toBe("02 - Dev/incubator/change-counter.md");
+    expect(notePathOf(sprout({ noteMoved: true }))).toBe("02 - Dev/incubator/change-counter-0123456789ab.md");
+    expect(dailyLine(sprout({ noteMoved: true }), "started")).toContain("[[02 - Dev/incubator/change-counter-0123456789ab|change-counter]]");
   });
   test("intent, the inputs index with summaries, stages and spending; nothing raw", () => {
     const md = sproutNote(sprout(), "## What the user said\n\nCount coins.");

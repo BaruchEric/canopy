@@ -273,6 +273,14 @@ describe("a server without the flows lock", () => {
       );
       expect((await fetch(at(`/api/incubator/input?id=${one.id}`), { method: "POST", body: form({ text: "more" }) })).status).toBe(503);
       expect((await fetch(at(`/api/incubator/stop?id=${one.id}`), { method: "POST" })).status).toBe(503);
+      // its stages answer says it keeps no incubator, and which canopy does, beside the fields it always had
+      const st = (await (await fetch(at("/api/incubator/stages"))).json()) as IncubatorStages;
+      expect(st.notKeeping).toBe(`this canopy is not keeping the incubator right now: canopy pid ${process.pid} keeps it for this config folder`);
+      expect(typeof st.isolated).toBe("boolean");
+      expect(["runner", "unisolated", "off"]).toContain(st.mode);
+      expect(st).toHaveProperty("waiting");
+      // the one that keeps it says so by saying nothing
+      expect(((await (await fetch(url("/api/incubator/stages"))).json()) as IncubatorStages).notKeeping).toBeNull();
     } finally {
       second.stop();
     }
@@ -355,6 +363,24 @@ describe("whether a coordinator's project card may start here", () => {
     const on = new IncubatorHub(bare(true), async () => [], stages("runner"));
     await on.restore();
     expect(on.takesProjects()).toBeNull();
+  });
+
+  test("the stages route says whether this server keeps the incubator, starting, elsewhere and once it does", async () => {
+    const hub = new IncubatorHub(bare(true), async () => [], stages("runner"));
+    const ask = async (): Promise<IncubatorStages> => {
+      const res = await hub.handle(new Request("http://x/api/incubator/stages"), new URL("http://x/api/incubator/stages"));
+      if (!res) throw new Error("no answer");
+      return (await res.json()) as IncubatorStages;
+    };
+    expect(await ask()).toEqual({ isolated: true, mode: "runner", waiting: null, notKeeping: notKeeping({ kind: "starting" }) });
+    hub.notKeeping(42);
+    expect((await ask()).notKeeping).toBe(notKeeping({ kind: "elsewhere", pid: 42 }));
+    expect(hub.keepingWhy()).toBe(notKeeping({ kind: "elsewhere", pid: 42 }));
+    const owner = new IncubatorHub(bare(true), async () => [], stages("runner"));
+    await owner.restore();
+    const res = await owner.handle(new Request("http://x/api/incubator/stages"), new URL("http://x/api/incubator/stages"));
+    expect(await res?.json()).toEqual({ isolated: true, mode: "runner", waiting: null, notKeeping: null });
+    expect(owner.keepingWhy()).toBeNull();
   });
 
   test("a server that does not keep the incubator refuses in notKeeping's words, starting or after", () => {

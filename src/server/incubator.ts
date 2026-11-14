@@ -159,6 +159,11 @@ export class IncubatorHub {
     this.inc.detach();
   }
 
+  /** why this server does not keep the incubator, in `notKeeping`'s words, or null once it does */
+  keepingWhy(): string | null {
+    return this.keeping.kind === "owner" ? null : notKeeping(this.keeping);
+  }
+
   /** Why a coordinator's project card cannot make its sprout here, in the
    *  words a new project from the page is refused with, or null when it
    *  can: this server does not keep the incubator, or stages are off with
@@ -195,7 +200,9 @@ export class IncubatorHub {
     if (path !== "/api/incubator" && !path.startsWith("/api/incubator/")) return null;
     const method = req.method;
     const id = url.searchParams.get("id") ?? "";
-    if (path === "/api/incubator/stages" && method === "GET") return json(this.stages());
+    // any server can say where stages run, and one that does not keep the
+    // incubator says that too, with the canopy that does when it knows
+    if (path === "/api/incubator/stages" && method === "GET") return json({ ...this.stages(), notKeeping: this.keepingWhy() });
     if (this.keeping.kind !== "owner") return this.readOnly(path, method, id);
     try {
       if (path === "/api/incubator" && method === "GET") return json(this.inc.list());

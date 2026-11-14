@@ -15,6 +15,17 @@ export const DAILY_EVENTS: ReadonlySet<NoteEvent> = new Set<NoteEvent>(["started
 
 export const sproutNotePath = (slug: string): string => `02 - Dev/incubator/${slug}.md`;
 
+/** the line a sprout's note carries in its frontmatter, so a write knows
+ *  its own note from another backend's that picked the same slug */
+export const noteMark = (s: Pick<Sprout, "id">): string => `sprout: ${s.id}`;
+
+/** where a sprout's note goes when another project's note holds its
+ *  slug's path: the slug with the sprout's own id */
+export const noteElsewhere = (s: Pick<Sprout, "id" | "slug">): string => sproutNotePath(`${s.slug}-${s.id.slice(3)}`);
+
+/** where the sprout's note is: its slug's path, or its own once it moved */
+export const notePathOf = (s: Pick<Sprout, "id" | "slug" | "noteMoved">): string => (s.noteMoved ? noteElsewhere(s) : sproutNotePath(s.slug));
+
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -43,7 +54,7 @@ export function dailyNoteHead(d: Date): string {
 /** one line: a park reason can carry a flow's error, newlines and all */
 const flat = (t: string): string => t.replace(/\s+/g, " ").trim();
 
-const link = (s: Sprout): string => `[[${sproutNotePath(s.slug).replace(/\.md$/, "")}|${s.slug}]]`;
+const link = (s: Sprout): string => `[[${notePathOf(s).replace(/\.md$/, "")}|${s.slug}]]`;
 
 const eventWord = (s: Sprout, event: NoteEvent): string => {
   switch (event) {
@@ -156,6 +167,7 @@ export function sproutNote(s: Sprout, intent: string | null, retro: string | nul
     `created: ${ymd(new Date(s.createdAt))}`,
     "source: canopy incubator",
     `seed: ${s.repoId}`,
+    noteMark(s),
     "---",
     `# ${s.title}`,
     "",

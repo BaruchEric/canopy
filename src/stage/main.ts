@@ -93,10 +93,13 @@ if (process.getuid?.() === 0) {
   callerGid = start.callerGid;
   await socketModes(dirname(socket), null, callerGid, { chown, chmod });
 }
-await startStageRunner({ socket, root, sweepOrphans, ...(as ? { as } : {}) });
+// the daily check of the claude login with Anthropic; never under bun test
+const loginProbe = process.env["NODE_ENV"] === "test" ? {} : { loginProbe: {} };
+await startStageRunner({ socket, root, sweepOrphans, ...(as ? { as } : {}), ...loginProbe });
 if (callerGid !== null) await socketModes(dirname(socket), socket, callerGid, { chown, chmod });
 console.log(`canopy-stage-runner on ${socket}, seeds under ${root}`);
 if (pass.names.length) console.log(`children also get ${pass.names.join(" and ")} from canopy`);
 if (net.env["HTTPS_PROXY"]) console.log(`children reach the internet through ${net.env["HTTPS_PROXY"]}`);
 if (as) console.log(`stages run as ${as.uid}:${as.gid} with no groups; the socket is for group ${callerGid} alone`);
 console.log(sweepOrphans ? "orphans are swept at each run's end and every 30 s" : "no pid namespace of its own: orphans are not swept");
+if ("loginProbe" in loginProbe) console.log("the claude login is checked with one claude -p turn, at most once a day while it stays the same");

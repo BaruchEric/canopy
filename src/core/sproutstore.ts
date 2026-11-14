@@ -8,7 +8,7 @@
  * sprout.json carries the root of the server that wrote it (a property of
  * the file, not of the Sprout) and a server lists only its own.
  */
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isSproutId, parseSproutRecord } from "./sprout";
 import { configDir } from "./store";
@@ -31,6 +31,8 @@ function runAnswerOf(v: unknown): RunAnswerRecord | null {
 }
 
 export const incubatorDir = (): string => join(configDir(), "incubator");
+/** where a dismissed sprout's folder moves, under the store; the leftovers sweep empties it (leftovers.ts) */
+export const DISMISSED_DIR = ".dismissed";
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -165,8 +167,11 @@ export class SproutFiles {
   }
 
   async dismiss(id: string): Promise<void> {
-    const away = join(this.dir, ".dismissed");
+    const away = join(this.dir, DISMISSED_DIR);
     await mkdir(away, { recursive: true, mode: 0o700 });
     await rename(this.home(id), join(away, id));
+    // the leftovers sweep keeps it two weeks from now, not from its last change
+    const now = new Date();
+    await utimes(join(away, id), now, now).catch(() => {});
   }
 }

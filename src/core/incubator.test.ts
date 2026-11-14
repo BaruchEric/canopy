@@ -13,6 +13,7 @@ import { BUNDLED_DIR, findWorkflow, loadWorkflows, readFlowModes } from "./workf
 import { branchPushRefusal, holdsSlot } from "./sprout";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
 import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, PendingRework, Repo, RunAnswerRecord, Sprout, SproutPick, SproutWork, Workflow } from "./types";
+import type { NoteOwner } from "./vault";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -193,12 +194,15 @@ class FakeNotes implements NoteSink {
   puts: { path: string; text: string; rev: string | undefined }[] = [];
   lines: { path: string; line: string }[] = [];
   fail = false;
+  /** paths another project's note holds: a put there goes to its owner's other path */
+  others = new Set<string>();
   private rev = 0;
-  async put(path: string, text: string, rev: string | undefined): Promise<string | undefined> {
+  async put(path: string, text: string, rev: string | undefined, owner: NoteOwner): Promise<{ rev: string | undefined; path: string }> {
     if (this.fail) throw new Error("gateway down");
-    this.puts.push({ path, text, rev });
+    const at = this.others.has(path) ? owner.elsewhere : path;
+    this.puts.push({ path: at, text, rev });
     this.rev += 1;
-    return String(this.rev);
+    return { rev: String(this.rev), path: at };
   }
   async append(path: string, line: string): Promise<void> {
     if (this.fail) throw new Error("gateway down");
@@ -868,6 +872,26 @@ describe("the vault", () => {
     await w.inc.idle();
     expect(now(w, s.id).status).toBe("clarifying");
     expect(w.logs.some((l) => l.includes("vault note") && l.includes("gateway down"))).toBe(true);
+  });
+  test("a note another project holds is left alone: the sprout's note moves to its own path and stays there", async () => {
+    const w = world();
+    w.notes.others.add("02 - Dev/incubator/coin-counter.md");
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    const moved = `02 - Dev/incubator/coin-counter-${s.id.slice(3)}.md`;
+    expect(w.notes.puts.map((p) => p.path)).not.toContain("02 - Dev/incubator/coin-counter.md");
+    expect(w.notes.puts.at(-1)?.path).toBe(moved);
+    expect(w.notes.puts.at(-1)?.text).toContain(`sprout: ${s.id}`);
+    expect(now(w, s.id).noteMoved).toBe(true);
+    expect(w.store.records.get(s.id)?.noteMoved).toBe(true);
+    // the daily line links to where the note is
+    expect(w.notes.lines.map((l) => l.line)).toEqual([expect.stringContaining(`[[${moved.replace(/\.md$/, "")}|coin-counter]]`)]);
+    // the next change asks for the moved path, with its revision
+    w.notes.others.clear();
+    await w.inc.stop(s.id);
+    await w.inc.idle();
+    expect(w.notes.puts.at(-1)?.path).toBe(moved);
+    expect(w.notes.puts.at(-1)?.rev).toBe(String(w.notes.puts.length - 1));
   });
   test("no gateway, no notes", async () => {
     const w = world({ notes: null });

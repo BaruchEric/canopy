@@ -78,7 +78,8 @@ import { effectiveAgents, hasProfile, isAgentScopeName, isProfileName, launchPic
 import { selfName } from "../core/backends";
 import { Incubator, IncubatorError, incubatorWorkflow, type IntakeFile, type NoteSink, type Transcriber } from "../core/incubator";
 import { seedOps } from "../core/seed";
-import { SproutFiles } from "../core/sproutstore";
+import { incubatorDir, SproutFiles } from "../core/sproutstore";
+import { LEFTOVER_EVERY, sweepLeftovers } from "../core/leftovers";
 import { hearer, transcribeConfig, transcriber } from "../core/transcribe";
 import { voiceConfig, voiceMinter, type VoiceMinter } from "../core/voice";
 import { liveConfig, liveOpener, type LiveOpener } from "../core/voicelive";
@@ -230,7 +231,7 @@ import {
 import type { About, AdviceAccepted, AgentEffort, Emulator, EmulatorOpened, AdviceEntry, CoordTask, RunCardAction, IncubatorStages, Loadout, LoadoutsInfo, RepoStatus, Sprout } from "../core/types";
 import { AWAKE_MODES, EMULATOR_KINDS, cleanLabel, isFlowActive, isLiveAgent, isRunActive, LIVE_AGENT_STATES, statusFingerprint } from "../core/types";
 import { holdQuiet, type QuietHold, seedGitThrough, StageClient } from "../core/stageclient";
-import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
+import { COORD_LOGIN, loginRefusal, loginRefusedHint, loginWord, probeRefusal, probeWord, STAGE_AWAY, STAGES_LOGIN, type LoginSite } from "../core/stagewire";
 import { DEFAULT_IGNORE } from "../core/scan";
 import { ChanHub, PUT_MAX } from "./tailchan";
 import { PULSE_EVERY, PulseHub } from "./pulse";
@@ -3803,6 +3804,11 @@ function rememberForAsk(state: ServerState, ask: Ask, rule: string): { error: st
 /** How often a remote source's repos get their status re-read: there is no
  *  watcher on another host, and a scan of a whole tree is too much to repeat. */
 const REMOTE_REFRESH = 5 * 60_000;
+/** how long after start a stage runner that has never answered reads down */
+const STAGE_GRACE = 60_000;
+const STAGE_NEVER = "the stage runner has not answered since canopy started: check that the stages container is up (docker compose ps, docker compose logs stages)";
+/** why a runner whose hello lists no harness is not ready */
+const NO_HARNESS = "the stage runner answers but can start neither claude nor codex: both must be installed on its PATH, outside the stage root, where the stage user cannot change them";
 
 /** How long after start the first fetch and pull request pass runs. */
 const ACTIVITY_DELAY = 3_000;
@@ -6513,6 +6519,9 @@ export async function startServer(opts: {
     stage?: StageClient | null;
     unisolated?: boolean;
     stageEvery?: number;
+    /** how long after start a runner that has never answered reads down
+     *  rather than unknown, ms */
+    stageGrace?: number;
     /** what accepting a piece of retro advice does, in place of the chat or the file */
     accept?: (entry: AdviceEntry) => Promise<AdviceAccepted>;
     /** how often a park is looked at for its day-old retro */
@@ -6635,6 +6644,11 @@ export async function startServer(opts: {
     const f = stage.fenceNow();
     return f?.fenced === true ? null : (f?.reason ?? "the stage runner says nothing of its fence: update the stages image");
   };
+  /** Why an answering runner can start no stage at all: its hello lists no
+   *  harness (neither claude nor codex resolves on its PATH, outside the
+   *  stage root and out of the stage user's reach). Null for one that lists
+   *  any, or a runner that is not answering. */
+  const noHarnessWhy = (): string | null => (stage?.harnessesNow()?.length === 0 ? NO_HARNESS : null);
   /** Whether any stage workflow has a step that runs claude, by the routes
    *  and workflows at startup, after route writes and on each runner hello.
    *  True until read: claude is the default harness. A backend whose stages
@@ -6661,7 +6675,7 @@ export async function startServer(opts: {
    *  of, with what to do: its `/login` lapsed (about 30 days after it was
    *  made, used or not) or was never made. Null for a good login, a token,
    *  a runner that says nothing of one, or stages that run no claude. */
-  const stageLoginWhy = (): string | null => (claudeStages ? loginRefusal(stage?.claudeNow() ?? undefined) : null);
+  const stageLoginWhy = (): string | null => (claudeStages ? (loginRefusal(stage?.claudeNow() ?? undefined) ?? probeRefusal(stage?.probeNow() ?? undefined)) : null);
   // A dead login holds the queue the way an unconfirmed fence does: a stage
   // started on it would spend its run on "OAuth session expired" and park.
   // Held, the project starts on its own at the first hello that says the
@@ -6669,7 +6683,7 @@ export async function startServer(opts: {
   const isolation = (): string | null =>
     stage
       ? stage.harnessesNow()
-        ? (unfencedWhy() ?? stageLoginWhy())
+        ? (noHarnessWhy() ?? unfencedWhy() ?? stageLoginWhy())
         : STAGE_AWAY
       : unisolated
         ? null
@@ -6956,7 +6970,8 @@ export async function startServer(opts: {
   }
   // one store, stamped with the realpath'd root, for the incubator and for
   // what a server without the flows lock lists
-  const sprouts = new SproutFiles(root);
+  const sproutStore = incubatorDir();
+  const sprouts = new SproutFiles(root, sproutStore);
   // the improvements list retros fold into, and the page hears of each change
   const adviceFiles = new AdviceFiles(undefined, (advice) => broadcast(state, { type: "advice", advice }));
   const health = new HealthHub({
@@ -7774,6 +7789,7 @@ export async function startServer(opts: {
     waiting: state.incubator.inc.waiting(),
     unfenced: unfencedWhy(),
     login: stageLoginWhy(),
+    notKeeping: state.incubator.keepingWhy(),
   });
   let toldStages = JSON.stringify(stagesNow());
   /** the `stages` event, only when what it says changed */
@@ -8241,6 +8257,19 @@ export async function startServer(opts: {
     await readClaudeStages();
     await stage.hello(10_000);
   }
+  /** The incubator's leftovers (core/leftovers.ts), swept only by the
+   *  canopy that keeps it: at the start that takes its records back, and
+   *  every 6 hours. */
+  const sweepIncubator = (): void => {
+    if (state.incubator.keepingWhy() !== null) return;
+    void sweepLeftovers({ root, store: sproutStore }, state.incubator.inc.list(), Date.now())
+      .then((gone) => {
+        if (gone.length && process.env["NODE_ENV"] !== "test") console.log(`incubator: swept ${gone.length} leftover ${gone.length === 1 ? "folder" : "folders"}: ${gone.join(", ")}`);
+      })
+      .catch((err: unknown) => console.error(`incubator: the leftovers sweep failed: ${err instanceof Error ? err.message : String(err)}`));
+  };
+  const leftoverTimer = setInterval(sweepIncubator, LEFTOVER_EVERY);
+  leftoverTimer.unref?.();
   /** the flows and sprouts the last server left, taken in by the one
    *  holding the lock: at start, and from health's button once the server
    *  that held it is gone */
@@ -8271,6 +8300,9 @@ export async function startServer(opts: {
     // the sprouts the last server left, once their flows are back; a server
     // without the lock lists them and takes nothing in (server/incubator.ts)
     await state.incubator.restore();
+    // the page hears that this canopy keeps the incubator now
+    tellStages();
+    sweepIncubator();
     // the branch runs and queues the last server left, by the same lock
     await state.landing.adopt();
     await state.warm.adopt();
@@ -8297,6 +8329,7 @@ export async function startServer(opts: {
     state.warm.stop();
     state.trees.stop();
     state.incubator.notKeeping(flowsLock.holder);
+    tellStages();
     if (flowsLock.holder) {
       console.error(`flows: canopy pid ${flowsLock.holder} keeps the records in ${flowsDir()}; flows started here are not kept across a restart`);
     }
@@ -8341,15 +8374,21 @@ export async function startServer(opts: {
   state.health.add({ id: "canopy:stages", label: "stage runner", scope: { kind: "canopy" }, heal: "self" });
   if (!stage) state.health.report("canopy:stages", { state: "off" });
   // A runner's claude login, as each of its hellos says it: down the moment
-  // it is expired or missing, with what to do, so it is seen here and not
-  // by the stage that would have spent a run on it. Only where a runner is
-  // set up; one that stops answering leaves its last word standing.
+  // it is expired or missing, or Anthropic refused it at the runner's own
+  // check, with what to do, so it is seen here and not by the stage that
+  // would have spent a run on it. Only where a runner is set up; one that
+  // stops answering leaves its last word standing.
   const reportLogin = (id: string, client: StageClient, site: LoginSite): void => {
     const login = client.claudeNow() ?? undefined;
-    const why = loginRefusal(login, site);
+    const probe = client.probeNow() ?? undefined;
+    const why = loginRefusal(login, site) ?? probeRefusal(probe, site);
     const word = loginWord(login);
+    const checked = probeWord(probe);
     // a runner that says nothing (an older image, a Mac's Keychain login) is not known to be well
-    state.health.report(id, why !== null ? { state: "down", why } : word !== null ? { state: "ok", detail: word } : { state: "off", why: "the runner does not say" });
+    state.health.report(
+      id,
+      why !== null ? { state: "down", why } : word !== null ? { state: "ok", detail: checked ? `${word}; ${checked}` : word } : { state: "off", why: "the runner does not say" },
+    );
   };
   if (stage) state.health.add({ id: "canopy:stage-login", label: "stages' claude login", scope: { kind: "canopy" }, heal: "self" });
   if (coord) state.health.add({ id: "canopy:coord-login", label: "coordinator's claude login", scope: { kind: "canopy" }, heal: "self" });
@@ -8374,7 +8413,9 @@ export async function startServer(opts: {
         // back before the queue is pumped.
         () => {
           const unfenced = unfencedWhy();
-          state.health.report("canopy:stages", unfenced === null ? { state: "ok" } : { state: "down", why: unfenced });
+          // a runner that lists no harness answers, but nothing can start there
+          const notReady = noHarnessWhy() ?? unfenced;
+          state.health.report("canopy:stages", notReady === null ? { state: "ok" } : { state: "down", why: notReady });
           if (stage) {
             reportLogin("canopy:stage-login", stage, STAGES_LOGIN);
             // Routing and workflow files can change without a login change.
@@ -8388,6 +8429,15 @@ export async function startServer(opts: {
         },
       )
     : null;
+  // A runner down from the start never misses after an answer, so the
+  // watch never says it went away: past the grace with no answer, the
+  // check says so rather than staying unknown for good.
+  const stageGraceTimer = stage
+    ? setTimeout(() => {
+        if (stage.harnessesNow() === null) state.health.report("canopy:stages", { state: "down", why: STAGE_NEVER });
+      }, opts.incubator?.stageGrace ?? STAGE_GRACE)
+    : null;
+  stageGraceTimer?.unref?.();
   tellStages();
   // the Mac's own simulators are read now, so the first page's /api/client
   // already lists them (FR-050)
@@ -8503,9 +8553,11 @@ export async function startServer(opts: {
       clearInterval(keepTimer);
       clearInterval(remoteTimer);
       clearInterval(retroTimer);
+      clearInterval(leftoverTimer);
       clearTimeout(firstActivity);
       for (const t of state.timers.values()) clearTimeout(t);
       stopStageWatch?.();
+      if (stageGraceTimer) clearTimeout(stageGraceTimer);
       stopCoordWatch?.();
       // the hook stays, answering SEED_AWAY for this root's seeds
       stopped = true;

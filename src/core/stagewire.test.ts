@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { childEnv, chunkB64, COORD_LOGIN, encodeFrame, fromB64, gitEnv, lineSplitter, loginEnv, loginRefusal, loginRefusedHint, loginWord, parseFrame, passEnvNames, proxyEnv, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
+import { childEnv, chunkB64, COORD_LOGIN, encodeFrame, fromB64, gitEnv, lineSplitter, loginEnv, loginRefusal, loginRefusedHint, loginWord, parseFrame, probeRefusal, probeWord, refusesLogin, passEnvNames, proxyEnv, requestRefusal, StageAwayError, STAGE_AWAY, type StageRequest } from "./stagewire";
 
 describe("stage wire", () => {
   test("frames round-trip one per line", () => {
@@ -76,6 +76,31 @@ describe("stage wire", () => {
     expect(loginWord({ how: "login", until: Date.UTC(2026, 11, 1, 14, 51) })).toBe("logged in until 2026-12-01");
     expect(loginWord({ how: "login" })).toBe("logged in");
     expect(loginWord(undefined)).toBe(null);
+  });
+  test("a hello's login check is ok, refused or unrun with a time, and anything else is left out", () => {
+    const hello = (probe: unknown) => parseFrame(JSON.stringify({ t: "hello", harnesses: ["claude"], fenced: true, probe }));
+    expect(hello({ said: "ok", at: 5 })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, probe: { said: "ok", at: 5 } });
+    expect(hello({ said: "refused", at: 5, words: "Invalid bearer token" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, probe: { said: "refused", at: 5, words: "Invalid bearer token" } });
+    expect(hello({ said: "unrun", at: 5, words: "no network" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, probe: { said: "unrun", at: 5, words: "no network" } });
+    // an older runner says nothing, and an odd word is not guessed at
+    for (const odd of [undefined, null, "ok", { said: "ok" }, { said: "maybe", at: 5 }, { said: "ok", at: "now" }]) expect(hello(odd)).toEqual({ t: "hello", harnesses: ["claude"], fenced: true });
+    // nothing rides along, and words are cut short
+    expect(hello({ said: "refused", at: 5, words: 7, token: "sk-x" })).toEqual({ t: "hello", harnesses: ["claude"], fenced: true, probe: { said: "refused", at: 5 } });
+    expect((hello({ said: "refused", at: 5, words: "x".repeat(5000) }) as { probe: { words: string } }).probe.words.length).toBeLessThanOrEqual(400);
+  });
+  test("the login check's words: a refusal is down with claude's words and what to do, the rest a detail", () => {
+    const at = Date.UTC(2026, 10, 14, 3);
+    expect(probeRefusal({ said: "refused", at, words: "OAuth token has been revoked" })).toBe(
+      "Anthropic refused the stages' claude login when the runner checked it on 2026-11-14 (OAuth token has been revoked): save a fresh token from claude setup-token as ~/.config/canopy-stages/claude/oauth-token.txt on the host, or log in again in the stages container (docs/deploy.md, Stages, step 7)",
+    );
+    expect(probeRefusal({ said: "refused", at }, COORD_LOGIN)).toStartWith("Anthropic refused the coordinator's claude login when the runner checked it on 2026-11-14: save a fresh token");
+    for (const p of [undefined, { said: "ok" as const, at }, { said: "unrun" as const, at, words: "x" }]) expect(probeRefusal(p)).toBe(null);
+    expect(probeWord({ said: "ok", at })).toBe("Anthropic took it on 2026-11-14");
+    expect(probeWord({ said: "unrun", at, words: "API Error: Connection error." })).toBe("not checked with Anthropic on 2026-11-14: API Error: Connection error.");
+    expect(probeWord({ said: "refused", at })).toBe(null);
+    expect(probeWord(undefined)).toBe(null);
+    expect(refusesLogin("Failed to authenticate. API Error: 401")).toBe(true);
+    expect(refusesLogin("API Error: Connection error.")).toBe(false);
   });
   test("claude's words for a login it could not use get the fix, and no other error does", () => {
     const fix =

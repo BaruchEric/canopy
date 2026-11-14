@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claudeLogin, loginOf, stageToken } from "./logincheck";
+import { claudeLogin, LoginProber, loginKey, loginOf, PROBE_AGAIN, PROBE_ARGS, PROBE_EVERY, probeResult, stageToken } from "./logincheck";
+import type { LoginProbe } from "../core/stagewire";
 
 const NOW = Date.UTC(2026, 10, 11, 20, 44);
 /** shaped like what claude setup-token prints; not a real one */
@@ -122,5 +123,113 @@ describe("claudeLogin", () => {
     const pad = (n: number): string => `{"claudeAiOauth":{"accessToken":"a","refreshToken":"r"}}`.padEnd(n, " ");
     expect(await claudeLogin({ CLAUDE_CONFIG_DIR: await home("over", pad(64 * 1024 + 1)) }, NOW, "linux")).toBeUndefined();
     expect(await claudeLogin({ CLAUDE_CONFIG_DIR: await home("at", pad(64 * 1024)) }, NOW, "linux")).toEqual({ how: "login" });
+  });
+});
+
+describe("the login check with Anthropic", () => {
+  test("is one turn of the cheapest model, with the stages' own user settings and no MCP server", () => {
+    expect(PROBE_ARGS[0]).toBe("-p");
+    expect(PROBE_ARGS.join(" ")).toContain("--model haiku");
+    expect(PROBE_ARGS.join(" ")).toContain("--max-turns 1");
+    expect(PROBE_ARGS.join(" ")).toContain("--setting-sources user");
+    expect(PROBE_ARGS).toContain("--strict-mcp-config");
+    expect(PROBE_ARGS.join(" ")).not.toContain("sk-ant");
+  });
+
+  test("a turn back is ok; claude's words for a refused login are refused; anything else could not run", () => {
+    expect(probeResult({ code: 0, out: "ok\n", err: "" }, NOW)).toEqual({ said: "ok", at: NOW });
+    const revoked = 'Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"OAuth token has been revoked."}}';
+    expect(probeResult({ code: 1, out: `${revoked}\n`, err: "" }, NOW)).toEqual({ said: "refused", at: NOW, words: revoked });
+    expect(probeResult({ code: 1, out: "", err: "Invalid API key · Please run /login\n" }, NOW)).toEqual({ said: "refused", at: NOW, words: "Invalid API key · Please run /login" });
+    expect(probeResult({ code: 1, out: "", err: "API Error: Connection error.\n" }, NOW)).toEqual({ said: "unrun", at: NOW, words: "API Error: Connection error." });
+    expect(probeResult({ code: 3, out: "", err: "" }, NOW)).toEqual({ said: "unrun", at: NOW, words: "claude -p ended with exit 3 and said nothing" });
+    expect(probeResult({ code: null, out: "", err: "", timedOut: true }, NOW)).toEqual({ said: "unrun", at: NOW, words: "claude -p did not answer within 120 s" });
+  });
+
+  test("its words never carry a token, and stay short", () => {
+    const r = probeResult({ code: 1, out: `Invalid bearer token ${TOKEN}\n${"more ".repeat(200)}`, err: "" }, NOW);
+    expect(r.said).toBe("refused");
+    expect(r.words).not.toContain(TOKEN);
+    expect(r.words).toContain("Invalid bearer token (a token)");
+    expect((r.words ?? "").length).toBeLessThanOrEqual(300);
+  });
+
+  test("what a check is for: a token by a hash of it, a login by its end; nothing to check for a dead login, none, or a runner that says nothing", () => {
+    const a = loginKey({ how: "token" }, TOKEN);
+    expect(a).toStartWith("token:");
+    expect(a).not.toContain(TOKEN.slice(13, 30));
+    expect(loginKey({ how: "token" }, `${TOKEN}x`)).not.toBe(a);
+    expect(loginKey({ how: "login", until: NOW }, null)).toBe(`login:${NOW}`);
+    expect(loginKey({ how: "login" }, null)).toBe("login:");
+    for (const l of [{ how: "expired" as const }, { how: "none" as const }, undefined]) expect(loginKey(l, TOKEN)).toBe(null);
+  });
+
+  test("checks at once, then at most once a day while the login stays; an hour after a refusal; at once for a new login", async () => {
+    let clock = NOW;
+    let answer: LoginProbe | null = { said: "ok", at: 0 };
+    let runs = 0;
+    const prober = new LoginProber(async () => {
+      runs++;
+      return answer ? { ...answer, at: clock } : null;
+    }, () => clock);
+    // the first hello starts a check and has nothing to say yet
+    expect(prober.observe("token:a")).toBeUndefined();
+    await prober.settled();
+    expect(runs).toBe(1);
+    expect(prober.observe("token:a")).toEqual({ said: "ok", at: NOW });
+    // later that day: no second check
+    clock += PROBE_EVERY - 60_000;
+    expect(prober.observe("token:a")).toEqual({ said: "ok", at: NOW });
+    await prober.settled();
+    expect(runs).toBe(1);
+    // a day on: checked again, and refused
+    clock += 120_000;
+    answer = { said: "refused", at: 0, words: "Invalid bearer token" };
+    prober.observe("token:a");
+    await prober.settled();
+    expect(runs).toBe(2);
+    expect(prober.observe("token:a")).toMatchObject({ said: "refused" });
+    // a refusal is checked again within the hour, not a day
+    clock += PROBE_AGAIN + 1;
+    answer = { said: "ok", at: 0 };
+    prober.observe("token:a");
+    await prober.settled();
+    expect(runs).toBe(3);
+    expect(prober.observe("token:a")).toMatchObject({ said: "ok" });
+    // a new token: the old word is not this login's, and it is checked at once
+    expect(prober.observe("token:b")).toBeUndefined();
+    await prober.settled();
+    expect(runs).toBe(4);
+    expect(prober.observe("token:b")).toMatchObject({ said: "ok" });
+    // nothing to check: no word and no run
+    expect(prober.observe(null)).toBeUndefined();
+    await prober.settled();
+    expect(runs).toBe(4);
+  });
+
+  test("a check that could not start now (the fence unconfirmed) is not kept, and is asked for again at the next hello", async () => {
+    let runs = 0;
+    const prober = new LoginProber(async () => {
+      runs++;
+      return null;
+    }, () => NOW);
+    prober.observe("token:a");
+    await prober.settled();
+    expect(prober.observe("token:a")).toBeUndefined();
+    await prober.settled();
+    expect(runs).toBe(2);
+  });
+
+  test("one check at a time, however many hellos come while it runs", async () => {
+    let release: () => void = () => {};
+    let runs = 0;
+    const prober = new LoginProber(() => {
+      runs++;
+      return new Promise<LoginProbe>((r) => (release = () => r({ said: "ok", at: NOW })));
+    }, () => NOW);
+    for (let i = 0; i < 5; i++) prober.observe("token:a");
+    release();
+    await prober.settled();
+    expect(runs).toBe(1);
   });
 });

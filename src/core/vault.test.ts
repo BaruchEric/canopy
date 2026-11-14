@@ -53,35 +53,72 @@ beforeEach(() => {
 
 const vault = (token = "t0k") => new VaultNotes({ url: `http://127.0.0.1:${server.port}`, token });
 
+/** a note of project `id`'s, as the incubator writes one: its mark in the frontmatter */
+const noteOf = (id: string, body: string): string => `---\ntype: project\nsprout: ${id}\n---\n# ${body}\n`;
+const MINE = "sp_aaaaaaaaaaaa";
+const THEIRS = "sp_bbbbbbbbbbbb";
+const mine = { mark: `sprout: ${MINE}`, elsewhere: "a-aaaaaaaaaaaa.md" };
+
 describe("put", () => {
   test("no rev creates; the rev it returns replaces", async () => {
-    const r1 = await vault().put("a.md", "one", undefined);
-    expect(notes.get("a.md")?.text).toBe("one");
-    const r2 = await vault().put("a.md", "two", r1);
-    expect(notes.get("a.md")?.text).toBe("two");
-    expect(r2).not.toBe(r1);
+    const r1 = await vault().put("a.md", noteOf(MINE, "one"), undefined, mine);
+    expect(notes.get("a.md")?.text).toBe(noteOf(MINE, "one"));
+    expect(r1.path).toBe("a.md");
+    const r2 = await vault().put("a.md", noteOf(MINE, "two"), r1.rev, mine);
+    expect(notes.get("a.md")?.text).toBe(noteOf(MINE, "two"));
+    expect(r2.rev).not.toBe(r1.rev);
   });
-  test("a stale rev takes the head's and still writes", async () => {
-    await vault().put("a.md", "one", undefined);
-    const rev = await vault().put("a.md", "mine", "999");
-    expect(notes.get("a.md")?.text).toBe("mine");
-    expect(rev).toBe(String(notes.get("a.md")?.rev));
+  test("a stale rev on its own note takes the head's and still writes", async () => {
+    await vault().put("a.md", noteOf(MINE, "one"), undefined, mine);
+    const r = await vault().put("a.md", noteOf(MINE, "mine"), "999", mine);
+    expect(notes.get("a.md")?.text).toBe(noteOf(MINE, "mine"));
+    expect(r).toEqual({ rev: String(notes.get("a.md")?.rev), path: "a.md" });
   });
-  test("no rev on a note that exists (a lost record) replaces it", async () => {
-    await vault().put("a.md", "old", undefined);
-    await vault().put("a.md", "new", undefined);
-    expect(notes.get("a.md")?.text).toBe("new");
+  test("no rev on its own note (a lost record) replaces it", async () => {
+    await vault().put("a.md", noteOf(MINE, "old"), undefined, mine);
+    await vault().put("a.md", noteOf(MINE, "new"), undefined, mine);
+    expect(notes.get("a.md")?.text).toBe(noteOf(MINE, "new"));
+  });
+  test("a note another project holds is left alone, and the write goes to the owner's own path", async () => {
+    await vault().put("a.md", noteOf(THEIRS, "theirs"), undefined, { mark: `sprout: ${THEIRS}`, elsewhere: "a-bbbbbbbbbbbb.md" });
+    const r = await vault().put("a.md", noteOf(MINE, "mine"), undefined, mine);
+    expect(notes.get("a.md")?.text).toBe(noteOf(THEIRS, "theirs"));
+    expect(notes.get("a-aaaaaaaaaaaa.md")?.text).toBe(noteOf(MINE, "mine"));
+    expect(r).toEqual({ rev: String(notes.get("a-aaaaaaaaaaaa.md")?.rev), path: "a-aaaaaaaaaaaa.md" });
+  });
+  test("a stale rev at a path another project took over is not written over either", async () => {
+    const first = await vault().put("a.md", noteOf(MINE, "one"), undefined, mine);
+    notes.set("a.md", { text: noteOf(THEIRS, "theirs"), rev: 77 });
+    const r = await vault().put("a.md", noteOf(MINE, "two"), first.rev, mine);
+    expect(notes.get("a.md")?.text).toBe(noteOf(THEIRS, "theirs"));
+    expect(r.path).toBe("a-aaaaaaaaaaaa.md");
+    expect(notes.get("a-aaaaaaaaaaaa.md")?.text).toBe(noteOf(MINE, "two"));
+  });
+  test("a note with no mark at all is not taken for the owner's", async () => {
+    notes.set("a.md", { text: "# a note someone wrote by hand\nsprout: sp_aaaaaaaaaaaa\n", rev: 5 });
+    const r = await vault().put("a.md", noteOf(MINE, "mine"), undefined, mine);
+    expect(notes.get("a.md")?.text).toBe("# a note someone wrote by hand\nsprout: sp_aaaaaaaaaaaa\n");
+    expect(r.path).toBe("a-aaaaaaaaaaaa.md");
+  });
+  test("with its own path held by another project too, it throws and writes nothing", async () => {
+    notes.set("a.md", { text: noteOf(THEIRS, "theirs"), rev: 5 });
+    notes.set("a-aaaaaaaaaaaa.md", { text: noteOf(THEIRS, "theirs too"), rev: 6 });
+    const err = await vault().put("a.md", noteOf(MINE, "mine"), undefined, mine).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(VaultError);
+    expect((err as VaultError).status).toBe(409);
+    expect(notes.get("a.md")?.text).toBe(noteOf(THEIRS, "theirs"));
+    expect(notes.get("a-aaaaaaaaaaaa.md")?.text).toBe(noteOf(THEIRS, "theirs too"));
   });
   test("a rev for a note that went away creates it again", async () => {
-    await vault().put("gone.md", "back", "5");
-    expect(notes.get("gone.md")?.text).toBe("back");
+    await vault().put("gone.md", noteOf(MINE, "back"), "5", mine);
+    expect(notes.get("gone.md")?.text).toBe(noteOf(MINE, "back"));
   });
-  test("queued is no rev", async () => {
+  test("queued is no rev, at the path it asked for", async () => {
     queueNext = true;
-    expect(await vault().put("q.md", "x", undefined)).toBeUndefined();
+    expect(await vault().put("q.md", "x", undefined, mine)).toEqual({ rev: undefined, path: "q.md" });
   });
   test("a refused token throws with its status", async () => {
-    const err = await vault("wrong").put("a.md", "x", undefined).catch((e: unknown) => e);
+    const err = await vault("wrong").put("a.md", "x", undefined, mine).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(VaultError);
     expect((err as VaultError).status).toBe(401);
     expect(String(err)).not.toContain("wrong");

@@ -712,7 +712,10 @@ which leaves out the commit stamp and the shells guard that redeploy adds.
 
 canopy `depends_on` stages being healthy, so a broken stages image keeps
 canopy down too. If canopy does not come up after a deploy, the first look is
-`docker compose ps` and `docker compose logs stages`.
+`docker compose ps` and `docker compose logs stages`. The health page's
+"stage runner" check goes down when the runner has not answered within a
+minute of canopy's start, and when it answers but can start neither claude
+nor codex; in the second case queued projects wait with the same words.
 
 In the stages image claude and codex are root's, under `/opt/stage-tools`,
 and the PATH holds root-owned folders only, so no stage can change what a
@@ -827,9 +830,23 @@ with a token" or "logged in until <day>", and goes down on the day a login
 lapses with what to do. While it is down, a queued project whose stages run
 claude waits with the same words on its card and on the incubator's bar,
 spends no run, and starts on its own at the first hello that says the login
-is back. The check reads what is on file, not whether Anthropic still takes
-it: a token revoked at claude.ai still reads "signed in with a token", and
-the stage that meets it parks with claude's own words.
+is back.
+
+The file cannot say whether Anthropic still takes the login: a token
+revoked at claude.ai, or a copied login whose source refreshed first, reads
+well on file. So the runner also checks it with Anthropic: one `claude -p`
+turn on haiku, as a stage's claude signs in, once the fence is confirmed,
+then at most once a day while the login on file stays the same. A refused
+or failed check is tried again after an hour, and a new token or a new
+`/login` is checked at its first hello. The health check then reads
+"signed in with a token; Anthropic took it on <day>". A refusal puts it
+down with claude's own words and the same fix, and holds the queue as a
+dead login does. A check that could not run (the network, a timeout) says
+so after the login's word and holds nothing. The check never sends the
+token: only its word and day are in the hello. The coordinator's runner
+checks its own login the same way. A runner from an image older than the
+check says nothing of one, and a stage that meets a refused login parks
+with claude's words as before.
 
 The stages container runs as root (the stage runner drops each stage to
 `bun`), so every exec that acts as a stage names the user. For a `/login`,
@@ -1080,7 +1097,9 @@ coordinator's runner reads it the way the stages' runner reads theirs
 (Stages, step 7), so nothing restarts. It lasts a year, it is not the
 stages' token (a stage's commands can read theirs), and nothing has to be
 copied. The health page's "coordinator's claude login" check says which
-login the runner holds and when a `/login` lapses.
+login the runner holds, when a `/login` lapses, and what the runner's daily
+check with Anthropic said of it (through the egress proxy, as the
+coordinator's claude reaches Anthropic).
 
 Without a token, seed a login from the stages' `/login`, copying only the
 account files, never the whole folder: a stage can write the stages' folder,

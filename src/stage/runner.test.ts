@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -170,6 +171,76 @@ describe("the stage runner", () => {
     // a reader that throws says nothing, and the hello still answers
     const broken = await extra("login-broken", { login: async () => Promise.reject(new Error("no")) });
     expect((await talk({ t: "hello" }, [], 5000, broken))[0]).toEqual({ t: "hello", harnesses: expect.any(Array), fenced: true });
+  });
+
+  test("the login check: off unless asked for; then one claude -p turn, signed in as a stage's claude, whose word the next hellos carry and never the token", async () => {
+    /** a stand-in claude that keeps its argv and env, and answers with what `says` and `code` hold */
+    const fake = async (name: string): Promise<{ path: string; argv: string; env: string; says: string; code: string }> => {
+      const base = join(dir, name);
+      const f = { path: `${base}-claude`, argv: `${base}-argv`, env: `${base}-env`, says: `${base}-says`, code: `${base}-code` };
+      await writeFile(f.path, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${f.argv}'\nenv > '${f.env}'\ncat '${f.says}' 2>/dev/null\nexit "$(cat '${f.code}' 2>/dev/null || echo 0)"\n`);
+      await chmod(f.path, 0o755);
+      return f;
+    };
+    const cfg = join(dir, "probe-cfg");
+    await mkdir(cfg, { recursive: true });
+    await writeFile(join(cfg, "oauth-token.txt"), `${STAGE_TOKEN}\n`);
+    const token = async () => ({ how: "token" as const });
+
+    // off: hellos never start claude
+    const off = await fake("probe-off");
+    const offSock = await extra("probe-off", { login: token, env: { CLAUDE_CONFIG_DIR: cfg }, programs: { claude: off.path } });
+    for (let i = 0; i < 3; i++) expect((await talk({ t: "hello" }, [], 5000, offSock))[0]).not.toHaveProperty("probe");
+    await Bun.sleep(200);
+    expect(existsSync(off.argv)).toBe(false);
+
+    // on: the first hello starts it, a later one carries its word
+    const on = await fake("probe-on");
+    await writeFile(on.says, "ok\n");
+    const onSock = await extra("probe-on", { login: token, env: { CLAUDE_CONFIG_DIR: cfg }, programs: { claude: on.path }, loginProbe: {} });
+    expect((await talk({ t: "hello" }, [], 5000, onSock))[0]).not.toHaveProperty("probe");
+    let hello: StageFrame | undefined;
+    for (let i = 0; i < 100; i++) {
+      hello = (await talk({ t: "hello" }, [], 5000, onSock))[0];
+      if (hello && "probe" in hello) break;
+      await Bun.sleep(50);
+    }
+    expect(hello).toMatchObject({ t: "hello", claude: { how: "token" }, probe: { said: "ok", at: expect.any(Number) } });
+    expect(JSON.stringify(hello)).not.toContain(STAGE_TOKEN);
+    expect((await readFile(on.argv, "utf8")).trim()).toBe("-p --model haiku --max-turns 1 --setting-sources user --strict-mcp-config Reply with the one word ok.");
+    // signed in as a stage's claude would be: the runner's token, under the name claude reads
+    expect(await readFile(on.env, "utf8")).toContain(`CLAUDE_CODE_OAUTH_TOKEN=${STAGE_TOKEN}\n`);
+    // more hellos the same day: no second turn
+    for (let i = 0; i < 3; i++) await talk({ t: "hello" }, [], 5000, onSock);
+    await Bun.sleep(200);
+    expect((await readFile(on.argv, "utf8")).trim().split("\n")).toHaveLength(1);
+
+    // a login Anthropic refuses: claude's words, without the token
+    const no = await fake("probe-no");
+    await writeFile(no.says, `Failed to authenticate. API Error: 401 OAuth token has been revoked. ${STAGE_TOKEN}\n`);
+    await writeFile(no.code, "1\n");
+    const noSock = await extra("probe-no", { login: token, env: { CLAUDE_CONFIG_DIR: cfg }, programs: { claude: no.path }, loginProbe: {} });
+    let refused: StageFrame | undefined;
+    for (let i = 0; i < 100; i++) {
+      refused = (await talk({ t: "hello" }, [], 5000, noSock))[0];
+      if (refused && "probe" in refused) break;
+      await Bun.sleep(50);
+    }
+    expect(refused).toMatchObject({ probe: { said: "refused", words: "Failed to authenticate. API Error: 401 OAuth token has been revoked. (a token)" } });
+    expect(JSON.stringify(refused)).not.toContain(STAGE_TOKEN);
+  });
+
+  test("the login check waits for the fence like a stage, and with no login to check starts nothing", async () => {
+    const argv = join(dir, "probe-fence-argv");
+    const claude = join(dir, "probe-fence-claude");
+    await writeFile(claude, `#!/bin/sh\necho "$*" >> '${argv}'\n`);
+    await chmod(claude, 0o755);
+    const unfenced = await extra("probe-unfenced", { login: async () => ({ how: "token" }), programs: { claude }, loginProbe: {}, probe: async () => ({ result: "open" }) });
+    for (let i = 0; i < 3; i++) expect((await talk({ t: "hello" }, [], 5000, unfenced))[0]).not.toHaveProperty("probe");
+    const dead = await extra("probe-dead", { login: async () => ({ how: "expired" }), programs: { claude }, loginProbe: {} });
+    for (let i = 0; i < 3; i++) expect((await talk({ t: "hello" }, [], 5000, dead))[0]).not.toHaveProperty("probe");
+    await Bun.sleep(200);
+    expect(existsSync(argv)).toBe(false);
   });
 
   test("the runner's claude token goes to claude alone, under the name claude reads", async () => {

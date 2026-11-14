@@ -46,11 +46,12 @@ import {
   requestRefusal,
   STAGE_PROGRAMS,
   type StageFrame,
+  type LoginProbe,
   type StageLogin,
   type StageRequest,
 } from "../core/stagewire";
 import { reach, type ProbeResult } from "./fencecheck";
-import { claudeLogin, stageToken } from "./logincheck";
+import { claudeLogin, LoginProber, loginKey, PROBE_ARGS, PROBE_MS, probeResult, stageToken } from "./logincheck";
 import { stageSettingsRefusal } from "./settingscheck";
 
 export interface RunnerOptions {
@@ -88,6 +89,12 @@ export interface RunnerOptions {
   /** what a hello says of the stages' claude login, from the runner's env:
    *  `claudeLogin` unless a test hands in its own */
   login?: (env: Record<string, string | undefined>) => Promise<StageLogin | undefined>;
+  /** Check that login with Anthropic (`LoginProber`): one `claude -p` turn
+   *  once the fence is confirmed, as a stage's claude, at most once a day
+   *  while the login stays the same, its word in each hello. Off unless
+   *  given: main.ts turns it on, and no test spawns a real claude by
+   *  leaving it in. `now` and `timeoutMs` are the tests'. */
+  loginProbe?: { now?: () => number; timeoutMs?: number };
 }
 
 /** Whether `uid` with only `gid` as its group could write a file or folder
@@ -447,7 +454,7 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
    *  sweep at a time; a call while one runs waits for it and runs again,
    *  so a run's end never rides on a pass that read the table before it. */
   let sweeping: Promise<void> = Promise.resolve();
-  /** the chores children alive now, which the orphan sweep spares */
+  /** the chores children and the login check alive now, which the orphan sweep spares */
   const chores = new Set<number>();
   /** `stageChores` in a child dropped to the stage user, in a neutral cwd,
    *  with the runner's own env; anything but its answer refuses */
@@ -535,6 +542,53 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
   /** the sh a child enters its seed with, held to the same rule as a program */
   const shell = () => resolveProgram("sh", programs["sh"] ?? "sh", own["PATH"], opts.root, writable);
 
+  /** One check of the claude login with Anthropic, held to a stage's rules:
+   *  nothing until the fence is confirmed (null: asked again at the next
+   *  hello), the chores first, claude resolved as for a spawn and started
+   *  as the stage user in "/", with a stage's env and the runner's token.
+   *  It never enters a seed. */
+  const probeLogin = async (): Promise<LoginProbe | null> => {
+    await firstProbe;
+    if (fence.fenced !== true) return null;
+    const now = opts.loginProbe?.now ?? Date.now;
+    const at = now();
+    const unsettled = as ? await choresAs(as, [opts.root]) : await stageChores(own, [opts.root]);
+    if (unsettled) return { said: "unrun", at, words: unsettled };
+    const resolved = await resolveProgram("claude", programs["claude"] ?? "claude", own["PATH"], opts.root, writable);
+    if ("refused" in resolved) return { said: "unrun", at, words: resolved.refused };
+    const token = await stageToken(own).catch(() => null);
+    const argv = [resolved.program, ...PROBE_ARGS];
+    let p: Bun.Subprocess<"ignore", "pipe", "pipe">;
+    try {
+      p = Bun.spawn(as ? [...dropTo(as), ...argv] : argv, {
+        cwd: "/",
+        env: childEnv(own, {}, [], net.env, loginEnv(token, "claude")),
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        detached: true,
+      });
+    } catch {
+      return { said: "unrun", at, words: "claude could not be started" };
+    }
+    chores.add(p.pid);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      signal(-p.pid, "SIGKILL");
+    }, opts.loginProbe?.timeoutMs ?? PROBE_MS);
+    try {
+      const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+      return probeResult({ code, out, err, timedOut }, at);
+    } finally {
+      clearTimeout(timer);
+      // whatever it left in its group goes with it
+      signal(-p.pid, "SIGKILL");
+      chores.delete(p.pid);
+    }
+  };
+  const prober = opts.loginProbe ? new LoginProber(probeLogin, opts.loginProbe.now) : null;
+
   const server = createServer((sock) => {
     live.add(sock);
     const split = lineSplitter();
@@ -564,7 +618,9 @@ export async function startStageRunner(opts: RunnerOptions): Promise<{ stop(): P
       }
       // the claude login as it stands now; a reader that fails says nothing
       const claude = await readLogin(own).catch(() => undefined);
-      finish({ t: "hello", harnesses, fenced: fence.fenced, ...(fence.reason ? { reason: fence.reason } : {}), ...(claude ? { claude } : {}) });
+      // the last check of that login with Anthropic, and the next when due
+      const probe = prober?.observe(loginKey(claude, claude?.how === "token" ? await stageToken(own).catch(() => null) : null));
+      finish({ t: "hello", harnesses, fenced: fence.fenced, ...(fence.reason ? { reason: fence.reason } : {}), ...(claude ? { claude } : {}), ...(probe ? { probe } : {}) });
     };
 
     const busy = async (path: string): Promise<void> => {

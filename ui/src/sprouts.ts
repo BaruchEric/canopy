@@ -249,6 +249,13 @@ export function replaceSprouts(
 /** The incubator bar's word for where stages run, the title naming which
  *  env is set or missing, and whether it is worth a second look. */
 export function stagesWord(st: IncubatorStages): { word: string; title: string; warn: boolean } {
+  if (st.notKeeping) {
+    return {
+      word: "incubator kept elsewhere",
+      title: `${st.notKeeping}. A project started here is refused, and what this canopy says of its stages is its own view, not the keeper's.`,
+      warn: true,
+    };
+  }
   switch (st.mode) {
     case "runner":
       if (!st.isolated && st.unfenced) {
@@ -291,11 +298,13 @@ export function stagesWord(st: IncubatorStages): { word: string; title: string; 
   }
 }
 
-/** Why a project started on this backend would never start: its stages are
- *  off, with no runner and no unisolated switch. Null for any other mode
- *  (a runner away starts its projects once it answers) and for a backend
- *  that has not said, which the server answers for. */
+/** Why a project started on this backend would never start, or is refused:
+ *  it does not keep its incubator now, or its stages are off, with no
+ *  runner and no unisolated switch. Null for any other mode (a runner away
+ *  starts its projects once it answers) and for a backend that has not
+ *  said, which the server answers for. */
 export function cannotStart(backend: string, st: IncubatorStages | undefined): string | null {
+  if (st?.notKeeping) return `${backend} cannot take a project now: ${st.notKeeping}. Pick another backend.`;
   if (st?.mode !== "off") return null;
   return `${backend} has nowhere to run a stage, so a project started there would never start. Pick another backend, or set CANOPY_INCUBATOR_UNISOLATED=1 on ${backend} and restart it.`;
 }
@@ -321,7 +330,7 @@ export function sproutBackend(
 ): string {
   const can = (b: string): boolean => {
     const st = Object.hasOwn(stages, b) ? stages[b] : undefined;
-    return st !== undefined && st.mode !== "off";
+    return st !== undefined && st.mode !== "off" && !st.notKeeping;
   };
   if (can(home)) return home;
   return order.find((b) => b !== home && online(b) && can(b)) ?? home;

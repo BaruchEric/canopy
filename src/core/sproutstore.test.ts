@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SproutFiles } from "./sproutstore";
@@ -122,8 +122,12 @@ describe("SproutFiles", () => {
     expect(await files.readRunAnswers(id)).toEqual([rec]);
   });
   test("dismiss keeps the inputs under .dismissed and drops the sprout from the list", async () => {
+    // a record last changed long ago: its time in .dismissed counts from the dismissal
+    await utimes(join(dir, "sp_000000000001"), 1_000, 1_000);
+    const before = Date.now();
     await files.dismiss("sp_000000000001");
     expect(await files.list()).toEqual([]);
     expect(await readFile(join(dir, ".dismissed", "sp_000000000001", "inputs", "001-text.md"), "utf8")).toBe("hello");
+    expect((await stat(join(dir, ".dismissed", "sp_000000000001"))).mtimeMs).toBeGreaterThanOrEqual(before - 1_000);
   });
 });
