@@ -1205,6 +1205,13 @@ export const api = {
     const [b, plain] = on(runId);
     await req<{ ok: true }>(b, "/api/coordinator/start", { method: "POST", body: JSON.stringify({ run: plain, ...(ids ? { ids } : {}) }) });
   },
+  /** a goal from the top: a coordinator at no repo, started with its goal,
+   *  the repos it may touch (plain ids on that backend) and files, as
+   *  multipart. The answer is the run, qualified for its backend. */
+  coordNew: async (form: FormData, b: string) => {
+    if (!form.has("client")) form.set("client", clientId());
+    return from(b, await req<Run>(b, "/api/coordinator/new", { method: "POST", body: form }), qRun);
+  },
   /** adds cards to a coordinator's plan as a person; the run's broadcast carries them */
   coordPlan: async (runId: string, tasks: Array<{ title: string; repo: string; note: string; action: "ask" | "propose" }>) => {
     const [b, plain] = on(runId);

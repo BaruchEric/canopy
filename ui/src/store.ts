@@ -64,7 +64,7 @@ import { appendFeed, describeEvent, feedOnSide, feedPlaceOf, feedPlaceShown, swe
 import { mergeAction } from "./peers";
 import { pasteIntoAgentShell } from "./agentsend";
 import { convOf, isUnread, mergeMessages } from "./chan";
-import type { AdviceAccepted, AdviceOffer, AgentCard, AgentKind, AgentPulse, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
+import type { AdviceAccepted, AdviceOffer, AgentCard, AgentEffort, AgentKind, AgentPulse, Ask, AwakeInfo, AwakeMode, BranchTreesInfo, CapacityInfo, ChanMessage, HealthCheck, IncubatorStages, KitInfo, LandingInfo, PendingPair, Presence, PrWatch, RangerInfo, ScenarioNames, SecretsInfo, Sprout, SweepInfo, SweepOutcome, TailchanInfo, WorktreesInfo } from "../../src/core/types";
 import { askCloses, askGone, endedCards, freshEntry } from "./sweep";
 import { cardOfPanel } from "./agentpanel";
 import { isReservedPanel, panelOfItem, runOfPanel, runPanel } from "./itempanel";
@@ -1449,6 +1449,9 @@ export interface CanopyState {
   /** a new project from the + project sheet or n; answers before the seed is made */
   /** starts a project on the named backend, home by default */
   createSprout: (form: FormData, backend?: string) => Promise<Sprout>;
+  /** starts a coordinator at no repo (FR-067) on one backend; answers the
+   *  run's id as this page holds it. A refusal throws the server's words. */
+  newGoal: (backend: string, input: { goal: string; repos: string[]; files: File[]; model?: string; effort?: AgentEffort }) => Promise<string>;
   addSproutInputs: (id: string, form: FormData) => Promise<Sprout>;
   /** clarify's questions answered, or null to go on assumptions */
   answerSprout: (id: string, answers: Record<string, string> | null) => Promise<void>;
@@ -4555,6 +4558,18 @@ export const useStore = create<CanopyState>((set, get) => ({
     } catch {
       // a failed reload keeps what is held, so a blip does not drop the inbox's questions
     }
+  },
+  newGoal: async (backend, input) => {
+    const form = new FormData();
+    form.set("goal", input.goal);
+    // plain ids: the backend knows its repos by those
+    for (const r of input.repos) form.append("repos[]", plainOf(r));
+    for (const f of input.files) form.append("files[]", f);
+    if (input.model) form.set("model", input.model);
+    if (input.effort) form.set("effort", input.effort);
+    const run = await api.coordNew(form, backend);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+    return run.id;
   },
   createSprout: async (form, backend) => {
     const sp = await api.newSprout(form, backend ?? get().home);

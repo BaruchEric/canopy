@@ -2,10 +2,11 @@ import { useEffect } from "react";
 import { runPanel } from "../itempanel";
 import { tellPanes } from "../panes";
 import { groveUrl } from "../routes";
-import { idText, useStore } from "../store";
+import { useStore } from "../store";
 import { setTitleBase } from "../title";
 import { Console } from "./RunSheet";
 import { Wordmark } from "./TopBar";
+import { runRepoName } from "../goals";
 
 /**
  * One chat in a window of its own (`?view=run&run=<id>`): the dock's run
@@ -19,7 +20,8 @@ import { Wordmark } from "./TopBar";
 export function RunSolo({ id, popped }: { id: string; popped: boolean }) {
   const run = useStore((s) => s.runs[id]);
   const repo = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId) : undefined));
-  const name = run ? `${run.verb} · ${repo?.name ?? idText(run.repoId)}` : null;
+  const repoName = useStore((s) => (run ? runRepoName(s.repos, run.repoId) : ""));
+  const name = run ? `${run.verb} · ${repoName}` : null;
 
   useEffect(() => {
     setTitleBase(name ? `${name} · canopy` : "chat · canopy");

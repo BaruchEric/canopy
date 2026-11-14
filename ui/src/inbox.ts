@@ -43,6 +43,8 @@ import { askTitle } from "./sweep";
 import type { TriggerEvent } from "../../src/core/trigger";
 import type { QuickNote } from "../../src/core/notes";
 import { branchReportLine, reportLine, serviceOf } from "./triggers";
+import { runRepoName } from "./goals";
+import { isGoalAnchor } from "../../src/core/coordinator";
 
 /** The browser's quiet harness line, kept to one notice per ISO week. */
 export const HARNESS_SAID_KEY = "canopy.harnessSaid";
@@ -254,7 +256,7 @@ function runItem(run: Run, flow: Flow | undefined, runs: Readonly<Record<string,
     id: run.id,
     kind: p.kind,
     repoId: run.repoId,
-    repo: repo?.name ?? run.repoId,
+    repo: isGoalAnchor(run.repoId) ? runRepoName(ctx.repos, run.repoId) : (repo?.name ?? run.repoId),
     who,
     where: `canopy ${run.chat ? "chat" : "run"}${backend ? ` on ${backend}` : ""}`,
     title: p.kind === "permission" ? p.title : p.kind === "proposal" ? "plan to approve" : `question: ${p.questions[0]?.question ?? "a question"}`,

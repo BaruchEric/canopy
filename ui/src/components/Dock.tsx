@@ -130,6 +130,7 @@ import {
 } from "../../../src/core/types";
 import { SPEC_TONE, SPEC_WORDS } from "../../../src/core/treelines";
 import { isTreeCard } from "../../../src/core/treewords";
+import { runRepoName } from "../goals";
 
 /** the tool each opener shows as along a panel's action row */
 const OPENER_ICON: Record<OpenerId, IconName> = {
@@ -2153,7 +2154,7 @@ const panelText = (id: string): string =>
 function runPanelName(id: string): string {
   const s = useStore.getState();
   const run = s.runs[runOfPanel(id) ?? ""];
-  return run ? `${run.verb} · ${s.repos.find((r) => r.id === run.repoId)?.name ?? idText(run.repoId)}` : "chat";
+  return run ? `${run.verb} · ${runRepoName(s.repos, run.repoId)}` : "chat";
 }
 
 /** what a popup's panel is called: the popup's word (FR-047) */
@@ -2576,6 +2577,7 @@ function RunPanel({
   const runId = runOfPanel(id) ?? "";
   const run = useStore((s) => s.runs[runId]);
   const repo = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId) : undefined));
+  const repoName = useStore((s) => (run ? runRepoName(s.repos, run.repoId) : ""));
   const closable = useStore((s) => s.settings.panelClose);
   const closePanel = useStore((s) => s.closePanel);
   const wasTab = useWasTab(strip);
@@ -2589,7 +2591,7 @@ function RunPanel({
     const frame = requestAnimationFrame(() => revealHead(box.current?.querySelector(".panel-head") ?? null));
     return () => cancelAnimationFrame(frame);
   }, [forward, sideBySide, area]);
-  const name = run ? `${run.verb} · ${repo?.name ?? idText(run.repoId)}` : "chat";
+  const name = run ? `${run.verb} · ${repoName}` : "chat";
   const tab: TabRef | undefined = run ? { kind: "run", ref: runId, label: name, repoId: run.repoId } : undefined;
   const close = () => closePanel(id);
   return (

@@ -60,6 +60,8 @@ import { openSectionElsewhere, parseRoute } from "../routes";
 import { nextGap, REPLAY_SPEEDS, replayClock, replayEnd, replayTime, replayTimeline, replayView, type ReplayJumpKind, type ReplaySpeed, type ReplayTimeline } from "../replay";
 
 import { GROUP_MAX } from "../../../src/core/group";
+import { runRepoName } from "../goals";
+import { isGoalAnchor } from "../../../src/core/coordinator";
 
 const STATUS_WORD: Record<Run["status"], string> = {
   working: "working",
@@ -107,7 +109,7 @@ export function RunSheet() {
   const close = useStore((s) => s.closeSheet);
   // a run's sheet (a chat or a coordinator) can become a tab (FR-030)
   const run = useStore((s) => (s.sheet?.kind === "run" ? s.runs[s.sheet.runId] : undefined));
-  const repoName = useStore((s) => (run ? s.repos.find((r) => r.id === run.repoId)?.name : undefined));
+  const repoName = useStore((s) => (run ? runRepoName(s.repos, run.repoId) : undefined));
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -131,7 +133,7 @@ export function RunSheet() {
 
   if (!sheet) return null;
   // the tab finds the run again by the key the store keeps it under
-  const tab: TabRef | undefined = run && sheet.kind === "run" ? { kind: "run", ref: sheet.runId, label: `${run.verb} · ${repoName ?? idText(run.repoId)}`, repoId: run.repoId } : undefined;
+  const tab: TabRef | undefined = run && sheet.kind === "run" ? { kind: "run", ref: sheet.runId, label: `${run.verb} · ${repoName ?? ""}`, repoId: run.repoId } : undefined;
   const pop = { name: `sheet ${sheet.kind}`, anchor: CENTERED, gap: 24, ...(tab ? { tab } : {}) };
   return (
     <div className="sheet-back" onPointerDown={(e) => {
@@ -686,7 +688,7 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
             {run.kept && <span className="run-by" title="Served from the run's record on disk; the live run is gone. Nothing here can be answered or stopped."> · kept</span>}
           </div>
           <h2 className="sheet-title">
-            {run.verb} <span className="sheet-repo">{idText(run.repoId)}</span>
+            {run.verb} <span className="sheet-repo">{isGoalAnchor(run.repoId) ? "goal" : idText(run.repoId)}</span>
             {run.equip && <> <span className="branch" title={equipTitle(run.equip)}>{run.equip.loadout}</span></>}
           </h2>
         </div>

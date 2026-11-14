@@ -28,6 +28,7 @@ import type {
 } from "../../src/core/types";
 import { cardName, repoOfCard, repoWord, whereWord } from "./agentcards";
 import { chanLine } from "./chan";
+import { runRepo } from "./goals";
 import { askWord, endingWord } from "./inbox";
 import { elsewhereLines } from "./elsewhere";
 import { peerLines } from "./peers";
@@ -287,7 +288,7 @@ function stepLine(run: Run, index: number): string | null {
 function runLines(ev: Extract<ServerEvent, { type: "run" }>, prev: FeedSnapshot, at: number): FeedLine[] {
   const run = ev.run;
   const before = prev.runs[run.id];
-  const repo = prev.repos.find((r) => r.id === run.repoId);
+  const repo = runRepo(prev.repos, run.repoId);
   const lines: FeedLine[] = [];
   const say = (text: string) => lines.push(about(repo, "run", at, text));
   if (!before) {
@@ -408,7 +409,7 @@ export function describeEvent(
       return runLines(ev, prev, at);
     case "run-gone": {
       const run = prev.runs[ev.id];
-      const repo = run ? prev.repos.find((r) => r.id === run.repoId) : undefined;
+      const repo = run ? runRepo(prev.repos, run.repoId) : undefined;
       return [about(repo, "run", at, run ? `${run.chat ? "chat" : run.verb} dismissed` : "run dismissed", true)];
     }
     case "flow":
