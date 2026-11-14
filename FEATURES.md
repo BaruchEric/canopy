@@ -31,6 +31,11 @@ One long-lived agent per component (the mini's compose stack, peer sync, tailcha
 
 ## In Progress
 
+### FR-067 · A goal from the top
+P2 · added 2026-11-13 · source: Eric ("start from top chat (with defaults set for Providers) flow with defaults set for coordinate routing, such as model and effort etc and than base on user prompts and or attachments, repos etc start existing canopy cards and worktrees or create new ones", 2026-11-13)
+Start a coordinator from a composer at the top of the manager view instead of a repo card's menu: a goal, attached files, the repos Eric names with @, and a model and effort that default to the backend's coordinate route. The goal is held at no repo (a fixed anchor id). Its cards work in existing repos as today, in a kept worktree (an existing one or one canopy makes for the branch the card names), or make a new project through the incubator and follow it until it is live.
+Spec: docs/superpowers/specs/2026-11-13-goal-from-the-top-design.md (2026-11-13). Three plans: the goal from the top, cards in kept worktrees, cards that make a new project.
+
 ### FR-037 · A durable work ledger
 P2 · added 2026-10-25 · source: Eric (software-factory survey, 2026-10-25; Beads, Symphony)
 A work item per branch (`w-xxxxxxxx`: title, repo, state derived from the hubs, the runs, branches, PRs, trigger events and coordinator cards that served it, and handoff notes) kept under `<configDir>/work/` by the flows-lock holder, not in the repo; git carries the id in the branch name, a `Canopy-Work:` commit trailer and the PR body, so `canopy work rebuild` re-derives the links. Notes are fenced into every later run on the branch; agents leave a `## Handoff` line in their closing text.
