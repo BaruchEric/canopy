@@ -32,6 +32,24 @@ export function choiceOnScreen(screen: string): boolean {
   return lines.some((l) => /^[\s│┃|]*[❯›>]\s*\d+\.\s/.test(l) || /\bEnter to confirm\b/.test(l));
 }
 
+/**
+ * Whether Codex's agent list fills the screen: its "Agent command center",
+ * which ← at an empty prompt opens (the phone's key bar has a ←, and a
+ * swipe on Gboard's space bar sends one), as does esc at its folder-trust
+ * question. Letters there are commands on the selected task (f forks it, r
+ * renames it, x stops it, p pins it, backspace deletes it), Enter opens a
+ * task, and nothing reaches the agent, so a steer waits; esc goes back to
+ * the prompt. Codex 0.169 draws the title on the first line and its keys
+ * (`? help  esc back  ↑/↓ move  enter open`) on the last.
+ */
+export function codexAgentListOnScreen(screen: string): boolean {
+  const lines = screen
+    .replace(ESCAPES, "")
+    .split("\n")
+    .filter((l) => l.trim() !== "");
+  return /^\s*Agent command center\b/.test(lines[0] ?? "") || lines.slice(-3).some((l) => /^\s*\?\s+help\s+esc back\b/.test(l));
+}
+
 /** The words a person typed, ready to send: trimmed, or why they cannot go. */
 export function steerWords(text: string): { ok: true; words: string } | { ok: false; error: string } {
   const words = text.trim();

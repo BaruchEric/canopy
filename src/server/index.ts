@@ -61,7 +61,7 @@ import { workflowGraph, type ModesRead } from "../core/flowgraph";
 import { unattendedRefusal } from "../core/workflow";
 import { INHERITED_ENV, SECRET_ENV, isKeystroke, isTermId, parseTermMessage, Scrollback, shellArgs, startTerm, termPlace, termSize, type TermSession, type TermSize } from "../core/term";
 import { attachTmuxTerm, hasSession, history, killSession, listActivity, listSessions, noServer, newSession, paneInfo, paneScreen, paneText, sayInto, sendKeys, sendLine, serverUp, sessionName, setLabel, setPlace, snapshot, tmuxBase } from "../core/tmux";
-import { choiceOnScreen, steerWords } from "../core/steer";
+import { choiceOnScreen, codexAgentListOnScreen, steerWords } from "../core/steer";
 import { isPerson } from "../core/callers";
 import { cardAsks } from "../core/agentstatus";
 import { cardSession, clip, continueLine, countLines, expiredShells, forgetKept, KEEP_EVERY, listKept, lostShells, readKeptHistory, replayCommand, replayFile, restoredBanner, resumeLine as resumeKeptLine, writeKept } from "../core/keep";
@@ -5297,6 +5297,9 @@ async function handleApi(
     const screen = await paneScreen(tmux, term);
     if (screen !== null && choiceOnScreen(screen)) {
       return json({ error: "its screen shows a choice waiting: answer that in its shell or the inbox, where an answer is a deliberate act" }, 409);
+    }
+    if (screen !== null && codexAgentListOnScreen(screen)) {
+      return json({ error: "Codex shows its agent list, where letters act on the selected task and Enter opens one: esc takes it back to its prompt" }, 409);
     }
     if (!(await sayInto(tmux, term, said.words))) return json({ error: "tmux would not take the words" }, 502);
     return json({ ok: true });

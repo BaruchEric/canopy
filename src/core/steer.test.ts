@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { choiceOnScreen, STEER_MAX, steerWords } from "./steer";
+import { choiceOnScreen, codexAgentListOnScreen, STEER_MAX, steerWords } from "./steer";
 import { pasteArgs, sayBuffer, sayInto, sessionName, setBufferArgs } from "./tmux";
 
 const ID = "0123456789abcdef0123456789abcdef";
@@ -38,6 +38,38 @@ describe("a choice on a terminal agent's screen", () => {
   test("a choice scrolled far up the pane is gone, only the last lines count", () => {
     const old = "❯ 1. Yes\n" + Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
     expect(choiceOnScreen(old)).toBe(false);
+  });
+});
+
+describe("Codex's agent list on a shell's screen", () => {
+  // as codex 0.169 draws it at a phone's 46 columns, colours and all
+  const list = [
+    "\x1b[1m  Agent command center\x1b[0m  Group: Project  g",
+    "   All 4   Needs you 0   Working 0        ›",
+    "  ──────────────────────────────────────────",
+    "      Tasks",
+    "  ~/dev/demo  2",
+    "  › ○ Untitled task",
+    "    ○ Respond to greeting",
+    "  ↓",
+    "",
+    "  ? help  esc back  ↑/↓ move  enter open  n…",
+  ];
+
+  test("is seen by its title on top or its keys at the bottom", () => {
+    expect(codexAgentListOnScreen(list.join("\n"))).toBe(true);
+    // a short pane that lost the title still has the keys
+    expect(codexAgentListOnScreen(list.slice(3).join("\n"))).toBe(true);
+    // its help over the list keeps the title
+    expect(codexAgentListOnScreen([list[0], "  Task shortcuts", "  Navigate  Tasks  View", "  esc back"].join("\n"))).toBe(true);
+  });
+
+  test("is not Codex's prompt, its trust question, or a transcript that names it", () => {
+    const prompt = ["  >_ OpenAI Codex (v0.169.0)", "› Ask Codex to do anything", "  gpt-6.1-sol default · ~/dev/demo", "  ← for agents      ⚠ 5 warnings · f2 to view"];
+    expect(codexAgentListOnScreen(prompt.join("\n"))).toBe(false);
+    expect(codexAgentListOnScreen("  Trust this folder?\n› 1. Trust and continue\n  2. Back to Agent Command Center\n  enter continue · esc back\n")).toBe(false);
+    expect(codexAgentListOnScreen("⏺ The fix:\n  Codex's Agent command center eats letters.\n\n✻ Working… (3s · esc to interrupt)\n")).toBe(false);
+    expect(codexAgentListOnScreen("")).toBe(false);
   });
 });
 
