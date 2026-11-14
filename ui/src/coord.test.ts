@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CoordTask, Flow, LandingInfo, PrWatch, Run, RunStep } from "../../src/core/types";
-import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, chainWords, childLine, coordTurn, coordView, isCoordinator, parentCard, parseAfter, stepLine } from "./coord";
+import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, chainWords, childLine, coordCheckout, coordTurn, coordView, isCoordinator, parentCard, parseAfter, stepLine } from "./coord";
 
 const run = (id: string, over: Partial<Run> = {}): Run => ({
   id,
@@ -246,5 +246,33 @@ describe("what a card's form sends", () => {
   test("a proposed card's own fields, trimmed, as before", () => {
     const t = card();
     expect(cardEdit(t, { ...cardDraft(t), title: " add the other thing ", times: 3, action: "propose" })).toEqual({ title: "add the other thing", times: 3, action: "propose" });
+  });
+});
+
+describe("coordCheckout: where a card's coordinate… starts", () => {
+  const mac = { id: "proj" };
+  const mini = { id: "mini|proj" };
+  const desoto = { id: "desoto|proj" };
+  const runner = (...ids: string[]) => (id: string) => ids.includes(id);
+
+  test("a lead whose backend has a runner starts it there", () => {
+    expect(coordCheckout(mini, [mac, mini], runner("mini|proj", "proj"))).toBe(mini);
+  });
+
+  test("a lead with no runner starts it at the first other checkout that has one", () => {
+    expect(coordCheckout(mac, [mac, mini, desoto], runner("mini|proj", "desoto|proj"))).toBe(mini);
+    expect(coordCheckout(mac, [mac, desoto, mini], runner("mini|proj", "desoto|proj"))).toBe(desoto);
+  });
+
+  test("no checkout on a backend with a runner offers none", () => {
+    expect(coordCheckout(mac, [mac, mini], runner())).toBeUndefined();
+    expect(coordCheckout(mac, [mac], runner("mini|proj"))).toBeUndefined();
+  });
+
+  test("a checkout over ssh or a seed never starts one", () => {
+    const ssh = { id: "mini|proj", host: "nas" };
+    expect(coordCheckout(mac, [mac, ssh], runner("mini|proj"))).toBeUndefined();
+    const seed = { id: "mini|_incubator/idea" };
+    expect(coordCheckout(seed, [seed], runner("mini|_incubator/idea"))).toBeUndefined();
   });
 });

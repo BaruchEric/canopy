@@ -12,7 +12,8 @@ import { AGENT_NAME } from "../runs";
 import { describeLaunch } from "../../../src/core/launch";
 import { flowWord } from "../flows";
 import { useShallow } from "zustand/react/shallow";
-import { activeFlowFor, activeRunFor, agentFor, capsFor, connOf, coordinatorFor, isFavorite, isHarness, launchFor, routesOf, useStore } from "../store";
+import { activeFlowFor, activeRunFor, agentFor, capsFor, cardOf, connOf, coordinatorFor, isFavorite, isHarness, isOnline, launchFor, multi, routesOf, useStore } from "../store";
+import { coordCheckout } from "../coord";
 import { oneMenu } from "../menus";
 import { backendOf } from "../registry";
 import { triggerKeeps } from "../surface";
@@ -214,10 +215,17 @@ export function RepoMenuItems({
   // a chat and a job start on whatever the repo's routes say for them
   const chatAgent = useStore((s) => agentFor(s, repo, "chat"));
   const jobAgent = useStore((s) => agentFor(s, repo, "job"));
-  // a coordinator (FR-010) only where the backend has its isolated runner
-  const coordHere = useStore((s) => connOf(s, backendOf(repo.id)).about?.coordinator === true);
-  const coordAgent = useStore((s) => agentFor(s, repo, "coordinate"));
-  const coordinator = useStore((s) => coordinatorFor(s, repo.id));
+  // a coordinator (FR-010) only where a backend has its isolated runner; it
+  // holds no repo, so a card led by a checkout without one (the Mac's)
+  // starts it at another checkout of the card that has one (the mini's)
+  const cardCheckouts = useStore((s) => (multi(s) ? cardOf(s, repo.id)?.checkouts : undefined));
+  const checkouts = cardCheckouts ?? [repo];
+  const coordAt = useStore((s) =>
+    coordCheckout(repo, checkouts, (id) => connOf(s, backendOf(id)).about?.coordinator === true && (id === repo.id || isOnline(s, backendOf(id)))),
+  );
+  const coordAgent = useStore((s) => agentFor(s, coordAt ?? repo, "coordinate"));
+  const coordinator = useStore((s) => checkouts.map((c) => coordinatorFor(s, c.id)).find((r) => r !== undefined));
+  const coordAway = coordAt !== undefined && coordAt.id !== repo.id ? backendOf(coordAt.id) : null;
   const has = useStore((s) => harnessesOf(connOf(s, backendOf(repo.id)).backend));
   // a shell's agent: on another host for a repo there
   const shellHas = useStore((s) => startHarnesses(connOf(s, backendOf(repo.id)).backend, repo.host));
@@ -452,9 +460,10 @@ export function RepoMenuItems({
             </button>
           );
         })()}
-        {!repo.host && !seed && (coordHere || coordinator) && (() => {
+        {(coordAt || coordinator) && (() => {
           // a coordinator holds no repo, so nothing else going here stops one
           const off = !coordinator && coordAgent.harness !== "claude";
+          const at = coordinator?.repoId ?? coordAt?.id ?? repo.id;
           return (
             <button
               type="button"
@@ -467,12 +476,14 @@ export function RepoMenuItems({
                   ? "Show the coordinator going at this repo"
                   : off
                     ? "the coordinator needs Claude Code"
-                    : "A chat that splits your goal into branch runs across repos, proposed as cards you edit before anything starts"
+                    : `A chat that splits your goal into branch runs across repos, proposed as cards you edit before anything starts${
+                        coordAway ? `. It runs on ${coordAway}, since ${backendOf(repo.id)} has no coordinator` : ""
+                      }`
               }
               onClick={() => {
                 if (off) return;
                 onDone();
-                plan(repo.id, "coordinate");
+                plan(at, "coordinate");
               }}
             >
               {coordinator && <span className="dot sky" />}
@@ -488,7 +499,9 @@ export function RepoMenuItems({
                   </>
                 )}
               </span>
-              <span className="menu-fact">{coordinator ? "show" : off ? "needs Claude Code" : "in a sandbox"}</span>
+              <span className="menu-fact">
+                {coordinator ? "show" : off ? "needs Claude Code" : coordAway ? `in a sandbox on ${coordAway}` : "in a sandbox"}
+              </span>
             </button>
           );
         })()}

@@ -8,6 +8,7 @@ import { cardCarries, cardCounts } from "../../src/core/coordinator";
 import { flowWord } from "./flows";
 import { groupWord } from "./groups";
 import { SEP } from "../../src/core/backendid";
+import { isSeedId } from "../../src/core/sprout";
 import { runLanding } from "./landing";
 import { prOfRun, prWord } from "./prs";
 
@@ -238,5 +239,22 @@ export function coordView(run: Pick<Run, "status" | "tasks">): CoordView {
 /** The card a coordinator started a child for, when the page has the parent. */
 export const parentCard = (parent: Pick<Run, "tasks"> | undefined, childId: string): CoordTask | undefined =>
   parent?.tasks?.find((t) => t.run === childId);
+
+/** The checkout of a repo card that coordinate… starts at. A coordinator
+ *  runs only on a backend with its isolated runner, and it holds no repo,
+ *  so any checkout of the card will do: the lead's when its backend has a
+ *  runner, else the first other checkout, in the card's order, whose backend
+ *  has one. The Mac has none, so a card led by the Mac's clone starts it at
+ *  the mini's. A checkout over ssh or a seed never starts one. */
+export function coordCheckout<R extends { id: string; host?: string }>(
+  lead: R,
+  checkouts: readonly R[],
+  hasRunner: (repoId: string) => boolean,
+): R | undefined {
+  for (const r of [lead, ...checkouts.filter((c) => c.id !== lead.id)]) {
+    if (!r.host && !isSeedId(r.id) && hasRunner(r.id)) return r;
+  }
+  return undefined;
+}
 
 export { cardCarries, cardCounts };
