@@ -542,6 +542,8 @@ describe("the brief", () => {
     expect(brief).not.toContain("{{");
     expect(brief).toContain('-H "X-Canopy-Token: $CANOPY_TOKEN"');
     expect(brief).toContain("$CANOPY_API/api/coordinator/plan");
+    expect(brief).toContain("$CANOPY_API/api/trees");
+    expect(brief).toContain('"tree"');
     const example = /<<'EOF'\n([\s\S]*?)\n\s*EOF\n/.exec(brief)?.[1];
     if (!example) throw new Error("no example in the brief");
     const body = JSON.parse(example) as { tasks: unknown };
