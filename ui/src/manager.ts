@@ -151,7 +151,9 @@ const prefixOf = (id: string): string => (id.includes(SEP) ? id.slice(0, id.inde
 function laneTree(task: CoordTask, at: ManagerInputs): LaneTree | null {
   if (!task.tree) return null;
   const found = repoTrees(at.trees ?? {}, task.repo)?.trees.find((t) => t.branch === task.tree);
-  const cardId = task.treeRepo ?? (found ? (at.repos ?? []).find((r) => r.path === found.dir && prefixOf(r.id) === prefixOf(task.repo))?.id : undefined) ?? null;
+  const named = task.treeRepo ?? (found ? (at.repos ?? []).find((r) => r.path === found.dir && prefixOf(r.id) === prefixOf(task.repo))?.id : undefined) ?? null;
+  // a tree merged or removed after its card ran leaves no card to open
+  const cardId = named !== null && at.repos && !at.repos.some((r) => r.id === named) ? null : named;
   return { branch: task.tree, state: found?.state ?? null, cardId };
 }
 

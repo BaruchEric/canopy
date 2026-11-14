@@ -680,6 +680,12 @@ describe("a card in a kept tree", () => {
     expect(lane(tcard(), { runs: runsOf(tr) })?.tree).toEqual({ branch: "feat/x", state: null, cardId: "trees:canopy/feat-x" });
   });
 
+  test("a tree removed after its card ran has no card to open: repos without it give cardId null", () => {
+    const l = lane(tcard(), { runs: runsOf(tr), repos: [] });
+    expect(l?.tree).toEqual({ branch: "feat/x", state: null, cardId: null });
+    expect(lane(tcard(), { runs: runsOf(tr), repos })?.tree?.cardId).toBe("trees:canopy/feat-x");
+  });
+
   test("a settled tree card takes words into its tree, and a stopped run resumes there", () => {
     const l = lane(tcard(), { runs: runsOf(tr) });
     expect(l?.say).toEqual({ kind: "tree", coordId: "k", cardId: "t1", branch: "feat/x" });
