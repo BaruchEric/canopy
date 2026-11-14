@@ -274,6 +274,7 @@ try {
     const repo = (name: string) => tree.repos.find((r) => r.name === name)?.id ?? name;
     const repoDir = (name: string) => tree.repos.find((r) => r.name === name)?.path ?? "";
     const TREE_BRANCH = "check/dev-server-for-the-copy-on-a-phone";
+    const SPROUT_ID = "sp_0123456789ab";
     const now = Date.now();
     const ago = (min: number) => now - min * 60_000;
     const base0 = { verb: "ask", progress: "", expectsChange: true, chat: false, harness: "claude", note: "", prompt: null };
@@ -303,6 +304,7 @@ try {
         { id: "t2", title: "Build the page the spec asks for", repo: repo("demo"), note: "Build what t1's spec says.", action: "ask", state: "queued", after: ["t1"], equip: { loadout: "quick", model: "sonnet" } },
         { id: "t3", title: "Read the copy aloud on a phone", repo: repo("demo"), note: "Every label in plain words.", action: "propose", state: "proposed", files: ["shot.png", "the-copy-to-read-aloud-on-a-phone-every-label-in-plain-words.md"] },
         { id: "t4", title: "Try the copy on a dev server", repo: repo("demo"), note: "Run the dev server and read the copy.", action: "ask", state: "queued", tree: TREE_BRANCH, outcome: `making tree ${TREE_BRANCH}` },
+        { id: "t5", title: "A shop for the copy", repo: "~goal", note: "A tiny shop.", action: "project", state: "running", sprout: SPROUT_ID, outcome: "the project waits on your answers in the incubator" },
       ],
     };
     const branch = { name: "canopy/t1-spec", target: "main", base: "0000000", dir: "/tmp/check-t1", origin: "check-s1", state: "working" };
@@ -380,6 +382,25 @@ try {
         },
       ],
     };
+    // t5's sprout, clarifying with one question for the user
+    const sprout = {
+      id: SPROUT_ID,
+      slug: "a-shop-for-the-copy",
+      title: "A shop for the copy",
+      status: "clarifying",
+      repoId: "_incubator/a-shop-for-the-copy",
+      seedPath: "/tmp/check-incubator/a-shop-for-the-copy",
+      prepared: true,
+      inputs: [{ n: 1, kind: "text", name: "001-text.md", label: "text", type: "text/plain", at: ago(5), via: "coordinator", bytes: 28, summary: "", processed: true }],
+      clarified: false,
+      reclarify: false,
+      questions: [{ question: "Who buys from the shop?", header: "Buyer", multiSelect: false, options: [{ label: "visitors", description: "anyone who reads the copy" }, { label: "members", description: "people with an account" }] }],
+      questionsAt: ago(4),
+      flows: [],
+      spent: { runs: 1, workMs: 60_000 },
+      createdAt: ago(5),
+      updatedAt: ago(4),
+    };
     const goalPage = async (width: number): Promise<Page> => {
       const phone = width <= 390;
       const page = await fresh(undefined, true, phone);
@@ -389,6 +410,7 @@ try {
       await get("/api/flows", flows);
       await get("/api/kit", kit);
       await get("/api/trees", keptTrees);
+      await get("/api/incubator", [sprout]);
       await get("/api/repos/mentions", mentions);
       return page;
     };
@@ -418,7 +440,7 @@ try {
       }));
       const head = await textOf(page, ".mgr-head");
       check(
-        at.includes("run=check-coord") && head.startsWith("Give the check page") && rows.rings === 5 && rows.needs === 3 && rows.lanes === 4 && rows.beside,
+        at.includes("run=check-coord") && head.startsWith("Give the check page") && rows.rings === 6 && rows.needs === 4 && rows.lanes === 5 && rows.beside,
         `at 1440px the one goal going opens (${at}): ${rows.rings} rings, ${rows.needs} things that need you, ${rows.lanes} lanes, the chat ${rows.beside ? "beside them" : "not beside them"}`,
       );
       const files = await textOf(page, "#mgr-lane-t3 .mgr-files");
@@ -428,6 +450,12 @@ try {
       const openTree = page.locator("#mgr-lane-t4").getByRole("button", { name: "open tree" });
       const hasOpen = (await openTree.count()) === 1;
       check(hasOpen, `at 1440px t4's lane has an open tree button`);
+      const project = await page.evaluate(() => {
+        const lane = document.querySelector("#mgr-lane-t5");
+        const buttons = [...(lane?.querySelectorAll("button") ?? [])].map((b) => b.textContent?.trim() ?? "");
+        return { facts: lane?.querySelector(".mgr-lane-facts .mono")?.textContent?.trim() ?? "", word: lane?.querySelector(".mgr-word")?.textContent?.trim() ?? "", buttons };
+      });
+      check(project.facts === "new project" && project.word === "needs you" && project.buttons.includes("open in incubator"), `at 1440px t5's lane reads "${project.facts}", shows "${project.word}" and has ${project.buttons.includes("open in incubator") ? "" : "no "}open in incubator`);
       await page.screenshot({ path: `${shots}/manager-1440.png` });
       if (hasOpen) {
         await openTree.click();
@@ -435,6 +463,14 @@ try {
         const after = await page.evaluate(() => location.search);
         check(!after.includes("view=manager"), `at 1440px open tree leaves the manager view (${after || "no query"})`);
       }
+      // open tree left the view, so come back to it for the project card
+      await page.goto(`${base}/${at}`, { waitUntil: "load" });
+      await settle(page);
+      await page.locator("#mgr-lane-t5").getByRole("button", { name: "open in incubator" }).click();
+      await page.waitForTimeout(800);
+      const opened = await page.evaluate(() => ({ search: location.search, sheet: document.querySelector(".sheet-title")?.textContent?.trim() ?? "", eyebrow: document.querySelector(".sheet-head .eyebrow")?.textContent?.trim() ?? "" }));
+      check(opened.search.includes("view=incubator") && opened.sheet.startsWith("A shop for the copy") && opened.eyebrow.startsWith("incubator"), `at 1440px open in incubator lands on ${opened.search} with the sprout's sheet open ("${opened.eyebrow}", "${opened.sheet}")`);
+      await page.screenshot({ path: `${shots}/manager-1440-project-sheet.png` });
       await page.close();
     }
     {
@@ -491,6 +527,16 @@ try {
       });
       check(treeLine !== null && treeLine.right <= treeLine.lane + 0.5, `at 390px t4's tree line stays inside its lane${treeLine ? ` (${Math.round(treeLine.right)}px of ${Math.round(treeLine.lane)}px)` : ": no tree line"}`);
       await page.locator("#mgr-lane-t4").screenshot({ path: `${shots}/manager-390-tree.png` });
+      // a project card's lane keeps its facts inside it
+      const projectLane = await page.evaluate(() => {
+        const lane = document.querySelector<HTMLElement>("#mgr-lane-t5");
+        if (!lane) return null;
+        const edge = lane.getBoundingClientRect().right;
+        const out = [...lane.querySelectorAll<HTMLElement>(".mgr-lane-facts, .mgr-lane-facts > *, .mgr-lane-foot, .mgr-acts button")].filter((el) => el.getBoundingClientRect().right > edge + 0.5).map((el) => el.className || el.tagName);
+        return { out, text: lane.querySelector(".mgr-lane-facts")?.textContent?.trim() ?? "" };
+      });
+      check(projectLane !== null && projectLane.out.length === 0 && projectLane.text.startsWith("new project"), `at 390px t5's lane keeps its facts inside it ("${projectLane?.text ?? "no lane"}"${projectLane?.out.length ? `, past the edge: ${projectLane.out.join(", ")}` : ""})`);
+      await page.locator("#mgr-lane-t5").screenshot({ path: `${shots}/manager-390-project.png` });
       // the view's root is .mgr-view; there is no .mgr, so a selector on that would see no button at all
       const workers = await shortButtons(page, ".mgr-view");
       check(
