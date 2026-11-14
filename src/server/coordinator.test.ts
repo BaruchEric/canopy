@@ -1979,6 +1979,34 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       expect(card("t1", "co2")?.state).toBe("queued");
     });
 
+    test("cards on one tree go in plan order: a card whose start makes the tree holds the later ones on it this pass, even once the tree is ready", async () => {
+      // the tree is ready the moment its first start has answered
+      making = new (class extends Map<string, string> {
+        override get(key: string): string | undefined {
+          const words = super.get(key);
+          this.delete(key);
+          return words;
+        }
+      })([["feat/x", "making tree feat/x"]]);
+      const h = treeHub();
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" }), task({ title: "two", tree: "feat/x" }), task({ title: "three", tree: "feat/y" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+        ["t1", "queued", "making tree feat/x"],
+        ["t2", "queued", "making tree feat/x"],
+        ["t3", "running", undefined],
+      ]);
+      expect(tried).toEqual(["co1:t1", "co1:t3"]);
+      h.onTrees();
+      await settled(h);
+      expect(cards().map((t) => [t.id, t.state, t.outcome])).toEqual([
+        ["t1", "running", undefined],
+        ["t2", "queued", "waiting for tree feat/x to be free"],
+        ["t3", "running", undefined],
+      ]);
+    });
+
     test("a tree card waiting for its tree to be free keeps those words, and starts once the run there ends", async () => {
       const h = treeHub();
       const his = mine(h, FEAT_X);

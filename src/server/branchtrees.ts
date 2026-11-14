@@ -40,7 +40,7 @@ import {
 import { git } from "../core/exec";
 import { cleanable, isTreeCard, removeRefusal } from "../core/treewords";
 import { parseWorktreeList } from "../core/git";
-import type { BranchTree, BranchTreeRepo, BranchTreesInfo, Repo, ServerEvent } from "../core/types";
+import type { BranchTree, BranchTreeRepo, BranchTreesInfo, BranchTreeState, Repo, ServerEvent } from "../core/types";
 import { defaultBranch, midRebase, repoKey, revOf } from "../core/worktree";
 
 /** a tree a clean-up removed */
@@ -262,6 +262,17 @@ export class BranchTrees {
     if (!t) return null;
     const dir = treeDir(repoPath, t.slug, this.root);
     return existsSync(dir) ? { slug: t.slug, branch: t.branch, dir, port: t.port } : null;
+  }
+
+  /** The tree kept for a branch, matched on the branch exactly and never on
+   *  its slug, with its state and what stopped its setup: what a
+   *  coordinator's card in a kept tree starts from (FR-067). Null when the
+   *  repo keeps none on that branch, or its folder is gone. */
+  treeFor(repoPath: string, branch: string): { slug: string; branch: string; dir: string; state: BranchTreeState; why?: string } | null {
+    const t = this.record(repoPath).trees.find((x) => x.branch === branch);
+    if (!t) return null;
+    const dir = treeDir(repoPath, t.slug, this.root);
+    return existsSync(dir) ? { slug: t.slug, branch: t.branch, dir, state: t.state, ...(t.why !== undefined ? { why: t.why } : {}) } : null;
   }
 
   /** The tree a folder is, for a shell restored into one: its name and port. */

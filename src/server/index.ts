@@ -175,6 +175,7 @@ import {
   isWsColor,
   type AgentSettings,
   type AgentTable,
+  type BranchTreeState,
   type CanopyConfig,
   type Harness,
   type HeldStart,
@@ -254,7 +255,7 @@ import { WarmPool, type Take } from "./warm";
 import { BranchTrees } from "./branchtrees";
 import { isCanopyStack, realCompose } from "./stacks";
 import { treesRoot, treesSource } from "../core/branchtrees";
-import { TREES_SOURCE } from "../core/treewords";
+import { isTreeCard, runsInTrees, TREES_SOURCE } from "../core/treewords";
 import { treesAtWork } from "../core/treework";
 import { GroupHub } from "./groups";
 import { GROUP_MAX, memberProfiles, type RunGroup } from "../core/group";
@@ -263,7 +264,7 @@ import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type ChildStart } from "./coordinator";
 import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
-import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, withStandingRules, type ChildBranch } from "../core/coordinator";
+import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
 import { bodyUpTo } from "./body";
@@ -2465,7 +2466,8 @@ async function coordWorkflowNames(state: ServerState, repoId: string, withRepo: 
  *  run is first heard of. It lands through the landing queue, never opening
  *  a PR on its own: canopy has no per-repo setting for that yet, and "open
  *  PR" on the ready run still can. A repo whose branch slots are full
- *  answers busy, and the card waits. */
+ *  answers busy, and the card waits. A card that names a kept tree runs in
+ *  place there instead (`startCoordTree`, FR-067). */
 async function startCoordChild(state: ServerState, coordId: string, task: CoordTask, priority: Priority = "normal"): Promise<ChildStart> {
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
@@ -2475,6 +2477,8 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   // it can no longer have fails the card in its words (FR-065)
   const loadout = task.equip?.loadout ? cardLoadout(task.equip, state.kit.loadouts()) : null;
   if (loadout && "refused" in loadout) throw new Error(loadout.refused);
+  // a card in a kept tree runs in place there and holds no branch slot (FR-067)
+  if (task.tree !== undefined) return startCoordTree(state, coordId, task, repo, priority);
   // the runner's own count takes held branch runs too, so both are asked
   const going = Math.max(branchSlotsTaken(state, repo.id), state.runner.branchSlotsFor(repo.id));
   const times = task.times ?? 1;
@@ -2503,20 +2507,13 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
   const harness = loadout?.harness ?? routed.harness;
   if (task.action === "propose" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, harness, repo.path);
-  // a card that lists its goal's files gets their folder and a line under
-  // its note naming each (FR-067); validatePlan keeps files off a card with
-  // times or a workflow, so only a card's one run gets here with them
-  const folder = task.files?.length ? await goalFolder(state, coordId) : null;
-  if (task.files?.length && !folder) throw new Error("the goal's files folder is gone");
-  // the coordinator can rewrite its goal's folder, so a name it planned with
-  // may be gone by the start: the card fails naming it, never starts with a
-  // path that is not there
-  const missing = folder ? (task.files ?? []).filter((name) => !folder.files.includes(name)) : [];
-  if (missing.length > 0) throw new Error(`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} no longer in the goal's files folder`);
-  const note = folder && task.files?.length ? `${task.note}\n\n${cardFilesLine(folder.dir, task.files)}` : task.note;
+  // validatePlan keeps files off a card with times or a workflow, so only a
+  // card's one run gets here with them
+  const files = await cardFiles(state, coordId, task);
+  const note = files.line ? `${task.note}\n\n${files.line}` : task.note;
   // a card's child names its parent and never `child`: the tool-child
   // refusal and depth are for runs a run starts through canopy's tools
-  const base: StartExtras = { parent: coordId, ...(priority !== "interactive" ? { priority } : {}), ...(folder ? { addDirs: [folder.dir] } : {}) };
+  const base: StartExtras = { parent: coordId, ...(priority !== "interactive" ? { priority } : {}), ...(files.dirs.length > 0 ? { addDirs: files.dirs } : {}) };
   let release = async (): Promise<void> => {};
   try {
     // the governor before the loadout's files, so a held card writes none
@@ -2534,6 +2531,143 @@ async function startCoordChild(state: ServerState, coordId: string, task: CoordT
     if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
     throw err;
   }
+}
+
+/** A card that lists its goal's files (FR-067): a line for under its note
+ *  naming each, and the folder its run is given. None for a card that lists
+ *  none. The coordinator can rewrite its goal's folder, so a name it planned
+ *  with may be gone by the start: that throws naming it, so the card never
+ *  starts with a path that is not there. */
+async function cardFiles(state: ServerState, coordId: string, task: CoordTask): Promise<{ line: string | null; dirs: string[] }> {
+  if (!task.files?.length) return { line: null, dirs: [] };
+  const folder = await goalFolder(state, coordId);
+  if (!folder) throw new Error("the goal's files folder is gone");
+  const missing = task.files.filter((name) => !folder.files.includes(name));
+  if (missing.length > 0) throw new Error(`${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} no longer in the goal's files folder`);
+  return { line: cardFilesLine(folder.dir, task.files), dirs: [folder.dir] };
+}
+
+/** The trees source's scanned card at a kept tree's folder (FR-067). A
+ *  fresh tree's `.git` is a file the watcher never reports, so nothing
+ *  rescans for it: when the card is not there yet, the source is scanned
+ *  here (after any scan already under way, which may have walked past the
+ *  folder) and the page hears the new list. Null when even that scan does
+ *  not list it. */
+async function treeCardFor(state: ServerState, dir: string): Promise<Repo | null> {
+  const find = (): Repo | null => state.result.repos.find((r) => isTreeCard(r) && r.path === dir) ?? null;
+  const found = find();
+  if (found) return found;
+  const rt = state.sources.find((s) => s.src.id === TREES_SOURCE);
+  if (!rt) return null;
+  if (rt.scanning) await rt.scanning;
+  if (!find()) await scanOne(state, rt, scanOpts(state, await loadConfig()));
+  broadcast(state, { type: "scan", result: state.result });
+  return find();
+}
+
+/** whether a workflow or another in-place run holds a repo's checkout */
+const checkoutInUse = (state: ServerState, repoId: string): boolean => (state.flows.activeFor(repoId) ?? state.runner.activeFor(repoId)) !== undefined;
+
+/** A tree card's run (FR-067): in place on the tree's own repo, no branch,
+ *  with the coordinator as `parent` and never `child`. The agent is the
+ *  card repo's job route for the card's action with the card's loadout
+ *  over it, never holding canopy's tools. A run after the card's own
+ *  (`after`) resumes its Claude session when both are Claude Code's. The
+ *  in-use check and the start share one synchronous stretch after the last
+ *  await, so the runner's one-run-per-repo refusal never races it: a tree
+ *  in use, or a start the governor holds, answers busy, and anything else
+ *  throws. Whatever the loadout wrote goes again unless the run started. */
+async function startTreeRun(state: ServerState, coordId: string, task: CoordTask, treeRepo: Repo, how: { message: string; spec: ActionSpec; priority: Priority; after?: Run }): Promise<ChildResume> {
+  const repo = state.result.repos.find((r) => r.id === task.repo);
+  if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
+  const loadout = task.equip?.loadout ? cardLoadout(task.equip, state.kit.loadouts()) : null;
+  if (loadout && "refused" in loadout) throw new Error(loadout.refused);
+  const routed = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
+  const harness = loadout?.harness ?? routed.harness;
+  if (how.spec.permissionMode === "plan" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
+  await needHarness(state, harness, treeRepo.path);
+  const files = await cardFiles(state, coordId, task);
+  const resume = how.after?.session !== undefined && how.after.harness === "claude" && harness === "claude" ? how.after.session : undefined;
+  // a resumed session has the card's note and its files' line already
+  const note = resume || !files.line ? how.message : `${how.message}\n\n${files.line}`;
+  const base: StartExtras = {
+    parent: coordId,
+    ...(how.priority !== "interactive" ? { priority: how.priority } : {}),
+    ...(files.dirs.length > 0 ? { addDirs: files.dirs } : {}),
+    ...(resume ? { resume } : {}),
+  };
+  let release = async (): Promise<void> => {};
+  try {
+    // the governor before the loadout's files, so a held card writes none
+    needCapacity(state, harness, how.priority);
+    // a manager's worker never holds canopy's tools, whatever its loadout says
+    const loaded = loadout ? await withLoadout(state, treeRepo, loadout, routed, base, false) : { agent: routed, extras: base, release };
+    release = loaded.release;
+    // no await from here to the start
+    if (checkoutInUse(state, treeRepo.id)) {
+      await release();
+      return { busy: treeBusyWords(task.tree ?? "") };
+    }
+    return { run: state.runner.start(treeRepo, task.action, how.spec, note, loaded.agent, "coordinator", undefined, undefined, loaded.extras) };
+  } catch (err) {
+    await release();
+    if (isCapacityHeld(err)) return { busy: err.message };
+    throw err;
+  }
+}
+
+/** What a tree card does in a tree that has a record (FR-067): a ready
+ *  tree's card is found, scanned in when new, and asked whether a run holds
+ *  it; then `treeStep` says wait (its words as busy), fail (thrown), or
+ *  start the run. */
+async function stepInTree(
+  state: ServerState,
+  coordId: string,
+  task: CoordTask,
+  tree: { dir: string; state: BranchTreeState; why?: string },
+  how: { message: string; spec: ActionSpec; priority: Priority; after?: Run },
+): Promise<ChildResume> {
+  const branch = task.tree ?? "";
+  const treeRepo = tree.state === "ready" ? await treeCardFor(state, tree.dir) : null;
+  if (tree.state === "ready" && !treeRepo) throw new Error(`tree ${branch} is ready, but canopy's scan does not list ${tree.dir}`);
+  const step = treeStep(branch, tree, treeRepo !== null && checkoutInUse(state, treeRepo.id));
+  if ("fail" in step) throw new Error(step.fail);
+  if ("start" in step && treeRepo) return startTreeRun(state, coordId, task, treeRepo, how);
+  // a tree that has a record is never made again
+  return { busy: "wait" in step ? step.wait : treeBusyWords(branch) };
+}
+
+/** A coordinator's card that names a kept tree (FR-067). Its repo's tree for
+ *  that branch, made when there is none: `add` makes the worktree before it
+ *  answers and prepares it in the background, so the card waits with the
+ *  making words and the `trees` event pumps it again. An add git refuses (a
+ *  branch checked out elsewhere) fails the card in git's words and leaves no
+ *  record; one refused because another add made the tree meanwhile waits
+ *  for that one. */
+async function startCoordTree(state: ServerState, coordId: string, task: CoordTask, repo: Repo, priority: Priority): Promise<ChildStart> {
+  const branch = task.tree ?? "";
+  const tree = state.trees.treeFor(repo.path, branch);
+  if (tree) return stepInTree(state, coordId, task, tree, { message: task.note, spec: ACTIONS[task.action], priority });
+  try {
+    await state.trees.add(repo, branch, undefined, true);
+  } catch (err) {
+    if (!state.trees.treeFor(repo.path, branch)) throw new Error(String(err instanceof Error ? err.message : err));
+  }
+  return { busy: treeMakingWords(branch) };
+}
+
+/** A settled tree card carried on in its tree (FR-067): Eric's follow-up, or
+ *  a run that hit the plan's limit resumed, as an ask run after the card's
+ *  own, with `message`. Busy while a merge or another run holds the tree;
+ *  throws when the card's repo or its tree is gone. */
+async function followCoordTree(state: ServerState, coordId: string, task: CoordTask, message: string, priority: Priority): Promise<ChildResume> {
+  const repo = state.result.repos.find((r) => r.id === task.repo);
+  if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
+  const branch = task.tree ?? "";
+  const tree = state.trees.treeFor(repo.path, branch);
+  if (!tree) throw new Error(`tree ${branch} is no longer kept in ${repo.name}`);
+  const after = task.run ? state.runner.get(task.run) : undefined;
+  return stepInTree(state, coordId, task, tree, { message, spec: ACTIONS.ask, priority, ...(after ? { after } : {}) });
 }
 
 /** A coordinator's card that names a workflow (FR-065). The workflow is read
@@ -2618,6 +2752,11 @@ async function startCoordWorkflow(state: ServerState, coordId: string, task: Coo
   });
 }
 
+/** what a card's run carries on with when Eric's follow-up says nothing */
+const CARRY_ON = "Carry on with the task from where you stopped.";
+/** what a card's child that hit the plan's usage limit carries on with */
+const AFTER_LIMIT = `The plan's usage window has reset. ${CARRY_ON}`;
+
 /** A coordinator's child that hit the plan's usage limit carries on on its
  *  branch, its session resumed, as a new child of the same coordinator.
  *  Never beside another writer on the branch, as a follow-up: the card
@@ -2628,7 +2767,7 @@ async function resumeCoordChild(state: ServerState, coordId: string, child: Run,
   if (!rec) throw new Error("its branch is gone, so the card cannot carry on");
   if (branchBusy(state, rec.id)) return { busy: BRANCH_BUSY };
   try {
-    return { run: await startingOn(state, rec.id, () => startBranchFix(state, rec, "The plan's usage window has reset. Carry on with the task from where you stopped.", "carry on after the limit", true, { priority, parent: coordId })) };
+    return { run: await startingOn(state, rec.id, () => startBranchFix(state, rec, AFTER_LIMIT, "carry on after the limit", true, { priority, parent: coordId })) };
   } catch (err) {
     if (isCapacityHeld(err)) return { busy: err.message };
     throw err;
@@ -7182,8 +7321,18 @@ export async function startServer(opts: {
         return count;
       },
       stopTree: (dir) => state.tasks.endTree(dir),
-      working: (dirs) => treesAtWork(dirs),
-      broadcast: (ev) => broadcast(state, ev),
+      // an agent waiting on its model uses no processor, so an active
+      // in-place run in a tree counts as at work there too (FR-067)
+      working: async (dirs) => {
+        const procs = await treesAtWork(dirs).catch(() => new Map<string, string>());
+        const runs = runsInTrees(dirs, state.runner.list(), (id) => state.result.repos.find((r) => r.id === id)?.path);
+        return new Map([...procs, ...runs]);
+      },
+      broadcast: (ev) => {
+        broadcast(state, ev);
+        // a tree made, or a merge ended: a card waiting for its tree may go
+        if (ev.type === "trees") state.coordinator.onTrees();
+      },
     }),
     collisions: new CollisionHub({
       runs: () => state.runner.list(),
@@ -7459,7 +7608,10 @@ export async function startServer(opts: {
       run: (id) => state.runner.get(id),
       runs: () => state.runner.list(),
       startChild: (coordId, task, priority) => startCoordChild(state, coordId, task, priority),
-      resumeChild: (coordId, _task, child, priority) => resumeCoordChild(state, coordId, child, priority),
+      // a tree card's child carries on in its tree, never on a branch (FR-067)
+      resumeChild: (coordId, task, child, priority) => (task.tree !== undefined ? followCoordTree(state, coordId, task, AFTER_LIMIT, priority) : resumeCoordChild(state, coordId, child, priority)),
+      followTree: (coordId, task, note, priority) => followCoordTree(state, coordId, task, note?.trim() || CARRY_ON, priority),
+      treeCard: (repo) => state.result.repos.some((r) => r.id === repo && isTreeCard(r)),
       say: (id, text) => void state.runner.say(id, text),
       repoFull: (repo, need = 1) => branchSlotsTaken(state, repo) + need > BRANCH_RUNS_PER_REPO,
       group: (id) => state.groups.info().find((g) => g.id === id),

@@ -245,6 +245,37 @@ test("adopt reads the record back, drops a tree whose folder went, and takes in 
   expect(second.shellTree(w.repo.path, "kept")?.port).toBe(info.repos[0]?.trees[0]?.port ?? -1);
 });
 
+test("treeFor finds a tree by its branch exactly, never its slug, with its state, and none once it is removed", async () => {
+  // the setup waits until it is let go, so the tree is surely still being prepared
+  let letGo = (): void => {};
+  const held = new Promise<void>((resolve) => {
+    letGo = resolve;
+  });
+  const w = await world({
+    setup: async () => {
+      await held;
+      return { exit: 0, output: "" };
+    },
+  });
+  const made = await w.trees.add(w.repo, "Feat/Login", undefined, false);
+  expect(w.trees.treeFor(w.repo.path, "Feat/Login")).toEqual({ slug: "feat-login", branch: "Feat/Login", dir: made.dir, state: "preparing" });
+  letGo();
+  await w.trees.idle();
+  expect(w.trees.treeFor(w.repo.path, "Feat/Login")).toEqual({ slug: "feat-login", branch: "Feat/Login", dir: made.dir, state: "ready" });
+  expect(w.trees.treeFor(w.repo.path, "feat-login")).toBeNull();
+  expect(w.trees.treeFor(w.repo.path, "feat/login")).toBeNull();
+  expect(w.trees.treeFor(join(root, "elsewhere"), "Feat/Login")).toBeNull();
+  await w.trees.remove(w.repo, "Feat/Login", true, false);
+  expect(w.trees.treeFor(w.repo.path, "Feat/Login")).toBeNull();
+});
+
+test("treeFor carries a failed tree's why", async () => {
+  const w = await world({}, "echo nope >&2; exit 3");
+  await w.trees.add(w.repo, "feat", undefined, false);
+  await w.trees.idle();
+  expect(w.trees.treeFor(w.repo.path, "feat")).toMatchObject({ branch: "feat", state: "failed", why: "setup exited 3\nnope\n" });
+});
+
 test("a touch on the checkout publishes the list again once trees exist", async () => {
   const w = await world({}, "");
   w.trees.touched(w.repo.path);

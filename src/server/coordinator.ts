@@ -540,7 +540,8 @@ export class CoordinatorHub {
    *  cards its `after` names to land; a held coordinator starts none. A
    *  start that throws fails its card and queues a note saying why. A card
    *  in a kept tree whose start answers busy keeps those words, since its
-   *  tree is being made or another run holds it, and its started run's
+   *  tree is being made or another run holds it, and the later cards on
+   *  that tree wait behind it with them for this pass; its started run's
    *  repo becomes its `treeRepo` (FR-067). */
   pump(coordId: string): Promise<void> {
     return this.queue(async () => {
@@ -587,6 +588,16 @@ export class CoordinatorHub {
           const words = next.tree !== undefined ? out.busy : slotWord(next.repo);
           passed.set(next.id, words);
           this.update(coordId, next.id, (x) => withOutcome(x, words));
+          // a later card on the same tree waits behind it with its words, so
+          // cards on one tree start in the order they would go: a tree made
+          // by this card's start may be ready before the next card is tried
+          if (next.tree !== undefined) {
+            for (const t of tasks) {
+              if (t.state !== "queued" || t.tree !== next.tree || t.repo !== next.repo || passed.has(t.id) || afterWait(t, tasks)) continue;
+              passed.set(t.id, words);
+              this.update(coordId, t.id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
+            }
+          }
           continue;
         }
         if ("group" in out) {

@@ -15,7 +15,7 @@ import { selfName } from "../core/backends";
 import type { DriveCtx, RunDriver } from "../core/driver";
 import type { StageClient } from "../core/stageclient";
 import { cardFilesLine, goalRepoLine, goalTopLine } from "../core/coordinator";
-import { DEFAULT_AGENT, isRunActive, type About, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Run } from "../core/types";
+import { DEFAULT_AGENT, isRunActive, type About, type BranchTree, type BranchTreesInfo, type CoordTask, type Flow, type Harness, type LoadoutsInfo, type Repo, type Run, type ScanResult } from "../core/types";
 import { CallerBook } from "./callers";
 import { COORD_REFUSAL, startServer } from "./index";
 
@@ -384,7 +384,7 @@ describe("the coordinator's lane, on its own listener", () => {
   });
 
   test("a coordinator's token reads the brief's routes and posts its plan there, and nothing else", async () => {
-    for (const path of ["/api/about", "/api/tree", "/api/runs", "/api/landing", "/api/loadouts", "/api/coordinator/workflows"]) {
+    for (const path of ["/api/about", "/api/tree", "/api/runs", "/api/landing", "/api/loadouts", "/api/coordinator/workflows", "/api/trees"]) {
       expect([path, (await call(s, path, token, {}, lanePort(s))).status]).toEqual([path, 200]);
     }
     const listed = (await (await call(s, "/api/coordinator/workflows", token, {}, lanePort(s))).json()) as { name: string; source: string; file?: unknown; steps: { body?: unknown }[] }[];
@@ -1322,6 +1322,25 @@ describe("a goal from the top", () => {
     expect(driver.ctx?.spec.addDirs).toEqual([dir]);
   }, 30_000);
 
+  test("a tree card that lists the goal's files: its run in the tree gets the folder and a line under its note", async () => {
+    const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "favicon", repo: "a", note: "use the logo", action: "ask", files: ["shot.png"], tree: "feat/files" }] }, token);
+    expect(plan.status).toBe(200);
+    expect((await postAs(s, "/api/coordinator/start", { run: run.id }, s.page)).status).toBe(200);
+    const card = await until(async () => {
+      const c = (await runs()).find((r) => r.id === run.id)?.tasks?.[0];
+      return c?.state === "running" && c.run ? c : null;
+    }, "the tree card to run");
+    const childId = card.run ?? "";
+    live.push(childId);
+    const child = (await runs()).find((r) => r.id === childId);
+    expect(child?.repoId).toBe(card.treeRepo);
+    expect(child?.branch).toBeUndefined();
+    expect(child?.note).toBe(`use the logo\n\n${cardFilesLine(dir, ["shot.png"])}`);
+    expect((await driverOf(childId)).ctx?.spec.addDirs).toEqual([dir]);
+  }, 30_000);
+
   test("a later run on a files card's branch keeps the goal's folder: a follow-up gets it in its added folders", async () => {
     const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
     const dir = join(s.seeds, "goal-files", run.id);
@@ -1436,4 +1455,201 @@ describe("a goal from the top", () => {
     expect(again.status).toBe(409);
     expect(((await again.json()) as { error: string }).error).toBe("a already has a coordinator going");
   });
+});
+
+describe("cards in kept worktrees", () => {
+  // a server of its own on a root of its own: app has one commit on main,
+  // and bad's committed setup line fails
+  let s: Up;
+  let app = "";
+  /** runs to stop when the test ends, children first */
+  const live: string[] = [];
+  const runs = async (): Promise<Run[]> => (await (await call(s, "/api/runs", s.page)).json()) as Run[];
+  const cardOf = async (coord: string, id = "t1"): Promise<CoordTask | undefined> => (await runs()).find((r) => r.id === coord)?.tasks?.find((t) => t.id === id);
+  const cardWhen = (coord: string, id: string, ok: (t: CoordTask) => boolean, what: string): Promise<CoordTask> =>
+    until(async () => {
+      const t = await cardOf(coord, id);
+      return t && ok(t) ? t : null;
+    }, what);
+  const ctxOf = (id: string): Promise<DriveCtx> => until(async () => s.made.find((d) => d.ctx?.env["CANOPY_RUN"] === id)?.ctx, `run ${id} to reach the driver`);
+  /** ends a run as its harness would: a result, then the process exits */
+  const finish = (ctx: DriveCtx): void => {
+    ctx.result({ text: "Done.", durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+  };
+  const treeOf = async (branch: string, repo = "app"): Promise<BranchTree | undefined> =>
+    ((await (await call(s, "/api/trees", s.page)).json()) as BranchTreesInfo).repos.find((r) => r.repoId === repo)?.trees.find((t) => t.branch === branch);
+  const scanned = async (): Promise<Repo[]> => ((await (await call(s, "/api/tree", s.page)).json()) as ScanResult).repos;
+  const headOf = async (dir: string): Promise<string> => (await Bun.$`git -C ${dir} rev-parse HEAD`.quiet().text()).trim();
+  const runIn = (repoId: string, note: string): Promise<Response> => postAs(s, `/api/repos/run?id=${encodeURIComponent(repoId)}`, { action: "ask", note }, s.page);
+
+  /** a coordinator at app with these cards planned by its own token, then "start these" from the page */
+  async function startCards(cards: Record<string, unknown>[]): Promise<{ coord: string; tasks: CoordTask[] }> {
+    const res = await postAs(s, "/api/repos/run?id=app", { action: "coordinate", note: "cards" }, s.page);
+    expect(res.status).toBe(201);
+    const coord = ((await res.json()) as Run).id;
+    live.push(coord);
+    const token = s.made.at(-1)?.ctx?.pass?.["CANOPY_TOKEN"] ?? "";
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: cards.map((c) => ({ title: "t", repo: "app", note: "do the thing", action: "ask", ...c })) }, token);
+    expect(plan.status).toBe(200);
+    const started = await postAs(s, "/api/coordinator/start", { run: coord }, s.page);
+    expect(started.status).toBe(200);
+    return { coord, tasks: ((await started.json()) as { tasks: CoordTask[] }).tasks };
+  }
+  const startCard = (card: Record<string, unknown>): Promise<{ coord: string; tasks: CoordTask[] }> => startCards([card]);
+  /** the card's run once it runs (another than `not`), kept to stop when the test ends */
+  async function running(coord: string, id = "t1", not?: string): Promise<{ card: CoordTask; run: Run; ctx: DriveCtx; message: string }> {
+    const card = await cardWhen(coord, id, (t) => t.state === "running" && t.run !== undefined && t.run !== not, `${id} to run`);
+    const runId = card.run ?? "";
+    live.push(runId);
+    const run = (await runs()).find((r) => r.id === runId);
+    if (!run) throw new Error(`no run ${runId}`);
+    const ctx = await ctxOf(runId);
+    return { card, run, ctx, message: s.made.find((d) => d.ctx === ctx)?.message ?? "" };
+  }
+
+  beforeAll(async () => {
+    const root = join(scratch, "trees-root");
+    app = join(root, "app");
+    const bad = join(root, "bad");
+    await Bun.$`mkdir -p ${app} && git -C ${app} init -q -b main && git -C ${app} -c user.name=t -c user.email=t@t commit -q --allow-empty -m one`.quiet();
+    await mkdir(join(bad, ".canopy"), { recursive: true });
+    await writeFile(join(bad, ".canopy", "gates.json"), JSON.stringify({ gates: [], setup: "echo broken; exit 3" }));
+    await Bun.$`git -C ${bad} init -q -b main && git -C ${bad} add -A && git -C ${bad} -c user.name=t -c user.email=t@t commit -q -m one`.quiet();
+    const home = join(scratch, "trees-home");
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
+    process.env["HOME"] = home;
+    s = await up("trees", fakeRunner({ answers: true, fenced: true }), COORD_ENV, 0, ["claude"], root);
+  });
+  afterEach(async () => {
+    for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
+  });
+  afterAll(() => s.stop());
+
+  test("Review Focus 3: a card on a branch with no tree makes it, scans it and runs in place there, its coordinator the parent", async () => {
+    const { coord, tasks } = await startCard({ tree: "feat/x" });
+    expect(tasks[0]).toMatchObject({ state: "queued", outcome: "making tree feat/x" });
+    const { card, run, ctx } = await running(coord);
+    const tree = await treeOf("feat/x");
+    expect(tree?.state).toBe("ready");
+    const dir = tree?.dir ?? "";
+    expect(run.repoId.startsWith("trees:")).toBe(true);
+    expect((await scanned()).find((r) => r.path === dir)?.id).toBe(run.repoId);
+    expect(card.treeRepo).toBe(run.repoId);
+    expect(run.parent).toBe(coord);
+    expect(run.by).toBe("coordinator");
+    expect(run.depth).toBeUndefined();
+    expect(run.branch).toBeUndefined();
+    expect(ctx.cwd).toBe(dir);
+    finish(ctx);
+    expect(await cardWhen(coord, "t1", (t) => t.state === "done", "t1 to settle")).toMatchObject({ outcome: "done in tree feat/x", run: run.id });
+  }, 30_000);
+
+  test("two cards on one tree: the second waits while the first runs there, then runs in the same tree", async () => {
+    const { coord } = await startCards([{ tree: "feat/two" }, { title: "u", tree: "feat/two" }]);
+    const first = await running(coord, "t1");
+    expect(await cardWhen(coord, "t2", (t) => t.outcome === "waiting for tree feat/two to be free", "t2 to wait for its tree")).toMatchObject({ state: "queued" });
+    finish(first.ctx);
+    const second = await running(coord, "t2");
+    expect(second.run.id).not.toBe(first.run.id);
+    expect(second.ctx.cwd).toBe(first.ctx.cwd);
+    expect(await cardOf(coord, "t1")).toMatchObject({ state: "done", outcome: "done in tree feat/two", run: first.run.id });
+  }, 30_000);
+
+  test("Review Focus 2: a card waits for Eric's own run in its tree, starts when it ends, and his later run there leaves it done", async () => {
+    expect((await postAs(s, "/api/trees/add", { repo: "app", branch: "feat/mine" }, s.page)).status).toBe(201);
+    const tree = await until(async () => {
+      const t = await treeOf("feat/mine");
+      return t?.state === "ready" ? t : null;
+    }, "feat/mine to be ready");
+    expect((await postAs(s, "/api/rescan", {}, s.page)).status).toBe(200);
+    const treeRepo = await until(async () => (await scanned()).find((r) => r.path === tree.dir), "the tree's repo in the scan");
+    const mine = await runIn(treeRepo.id, "mine");
+    expect(mine.status).toBe(201);
+    const ericRun = (await mine.json()) as Run;
+    live.push(ericRun.id);
+    expect(ericRun.parent).toBeUndefined();
+    const { coord, tasks } = await startCard({ tree: "feat/mine" });
+    expect(tasks[0]).toMatchObject({ state: "queued", outcome: "waiting for tree feat/mine to be free" });
+    expect((await postAs(s, "/api/runs/stop", { id: ericRun.id }, s.page)).status).toBe(200);
+    const { run, ctx } = await running(coord);
+    expect(run.repoId).toBe(treeRepo.id);
+    expect(ctx.cwd).toBe(tree.dir);
+    finish(ctx);
+    await cardWhen(coord, "t1", (t) => t.state === "done", "t1 to settle done");
+    const later = await runIn(treeRepo.id, "mine again");
+    expect(later.status).toBe(201);
+    const laterRun = (await later.json()) as Run;
+    live.push(laterRun.id);
+    expect(await cardOf(coord)).toMatchObject({ state: "done", outcome: "done in tree feat/mine", run: run.id });
+    finish(await ctxOf(laterRun.id));
+    await until(async () => (await runs()).some((r) => r.id === laterRun.id && !isRunActive(r)), "Eric's later run to end");
+    expect(await cardOf(coord)).toMatchObject({ state: "done", outcome: "done in tree feat/mine", run: run.id });
+  }, 30_000);
+
+  test("Review Focus 1: a card on a branch checked out elsewhere fails at once in git's words, and leaves no tree", async () => {
+    const { tasks } = await startCard({ tree: "main" });
+    expect(tasks[0]?.state).toBe("failed");
+    expect(tasks[0]?.outcome).toContain("main");
+    expect(tasks[0]?.outcome).toContain("already");
+    expect(await treeOf("main")).toBeUndefined();
+  });
+
+  test("a card whose tree's setup fails fails with the tree's words", async () => {
+    const { coord } = await startCard({ repo: "bad", tree: "feat/bad" });
+    const card = await cardWhen(coord, "t1", (t) => t.state === "failed", "t1 to fail");
+    expect(card.outcome?.startsWith("tree feat/bad failed: setup exited 3")).toBe(true);
+    expect(card.run).toBeUndefined();
+  }, 30_000);
+
+  test("Review Focus 4: Eric's follow-up runs a settled card again in its tree, a blank note in canopy's words, and once the tree is gone it answers 409 in words", async () => {
+    const { coord } = await startCard({ tree: "feat/f" });
+    const first = await running(coord);
+    // the card's run said its Claude session, so the follow-up resumes it
+    const session = "5b0c2f4e-8d1a-4c3b-9e7f-0a1b2c3d4e5f";
+    first.ctx.session(session);
+    finish(first.ctx);
+    await cardWhen(coord, "t1", (t) => t.state === "done", "t1 to settle done");
+    const res = await postAs(s, "/api/coordinator/followup", { run: coord, id: "t1", note: "also y" }, s.page);
+    expect(res.status).toBe(200);
+    const again = await running(coord, "t1", first.run.id);
+    expect(again.run.parent).toBe(coord);
+    expect(again.run.repoId).toBe(first.run.repoId);
+    expect(again.run.note).toBe("also y");
+    expect(again.ctx.cwd).toBe(first.ctx.cwd);
+    expect(again.ctx.spec.resume).toBe(session);
+    expect(again.message).toContain("also y");
+    finish(again.ctx);
+    await cardWhen(coord, "t1", (t) => t.state === "done" && t.run === again.run.id, "t1 to settle again");
+    // a note of nothing, or of nothing but spaces, carries on in canopy's own words
+    let last = again.run.id;
+    for (const note of ["", "  \n "]) {
+      expect((await postAs(s, "/api/coordinator/followup", { run: coord, id: "t1", note }, s.page)).status).toBe(200);
+      const next = await running(coord, "t1", last);
+      expect(next.message).toContain("Carry on with the task from where you stopped.");
+      // the run before said no session, so this one starts fresh
+      expect(next.ctx.spec.resume).toBeUndefined();
+      finish(next.ctx);
+      await cardWhen(coord, "t1", (t) => t.state === "done" && t.run === next.run.id, "t1 to settle after a blank follow-up");
+      last = next.run.id;
+    }
+    expect((await postAs(s, "/api/trees/remove", { repo: "app", tree: "feat/f", force: true }, s.page)).status).toBe(200);
+    const gone = await postAs(s, "/api/coordinator/followup", { run: coord, id: "t1", note: "more" }, s.page);
+    expect([gone.status, await gone.json()]).toEqual([409, { error: "tree feat/f is no longer kept in app" }]);
+    expect(await cardOf(coord)).toMatchObject({ state: "done", outcome: "done in tree feat/f", run: last });
+  }, 30_000);
+
+  test("Review Focus 5: a tree that follows main waits while a card's run works in it, says on what, and keeps its HEAD", async () => {
+    const { coord } = await startCard({ tree: "feat/s" });
+    const { run, ctx } = await running(coord);
+    const head = await headOf(ctx.cwd);
+    await Bun.$`git -C ${app} -c user.name=t -c user.email=t@t commit -q --allow-empty -m two`.quiet();
+    const tree = await until(async () => {
+      const t = await treeOf("feat/s");
+      return t?.waiting?.startsWith("run ") ? t : null;
+    }, "feat/s to wait on the card's run", 10_000);
+    expect(tree.waiting).toBe(`run ${run.id} (${run.verb})`);
+    expect(await headOf(ctx.cwd)).toBe(head);
+  }, 30_000);
 });
