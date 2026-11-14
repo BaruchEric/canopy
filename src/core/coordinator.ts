@@ -683,10 +683,15 @@ export function projectStep(s: Pick<Sprout, "status" | "questions" | "parked" | 
 export const isProjectWait = (outcome: string | undefined): boolean =>
   outcome === "the project waits on your answers in the incubator" || outcome === "the project waits on your yes in the incubator" || (outcome !== undefined && outcome.startsWith("the project is parked: "));
 
-/** The note a project card sends into its coordinator's chat: one line while
- *  it waits, `settleNote`'s four lines once it is done or failed. */
+/** The card's wait words as the manager reads them: the answers and the yes
+ *  are Eric's, not the agent's. A park's own words pass as they are. */
+const ericsWait = (words: string): string => words.replace(/^the project waits on your /, "the project waits on Eric's ");
+
+/** The note a project card sends into its coordinator's chat: one line in
+ *  the house form while it waits on Eric, `settleNote`'s four lines once it
+ *  is done or failed. */
 export function projectNote(task: CoordTask, words: string, state: "waits" | "done" | "failed"): string {
-  if (state === "waits") return `${task.id} (new project "${task.title}") ${words}`;
+  if (state === "waits") return `canopy: task ${task.id} (new project "${task.title}") needs Eric: ${ericsWait(words)}`;
   return [
     "canopy: a task you started has settled",
     `task ${task.id}: ${task.title} (${cardWhere(task)})`,

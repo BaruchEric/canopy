@@ -2590,13 +2590,13 @@ describe("a project card (FR-067 plan 3)", () => {
     // the same status again, as onChange sends on every change, says nothing more
     move(h, "sp_000000000001", {});
     h.recheck();
-    const heard = (await hearAll(h)).filter((x) => x.startsWith("t1 (new project"));
-    expect(heard).toEqual([`t1 (new project "Shop") ${WAITS}`]);
+    const heard = (await hearAll(h)).filter((x) => x.startsWith("canopy: task t1 (new project"));
+    expect(heard).toEqual(['canopy: task t1 (new project "Shop") needs Eric: the project waits on Eric\'s answers in the incubator']);
     // a wait that is not on Eric says nothing; the next one on him says it again
     move(h, "sp_000000000001", { status: "building", questions: [] });
     expect(card("t1")?.outcome).toBe("in the incubator: building");
     move(h, "sp_000000000001", { status: "parked", parked: "tests failed" });
-    expect((await hearAll(h)).filter((x) => x.startsWith("t1 (new project"))).toEqual([`t1 (new project "Shop") ${WAITS}`, 't1 (new project "Shop") the project is parked: tests failed']);
+    expect((await hearAll(h)).filter((x) => x.startsWith("canopy: task t1 (new project"))).toEqual([...heard, 'canopy: task t1 (new project "Shop") needs Eric: the project is parked: tests failed']);
   });
 
   test("Review Focus 2: a sprout that moved after create answered, before the card held its id, is read again at the start", async () => {

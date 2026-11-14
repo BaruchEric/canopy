@@ -1083,8 +1083,14 @@ describe("a project card", () => {
     expect(isRunCard(card("t2", "web"))).toBe(true);
   });
 
+  test("the wait note takes the house form and names Eric where the card's words say your", () => {
+    expect(projectNote(proj("t3"), "the project waits on your answers in the incubator", "waits")).toBe('canopy: task t3 (new project "a tide chart app") needs Eric: the project waits on Eric\'s answers in the incubator');
+    expect(projectNote(proj("t1"), "the project waits on your yes in the incubator", "waits")).toBe('canopy: task t1 (new project "a tide chart app") needs Eric: the project waits on Eric\'s yes in the incubator');
+    // a park's own words pass as they are, a "your" inside them too
+    expect(projectNote(proj("t1"), "the project is parked: add your Vercel token", "waits")).toBe('canopy: task t1 (new project "a tide chart app") needs Eric: the project is parked: add your Vercel token');
+  });
+
   test("the notes name new project where a repo goes", () => {
-    expect(projectNote(proj("t1"), "the project waits on your yes in the incubator", "waits")).toBe('t1 (new project "a tide chart app") the project waits on your yes in the incubator');
     expect(projectNote(proj("t1"), "live as tides", "done")).toBe(
       ["canopy: a task you started has settled", "task t1: a tide chart app (new project)", "outcome: done", "result: live as tides"].join("\n"),
     );
