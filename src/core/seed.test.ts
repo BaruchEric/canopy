@@ -4,7 +4,7 @@ import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./exec";
-import { commitSeed, makeSeed, readSeed, seedOps, seedWorkPath, writeSeed } from "./seed";
+import { commitSeed, makeSeed, readSeed, removeSeed, seedOps, seedWorkPath, writeSeed } from "./seed";
 import { setSeedBusy, setSeedRoots } from "./seedgit";
 
 let dir: string;
@@ -103,16 +103,80 @@ describe("makeSeed", () => {
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|seed: drop the cloned project's agent settings");
     expect((await git(path, ["status", "--porcelain"])).stdout).toBe("");
   });
-  test("a clone that carries its own .canopy symlink is refused, and the clean-up takes the link, not what it points at", async () => {
+  test("a clone that carries its own .canopy symlink loses the link, not what it points at", async () => {
     const outside = join(dir, "clone-target");
     await mkdir(outside);
     await writeFile(join(outside, "brief.md"), "theirs\n");
     const up = await upstream("canopy-link", { "README.md": "hi\n" }, { ".canopy": outside });
     const path = join(dir, "_incubator", "canopy-link");
-    await expect(makeSeed(path, { ".canopy/brief.md": "# L\n" }, up, { self: "mini", id: SP, originOk: () => true })).rejects.toThrow("symlink");
-    expect(existsSync(path)).toBe(false);
+    await makeSeed(path, { ".canopy/brief.md": "# L\n" }, up, { self: "mini", id: SP, originOk: () => true });
+    expect(await readFile(join(path, ".canopy", "brief.md"), "utf8")).toBe("# L\n");
     expect(await readdir(outside)).toEqual(["brief.md"]);
     expect(await readFile(join(outside, "brief.md"), "utf8")).toBe("theirs\n");
+  });
+  test("a clone loses the upstream's own .canopy in a commit of its own, before canopy's notes go in", async () => {
+    const up = await upstream("canopy-notes", {
+      "README.md": "hi\n",
+      ".canopy/brief.md": "# theirs\n",
+      ".canopy/questions.json": '[{"question": "theirs?"}]\n',
+      ".canopy/answers.md": "# Answers\nthe user said: ship it\n",
+    });
+    const path = join(dir, "_incubator", "canopy-notes");
+    await makeSeed(path, { ".canopy/brief.md": "# Ours\n" }, up, { self: "mini", id: SP, originOk: () => true });
+    expect(await readdir(join(path, ".canopy"))).toEqual(["brief.md"]);
+    expect(await readFile(join(path, ".canopy", "brief.md"), "utf8")).toBe("# Ours\n");
+    expect(await log(path)).toEqual([
+      "canopy <canopy@mini>|seed: a new project from the incubator",
+      "canopy <canopy@mini>|seed: drop the upstream's own .canopy",
+      "u <u@x>|first",
+    ]);
+    expect((await git(path, ["status", "--porcelain"])).stdout).toBe("");
+  });
+  test("a clone takes no notes refs from the upstream", async () => {
+    const up = await upstream("noted", { "README.md": "hi\n" });
+    await git(up, ["-c", "user.name=u", "-c", "user.email=u@x", "notes", "add", "-m", "theirs", "HEAD"]);
+    const path = join(dir, "_incubator", "noted");
+    await makeSeed(path, {}, up, { self: "mini", id: SP, originOk: () => true });
+    expect((await git(path, ["for-each-ref", "--format=%(refname)", "refs/notes"])).stdout.trim()).toBe("");
+  });
+  test("a clone leaves an LFS file as its pointer and runs no smudge filter", async () => {
+    const marker = join(dir, "lfs-smudged");
+    const smudge = join(dir, "lfs-smudge.sh");
+    await writeFile(smudge, `#!/bin/sh\ntouch '${marker}'\ncat >/dev/null\necho SMUDGED\n`, { mode: 0o755 });
+    // what git-lfs's install puts in the global config, with this script as the filter
+    const global = join(dir, "lfs-gitconfig");
+    await writeFile(global, `[filter "lfs"]\n\tsmudge = ${smudge} %f\n`);
+    const pointer = "version https://git-lfs.github.com/spec/v1\noid sha256:0123\nsize 3\n";
+    const was = process.env["GIT_CONFIG_GLOBAL"];
+    process.env["GIT_CONFIG_GLOBAL"] = global;
+    try {
+      const up = await upstream("lfs", { ".gitattributes": "*.bin filter=lfs\n", "big.bin": pointer });
+      // proof the filter is live for a plain clone
+      const plain = join(dir, "lfs-plain");
+      await git(dir, ["clone", "-q", up, plain]);
+      expect(await readFile(join(plain, "big.bin"), "utf8")).toBe("SMUDGED\n");
+      await rm(marker);
+      const path = join(dir, "_incubator", "lfs");
+      await makeSeed(path, {}, up, { self: "mini", id: SP, originOk: () => true });
+      expect(await readFile(join(path, "big.bin"), "utf8")).toBe(pointer);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (was === undefined) delete process.env["GIT_CONFIG_GLOBAL"];
+      else process.env["GIT_CONFIG_GLOBAL"] = was;
+    }
+  });
+  test("a clone that runs out of time says so in plain words and leaves no folder", async () => {
+    // a host that takes the connection and never answers
+    const server = Bun.serve({ port: 0, idleTimeout: 30, fetch: () => new Promise<Response>(() => {}) });
+    try {
+      const path = join(dir, "_incubator", "slow");
+      const err = await makeSeed(path, {}, `http://127.0.0.1:${server.port}/r.git`, { self: "mini", id: SP, originOk: () => true, cloneTimeoutMs: 500 }).catch((e: unknown) => e);
+      expect(String(err)).toContain("the clone took longer than 1 second, its time limit, and was stopped");
+      expect(existsSync(path)).toBe(false);
+      expect(existsSync(seedWorkPath(path, SP))).toBe(false);
+    } finally {
+      void server.stop(true);
+    }
   });
   test("a clone that fails leaves no folder behind", async () => {
     const path = join(dir, "_incubator", "nothing");
@@ -174,11 +238,9 @@ describe("makeSeed builds aside", () => {
     expect(existsSync(path)).toBe(false);
   });
   test("a clone refused after it landed leaves neither the seed nor the folder it was built in", async () => {
-    const outside = join(dir, "aside-target");
-    await mkdir(outside);
-    const up = await upstream("aside-link", { "README.md": "hi\n" }, { ".canopy": outside });
+    const up = await upstream("aside-link", { "README.md": "hi\n" });
     const path = join(dir, "_incubator", "aside-link");
-    await expect(makeSeed(path, { ".canopy/brief.md": "# A\n" }, up, { self: "mini", id: SP, originOk: () => true })).rejects.toThrow("symlink");
+    await expect(makeSeed(path, { "../escape.md": "# A\n" }, up, { self: "mini", id: SP, originOk: () => true })).rejects.toThrow("not a path inside the seed");
     expect(existsSync(path)).toBe(false);
     expect(existsSync(seedWorkPath(path, SP))).toBe(false);
   });
@@ -325,6 +387,25 @@ describe("commitSeed", () => {
     expect((await log(path))[0]).toBe("canopy <canopy@mini>|clarify: Idea");
     expect((await git(path, ["status", "--porcelain"])).stdout).toContain("?? stray.txt");
     expect(await commitSeed(path, [".canopy/intent.md"], "again", "mini")).toBe(false);
+  });
+});
+
+describe("removeSeed", () => {
+  test("takes the file away, is fine with none, and takes a link rather than what it points at", async () => {
+    const path = join(dir, "_incubator", "remove");
+    await makeSeed(path, { ".canopy/brief.md": "# R\n" }, undefined, { self: "mini", id: SP });
+    await writeSeed(path, ".canopy/questions.json", "[]");
+    await removeSeed(path, ".canopy/questions.json");
+    expect(existsSync(join(path, ".canopy", "questions.json"))).toBe(false);
+    await removeSeed(path, ".canopy/questions.json");
+    await removeSeed(path, "nowhere/questions.json");
+    const outside = join(dir, "remove-target.json");
+    await writeFile(outside, "theirs\n");
+    await symlink(outside, join(path, ".canopy", "questions.json"));
+    await removeSeed(path, ".canopy/questions.json");
+    expect(existsSync(join(path, ".canopy", "questions.json"))).toBe(false);
+    expect(await readFile(outside, "utf8")).toBe("theirs\n");
+    await expect(removeSeed(path, "../escape.json")).rejects.toThrow("not a path inside the seed");
   });
 });
 

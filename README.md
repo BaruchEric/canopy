@@ -350,6 +350,7 @@ A `##` heading is a step's name. The `key: value` lines right under it, up to th
 | `tools` | comma-separated: named sets `git-read`, `git-commit`, `git-push`, `bun`, `read`, or literal rules like `Bash(cargo:*)` | `git-read` |
 | `turns` | max turns for this step's run | 30 |
 | `check` | a shell command run in the repo after the run ends; exit 0 passes | none |
+| `check-minutes` | how long the step's check may run before it is stopped, 1 to 120 | 10 |
 | `gate` | `continue`, `ask`, `verdict`, or `judge` | `continue` |
 | `after` | comma-separated earlier step headings to wait for; all predecessors must settle before this step is ready; `none` waits for nothing, so a later step starts with the first | the step above, none for the first |
 | `when` | comma-separated conditions on predecessors; any one holding runs the step, none skips it: `always`, `verdict done`, `verdict partial`, `verdict blocked`, `judge meets`, `judge partly`, `judge misses`, `check pass`, `check fail`, `changed`, `unchanged`, `skipped` | `always` |

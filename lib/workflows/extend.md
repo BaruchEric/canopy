@@ -8,12 +8,15 @@ budget: 20 runs, 4h
 ---
 
 ## Baseline
+check-minutes: 30
+retries: 2
 check: rec=$(git rev-parse --git-path canopy-baseline) || exit 0; md=.canopy/baseline.md; if [ -f "$rec" ]; then echo "the baseline was taken already: $md"; exit 0; fi; mkdir -p .canopy; head=$(git rev-parse -q --verify HEAD); began=$(git reflog show --format=%H "$(git symbolic-ref -q HEAD)" 2>/dev/null | tail -n 1); if [ -z "$head" ] || [ "$began" != "$head" ]; then : > "$rec"; echo "HEAD is not where this branch began, so canopy ran nothing on the base commit and every gate counts." | tee "$md"; exit 0; fi; printf "# The gates on the base commit\n\ncanopy ran each gate script on %s, where this branch began, before any change. A gate that fails here does not fail the checks of the steps after this one.\n\n" "$head" > "$md"; : > "$rec.new"; if [ ! -f package.json ]; then echo "There is no package.json, so there was nothing to run." | tee -a "$md"; elif ! { if [ -f bun.lock ]; then bun install --frozen-lockfile; else bun install --no-save; fi; } >/dev/null 2>&1; then echo "bun install failed, so nothing ran and every gate counts." | tee -a "$md"; else for s in typecheck lint test build; do if grep -q "\"$s\":" package.json; then if log=$(bun run "$s" 2>&1); then echo "- bun run $s passes." >> "$md"; else echo "$s" >> "$rec.new"; echo "bun run $s fails on the base commit"; { echo "- bun run $s fails. The end of what it printed:"; echo; printf "%s\n" "$log" | tail -n 30 | sed "s/^/    /"; echo; } >> "$md"; fi; fi; done; [ -s "$rec.new" ] || echo "every gate passes on the base commit"; fi; mv "$rec.new" "$rec"; exit 0
 
 ## Build
 tools: git-read, git-commit, bun, Bash(bun add:*), Bash(bun remove:*), Bash(ls:*), Bash(mkdir:*), Edit, Write, WebFetch
 turns: 200
 check: b=$(git symbolic-ref --short HEAD 2>/dev/null); case "$b" in new/*) ;; *) echo "stay on the branch canopy made (new/...); HEAD is on ${b:-no branch}"; exit 1;; esac; if [ -f bun.lock ]; then bun install --frozen-lockfile >/dev/null 2>&1 || { echo "bun install --frozen-lockfile failed: commit bun.lock after every bun add"; exit 1; }; fi; if [ -f package.json ]; then rec=$(git rev-parse --git-path canopy-baseline); for s in typecheck lint test build; do if grep -q "\"$s\":" package.json; then bun run "$s" || { grep -qx "$s" "$rec" 2>/dev/null || { echo "bun run $s failed"; exit 1; }; echo "bun run $s failed, as it did on the base commit (.canopy/baseline.md), so it does not fail this check"; }; fi; done; fi; [ -z "$(git status --porcelain -- . ':(exclude).canopy')" ] || { echo "the working tree is not clean: commit your work"; git status --short; exit 1; }
+check-minutes: 30
 retries: 3
 
 Task: you are the extend stage of canopy's incubator. This repo is a clone of one of the user's own projects, on a branch canopy made for this work. .canopy/intent.md says what the user wants added to it, and .canopy/research.md what the research found.
@@ -35,6 +38,7 @@ Finish with two sentences: what you changed and what is left out. When .canopy/b
 tools: git-read, git-commit, bun, Bash(bun add:*), Bash(curl:*), Bash(ls:*), KillShell, Edit, Write
 turns: 120
 check: if [ -f package.json ]; then rec=$(git rev-parse --git-path canopy-baseline); for s in typecheck lint test build; do if grep -q "\"$s\":" package.json; then bun run "$s" || { grep -qx "$s" "$rec" 2>/dev/null || { echo "bun run $s failed"; exit 1; }; echo "bun run $s failed, as it did on the base commit (.canopy/baseline.md), so it does not fail this check"; }; fi; done; fi; [ -s .canopy/smoke.md ] || { echo ".canopy/smoke.md must say how the change was tried and what it did"; exit 1; }; [ -z "$(git status --porcelain -- . ':(exclude).canopy')" ] || { echo "the working tree is not clean: commit your fixes"; git status --short; exit 1; }
+check-minutes: 30
 retries: 3
 
 Task: make sure the change works in the project.

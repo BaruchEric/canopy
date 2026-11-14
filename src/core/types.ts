@@ -2399,6 +2399,10 @@ export interface WorkflowStep {
   retries: number;
   /** the step a retry goes back to: this step's own name or an earlier one's */
   back: string;
+  /** how long the step's check may run, in minutes, when it is not canopy's
+   *  own 10 (`check-minutes:`): a check that runs every gate of a real
+   *  project needs longer */
+  checkMinutes?: number;
   /** repo-relative files a judge gate reads beside the summary */
   evidence: string[];
   /** the steps this one waits for, by heading; defaults to the step above */

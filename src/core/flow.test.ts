@@ -133,13 +133,16 @@ function setup(opts: {
   const fleetGone: string[] = [];
   const saved: FlowRecord[] = [];
   const forgotten: string[] = [];
+  /** each check's time limit as the hook was handed it */
+  const limits: (number | undefined)[] = [];
   const flows = new Flows(runner, {
     onChange: (f) => changes.push(structuredClone(f)),
     onGone: (id) => gone.push(id),
     onFleet: (f) => fleets.push(structuredClone(f)),
     onFleetGone: (id) => fleetGone.push(id),
-    check: async (_repo, command, signal) => {
+    check: async (_repo, command, signal, timeoutMs) => {
       checks.push(command);
+      limits.push(timeoutMs);
       return opts.check ? opts.check(command, signal) : { exit: 0, output: "" };
     },
     checkTools: opts.checkTools,
@@ -155,7 +158,7 @@ function setup(opts: {
     forget: (id) => forgotten.push(id),
   });
   runner.onChange = (run) => flows.onRun(run);
-  return { runner, flows, changes, gone, checks, fleets, fleetGone, saved, forgotten };
+  return { runner, flows, changes, gone, checks, limits, fleets, fleetGone, saved, forgotten };
 }
 
 describe("stepSpec", () => {
@@ -354,6 +357,33 @@ describe("Flows", () => {
     expect(f?.steps[0]?.check).toEqual({ command: "bun test", exit: 1, output: "1 fail" });
     expect(f?.steps[0]?.status).toBe("failed");
     expect(f?.steps[1]?.status).toBe("skipped");
+  });
+
+  test("a step's check-minutes reaches its check as the time limit; a step without one leaves canopy's own", async () => {
+    const CHECKED = wf(`---\nblurb: b\n---\n\n## Gate\ncheck: bun test\ncheck-minutes: 30\n\n## After\ncheck: true\n\nx\n`);
+    const { runner, flows, limits } = setup();
+    flows.start(repo(), CHECKED, "", DEFAULT_AGENT);
+    await flush();
+    runner.end(runner.last(), "done", "did x");
+    await flush();
+    expect(limits).toEqual([30 * 60_000, undefined]);
+  });
+
+  test("a check-only step with retries runs its check again, and parks once they are spent", async () => {
+    const CHECKED = wf(`---\nblurb: b\n---\n\n## Gate\ncheck: bun test\nretries: 2\n\n## After\n\nx\n`);
+    let calls = 0;
+    const { runner, flows, checks } = setup({ check: () => (++calls < 3 ? { exit: 143, output: "killed" } : { exit: 0, output: "ok" }) });
+    const flow = flows.start(repo(), CHECKED, "", DEFAULT_AGENT);
+    await flush();
+    expect(checks).toEqual(["bun test", "bun test", "bun test"]);
+    expect(flows.get(flow.id)?.steps[0]?.status).toBe("passed");
+    expect(runner.specs.map((s) => s.verb)).toEqual(["t · After"]);
+    const always = setup({ check: () => ({ exit: 143, output: "killed" }) });
+    const parked = always.flows.start(repo(), CHECKED, "", DEFAULT_AGENT);
+    await flush();
+    expect(always.checks).toHaveLength(3);
+    expect(always.flows.get(parked.id)?.status).toBe("gated");
+    expect(always.runner.specs).toHaveLength(0);
   });
 
   test("a check-only step starts no run and passes on exit 0", async () => {

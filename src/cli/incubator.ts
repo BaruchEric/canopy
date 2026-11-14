@@ -8,7 +8,7 @@
 
 import { basename } from "node:path";
 import { verbHelp } from "../core/help";
-import { handOffText, isOwnStep, nextWorkflow, parsePick, pickRefusal, sproutEnded } from "../core/sprout";
+import { handOffText, isOwnStep, nextWorkflow, parsePick, phaseRefusal, pickRefusal, sproutEnded } from "../core/sprout";
 import type { IncubatorStages, RunQuestion, Sprout, SproutDetail } from "../core/types";
 import { NO_STAGES } from "../server/incubator";
 import { apiBase, callerHeaders } from "./api";
@@ -295,7 +295,7 @@ export async function incubatorCommand(argv: string[], { fail }: { fail: Fail })
       if (!(await pickFile.exists())) return fail(".canopy/pick.json is missing: research ends by writing it");
       const parsed = parsePick(await pickFile.text());
       if (!parsed.ok) return fail(`.canopy/pick.json: ${parsed.error}`);
-      const refused = pickRefusal(parsed.pick);
+      const refused = pickRefusal(parsed.pick) ?? phaseRefusal(parsed.pick);
       if (refused) return fail(`.canopy/pick.json: ${refused}`);
       if (!(await Bun.file(".canopy/research.md").exists())) return fail(".canopy/research.md is missing: research writes it before the pick");
       console.log(`pick ok: ${parsed.pick.kind} on ${parsed.pick.host}`);

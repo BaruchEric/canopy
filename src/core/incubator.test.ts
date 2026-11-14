@@ -6,13 +6,13 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Incubator, IncubatorError, incubatorWorkflow, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
+import { Incubator, IncubatorError, incubatorWorkflow, STAGE_WAIT_MAX, type AdviceSink, type IncubatorDeps, type IncubatorFlows, type IncubatorSeeds, type IncubatorStore, type Intake, type NoteSink } from "./incubator";
 import type { BranchPush, NameClaim, ShipBundle, Shipper, ShipSource } from "./shipper";
 import type { ExtendTarget, RebuildSpec, SeedSource } from "./seedsource";
 import { BUNDLED_DIR, findWorkflow, loadWorkflows, readFlowModes } from "./workflows";
 import { branchPushRefusal, holdsSlot } from "./sprout";
 import { RETRO_PARK_WAIT, RETRO_UNATTENDED, RETRO_WAIT_MAX } from "./retro";
-import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, PendingRework, Repo, RunAnswerRecord, Sprout, SproutWork, Workflow } from "./types";
+import type { Advice, Flow, FlowChoice, HandOffReview, Judgment, PendingRework, Repo, RunAnswerRecord, Sprout, SproutPick, SproutWork, Workflow } from "./types";
 
 const CLARIFY: Workflow = {
   name: "clarify",
@@ -120,6 +120,9 @@ class FakeSeeds implements IncubatorSeeds {
   }
   async headOf(_path: string): Promise<string> {
     return this.head;
+  }
+  async remove(path: string, rel: string): Promise<void> {
+    this.files.get(path)?.delete(rel);
   }
   exists(path: string): boolean {
     return this.files.has(path);
@@ -1602,6 +1605,61 @@ describe("detach", () => {
   });
 });
 
+describe("a stage that waits on a prompt (incubator review, P2)", () => {
+  const REASON = "clarify's Clarify step has waited 30 minutes on a permission or a question no one answered. Answer it and the stage goes on, or stop the project";
+
+  test("parks its project with the reason past the cap, keeps the flow and the slot, and goes on once the prompt is answered", async () => {
+    let clock = 1_000;
+    const w = world({ now: () => clock });
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += STAGE_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    clock += 1;
+    w.inc.tick();
+    await w.inc.idle();
+    const parked = now(w, s.id);
+    expect(parked.status).toBe("parked");
+    expect(parked.parked).toBe(REASON);
+    expect(w.flows.get(id)?.status).toBe("waiting");
+    expect(holdsSlot(parked, "waiting")).toBe(true);
+    // parked once for one wait
+    clock += STAGE_WAIT_MAX;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).parks).toHaveLength(1);
+    w.flows.move(id, { status: "working" });
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(now(w, s.id).parked).toBeUndefined();
+  });
+
+  test("a wait answered before the cap parks nothing, and the next wait's clock starts over", async () => {
+    let clock = 1_000;
+    const w = world({ now: () => clock });
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += STAGE_WAIT_MAX - 1;
+    w.flows.move(id, { status: "working" });
+    await w.inc.idle();
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += STAGE_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(now(w, s.id).parks ?? []).toHaveLength(0);
+  });
+});
+
 describe("a second clarify cut short", () => {
   /** a sprout whose second clarify is running: the first asked, more input came */
   async function secondClarify(w: World): Promise<Sprout> {
@@ -1616,6 +1674,12 @@ describe("a second clarify cut short", () => {
     expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "clarify"]);
     return now(w, s.id);
   }
+
+  test("each clarify starts with no questions.json, so the last pass's cannot pass for this one", async () => {
+    const w = world();
+    const s = await secondClarify(w);
+    expect(await w.seeds.read(s.seedPath, ".canopy/questions.json")).toBeNull();
+  });
 
   test("a restart that lost its flow runs clarify again, not scout", async () => {
     const w = world();
@@ -2210,14 +2274,58 @@ describe("scout and build-new", () => {
     expect(ship.made).toEqual([]);
   });
 
-  test("input that arrives while scout runs drops the pick, and the chain clarifies again", async () => {
+  test("input that arrives while scout runs stops scout, and clarify reads it at once (incubator review, P2)", async () => {
     const w = chain();
     const s = await scouting(w);
+    const scout = now(w, s.id).flows.at(-1)?.flowId ?? "";
     await w.inc.addInputs(s.id, intake({ text: "and it should count euros" }));
     await w.inc.idle();
-    const after = await end(w, s.id, { ".canopy/pick.json": PICK });
-    expect(after.pick).toBe(undefined);
-    expect(w.flows.started.at(-1)?.workflow.name).toBe("clarify");
+    const after = now(w, s.id);
+    expect(w.flows.get(scout)?.status).toBe("stopped");
+    expect(after.flows.find((f) => f.flowId === scout)?.outcome).toBe("superseded");
+    expect(after.pick).toBeUndefined();
+    expect(after.parked).toBeUndefined();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "scout", "clarify"]);
+    expect(after.status).toBe("clarifying");
+  });
+
+  test("input that arrives while a build runs stops the build, and the build runs again on the pick scout makes next", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    expect((await end(w, s.id, { ".canopy/pick.json": PICK })).status).toBe("building");
+    const build = now(w, s.id).flows.at(-1)?.flowId ?? "";
+    await w.inc.addInputs(s.id, intake({ text: "and dark mode" }));
+    await w.inc.idle();
+    expect(w.flows.get(build)?.status).toBe("stopped");
+    expect(now(w, s.id).parked).toBeUndefined();
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "scout", "build-new", "clarify"]);
+    await end(w, s.id, { ".canopy/questions.json": "[]" });
+    expect(w.flows.started.at(-1)?.workflow.name).toBe("scout");
+    const again = await end(w, s.id, { ".canopy/pick.json": PICK });
+    expect(again.status).toBe("building");
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "scout", "build-new", "clarify", "scout", "build-new"]);
+  });
+
+  test("a scout parked at its judge when input arrives is stopped as well, and the project goes on to clarify", async () => {
+    const w = chain();
+    const s = await scouting(w);
+    const scout = now(w, s.id).flows.at(-1)?.flowId ?? "";
+    const parked = await end(w, s.id, {}, {
+      status: "gated",
+      current: 1,
+      steps: [
+        { name: "Research", status: "passed" },
+        { name: "Eval", status: "gated", reason: "the judge is not sure" },
+      ],
+    });
+    expect(parked.status).toBe("parked");
+    await w.inc.addInputs(s.id, intake({ text: "it only needs coins" }));
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(w.flows.get(scout)?.status).toBe("stopped");
+    expect(after.parked).toBeUndefined();
+    expect(after.status).toBe("clarifying");
+    expect(w.flows.started.map((r) => r.workflow.name)).toEqual(["clarify", "scout", "clarify"]);
   });
 
   test("with the real share, a scout reads the copies under _incubator/.shared and a dismiss removes them", async () => {
@@ -2958,6 +3066,48 @@ describe("renovate and extend builds", () => {
     await end(w, s.id, { ".canopy/questions.json": "[]" });
     return end(w, s.id, { ".canopy/pick.json": pick });
   };
+
+  test("scout's check asks, before the judge, what the backend would refuse once the judge passed the pick (incubator review, P2)", async () => {
+    const src = new FakeSource();
+    const ship = new FakeShip();
+    const w = builds(src, ship);
+    const s = await w.inc.create(intake({ text: "coin counter" }));
+    await w.inc.idle();
+    const seed = (await end(w, s.id, { ".canopy/questions.json": "[]" })).seedPath;
+    const NEW: SproutPick = { kind: "new", host: "vercel", why: "w" };
+    const UP: SproutPick = { kind: "renovate", host: "vercel", why: "w", target: "https://github.com/up/lib", license: "MIT" };
+    const MINE: SproutPick = { kind: "extend", host: "vercel", why: "w", target: "clms" };
+    expect(await w.inc.wouldRefuse("/root/_incubator/nobody", NEW)).toBeUndefined();
+    expect(await w.inc.wouldRefuse(seed, NEW)).toBeNull();
+    ship.readyAs = "VERCEL_TOKEN is not set on mini";
+    expect(await w.inc.wouldRefuse(seed, NEW)).toBe("VERCEL_TOKEN is not set on mini");
+    // an extend deploys nothing, so the deploy setup is no reason to refuse it
+    expect(await w.inc.wouldRefuse(seed, MINE)).toBeNull();
+    ship.readyAs = null;
+    src.license = "GPL-3.0";
+    expect(await w.inc.wouldRefuse(seed, UP)).toBe("GitHub says https://github.com/up/lib is GPL-3.0, not the MIT scout read");
+    src.license = null;
+    expect(await w.inc.wouldRefuse(seed, UP)).toBe("GitHub names no license for https://github.com/up/lib, so canopy will not renovate it");
+    src.refuseTarget = "clms is not one of your own GitHub repos";
+    expect(await w.inc.wouldRefuse(seed, MINE)).toBe("clms is not one of your own GitHub repos");
+    // a check rebuilds nothing
+    expect(src.calls.some((c) => c.startsWith("rebuild"))).toBe(false);
+    const bare = builds(null);
+    const t = await bare.inc.create(intake({ text: "coin counter" }));
+    await bare.inc.idle();
+    const bareSeed = (await end(bare, t.id, { ".canopy/questions.json": "[]" })).seedPath;
+    expect(await bare.inc.wouldRefuse(bareSeed, NEW)).toBe("this backend has no deploy set up");
+    expect(await bare.inc.wouldRefuse(bareSeed, MINE)).toBe("this backend cannot rebuild a seed for a renovate or extend pick");
+  });
+
+  test("on a seed already rebuilt, scout's check refuses a pick of another source", async () => {
+    const w = builds(new FakeSource());
+    const s = await picked(w, EXTEND);
+    expect(s.work?.kind).toBe("extend");
+    const UP: SproutPick = { kind: "renovate", host: "vercel", why: "w", target: "https://github.com/up/lib", license: "MIT" };
+    expect(await w.inc.wouldRefuse(s.seedPath, UP)).toBe("this seed already holds web-apps/clms; start a new project for another pick");
+    expect(await w.inc.wouldRefuse(s.seedPath, { kind: "extend", host: "vercel", why: "w", target: "clms" })).toBeNull();
+  });
 
   test("behind the stage runner renovate and extend get a bare Bash on every step after their rebuild", async () => {
     for (const pick of [RENOVATE, EXTEND]) {

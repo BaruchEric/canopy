@@ -173,7 +173,7 @@ describe("the bundled clarify", () => {
     expect(clarify?.steps[0]?.tools).toEqual(expect.arrayContaining(["Edit", "Write", "WebFetch", "Bash(git status:*)"]));
   });
 
-  test("its check passes a readable questions.json or none, refuses the rest, and gets one retry", async () => {
+  test("its check passes a readable questions.json beside intent.md, refuses the rest and none, and gets one retry", async () => {
     const step = findWorkflow(await loadWorkflows({ path: "", host: "none" }), "clarify")?.steps[0];
     expect(step?.retries).toBe(1);
     const check = step?.check ?? "";
@@ -181,13 +181,14 @@ describe("the bundled clarify", () => {
     const dir = await mkdtemp(join(tmpdir(), "canopy-clarify-check-"));
     try {
       await mkdir(join(dir, ".canopy"));
+      await writeFile(join(dir, ".canopy", "intent.md"), "# Intent\n");
       const run = async (body: string | null): Promise<number> => {
         const file = join(dir, ".canopy", "questions.json");
         await rm(file, { force: true });
         if (body !== null) await writeFile(file, body);
         return (await builtinCheck(check, dir)).exit;
       };
-      expect(await run(null)).toBe(0);
+      expect(await run(null)).toBe(1);
       expect(await run("[]")).toBe(0);
       expect(await run('[{"question":"which?","options":["a","b"]}]')).toBe(0);
       expect(await run('{"questions":[{"question":"which?"}]}')).toBe(0);
@@ -388,6 +389,14 @@ describe("the bundled renovate and extend", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  test("extend's checks that run every gate get the time a full gate run takes, and Baseline its retries (incubator review, P2)", async () => {
+    const steps = (await load("extend"))?.steps ?? [];
+    const step = (name: string) => steps.find((s) => s.name === name);
+    for (const name of ["Baseline", "Build", "Test"]) expect(step(name)?.checkMinutes).toBe(30);
+    expect(step("Baseline")?.retries).toBe(2);
+    expect(step("Baseline")?.back).toBe("Baseline");
   });
 
   test("extend's baseline records the gates that fail before any change, and only those stop failing the checks after it", async () => {

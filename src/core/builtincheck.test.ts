@@ -3,6 +3,8 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { builtinCheck, isBuiltinCheck } from "./builtincheck";
+import { CONVEX_PARKED } from "./sprout";
+import type { SproutPick } from "./types";
 
 let dir = "";
 beforeAll(async () => {
@@ -32,12 +34,49 @@ describe("built-in checks", () => {
     expect(await builtinCheck("@pick-check", dir)).toEqual({ exit: 0, output: "pick ok: new on vercel" });
   });
 
-  test("@questions: absent is fine, a bad list is not", async () => {
-    expect((await builtinCheck("@questions", dir)).exit).toBe(0);
-    await put(".canopy/questions.json", '[{"q": 1}]');
-    expect((await builtinCheck("@questions", dir)).exit).toBe(1);
-    await put(".canopy/questions.json", '[{"question": "who is it for?"}]');
-    expect((await builtinCheck("@questions", dir)).exit).toBe(0);
+  test("@pick-check: a host this phase cannot deploy, and what the backend would refuse later, fail it before the judge", async () => {
+    const d = await mkdtemp(join(tmpdir(), "canopy-builtin-pick-"));
+    try {
+      await mkdir(join(d, ".canopy"));
+      await writeFile(join(d, ".canopy", "research.md"), "# research\n");
+      await writeFile(join(d, ".canopy", "pick.json"), JSON.stringify({ kind: "new", host: "vercel+convex", why: "it needs a database" }));
+      expect(await builtinCheck("@pick-check", d)).toEqual({ exit: 1, output: `.canopy/pick.json: ${CONVEX_PARKED}` });
+      const pick = { kind: "renovate", host: "vercel", why: "a maintained fork", target: "https://github.com/up/lib", license: "MIT" };
+      await writeFile(join(d, ".canopy", "pick.json"), JSON.stringify(pick));
+      const asked: SproutPick[] = [];
+      const refused = await builtinCheck("@pick-check", d, {
+        pick: async (p) => {
+          asked.push(p);
+          return "GitHub says https://github.com/up/lib is GPL-3.0, not the MIT scout read";
+        },
+      });
+      expect(refused).toEqual({ exit: 1, output: ".canopy/pick.json: GitHub says https://github.com/up/lib is GPL-3.0, not the MIT scout read" });
+      expect(asked).toEqual([pick as SproutPick]);
+      expect(await builtinCheck("@pick-check", d, { pick: async () => null })).toEqual({ exit: 0, output: "pick ok: renovate on vercel" });
+      // a seed no sprout of this server's holds has nothing more to ask
+      expect(await builtinCheck("@pick-check", d, { pick: async () => undefined })).toEqual({ exit: 0, output: "pick ok: renovate on vercel" });
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
+  });
+
+  test("@questions: intent.md and questions.json both written, and a list canopy can read", async () => {
+    const d = await mkdtemp(join(tmpdir(), "canopy-builtin-questions-"));
+    try {
+      await mkdir(join(d, ".canopy"));
+      const run = () => builtinCheck("@questions", d);
+      expect(await run()).toEqual({ exit: 1, output: ".canopy/intent.md is missing: clarify writes it before its questions" });
+      await writeFile(join(d, ".canopy", "intent.md"), "# Intent\n");
+      expect(await run()).toEqual({ exit: 1, output: ".canopy/questions.json is missing: write [] when nothing needs asking" });
+      await writeFile(join(d, ".canopy", "questions.json"), '[{"q": 1}]');
+      expect((await run()).exit).toBe(1);
+      await writeFile(join(d, ".canopy", "questions.json"), "[]");
+      expect(await run()).toEqual({ exit: 0, output: "0 questions" });
+      await writeFile(join(d, ".canopy", "questions.json"), '[{"question": "who is it for?"}]');
+      expect(await run()).toEqual({ exit: 0, output: "1 questions" });
+    } finally {
+      await rm(d, { recursive: true, force: true });
+    }
   });
 
   test("@advice: retro.md first, then a list canopy can read", async () => {
@@ -89,6 +128,7 @@ describe("built-in checks", () => {
       const link = await builtinCheck("@pick-check", d);
       expect(link.exit).toBe(1);
       expect(link.output).toContain("pick.json");
+      await writeFile(join(d, ".canopy", "intent.md"), "# Intent\n");
       await writeFile(join(d, ".canopy", "questions.json"), "x".repeat(300 * 1024));
       const big = await builtinCheck("@questions", d);
       expect(big.exit).toBe(1);

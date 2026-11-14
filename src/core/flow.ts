@@ -229,8 +229,10 @@ export interface FlowHooks {
   onFleet: (fleet: Fleet) => void;
   onFleetGone: (id: string) => void;
   /** runs a step's check in the repo; the signal aborts when the flow is
-   *  stopped, and the check should then kill what it started and settle */
-  check: (repo: Repo, command: string, signal: AbortSignal) => Promise<CheckResult>;
+   *  stopped, and the check should then kill what it started and settle.
+   *  `timeoutMs` is the step's own limit (`check-minutes:`), undefined for
+   *  the runner's default. */
+  check: (repo: Repo, command: string, signal: AbortSignal, timeoutMs?: number) => Promise<CheckResult>;
   /** tools a step gets for its check line on top of its own (`@gates`
    *  gives each gate's line); null, as for most lines, adds none and starts
    *  the run without waiting */
@@ -1486,7 +1488,7 @@ export class Flows {
     live.checking.set(i, ctl);
     let r: CheckResult;
     try {
-      r = await this.hooks.check(workRepo(live), def.check, ctl.signal);
+      r = await this.hooks.check(workRepo(live), def.check, ctl.signal, def.checkMinutes === undefined ? undefined : def.checkMinutes * 60_000);
       if (live.checking.get(i) !== ctl) return;
     } finally {
       if (live.checking.get(i) === ctl) live.checking.delete(i);

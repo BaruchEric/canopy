@@ -43,22 +43,24 @@ export async function runCheck(
   away: string = STAGE_AWAY,
   /** a stopped flow's: kills the check and what it started */
   signal?: AbortSignal,
+  /** the step's own limit; canopy's 10 minutes when it sets none */
+  timeoutMs = CHECK_TIMEOUT,
 ): Promise<CheckResult> {
   const sig = signal ? { signal } : {};
   const { host, path } = parseLocator(repo.path);
   if (stage && client === null) return { exit: 127, output: away, away: true };
   const r: ExecResult & { unfenced?: string } =
     stage && client
-      ? await client.exec(["sh", "-c", command], { cwd: path, timeoutMs: CHECK_TIMEOUT, ...sig })
+      ? await client.exec(["sh", "-c", command], { cwd: path, timeoutMs, ...sig })
       : host === null
         ? await exec(ledLine(command), {
             cwd: path,
-            timeoutMs: CHECK_TIMEOUT,
+            timeoutMs,
             env: checkEnv(),
             ...(stage ? { base: stageEnv(process.env) } : {}),
             ...sig,
           })
-        : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs: CHECK_TIMEOUT, ...sig });
+        : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs, ...sig });
   // the runner refused it for its fence, by the refusal's own field: the
   // check waits for the fence, as it waits for a runner away
   if (stage && client && r.unfenced !== undefined) return { exit: r.code, output: r.unfenced, away: true };

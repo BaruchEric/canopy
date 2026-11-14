@@ -63,6 +63,14 @@ const STUCK = `- When you cannot finish the task as stated (nothing you would co
 
 const SUMMARY = `- Finish with a short plain-prose summary of what you did (commit hashes, remote, URL) and anything you left alone and why. No headings, no bullet lists.`;
 
+/** An incubator stage's step in place of DONE, STUCK and SUMMARY, which
+ *  said the opposite of every stage prompt: ask the user, be done only
+ *  once the tree is clean and pushed, close with hashes and a URL. No one
+ *  watches a stage, its task says what to commit, and canopy pushes. */
+const STAGE = `- No one watches this run: it is a stage of canopy's incubator. Ask the user nothing and wait on no answer; when you cannot finish the step as its task says, say what is missing and stop.
+- Commit only what the task says to commit, and never push: canopy commits its own files under .canopy/ and makes every push itself.
+- Finish with the closing words the task asks for.`;
+
 /** The three rule sets, built once per safety wording: a workspace run is
  *  told the same rules over its folders instead of one repository. */
 const rulesFor = (safety: string) => ({
@@ -76,6 +84,8 @@ const rulesFor = (safety: string) => ({
    *  a conversation has no closing summary, and it is not done until the user
    *  says so. */
   chat: ["Ground rules:", safety].join("\n"),
+  /** an incubator stage's job: a flow step in a seed */
+  stage: ["Ground rules:", safety, STAGE].join("\n"),
 });
 
 const RULES = rulesFor(SAFETY);
@@ -309,8 +319,9 @@ export const FIRST_MESSAGE = "First message from the user:";
 /** The full prompt for a run. The repo facts come from canopy's own status
  *  read, so the agent starts with the same picture the card shows. The
  *  ground rules name Claude's AskUserQuestion; a Codex run is told its own
- *  tool for the same thing (codexrun.ts). */
-export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope): string {
+ *  tool for the same thing (codexrun.ts). A job in an incubator seed
+ *  (`stage`) takes the stage's rules instead of the job's. */
+export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: WorkspaceScope, stage = false): string {
   if (spec.detached) {
     const first = note.trim();
     return first ? `${spec.task}\n\n${FIRST_MESSAGE}\n${first}` : spec.task;
@@ -344,7 +355,7 @@ export function buildPrompt(repo: Repo, spec: ActionSpec, note: string, scope?: 
   const parts =
     spec.mode === "chat"
       ? [head, spec.task, rules.chat, spec.brief, noteBlock]
-      : [head, spec.task, noteBlock, spec.mode === "ask" ? rules.ask : rules.job, spec.brief];
+      : [head, spec.task, noteBlock, spec.mode === "ask" ? rules.ask : stage ? rules.stage : rules.job, spec.brief];
   return parts.filter(Boolean).join("\n\n");
 }
 

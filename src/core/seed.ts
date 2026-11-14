@@ -211,6 +211,21 @@ export const MAKING_DIR = ".canopy-making";
  *  attempts must not clear each other's folder. */
 export const seedWorkPath = (path: string, id: string): string => join(dirname(dirname(path)), MAKING_DIR, `${basename(path)}.${id}`);
 
+/** how long the intake clone may take before it is stopped */
+const CLONE_TIMEOUT = 10 * 60_000;
+
+/** LFS files stay pointers: no smudge filter runs during the clone, whatever
+ *  the global config names, so no large file is fetched. Set on the clone's
+ *  command alone, so the seed's own config keeps none of it. */
+const NO_LFS = ["-c", "filter.lfs.smudge=", "-c", "filter.lfs.process=", "-c", "filter.lfs.required=false"];
+
+const span = (ms: number): string => {
+  const min = Math.round(ms / 60_000);
+  if (min >= 1) return `${min} ${min === 1 ? "minute" : "minutes"}`;
+  const sec = Math.max(1, Math.round(ms / 1000));
+  return `${sec} ${sec === 1 ? "second" : "seconds"}`;
+};
+
 export async function makeSeed(
   path: string,
   files: Record<string, string>,
@@ -232,10 +247,13 @@ export async function makeSeed(
   });
   try {
     if (clone) {
-      const r = await exec(["git", ...QUIET, "clone", "--quiet", "--", clone, work], {
-        timeoutMs: opts.cloneTimeoutMs ?? 600_000,
-        env: { GIT_TERMINAL_PROMPT: "0" },
+      const limit = opts.cloneTimeoutMs ?? CLONE_TIMEOUT;
+      const timer = AbortSignal.timeout(limit);
+      const r = await exec(["git", ...QUIET, ...NO_LFS, "clone", "--quiet", "--", clone, work], {
+        signal: timer,
+        env: { GIT_TERMINAL_PROMPT: "0", GIT_LFS_SKIP_SMUDGE: "1" },
       });
+      if (timer.aborted) throw new Error(`the clone took longer than ${span(limit)}, its time limit, and was stopped: the repo is too big, or its host too slow, to clone from here`);
       // git may name the url in its error, token and all, in any form
       // (rewritten by an insteadOf, say), so every http(s) userinfo goes
       const said = firstLine(r.stderr).split(clone).join(urlWithoutSecret(clone)).replace(/(https?:\/\/)[^@/\s]+@/gi, "$1");
@@ -248,6 +266,8 @@ export async function makeSeed(
         const set = await git(work, [...NO_HOOKS, "remote", "set-url", "upstream", clean]);
         if (set.code !== 0) throw new Error(`git remote set-url: ${firstLine(set.stderr)}`);
       }
+      // notes the upstream tracks would read as canopy's own, an answers file among them
+      await dropUpstreamNotes(work, opts.self);
     } else {
       const r = await git(work, [...QUIET, "init", "-q", "-b", "main"]);
       if (r.code !== 0) throw new Error(`git init: ${firstLine(r.stderr)}`);
@@ -296,6 +316,14 @@ export async function readSeed(path: string, rel: string): Promise<string | null
   }
 }
 
+/** A file the agent writes, taken away so the next run has to write it
+ *  again; nothing there is fine. A link goes as itself, never what it
+ *  points at, and a folder on the way that is a link is refused. */
+export async function removeSeed(path: string, rel: string): Promise<void> {
+  const file = await place(path, rel, false);
+  if (file) await rm(file, { force: true });
+}
+
 export async function writeSeed(path: string, rel: string, text: string): Promise<void> {
   const file = await place(path, rel, true);
   if (!file) throw new Error(`${rel} is not a path inside the seed`);
@@ -322,6 +350,7 @@ export function seedOps(self: string, committed?: (path: string) => void) {
     make: (path: string, files: Record<string, string>, clone: string | undefined, id: string) => makeSeed(path, files, clone, { self, id }),
     read: readSeed,
     write: writeSeed,
+    remove: removeSeed,
     /** the seed's HEAD after the commit, which the ship holds the seed to */
     commit: async (path: string, rels: string[], message: string): Promise<string> => {
       // a busy seed (its own stage alive on an isolated backend, any

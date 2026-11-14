@@ -124,6 +124,8 @@ export interface IncubatorSeeds {
   /** a plain file the agent wrote, or null; throws on a symlink */
   read(path: string, rel: string): Promise<string | null>;
   write(path: string, rel: string, text: string): Promise<void>;
+  /** a file the agent writes, gone; nothing there is fine */
+  remove(path: string, rel: string): Promise<void>;
   /** the named files only, as canopy; the seed's HEAD after, when known */
   commit(path: string, rels: string[], message: string): Promise<string | void>;
   /** the seed's HEAD commit, with nothing committed */
@@ -229,6 +231,11 @@ export const newSproutId = (): string => `sp_${crypto.randomUUID().replace(/-/g,
 const msg = (err: unknown): string => String(err instanceof Error ? err.message : err);
 /** a write refused because a file is at that name already */
 const alreadyThere = (err: unknown): boolean => typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST";
+/** How long a stage's run may wait on a permission or a question before
+ *  its project parks with the reason. No one watches a stage, so a prompt
+ *  it raised can wait unseen while the project holds its slot. */
+export const STAGE_WAIT_MAX = 30 * 60_000;
+
 /** the park reason's start when the seed's HEAD is not the one accepted */
 const SEED_MOVED = "the seed moved after the build was accepted";
 const enc = new TextEncoder();
@@ -257,6 +264,8 @@ export class Incubator {
   private readonly seen = new Map<string, string>();
   /** when each running retro's flow began waiting on a prompt, for the backstop */
   private readonly retroWaiting = new Map<string, number>();
+  /** when each stage flow began waiting on a prompt, until it parks its project */
+  private readonly stageWaiting = new Map<string, number>();
   /** each sprout's vault writes, one after another */
   private readonly noteChain = new Map<string, Promise<void>>();
   /** each sprout's slow work (prepare, more input), one after another, so two
@@ -605,6 +614,41 @@ export class Incubator {
     return judgeAnswersText(await this.deps.store.readRunAnswers(s.id));
   }
 
+  /** Why canopy would refuse `p` once scout's judge had passed it, asked by
+   *  scout's own check (`@pick-check`) so research hears it first: a host
+   *  this backend cannot deploy, a seed already rebuilt for another source,
+   *  or what GitHub says of the target or the license. Null when nothing
+   *  here refuses it; undefined when no sprout of this server's is at
+   *  `seedPath`. Nothing is rebuilt; the build checks GitHub again. */
+  async wouldRefuse(seedPath: string, p: SproutPick): Promise<string | null | undefined> {
+    const s = this.list().find((x) => x.seedPath === seedPath);
+    if (!s) return undefined;
+    const held = workRefusal(s.work, p);
+    if (held) return held;
+    if (p.kind !== "extend") {
+      const ship = this.deps.ship ?? null;
+      const why = ship ? ship.ready(p.host) : "this backend has no deploy set up";
+      if (why) return why;
+    }
+    // a seed rebuilt for this source was checked when it was rebuilt
+    if (p.kind === "new" || s.work) return null;
+    const source = this.deps.source ?? null;
+    if (!source) return "this backend cannot rebuild a seed for a renovate or extend pick";
+    const target = (p.target ?? "").trim();
+    try {
+      if (p.kind === "extend") {
+        await source.extendTarget(target);
+        return null;
+      }
+      const license = await source.upstreamLicense(target);
+      if (license === null) return `GitHub names no license for ${target}, so canopy will not renovate it`;
+      if (license !== p.license) return `GitHub says ${target} is ${license}, not the ${p.license ?? "license"} scout read`;
+      return null;
+    } catch (err) {
+      return msg(err);
+    }
+  }
+
   /** more inputs; after clarify has looked, clarify looks again before the next stage */
   async addInputs(id: string, intake: Intake): Promise<Sprout> {
     const s = this.need(id);
@@ -618,6 +662,12 @@ export class Incubator {
     // not read these, so another follows it whenever it ends
     const last = s.flows.at(-1);
     if (s.clarified || s.status === "clarifying" || (last?.workflow === "clarify" && !last.outcome)) this.reclarify(s);
+    // a scout or a build under way works on the pick this input voids: it
+    // stops now, and clarify reads the input next
+    if (this.supersede(s)) {
+      delete s.parked;
+      s.status = "queued";
+    }
     if (s.status === "clarifying" && s.questions) {
       delete s.questions;
       delete s.questionsAt;
@@ -640,6 +690,22 @@ export class Incubator {
     if (requeued && !s.prepared) this.serial(s, () => this.prepare(s));
     await this.changed(s, "input");
     return s;
+  }
+
+  /** Stops the scout or build flow under way, running or parked at a gate,
+   *  when new input has voided the pick it works on: true when there was
+   *  one. Its end goes on record first, so the flow's own broadcast of the
+   *  stop changes nothing. */
+  private supersede(s: Sprout): boolean {
+    const entry = s.flows.at(-1);
+    if (!entry || entry.outcome || (entry.workflow !== "scout" && !isBuildWorkflow(entry.workflow))) return false;
+    const f = this.deps.flows.get(entry.flowId);
+    if (!f || !isFlowActive(f)) return false;
+    entry.outcome = "superseded";
+    entry.digest = flowDigest(f);
+    s.spent = { runs: s.spent.runs + (f.spent?.runs ?? 0), workMs: s.spent.workMs + (f.spent?.workMs ?? 0) };
+    this.stopFlow(f);
+    return true;
   }
 
   private async afterInputs(s: Sprout): Promise<void> {
@@ -1027,11 +1093,35 @@ export class Incubator {
   }
 
   /** The server's clock: a park comes due a day on with nothing else
-   *  happening, and a vault write that failed is tried again. */
+   *  happening, a vault write that failed is tried again, and a stage
+   *  waiting on a prompt too long parks. */
   tick(): void {
+    this.stageWaits();
     this.pump();
     if (this.detached) return;
     for (const s of this.list()) if (s.vault?.noteOwed || s.vault?.owed?.length) this.note(s);
+  }
+
+  /** A stage flow waiting on a permission or a question past
+   *  `STAGE_WAIT_MAX` parks its project with the reason, once per wait. The
+   *  flow stays, with its slot as at a gate: an answer still reaches the
+   *  run and the stage goes on, and stop ends it. */
+  private stageWaits(): void {
+    const at = this.now();
+    for (const [id, since] of this.stageWaiting) {
+      const s = this.ownerOf(id);
+      const entry = s?.flows.at(-1);
+      const f = this.deps.flows.get(id);
+      if (!s || !entry || entry.flowId !== id || entry.outcome || sproutEnded(s) || f?.status !== "waiting") {
+        this.stageWaiting.delete(id);
+        continue;
+      }
+      if (at - since < STAGE_WAIT_MAX || s.status === "parked") continue;
+      this.stageWaiting.delete(id);
+      const step = f.steps[f.current]?.name ?? "current";
+      const minutes = Math.round(STAGE_WAIT_MAX / 60_000);
+      this.track(this.park(s, `${entry.workflow}'s ${step} step has waited ${minutes} minutes on a permission or a question no one answered. Answer it and the stage goes on, or stop the project`, false));
+    }
   }
 
   /* ---------- retro ---------- */
@@ -1220,7 +1310,11 @@ export class Incubator {
     const share = this.deps.share ?? REAL_SHARE;
     const inputs = await share.inputs(seedsDir, s.id, this.deps.store.inputsDir(s.id));
     const ws = name === "scout" ? await share.workspace(seedsDir, this.deps.root, s.id) : null;
-    if (name === "clarify") wf = withInputsRead(wf, inputs);
+    if (name === "clarify") {
+      // the last pass's questions never pass this one's check
+      await this.deps.seeds.remove(s.seedPath, ".canopy/questions.json");
+      wf = withInputsRead(wf, inputs);
+    }
     if (ws !== null) wf = withWorkspaceRead(wf, ws);
     const build = isBuildWorkflow(name) ? s.pick : undefined;
     if (build) {
@@ -1316,6 +1410,9 @@ export class Incubator {
   private async flowMoved(s: Sprout, entry: SproutFlow, flow: Flow): Promise<void> {
     // an outcome on record means this flow's end was already taken in
     if (this.detached || s.status === "stopped" || entry.outcome) return;
+    // the backstop's clock: the tick parks a stage that waits too long
+    if (flow.status !== "waiting") this.stageWaiting.delete(flow.id);
+    else if (!this.stageWaiting.has(flow.id)) this.stageWaiting.set(flow.id, this.now());
     const step = flow.steps[flow.current];
     if (flow.status === "gated") {
       if (entry.workflow === "scout" && step?.judgment?.rejected) {

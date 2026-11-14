@@ -329,7 +329,7 @@ describe("whether a coordinator's project card may start here", () => {
     new Incubator({
       root: join(tmpdir(), "canopy-no-root"),
       store: { list: async () => [], save: never, writeInput: never, removeInput: never, readInput: never, inputsDir: () => "", writeIndex: never, readRunAnswers: never, writeRunAnswers: never, dismiss: never },
-      seeds: { make: never, read: never, write: never, commit: never, headOf: never, exists: () => false },
+      seeds: { make: never, read: never, write: never, commit: never, headOf: never, remove: never, exists: () => false },
       flows: { start: never, get: () => undefined, resume: () => { throw new Error("no flows"); }, stop: () => { throw new Error("no flows"); } },
       workflow: async () => undefined,
       rescan: async () => {},

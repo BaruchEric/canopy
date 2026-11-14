@@ -1,15 +1,29 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { libraryStateDir } from "./library";
 import { shareInputs, shareRecord, shareWorkspace, unshare } from "./stageshare";
 
 let root = "";
 let outside = "";
+let config = "";
+let configWas: string | undefined;
+/** the Library's folder for a workspace root, under the test's config dir */
+const libOf = async (ws: string): Promise<string> => libraryStateDir(await realpath(ws));
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), "canopy-share-"));
   outside = await mkdtemp(join(tmpdir(), "canopy-share-out-"));
+  config = await mkdtemp(join(tmpdir(), "canopy-share-config-"));
+  configWas = process.env["CANOPY_CONFIG_DIR"];
+  process.env["CANOPY_CONFIG_DIR"] = config;
+  const lib = await libOf(root);
+  await mkdir(lib, { recursive: true });
+  // devhub's copy, retired on 2026-09-12: a stage never reads it
   await mkdir(join(root, "_devhub"), { recursive: true });
+  await writeFile(join(root, "_devhub", "manifest.json"), JSON.stringify({ categories: { old: { projects: [{ name: "gone", path: "web-apps/gone" }] } } }));
+  await mkdir(join(root, "web-apps", "gone"), { recursive: true });
+  await writeFile(join(root, "web-apps", "gone", "README.md"), "# gone\n");
   await mkdir(join(root, "web-apps", "tally"), { recursive: true });
   await mkdir(join(root, "dev-tools", "canopy"), { recursive: true });
   await writeFile(join(root, ".env"), "GH_TOKEN=secret\n");
@@ -19,7 +33,7 @@ beforeAll(async () => {
   await writeFile(join(outside, "README.md"), "# outside GH_TOKEN\n");
   await symlink(outside, join(root, "web-apps", "escape"));
   await writeFile(
-    join(root, "_devhub", "manifest.json"),
+    join(lib, "manifest.json"),
     JSON.stringify({
       categories: {
         "web-apps": {
@@ -33,11 +47,14 @@ beforeAll(async () => {
       },
     }),
   );
-  await writeFile(join(root, "_devhub", "references.json"), "{}");
+  await writeFile(join(lib, "references.json"), "{}");
 });
 afterAll(async () => {
+  if (configWas === undefined) delete process.env["CANOPY_CONFIG_DIR"];
+  else process.env["CANOPY_CONFIG_DIR"] = configWas;
   await rm(root, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
+  await rm(config, { recursive: true, force: true });
 });
 
 describe("stage share", () => {
@@ -48,6 +65,28 @@ describe("stage share", () => {
     expect((await readdir(join(dir, "READMEs"))).sort()).toEqual(["dev-tools__canopy.md", "web-apps__tally.md"]);
   });
 
+  test("the indexes are the Library's own, never devhub's retired copy under the root", async () => {
+    const dir = await shareWorkspace(join(root, "_incubator"), root, "sp_a");
+    const manifest = JSON.parse(await readFile(join(dir, "manifest.json"), "utf8")) as { categories: Record<string, unknown> };
+    expect(Object.keys(manifest.categories).sort()).toEqual(["dev-tools", "web-apps"]);
+    expect(await readdir(join(dir, "READMEs"))).not.toContain("web-apps__gone.md");
+  });
+
+  test("a workspace whose Library has no manifest yet shares no index and no README", async () => {
+    const ws = await mkdtemp(join(tmpdir(), "canopy-share-nolib-"));
+    try {
+      await mkdir(join(ws, "_devhub"), { recursive: true });
+      await mkdir(join(ws, "web-apps", "x"), { recursive: true });
+      await writeFile(join(ws, "web-apps", "x", "README.md"), "# x\n");
+      await writeFile(join(ws, "_devhub", "manifest.json"), JSON.stringify({ categories: { a: { projects: [{ name: "x", path: "web-apps/x" }] } } }));
+      const dest = await shareWorkspace(join(ws, "_incubator"), ws, "sp_nolib");
+      expect(await readdir(dest)).toEqual(["READMEs"]);
+      expect(await readdir(join(dest, "READMEs"))).toEqual([]);
+    } finally {
+      await rm(ws, { recursive: true, force: true });
+    }
+  });
+
   test("a README that is a symlink, a path out of the root or the .env never lands", async () => {
     const dir = await shareWorkspace(join(root, "_incubator"), root, "sp_a");
     const all = await readdir(join(dir, "READMEs"));
@@ -56,7 +95,7 @@ describe("stage share", () => {
   });
 
   test("the cap holds", async () => {
-    const dir = await shareWorkspace(join(root, "_incubator"), root, "sp_a", { files: 1, bytes: 1_000_000 });
+    const dir = await shareWorkspace(join(root, "_incubator"), root, "sp_a", { cap: { files: 1, bytes: 1_000_000 } });
     expect(await readdir(join(dir, "READMEs"))).toHaveLength(1);
   });
 
@@ -108,9 +147,10 @@ describe("the indexes a stage reads", () => {
   test("hold no userinfo: every remote, url and url in free text loses its password or token", async () => {
     const ws = await mkdtemp(join(tmpdir(), "canopy-share-secret-"));
     try {
-      await mkdir(join(ws, "_devhub"), { recursive: true });
+      const lib = await libOf(ws);
+      await mkdir(lib, { recursive: true });
       await writeFile(
-        join(ws, "_devhub", "manifest.json"),
+        join(lib, "manifest.json"),
         JSON.stringify({
           categories: {
             "web-apps": {
@@ -129,7 +169,7 @@ describe("the indexes a stage reads", () => {
           },
         }),
       );
-      await writeFile(join(ws, "_devhub", "references.json"), JSON.stringify([{ url: "https://u:SECRET4@ref.example/doc" }]));
+      await writeFile(join(lib, "references.json"), JSON.stringify([{ url: "https://u:SECRET4@ref.example/doc" }]));
       const dest = await shareWorkspace(join(ws, "_incubator"), ws, "sp_secret0000");
       const manifest = await readFile(join(dest, "manifest.json"), "utf8");
       const refs = await readFile(join(dest, "references.json"), "utf8");
@@ -151,8 +191,9 @@ describe("the indexes a stage reads", () => {
   test("an index that does not parse is left out rather than copied as it is", async () => {
     const ws = await mkdtemp(join(tmpdir(), "canopy-share-bad-"));
     try {
-      await mkdir(join(ws, "_devhub"), { recursive: true });
-      await writeFile(join(ws, "_devhub", "manifest.json"), '{"remote": "https://e:SECRET5@github.com/x" ');
+      const lib = await libOf(ws);
+      await mkdir(lib, { recursive: true });
+      await writeFile(join(lib, "manifest.json"), '{"remote": "https://e:SECRET5@github.com/x" ');
       const dest = await shareWorkspace(join(ws, "_incubator"), ws, "sp_secret0001");
       expect(await readdir(dest)).not.toContain("manifest.json");
     } finally {

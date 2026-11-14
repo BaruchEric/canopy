@@ -37,6 +37,17 @@ const stepCheck = async (workflow: string, step: string): Promise<string> => {
   return line;
 };
 
+describe("a check's time limit", () => {
+  test("a check that runs past the limit it is handed is stopped", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "canopy-check-limit-"));
+    scratch.push(dir);
+    const began = Date.now();
+    const r = await runCheck({ path: dir }, "sleep 5", false, undefined, undefined, undefined, 300);
+    expect(r.exit).not.toBe(0);
+    expect(Date.now() - began).toBeLessThan(4000);
+  });
+});
+
 describe("a check never runs the seed's bunfig preload or reads its .env", () => {
   test("the seed is hostile: plain bun in it runs the preload and reads the .env", async () => {
     const { dir, marker } = await hostileSeed({});
@@ -61,10 +72,10 @@ describe("a check never runs the seed's bunfig preload or reads its .env", () =>
 
   test("clarify's check gives its own answer, and the preload never runs", async () => {
     const line = await stepCheck("clarify", "Clarify");
-    const good = await hostileSeed({ ".canopy/questions.json": "[]" });
+    const good = await hostileSeed({ ".canopy/intent.md": "# Intent\n", ".canopy/questions.json": "[]" });
     expect((await builtinCheck(line, good.dir)).exit).toBe(0);
     expect(existsSync(good.marker)).toBe(false);
-    const bad = await hostileSeed({ ".canopy/questions.json": "not json" });
+    const bad = await hostileSeed({ ".canopy/intent.md": "# Intent\n", ".canopy/questions.json": "not json" });
     const no = await builtinCheck(line, bad.dir);
     expect(no.exit).toBe(1);
     expect(no.output).toContain("questions.json is not JSON");

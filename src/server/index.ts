@@ -6842,7 +6842,7 @@ export async function startServer(opts: {
     },
     // a seed's check starts without canopy's GitHub login, like its runs
     checkTools: (repo, line) => (line === GATES_CHECK ? gateTools(repo.path) : null),
-    check: async (repo, line, signal) => {
+    check: async (repo, line, signal, timeoutMs) => {
       // @gates becomes the repo's gates as a script, then runs like any other line
       let command = line;
       if (command === GATES_CHECK) {
@@ -6851,8 +6851,8 @@ export async function startServer(opts: {
         command = script;
       }
       // @name is a built-in canopy runs itself over readSeed, never a shell line
-      if (isBuiltinCheck(command)) return builtinCheck(command, repo.path);
-      if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false, undefined, undefined, signal);
+      if (isBuiltinCheck(command)) return builtinCheck(command, repo.path, { pick: (p) => state.incubator.inc.wouldRefuse(repo.path, p) });
+      if (!isSeedPath(root, repo.path)) return runCheck(repo, command, false, undefined, undefined, signal, timeoutMs);
       // canopy runs no git in any seed while a check runs in one (seedgit.ts),
       // nor after it while the stage runner still says something runs there
       seedChecks.set(repo.path, (seedChecks.get(repo.path) ?? 0) + 1);
@@ -6864,7 +6864,7 @@ export async function startServer(opts: {
       const client = stageFor();
       let held = false;
       try {
-        const result = await runCheck(repo, command, true, client, stageAway(), signal);
+        const result = await runCheck(repo, command, true, client, stageAway(), signal, timeoutMs);
         if (client) {
           const hold = holdQuiet(client, repo.path, runnerOpts.quietWait ?? QUIET_WAIT, "check");
           checkHolds.add(hold);

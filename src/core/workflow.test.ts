@@ -246,10 +246,30 @@ describe("retries, back, evidence and budget", () => {
   const checkOnly = (keys: string) =>
     `---\nblurb: b\n---\n\n## First\n\nOne.\n\n## Gate\ncheck: true\n${keys}\n\n## Third\n\nThree.\n`;
 
-  test("refuses retries on a check-only step that goes back to itself", () => {
+  test("allows retries on a check-only step that goes back to itself: its check runs again", () => {
     const e = parseWorkflow(checkOnly("retries: 2"), meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps[1]).toMatchObject({ retries: 2, back: "Gate" });
+  });
+
+  test("check-minutes sets how long the step's check may run", () => {
+    const e = parseWorkflow(checkOnly("check-minutes: 30"), meta);
+    if (!e.ok) throw new Error(e.error);
+    expect(e.workflow.steps[1]?.checkMinutes).toBe(30);
+    const none = parseWorkflow(checkOnly(""), meta);
+    if (!none.ok) throw new Error(none.error);
+    expect(none.workflow.steps[1]?.checkMinutes).toBeUndefined();
+  });
+
+  test("check-minutes is a whole number from 1 to 120, on a step that has a check", () => {
+    for (const bad of ["0", "121", "1.5", "ten"]) {
+      const e = parseWorkflow(checkOnly(`check-minutes: ${bad}`), meta);
+      expect(e.ok).toBe(false);
+      if (!e.ok) expect(e.error).toContain(`step Gate: check-minutes must be a whole number from 1 to 120, not ${bad}`);
+    }
+    const e = parseWorkflow(`---\nblurb: b\n---\n\n## Do\ncheck-minutes: 20\n\nWork.\n`, meta);
     expect(e.ok).toBe(false);
-    if (!e.ok) expect(e.error).toContain("step Gate: a check-only step's retries need back: an earlier step");
+    if (!e.ok) expect(e.error).toContain("step Do: check-minutes needs a check");
   });
 
   test("allows retries on a check-only step that goes back to an earlier one", () => {

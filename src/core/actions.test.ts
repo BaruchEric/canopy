@@ -211,6 +211,23 @@ describe("buildPrompt", () => {
     const job = buildPrompt(repo(), { ...ACTIONS.ask, mode: "job" as const, task: "Task: x" }, "");
     expect(job).toContain("The job is done when the list is empty and the branch is not ahead");
   });
+  test("a stage's rules agree with its prompts: it asks no one, commits as its task says, pushes nothing, and closes as its task asks (incubator review, P2)", () => {
+    const spec = { ...ACTIONS.ask, mode: "job" as const, task: "Task: write .canopy/pick.json. Finish with one sentence: the pick and why." };
+    const stage = buildPrompt(repo({ ahead: 1 }), spec, "", undefined, true);
+    expect(stage).toContain("Never rewrite published history");
+    expect(stage).not.toContain("AskUserQuestion");
+    expect(stage).not.toContain("The job is done when the list is empty");
+    expect(stage).not.toContain("short plain-prose summary");
+    expect(stage).toContain("No one watches this run");
+    expect(stage).toContain("never push");
+    expect(stage.trim().endsWith("Finish with the closing words the task asks for.")).toBe(true);
+    // a job outside a seed keeps the job's rules
+    const job = buildPrompt(repo(), spec, "");
+    expect(job).toContain("Ask with AskUserQuestion");
+    expect(job).toContain("The job is done when the list is empty");
+    // an ask on a seed is a person's, and keeps the ask's rules
+    expect(buildPrompt(repo(), ACTIONS.ask, "explain", undefined, true)).toContain("Ask with AskUserQuestion");
+  });
   test("every action has a spec and a prompt", () => {
     for (const a of RUN_ACTIONS) {
       expect(ACTIONS[a].label.length).toBeGreaterThan(0);

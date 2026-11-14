@@ -1,15 +1,18 @@
 /**
  * What a stage may read beyond its own seed, copied by canopy under the seeds
  * dir's `.shared/`, which the stages container mounts read-only: a sprout's
- * inputs, a per-sprout snapshot of the workspace (devhub's two indexes and
- * each listed project's README), and the record its retro reads. The stage never sees the launch root, its
- * .env, or canopy's config volume. Regular files only; a symlink is skipped.
+ * inputs, a per-sprout snapshot of the workspace (the Library's two indexes,
+ * `manifest.json` and `references.json` from its folder under the config
+ * dir, and each listed project's README), and the record its retro reads.
+ * The stage never sees the launch root, its .env, or canopy's config
+ * volume. Regular files only; a symlink is skipped.
  * Every build happens in a tmp folder of its own, so two stages at once never
  * share one or swap a snapshot out from under each other.
  */
 import { randomBytes } from "node:crypto";
 import { copyFile, lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { join, normalize, relative, sep } from "node:path";
+import { libraryStateDir } from "./library";
 import { withoutSecrets } from "./sprout";
 
 export { withoutSecrets };
@@ -55,24 +58,35 @@ export async function shareInputs(seeds: string, sproutId: string, from: string)
   return dest;
 }
 
-export async function shareWorkspace(seeds: string, root: string, sproutId: string, cap = CAP): Promise<string> {
+/** The workspace snapshot scout reads. The indexes are the Library's own
+ *  (`libraryStateDir` of the root), which the Library rebuilds as the
+ *  workspace changes; devhub's copy under `<root>/_devhub` stopped changing
+ *  when devhub was retired on 2026-09-12, so it is never read. A root whose
+ *  Library has no manifest yet shares no index and no README. */
+export async function shareWorkspace(
+  seeds: string,
+  root: string,
+  sproutId: string,
+  opts: { cap?: { files: number; bytes: number } } = {},
+): Promise<string> {
   checkId(sproutId);
+  const cap = opts.cap ?? CAP;
   const dest = join(seeds, SHARED_DIR, "workspace", sproutId);
   const tmp = await scratch(seeds);
   try {
     await mkdir(join(tmp, "READMEs"), { recursive: true });
-    const hub = join(root, "_devhub");
+    const hub = await realpath(root).then(libraryStateDir, () => null);
     // the indexes carry each project's remote, which may hold a password or
     // token: every url in them goes in without its userinfo, and an index that
     // does not parse stays out rather than go in as it is
     for (const f of ["manifest.json", "references.json"]) {
-      if (!(await regular(join(hub, f)))) continue;
+      if (hub === null || !(await regular(join(hub, f)))) continue;
       const parsed: unknown = await readFile(join(hub, f), "utf8")
         .then(JSON.parse)
         .catch(() => undefined);
       if (parsed !== undefined) await writeFile(join(tmp, f), JSON.stringify(withoutSecrets(parsed), null, 1));
     }
-    const manifest: unknown = await readFile(join(hub, "manifest.json"), "utf8").then(JSON.parse).catch(() => null);
+    const manifest: unknown = hub === null ? null : await readFile(join(hub, "manifest.json"), "utf8").then(JSON.parse).catch(() => null);
     const cats = typeof manifest === "object" && manifest !== null ? (manifest as { categories?: unknown }).categories : null;
     const projects: unknown[] =
       typeof cats === "object" && cats !== null

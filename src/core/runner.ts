@@ -596,7 +596,7 @@ export class Runner {
    *  a branch run's, which names its worktree and how its work lands. */
   private firstMessage(live: Live, note: string): string {
     const b = live.ctx.run.branch;
-    return b ? branchPrompt(live.repo, live.spec, note, b) : buildPrompt(live.repo, live.spec, note, live.scope);
+    return b ? branchPrompt(live.repo, live.spec, note, b) : buildPrompt(live.repo, live.spec, note, live.scope, this.opts.stage?.(live.repo) ?? false);
   }
 
   /** a one-line remark from canopy on a live run's timeline; nothing for an unknown or ended run */

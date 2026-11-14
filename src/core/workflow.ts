@@ -135,6 +135,7 @@ function agentKey(v: string | undefined, what: string): string | undefined {
 }
 
 const MAX_RETRIES = 10;
+const MAX_CHECK_MINUTES = 120;
 const BUDGET = /^(\d+)\s+runs?\s*,\s*(\d+(?:\.\d+)?)\s*h$/;
 
 function retriesKey(v: string | undefined, name: string): number {
@@ -143,6 +144,16 @@ function retriesKey(v: string | undefined, name: string): number {
   if (!Number.isInteger(n) || n < 0 || n > MAX_RETRIES) {
     throw new Bad(`step ${name}: retries must be a whole number from 0 to ${MAX_RETRIES}, not ${v}`);
   }
+  return n;
+}
+
+function checkMinutesKey(v: string | undefined, name: string, check: string | null): number | undefined {
+  if (v === undefined || v === "") return undefined;
+  const n = Number(v);
+  if (!/^\d+$/.test(v) || n < 1 || n > MAX_CHECK_MINUTES) {
+    throw new Bad(`step ${name}: check-minutes must be a whole number from 1 to ${MAX_CHECK_MINUTES}, not ${v}`);
+  }
+  if (check === null) throw new Bad(`step ${name}: check-minutes needs a check`);
   return n;
 }
 
@@ -198,6 +209,7 @@ function step(name: string, lines: string[], agent: string | undefined): ParsedS
   const evidence = evidenceKey(keys.get("evidence"), name);
   if (evidence.length > 0 && gate !== "judge") throw new Bad(`step ${name}: evidence is only read by gate: judge`);
   const mode: StepMode = oneOf(keys.get("mode"), STEP_MODES, `step ${name}: mode`, "auto");
+  const checkMinutes = checkMinutesKey(keys.get("check-minutes"), name, check);
   return {
     step: {
       name,
@@ -210,6 +222,7 @@ function step(name: string, lines: string[], agent: string | undefined): ParsedS
       back: keys.get("back") || name,
       evidence,
       mode,
+      ...(checkMinutes !== undefined ? { checkMinutes } : {}),
       ...(profile ? { agent: profile } : {}),
     },
     after: keys.get("after"),
@@ -310,10 +323,9 @@ function steps(body: string, agent: string | undefined): WorkflowStep[] {
   out.forEach((s, i) => {
     const to = positions.get(s.step.back);
     if (to === undefined) throw new Bad(`step ${s.step.name}: back names no step called ${s.step.back}`);
+    // back may be the step itself, a check-only step's too: its retry runs
+    // the check again, since a check can fail for a reason outside the work
     if (to > i) throw new Bad(`step ${s.step.name}: back must name this step or an earlier one, not ${s.step.back}`);
-    if (!s.step.body && s.step.retries > 0 && to === i) {
-      throw new Bad(`step ${s.step.name}: a check-only step's retries need back: an earlier step`);
-    }
   });
 
   return out.map((parsed, i) => {

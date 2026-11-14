@@ -181,4 +181,24 @@ describe("the runner", () => {
     runner.start(repo("b", "/root/b"), "ask", ACTIONS.ask, "read", DEFAULT_AGENT);
     expect(seen.map((c) => c.stage)).toEqual([true, false]);
   });
+
+  test("a stage's step takes the stage's ground rules, a job anywhere else the job's", () => {
+    const said: string[] = [];
+    const driver = (): RunDriver => ({
+      harness: "claude",
+      label: "test",
+      check: () => null,
+      start: (_ctx, message) => void said.push(message),
+      say: () => {},
+      stop: () => {},
+    });
+    const runner = new Runner({ onChange: () => {}, onGone: () => {} }, { driver, stage: (repo) => repo.path.startsWith("/root/_incubator/") });
+    const repo = (id: string, path: string): Repo => ({ id, name: id, path, group: "", source: "", status: null });
+    const step = { ...ACTIONS.ask, mode: "job" as const, task: "Task: research. Finish with one sentence." };
+    runner.start(repo("_incubator/a", "/root/_incubator/a"), "ask", step, "go", DEFAULT_AGENT);
+    runner.start(repo("b", "/root/b"), "ask", step, "go", DEFAULT_AGENT);
+    expect(said[0]).toContain("No one watches this run");
+    expect(said[0]).not.toContain("AskUserQuestion");
+    expect(said[1]).toContain("Ask with AskUserQuestion");
+  });
 });

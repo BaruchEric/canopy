@@ -423,9 +423,10 @@ export const RUNNING_STATUSES: ReadonlySet<SproutStatus> = new Set<SproutStatus>
  *  except clarify waiting on the user's answers, which frees it. A sprout
  *  parked at a gate keeps it while its flow (`current`, the status of the
  *  stage's flow) is gated and alive, so resuming that flow never makes one
- *  more than `SPROUT_CONCURRENCY` run. */
+ *  more than `SPROUT_CONCURRENCY` run; so does one parked while its flow's
+ *  run waits on a prompt, which an answer sets going again. */
 export const holdsSlot = (s: Sprout, current?: FlowStatus): boolean =>
-  (RUNNING_STATUSES.has(s.status) && !(s.status === "clarifying" && s.questions?.length)) || (s.status === "parked" && current === "gated");
+  (RUNNING_STATUSES.has(s.status) && !(s.status === "clarifying" && s.questions?.length)) || (s.status === "parked" && (current === "gated" || current === "waiting"));
 
 const ENDED: ReadonlySet<SproutStatus> = new Set<SproutStatus>(["live", "rejected", "handed-off", "stopped"]);
 export const sproutEnded = (s: Sprout): boolean => ENDED.has(s.status);
@@ -722,7 +723,7 @@ export const recordLine = (file: string): string => `This project's record is ${
 
 /** the stage note's sentence naming what withWorkspaceRead opens */
 export const workspaceLine = (dir: string): string =>
-  `The workspace's devhub manifest is ${dir}/manifest.json, its saved references are ${dir}/references.json and each project's README is in ${dir}/READMEs/.`;
+  `The workspace's project manifest, from canopy's Library, is ${dir}/manifest.json, its saved references are ${dir}/references.json and each project's README is in ${dir}/READMEs/.`;
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const optStr = (v: unknown): boolean => v === undefined || typeof v === "string";

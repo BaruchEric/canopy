@@ -328,7 +328,7 @@ describe("slots and stages", () => {
     expect(rec.steps[0]?.tools).toEqual(["WebFetch", "Read(//seeds/.shared/record/sp_1/**)"]);
     expect(recordLine("/seeds/.shared/record/sp_1/record.json")).toBe("This project's record is /seeds/.shared/record/sp_1/record.json.");
     expect(workspaceLine("/seeds/.shared/workspace/sp_1")).toBe(
-      "The workspace's devhub manifest is /seeds/.shared/workspace/sp_1/manifest.json, its saved references are /seeds/.shared/workspace/sp_1/references.json and each project's README is in /seeds/.shared/workspace/sp_1/READMEs/.",
+      "The workspace's project manifest, from canopy's Library, is /seeds/.shared/workspace/sp_1/manifest.json, its saved references are /seeds/.shared/workspace/sp_1/references.json and each project's README is in /seeds/.shared/workspace/sp_1/READMEs/.",
     );
   });
 });
