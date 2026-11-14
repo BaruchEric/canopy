@@ -23,6 +23,7 @@ Equipping cards:
 Planning:
 - Ask Eric when the goal is unclear. A short question beats a wrong plan.
 - Each task is one repo and one change a single agent can finish and commit on its own branch. Split work across repos into one task per repo. Split a large change into steps that each land on their own.
+- A goal Eric starts from canopy's top names no repo. Plan in the repos he named, or ask which when the goal leaves it open. Files he attached are listed in the goal. A card may list `"files"`: names from the goal's files that its worker needs, and only those. Files are refused on a card with `times` above 1 or a `workflow`.
 - A task's repo must be a local one: a repo whose entry in the tree has no `host`.
 - The child run sees only its task's note: not this chat, not the goal, not the other tasks. Write each note so it stands alone. Say what to change and why, where to look if you know, what done looks like, and how to check it (the repo's tests, a command to run). Name anything another task changes that this one depends on.
 - `action` is `propose` or `ask`. `propose` plans first and waits for Eric to approve the plan before it builds; use it for anything with design choices. A propose card waiting for that approval still holds one of the 3 places, so propose only what Eric will want to look at. `ask` goes straight to work; use it for small, clear changes and for questions about a repo, since an ask may answer without changing anything.
@@ -30,7 +31,7 @@ Planning:
 - At most 8 tasks per proposal and 20 in all. A title is at most 120 characters, a note at most 4000.
 
 Proposing:
-- Send the tasks to `POST $CANOPY_API/api/coordinator/plan` as `{"tasks": [{"title": "...", "repo": "<repo id>", "note": "...", "action": "propose" or "ask"}]}`. Write the JSON through a quoted heredoc so quotes and apostrophes in a note survive:
+- Send the tasks to `POST $CANOPY_API/api/coordinator/plan` as `{"tasks": [{"title": "...", "repo": "<repo id>", "note": "...", "action": "propose" or "ask"}]}`; a card may also carry `equip`, `workflow`, `after`, `times` and `files`, as above. Write the JSON through a quoted heredoc so quotes and apostrophes in a note survive:
 
   ```
   curl -s -X POST "$CANOPY_API/api/coordinator/plan" \

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import type { CoordTask, Run } from "../core/types";
-import { cardLines, coordinatorCommand, coordinatorLines } from "./coordinator";
+import { cardLines, coordinatorCommand, coordinatorLines, newGoalForm, parseNewArgs } from "./coordinator";
 
 const card = (id: string, over: Partial<CoordTask> = {}): CoordTask => ({ id, title: `card ${id}`, repo: "playground/x", note: "", action: "propose", state: "proposed", ...over });
 const coord = (id: string, over: Partial<Run> = {}): Run => ({ id, action: "coordinate", status: "working", repoId: "playground/x", note: "ship the thing\nsecond line", tasks: [], ...over }) as Run;
@@ -66,4 +66,37 @@ test("coordinator <run> prints its cards; an unknown run fails", async () => {
   const runs = [coord("c1", { tasks: [card("t1")] })];
   expect(await run(["c1"], serve([], runs))).toEqual(["t1  proposed  playground/x  card t1"]);
   await expect(run(["nope"], serve([], runs))).rejects.toThrow("no live coordinator nope");
+});
+
+test("parseNewArgs reads the goal, repeated --repo and --file, and model and effort", () => {
+  expect(parseNewArgs(["fix the cart", "--repo", "web/shop", "--repo", "canopy", "--file", "a.png", "--model", "sonnet"])).toEqual({
+    goal: "fix the cart",
+    repos: ["web/shop", "canopy"],
+    files: ["a.png"],
+    model: "sonnet",
+  });
+  expect(parseNewArgs(["--effort", "high", "ship it"])).toEqual({ goal: "ship it", repos: [], files: [], effort: "high" });
+  expect(parseNewArgs(["a", "goal", "words"])).toEqual({ goal: "a goal words", repos: [], files: [] });
+});
+
+test("parseNewArgs refuses no goal, a flag without a value and an unknown flag", () => {
+  const none = parseNewArgs([]);
+  const text = "error" in none ? none.error : "";
+  expect(text.startsWith("usage:")).toBe(true);
+  expect(text).toContain("canopy coordinator new <goal>");
+  expect(parseNewArgs(["goal", "--repo"])).toEqual({ error: "--repo needs a value" });
+  expect(parseNewArgs(["goal", "--wat", "x"])).toEqual({ error: "unknown flag --wat" });
+});
+
+test("newGoalForm puts goal, repos[], files[], model and effort in the form", async () => {
+  const form = newGoalForm({ goal: "g", repos: ["a", "b"], files: [{ name: "x.txt", data: new TextEncoder().encode("hi") }], model: "opus" });
+  expect(form.get("goal")).toBe("g");
+  expect(form.getAll("repos[]")).toEqual(["a", "b"]);
+  const files = form.getAll("files[]");
+  expect(files.length).toBe(1);
+  const file = files[0] as File;
+  expect(file.name).toBe("x.txt");
+  expect(await file.text()).toBe("hi");
+  expect(form.get("model")).toBe("opus");
+  expect(form.has("effort")).toBe(false);
 });

@@ -139,6 +139,8 @@ usage:
   canopy coordinator hold <run>     start no card of the goal until resumed; running children go on
   canopy coordinator resume <run>   lift a hold
   canopy coordinator start <run> [id ...]   start these cards, or every proposed one
+  canopy coordinator new <goal> [--repo R ...] [--file PATH ...] [--model M] [--effort E] [--on NAME]
+                                    start a goal from the top at no repo; prints the run id and its link
     --backend URL | --on NAME       select the backend that owns the goal
   canopy groups [repo]              list best-of-N groups and each member's branch, state and profile
   canopy groups pick <group> <run>  choose a green member as the winner
