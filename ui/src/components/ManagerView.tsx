@@ -22,6 +22,7 @@ import { cardCounts } from "../coord";
 import { gateButtons, gateWords } from "../flows";
 import { scopeOffers } from "../inbox";
 import { needsApproval, sentBack } from "../landing";
+import { openView } from "../clirun";
 import { chatAim, goalText, liveCoordinators, managerRows, type Goal, type Lane, type Need, type Ring, type SayTarget, type Tone } from "../manager";
 import { PHONE, useMedia } from "../media";
 import { backendOf, isHome, plainOf } from "../registry";
@@ -198,7 +199,9 @@ function GoalView({ coord }: { coord: Run }) {
   const landing = useStore(landingAll);
   const prs = useStore(prsAll);
   const loadouts = useStore((s) => s.kit[backendOf(coord.id)]?.loadouts?.loadouts) ?? NO_LOADOUTS;
-  const rows = useMemo(() => managerRows(coord, { runs, flows, landing, prs, loadouts }), [coord, runs, flows, landing, prs, loadouts]);
+  const trees = useStore((s) => s.trees);
+  const repos = useStore((s) => s.repos);
+  const rows = useMemo(() => managerRows(coord, { runs, flows, landing, prs, loadouts, trees, repos }), [coord, runs, flows, landing, prs, loadouts, trees, repos]);
   // the ring and lane picked: a card's id, or "manager" for the chat
   const [picked, setPicked] = useState<string | null>(null);
   // the card whose equip sheet is open
@@ -675,6 +678,8 @@ function sayWith(say: SayTarget, text: string): Promise<void> {
       return s.sayRun(say.runId, text);
     case "followup":
       return s.followUp(say.landingId, text);
+    case "tree":
+      return s.coordFollowup(say.coordId, say.cardId, text);
     case "none":
       return Promise.reject(new Error(say.why));
   }
@@ -686,6 +691,8 @@ function sayHint(lane: Lane): string {
       return `say to ${lane.id}; it reads this at its next step`;
     case "followup":
       return `say to ${lane.id}; a run on its branch starts with this`;
+    case "tree":
+      return `say to ${lane.id}; a run in tree ${lane.say.branch} starts with this`;
     case "none":
       return `${lane.id} takes no words now: ${lane.say.why}`;
   }
@@ -737,7 +744,15 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
   const resume = () => {
     const s = useStore.getState();
     if (flowId && flowStopped) return s.pickUpFlow(flowId);
+    if (lane.say.kind === "tree") return s.coordFollowup(lane.say.coordId, lane.say.cardId);
     return lane.say.kind === "followup" ? s.followUp(lane.say.landingId) : Promise.resolve();
+  };
+  // the tree's own card on the git view: its changes, files, tasks, preview and shells
+  const openTree = () => {
+    const cardId = lane.tree?.cardId;
+    if (!cardId) return;
+    openView("git");
+    useStore.getState().openPanel(cardId);
   };
   const open = () => {
     const s = useStore.getState();
@@ -757,7 +772,14 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
           <span className="mono" title={idText(lane.repo)}>
             {plainOf(lane.repo)}
           </span>
-          {lane.branch && <span className="mono">{lane.branch}</span>}
+          {lane.tree ? (
+            <span className="mono mgr-tree" title={`runs in place in the kept tree for ${lane.tree.branch}`}>
+              in tree {lane.tree.branch}
+              {lane.tree.state && lane.tree.state !== "ready" ? ` · ${lane.tree.state}` : ""}
+            </span>
+          ) : (
+            lane.branch && <span className="mono">{lane.branch}</span>
+          )}
           {lane.startedAt !== null && <span>{durationWord((endedAt ?? now) - lane.startedAt)}</span>}
         </span>
       </div>
@@ -808,13 +830,18 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
             </button>
           )}
           {lane.canResume && (
-            <button type="button" className="mini" title={flowId && flowStopped ? "Pick its flow up where it stopped" : "Start a run on its branch where this one stopped"} onClick={() => void act(resume)}>
+            <button type="button" className="mini" title={flowId && flowStopped ? "Pick its flow up where it stopped" : lane.say.kind === "tree" ? "Start a run in its tree where this one stopped" : "Start a run on its branch where this one stopped"} onClick={() => void act(resume)}>
               resume
             </button>
           )}
           {lane.canStartNow && (
             <button type="button" className="mini" title="Queue this card alone, ahead of the rest" onClick={() => void act(() => useStore.getState().coordStart(coord.id, [lane.id]))}>
               start now
+            </button>
+          )}
+          {lane.tree?.cardId && (
+            <button type="button" className="mini" title="Open the tree's own card: its changes, files, tasks, preview and shells" onClick={openTree}>
+              open tree
             </button>
           )}
           {(runId || flowId) && (

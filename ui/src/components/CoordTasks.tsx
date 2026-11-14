@@ -226,6 +226,11 @@ function CoordCard({ run, task, act }: { run: Run; task: CoordTask; act: Act }) 
             {carries.files}
           </span>
         )}
+        {carries.tree && (
+          <span className="branch" title={`runs in place in the kept tree for ${task.tree ?? ""}`}>
+            {carries.tree}
+          </span>
+        )}
       </div>
       {/* a proposed card's form edits its note; a queued card's keeps it in view */}
       {!(editing && editable && task.state === "proposed") && <p className="coord-note">{task.note}</p>}

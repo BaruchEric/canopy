@@ -35,6 +35,14 @@ test("cardLines shows the goal's files a card takes, after the cards it waits fo
   ]);
 });
 
+test("cardLines puts the tree a card runs in after the files column", () => {
+  const tasks = [card("t1", { title: "tree work", files: ["a.md"], tree: "feat/x" }), card("t2", { title: "other" })];
+  expect(cardLines(coord("c1", { tasks }))).toEqual([
+    "t1  proposed  playground/x  files: a.md  in tree feat/x  tree work",
+    "t2  proposed  playground/x" + " ".repeat(31) + "other",
+  ]);
+});
+
 const serve = (posted: { path: string; body: unknown }[], runs: Run[]) =>
   Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: async (req) => {
     const path = new URL(req.url).pathname;

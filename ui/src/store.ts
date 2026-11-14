@@ -1650,6 +1650,8 @@ export interface CanopyState {
   pickUpFlow: (flowId: string) => Promise<void>;
   /** a later run on a settled branch with the person's words; the run joins `runs` */
   followUp: (id: string, note?: string) => Promise<void>;
+  /** a later run in a tree card's kept tree, with the person's words or none */
+  coordFollowup: (runId: string, cardId: string, note?: string) => Promise<void>;
   /** adds a card to a coordinator's plan as a person */
   coordAdd: (runId: string, task: { title: string; repo: string; note: string; action: "ask" | "propose" }) => Promise<void>;
   stopFlow: (flowId: string) => Promise<void>;
@@ -5387,6 +5389,10 @@ export const useStore = create<CanopyState>((set, get) => ({
   },
   followUp: async (id, note) => {
     const { run } = await api.followUp(id, note);
+    set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
+  },
+  coordFollowup: async (runId, cardId, note) => {
+    const { run } = await api.coordFollowup(runId, cardId, note);
     set((s) => ({ runs: { ...s.runs, [run.id]: run } }));
   },
   coordAdd: async (runId, task) => {

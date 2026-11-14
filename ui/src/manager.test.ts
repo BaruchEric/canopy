@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import type { CoordTask, Flow, FlowStep, LandEntry, LandingInfo, LandingRun, Loadout, PrWatch, Run, RunBranch, RunPrompt, RunReview, RunStep } from "../../src/core/types";
+import type { BranchTree, BranchTreesInfo, CoordTask, Flow, FlowStep, LandEntry, LandingInfo, LandingRun, Loadout, PrWatch, Run, RunBranch, RunPrompt, RunReview, RunStep } from "../../src/core/types";
 import type { RunGroup } from "../../src/core/group";
+import type { Repo } from "../../src/core/types";
 import { chatAim, liveCoordinators, managerRows, sayTarget, waves, type Lane, type ManagerInputs } from "./manager";
 
 // a run's branch id is b-<run id>, so a test that mixes up a run's id and
@@ -656,5 +657,45 @@ describe("the live coordinators", () => {
       coord([], { id: "k4", startedAt: 20, status: "waiting" }),
     );
     expect(liveCoordinators(runs).map((r) => r.id)).toEqual(["k2", "k4", "k1"]);
+  });
+});
+
+describe("a card in a kept tree", () => {
+  const tree = (over: Partial<BranchTree> = {}): BranchTree => ({ slug: "feat-x", dir: "/c/trees/canopy/feat-x", branch: "feat/x", base: "main", port: null, madeAt: 1, caches: false, state: "ready", sync: false, ...over }) as BranchTree;
+  const trees = (t: BranchTree): Record<string, BranchTreesInfo> => ({ mini: { root: "/c/trees", ports: "", repos: [{ repoId: "canopy", repoPath: "/r/canopy", trees: [t] }] } });
+  const repos = [{ id: "trees:canopy/feat-x", path: "/c/trees/canopy/feat-x" }] as unknown as Repo[];
+  const tcard = (over: Partial<CoordTask> = {}): CoordTask => card({ id: "t1", state: "done", run: "c1", tree: "feat/x", treeRepo: "trees:canopy/feat-x", outcome: "done in tree feat/x", ...over });
+  const lane = (task: CoordTask, over: Partial<ManagerInputs> = {}, c: Partial<Run> = {}) => managerRows(coord([task], c), at(over)).lanes[0];
+  const tr = run("c1", { repoId: "trees:canopy/feat-x", branch: undefined });
+
+  test("a queued tree card carries its tree, its state and its card, and the making words", () => {
+    const l = lane(card({ state: "queued", tree: "feat/x", outcome: "making tree feat/x" }), { trees: trees(tree({ state: "preparing" })), repos });
+    expect(l?.tree).toEqual({ branch: "feat/x", state: "preparing", cardId: "trees:canopy/feat-x" });
+    expect(l?.live).toBe("making tree feat/x");
+    expect(lane(card({ state: "queued", tree: "feat/x" }))?.tree).toEqual({ branch: "feat/x", state: null, cardId: null });
+    expect(lane(card())?.tree).toBeNull();
+  });
+
+  test("the card is the task's treeRepo when the server set it", () => {
+    expect(lane(tcard(), { runs: runsOf(tr) })?.tree).toEqual({ branch: "feat/x", state: null, cardId: "trees:canopy/feat-x" });
+  });
+
+  test("a settled tree card takes words into its tree, and a stopped run resumes there", () => {
+    const l = lane(tcard(), { runs: runsOf(tr) });
+    expect(l?.say).toEqual({ kind: "tree", coordId: "k", cardId: "t1", branch: "feat/x" });
+    expect(l?.canResume).toBe(false);
+    if (!l) throw new Error("no lane");
+    expect(chatAim([l], "t1").options).toEqual([l]);
+    expect(lane(tcard({ state: "failed" }), { runs: runsOf({ ...tr, status: "stopped" }) })).toMatchObject({ canResume: true, say: { kind: "tree" } });
+    expect(lane(tcard({ state: "running" }), { runs: runsOf({ ...tr, status: "working" }) })?.say).toEqual({ kind: "steer", runId: "c1" });
+    expect(lane(tcard(), { runs: runsOf(tr) }, { status: "stopped" })?.say).toEqual({ kind: "none", why: "its goal has ended" });
+    expect(lane(card({ state: "queued", tree: "feat/x" }))?.say).toEqual({ kind: "none", why: "it has not started" });
+    expect(lane(tcard({ limited: 0 }), { runs: runsOf({ ...tr, status: "limited" }) })?.say).toEqual({ kind: "none", why: "it carries on after the reset" });
+  });
+
+  test("its last arc is the tree: moss when done, hair while running", () => {
+    const last = (task: CoordTask, r: Run) => lane(task, { runs: runsOf(r) })?.steps.at(-1);
+    expect(last(tcard(), tr)).toEqual({ label: "tree", tone: "moss" });
+    expect(last(tcard({ state: "running" }), { ...tr, status: "working" })).toEqual({ label: "tree", tone: "hair" });
   });
 });

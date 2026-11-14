@@ -82,6 +82,8 @@ export const qRun = (q: Q, r: Run): Run => ({
           ...(t.group !== undefined ? { group: q(t.group) } : {}),
           ...(t.flow !== undefined ? { flow: q(t.flow) } : {}),
           ...(t.branch !== undefined ? { branch: q(t.branch) } : {}),
+          // the tree's own repo is the backend's; `tree` is a git branch name and stays
+          ...(t.treeRepo !== undefined ? { treeRepo: q(t.treeRepo) } : {}),
         })),
       }
     : {}),

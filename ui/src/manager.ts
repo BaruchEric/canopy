@@ -16,6 +16,8 @@ import { watchHolds } from "../../src/core/pr";
 import {
   isFlowActive,
   isRunActive,
+  type BranchTreeState,
+  type BranchTreesInfo,
   type CoordTask,
   type Flow,
   type LandEntry,
@@ -23,10 +25,12 @@ import {
   type LandingRun,
   type Loadout,
   type PrWatch,
+  type Repo,
   type Run,
   type RunPrompt,
   type StepStatus,
 } from "../../src/core/types";
+import { repoTrees } from "./trees";
 import { cardCarries, cardCounts, cardStatus, childLine, coordTurn, stepLine } from "./coord";
 import { gateWords, STEP_WORD } from "./flows";
 import { backLine, inQueue, runLanding, sentBack, stoppedWhole, verdictWord } from "./landing";
@@ -37,11 +41,16 @@ export interface Arc { label: string; tone: Tone }
 export interface Ring { id: string; title: string; repo: string | null; word: string; tone: Tone; model: string | null; arcs: Arc[]; at: string | null; wave: number }
 export type NeedKind = "prompt" | "gate" | "landing" | "cards";
 export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean }
-export type SayTarget = { kind: "steer"; runId: string } | { kind: "followup"; landingId: string } | { kind: "none"; why: string };
-export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget }
+export type SayTarget = { kind: "steer"; runId: string } | { kind: "followup"; landingId: string } | { kind: "tree"; coordId: string; cardId: string; branch: string } | { kind: "none"; why: string };
+/** The kept tree a card runs in: its branch, the tree's state once the page
+ *  holds the trees list, and the tree's own card (a repo id) once there is one. */
+export interface LaneTree { branch: string; state: BranchTreeState | null; cardId: string | null }
+export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget; tree: LaneTree | null }
 export interface Goal { text: string; model: string | null; effort: string | null; startedAt: number; working: number; waiting: number; held: boolean; ended: boolean }
 export interface ManagerRows { goal: Goal; rings: Ring[]; needs: Need[]; lanes: Lane[] }
-export interface ManagerInputs { runs: Record<string, Run>; flows: Record<string, Flow>; landing: LandingInfo; prs: readonly PrWatch[]; loadouts: readonly Loadout[] }
+export interface ManagerInputs { runs: Record<string, Run>; flows: Record<string, Flow>; landing: LandingInfo; prs: readonly PrWatch[]; loadouts: readonly Loadout[];
+  /** the kept trees by backend and the page's repos: without them a tree card's lane knows no state and no card */
+  trees?: Readonly<Record<string, BranchTreesInfo>>; repos?: readonly Repo[] }
 
 const STEP_TONE: Record<StepStatus, Tone> = {
   running: "sky",
@@ -117,6 +126,31 @@ export function sayTarget(task: CoordTask, run: Run | undefined, flow: Flow | un
   const refused = followupRefusal(rec, entry, false, origin, { pr: watchHolds(prs.find((w) => w.id === origin)) });
   if (refused) return none(refused.error);
   return { kind: "followup", landingId: rec.id };
+}
+
+/** Where a tree card's say box sends: a steer into the run at work, or a
+ *  follow-up run in the card's kept tree (`POST /api/coordinator/followup`,
+ *  which refuses with its own words what the tree no longer takes). */
+export function treeSayTarget(task: CoordTask, run: Run | undefined, coord: Run): SayTarget {
+  const none = (why: string): SayTarget => ({ kind: "none", why });
+  if (notStarted(task)) return none("it has not started");
+  if (run && isRunActive(run)) return run.harness === "codex" ? none("a Codex worker takes no message mid-turn") : { kind: "steer", runId: run.id };
+  if (task.limited === 0) return none("it carries on after the reset");
+  if (!isRunActive(coord)) return none("its goal has ended");
+  return { kind: "tree", coordId: coord.id, cardId: task.id, branch: task.tree ?? "" };
+}
+
+/** the backend an id carries, "" for the home backend's bare ids */
+const prefixOf = (id: string): string => (id.includes(SEP) ? id.slice(0, id.indexOf(SEP)) : "");
+
+/** A tree card's tree: its state from the trees list, and its own card, the
+ *  repo the server set when the run started, else the scanned repo at the
+ *  tree's folder on the card's backend. */
+function laneTree(task: CoordTask, at: ManagerInputs): LaneTree | null {
+  if (!task.tree) return null;
+  const found = repoTrees(at.trees ?? {}, task.repo)?.trees.find((t) => t.branch === task.tree);
+  const cardId = task.treeRepo ?? (found ? (at.repos ?? []).find((r) => r.path === found.dir && prefixOf(r.id) === prefixOf(task.repo))?.id : undefined) ?? null;
+  return { branch: task.tree, state: found?.state ?? null, cardId };
 }
 
 /** Whom the manager chat's box speaks to, from the card Eric picked in its
@@ -262,7 +296,9 @@ function lifeArcs(w: Work, watch: PrWatch | undefined): Arc[] {
   const run = w.run ?? w.landed;
   const plan = w.task.action === "propose" ? planTone(w.task, run) : null;
   const build = plan !== null && plan !== "moss" ? "hair" : buildTone(w.task, run, w.branch.rec);
-  return [...(plan !== null ? [{ label: "plan", tone: plan }] : []), { label: "build", tone: build }, { label: "land", tone: landTone(w.task, w.branch, watch) }];
+  // a tree card's work stays in its tree, so it has no landing: its last arc is the tree
+  const last: Arc = w.task.tree ? { label: "tree", tone: w.task.state === "done" ? "moss" : w.task.state === "failed" ? "rust" : "hair" } : { label: "land", tone: landTone(w.task, w.branch, watch) };
+  return [...(plan !== null ? [{ label: "plan", tone: plan }] : []), { label: "build", tone: build }, last];
 }
 
 /** "2/3": the first arc not passed yet, or the last when all have. */
@@ -468,7 +504,7 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     const line = sr ? childLine(sr) : "";
     return s && line ? `${s.name}: ${line}` : look.line;
   })();
-  const say = sayTarget(task, worker, flow, at.landing, at.prs);
+  const say = task.tree ? treeSayTarget(task, worker, coord) : sayTarget(task, worker, flow, at.landing, at.prs);
   const fresh = notStarted(task);
   const c = look.carried;
   return {
@@ -500,9 +536,10 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     // takes one; a stopped flow's pickup where the server takes that: no
     // landing entry on its branch and no PR the PR watch holds
     canResume:
-      (run?.status === "stopped" && say.kind === "followup") ||
+      (run?.status === "stopped" && (say.kind === "followup" || say.kind === "tree")) ||
       (flow?.status === "stopped" && flow.branch !== undefined && pickupRefusal(w.branch.entry, false, watchHolds(at.prs.find((p) => p.id === w.branch.origin))) === null),
     say,
+    tree: laneTree(task, at),
   };
 }
 

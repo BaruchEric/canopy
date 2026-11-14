@@ -85,7 +85,7 @@ canopy run <repo> <action> --loadout NAME   # start one run with that loadout; n
 canopy run <repo> <action> --tools   # this run holds canopy's tools: a run token and the canopy MCP server; off unless a start or a profile says so
 canopy runs child <repo> --note text --parent <run>   # a child of a live run, on its own branch at low priority
 canopy coordinator [--json] [--backend URL | --on NAME]   # the live coordinators: id, repo, held or not, card counts, the goal's first line
-canopy coordinator <run> [--json]  # one coordinator's cards: id, state, repo, loadout, workflow, after, files, title
+canopy coordinator <run> [--json]  # one coordinator's cards: id, state, repo, loadout, workflow, after, files, tree, title
 canopy coordinator hold <run>      # start no card of the goal until it is resumed; running cards go on
 canopy coordinator resume <run>    # lift the hold
 canopy coordinator start <run> [id ...]   # start these cards, ahead of the rest, or every proposed card when no id is given

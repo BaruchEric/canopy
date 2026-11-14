@@ -1212,6 +1212,13 @@ export const api = {
     if (!form.has("client")) form.set("client", clientId());
     return from(b, await req<Run>(b, "/api/coordinator/new", { method: "POST", body: form }), qRun);
   },
+  /** a later run in a tree card's kept tree with the person's words, or none to resume it;
+   *  the answer's run is qualified for its backend. A refusal carries the server's words. */
+  coordFollowup: async (runId: string, cardId: string, note?: string) => {
+    const [b, plain] = on(runId);
+    const got = await req<{ ok: true; run: Run }>(b, "/api/coordinator/followup", { method: "POST", body: JSON.stringify({ run: plain, id: cardId, ...(note ? { note } : {}) }) });
+    return { ok: true as const, run: from(b, got.run, qRun) };
+  },
   /** adds cards to a coordinator's plan as a person; the run's broadcast carries them */
   coordPlan: async (runId: string, tasks: Array<{ title: string; repo: string; note: string; action: "ask" | "propose" }>) => {
     const [b, plain] = on(runId);
