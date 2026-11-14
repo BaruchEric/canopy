@@ -1640,6 +1640,23 @@ describe("cards in kept worktrees", () => {
     expect(await cardOf(coord)).toMatchObject({ state: "done", outcome: "done in tree feat/f", run: last });
   }, 30_000);
 
+  test("a propose card's first run plans in its tree, its follow-up runs as an ask, and the card settles done in its tree each time", async () => {
+    const { coord } = await startCard({ tree: "feat/p", action: "propose" });
+    const first = await running(coord);
+    expect(first.run.action).toBe("propose");
+    expect(first.ctx.spec.permissionMode).toBe("plan");
+    finish(first.ctx);
+    await cardWhen(coord, "t1", (t) => t.state === "done", "the propose card to settle");
+    expect(await cardOf(coord)).toMatchObject({ outcome: "done in tree feat/p", run: first.run.id });
+    expect((await postAs(s, "/api/coordinator/followup", { run: coord, id: "t1", note: "build it" }, s.page)).status).toBe(200);
+    const again = await running(coord, "t1", first.run.id);
+    expect(again.run.action).toBe("ask");
+    expect(again.ctx.spec.permissionMode).toBeUndefined();
+    expect(again.ctx.cwd).toBe(first.ctx.cwd);
+    finish(again.ctx);
+    expect(await cardWhen(coord, "t1", (t) => t.state === "done" && t.run === again.run.id, "the follow-up to settle")).toMatchObject({ outcome: "done in tree feat/p" });
+  }, 30_000);
+
   test("Review Focus 5: a tree that follows main waits while a card's run works in it, says on what, and keeps its HEAD", async () => {
     const { coord } = await startCard({ tree: "feat/s" });
     const { run, ctx } = await running(coord);

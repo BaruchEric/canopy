@@ -2565,26 +2565,37 @@ async function treeCardFor(state: ServerState, dir: string): Promise<Repo | null
   return find();
 }
 
+/** How a tree card's run starts: the action it runs (whose spec it takes),
+ *  its message, its priority, and the card's run it comes after, if any. */
+interface TreeRunHow {
+  action: CoordTask["action"];
+  message: string;
+  priority: Priority;
+  after?: Run;
+}
+
 /** whether a workflow or another in-place run holds a repo's checkout */
 const checkoutInUse = (state: ServerState, repoId: string): boolean => (state.flows.activeFor(repoId) ?? state.runner.activeFor(repoId)) !== undefined;
 
 /** A tree card's run (FR-067): in place on the tree's own repo, no branch,
- *  with the coordinator as `parent` and never `child`. The agent is the
- *  card repo's job route for the card's action with the card's loadout
- *  over it, never holding canopy's tools. A run after the card's own
+ *  with the coordinator as `parent` and never `child`. It runs `how.action`
+ *  with that action's spec: the card's own on its first start, an ask on a
+ *  follow-up, as a branch fix is. The agent is the card repo's job route
+ *  for the card's action with the card's loadout over it, never holding
+ *  canopy's tools. A run after the card's own
  *  (`after`) resumes its Claude session when both are Claude Code's. The
  *  in-use check and the start share one synchronous stretch after the last
  *  await, so the runner's one-run-per-repo refusal never races it: a tree
  *  in use, or a start the governor holds, answers busy, and anything else
  *  throws. Whatever the loadout wrote goes again unless the run started. */
-async function startTreeRun(state: ServerState, coordId: string, task: CoordTask, treeRepo: Repo, how: { message: string; spec: ActionSpec; priority: Priority; after?: Run }): Promise<ChildResume> {
+async function startTreeRun(state: ServerState, coordId: string, task: CoordTask, treeRepo: Repo, how: TreeRunHow): Promise<ChildResume> {
   const repo = state.result.repos.find((r) => r.id === task.repo);
   if (!repo) throw new Error(`${task.repo} is no longer in the tree`);
   const loadout = task.equip?.loadout ? cardLoadout(task.equip, state.kit.loadouts()) : null;
   if (loadout && "refused" in loadout) throw new Error(loadout.refused);
   const routed = agentFor(await loadConfig(), repo.path, "job", undefined, { kind: "task", name: task.action });
   const harness = loadout?.harness ?? routed.harness;
-  if (how.spec.permissionMode === "plan" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
+  if (how.action === "propose" && harness !== "claude") throw new Error("plan, then build needs Claude Code");
   await needHarness(state, harness, treeRepo.path);
   const files = await cardFiles(state, coordId, task);
   const resume = how.after?.session !== undefined && how.after.harness === "claude" && harness === "claude" ? how.after.session : undefined;
@@ -2608,7 +2619,7 @@ async function startTreeRun(state: ServerState, coordId: string, task: CoordTask
       await release();
       return { busy: treeBusyWords(task.tree ?? "") };
     }
-    return { run: state.runner.start(treeRepo, task.action, how.spec, note, loaded.agent, "coordinator", undefined, undefined, loaded.extras) };
+    return { run: state.runner.start(treeRepo, how.action, ACTIONS[how.action], note, loaded.agent, "coordinator", undefined, undefined, loaded.extras) };
   } catch (err) {
     await release();
     if (isCapacityHeld(err)) return { busy: err.message };
@@ -2625,7 +2636,7 @@ async function stepInTree(
   coordId: string,
   task: CoordTask,
   tree: { dir: string; state: BranchTreeState; why?: string },
-  how: { message: string; spec: ActionSpec; priority: Priority; after?: Run },
+  how: TreeRunHow,
 ): Promise<ChildResume> {
   const branch = task.tree ?? "";
   const treeRepo = tree.state === "ready" ? await treeCardFor(state, tree.dir) : null;
@@ -2647,7 +2658,7 @@ async function stepInTree(
 async function startCoordTree(state: ServerState, coordId: string, task: CoordTask, repo: Repo, priority: Priority): Promise<ChildStart> {
   const branch = task.tree ?? "";
   const tree = state.trees.treeFor(repo.path, branch);
-  if (tree) return stepInTree(state, coordId, task, tree, { message: task.note, spec: ACTIONS[task.action], priority });
+  if (tree) return stepInTree(state, coordId, task, tree, { action: task.action, message: task.note, priority });
   try {
     await state.trees.add(repo, branch, undefined, true);
   } catch (err) {
@@ -2667,7 +2678,7 @@ async function followCoordTree(state: ServerState, coordId: string, task: CoordT
   const tree = state.trees.treeFor(repo.path, branch);
   if (!tree) throw new Error(`tree ${branch} is no longer kept in ${repo.name}`);
   const after = task.run ? state.runner.get(task.run) : undefined;
-  return stepInTree(state, coordId, task, tree, { message, spec: ACTIONS.ask, priority, ...(after ? { after } : {}) });
+  return stepInTree(state, coordId, task, tree, { action: "ask", message, priority, ...(after ? { after } : {}) });
 }
 
 /** A coordinator's card that names a workflow (FR-065). The workflow is read
