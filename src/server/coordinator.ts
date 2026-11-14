@@ -129,6 +129,9 @@ const HELD_WORD = "the goal is held";
 const flowKey = (id: string): string => `flow:${id}`;
 /** a card's outcome that may still turn landed (`MAY_LAND_LATER`) */
 const mayLandLater = (outcome: string | undefined): boolean => outcome !== undefined && (MAY_LAND_LATER as readonly string[]).includes(outcome);
+/** A tree card whose child hit the limit and whose resume found its tree
+ *  busy: it still waits after the limit, with the tree's words (FR-067). */
+const waitsForTree = (t: CoordTask): boolean => t.tree !== undefined && t.state === "running" && t.limited === 0 && isTreeWait(t.outcome);
 
 /** a card with its outcome set, or taken off when `outcome` is undefined */
 function withOutcome(t: CoordTask, outcome: string | undefined): CoordTask {
@@ -623,13 +626,28 @@ export class CoordinatorHub {
     }
   }
 
-  /** The kept trees moved (a tree's setup settled): pumps every coordinator
-   *  still going with a card queued for a tree, which may now start in it
-   *  (FR-067). A coordinator whose queued cards are all plain waits for a
-   *  run's end as before. */
+  /** The kept trees moved (a tree's setup settled, a merge ended): pumps
+   *  every coordinator still going with a card queued for a tree, which may
+   *  now start in it, and a limited tree card waiting for its tree tries its
+   *  resume again (FR-067). A coordinator whose queued cards are all plain
+   *  waits for a run's end as before. */
   onTrees(): void {
     for (const r of this.deps.runs()) {
       if (r.action === "coordinate" && isRunActive(r) && r.tasks?.some((t) => t.state === "queued" && t.tree !== undefined)) void this.pump(r.id);
+    }
+    this.retryInTree();
+  }
+
+  /** A tree card that waits after the limit for its tree to be free
+   *  (`waitsForTree`) tries its resume again, as a wake would: in the tree
+   *  `repoId` names, or in every tree when absent. The resume's own start
+   *  still asks the governor, so a spent window holds it again. */
+  private retryInTree(repoId?: string): void {
+    for (const coord of this.deps.runs()) {
+      if (coord.action !== "coordinate" || !isRunActive(coord)) continue;
+      for (const t of coord.tasks ?? []) {
+        if (waitsForTree(t) && (repoId === undefined || t.treeRepo === repoId)) void this.resumeLimited(coord.id, t.id, "normal");
+      }
     }
   }
 
@@ -747,8 +765,9 @@ export class CoordinatorHub {
     if (isRunActive(child)) return;
     if (child.status === "limited" && (task.limited ?? 0) < 1) {
       // the work is sound and waits for the reset: the card keeps its run
-      // until the child resumes on its branch (FR-036)
-      if (task.limited === undefined || !isCapacityWords(task.outcome)) {
+      // until the child resumes on its branch (FR-036). A tree card whose
+      // resume found its tree busy keeps those words, as a queued one does.
+      if (task.limited === undefined || !(isCapacityWords(task.outcome) || (task.tree !== undefined && isTreeWait(task.outcome)))) {
         this.update(coord.id, task.id, (x) => ({ ...withOutcome(x, limitedWords(child.limited, this.now())), limited: 0 }));
         const where = task.tree !== undefined ? `in tree ${task.tree}` : "on its branch";
         this.queueNote(coord.id, `canopy: task ${task.id} (${task.title}) stopped at the plan's usage limit; it carries on ${where} after the reset`);
@@ -848,13 +867,14 @@ export class CoordinatorHub {
   /* ---------- capacity (FR-036) ---------- */
 
   /** The cards waiting for capacity, as the chip lists them: queued ones the
-   *  governor holds and running ones whose child hit the limit. */
+   *  governor holds and running ones whose child hit the limit, a tree card
+   *  whose resume waits for its tree to be free among them. */
   heldStarts(): HeldStart[] {
     const out: HeldStart[] = [];
     for (const coord of this.deps.runs()) {
       if (coord.action !== "coordinate" || !isRunActive(coord)) continue;
       for (const t of coord.tasks ?? []) {
-        const waits = (t.state === "queued" || t.state === "running") && isCapacityWords(t.outcome);
+        const waits = ((t.state === "queued" || t.state === "running") && isCapacityWords(t.outcome)) || waitsForTree(t);
         if (!waits) continue;
         const child = t.run ? this.deps.run(t.run) : undefined;
         out.push({ id: `card:${coord.id}:${t.id}`, what: t.title, repoId: t.repo, priority: "normal", why: t.outcome ?? "waiting for capacity", since: child?.endedAt ?? coord.startedAt });
@@ -881,7 +901,7 @@ export class CoordinatorHub {
   async release(coordId: string, taskId: string): Promise<void> {
     const coord = this.deps.run(coordId);
     const task = coord?.tasks?.find((t) => t.id === taskId);
-    if (!coord || !task || !isCapacityWords(task.outcome)) throw new CoordError(`card ${taskId} is not waiting for capacity`, 404);
+    if (!coord || !task || !(isCapacityWords(task.outcome) || waitsForTree(task))) throw new CoordError(`card ${taskId} is not waiting for capacity`, 404);
     if (task.state === "running") {
       const why = await this.resumeLimited(coordId, taskId, "interactive");
       if (why !== null) throw new CoordError(`card ${taskId} cannot resume: ${why}`);
@@ -1126,14 +1146,18 @@ export class CoordinatorHub {
     );
   }
 
-  /** The Runner's every change. */
+  /** The Runner's every change. An in-place run's end, Eric's or any, may
+   *  free the tree a limited tree card's resume waits for. */
   onRun(run: Run): void {
     if (run.parent || run.branch) this.follow(run);
     if (run.action === "coordinate") {
       if (!isRunActive(run)) this.end(run);
       else if (run.status === "idle" && this.notes.has(run.id)) this.flushSoon(run.id);
     }
-    if (!isRunActive(run)) this.pumpAll();
+    if (!isRunActive(run)) {
+      this.pumpAll();
+      if (!run.branch) this.retryInTree(run.repoId);
+    }
   }
 
   /** The flows' every change: a card's flow settles its card, or puts it

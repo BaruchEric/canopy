@@ -2160,6 +2160,91 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       const note = (await hearAll(h)).find((x) => x.startsWith("canopy: a task you started has settled"));
       expect(note).toContain("tree: feat/x, a kept worktree");
     });
+
+    /** A tree card whose child hit the limit and whose resume finds its tree
+     *  busy (Eric's run there, or `merging`), as Task 4's resumeChild answers. */
+    async function limitedTreeBusy(over: { merging?: () => boolean } = {}): Promise<{ h: CoordinatorHub; resumed: string[]; his: Run }> {
+      clock = Date.UTC(2026, 9, 26, 12);
+      coordinator({ status: "idle" });
+      const resumed: string[] = [];
+      const h = treeHub({
+        resumeChild: async (coordId, t, _old, priority) => {
+          resumed.push(`${t.id} ${priority}`);
+          const busy = over.merging?.() === true || [...runs.values()].some((r) => r.repoId === FEAT_X && r.status === "working");
+          if (busy) return { busy: "waiting for tree feat/x to be free" };
+          return { run: inTree(h, FEAT_X, { parent: coordId }) };
+        },
+      });
+      await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+      await post(h, "start", { run: "co1" });
+      await settled(h);
+      const first = child("t1");
+      first.status = "limited";
+      first.endedAt = clock;
+      first.error = LIMIT;
+      first.limited = { at: clock, text: LIMIT };
+      h.onRun(first);
+      await settled(h);
+      // Eric starts a run in the tree while the card waits for the reset
+      const his = mine(h, FEAT_X);
+      h.wake(() => true);
+      await settled(h);
+      expect(resumed).toEqual(["t1 normal"]);
+      expect(card("t1")).toMatchObject({ state: "running", run: first.id, limited: 0, outcome: "waiting for tree feat/x to be free" });
+      return { h, resumed, his };
+    }
+
+    test("Fix 1: a resume that finds its tree busy keeps the tree's words; a recheck neither rewrites them nor says the limit again", async () => {
+      const { h } = await limitedTreeBusy();
+      h.recheck();
+      await settled(h);
+      expect(card("t1")).toMatchObject({ state: "running", limited: 0, outcome: "waiting for tree feat/x to be free" });
+      const limitNotes = (await hearAll(h)).filter((x) => x.includes("stopped at the plan's usage limit"));
+      expect(limitNotes).toEqual(["canopy: task t1 (fix the login) stopped at the plan's usage limit; it carries on in tree feat/x after the reset"]);
+    });
+
+    test("Fix 1: such a card stays on the held chip, and start anyway tries its resume as interactive", async () => {
+      const { h, resumed } = await limitedTreeBusy();
+      expect(h.heldStarts().map((x) => [x.id, x.why])).toEqual([["card:co1:t1", "waiting for tree feat/x to be free"]]);
+      await h.release("co1", "t1");
+      await settled(h);
+      expect(resumed).toEqual(["t1 normal", "t1 interactive"]);
+      expect(card("t1")).toMatchObject({ state: "running", limited: 0, outcome: "waiting for tree feat/x to be free" });
+    });
+
+    test("Fix 1: the run that held its tree ending tries the resume again, and the card carries on", async () => {
+      const { h, resumed, his } = await limitedTreeBusy();
+      his.status = "done";
+      his.endedAt = clock;
+      h.onRun(his);
+      await settled(h);
+      expect(resumed).toEqual(["t1 normal", "t1 normal"]);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c3", limited: 1 });
+      expect(card("t1")?.outcome).toBeUndefined();
+      expect(h.heldStarts()).toEqual([]);
+    });
+
+    test("Fix 1: a run ending in another tree tries nothing; the trees moving (a merge done) tries it again", async () => {
+      let merging = true;
+      const { h, resumed, his } = await limitedTreeBusy({ merging: () => merging });
+      his.status = "done";
+      his.endedAt = clock;
+      h.onRun(his);
+      await settled(h);
+      // the merge still holds the tree: the retry answers busy again
+      expect(resumed).toEqual(["t1 normal", "t1 normal"]);
+      const other = inTree(h, treeRepo("feat/y"), { parent: undefined, by: "person" });
+      other.status = "done";
+      other.endedAt = clock;
+      h.onRun(other);
+      await settled(h);
+      expect(resumed).toHaveLength(2);
+      merging = false;
+      h.onTrees();
+      await settled(h);
+      expect(resumed).toEqual(["t1 normal", "t1 normal", "t1 normal"]);
+      expect(card("t1")).toMatchObject({ state: "running", limited: 1 });
+    });
   });
 
   describe("the follow-up route", () => {
