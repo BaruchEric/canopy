@@ -1177,6 +1177,9 @@ describe("a card whose child hit the plan's usage limit", () => {
 describe("a goal from the top", () => {
   const state = { answers: true, fenced: true };
   let s: Up;
+  /** what the server says of taking a project in place of its incubator's
+   *  own answer (the `takesProjects` option), undefined for the incubator's */
+  let projectsSay: string | null | undefined;
   /** runs to stop when the test ends, children first */
   const live: string[] = [];
   const runs = async (): Promise<Run[]> => (await (await call(s, "/api/runs", s.page)).json()) as Run[];
@@ -1221,7 +1224,7 @@ describe("a goal from the top", () => {
     await writeFile(join(home, ".gitconfig"), "[user]\n\tname = t\n\temail = t@t\n");
     process.env["HOME"] = home;
     // the incubator holds its queue, so a project card's sprout stays queued and no stage runs
-    s = await up("goal", fakeRunner(state), COORD_ENV, 0, ["claude"], root, { autostart: false, stage: null, transcribe: null, notes: null, ship: null });
+    s = await up("goal", fakeRunner(state), COORD_ENV, 0, ["claude"], root, { autostart: false, stage: null, transcribe: null, notes: null, ship: null, takesProjects: () => projectsSay });
   });
   afterEach(async () => {
     for (const id of live.splice(0).reverse()) await postAs(s, "/api/runs/stop", { id }, s.page);
@@ -1523,6 +1526,25 @@ describe("a goal from the top", () => {
       const card = await cardOf(run.id);
       expect([card.state, card.outcome, card.sprout]).toEqual(["failed", "idea.md is no longer in the goal's files folder", undefined]);
       expect((await sprouts()).map((x) => x.id)).toEqual(before);
+    });
+
+    // A backend's answer is fixed once it is up (its stages and autostart are
+    // read at start), so the server's takesProjects option turns it: the
+    // card is planned while the backend takes projects and started once it
+    // no longer does.
+    test("a card planned while the backend took projects is refused at its start with the server's words once it no longer does, and makes no sprout", async () => {
+      const { run, token } = await started({ goal: "a shop", files: FILES });
+      expect((await postAs(s, "/api/coordinator/plan", { tasks: [shop] }, token)).status).toBe(200);
+      const before = (await sprouts()).map((x) => x.id);
+      projectsSay = NO_STAGES;
+      try {
+        expect((await postAs(s, "/api/coordinator/start", { run: run.id }, s.page)).status).toBe(200);
+        const card = await cardOf(run.id);
+        expect([card.state, card.outcome, card.sprout]).toEqual(["failed", NO_STAGES, undefined]);
+        expect((await sprouts()).map((x) => x.id)).toEqual(before);
+      } finally {
+        projectsSay = undefined;
+      }
     });
 
     test("stopping the project fails the card, and dismissing it leaves the card as it settled", async () => {

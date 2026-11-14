@@ -160,7 +160,7 @@ import { BRANCH_RUNS_PER_REPO, BranchCapError, QUIET_WAIT, Runner, SteerError, U
 import { areKin, RUN_CHILD_ACTIONS } from "../core/runtools";
 import { canopyMcpCommand, flowToolsId, mcpConfigPath, removeMcpConfig, removeRunSettings, runConfigLaunch, settingsPath, sweepMcpConfigs, toolsBrief, writeMcpConfig, writeRunSettings } from "./runtools";
 import { NotWaitingError, type RunDriver } from "../core/driver";
-import { ANSWERS_FILE, INPUT_FILE_MAX, inputType, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, STAGE_WORKFLOWS, withStoredAnswers } from "../core/sprout";
+import { ANSWERS_FILE, INPUT_FILE_MAX, INPUT_TOTAL_MAX, inputType, isSeedRepoId, SEED_AGENT_REFUSAL, SEEDS_DIR, STAGE_WORKFLOWS, withStoredAnswers } from "../core/sprout";
 import { SeedMirrors } from "../core/seedmirror";
 import { sweepCodexTrust } from "../core/codextrust";
 import { seedBusy, seedBusyFor, seedHeld, seedRootsNow, setSeedBusy, setSeedRoots } from "../core/seedgit";
@@ -263,7 +263,7 @@ import { Scenarios, scenariosRoot } from "./scenarios";
 import { PrHub, type PrDeps } from "./prs";
 import { TriggerError, TriggerHub, type StartOutcome } from "./triggers";
 import { CoordinatorHub, type ChildResume, type RunStart } from "./coordinator";
-import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, readGoalFile, writeGoalFiles, type GoalFile } from "./goalfiles";
+import { dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, readGoalFiles, writeGoalFiles, type GoalFile } from "./goalfiles";
 import { cardFilesLine, coordWorkflows, GOAL_LIMITS, goalAnchor, goalFileNames, goalRepoLine, goalTopLine, isGoalAnchor, isRunCard, treeBusyWords, treeMakingWords, treeStep, withStandingRules, type ChildBranch } from "../core/coordinator";
 import { WorkHub } from "./work";
 import { NotesHub } from "./notes";
@@ -2575,11 +2575,13 @@ async function startCoordProject(state: ServerState, coordId: string, task: Coor
   const files: IntakeFile[] = [];
   if (task.files?.length) {
     const { seeds } = await goalFolderWith(state, coordId, task.files);
-    for (const name of task.files) {
+    const typed = task.files.map((name) => {
       const type = inputType("", name);
       if (!type) throw new Error(`the incubator takes audio, images, pdf, text and markdown; ${name} is none of them`);
-      files.push({ label: name, type, data: await readGoalFile(seeds, coordId, name, INPUT_FILE_MAX) });
-    }
+      return { name, type };
+    });
+    // each file under the incubator's cap and all of them under its total, before any is held whole
+    for (const f of await readGoalFiles(seeds, coordId, typed, INPUT_FILE_MAX, INPUT_TOTAL_MAX)) files.push({ label: f.name, type: f.type, data: f.data });
   }
   return { sprout: await state.incubator.inc.create({ text: `${task.title}\n\n${task.note}`, urls: [], files, via: "coordinator" }) };
 }
@@ -6515,6 +6517,10 @@ export async function startServer(opts: {
     accept?: (entry: AdviceEntry) => Promise<AdviceAccepted>;
     /** how often a park is looked at for its day-old retro */
     tickEvery?: number;
+    /** why a coordinator's project card cannot start here, in place of the
+     *  hub's own answer, or undefined for the hub's: a test turns a backend
+     *  that took the card at plan into one that refuses it at start */
+    takesProjects?: () => string | null | undefined;
   };
   /** tests can pause the real reviewer callback after async preflight */
   groups?: { reviewerPreflight?: (group: RunGroup) => Promise<void> };
@@ -7286,6 +7292,7 @@ export async function startServer(opts: {
       () => sprouts.list(),
       () => stagesNow(),
       { files: adviceFiles, accept: (entry) => (opts.incubator?.accept ?? ((e) => acceptAdvice(state, e)))(entry) },
+      opts.incubator?.takesProjects,
     ),
     layouts: new ScreenLayouts(),
     backendName: selfName(cfg.self, hostname()),

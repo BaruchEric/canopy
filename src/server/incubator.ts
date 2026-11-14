@@ -126,6 +126,9 @@ export class IncubatorHub {
     private readonly stages: () => IncubatorStages,
     /** the improvements list, on a backend that keeps one */
     private readonly advice: AdviceRoutes | null = null,
+    /** tests: why a project card cannot start here, asked before this
+     *  hub's own answer; undefined leaves it to the hub */
+    private readonly projectsSeam?: () => string | null | undefined,
   ) {}
 
   onFlow(flow: Flow): void {
@@ -161,6 +164,8 @@ export class IncubatorHub {
    *  can: this server does not keep the incubator, or stages are off with
    *  the queue live, so the sprout would sit queued for good (FR-067). */
   takesProjects(): string | null {
+    const told = this.projectsSeam?.();
+    if (told !== undefined) return told;
     if (this.keeping.kind !== "owner") return notKeeping(this.keeping);
     if (this.stages().mode === "off" && this.inc.starts()) return NO_STAGES;
     return null;

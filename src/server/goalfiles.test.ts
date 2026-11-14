@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { appendFile, chmod, link, mkdir, mkdtemp, readdir, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Run } from "../core/types";
-import { GOAL_FILES_KEEP, dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, readGoalFile, writeGoalFiles } from "./goalfiles";
+import { GOAL_FILES_KEEP, dropGoalFiles, goalFileList, goalFilesDir, liveGoalIds, pruneGoalFiles, readGoalFile, readGoalFiles, writeGoalFiles } from "./goalfiles";
 
 /* A goal's files folder under the coordinator's seeds: where it is, what a
  * start writes there, what a plan may name from it, and which folders a
@@ -94,6 +94,105 @@ describe("reading a goal file for a project card", () => {
     await symlink(elsewhere, goalFilesDir(seeds, "ab12cd34"));
     await expect(readGoalFile(seeds, "ab12cd34", "idea.md", 100)).rejects.toThrow("the goal's files folder is a link; canopy reads no goal file through one");
     await expect(readGoalFile(seeds, "00000000", "idea.md", 100)).rejects.toThrow("the goal's files folder is gone");
+  });
+
+  /** a goal's folder with idea.md, and a folder elsewhere with its own idea.md a swap would point at */
+  async function swappable(at: string): Promise<{ seeds: string; dir: string; swap: () => Promise<void>; back: () => Promise<void> }> {
+    const seeds = join(scratch, at);
+    const dir = goalFilesDir(seeds, "ab12cd34");
+    await writeGoalFiles(dir, [{ name: "idea.md", data: bytes("# idea") }]);
+    const elsewhere = join(scratch, `${at}-elsewhere`);
+    await mkdir(elsewhere, { recursive: true });
+    await writeFile(join(elsewhere, "idea.md"), "not the goal's");
+    return {
+      seeds,
+      dir,
+      swap: async () => {
+        await rename(dir, `${dir}.kept`);
+        await symlink(elsewhere, dir);
+      },
+      back: async () => {
+        await rm(dir);
+        await rename(`${dir}.kept`, dir);
+      },
+    };
+  }
+  const SWAPPED = "the goal's files folder changed while canopy opened idea.md; canopy reads no goal file through a link";
+
+  test("a folder swapped for a link between the check and the open is refused, not read through", async () => {
+    const f = await swappable("race-swap");
+    await expect(readGoalFile(f.seeds, "ab12cd34", "idea.md", 100, { race: { beforeOpen: f.swap } })).rejects.toThrow(SWAPPED);
+    await f.back();
+    expect(new TextDecoder().decode(await readGoalFile(f.seeds, "ab12cd34", "idea.md", 100))).toBe("# idea");
+  });
+
+  test("a folder swapped for a link before the open and back just after it is refused too", async () => {
+    const f = await swappable("race-back");
+    await expect(readGoalFile(f.seeds, "ab12cd34", "idea.md", 100, { race: { beforeOpen: f.swap, afterOpen: f.back } })).rejects.toThrow(SWAPPED);
+  });
+
+  // The swap undone and its inode put back at the goal's path (a hard link)
+  // passes the inode and folder checks; the kernel's path for the open file
+  // still says where it was opened.
+  test.if(existsSync("/proc/self/fd"))("on Linux, a file opened through a swapped folder is refused though its inode is back at the goal's path", async () => {
+    const f = await swappable("race-kernel");
+    const backWithLink = async () => {
+      await f.back();
+      await rm(join(f.dir, "idea.md"));
+      await link(join(scratch, "race-kernel-elsewhere", "idea.md"), join(f.dir, "idea.md"));
+    };
+    await expect(readGoalFile(f.seeds, "ab12cd34", "idea.md", 100, { race: { beforeOpen: f.swap, afterOpen: backWithLink } })).rejects.toThrow(SWAPPED);
+  });
+
+  test("a file that grows after its size was read is refused, the read stopping one byte past that size", async () => {
+    const seeds = join(scratch, "grows");
+    const dir = goalFilesDir(seeds, "ab12cd34");
+    await writeGoalFiles(dir, [{ name: "idea.md", data: bytes("# idea") }]);
+    const grow = () => appendFile(join(dir, "idea.md"), "x".repeat(1000));
+    await expect(readGoalFile(seeds, "ab12cd34", "idea.md", 10_000, { race: { afterOpen: grow } })).rejects.toThrow("idea.md grew while canopy read it");
+  });
+
+  test("an error of the host's own is put as the file could not be read, with no path in it", async () => {
+    const seeds = join(scratch, "raw");
+    const dir = goalFilesDir(seeds, "ab12cd34");
+    await writeGoalFiles(dir, [{ name: "idea.md", data: bytes("# idea") }]);
+    const raw = Object.assign(new Error(`EIO: i/o error, read '${join(dir, "idea.md")}'`), { code: "EIO" });
+    const said = await readGoalFile(seeds, "ab12cd34", "idea.md", 100, { race: { afterOpen: () => Promise.reject(raw) } }).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+    expect(said).toBe("idea.md could not be read");
+  });
+
+  test.if(process.getuid?.() !== 0)("a folder canopy may not search is put as the file could not be read", async () => {
+    const seeds = join(scratch, "eacces");
+    const dir = goalFilesDir(seeds, "ab12cd34");
+    await writeGoalFiles(dir, [{ name: "idea.md", data: bytes("# idea") }]);
+    await chmod(dir, 0o000);
+    try {
+      const said = await readGoalFile(seeds, "ab12cd34", "idea.md", 100).catch((e: unknown) => (e instanceof Error ? e.message : String(e)));
+      expect(said).toBe("idea.md could not be read");
+    } finally {
+      await chmod(dir, 0o700);
+    }
+  });
+
+  test("a card's files keep a running total: the one that would pass it is refused before it is read", async () => {
+    const seeds = join(scratch, "total");
+    const dir = goalFilesDir(seeds, "ab12cd34");
+    await writeGoalFiles(dir, [
+      { name: "a.md", data: bytes("aaaa") },
+      { name: "b.md", data: bytes("bbbb") },
+      { name: "c.md", data: bytes("cc") },
+      { name: "d.md", data: bytes("d") },
+    ]);
+    const named = (...names: string[]) => names.map((name) => ({ name }));
+    const read = await readGoalFiles(seeds, "ab12cd34", named("a.md", "b.md", "c.md"), 5, 10);
+    expect(read.map((f) => [f.name, new TextDecoder().decode(f.data)])).toEqual([
+      ["a.md", "aaaa"],
+      ["b.md", "bbbb"],
+      ["c.md", "cc"],
+    ]);
+    await expect(readGoalFiles(seeds, "ab12cd34", named("a.md", "b.md", "c.md", "d.md"), 5, 10)).rejects.toThrow("the card's goal files come to over 10 bytes");
+    // the cap on one file still speaks for that file
+    await expect(readGoalFiles(seeds, "ab12cd34", named("a.md", "b.md"), 3, 100)).rejects.toThrow("a.md is over 3 bytes");
   });
 });
 

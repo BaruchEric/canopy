@@ -7,7 +7,7 @@
  *  names come from `goalFileNames` in core/coordinator.ts. */
 
 import { constants, type Dirent } from "node:fs";
-import { chmod, lstat, mkdir, open, readdir, realpath, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readdir, readlink, realpath, rm, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { Run } from "../core/types";
 
@@ -60,40 +60,125 @@ export async function goalFileList(dir: string): Promise<string[]> {
 
 const MB = 1024 * 1024;
 const errCode = (e: unknown): string | undefined => (e instanceof Error && "code" in e && typeof e.code === "string" ? e.code : undefined);
+const sizeWords = (n: number): string => (n % MB === 0 ? `${n / MB} MB` : `${n} bytes`);
+
+/** A refusal in words a card's outcome carries. Any other error on the way
+ *  (EACCES, EIO) is put as "<name> could not be read", so no host path
+ *  reaches the card. */
+class Refused extends Error {}
+
+/** Test seams: a step run between the folder's check and the open, where a
+ *  swap of the folder would land, and one run just after the open file's
+ *  stat, where a swap back or a write that grows the file would. */
+export interface GoalReadRace {
+  beforeOpen?: () => Promise<void>;
+  afterOpen?: () => Promise<void>;
+}
+
+export interface GoalReadMore {
+  /** what the card's files have left of their total, and the words a file
+   *  that would pass it is refused with */
+  room?: { bytes: number; over: string };
+  race?: GoalReadRace;
+}
 
 /** One goal file's bytes, for a project card's intake in the incubator
  *  (FR-067). The coordinator can rewrite its goal's folder, and the bytes
  *  leave its reach for the incubator's, so nothing is read through a link:
  *  the folder must be the goal's own under the seeds, and the file a plain
  *  file of its own, opened without following a link swapped in after the
- *  list. A file over `max` bytes is refused before it is read. Each refusal
- *  names the file, in words a card's outcome carries. */
-export async function readGoalFile(seeds: string, runId: string, name: string, max: number): Promise<Uint8Array> {
-  if (!plainName(name)) throw new Error(`not a plain file name: ${name}`);
+ *  list. After the open, the file canopy holds must still be the one at the
+ *  goal's own path (its device and inode against an lstat there, and on
+ *  Linux the kernel's own path for the open file), and the folder must
+ *  still be no link, so a folder swapped for a link between the check and
+ *  the open is caught too. A file over `max` bytes, or over the card's room
+ *  left, is refused before it is read, and the read stops one byte past
+ *  the size the open file's stat gave, so a file that grows is refused
+ *  without reading on to its end. Each refusal names the file, in words a card's outcome
+ *  carries. */
+export async function readGoalFile(seeds: string, runId: string, name: string, max: number, more: GoalReadMore = {}): Promise<Uint8Array> {
+  try {
+    return await readChecked(seeds, runId, name, max, more);
+  } catch (e) {
+    if (e instanceof Refused) throw e;
+    console.error(`goal files: ${name} for ${runId} could not be read: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`${name} could not be read`);
+  }
+}
+
+async function readChecked(seeds: string, runId: string, name: string, max: number, { room, race }: GoalReadMore): Promise<Uint8Array> {
+  if (!plainName(name)) throw new Refused(`not a plain file name: ${name}`);
   const dir = goalFilesDir(seeds, runId);
   const real = await realpath(dir).catch(() => null);
-  if (real === null) throw new Error("the goal's files folder is gone");
-  if (real !== goalFilesDir(await realpath(seeds), runId)) throw new Error("the goal's files folder is a link; canopy reads no goal file through one");
+  if (real === null) throw new Refused("the goal's files folder is gone");
+  const expected = goalFilesDir(await realpath(seeds), runId);
+  if (real !== expected) throw new Refused("the goal's files folder is a link; canopy reads no goal file through one");
+  const path = join(expected, name);
+  await race?.beforeOpen?.();
   let fh: FileHandle;
   try {
     // non-blocking, so a fifo swapped in cannot hang the read
-    fh = await open(join(real, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    fh = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (e) {
-    if (errCode(e) === "ELOOP") throw new Error(`${name} is a link; canopy reads no goal file through one`);
-    if (errCode(e) === "ENOENT") throw new Error(`${name} is no longer in the goal's files folder`);
+    if (errCode(e) === "ELOOP") throw new Refused(`${name} is a link; canopy reads no goal file through one`);
+    if (errCode(e) === "ENOENT") throw new Refused(`${name} is no longer in the goal's files folder`);
     throw e;
   }
   try {
     const st = await fh.stat();
-    if (!st.isFile()) throw new Error(`${name} is not a plain file`);
-    const over = `${name} is over ${max % MB === 0 ? `${max / MB} MB` : `${max} bytes`}`;
-    if (st.size > max) throw new Error(over);
-    const data = await fh.readFile();
-    if (data.byteLength > max) throw new Error(over);
+    await race?.afterOpen?.();
+    if (!(await stillHere(fh, st, dir, expected, path))) throw new Refused(`the goal's files folder changed while canopy opened ${name}; canopy reads no goal file through a link`);
+    if (!st.isFile()) throw new Refused(`${name} is not a plain file`);
+    if (st.size > max) throw new Refused(`${name} is over ${sizeWords(max)}`);
+    if (room && st.size > room.bytes) throw new Refused(room.over);
+    const data = await readUpTo(fh, st.size + 1);
+    if (data.byteLength > st.size) throw new Refused(`${name} grew while canopy read it`);
     return data;
   } finally {
     await fh.close();
   }
+}
+
+/** Whether the open file is still the goal's own at `path`: the same device
+ *  and inode as an lstat there, the folder still resolving to itself, and,
+ *  where the kernel says it (Linux's /proc/self/fd), the open file's own
+ *  path. The first two leave a gap a swap undone and redone between them
+ *  could pass; the kernel's path has none. */
+async function stillHere(fh: FileHandle, st: { dev: number; ino: number }, dir: string, expected: string, path: string): Promise<boolean> {
+  const at = await lstat(path).catch(() => null);
+  if (!at || at.dev !== st.dev || at.ino !== st.ino) return false;
+  if ((await realpath(dir).catch(() => null)) !== expected) return false;
+  const held = await readlink(`/proc/self/fd/${fh.fd}`).catch(() => null);
+  return held === null || held === path;
+}
+
+/** At most `cap` bytes from the start of the file, and no more. */
+async function readUpTo(fh: FileHandle, cap: number): Promise<Uint8Array> {
+  const buf = new Uint8Array(cap);
+  let got = 0;
+  while (got < cap) {
+    const { bytesRead } = await fh.read(buf, got, cap - got, got);
+    if (bytesRead === 0) break;
+    got += bytesRead;
+  }
+  return buf.subarray(0, got);
+}
+
+/** A card's goal files for its intake, in order, each read as
+ *  `readGoalFile` reads it and handed back with what it came with, under a
+ *  running total: the file that would take the card's files past `total`
+ *  bytes is refused before it is read, so no more than the incubator takes
+ *  is held before it is asked. */
+export async function readGoalFiles<T extends { name: string }>(seeds: string, runId: string, files: readonly T[], max: number, total: number): Promise<(T & { data: Uint8Array })[]> {
+  const over = `the card's goal files come to over ${sizeWords(total)}`;
+  const out: (T & { data: Uint8Array })[] = [];
+  let used = 0;
+  for (const f of files) {
+    const data = await readGoalFile(seeds, runId, f.name, max, { room: { bytes: total - used, over } });
+    used += data.byteLength;
+    out.push({ ...f, data });
+  }
+  return out;
 }
 
 /** the newest mtime of anything in `dir`, or its own when it is empty; null when it does not read */
