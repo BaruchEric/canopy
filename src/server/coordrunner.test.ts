@@ -1308,6 +1308,37 @@ describe("a goal from the top", () => {
     expect(driver.ctx?.spec.addDirs).toEqual([dir]);
   }, 30_000);
 
+  test("a later run on a files card's branch keeps the goal's folder: a follow-up gets it in its added folders", async () => {
+    const { run, token } = await started({ goal: "favicon", files: [["shot.png", "png"]] });
+    const dir = join(s.seeds, "goal-files", run.id);
+    const plan = await postAs(s, "/api/coordinator/plan", { tasks: [{ title: "favicon", repo: "a", note: "use the logo", action: "ask", files: ["shot.png"] }] }, token);
+    expect(plan.status).toBe(200);
+    const begun = await postAs(s, "/api/coordinator/start", { run: run.id }, s.page);
+    expect(begun.status).toBe(200);
+    const childId = ((await begun.json()) as { tasks: CoordTask[] }).tasks[0]?.run ?? "";
+    live.push(childId);
+    const ctx = (await driverOf(childId)).ctx;
+    if (!ctx) throw new Error("the child never reached its driver");
+    expect(ctx.spec.addDirs).toEqual([dir]);
+    // the child commits and settles ready, so its branch takes a follow-up
+    await writeFile(join(ctx.cwd, "favicon.txt"), "x\n");
+    await Bun.$`git -C ${ctx.cwd} add -A && git -C ${ctx.cwd} -c user.name=t -c user.email=t@t commit -q -m favicon`.quiet();
+    ctx.result({ text: "Done.", durationMs: 1, turns: 1 }, null);
+    ctx.exited({ code: 0, stderr: "" });
+    const card = await until(async () => {
+      const c = (await runs()).find((r) => r.id === run.id)?.tasks?.[0];
+      return c?.state === "done" && c.outcome === "ready" ? c : null;
+    }, "the card to settle ready");
+    const res = await postAs(s, "/api/landing/followup", { id: card.branch ?? "", note: "make it round" }, s.page);
+    const got = (await res.json()) as { run?: Run; error?: string };
+    expect([res.status, got.error]).toEqual([201, undefined]);
+    const later = got.run;
+    if (!later) throw new Error("the follow-up answered no run");
+    live.push(later.id);
+    expect(later.branch?.origin).toBe(card.branch);
+    expect((await driverOf(later.id)).ctx?.spec.addDirs).toEqual([dir]);
+  }, 30_000);
+
   test("a goal started at a repo is as it was: its own last line, no files to name, and one at a time", async () => {
     const res = await postAs(s, "/api/repos/run?id=a", { action: "coordinate", note: "ship it" }, s.page);
     expect(res.status).toBe(201);

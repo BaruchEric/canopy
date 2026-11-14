@@ -1351,6 +1351,9 @@ export interface Run {
   held?: true;
   /** what the run's loadout resolved to at its start (FR-065) */
   equip?: RunEquip;
+  /** folders canopy added beside its cwd (`--add-dir`): a goal's files
+   *  folder, for its coordinator and a card that lists them (FR-067) */
+  addDirs?: string[];
   id: string;
   repoId: string;
   /** the best-of-N group, set before the first run event */
@@ -1849,6 +1852,8 @@ export interface LandingRun {
   canopyTools?: true;
   /** the loadout its run started with, so a fix starts with the same one */
   equip?: RunEquip;
+  /** the folders its run was given beside its worktree, so a fix keeps them (FR-067) */
+  addDirs?: string[];
   /** the run that started it, a run's (with its depth) or a coordinator's
    *  (with none): a fix keeps them, so a run's child stays one and a
    *  coordinator's card follows the fix */

@@ -139,7 +139,8 @@ export interface StartExtras {
    *  coordinator's own folder under its runner's seeds */
   cwd?: string;
   /** more folders the agent may use (`--add-dir`), after a workspace's: a
-   *  goal's files folder, for its coordinator and for a card that lists them */
+   *  goal's files folder, for its coordinator, a card that lists them and a
+   *  later run on that card's branch. The run keeps them (`Run.addDirs`). */
   addDirs?: readonly string[];
   /** a Claude session to resume, for a chat the sweep stopped; a branch's own
    *  `resume` wins when both are set */
@@ -478,6 +479,7 @@ export class Runner {
     const depth = extras.child ? (this.get(extras.parent ?? "")?.depth ?? 0) + 1 : extras.depth ?? 0;
     if (depth > 0) run.depth = depth;
     if (extras.canopy) run.canopyTools = true;
+    if (extras.addDirs?.length) run.addDirs = [...extras.addDirs];
     if (extras.equip) run.equip = { ...extras.equip, skills: [...extras.equip.skills], mcp: [...extras.equip.mcp], ...(extras.equip.pluginsOff ? { pluginsOff: [...extras.equip.pluginsOff] } : {}) };
     if (spec.unattended) run.unattended = true;
     const group = extras.group ?? branch?.branch.group;

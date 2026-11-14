@@ -234,12 +234,16 @@ describe("a workspace run", () => {
 
   test("folders the server adds join the workspace's, and a run with neither has none", () => {
     const { runner, ctxOf } = setup();
-    runner.start(repo("a"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, scope, undefined, { addDirs: ["/seeds/goal-files/ab12cd34"] });
+    const both = runner.start(repo("a"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, scope, undefined, { addDirs: ["/seeds/goal-files/ab12cd34"] });
     expect(ctxOf(0).spec.addDirs).toEqual(["/w/trips-analysis", "/seeds/goal-files/ab12cd34"]);
+    // the run keeps the server's folders alone, which a fix on its branch carries on
+    expect(both.addDirs).toEqual(["/seeds/goal-files/ab12cd34"]);
     runner.start(repo("b"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, undefined, undefined, { addDirs: ["/seeds/goal-files/ab12cd34"] });
     expect(ctxOf(1).spec.addDirs).toEqual(["/seeds/goal-files/ab12cd34"]);
-    runner.start(repo("c"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, undefined, undefined, { addDirs: [] });
+    const none = runner.start(repo("c"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, undefined, undefined, { addDirs: [] });
     expect("addDirs" in ctxOf(2).spec).toBe(false);
+    expect(none.addDirs).toBeUndefined();
+    expect(runner.start(repo("d"), "ask", ACTIONS.ask, "look", DEFAULT_AGENT, undefined, scope).addDirs).toBeUndefined();
   });
 
   test("a chat opened empty keeps the workspace wording in its first prompt", () => {

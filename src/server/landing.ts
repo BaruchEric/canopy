@@ -576,6 +576,7 @@ export class LandingHub {
         ...(run.group ?? b.group ? { group: run.group ?? b.group } : {}),
         ...(run.canopyTools ? { canopyTools: true as const } : {}),
         ...(run.equip ? { equip: run.equip } : {}),
+        ...(run.addDirs?.length ? { addDirs: [...run.addDirs] } : {}),
         // a run's child and a coordinator's card alike: a fix stays the parent's
         ...(run.parent ? { parent: run.parent } : {}),
         ...(run.depth ? { depth: run.depth } : {}),

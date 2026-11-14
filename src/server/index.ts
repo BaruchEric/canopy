@@ -2164,13 +2164,15 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
   const holdsTools = rec.canopyTools === true && !toolsRefusal(state, repo);
   const askSpec = holdsTools && !resume ? { ...ACTIONS.ask, brief: await toolsBrief() } : ACTIONS.ask;
   const message = resume ? (fence ? `${fence}\n\n${resumed}` : resumed) : branchPrompt(repo, askSpec, `${rec.note}\n\n${reason}`, b, notes);
-  // a fix of a child stays one, and a run that held tools gets a fresh token
+  // a fix of a child stays one, a run that held tools gets a fresh token,
+  // and one given a goal's files folder keeps it
   const parent = how.parent ?? rec.parent;
   const base: StartExtras = {
     ...(rec.group ? { group: rec.group } : {}),
     ...(priority !== "interactive" ? { priority } : {}),
     ...(parent ? { parent } : {}),
     ...(rec.depth ? { depth: rec.depth } : {}),
+    ...(rec.addDirs?.length ? { addDirs: rec.addDirs } : {}),
   };
   const tools: { agent?: AgentSettings; extras: StartExtras; release: () => Promise<void> } = fixLoadout
     ? await withLoadout(state, repo, fixLoadout, agent, base, holdsTools)
