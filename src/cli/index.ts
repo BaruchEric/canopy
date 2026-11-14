@@ -1,7 +1,7 @@
 import { libraryCommand } from "../core/library";
 import { realpath } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { exec } from "../core/exec";
 import { leadingWhen } from "../core/cron";
 import { commit, dropStaleCopies, getStatus, pull, push, StaleCopyError } from "../core/git";
@@ -36,12 +36,12 @@ import {
   setLaunch,
   upsertWorkspace,
 } from "../core/store";
-import { effectivePrimary, type Job, type LaunchSettings, type RangerInfo, type RangerWake, type SourceInput, type SpecHalf, type Sprout, type SproutDetail } from "../core/types";
+import { effectivePrimary, type Job, type LaunchSettings, type RangerInfo, type RangerWake, type SourceInput, type SpecHalf } from "../core/types";
 import { loadSpec, repoSpecState, syncRepo } from "../core/spec";
-import { parsePick, pickRefusal, SEEDS_DIR } from "../core/sprout";
+import { SEEDS_DIR } from "../core/sprout";
 import { setSeedRoots } from "../core/seedgit";
 import { mirrorRefusal } from "../core/seedmirror";
-import { parseNewArgs, sproutLink } from "./newargs";
+import { incubatorCommand, newCommand } from "./incubator";
 import { suggestMessage } from "../core/suggest";
 import { PortUnavailableError, startServer } from "../server/index";
 import { helperName, localOpeners, runHelper } from "../core/helperd";
@@ -780,83 +780,10 @@ export async function main(argv: string[]): Promise<void> {
     case "-h":
       console.log((args[0] === undefined ? undefined : verbHelp(args[0])) ?? HELP);
       return;
-    case "new": {
-      const parsed = parseNewArgs(args, process.env);
-      if ("error" in parsed) return fail(parsed.error);
-      const form = new FormData();
-      if (parsed.text) form.append("text", parsed.text);
-      for (const u of parsed.urls) form.append("url", u);
-      if (parsed.repo) form.append("repo", parsed.repo);
-      for (const path of parsed.files) {
-        const f = Bun.file(path);
-        if (!(await f.exists())) return fail(`no such file: ${path}`);
-        form.append("file", new File([await f.arrayBuffer()], basename(path), { type: f.type }), basename(path));
-      }
-      form.append("via", "cli");
-      let res: Response;
-      try {
-        res = await fetch(`${parsed.backend}/api/incubator`, { method: "POST", body: form, redirect: "manual", headers: callerHeaders(parsed.backend) });
-      } catch (err) {
-        return fail(`${parsed.backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      const body = (await res.json().catch(() => ({}))) as Partial<Sprout> & { error?: string };
-      if (!res.ok || !body.id) return fail(body.error ?? `the backend answered ${res.status}`);
-      console.log(`${moss(body.id)} ${body.title ?? ""}`);
-      console.log(sky(sproutLink(parsed.backend, body.id)));
-      return;
-    }
-    case "incubator": {
-      const backend = apiBase(opt(args, "--backend"));
-      if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);
-      const get = async <T>(path: string): Promise<T> => {
-        let res: Response;
-        try {
-          res = await fetch(`${backend}${path}`, { redirect: "manual", headers: callerHeaders(backend) });
-        } catch (err) {
-          return fail(`${backend} did not answer: ${err instanceof Error ? err.message : String(err)}`);
-        }
-        // The body is the server's JSON; an error body carries { error }.
-        const body = (await res.json().catch(() => ({}))) as T & { error?: string };
-        if (!res.ok) return fail(body.error ?? `the backend answered ${res.status}`);
-        return body;
-      };
-      const sub = args[0] ?? "list";
-      if (sub === "list") {
-        const list = await get<Sprout[]>("/api/incubator");
-        if (list.length === 0) console.log(dim("nothing in the incubator"));
-        for (const s of list) {
-          const why = s.parked ? dim(` (${s.parked})`) : s.questions?.length ? dim(` (${s.questions.length} questions waiting)`) : "";
-          console.log(`${moss(s.id)}  ${s.status.padEnd(11)} ${s.title}${why}`);
-        }
-        return;
-      }
-      if (sub === "show") {
-        const id = args[1];
-        if (!id) return fail("usage: canopy incubator show <id>");
-        const d = await get<SproutDetail>(`/api/incubator/one?id=${encodeURIComponent(id)}`);
-        const s = d.sprout;
-        console.log(`${bold(s.title)} ${dim(s.repoId)}`);
-        console.log(`${s.status}${s.parked ? `: ${s.parked}` : ""}`);
-        console.log(dim(`${s.spent.runs} runs, ${Math.round(s.spent.workMs / 60_000)} min of agent work`));
-        if (d.intent) console.log(`\n${d.intent.trim()}`);
-        console.log(`\n${d.inputsIndex.trim()}`);
-        console.log(`\n${sky(sproutLink(backend, s.id))}`);
-        return;
-      }
-      if (sub === "pick-check") {
-        // run by scout's check in the seed: what canopy will read after scout, read now
-        const pickFile = Bun.file(".canopy/pick.json");
-        if (!(await pickFile.exists())) return fail(".canopy/pick.json is missing: research ends by writing it");
-        const parsed = parsePick(await pickFile.text());
-        if (!parsed.ok) return fail(`.canopy/pick.json: ${parsed.error}`);
-        const refused = pickRefusal(parsed.pick);
-        if (refused) return fail(`.canopy/pick.json: ${refused}`);
-        if (!(await Bun.file(".canopy/research.md").exists())) return fail(".canopy/research.md is missing: research writes it before the pick");
-        console.log(`pick ok: ${parsed.pick.kind} on ${parsed.pick.host}`);
-        return;
-      }
-      return fail("usage: canopy incubator list | show <id> | pick-check");
-    }
+    case "new":
+      return newCommand(args, { fail });
+    case "incubator":
+      return incubatorCommand(args, { fail });
     case "ranger": {
       const backend = apiBase(opt(args, "--backend"));
       if (!/^https?:\/\/[^/\s]+$/.test(backend)) return fail(`--backend must be an http(s) origin, got ${backend}`);

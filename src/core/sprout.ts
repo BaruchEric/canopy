@@ -75,10 +75,13 @@ export function urlWithoutSecret(url: string): string {
 /** a url anywhere in a string: up to whitespace, a quote or an angle bracket */
 const URL_IN_TEXT = /[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi;
 
+/** free text with every url in it passed through `urlWithoutSecret` */
+export const textWithoutSecrets = (text: string): string => text.replace(URL_IN_TEXT, (u) => urlWithoutSecret(u));
+
 /** a JSON value with every url in every string, whole or inside free text,
  *  passed through `urlWithoutSecret` */
 export function withoutSecrets(v: unknown): unknown {
-  if (typeof v === "string") return v.replace(URL_IN_TEXT, (u) => urlWithoutSecret(u));
+  if (typeof v === "string") return textWithoutSecrets(v);
   if (Array.isArray(v)) return v.map(withoutSecrets);
   if (typeof v === "object" && v !== null) {
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, withoutSecrets(x)]));

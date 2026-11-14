@@ -90,6 +90,15 @@ canopy coordinator hold <run>      # start no card of the goal until it is resum
 canopy coordinator resume <run>    # lift the hold
 canopy coordinator start <run> [id ...]   # start these cards, ahead of the rest, or every proposed card when no id is given
 canopy coordinator new <goal> [--repo R ...] [--file PATH ...] [--model M] [--effort E] [--on NAME]   # start a goal from the top at no repo: prints the run id and its manager link
+canopy new "<idea>" [--file f]... [--url u]... [--repo url] [--backend URL]   # start a project in the incubator; asks where stages run before it sends a file, then prints the link at the backend's public address
+canopy new https://github.com/a/b  # one url alone is the repo when it reads as one, else a link (stderr says which); an unknown flag is an error, and -- ends the flags
+canopy incubator [list] [--json]   # the projects: id, status, title, and why each waits (a park, questions, the stage runner)
+canopy incubator show <id> [--json]   # one project: why it waits, clarify's questions with numbered options, a hand-off's review, intent, inputs, link
+canopy incubator answer <id> 2 "1,3" "open Sundays"   # clarify's questions in order: a number picks an option, "" skips one; --skip goes on assumptions
+canopy incubator resume <id> [--retry]   # a parked project goes on; --retry runs the step again, or sends the work back to the step that made it
+canopy incubator stop <id> | dismiss <id>   # end the project | take an ended one off the list; the seed, inputs and vault note stay
+canopy incubator add <id> "more words" [--file f]... [--url u]...   # more input; clarify reads it before the next stage
+canopy incubator handoff <id> --yes <head> | --no ["reason"]   # push an extend's branch at the head show printed, or decline it
 canopy health [--bad] [--repo R] [--json]   # every check on every backend; exit 1 when anything is down
 canopy health show <id>            # one check: why, how it heals, its last 20 changes
 canopy health heal <id>            # heal one check now

@@ -482,6 +482,31 @@ describe("intake", () => {
     expect(stored).not.toContain("pa55");
   });
 
+  test("a token in a link inside the idea's words reaches neither the title, the slug, the brief, the inputs nor the vault note", async () => {
+    const w = world();
+    const s = await w.inc.create(intake({ text: "https://x:tok3n@github.com/someone/coins fix the counter" }));
+    await w.inc.idle();
+    await w.inc.addInputs(s.id, intake({ text: "and see https://u:pa55@example.com/spec" }));
+    await w.inc.idle();
+    const after = now(w, s.id);
+    expect(after.title).toBe("https://github.com/someone/coins fix the counter");
+    expect(after.slug).toBe("https-github-com-someone-coins-fix");
+    const files = [...(w.store.inputs.get(s.id)?.values() ?? [])].map((d) => new TextDecoder().decode(d));
+    expect(files).toContain("and see https://example.com/spec");
+    const stored = [
+      JSON.stringify(w.store.records.get(s.id)),
+      JSON.stringify(after),
+      ...files,
+      w.store.indexes.get(s.id) ?? "",
+      ...(w.seeds.files.get(after.seedPath)?.values() ?? []),
+      ...w.notes.puts.map((p) => `${p.path}\n${p.text}`),
+      ...w.notes.lines.map((l) => l.line),
+      ...w.flows.started.map((f) => f.note),
+    ].join("\n");
+    expect(stored).not.toContain("tok3n");
+    expect(stored).not.toContain("pa55");
+  });
+
   test("the intake refuses nothing, a bad link, a local repo, a zip and an oversized file", async () => {
     const w = world();
     const status = (p: Promise<unknown>) => p.then(() => 0, (e: unknown) => (e instanceof IncubatorError ? e.status : -1));

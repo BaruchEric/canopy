@@ -58,7 +58,19 @@ usage:
   canopy peers gate --root dir       what a peer key's authorized_keys entry runs
   canopy new "<idea>" [--file f]... [--url u]... [--repo url]
                                      start a project in the incubator; prints its link
-  canopy incubator list | show <id>  the incubator's projects, or one project
+                                     one url alone is the repo when it reads as one, else a link; -- ends the flags
+    --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
+  canopy incubator [list] [--json]   the incubator's projects: id, status, title, and why each waits
+  canopy incubator show <id> [--json]   one project: why it waits, clarify's questions, a hand-off's review, intent, inputs
+  canopy incubator answer <id> "<answer>"...   answer clarify's questions in order; a number picks that option, "" skips one
+  canopy incubator answer <id> --skip   go on assumptions: research goes on with what clarify assumed
+  canopy incubator resume <id> [--retry]   a parked project goes on; past a judge's no, with the work as it is;
+                                     --retry runs the step again, or sends the work back to the step that made it
+  canopy incubator stop <id>         end the project; the seed, the inputs and the vault note stay
+  canopy incubator dismiss <id>      take an ended project off the list
+  canopy incubator add <id> ["<words>"] [--file f]... [--url u]...   more input; clarify reads it before the next stage
+  canopy incubator handoff <id> --yes <head> | --no ["<reason>"]   push an extend's branch at the head show printed, or decline it
+  canopy incubator pick-check        run in a seed by scout's check: is .canopy/pick.json one canopy takes
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)
   canopy ranger [status]             the always-on agent on a backend, and its wakes
     --backend URL                    the backend (default: $CANOPY_API, else 127.0.0.1:7850)

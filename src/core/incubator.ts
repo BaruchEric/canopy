@@ -61,6 +61,7 @@ import {
   sproutTitle,
   stageNote,
   statusFor,
+  textWithoutSecrets,
   urlWithoutSecret,
   withInputsRead,
   withRecordRead,
@@ -352,7 +353,10 @@ export class Incubator {
     const urls = given.map(urlWithoutSecret);
     if (cloneFrom && !networkOrigin(cloneFrom)) throw new IncubatorError(400, `not a git url canopy can clone: ${urlWithoutSecret(cloneFrom)}`);
     const repo = cloneFrom ? urlWithoutSecret(cloneFrom) : undefined;
-    let total = already + bytesOf(intake.text);
+    // nor is one in a link inside the idea's words, which become the title,
+    // the slug, the brief and the vault note
+    const text = textWithoutSecrets(intake.text);
+    let total = already + bytesOf(text);
     // a link is stored as a file of its own, so it counts like one
     for (const u of [...urls, ...(repo ? [repo] : [])]) total += bytesOf(`${u}\n`);
     const files: IntakeFile[] = [];
@@ -365,10 +369,10 @@ export class Incubator {
       files.push({ ...f, type });
     }
     if (total > INPUT_TOTAL_MAX) throw new IncubatorError(413, "a project's inputs come to over 100 MB");
-    if (!intake.text.trim() && urls.length === 0 && files.length === 0 && !repo) {
+    if (!text.trim() && urls.length === 0 && files.length === 0 && !repo) {
       throw new IncubatorError(400, "give an idea, a link, a file or a repo");
     }
-    return { clean: { text: intake.text, urls, files, ...(repo ? { repo } : {}), via: intake.via }, cloneFrom };
+    return { clean: { text, urls, files, ...(repo ? { repo } : {}), via: intake.via }, cloneFrom };
   }
 
   /** one input written under inputs/ and added to the record */
