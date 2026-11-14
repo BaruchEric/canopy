@@ -135,7 +135,7 @@ usage:
   canopy run pickup <flow>          take up a stopped flow; prints its id and status
     --backend URL | --on NAME       select the backend that owns the flow
   canopy coordinator [--json]       the live coordinators: id, repo, held, card counts, the goal's first line
-  canopy coordinator <run> [--json]   one coordinator's cards: id, state, repo, loadout, workflow, after, title
+  canopy coordinator <run> [--json]   one coordinator's cards: id, state, repo, loadout, workflow, after, files, title
   canopy coordinator hold <run>     start no card of the goal until resumed; running children go on
   canopy coordinator resume <run>   lift a hold
   canopy coordinator start <run> [id ...]   start these cards, or every proposed one
