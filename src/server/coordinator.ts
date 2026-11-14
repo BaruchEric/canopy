@@ -1321,13 +1321,15 @@ export class CoordinatorHub {
     }
   }
 
-  /** The flows' every change: a card's flow settles its card, or puts it
-   *  back to running once picked up; and a branch flow holds one of its
-   *  repo's branch slots from its start to its end, so its end may free one
-   *  a card waits for. */
+  /** A card's flow settles its card, or puts it back to running once
+   *  picked up. A finished flow frees a branch slot or an in-place tree
+   *  that a queued card or a limited card's resume may be waiting for. */
   onFlow(flow: Flow): void {
     this.followFlow(flow);
-    if (flow.branch && !isFlowActive(flow)) this.pumpAll();
+    if (!isFlowActive(flow)) {
+      this.pumpAll();
+      if (!flow.branch) this.retryInTree(flow.repoId);
+    }
   }
 
   /* ---------- routes ---------- */

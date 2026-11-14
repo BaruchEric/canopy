@@ -176,11 +176,16 @@ async function releaseFixture(stage = false, logging = true) {
   const handoffRuns: Run[] = [];
   let flows: Flows;
   const quiet = deferred<boolean>();
+  const quietAsked = deferred<void>();
   const procExit = deferred<number | null>();
   class HeldSeed extends StageClient {
     polls = 0;
     override harnessesNow() { return ["claude"]; }
-    override busy() { return ++this.polls === 1 ? Promise.resolve(true) : quiet.promise; }
+    override busy() {
+      if (++this.polls === 1) return Promise.resolve(true);
+      quietAsked.resolve();
+      return quiet.promise;
+    }
   }
   class DeferredDriver extends Driver {
     stops = 0;
@@ -211,7 +216,7 @@ async function releaseFixture(stage = false, logging = true) {
     ctx.result({ text: "done", durationMs: 1, turns: 1 }, problem);
   };
   const exit = (n: number) => drivers[n]?.ctx?.exited({ code: 0, stderr: "" });
-  return { runner, flows, drivers, reads, handed, handoffRuns, result, exit, quiet, procExit,
+  return { runner, flows, drivers, reads, handed, handoffRuns, result, exit, quiet, quietAsked, procExit,
     cleanup: async () => { quiet.resolve(false); procExit.resolve(0); drivers.forEach((_, i) => exit(i)); await runner.stopLoggedAndWait(); await rm(dir, { recursive: true, force: true }); },
   };
 }
@@ -254,13 +259,17 @@ describe("workflow release boundary", () => {
     try {
       const flow = f.flows.start(repo, workflow("## First\ncheck: echo first\n\nwrite\n"), "", DEFAULT_AGENT);
       await f.flows.whenStarted();
+      const runId = flow.steps[0]?.runId;
+      if (!runId) throw new Error("first step has no run");
       f.result(0); f.exit(0); await flush();
       expect(f.reads).toEqual(["fingerprint"]);
       expect(flow.status).toBe("working");
-      f.procExit.resolve(0); await Bun.sleep(10);
+      f.procExit.resolve(0); await f.quietAsked.promise;
       expect(f.runner.liveIn(repo.path)).toBe(true);
       expect(f.reads).toEqual(["fingerprint"]);
-      f.quiet.resolve(false); await flush();
+      f.quiet.resolve(false);
+      await f.runner.whenEnded(runId);
+      await flush();
       expect(f.runner.liveIn(repo.path)).toBe(false);
       expect(f.reads).toEqual(["fingerprint", "fingerprint", "check"]);
       expect(flow.status).toBe("done");

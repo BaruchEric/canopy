@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { blockedNote, CARDS_NOW, flowGoneNote, flowNote, holdNote, landedNote, lateFailNote, treeNote, validatePlan, type ChildBranch } from "../core/coordinator";
 import { EMPTY_LOADOUTS } from "../core/loadout";
 import type { RunGroup } from "../core/group";
-import type { CoordTask, Flow, LandEntry, Loadout, LoadoutsInfo, Run, RunBranch } from "../core/types";
+import { isFlowActive, type CoordTask, type Flow, type LandEntry, type Loadout, type LoadoutsInfo, type Run, type RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import type { WorkState } from "../core/work";
 import { CoordError, CoordinatorHub, type CardSprout, type ChildResume, type CoordinatorDeps } from "./coordinator";
@@ -489,7 +489,6 @@ describe("a branch flow ending", () => {
     await post(h, "plan", { run: "co1", tasks: [task()] });
     await post(h, "start", { run: "co1" });
     expect(card("t1")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in web" });
-    full.delete("web");
     const someone = (over: Partial<Flow>): Flow => ({ id: "other", repoId: "web", workflow: "fix", verb: "fix", note: "", status: "working", steps: [], current: 0, startedAt: 1, branch: branch("other"), ...over });
     h.onFlow(someone({}));
     await settled(h);
@@ -498,6 +497,7 @@ describe("a branch flow ending", () => {
     h.onFlow(inCheckout);
     await settled(h);
     expect(card("t1")?.state).toBe("queued");
+    full.delete("web");
     h.onFlow(someone({ status: "done" }));
     await settled(h);
     expect(card("t1")?.state).toBe("running");
@@ -1917,7 +1917,8 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
           return { run: c };
         }
         const repoId = treeRepo(t.tree);
-        const held = making.get(t.tree) ?? ([...runs.values()].some((r) => r.repoId === repoId && r.status === "working") ? `waiting for tree ${t.tree} to be free` : undefined);
+        const occupied = [...runs.values()].some((r) => r.repoId === repoId && r.status === "working") || [...flows.values()].some((f) => f.repoId === repoId && !f.branch && isFlowActive(f));
+        const held = making.get(t.tree) ?? (occupied ? `waiting for tree ${t.tree} to be free` : undefined);
         if (held) return { busy: held };
         started.push({ coord: coordId, task: t.id });
         return { run: inTree(h, repoId, { parent: coordId, action: t.action, note: t.note }) };
@@ -2048,6 +2049,24 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       expect(card("t1")).toMatchObject({ state: "running", treeRepo: FEAT_X });
       expect(card("t1")?.run).not.toBe(his.id);
     });
+  });
+
+  test("a queued tree card starts when the in-place workflow holding its tree stops", async () => {
+    const h = treeHub();
+    const flow: Flow = { id: "other", repoId: FEAT_X, workflow: "fix", verb: "fix", note: "", status: "working", steps: [], current: 0, startedAt: clock };
+    flows.set(flow.id, flow);
+    await post(h, "plan", { run: "co1", tasks: [task({ tree: "feat/x" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(card("t1")?.state).toBe("queued");
+    h.onFlow(flow);
+    await settled(h);
+    expect(card("t1")?.state).toBe("queued");
+    flow.status = "stopped";
+    flow.endedAt = clock;
+    h.onFlow(flow);
+    await settled(h);
+    expect(card("t1")).toMatchObject({ state: "running", treeRepo: FEAT_X });
   });
 
   describe("settling", () => {
@@ -2253,14 +2272,14 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
 
     /** A tree card whose child hit the limit and whose resume finds its tree
      *  busy (Eric's run there, or `merging`), as Task 4's resumeChild answers. */
-    async function limitedTreeBusy(over: { merging?: () => boolean } = {}): Promise<{ h: CoordinatorHub; resumed: string[]; his: Run }> {
+    async function limitedTreeBusy(over: { merging?: () => boolean; workflow?: boolean } = {}): Promise<{ h: CoordinatorHub; resumed: string[]; his: Run; flow?: Flow }> {
       clock = Date.UTC(2026, 9, 26, 12);
       coordinator({ status: "idle" });
       const resumed: string[] = [];
       const h = treeHub({
         resumeChild: async (coordId, t, _old, priority) => {
           resumed.push(`${t.id} ${priority}`);
-          const busy = over.merging?.() === true || [...runs.values()].some((r) => r.repoId === FEAT_X && r.status === "working");
+          const busy = over.merging?.() === true || [...runs.values()].some((r) => r.repoId === FEAT_X && r.status === "working") || [...flows.values()].some((f) => f.repoId === FEAT_X && !f.branch && isFlowActive(f));
           if (busy) return { busy: "waiting for tree feat/x to be free" };
           return { run: inTree(h, FEAT_X, { parent: coordId }) };
         },
@@ -2277,11 +2296,17 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       await settled(h);
       // Eric starts a run in the tree while the card waits for the reset
       const his = mine(h, FEAT_X);
+      const flow: Flow | undefined = over.workflow ? { id: "other", repoId: FEAT_X, workflow: "fix", verb: "fix", note: "", status: "working", steps: [], current: 0, startedAt: clock } : undefined;
+      if (flow) {
+        his.status = "done";
+        flows.set(flow.id, flow);
+        h.onFlow(flow);
+      }
       h.wake(() => true);
       await settled(h);
       expect(resumed).toEqual(["t1 normal"]);
       expect(card("t1")).toMatchObject({ state: "running", run: first.id, limited: 0, outcome: "waiting for tree feat/x to be free" });
-      return { h, resumed, his };
+      return { h, resumed, his, ...(flow ? { flow } : {}) };
     }
 
     test("Fix 1: a resume that finds its tree busy keeps the tree's words; a recheck neither rewrites them nor says the limit again", async () => {
@@ -2321,6 +2346,18 @@ describe("a card in a kept tree (FR-067 plan 2)", () => {
       h.onRun(his);
       await settled(h);
       expect(resumed).toEqual(["t1 normal", "t1 normal"]);
+      expect(card("t1")).toMatchObject({ state: "running", run: "c3", limited: 1 });
+      expect(card("t1")?.outcome).toBeUndefined();
+      expect(h.heldStarts()).toEqual([]);
+    });
+
+    test("a limited tree card resumes when the in-place workflow holding its tree stops", async () => {
+      const { h, flow } = await limitedTreeBusy({ workflow: true });
+      if (!flow) throw new Error("no occupying workflow");
+      flow.status = "stopped";
+      flow.endedAt = clock;
+      h.onFlow(flow);
+      await settled(h);
       expect(card("t1")).toMatchObject({ state: "running", run: "c3", limited: 1 });
       expect(card("t1")?.outcome).toBeUndefined();
       expect(h.heldStarts()).toEqual([]);
