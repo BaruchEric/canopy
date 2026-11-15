@@ -788,7 +788,14 @@ test("concurrent groups reserve slots before the second request cuts anything", 
   const responses = await Promise.all([w.start(), w.start()]);
   expect(responses.map((r) => r.status).sort()).toEqual([201, 409]);
   expect(w.cutCounts).toEqual([2, 2]);
-  expect(await w.diskGroups()).toHaveLength(1);
+  // The started group's file is looked up by name. A member's state can
+  // rewrite it just after the 201 (a temp file renamed over it), and a
+  // folder listing opened before that rename may leave the name out (btrfs
+  // gives the new entry a later index); a lookup by name never misses it.
+  const started = responses.find((r) => r.status === 201);
+  const { id } = groupBody(await started?.json());
+  expect(existsSync(join(w.config, "landing", "groups", `${id}.json`))).toBe(true);
+  expect((await w.diskGroups()).filter((name) => name !== `${id}.json`)).toEqual([]);
 });
 
 test("a failed group preserves another branch run and its worktree", async () => {

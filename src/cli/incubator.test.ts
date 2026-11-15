@@ -81,15 +81,20 @@ function fake(opts: { stages?: IncubatorStages | null; backends?: unknown; one?:
   return { seen, base: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
 }
 
-/** a command's stdout and stderr lines; its fail throws its words */
+/** a line without the colours render.ts paints when stdout is a terminal,
+ *  as it is when canopy's test task runs the suite in a pty */
+// eslint-disable-next-line no-control-regex
+const plain = (line: unknown): string => String(line).replace(/\x1b\[[0-9;]*m/g, "");
+
+/** a command's stdout and stderr lines, uncoloured; its fail throws its words */
 async function run(cmd: (argv: string[], o: { fail: (m: string) => never }) => Promise<void>, argv: string[]): Promise<{ out: string[]; err: string[] }> {
   const log = console.log;
   const error = console.error;
   const out: string[] = [];
   const err: string[] = [];
   try {
-    console.log = (line: unknown) => void out.push(String(line));
-    console.error = (line: unknown) => void err.push(String(line));
+    console.log = (line: unknown) => void out.push(plain(line));
+    console.error = (line: unknown) => void err.push(plain(line));
     await cmd(argv, { fail: (m) => { throw Error(m); } });
   } finally {
     console.log = log;
