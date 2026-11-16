@@ -7,7 +7,7 @@ import type { RunGroup } from "../core/group";
 import { isFlowActive, type CoordTask, type Flow, type LandEntry, type Loadout, type LoadoutsInfo, type Run, type RunBranch } from "../core/types";
 import type { Caller } from "./callers";
 import type { WorkState } from "../core/work";
-import { CoordError, CoordinatorHub, type CardSprout, type ChildResume, type CoordinatorDeps } from "./coordinator";
+import { CoordError, CoordinatorHub, MAX_BODY, type CardSprout, type ChildResume, type CoordinatorDeps } from "./coordinator";
 
 let runs: Map<string, Run>;
 let said: { id: string; text: string; cards?: string }[];
@@ -231,6 +231,63 @@ describe("the plan route", () => {
     expect(await h.handle(req, new URL(req.url), page)).toBeNull();
     const get = new Request("http://x/api/coordinator/plan");
     expect(await h.handle(get, new URL(get.url), page)).toBeNull();
+  });
+
+  test("a body sent in chunks, which names no length, is read no further than the cap", async () => {
+    const h = hub();
+    const seen = { sent: 0, cancelled: false };
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (seen.sent >= 1000) return c.close();
+        seen.sent++;
+        c.enqueue(new Uint8Array(1024).fill(32));
+      },
+      cancel() {
+        seen.cancelled = true;
+      },
+    });
+    const req = new Request("http://x/api/coordinator/plan", { method: "POST", body, headers: { "content-type": "application/json" } });
+    const res = await h.handle(req, new URL(req.url), page);
+    expect(res?.status).toBe(413);
+    expect(await res?.json()).toEqual({ error: "body too large" });
+    // the cap is 256 chunks: the read stops just past it, and a stream keeps one more ready
+    expect(seen.cancelled).toBe(true);
+    expect(seen.sent).toBeLessThan(MAX_BODY / 1024 + 10);
+    expect(cards()).toEqual([]);
+  });
+
+  test("a removed top card's number is never given again: the run's nextCard names the next one, and a plan numbered from it binds after as the brief says", async () => {
+    const h = hub();
+    expect(runs.get("co1")?.nextCard).toBeUndefined();
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" }), task({ title: "three" }), task({ title: "four" })] });
+    expect(runs.get("co1")?.nextCard).toBe(5);
+    expect(await post(h, "tasks", { run: "co1", id: "t4", remove: true })).toEqual({ status: 200, body: { ok: true, removed: "t4" } });
+    // the board ends at t3, and the run still says t5
+    expect(cards().map((t) => t.id)).toEqual(["t1", "t2", "t3"]);
+    expect(runs.get("co1")?.nextCard).toBe(5);
+    // C waits for B: from nextCard 5, A is t5, B t6 and C t7
+    const got = await post(h, "plan", { run: "co1", tasks: [task({ title: "A" }), task({ title: "B" }), task({ title: "C", after: ["t6"] })] });
+    expect(got.status).toBe(200);
+    expect((got.body["added"] as CoordTask[]).map((t) => [t.id, t.title, t.after ?? []])).toEqual([
+      ["t5", "A", []],
+      ["t6", "B", []],
+      ["t7", "C", ["t6"]],
+    ]);
+    expect(runs.get("co1")?.nextCard).toBe(8);
+    // the brief tells the coordinator to read it
+    const brief = await readFile(join(import.meta.dir, "../../lib/coordinator.md"), "utf8");
+    expect(brief).toContain("A plan's cards take numbers in order from `nextCard` on your run");
+  });
+
+  test("a hub with no count of its own numbers from the run's nextCard, so a removed number stays given", async () => {
+    const co = runs.get("co1");
+    if (!co) throw new Error("no co1");
+    co.tasks = [{ id: "t1", title: "one", repo: "web", note: "n", action: "ask", state: "proposed" }];
+    co.nextCard = 4;
+    const h = hub();
+    const got = await post(h, "plan", { run: "co1", tasks: [task()] });
+    expect((got.body["added"] as CoordTask[]).map((t) => t.id)).toEqual(["t4"]);
+    expect(co.nextCard).toBe(5);
   });
 });
 
@@ -586,6 +643,77 @@ describe("capacity (FR-036 plan 2)", () => {
     await settled(h);
     expect(cards().map((t) => t.state)).toEqual(["running", "running"]);
     expect(card("t2")?.outcome).toBeUndefined();
+  });
+
+  /** a hub whose governor holds every normal start while `held()`, and
+   *  says which card each start tried, at which priority */
+  function governed(held: () => boolean, tried: string[]): CoordinatorHub {
+    const h = hub({
+      startChild: async (coordId, t, priority) => {
+        tried.push(`${t.id} ${priority}`);
+        if (held() && priority !== "interactive") return { busy: HOLD };
+        if (busy.has(t.repo)) return { busy: `${t.repo} has 3 branch runs going` };
+        started.push({ coord: coordId, task: t.id });
+        const c = { id: `c${++n}`, repoId: t.repo, action: t.action, status: "working", startedAt: clock, steps: [], note: t.note, by: "coordinator", parent: coordId, branch: branch(`c${n}`) } as unknown as Run;
+        runs.set(c.id, c);
+        h.onRun(c);
+        return { run: c };
+      },
+    });
+    return h;
+  }
+
+  test("start anyway on a held card that is not first in the queue tries that card first, as interactive", async () => {
+    const tried: string[] = [];
+    const h = governed(() => true, tried);
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([["queued", HOLD], ["queued", HOLD]]);
+    await h.release("co1", "t2");
+    await settled(h);
+    expect(tried).toEqual(["t1 normal", "t2 interactive", "t1 normal"]);
+    expect(card("t2")?.state).toBe("running");
+    expect(card("t1")).toMatchObject({ state: "queued", outcome: HOLD });
+  });
+
+  test("start anyway on a card the pass cannot start answers 409 with the words it waits with, and does not let it go later", async () => {
+    let held = true;
+    const tried: string[] = [];
+    const h = governed(() => held, tried);
+    await post(h, "plan", { run: "co1", tasks: [task(), task({ title: "two", repo: "api" })] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    expect(cards().map((t) => [t.state, t.outcome])).toEqual([["queued", HOLD], ["queued", HOLD]]);
+    // api's slots fill up: t2 is never tried, and the governor's hold on t1 does not speak for it
+    full.add("api");
+    const refused = await h.release("co1", "t2").then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(refused instanceof CoordError ? [refused.status, refused.message] : refused).toEqual([409, "waiting for a branch slot in api"]);
+    expect(tried).toEqual(["t1 normal", "t1 normal"]);
+    expect(card("t2")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in api" });
+    // a slot frees and the governor lets go: t2 starts as normal work, not as the release
+    full.delete("api");
+    held = false;
+    h.wake(() => true);
+    await settled(h);
+    expect(cards().map((t) => t.state)).toEqual(["running", "running"]);
+    expect(tried.filter((x) => x.startsWith("t2"))).toEqual(["t2 normal"]);
+  });
+
+  test("start anyway on a card whose start finds no slot answers 409 with the slot's words", async () => {
+    const tried: string[] = [];
+    const h = governed(() => true, tried);
+    await post(h, "plan", { run: "co1", tasks: [task()] });
+    await post(h, "start", { run: "co1" });
+    await settled(h);
+    // repoFull still says there is room: the start itself finds none
+    busy.add("web");
+    await expect(h.release("co1", "t1")).rejects.toThrow("waiting for a branch slot in web");
+    expect(tried).toEqual(["t1 normal", "t1 interactive"]);
+    expect(card("t1")).toMatchObject({ state: "queued", outcome: "waiting for a branch slot in web" });
   });
 
   test("a child that hits the limit keeps its card waiting, resumes on its branch on a wake that says go, and fails the card on a second limit", async () => {

@@ -176,11 +176,13 @@ export function rejoins(review: RunReview, entry: Pick<LandEntry, "auto" | "appr
 }
 
 /** the refusal while a writer works on a branch: a follow-up's, a stopped
- *  flow's pickup's, a "fix it"'s and a card's resume after the limit's */
+ *  flow's pickup's, a "fix it"'s, a card's resume after the limit's and a
+ *  Linear session's message's */
 export const BRANCH_BUSY = "a run is working on this branch; say to it instead";
 
 /** the refusal while the PR watch holds a branch's open pull request: a
- *  follow-up's, a stopped flow's pickup's and a trigger's resume's */
+ *  follow-up's, a stopped flow's pickup's, a trigger's resume's, a card's
+ *  resume after the limit's and a Linear session's message's */
 export const PR_HELD = "it has an open pull request; comment on the PR and the PR watch fixes it";
 
 /** What else keeps a follow-up off a branch, beside a writer working on
@@ -194,8 +196,9 @@ export interface FollowupHolds {
 
 /** Why a branch's landing entry keeps a later writer off the branch, or
  *  null with no entry that does: the queue works it, it was sent back to
- *  its own "fix it", or it landed. A follow-up, a stopped flow's pickup
- *  and the manager's say box all say it in these words. */
+ *  its own "fix it", or it landed. A follow-up, a stopped flow's pickup,
+ *  a card's resume after the limit and the manager's say box all say it
+ *  in these words. */
 export function entryRefusal(entry: LandEntry | undefined): string | null {
   if (!entry) return null;
   if (entry.state === "landed") return "it has landed";

@@ -15,6 +15,7 @@
  *      "threadStartError": { "code": -32600, "message": "..." },
  *      "ignoreEof": false,                          // stay up after stdin closes
  *      "steer": "accept" | "reject",                // turn/steer's answer (accept)
+ *      "laterTurnError": { "code": -32600, "message": "..." },  // every turn/start after the first
  *      "turns": [ [ step, ... ], ... ] }            // one list per turn/start
  *
  *  Steps, run in order:
@@ -41,6 +42,7 @@ interface Scenario {
   threadStartError?: { code: number; message: string };
   ignoreEof?: boolean;
   steer?: "accept" | "reject";
+  laterTurnError?: { code: number; message: string };
   turns?: Step[][];
 }
 
@@ -166,6 +168,10 @@ function handle(m: Record<string, unknown>): void {
       return;
     }
     case "turn/start": {
+      if (turnSeq > 0 && scenario.laterTurnError) {
+        out({ id, error: scenario.laterTurnError });
+        return;
+      }
       turnSeq += 1;
       turn = `turn-${turnSeq}`;
       interruptSeen = false;

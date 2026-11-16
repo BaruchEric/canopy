@@ -185,20 +185,26 @@ says what is running, and a deploy that would recreate the shells container
 stops unless given `--shells`. A deploy of the commit already running changes
 nothing, so compose leaves every container up; `--restart` recreates the
 canopy container anyway, and the shells stay. Before an `up` that may recreate
-the canopy container, the host asks canopy on its published port what it has
-going (`GET /api/going`, which answers a caller with no token, as the host
-is): a run working or waiting on a prompt, a coordinator between turns with a
-card queued or running, a flow working or waiting, a fleet working, and a
-landing entry rebasing, in setup, at its gate or landing. A canopy from before
-that route answers 404 and is asked through its four lists (`/api/runs`,
-`/api/flows`, `/api/fleets`, `/api/landing`) instead. Any of those stops
-the deploy with exit 4 and a line for each (its id, repo and what it is doing);
-wait for them to finish, or rerun with `--force` to cut them off. `--force`
-does not stand in for `--shells`. The check is skipped when the dry run shows
-the canopy container staying up and `--restart` is not given, and a canopy that
-does not answer has nothing going, so the deploy carries on. The host needs
-`curl` and `jq` for it. By hand it is the same command as above; the
-canopy image rebuilds and its container is replaced. The rsync no longer
+the canopy container, the host asks canopy what it has going (`GET
+/api/going`, which answers a caller with no token, as the host is): a run
+working or waiting on a prompt, a coordinator between turns with a card queued
+or running, a flow working or waiting, a fleet working, and a landing entry
+rebasing, in setup, at its gate, running its scenarios or landing. It asks
+inside the canopy container (`docker exec canopy-canopy-1 bun -e ...`), not on
+the published port: canopy can serve the tunnel while the host has no port
+published, which is what a failed bind leaves. A canopy from before that route
+answers 404 and is asked through its four lists (`/api/runs`, `/api/flows`,
+`/api/fleets`, `/api/landing`) instead. Any of those stops the deploy with
+exit 4 and a line for each (its id, repo and what it is doing); wait for them
+to finish, or rerun with `--force` to cut them off. `--force` does not stand
+in for `--shells`. The check is skipped when the dry run shows the canopy
+container staying up and `--restart` is not given. When canopy cannot be
+asked, the deploy carries on only if its container is not running (stopped,
+restarting in a crash loop, or gone), since then nothing is going. A canopy
+whose container is running or paused but that does not answer within 10
+seconds stops the deploy with exit 4 too, since nothing says what a restart
+would cut off. The host needs `jq` for it. By hand it is the same command as
+above; the canopy image rebuilds and its container is replaced. The rsync no longer
 carries canopy's checkout, so an uncommitted change on the Mac never reaches
 the mini's build, and a dirty checkout on the mini is not fast-forwarded. Config in
 the `canopy-config` volume survives, and so do the shells: they are held by

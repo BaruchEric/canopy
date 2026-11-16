@@ -284,7 +284,7 @@ import { parseRemote } from "../core/remote";
 import { forgejoClose, forgejoComment, forgejoListIssues, forgejoReadIssue } from "./forgejo";
 import { authRoute, CallerBook, callerOf, CallerGate, callersMode, coordinatorRefusal, coordPort, loopbackAuthWanted, loopbackBypass, type Caller } from "./callers";
 import { getPeers, PeerError, postPeersSync, postRepoPeer, queuePass, withPeering, type PeerDeps } from "./peers";
-import { BRANCH_BUSY, PR_HELD, fixPrompt, followupRefusal, landWord, pickupRefusal } from "../core/landing";
+import { BRANCH_BUSY, PR_HELD, entryRefusal, fixPrompt, followupRefusal, landWord, pickupRefusal } from "../core/landing";
 import { GATES_CHECK, readGates } from "../core/gates";
 import { goingOf } from "../core/going";
 import { addRunTree, defaultBranch, pushRemote, removeRunTree, repoAtPath, revOf, runTreeDir } from "../core/worktree";
@@ -1851,8 +1851,10 @@ async function newGoal(state: ServerState, req: Request): Promise<Run> {
   coordRunnerOrRefuse(state);
   const type = (req.headers.get("content-type") ?? "").toLowerCase();
   if (!type.startsWith("multipart/form-data")) throw new HttpError(415, "send a goal as multipart/form-data");
-  if (Number(req.headers.get("content-length") ?? "0") > GOAL_FORM_MAX) throw new HttpError(413, GOAL_TOO_BIG);
-  const form = await req.formData().catch(() => null);
+  // read no further than the cap: a form sent in chunks names no length to refuse it by
+  const bytes = await bodyUpTo(req, GOAL_FORM_MAX);
+  if (!bytes) throw new HttpError(413, GOAL_TOO_BIG);
+  const form = await new Response(bytes, { headers: { "content-type": req.headers.get("content-type") ?? "" } }).formData().catch(() => null);
   if (!form) throw new HttpError(400, "the form could not be read");
   const text = (name: string): string => {
     const v = form.get(name);
@@ -2207,6 +2209,8 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
     await tools.release();
     if (err instanceof Error && err.name === "StageAwayError") throw err;
     if (isCapacityHeld(err)) throw err;
+    // full branch slots clear on their own: a 409 to a route, a wait to a card
+    if (err instanceof BranchCapError) throw new SlotsFullError(err.message);
     throw new HttpError(400, String(err instanceof Error ? err.message : err));
   }
 }
@@ -2214,8 +2218,9 @@ async function startBranchFix(state: ServerState, rec: LandingRun, reason: strin
 /** Whether a writer works on the branch `origin`, or is about to: a live
  *  run on it or one the stall watchdog is resuming, an active flow on it,
  *  or a later run between its check and its start. A follow-up, a stopped
- *  flow's pickup, a trigger event's resume, a landing "fix it" and a
- *  card's resume after the limit each refuse while it holds. */
+ *  flow's pickup, a trigger event's resume, a Linear session's message, a
+ *  landing "fix it" and a card's resume after the limit each refuse while
+ *  it holds. */
 function branchBusy(state: ServerState, origin: string): boolean {
   if (state.branchStarting.has(origin)) return true;
   if (state.runner.list().some((r) => r.branch?.origin === origin && (isRunActive(r) || state.stalls.starting(r.id)))) return true;
@@ -2621,6 +2626,16 @@ interface TreeRunHow {
 /** whether a workflow or another in-place run holds a repo's checkout */
 const checkoutInUse = (state: ServerState, repoId: string): boolean => (state.flows.activeFor(repoId) ?? state.runner.activeFor(repoId)) !== undefined;
 
+/** The workflow going in place on a kept tree's card, in words (`workflow
+ *  <id> (<verb>)`), from its start to its end. Between steps, gated at an
+ *  ask or running a step's check, it has no live run, so `runsInTrees`
+ *  does not see it. */
+function flowInTree(state: ServerState, dir: string): string | undefined {
+  const card = state.result.repos.find((r) => isTreeCard(r) && r.path === dir);
+  const flow = card ? state.flows.activeFor(card.id) : undefined;
+  return flow ? `workflow ${flow.id} (${flow.verb})` : undefined;
+}
+
 /** A tree card's run (FR-067): in place on the tree's own repo, no branch,
  *  with the coordinator as `parent` and never `child`. It runs `how.action`
  *  with that action's spec: the card's own on its first start, an ask on a
@@ -2818,17 +2833,22 @@ const AFTER_LIMIT = `The plan's usage window has reset. ${CARRY_ON}`;
 
 /** A coordinator's child that hit the plan's usage limit carries on on its
  *  branch, its session resumed, as a new child of the same coordinator.
- *  Never beside another writer on the branch, as a follow-up: the card
- *  waits, and its next wake tries again unless the card took that
- *  writer's run in the meantime. */
+ *  Never where a follow-up may not go: beside another writer on the
+ *  branch, on a branch with a landing entry (queued, sent back or landed),
+ *  or on a PR the PR watch fixes from its comments. The card waits, as it
+ *  does for full branch slots or the governor, and its next wake tries
+ *  again unless the card took another writer's run in the meantime. */
 async function resumeCoordChild(state: ServerState, coordId: string, child: Run, priority: Priority): Promise<ChildResume> {
   const rec = child.branch ? state.landing.record(child.branch.origin) : undefined;
   if (!rec) throw new Error("its branch is gone, so the card cannot carry on");
   if (branchBusy(state, rec.id)) return { busy: BRANCH_BUSY };
+  const held = entryRefusal(state.landing.info().entries.find((e) => e.id === rec.id));
+  if (held) return { busy: held };
+  if (state.prs.holds(rec.id)) return { busy: PR_HELD };
   try {
     return { run: await startingOn(state, rec.id, () => startBranchFix(state, rec, AFTER_LIMIT, "carry on after the limit", true, { priority, parent: coordId })) };
   } catch (err) {
-    if (isCapacityHeld(err)) return { busy: err.message };
+    if (err instanceof SlotsFullError || isCapacityHeld(err)) return { busy: err.message };
     throw err;
   }
 }
@@ -7407,14 +7427,20 @@ export async function startServer(opts: {
       },
       stopTree: (dir) => state.tasks.endTree(dir),
       // an agent waiting on its model uses no processor, so an active
-      // in-place run in a tree counts as at work there too (FR-067)
+      // in-place run in a tree counts as at work there too (FR-067), and so
+      // does a workflow on the tree's card between its steps
       working: async (dirs) => {
         const procs = await treesAtWork(dirs).catch(() => new Map<string, string>());
         const runs = runsInTrees(dirs, state.runner.list(), (id) => state.result.repos.find((r) => r.id === id)?.path);
-        return new Map([...procs, ...runs]);
+        const flows = dirs.flatMap((dir) => {
+          const flow = flowInTree(state, dir);
+          return flow ? [[dir, flow] as const] : [];
+        });
+        return new Map([...procs, ...runs, ...flows]);
       },
-      // the same runs, alone: a merge or a remove without force waits for them
-      runIn: (dir) => runsInTrees([dir], state.runner.list(), (id) => state.result.repos.find((r) => r.id === id)?.path).get(dir),
+      // the same flows and runs, alone: a merge, a remove without force and
+      // a clean-up wait for them
+      runIn: (dir) => flowInTree(state, dir) ?? runsInTrees([dir], state.runner.list(), (id) => state.result.repos.find((r) => r.id === id)?.path).get(dir),
       broadcast: (ev) => {
         broadcast(state, ev);
         // a tree made, or a merge ended: a card waiting for its tree may go
@@ -7648,12 +7674,16 @@ export async function startServer(opts: {
         return (await git(repo.path, ["merge-base", "--is-ancestor", head, "FETCH_HEAD"])).code === 0 ? null : remote;
       },
       // a message written in a Linear agent session, read by a run on the
-      // event's branch; fenced, since anyone in the workspace can write one
+      // event's branch; fenced, since anyone in the workspace can write one.
+      // Never a second writer on the branch, as a resume: not beside a run
+      // on it or starting there, and not on a PR the PR watch fixes
       followUp: async (event, text) => {
         const rec = event.branch ? state.landing.record(event.branch) : undefined;
         if (!rec) throw new HttpError(404, "its branch is gone, so delegate the issue again for a new run");
+        if (branchBusy(state, rec.id)) throw new TriggerError(BRANCH_BUSY);
+        if (state.prs.holds(rec.id)) throw new TriggerError(PR_HELD);
         const said = text.trim() ? fence("The message from Linear", text.trim()) : "Carry on with the task from where you stopped.";
-        return { run: await startBranchFix(state, rec, said, "follow-up", true) };
+        return { run: await startingOn(state, rec.id, () => startBranchFix(state, rec, said, "follow-up", true)) };
       },
       ...(process.env["CANOPY_PUBLIC_ORIGIN"] ? { origin: process.env["CANOPY_PUBLIC_ORIGIN"] } : {}),
       work: {

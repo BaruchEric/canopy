@@ -865,7 +865,9 @@ export class CodexDriver implements RunDriver {
   }
 
   /** One message as a turn. The first one's failure fails the run; a later
-   *  one in a chat is a failed reply, and the chat goes on. */
+   *  one in a chat is a failed reply, and the chat goes on. A later one in
+   *  a job (a person's words the last turn did not take) fails the job,
+   *  and the server goes, as after any job's turn. */
   private async send(text: string, first: boolean): Promise<void> {
     const rpc = this.rpc;
     const ctx = this.ctx;
@@ -892,6 +894,8 @@ export class CodexDriver implements RunDriver {
         return;
       }
       ctx.result({ text: "", ...NO_COST, durationMs: 0, turns: this.fold.turns }, `codex refused the message: ${errText(err)}`);
+      // the job ended on that result; left open, the server would never exit
+      if (!ctx.chat) this.close();
     }
   }
 

@@ -1682,6 +1682,43 @@ describe("a stage that waits on a prompt (incubator review, P2)", () => {
     expect(now(w, s.id).status).toBe("clarifying");
     expect(now(w, s.id).parks ?? []).toHaveLength(0);
   });
+
+  test("a resume that leaves the prompt unanswered puts the stage back on the clock, so it parks again past the cap", async () => {
+    let clock = 1_000;
+    const w = world({ now: () => clock });
+    const s = await w.inc.create(intake({ text: "x" }));
+    await w.inc.idle();
+    const id = now(w, s.id).flows[0]?.flowId ?? "";
+    w.flows.move(id, { status: "waiting" });
+    await w.inc.idle();
+    clock += STAGE_WAIT_MAX;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("parked");
+    // resume is all the sheet offers for this park: the flow is not gated, so nothing reaches it
+    await w.inc.resume(s.id, "continue");
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    expect(w.flows.resumed).toEqual([]);
+    clock += STAGE_WAIT_MAX - 1;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).status).toBe("clarifying");
+    clock += 1;
+    w.inc.tick();
+    await w.inc.idle();
+    const parked = now(w, s.id);
+    expect(parked.status).toBe("parked");
+    expect(parked.parked).toBe(REASON);
+    expect(parked.parks).toHaveLength(2);
+    expect(w.flows.get(id)?.status).toBe("waiting");
+    expect(holdsSlot(parked, "waiting")).toBe(true);
+    // and once for that wait, as before
+    clock += STAGE_WAIT_MAX;
+    w.inc.tick();
+    await w.inc.idle();
+    expect(now(w, s.id).parks).toHaveLength(2);
+  });
 });
 
 describe("a second clarify cut short", () => {

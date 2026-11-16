@@ -671,7 +671,7 @@ export function SproutSheet({ id }: { id: string }) {
       </div>
       <footer className="sheet-foot">
         {ended ? (
-          <button type="button" className="mini" disabled={busy} title="Off the list; the seed, the inputs and the vault note stay" onClick={() => act(() => dismissSprout(id).then(close))}>
+          <button type="button" className="mini" disabled={busy} title="Off the list; the seed and the vault note stay, and the record and the raw inputs are deleted two weeks later" onClick={() => act(() => dismissSprout(id).then(close))}>
             dismiss
           </button>
         ) : (

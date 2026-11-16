@@ -68,9 +68,10 @@ export interface TreesDeps {
    *  what in words ("bun test"); a tree that follows waits on it. Left out,
    *  or failing, nothing is taken to be at work. */
   working?: (dirs: readonly string[]) => Promise<ReadonlyMap<string, string>>;
-  /** the run at work in place in a tree folder, in words (`run <id>
-   *  (<verb>)`), Eric's own runs included; a merge, and a remove without
-   *  force, refuse while one is. Left out, none is. */
+  /** the run or workflow at work in place in a tree folder, in words
+   *  (`run <id> (<verb>)`, `workflow <id> (<verb>)`), Eric's own included;
+   *  a merge, a remove without force and a clean-up refuse while one is.
+   *  Left out, none is. */
   runIn?: (dir: string) => string | undefined;
   broadcast: (ev: ServerEvent) => void;
   /** the port range, in place of `CANOPY_TREE_PORTS` */
@@ -401,8 +402,8 @@ export class BranchTrees {
   }
 
   /** A merge commits, rebases and removes the folder, and a remove takes
-   *  it away: neither goes while a run works in place in the tree, which
-   *  would fail with its files gone. Synchronous, so a merge marks its
+   *  it away: neither goes while a run works in place in the tree or a
+   *  workflow goes on its card, which would fail with its files gone. Synchronous, so a merge marks its
    *  record merging in the same stretch as this check. */
   private refuseRunIn(repoPath: string, t: BranchTreeRecord): void {
     const work = this.deps.runIn?.(treeDir(repoPath, t.slug, this.root));
@@ -531,9 +532,10 @@ export class BranchTrees {
 
   /** worktrunk's clean-up, for one repo or every one: each ready tree whose
    *  base holds all its commits, with nothing changed or open in it and no
-   *  run at work in it, goes with its branch. A coordinator's card that has
-   *  just started in a fresh tree looks clean until it writes, so the run
-   *  is what holds it. The trees removed. */
+   *  run or workflow at work in it, goes with its branch. A coordinator's
+   *  card that has just started in a fresh tree looks clean until it
+   *  writes, and a gated workflow may have changed nothing yet, so the run
+   *  or the workflow is what holds it. The trees removed. */
   async clean(repo: Repo | null): Promise<CleanedTree[]> {
     const removed: CleanedTree[] = [];
     for (const r of repo ? [repo] : this.local()) {

@@ -4,6 +4,7 @@
  *  line holds an id, a repo and a state and never an agent's words: no
  *  progress line, no note, no branch or step name. Pure and tested. */
 
+import { WORKING } from "./landing";
 import type { Fleet, Flow, LandEntry, Run } from "./types";
 
 export interface Going {
@@ -15,14 +16,16 @@ export interface Going {
   doing: string;
 }
 
-const LANDING_BUSY: ReadonlySet<string> = new Set(["rebasing", "setup", "gate", "landing"]);
 const FLEET_SHOWN = 3;
 
 /** The work a restart would cut off: a run working or waiting on a prompt, a
  *  coordinator between turns with a card queued or running (a restart drops
  *  its queue), a flow working or waiting, a fleet working, and a landing
- *  entry rebasing, in setup, at its gate or landing. A chat that is idle and
- *  anything that has ended are not work going. */
+ *  entry the loop is working (`WORKING`: rebasing, in setup, at its gate,
+ *  running its scenarios or landing), which a restart sends back to the
+ *  queue to start again. A chat that is idle and anything that has ended are
+ *  not work going. A landing line names its gate but not its scenario, since
+ *  a holdout scenario's name is only for a caller with a token. */
 export function goingOf(runs: readonly Run[], flows: readonly Flow[], fleets: readonly Fleet[], landing: readonly LandEntry[]): Going[] {
   const out: Going[] = [];
   for (const r of runs) {
@@ -45,8 +48,8 @@ export function goingOf(runs: readonly Run[], flows: readonly Flow[], fleets: re
     out.push({ kind: "fleet", id: f.id, repo: `${ids.slice(0, FLEET_SHOWN).join(", ")}${more > 0 ? ` and ${more} more` : ""}`, doing: f.verb });
   }
   for (const e of landing) {
-    if (!LANDING_BUSY.has(e.state)) continue;
-    out.push({ kind: "landing", id: e.id, repo: e.repoId, doing: `${e.state}${e.gate ? ` (${e.gate})` : ""}` });
+    if (!WORKING.has(e.state)) continue;
+    out.push({ kind: "landing", id: e.id, repo: e.repoId, doing: `${e.state}${e.state === "gate" && e.gate ? ` (${e.gate})` : ""}` });
   }
   return out;
 }

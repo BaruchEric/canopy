@@ -24,8 +24,8 @@
 #             nothing in it; the shells stay
 #   --force   go ahead when recreating the canopy container would cut off
 #             work it has going (runs, coordinators' cards, flows, fleets,
-#             the landing queue);
-#             it does not stand in for --shells
+#             the landing queue), or a running canopy cannot say what it
+#             has going; it does not stand in for --shells
 #   --expect  refuse unless the checkout's HEAD is this commit after pulling
 #   status    what is deployed and running
 #   log       the last deploy's log
@@ -350,39 +350,63 @@ job() {
   fi
   # Recreating canopy cuts off what it has going: a run working or waiting on
   # a prompt, a coordinator with cards queued or running, a flow or fleet
-  # mid-step, a landing entry rebasing, in setup, at its gate or landing. Any of those stops the deploy with exit 4 unless
+  # mid-step, a landing entry rebasing, in setup, at its gate, running its
+  # scenarios or landing. Any of those stops the deploy with exit 4 unless
   # --force. Only a plan that leaves canopy running as it is (the same commit
   # rebuilds to the same image) without --restart skips the check; a plan
-  # this cannot read is checked. A canopy that does not answer has nothing going.
+  # this cannot read is checked. canopy is asked inside its container, where
+  # it serves whether or not the host has its port: a failed bind publishes
+  # none, and the tunnel reaches canopy all the same. A canopy that cannot be
+  # asked has nothing going only when its container is not running; one
+  # whose container runs (or is paused) but that does not answer stops the
+  # deploy with exit 4 as well, since this cannot tell what a restart would
+  # cut off.
   if [ "$force" != 1 ] && { [ "$restart" = 1 ] || ! grep -q 'canopy-canopy-1.*Running' <<<"$plan" ||
     grep -Eq 'canopy-(canopy|shells)-1.*Recreate' <<<"$plan"; }; then
-    # not the coordinator bridge's gateway (published onto the
-    # coordinator's own listener, which refuses this host's checks): they
-    # go to canopy's own address
-    addr=$(docker port canopy-shells-1 7850 2>/dev/null | grep -v '^10\.250\.14\.1:' | head -1 || true)
+    # GET one of canopy's routes from inside its container, where the
+    # readiness probe below asks too: the body on a 2xx, exit 22 on another
+    # status (as curl -f), any other code when canopy could not be asked (no
+    # container to run in, no answer within 10 seconds)
+    ask_canopy() {
+      docker exec canopy-canopy-1 bun -e '
+        try {
+          const res = await fetch("http://127.0.0.1:7850/api/" + process.argv[1], { signal: AbortSignal.timeout(10000) });
+          if (!res.ok) process.exit(22);
+          await Bun.write(Bun.stdout, await res.text());
+        } catch { process.exit(7); }
+      ' "$1" 2>/dev/null
+    }
     got=0
     older=0
-    if [ -n "$addr" ]; then
-      # /api/going is what canopy has going, and it answers a caller with no
-      # token, which this host is. A canopy from before that route (a 404)
-      # is asked the old way, through the four lists it still tells anyone.
-      # Once every backend has been deployed from a canopy with /api/going,
-      # the older branch below can go.
-      going=$(curl -fsS -m 10 "http://$addr/api/going" 2>/dev/null) || got=$?
-      if [ "$got" = 22 ]; then
-        got=0
-        older=1
-        runs=$(curl -fsS -m 10 "http://$addr/api/runs" 2>/dev/null) || got=$?
-      fi
+    # /api/going is what canopy has going, and it answers a caller with no
+    # token, which this host is. A canopy from before that route (a 404)
+    # is asked the old way, through the four lists it still tells anyone.
+    # Once every backend has been deployed from a canopy with /api/going,
+    # the older branch below can go.
+    going=$(ask_canopy going) || got=$?
+    if [ "$got" = 22 ]; then
+      got=0
+      older=1
+      runs=$(ask_canopy runs) || got=$?
     fi
-    if [ -z "$addr" ] || { [ "$got" != 0 ] && [ "$got" != 22 ]; }; then
-      echo "canopy is not answering${addr:+ on $addr}, so nothing there is cut off"
+    if [ "$got" != 0 ] && [ "$got" != 22 ]; then
+      # a restarting container (a crash loop) holds no canopy to cut off; a
+      # paused one holds canopy as it was
+      state=$(docker inspect -f '{{.State.Status}}' canopy-canopy-1 2>/dev/null || true)
+      case $state in
+        running | paused)
+          echo "canopy's container is $state, but canopy did not say what it has going, so this cannot tell what a restart cuts off."
+          echo "check canopy, or run it again with --force."
+          return 4
+          ;;
+      esac
+      echo "canopy is not running${state:+ (its container is $state)}, so nothing there is cut off"
     elif [ "$got" = 22 ]; then
-      echo "canopy answers on $addr but would not say what it has going, so this cannot tell what a restart cuts off."
+      echo "canopy answers but would not say what it has going, so this cannot tell what a restart cuts off."
       echo "check canopy, or run it again with --force."
       return 1
     elif ! command -v jq >/dev/null 2>&1; then
-      echo "canopy answers on $addr, but this host has no jq to read what it has going."
+      echo "canopy answers, but this host has no jq to read what it has going."
       echo "install jq, or run it again with --force."
       return 1
     else
@@ -396,22 +420,23 @@ job() {
             | "  run \(.id)  \(.repoId)  \(.verb), \(if .status == "waiting" then "waiting on a prompt"
               elif .status == "idle" then "idle with \($cards) card\(if $cards == 1 then "" else "s" end) queued or running"
               elif (.progress // "") != "" then .progress else "working" end)"' <<<"$runs"
-          curl -fsS -m 10 "http://$addr/api/flows" 2>/dev/null | jq -r '.[] | select(.status == "working" or .status == "waiting")
+          ask_canopy flows | jq -r '.[] | select(.status == "working" or .status == "waiting")
             | "  flow \(.id)  \(.repoId)  \(.verb), at step \(.steps[.current].name // .current)\(if .status == "waiting" then ", waiting on a prompt" else "" end)"'
-          curl -fsS -m 10 "http://$addr/api/fleets" 2>/dev/null | jq -r '.[] | select(.status == "working")
+          ask_canopy fleets | jq -r '.[] | select(.status == "working")
             | [.repos[].repoId] as $r
             | "  fleet \(.id)  \($r[:3] | join(", "))\(if ($r | length) > 3 then " and \(($r | length) - 3) more" else "" end)  \(.verb)"'
-          curl -fsS -m 10 "http://$addr/api/landing" 2>/dev/null | jq -r '.entries[]?
-            | select(.state == "rebasing" or .state == "setup" or .state == "gate" or .state == "landing")
+          ask_canopy landing | jq -r '.entries[]?
+            | select(.state == "rebasing" or .state == "setup" or .state == "gate" or .state == "scenarios" or .state == "landing")
             | "  landing \(.id)  \(.repoId)  \(.state)\(if .gate then " (\(.gate))" else "" end), \(.branch)"'
         )
       else
         # canopy picks what counts (src/core/going.ts): a run working or
         # waiting on a prompt, a coordinator between turns with a card queued
         # or running, a flow working or waiting, a fleet working, a landing
-        # entry rebasing, in setup, at its gate or landing
+        # entry rebasing, in setup, at its gate, running its scenarios or
+        # landing
         work=$(jq -r '.going[] | "  \(.kind) \(.id)  \(.repo)  \(.doing)"' <<<"$going" 2>/dev/null) || {
-          echo "canopy answers on $addr, but what it said it has going could not be read."
+          echo "canopy answers, but what it said it has going could not be read."
           echo "check canopy, or run it again with --force."
           return 1
         }

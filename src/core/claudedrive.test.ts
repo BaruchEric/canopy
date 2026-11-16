@@ -1091,6 +1091,65 @@ describe("a person steering a Claude run (FR-066)", () => {
     expect(run.error).toBe("interrupted");
   });
 
+  test("the turn a steer starts is a turn like any other: no hold for the watchdog, and stop & send stops it", async () => {
+    const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_MS: "300", FAKE_STEER_NEXT_MS: "1000" } });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");
+    d.driver.steer("use bun");
+    await d.until((r) => r.steps.some((s) => s.text === "working on: use bun"), "the steered turn");
+    // the first turn's result is still held, for this turn's own
+    expect(d.driver.holding()).toBe(false);
+    expect(d.driver.interrupt()).toBe(true);
+    expect(d.driver.steer("then test it")).toBe(true);
+    const run = await d.until(d.done, "the end");
+    expect([run.status, run.error]).toEqual(["done", undefined]);
+    expect(texts(run.steps)).toEqual(["working on: build it", "reply 1", "working on: use bun", "working on: then test it", "reply 3"]);
+    expect(run.result).toMatchObject({ text: "reply 3", turns: 3, costUsd: 0.03 });
+  });
+
+  test("the turn a subagent's end wakes is stopped like any other: no hold, and its result no failure", async () => {
+    const d = await drive("steer", "hello", undefined, {
+      chat: true,
+      env: { FAKE_STEER_MS: "100", FAKE_STEER_NEXT_MS: "5000", FAKE_STEER_AGENT_MS: "300", FAKE_STEER_AGENT_END: "wake" },
+    });
+    await d.until((r) => r.steps.some((s) => s.text === "working on: the subagent's results"), "the woken turn");
+    expect(d.driver.holding()).toBe(false);
+    expect(d.driver.interrupt()).toBe(true);
+    const run = await d.until((r) => r.status === "idle", "the stop");
+    expect(run.error).toBeUndefined();
+    expect(run.steps.some((s) => s.kind === "note")).toBe(false);
+    // the held first turn and the stopped one
+    expect(run.result?.turns).toBe(2);
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  test("a chat stopped while a background subagent runs waits again with nothing said failed, though the subagent's end wakes no turn", async () => {
+    const d = await drive("steer", "hello", undefined, { chat: true, heldGraceMs: 50, env: { FAKE_STEER_MS: "5000", FAKE_STEER_AGENT_MS: "300" } });
+    await d.until(() => d.driver.holding(), "the subagent");
+    expect(d.driver.interrupt()).toBe(true);
+    const run = await d.until((r) => r.status === "idle", "the stop");
+    expect(run.error).toBeUndefined();
+    // never the CLI's "[ede_diagnostic] ..." as a failed reply
+    expect(run.steps.some((s) => s.kind === "note")).toBe(false);
+    d.ctx.ending = true;
+    d.driver.stop();
+    await d.until(d.done, "the end");
+  });
+
+  for (const end of ["quiet", "exit"] as const) {
+    test(`a job stopped while a background subagent runs ends interrupted when ${end === "quiet" ? "the subagent's end wakes no turn" : "the CLI exits with that result held"}`, async () => {
+      const d = await drive("steer", "build it", undefined, {
+        heldGraceMs: end === "quiet" ? 50 : 60_000,
+        env: { FAKE_STEER_MS: "5000", FAKE_STEER_AGENT_MS: "300", FAKE_STEER_AGENT_END: end },
+      });
+      await d.until(() => d.driver.holding(), "the subagent");
+      expect(d.driver.interrupt()).toBe(true);
+      const run = await d.until(d.done, "the end");
+      expect([run.status, run.error]).toEqual(["failed", "interrupted"]);
+    });
+  }
+
   test("a steer the CLI never takes holds the result only for the steer's grace", async () => {
     const d = await drive("steer", "build it", undefined, { env: { FAKE_STEER_SILENT: "1", FAKE_STEER_MS: "200" }, steerGraceMs: 250 });
     await d.until((r) => r.steps.some((s) => s.text === "working on: build it"), "the turn");

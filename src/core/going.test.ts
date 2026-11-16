@@ -43,14 +43,16 @@ describe("what a restart would cut off", () => {
     ]);
   });
 
-  test("a landing entry counts while it rebases, sets up, runs its gate or lands", () => {
-    const states: LandEntry["state"][] = ["queued", "rebasing", "setup", "gate", "landing", "landed", "waiting", "conflict", "red", "moved"];
-    const got = goingOf([], [], [], states.map((state, i) => entry({ id: `l${i}`, state, ...(state === "gate" ? { gate: "typecheck" } : {}) })));
-    expect(got.map((g) => `${g.id} ${g.doing}`)).toEqual(["l1 rebasing", "l2 setup", "l3 gate (typecheck)", "l4 landing"]);
+  test("a landing entry counts while it rebases, sets up, runs its gate or its scenarios, or lands", () => {
+    const states: LandEntry["state"][] = ["queued", "rebasing", "setup", "gate", "scenarios", "landing", "landed", "waiting", "judge", "conflict", "red", "moved"];
+    // the scenarios state keeps the scenario's name where the gate's goes
+    const named: Partial<Record<LandEntry["state"], string>> = { gate: "typecheck", scenarios: "checkout-flow", judge: "checkout-flow" };
+    const got = goingOf([], [], [], states.map((state, i) => entry({ id: `l${i}`, state, ...(named[state] ? { gate: named[state] } : {}) })));
+    expect(got.map((g) => `${g.id} ${g.doing}`)).toEqual(["l1 rebasing", "l2 setup", "l3 gate (typecheck)", "l4 scenarios", "l5 landing"]);
   });
 
-  test("no line carries an agent's words: no progress, note, branch or step name", () => {
-    const text = JSON.stringify(goingOf([run({}), run({ id: "w", status: "waiting" })], [flow({})], [fleet({ repos: [{ repoId: "a" }] })], [entry({})]));
-    for (const leak of ["reading .env", "secret plan", "all of them", "fix-the-login", "fix the login", "deploy", "/dev/apps/web", "/tmp/x"]) expect(text).not.toContain(leak);
+  test("no line carries an agent's words: no progress, note, branch, step or scenario name", () => {
+    const text = JSON.stringify(goingOf([run({}), run({ id: "w", status: "waiting" })], [flow({})], [fleet({ repos: [{ repoId: "a" }] })], [entry({}), entry({ id: "l2", state: "scenarios", gate: "refund-holdout" })]));
+    for (const leak of ["reading .env", "secret plan", "all of them", "fix-the-login", "fix the login", "deploy", "/dev/apps/web", "/tmp/x", "refund-holdout"]) expect(text).not.toContain(leak);
   });
 });

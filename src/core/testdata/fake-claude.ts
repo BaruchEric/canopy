@@ -69,7 +69,11 @@
  *          the result says "took" it). FAKE_STEER_SILENT=1 swallows such a
  *          message: never echoed, never run. An `interrupt` control request
  *          ends the running turn with the CLI's interrupt marker and an
- *          error_during_execution result.
+ *          error_during_execution result. With FAKE_STEER_AGENT_MS the
+ *          first turn starts a background Agent, which ends that long
+ *          after (its task_notification and an empty task list); then
+ *          FAKE_STEER_AGENT_END=wake starts a turn on its results when
+ *          none runs, =exit exits 0, and anything else sends nothing more.
  *
  *  Host control requests (set_permission_mode) are answered the way the
  *  real CLI did (spec P3, P8): a bypass is refused without
@@ -370,14 +374,31 @@ const echo = (text: string) => {
   if (replays) out({ type: "user", session_id: "sess-1", message: { role: "user", content: text }, isReplay: true });
 };
 
-function steerStart(text: string): void {
+/** a turn; one the CLI starts on its own (a subagent's end) echoes nothing */
+function steerStart(text: string, sent = true): void {
   steerBusy = true;
   steerTurns += 1;
   if (steerTurns > 1) sys("init", { cwd: process.cwd() });
-  echo(text);
+  if (sent) echo(text);
   out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "text", text: `working on: ${text}` }] } });
+  if (steerTurns === 1 && process.env["FAKE_STEER_AGENT_MS"]) steerAgent(Number(process.env["FAKE_STEER_AGENT_MS"]));
   const ms = (steerTurns > 1 ? process.env["FAKE_STEER_NEXT_MS"] : undefined) ?? process.env["FAKE_STEER_MS"] ?? 300;
   steerTimer = setTimeout(() => steerEnd(false), Number(ms));
+}
+
+/** a background Agent that ends `ms` later, as the async modes' does */
+function steerAgent(ms: number): void {
+  out({ type: "assistant", session_id: "sess-1", message: { role: "assistant", content: [{ type: "tool_use", id: "ag1", name: "Agent", input: { description: "read math.ts", subagent_type: "Explore", prompt: "read it" } }] } });
+  tasks([{ task_id: "t-ag", task_type: "local_agent" }]);
+  sys("task_started", { task_id: "t-ag", tool_use_id: "ag1", task_type: "local_agent", is_backgrounded: true });
+  toolResult("ag1", "Async agent launched successfully.");
+  setTimeout(() => {
+    sys("task_notification", { task_id: "t-ag", tool_use_id: "ag1", status: "completed" });
+    tasks([]);
+    const end = process.env["FAKE_STEER_AGENT_END"];
+    if (end === "exit") process.exit(0);
+    if (end === "wake" && !steerBusy) steerStart("the subagent's results", false);
+  }, ms);
 }
 
 function steerEnd(interrupted: boolean): void {

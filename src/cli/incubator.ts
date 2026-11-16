@@ -259,7 +259,7 @@ export async function incubatorCommand(argv: string[], { fail }: { fail: Fail })
     case "dismiss": {
       const id = only("usage: canopy incubator dismiss <id>");
       await call<unknown>(backend, "DELETE", `/api/incubator${one(id)}`, undefined, fail);
-      console.log(`${id} is off the list; its seed, inputs and vault note stay`);
+      console.log(`${id} is off the list; its seed and vault note stay, and its record and raw inputs are deleted in two weeks`);
       return;
     }
     case "add": {

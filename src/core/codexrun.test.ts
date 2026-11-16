@@ -589,6 +589,7 @@ interface Scenario {
   threadStartError?: { code: number; message: string };
   ignoreEof?: boolean;
   steer?: "accept" | "reject";
+  laterTurnError?: { code: number; message: string };
   turns?: Step[][];
 }
 
@@ -1470,6 +1471,26 @@ describe("a person steering a Codex run (FR-066)", () => {
     expect(run.result?.turns).toBe(2);
     const turns = requests(await d.sent(), "turn/start").map((m) => m["params"] as { input: { text: string }[] });
     expect(turns[1]?.input[0]?.text).toBe("then test it");
+  });
+
+  test("a job whose next turn codex refuses fails, and its server is closed, so the run's end settles", async () => {
+    const d = await drive(() => ({
+      steer: "reject",
+      laterTurnError: { code: -32600, message: "turn already in progress" },
+      turns: [[agentMessage("m0", "on it", "commentary"), { sleep: 300 }, agentMessage("m1", "first"), { complete: "completed" }]],
+    }));
+    await d.until((r) => texts(r).includes("on it"), "the turn");
+    d.driver.steer("then test it");
+    const run = await d.until(d.ended, "the end");
+    expect([run.status, run.error]).toEqual(["failed", "codex refused the message: turn already in progress"]);
+    // stdin closes and the server exits, as after any job's turn: the Runner
+    // waits on that exit before it reads the run's end
+    let log = await d.sent();
+    for (let i = 0; i < 100 && !log.some((m) => m["eof"]); i++) {
+      await Bun.sleep(20);
+      log = await d.sent();
+    }
+    expect(log.some((m) => m["eof"])).toBe(true);
   });
 
   test("interrupt and a message behind it: the turn stops and the message runs to the job's end", async () => {

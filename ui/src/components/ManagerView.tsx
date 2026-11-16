@@ -19,7 +19,6 @@ import { isSeedId } from "../../../src/core/sprout";
 import type { CoordTask, Loadout, Run, RunCardAction } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { cardCounts } from "../coord";
-import { gateButtons, gateWords } from "../flows";
 import { scopeOffers } from "../inbox";
 import { needsApproval, sentBack } from "../landing";
 import { openView } from "../clirun";
@@ -31,6 +30,7 @@ import { harnessOf } from "../runs";
 import { connOf, idParts, idText, landingAll, prsAll, recordsIn, useStore, type CanopyState } from "../store";
 import { HoldButton } from "./CoordTasks";
 import { EquipSheet } from "./EquipSheet";
+import { GateChoices, useGateGuard } from "./FlowSheet";
 import { GoalComposer } from "./GoalComposer";
 import { RunPromptForm } from "./Prompts";
 import { useNow } from "./Registry";
@@ -560,24 +560,14 @@ function PromptAnswer({ need, act }: { need: Need; act: Act }) {
   );
 }
 
-/** A card's flow parked at a gate: the gate's own buttons, and stop here. */
+/** A card's flow parked at a gate: the gate's own buttons, and stop here,
+ *  one answer at a time as the flow sheet's (`useGateGuard`). */
 function GateAnswer({ need, act }: { need: Need; act: Act }) {
   const flow = useStore((s) => (need.flowId ? s.flows[need.flowId] : undefined));
   const resumeFlow = useStore((s) => s.resumeFlow);
+  const guard = useGateGuard(flow);
   if (!flow) return null;
-  const words = gateWords(flow);
-  return (
-    <div className="mgr-need-acts">
-      {gateButtons(words).map((b) => (
-        <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} title={b.title} onClick={() => void act(() => resumeFlow(flow.id, b.choice))}>
-          {b.word}
-        </button>
-      ))}
-      <button type="button" className="mini" title={words.stopTitle} onClick={() => void act(() => resumeFlow(flow.id, "stop"))}>
-        {words.stop}
-      </button>
-    </div>
-  );
+  return <GateChoices flow={flow} off={guard.off} className="mgr-need-acts" onChoose={(c) => guard.choose(() => act(() => resumeFlow(flow.id, c)))} />;
 }
 
 /** A card's branch the queue leaves to Eric, told apart by what the queue

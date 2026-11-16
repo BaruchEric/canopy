@@ -4,10 +4,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProbeResult } from "../core/health";
+import { BRANCH_BUSY } from "../core/landing";
 import type { Incoming, TriggerEvent, TriggerRule } from "../core/trigger";
 import type { Flow, LandEntry, LandNotice, PrWatch, Repo, Run } from "../core/types";
 import { LinearError } from "./linear";
-import { MAX_BODY, signatureOk, TriggerHub, type AgentSay, type StartOutcome, type TriggerDeps } from "./triggers";
+import { MAX_BODY, signatureOk, TriggerError, TriggerHub, type AgentSay, type StartOutcome, type TriggerDeps } from "./triggers";
 
 const SECRET = "s3cret";
 const REPO = { id: "web/shop", name: "shop", path: "/dev/web/shop" } as Repo;
@@ -126,6 +127,29 @@ describe("the hook", () => {
     await h.adopt();
     const res = await h.handle(hookReq(issueBody(), sign("other")), new URL("http://x/api/hooks/sentry/shop"));
     expect(res?.status).toBe(401);
+    expect(h.list()).toEqual([]);
+  });
+
+  test("a body sent in chunks, which names no length, is read no further than the cap", async () => {
+    const h = hub();
+    await h.adopt();
+    const seen = { sent: 0, cancelled: false };
+    const body = new ReadableStream<Uint8Array>({
+      pull(c) {
+        if (seen.sent >= 64) return c.close();
+        seen.sent++;
+        c.enqueue(new Uint8Array(64 * 1024).fill(32));
+      },
+      cancel() {
+        seen.cancelled = true;
+      },
+    });
+    const req = new Request("http://x/api/hooks/sentry/shop", { method: "POST", body, headers: { "sentry-hook-signature": sign("{}"), "sentry-hook-resource": "issue" } });
+    const res = await h.handle(req, new URL("http://x/api/hooks/sentry/shop"));
+    expect(res?.status).toBe(413);
+    // a MiB is the cap, sixteen chunks: the read stops just past it, with four MiB on offer
+    expect(seen.cancelled).toBe(true);
+    expect(seen.sent).toBeLessThan(32);
     expect(h.list()).toEqual([]);
   });
 
@@ -671,6 +695,27 @@ describe("the linear agent", () => {
     expect(follows).toEqual(["br1:also the tooltip"]);
     expect(h.list()[0]).toMatchObject({ status: "working", runId: "r2" });
     expect(said().at(-1)).toBe("action: web/shop, on a branch of its own");
+  });
+
+  test("a message its branch cannot take now is told why, and the event stays stopped", async () => {
+    const h = agentHub({
+      followUp: async () => {
+        throw new TriggerError(BRANCH_BUSY);
+      },
+    });
+    await h.adopt();
+    await h.handle(req(body("created")), URL_);
+    await h.idle();
+    const r = runs[0] as Run;
+    h.onRun({ ...r, status: "stopped" });
+    await h.idle();
+    told = [];
+    expect(await (await h.handle(req(body("prompted", { agentActivity: { body: "also the tooltip" } })), URL_))?.json()).toEqual({ kind: "accepted" });
+    // the refusal reaches the session a few turns after the follow-up's own queue settles
+    await h.idle();
+    await h.idle();
+    expect(said()).toEqual([`error: ${BRANCH_BUSY}`]);
+    expect(h.list()[0]).toMatchObject({ status: "stopped", runId: "r1" });
   });
 
   test("the PR goes on the session as a link, not a comment, and the merge moves the issue with the app's token", async () => {

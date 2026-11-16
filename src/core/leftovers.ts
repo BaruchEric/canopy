@@ -56,6 +56,13 @@ async function folderTime(path: string): Promise<number | null> {
   return st?.isDirectory() ? st.mtimeMs : null;
 }
 
+/** a real folder's ctime, ms; null for a link, a file or nothing. A rename
+ *  moves the ctime and leaves the mtime. */
+async function changeTime(path: string): Promise<number | null> {
+  const st = await lstat(path).catch(() => null);
+  return st?.isDirectory() ? st.ctimeMs : null;
+}
+
 const there = (path: string): Promise<boolean> =>
   lstat(path).then(
     () => true,
@@ -111,7 +118,10 @@ export async function sweepLeftovers(at: LeftoverPlaces, sprouts: readonly Pick<
   for (const id of dismissed) {
     // its shared copies first, so a sweep that could not take them tries again
     const left = await Promise.all(SHARED_KINDS.map((kind) => there(join(shared, kind, id))));
-    if (!left.some(Boolean)) await takeOld(join(dismissedDir, id), DISMISSED_KEEP);
+    // one dismissed before the store set its time kept its last save's
+    // mtime, and the move set only its ctime
+    const record = join(dismissedDir, id);
+    if (!left.some(Boolean)) await takeOld(record, DISMISSED_KEEP, await changeTime(record));
   }
   return gone;
 }

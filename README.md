@@ -96,7 +96,7 @@ canopy incubator [list] [--json]   # the projects: id, status, title, and why ea
 canopy incubator show <id> [--json]   # one project: why it waits, clarify's questions with numbered options, a hand-off's review, intent, inputs, link
 canopy incubator answer <id> 2 "1,3" "open Sundays"   # clarify's questions in order: a number picks an option, "" skips one; --skip goes on assumptions
 canopy incubator resume <id> [--retry]   # a parked project goes on; --retry runs the step again, or sends the work back to the step that made it
-canopy incubator stop <id> | dismiss <id>   # end the project | take an ended one off the list; the seed, inputs and vault note stay
+canopy incubator stop <id> | dismiss <id>   # end the project | take an ended one off the list; the seed and vault note stay, and its record and raw inputs are deleted two weeks later
 canopy incubator add <id> "more words" [--file f]... [--url u]...   # more input; clarify reads it before the next stage
 canopy incubator handoff <id> --yes <head> | --no ["reason"]   # push an extend's branch at the head show printed, or decline it
 canopy health [--bad] [--repo R] [--json]   # every check on every backend; exit 1 when anything is down

@@ -1447,6 +1447,10 @@ export interface Run {
   unattended?: true;
   /** a coordinator's cards, in the order it proposed them */
   tasks?: CoordTask[];
+  /** the number a coordinator's next plan gives its first card, set with
+   *  its first cards: a removed card's number is never given again, so it
+   *  may be past the last card on the board */
+  nextCard?: number;
   /** the stall watchdog's marks (FR-035, `core/stall.ts`): when canopy told
    *  the quiet run to wrap up, and when it stopped the run for going quiet
    *  again */

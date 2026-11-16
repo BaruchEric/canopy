@@ -13,6 +13,11 @@ const ESCAPES = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
  *  pane's last lines */
 const CHOICE_TAIL = 25;
 
+/** an agent's input box with nothing typed in it: the prompt alone, or the
+ *  placeholder it shows (Claude Code's `Try "…"`, Codex's "Ask Codex to do
+ *  anything"), boxed or not */
+const INPUT_PROMPT = /^[\s│┃|]*[❯›>](?:\s+(?:Try ".*"|Ask Codex to do anything))?[\s│┃|]*$/;
+
 /**
  * Whether a terminal agent's screen shows a choice waiting on a person: a
  * numbered pick with the cursor on one of its options (Claude Code's
@@ -20,7 +25,10 @@ const CHOICE_TAIL = 25;
  * proceed`) or Claude Code's "Enter to confirm" (a folder's trust). A line
  * typed there and its Enter would pick an option, and an approval stays a
  * deliberate act in its own row (SPEC, 2026-11-07), so a steer waits.
- * `screen` is the pane as tmux captures it, escapes and all.
+ * Both agents draw a choice in place of their input box, while a prompt
+ * sent or queued sits above the box behind the same `❯ ` (Claude Code
+ * 2.1.325): with an empty input box on screen, only what is under it
+ * counts. `screen` is the pane as tmux captures it, escapes and all.
  */
 export function choiceOnScreen(screen: string): boolean {
   const lines = screen
@@ -28,8 +36,9 @@ export function choiceOnScreen(screen: string): boolean {
     .split("\n")
     .filter((l) => l.trim() !== "")
     .slice(-CHOICE_TAIL);
+  const below = lines.slice(lines.findLastIndex((l) => INPUT_PROMPT.test(l)) + 1);
   // a dialog drawn in a box puts its border before the cursor
-  return lines.some((l) => /^[\s│┃|]*[❯›>]\s*\d+\.\s/.test(l) || /\bEnter to confirm\b/.test(l));
+  return below.some((l) => /^[\s│┃|]*[❯›>]\s*\d+\.\s/.test(l) || /\bEnter to confirm\b/.test(l));
 }
 
 /**

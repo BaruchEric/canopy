@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { cardAsks } from "../../../src/core/agentstatus";
 import { isLiveAgent, type AgentCard } from "../../../src/core/types";
 import { joinTarget } from "../agentcards";
 import { allAgents, runOfCard, shellsToProbe, type Ids } from "../allagents";
@@ -315,13 +316,16 @@ export function AgentScreen({ card, live, active, showing = true, now }: { card:
  * their next step. Escape stops the turn it is on. A hooked agent
  * elsewhere gets a DM, which it reads at its next prompt or when its turn
  * ends. An agent waiting on a choice takes no words: the ask above is
- * where that is answered.
+ * where that is answered. That is a wait on a permission or a question
+ * (`cardAsks`) or an ask of its open, as the server reads it before it
+ * types a word in; one at its prompt, waiting "your turn", takes them.
  */
 function SteerBar({ card, term }: { card: AgentCard; term: string | null }) {
   const chanReady = useStore((s) => s.chan?.ready === true);
+  const asking = useStore((s) => Object.values(s.asks).some((a) => a.state === "open" && a.agent === card.id));
   if (!isLiveAgent(card) || (!term && !(card.handle && chanReady))) return null;
   const name = card.harness === "codex" ? "Codex" : card.harness === "claude" ? "Claude" : "the agent";
-  const closed = card.state === "waiting" ? { closed: `${name} waits on you: answer above` } : {};
+  const closed = asking || cardAsks(card) ? { closed: `${name} waits on you: answer above` } : {};
   const target: SteerTarget = term
     ? {
         placeholder: `type to ${name} in its shell…`,

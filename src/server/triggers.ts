@@ -75,6 +75,7 @@ import {
 import type { Flow, HeldStart, LandEntry, LandNotice, Priority, PrWatch, Repo, Run, ServerEvent } from "../core/types";
 import type { WorkSink } from "../core/work";
 import { repoKey } from "../core/worktree";
+import { bodyUpTo } from "./body";
 import { forgetAppToken, linearActivity, linearAppToken, linearComment, linearDone, LinearError, linearInstall, linearNote, linearSessionLinks, type LinearInstall } from "./linear";
 
 export const triggersFile = (): string => join(configDir(), "triggers.json");
@@ -1248,10 +1249,11 @@ export class TriggerHub {
     if (!rule.secretEnv) return json({ error: "no such hook" }, 404);
     const secret = this.env(rule.secretEnv);
     if (!secret) return json({ error: `${rule.secretEnv} is not set on this backend` }, 503);
-    const length = Number(req.headers.get("content-length") ?? "0");
-    if (length > MAX_BODY) return json({ error: "body too large" }, 413);
-    const body = await req.text();
-    if (body.length > MAX_BODY) return json({ error: "body too large" }, 413);
+    // read no further than the cap: the hook is open to anyone, and a body
+    // sent in chunks names no length to refuse it by
+    const bytes = await bodyUpTo(req, MAX_BODY);
+    if (!bytes) return json({ error: "body too large" }, 413);
+    const body = new TextDecoder().decode(bytes);
     if (!signatureOk(body, hookSignature(rule.source, req.headers), secret)) return json({ error: "bad signature" }, 401);
     // every service counts anything but a 200 as a failure and shows it as
     // one, so a delivery the rule has no use for is a quiet 200

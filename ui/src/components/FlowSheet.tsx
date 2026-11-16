@@ -4,7 +4,7 @@ import { describeAgent, isDefaultAgent } from "../../../src/core/agent";
 import { repoFacts } from "../../../src/core/actions";
 import { fleetSkipReason } from "../../../src/core/flow";
 import { graphStep, isChain } from "../../../src/core/flowgraph";
-import { isFlowActive, type Fleet, type Flow, type FlowStep, type GraphStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
+import { isFlowActive, type Fleet, type Flow, type FlowChoice, type FlowStep, type GraphStep, type Judgment, type Repo, type Verdict } from "../../../src/core/types";
 import { budgetWord, fleetCounts, flowWord, gateButtons, gateWords, oldestParked, rewindLines, stepWord } from "../flows";
 import { fit, flowGraphSteps, picture, stateWord } from "../flowgraph";
 import { PHONE, useMedia } from "../media";
@@ -293,13 +293,87 @@ function JudgeBars({ judgment }: { judgment: Judgment }) {
   );
 }
 
-function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: (c: "continue" | "retry" | "stop") => void }) {
+/** how long a gate's buttons stay off once the gate moves to another step or status */
+const GATE_SETTLE_MS = 500;
+
+/** What a gate's buttons stand for: the flow, the step it waits at, that
+ *  step's state and the flow's, and what it parked for. A change in any of
+ *  them draws buttons that may do something else. */
+export const gateAt = (flow: Flow): string =>
+  [flow.id, flow.current, flow.status, flow.steps[flow.current]?.status ?? "", flow.parkedFor ?? ""].join(" ");
+
+/** One request at a time: the function it gives sends only while no
+ *  earlier send is on its way, and says whether it sent. `onBusy` hears a
+ *  send start and end. Its flag holds within one turn of the event loop,
+ *  before React has drawn anything off. */
+export function oneAtATime(onBusy: (busy: boolean) => void): (send: () => Promise<void>) => Promise<boolean> {
+  let going = false;
+  return async (send) => {
+    if (going) return false;
+    going = true;
+    onBusy(true);
+    try {
+      await send();
+    } finally {
+      going = false;
+      onBusy(false);
+    }
+    return true;
+  };
+}
+
+/**
+ * One gate answer at a time, so a double tap on a phone sends one request:
+ * every button, stop too, is off while a choice is on its way, and for
+ * `GATE_SETTLE_MS` once the gate moves, so the second tap cannot land on a
+ * button drawn in its place. A continue that brings a manual step up draws
+ * "start <step>" where "continue to <step>" was, and that one runs the step.
+ */
+export function useGateGuard(flow: Flow | undefined): { off: boolean; choose: (send: () => Promise<void>) => void } {
+  const at = flow ? gateAt(flow) : "";
+  const [seen, setSeen] = useState(at);
+  const [settling, setSettling] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [once] = useState(() => oneAtATime(setBusy));
+  // read as it draws, so a moved gate's first frame has its buttons off
+  if (seen !== at) {
+    setSeen(at);
+    setSettling(true);
+  }
+  useEffect(() => {
+    if (!settling) return;
+    const t = setTimeout(() => setSettling(false), GATE_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [settling, at]);
+  const choose = (send: () => Promise<void>) => {
+    if (!settling) void once(send);
+  };
+  return { off: busy || settling, choose };
+}
+
+/** A gate's buttons and its stop, every one off while `off`. What each
+ *  will do: a park with one way on has no retry, and a gate that said no
+ *  to the work leads with the way back. */
+export function GateChoices({ flow, off, className, onChoose }: { flow: Flow; off: boolean; className: string; onChoose: (c: FlowChoice) => void }) {
+  const words = gateWords(flow);
+  return (
+    <div className={className}>
+      {gateButtons(words).map((b) => (
+        <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} disabled={off} title={b.title} onClick={() => onChoose(b.choice)}>
+          {b.word}
+        </button>
+      ))}
+      <button type="button" className="mini" disabled={off} title={words.stopTitle} onClick={() => onChoose("stop")}>
+        {words.stop}
+      </button>
+    </div>
+  );
+}
+
+function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: (c: FlowChoice) => Promise<void> }) {
+  const guard = useGateGuard(flow);
   const budget = budgetWord(flow);
   const rewinds = rewindLines(flow);
-  // what each button will do: a park with one way on has no retry, and a
-  // gate that said no to the work leads with the way back
-  const words = gateWords(flow);
-  const buttons = gateButtons(words);
   return (
     <div className="gate">
       <p className="outcome-lead">{step.reason}</p>
@@ -318,14 +392,7 @@ function Gate({ flow, step, onChoose }: { flow: Flow; step: FlowStep; onChoose: 
           {rewinds.map((line, i) => <li key={i}>{line}</li>)}
         </ul>
       )}
-      <div className="gate-buttons">
-        {buttons.map((b) => (
-          <button key={b.choice} type="button" className={b.strong ? "mini strong" : "mini"} title={b.title} onClick={() => onChoose(b.choice)}>
-            {b.word}
-          </button>
-        ))}
-        <button type="button" className="mini" title={words.stopTitle} onClick={() => onChoose("stop")}>{words.stop}</button>
-      </div>
+      <GateChoices flow={flow} off={guard.off} className="gate-buttons" onChoose={(c) => guard.choose(() => onChoose(c))} />
     </div>
   );
 }
@@ -384,7 +451,7 @@ export function FlowConsole({ flowId }: { flowId: string }) {
       <FlowSteps flow={flow} shown={shown} onPick={(i) => setPicked(i === flow.current ? null : i)} />
       {step && flow.status === "gated" && shown === flow.current ? (
         <div className="sheet-body console">
-          <Gate flow={flow} step={step} onChoose={(c) => void act(() => resumeFlow(flow.id, c))} />
+          <Gate flow={flow} step={step} onChoose={(c) => act(() => resumeFlow(flow.id, c))} />
           {run && <Timeline run={run} repo={repo} error={null} onAnswer={() => {}} />}
           {error && <p className="note err">{error}</p>}
         </div>
@@ -554,7 +621,7 @@ export function FleetSheet({ fleetId }: { fleetId: string }) {
           <section className="fleet-needs">
             <p className="eyebrow">needs you: {name(parked.repoId)}</p>
             {parked.status === "gated" ? (
-              <Gate flow={parked} step={parkedStep} onChoose={(c) => void act(() => resumeFlow(parked.id, c))} />
+              <Gate flow={parked} step={parkedStep} onChoose={(c) => act(() => resumeFlow(parked.id, c))} />
             ) : parkedRun?.prompt ? (
               <Timeline run={parkedRun} repo={repos.find((r) => r.id === parked.repoId)} error={null} onAnswer={(a, promptId) => void act(() => answerRun(parkedRun.id, promptId, a))} />
             ) : null}

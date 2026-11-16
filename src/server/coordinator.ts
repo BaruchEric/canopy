@@ -48,12 +48,13 @@ import {
 import type { RunGroup } from "../core/group";
 import { isFlowActive, isRunActive, type CoordTask, type Flow, type HeldStart, type LoadoutsInfo, type Priority, type Run, type Sprout } from "../core/types";
 import type { WorkSink, WorkState } from "../core/work";
+import { bodyUpTo } from "./body";
 import type { Caller } from "./callers";
 
 /** how long a ready child's card waits for the landing queue to sort or
  *  take its branch before it settles as ready anyway */
 export const READY_WAIT = 2 * 60_000;
-/** the largest body read; a full plan is 8 notes of 4000 characters */
+/** the largest body read, in bytes; a full plan is 8 notes of 4000 characters */
 export const MAX_BODY = 256 * 1024;
 
 export class CoordError extends Error {
@@ -275,9 +276,10 @@ export class CoordinatorHub {
     return caller === null || allows(caller.kind, "operate") ? "person" : "coordinator";
   }
 
-  /** the highest card number a coordinator has given out */
+  /** the highest card number a coordinator has given out, by the hub's own
+   *  count, the run's `nextCard` and its cards' ids */
   private last(coord: Run): number {
-    return Math.max(this.numbers.get(coord.id) ?? 0, ...(coord.tasks ?? []).map((t) => Number(t.id.slice(1)) || 0));
+    return Math.max(this.numbers.get(coord.id) ?? 0, (coord.nextCard ?? 1) - 1, ...(coord.tasks ?? []).map((t) => Number(t.id.slice(1)) || 0));
   }
 
   /** the names in the coordinator's goal's files folder, read before the checks, which are not async */
@@ -301,7 +303,8 @@ export class CoordinatorHub {
   }
 
   /** `POST /api/coordinator/plan {run, tasks}`: the coordinator's proposal,
-   *  added as `proposed` cards numbered t1, t2, ... per coordinator. A card
+   *  added as `proposed` cards numbered t1, t2, ... per coordinator, and the
+   *  run's `nextCard` says the number the next plan starts at. A card
    *  may carry `equip`, `workflow` and `after` (`validatePlan`): a
    *  coordinator's token names a loadout and a bundled or user workflow,
    *  and Eric's may set the loadout's fields and pick the repo's own. */
@@ -318,6 +321,8 @@ export class CoordinatorHub {
     if ("error" in got) throw new CoordError(got.error, 400);
     const added = got.tasks.map((t): CoordTask => ({ id: `t${++last}`, ...t, state: "proposed" }));
     this.numbers.set(coord.id, last);
+    // the coordinator reads it off its run to name a card of its next plan
+    coord.nextCard = last + 1;
     this.setTasks(coord, [...have, ...added]);
     return { ok: true, added };
   }
@@ -626,9 +631,11 @@ export class CoordinatorHub {
           // the governor holds every run card at once: they share its window,
           // so the rest wait with the same words and none is tried this pass
           if (isCapacityWords(out.busy)) {
-            // a card waiting on its after keeps saying so, and a project
-            // card, which asks no governor, may still start this pass
-            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id) && !isProjectCard(t) && !afterWait(t, tasks)) passed.set(t.id, out.busy);
+            // a card waiting on its after keeps saying so, a project card,
+            // which asks no governor, may still start this pass, and a card
+            // "start anyway" let go, which the governor does not hold, keeps
+            // the words it waits with
+            for (const t of tasks) if (t.state === "queued" && !passed.has(t.id) && !isProjectCard(t) && !afterWait(t, tasks) && !this.released.has(`${coordId}:${t.id}`)) passed.set(t.id, out.busy);
             for (const [id, words] of passed) this.update(coordId, id, (x) => (x.state === "queued" ? withOutcome(x, words) : x));
             if (!tasks.some((t) => t.state === "queued" && isProjectCard(t) && !passed.has(t.id))) return;
             continue;
@@ -1046,9 +1053,13 @@ export class CoordinatorHub {
     }
   }
 
-  /** "Start anyway" on a held card, once as interactive. A limited tree
-   *  card whose resume still finds its tree busy started nothing, so it
-   *  answers 409 with the tree's words. */
+  /** "Start anyway" on a held card, once as interactive. A queued card goes
+   *  to the head of the cards tried first, so the pass tries it before the
+   *  rest. One the pass does not start (it waits on its `after`, its repo
+   *  is full, the goal is held or has no room, or its start found no slot)
+   *  answers 409 with the words it waits with, and is not let go later. A
+   *  limited tree card whose resume still finds its tree busy started
+   *  nothing, so it answers 409 with the tree's words. */
   async release(coordId: string, taskId: string): Promise<void> {
     const coord = this.deps.run(coordId);
     const task = coord?.tasks?.find((t) => t.id === taskId);
@@ -1058,8 +1069,15 @@ export class CoordinatorHub {
       if (got === null) return;
       throw new CoordError("busy" in got ? got.busy : `card ${taskId} cannot resume: ${got.why}`);
     }
-    this.released.add(`${coordId}:${taskId}`);
+    const key = `${coordId}:${taskId}`;
+    this.first.set(coordId, [taskId, ...(this.first.get(coordId) ?? []).filter((id) => id !== taskId)]);
+    this.released.add(key);
     await this.pump(coordId);
+    // a pass that never tried it leaves its key, which would let it go as
+    // interactive whenever it is next tried
+    this.released.delete(key);
+    const now = this.deps.run(coordId)?.tasks?.find((t) => t.id === taskId);
+    if (!now || now.state === "queued" || now.state === "dropped") throw new CoordError(now?.outcome ?? `card ${taskId} did not start`);
   }
 
   /** The child that hit the limit carries on on its branch: a new run, the
@@ -1292,7 +1310,9 @@ export class CoordinatorHub {
   private end(coord: Run): void {
     this.notes.delete(coord.id);
     this.first.delete(coord.id);
+    this.numbers.delete(coord.id);
     for (const key of this.blockedSaid.keys()) if (key.startsWith(`${coord.id}:`)) this.blockedSaid.delete(key);
+    for (const key of this.released) if (key.startsWith(`${coord.id}:`)) this.released.delete(key);
     const tasks = coord.tasks ?? [];
     // its children's cards still settle on the broadcasts' recheck, with
     // nothing said, so no timer need outlive it
@@ -1340,12 +1360,12 @@ export class CoordinatorHub {
     const act = path.slice("/api/coordinator/".length);
     if (act !== "plan" && act !== "tasks" && act !== "start" && act !== "hold" && act !== "followup") return null;
     try {
-      if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY) return json({ error: "body too large" }, 413);
-      const text = await req.text();
-      if (text.length > MAX_BODY) return json({ error: "body too large" }, 413);
+      // read no further than the cap: a body sent in chunks names no length
+      const bytes = await bodyUpTo(req, MAX_BODY);
+      if (!bytes) return json({ error: "body too large" }, 413);
       let b: unknown = null;
       try {
-        b = JSON.parse(text);
+        b = JSON.parse(new TextDecoder().decode(bytes));
       } catch {
         // answered below
       }

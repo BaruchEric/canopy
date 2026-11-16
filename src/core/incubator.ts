@@ -841,6 +841,10 @@ export class Incubator {
           if (reason !== undefined) s.parked = reason;
           throw new IncubatorError(409, msg(err));
         }
+      } else if (f.status === "waiting") {
+        // the prompt the backstop parked on still waits: its clock starts
+        // over, so the project parks again if no one answers it
+        this.stageWaiting.set(f.id, this.now());
       }
       if (retry > 0 && s.prepared) this.serial(s, () => this.afterInputs(s));
       // a flow still running is followed again rather than started a second time
@@ -871,7 +875,8 @@ export class Incubator {
     return n;
   }
 
-  /** an ended sprout off the list; its seed, inputs and vault note stay */
+  /** an ended sprout off the list; its seed and vault note stay, and the
+   *  leftovers sweep deletes its record and raw inputs two weeks later */
   async dismiss(id: string): Promise<void> {
     const s = this.need(id);
     if (!sproutEnded(s)) throw new IncubatorError(409, "stop the project first");
@@ -1106,7 +1111,8 @@ export class Incubator {
   }
 
   /** A stage flow waiting on a permission or a question past
-   *  `STAGE_WAIT_MAX` parks its project with the reason, once per wait. The
+   *  `STAGE_WAIT_MAX` parks its project with the reason, once per wait, and
+   *  again that long after a resume that leaves the prompt unanswered. The
    *  flow stays, with its slot as at a gate: an answer still reaches the
    *  run and the stage goes on, and stop ends it. */
   private stageWaits(): void {

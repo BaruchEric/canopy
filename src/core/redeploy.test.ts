@@ -20,6 +20,8 @@ for (const [name, response, ready] of [
       const job = source.slice(source.indexOf("\njob() {") + 1, source.indexOf("\nexport -f job"));
       const harness = `
 docker() {
+  # canopy is not running before the up, so the work check carries on
+  if [ "$1" = exec ]; then return 1; fi
   if [ "$1" = port ]; then printf '100.64.0.1:7850\\n'; return 0; fi
   if [ "$1" = compose ] && [ "$2" = logs ]; then printf 'canopy → old server\\n'; return 0; fi
   if [ "$1" = compose ] && [ "$2" = exec ]; then
@@ -35,7 +37,7 @@ mkdir() { :; }
 chmod() { :; }
 sleep() { :; }
 seq() { printf '1\\n'; }
-# canopy is not answering, so the work check carries on
+# nothing here reaches the network
 curl() { return 7; }
 ${job}
 job
@@ -73,6 +75,9 @@ for (const [name, restart, upRecreates, recreated] of [
       const harness = `
 id=old
 docker() {
+  # canopy is not running before the up, so the work check carries on
+  if [ "$1" = exec ]; then return 1; fi
+  if [ "$1" = inspect ] && [ "$3" = '{{.State.Status}}' ]; then printf 'exited\\n'; return 0; fi
   printf '%s\\n' "$*" >>${shellQuote(calls)}
   if [ "$1" = inspect ]; then printf '%s\\n' "$id"; return 0; fi
   if [ "$*" = "compose up -d" ] && [ "$UP_RECREATES" = 1 ]; then id=new; return 0; fi
@@ -83,7 +88,7 @@ mkdir() { :; }
 chmod() { :; }
 sleep() { :; }
 seq() { printf '1\\n'; }
-# canopy is not answering, so the work check carries on
+# nothing here reaches the network
 curl() { return 7; }
 ${job}
 job
@@ -135,6 +140,8 @@ const busy = {
       { id: "l1", repoId: "web/app", branch: "run/x", state: "gate", gate: "typecheck" },
       { id: "l2", repoId: "web/app", branch: "run/y", state: "queued" },
       { id: "l3", repoId: "web/app", branch: "run/z", state: "landed" },
+      // running its holdout scenarios, whose name sits where a gate's does
+      { id: "l4", repoId: "web/app", branch: "run/s", state: "scenarios", gate: "checkout-flow" },
     ],
   },
 };
@@ -147,6 +154,7 @@ const fromLists = [
   "  flow f1  tools/cli  ship, at step Gates",
   "  fleet fl1  a, b, c and 2 more  bump",
   "  landing l1  web/app  gate (typecheck), run/x",
+  "  landing l4  web/app  scenarios (checkout-flow), run/s",
 ];
 /** GET /api/going, which canopy fills itself (core/going.ts) */
 const going = {
@@ -158,15 +166,23 @@ const going = {
   ],
 };
 const fromGoing = ["  run r1  web/app  fix, working", "  flow f1  tools/cli  ship, at step 2 of 2", "  fleet fl1  a, b, c and 2 more  bump", "  landing l1  web/app  gate (typecheck)"];
-const justGoing = ["curl http://100.64.0.1:7850/api/going"];
+const justGoing = ["ask canopy-canopy-1 going"];
+const unanswered = "canopy did not say what it has going, so this cannot tell what a restart cuts off";
 
 for (const [name, opts, expected] of [
-  ["stops with exit 4 naming what canopy says it has going, and asks it nothing else", { plan: recreate, api: { going, ...idle } }, { code: 4, asked: true, up: false, says: fromGoing, curls: justGoing }],
-  ["carries on when canopy says nothing is going, whatever its lists hold", { plan: recreate, api: { going: { going: [] }, ...busy } }, { code: 0, asked: true, up: true, curls: justGoing }],
-  ["stops when what canopy says it has going cannot be read", { plan: recreate, api: { going: { runs: [] } } }, { code: 1, asked: true, up: false, curls: justGoing }],
+  ["stops with exit 4 naming what canopy says it has going, and asks it nothing else", { plan: recreate, api: { going, ...idle } }, { code: 4, asked: true, up: false, says: fromGoing, asks: justGoing }],
+  ["carries on when canopy says nothing is going, whatever its lists hold", { plan: recreate, api: { going: { going: [] }, ...busy } }, { code: 0, asked: true, up: true, asks: justGoing }],
+  ["stops when what canopy says it has going cannot be read", { plan: recreate, api: { going: { runs: [] } } }, { code: 1, asked: true, up: false, asks: justGoing }],
   ["asks a canopy from before /api/going its four lists, and stops with exit 4 naming the work", { plan: recreate, api: busy }, { code: 4, asked: true, up: false, says: fromLists }],
   ["skips the work check with --force", { plan: recreate, api: busy, force: "1" }, { code: 0, asked: false, up: true }],
-  ["carries on when canopy is not answering", { plan: recreate, down: true }, { code: 0, asked: true, up: true }],
+  // a failed bind leaves the host no published port while the tunnel still
+  // reaches canopy, so canopy is asked inside its container
+  ["asks canopy inside its container, so a host with no published port still stops with exit 4", { plan: recreate, api: { going, ...idle }, noPort: true }, { code: 4, asked: true, up: false, says: fromGoing, asks: justGoing }],
+  ["stops with exit 4 when canopy's container runs but canopy does not answer in time", { plan: recreate, down: true }, { code: 4, asked: true, up: false, says: [`canopy's container is running, but ${unanswered}`] }],
+  ["stops with exit 4 when canopy's container is paused", { plan: recreate, down: true, state: "paused" }, { code: 4, asked: true, up: false, says: [`canopy's container is paused, but ${unanswered}`] }],
+  ["carries on when canopy cannot be asked and its container has stopped", { plan: recreate, down: true, state: "exited" }, { code: 0, asked: true, up: true }],
+  ["carries on when canopy cannot be asked and its container is restarting, as in a crash loop", { plan: recreate, down: true, state: "restarting" }, { code: 0, asked: true, up: true }],
+  ["carries on when there is no canopy container to ask", { plan: recreate, down: true, state: "" }, { code: 0, asked: true, up: true }],
   ["carries on when nothing is going", { plan: recreate, api: idle }, { code: 0, asked: true, up: true }],
   ["reads an older backend's missing routes as nothing going", { plan: recreate, api: { runs: [] } }, { code: 0, asked: true, up: true }],
   ["skips the work check when the canopy container stays up", { plan: unchanged, api: busy }, { code: 0, asked: false, up: true }],
@@ -185,20 +201,28 @@ for (const [name, opts, expected] of [
       for (const [route, body] of Object.entries(api)) await Bun.write(join(fixtures, `${route}.json`), JSON.stringify(body));
       const harness = `
 docker() {
+  if [ "$1" = exec ]; then
+    # the work check asks canopy inside its container; its script runs here
+    # instead, with a fetch that answers from the fixtures
+    for u; do :; done
+    printf 'ask %s %s\\n' "$2" "$u" >>${shellQuote(calls)}
+    shift 3
+    ${shellQuote(process.execPath)} "$1" "globalThis.fetch = async (url) => { if (process.env.CANOPY_DOWN === '1') throw Error('down'); const f = Bun.file(process.env.FIXTURES + '/' + String(url).split('/api/')[1] + '.json'); return (await f.exists()) ? new Response(await f.text()) : new Response('', { status: 404 }); }; $2" "$3"
+    return $?
+  fi
   printf '%s\\n' "$*" >>${shellQuote(calls)}
   if [ "$*" = "compose --dry-run up -d" ]; then printf '%s\\n' "$PLAN"; return 0; fi
+  if [ "$1" = inspect ] && [ "$3" = '{{.State.Status}}' ]; then
+    # no state means no container, which docker refuses to inspect
+    [ -n "$CANOPY_STATE" ] || return 1
+    printf '%s\\n' "$CANOPY_STATE"
+    return 0
+  fi
   if [ "$1" = inspect ]; then printf 'same\\n'; return 0; fi
-  if [ "$1" = port ]; then printf '100.64.0.1:7850\\n'; return 0; fi
+  if [ "$1" = port ]; then [ "$NO_PORT" = 1 ] || printf '100.64.0.1:7850\\n'; return 0; fi
   return 0
 }
-curl() {
-  for u; do :; done
-  printf 'curl %s\\n' "$u" >>${shellQuote(calls)}
-  [ "$CANOPY_DOWN" = 1 ] && return 7
-  f=${shellQuote(fixtures)}/\${u##*/api/}.json
-  [ -f "$f" ] || return 22
-  cat "$f"
-}
+curl() { printf 'curl %s\\n' "$*" >>${shellQuote(calls)}; return 7; }
 mkdir() { :; }
 chmod() { :; }
 sleep() { :; }
@@ -211,7 +235,8 @@ job
         env: {
           ...process.env, LOGS: logs, sha: "fixture revision", shells: "0", CANOPY_COMMIT: commit,
           restart: "restart" in opts ? opts.restart : "0", force: "force" in opts ? opts.force : "0",
-          PLAN: opts.plan, CANOPY_DOWN: "down" in opts ? "1" : "0",
+          PLAN: opts.plan, CANOPY_DOWN: "down" in opts ? "1" : "0", FIXTURES: fixtures,
+          CANOPY_STATE: "state" in opts ? opts.state : "running", NO_PORT: "noPort" in opts ? "1" : "0",
         },
       });
       const [code, stdout, stderr] = await Promise.all([
@@ -220,9 +245,11 @@ job
       expect(stderr).toBe("");
       expect(code).toBe(expected.code);
       const lines = (await readFile(calls, "utf8")).split("\n");
-      expect(lines.some((l) => l.startsWith("curl "))).toBe(expected.asked);
+      expect(lines.some((l) => l.startsWith("ask "))).toBe(expected.asked);
       expect(lines.includes("compose up -d")).toBe(expected.up);
-      if ("curls" in expected) expect(lines.filter((l) => l.startsWith("curl "))).toEqual([...expected.curls]);
+      if ("asks" in expected) expect(lines.filter((l) => l.startsWith("ask "))).toEqual([...expected.asks]);
+      // the check never dials a published port
+      expect(lines.filter((l) => l.startsWith("curl "))).toEqual([]);
       if (expected.code === 4) {
         for (const line of "says" in expected ? expected.says : fromLists) expect(stdout).toContain(line);
         expect(stdout).toContain("--force");
@@ -234,7 +261,7 @@ job
   });
 }
 
-test("redeploy reports and probes canopy's own address, not the coordinator bridge's gateway", async () => {
+test("redeploy reports canopy's own address, not the coordinator bridge's gateway, and dials neither to ask what is going", async () => {
   const logs = await mkdtemp(join(tmpdir(), "canopy-redeploy-test-"));
   try {
     const source = await readFile(script, "utf8");
@@ -244,6 +271,8 @@ test("redeploy reports and probes canopy's own address, not the coordinator brid
 docker() {
   # the gateway binding first, as docker may list it
   if [ "$1" = port ]; then printf '10.250.14.1:7850\\n100.64.0.1:7850\\n'; return 0; fi
+  # canopy is not running before the up, so the work check carries on
+  if [ "$1" = exec ]; then return 1; fi
   if [ "$1" = compose ] && [ "$2" = exec ]; then return 0; fi
   return 0
 }
@@ -263,9 +292,8 @@ job
     expect(stderr).toBe("");
     expect(code).toBe(0);
     expect(await Bun.file(join(logs, "deployed")).text()).toContain("fixture revision on 100.64.0.1:7850");
-    const calls = await readFile(probed, "utf8");
-    expect(calls).toContain("http://100.64.0.1:7850/api/going");
-    expect(calls).not.toContain("10.250.14.1");
+    // the work check asks inside canopy's container, not at a published address
+    expect(await Bun.file(probed).exists()).toBe(false);
   } finally {
     await rm(logs, { recursive: true, force: true });
   }

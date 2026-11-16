@@ -260,8 +260,12 @@ export class ClaudeDriver implements RunDriver {
   /** a person stopped the turn (`interrupt`): the result that ends it is
    *  no failure */
   private cut = false;
-  /** the subagents are done and the turn they woke has begun: the held
-   *  result now waits for that turn's own, however long it runs */
+  /** `held` ends a turn a person stopped: should it become the run's, it
+   *  is no failure either */
+  private heldCut = false;
+  /** the turn `held` waits on has begun (the one the subagents' end, or a
+   *  steer, starts): the held result now waits for that turn's own,
+   *  however long it runs */
   private woke = false;
   /** canopy's own control requests to the CLI, waiting on its control_response */
   private asked = new Map<string, { settle: (r: RequestReply) => void; done: Promise<RequestReply> }>();
@@ -312,10 +316,11 @@ export class ClaudeDriver implements RunDriver {
    *  control request, as Escape is in the terminal). A chat then waits for
    *  its next message, and a steer sent before the interrupt runs as the
    *  next turn. False when no turn of the main thread runs, which includes
-   *  a result held for subagents. */
+   *  a result held for subagents or a steer until the turn it waits on
+   *  begins; that turn is stopped like any other. */
   interrupt(): boolean {
     const ctx = this.ctx;
-    if (!this.proc || this.closed || this.over || !ctx || this.held) return false;
+    if (!this.proc || this.closed || this.over || !ctx || (this.held && !this.woke)) return false;
     const status = ctx.status();
     if (status !== "working" && status !== "waiting") return false;
     this.cut = true;
@@ -336,10 +341,11 @@ export class ClaudeDriver implements RunDriver {
     return true;
   }
 
-  /** A subagent in the background, or a result held for one, is work the
-   *  main thread's steps do not show. */
+  /** A subagent in the background, or a result held until the turn it
+   *  waits on begins, is work the main thread's steps do not show. Once
+   *  that turn runs, its steps show, and the watchdog watches it. */
   holding(): boolean {
-    return this.agents.size > 0 || this.held !== null;
+    return this.agents.size > 0 || (this.held !== null && !this.woke);
   }
 
   /** A chat between turns closes stdin and the CLI exits on its own;
@@ -351,6 +357,7 @@ export class ClaudeDriver implements RunDriver {
     else {
       // a result held for a subagent is not the run's once it is stopped
       this.held = null;
+      this.heldCut = false;
       this.woke = false;
       this.clearGrace();
       proc.kill();
@@ -388,6 +395,7 @@ export class ClaudeDriver implements RunDriver {
     // a chat's later turns reuse this process, so only a new drive resets these
     this.agents = new Set();
     this.held = null;
+    this.heldCut = false;
     this.woke = false;
     this.unread = [];
     this.cut = false;
@@ -482,16 +490,18 @@ export class ClaudeDriver implements RunDriver {
             this.held = m;
             this.heldFor = this.agents.size > 0 ? "agents" : "steer";
             this.woke = false;
-            // the interrupt that ended this turn is spent: the steer goes on
-            const cut = this.cut;
+            // the interrupt that ended this turn is spent: the steer goes on.
+            // It stays with the result, which is the run's if no turn wakes.
+            this.heldCut = this.cut;
             this.cut = false;
             // nothing more may come to arm it later, unlike a subagent's end
-            if (this.heldFor === "steer") this.armGrace(proc, chat, cut);
+            if (this.heldFor === "steer") this.armGrace(proc, chat);
             continue;
           }
           if (m["type"] === "result" && this.held) {
             this.fold.heldTurns = (this.fold.heldTurns ?? 0) + num(this.held, "num_turns");
             this.held = null;
+            this.heldCut = false;
           }
           if (m["type"] === "result") {
             const cut = this.cut;
@@ -507,7 +517,7 @@ export class ClaudeDriver implements RunDriver {
           }
           // subagents done, a result held: the CLI normally starts a turn
           // with their results; if none begins, the held result is the end
-          if (this.held && this.agents.size === 0 && !this.woke) this.armGrace(proc, chat, false);
+          if (this.held && this.agents.size === 0 && !this.woke) this.armGrace(proc, chat);
         }
       }
       this.clearGrace();
@@ -515,7 +525,9 @@ export class ClaudeDriver implements RunDriver {
       this.closed = true;
       for (const a of this.asked.values()) a.settle({ ok: false, error: "the run ended" });
       const held = this.held;
+      const heldCut = this.heldCut;
       this.held = null;
+      this.heldCut = false;
       const code = await proc.exited;
       // Through the stage runner, stderr carries the runner's own word on a
       // failure (that it is not answering), which a flow parks on: give it a
@@ -523,12 +535,14 @@ export class ClaudeDriver implements RunDriver {
       // held result needs the tail to say why the process died.
       if (ctx.spawn || (held && code !== 0)) await Promise.race([stderrRead, Bun.sleep(STDERR_WAIT)]);
       // The process ended with a result still held. A clean exit makes it
-      // the run's, not a failure for want of one; a crash while a subagent
-      // ran is a failure, whatever the early result said. A stop dropped it.
+      // the run's, not a failure for want of one (and a turn a person
+      // stopped no failure at all); a crash while a subagent ran is a
+      // failure, whatever the early result said. A stop dropped it.
       if (held) {
         const tail = stderr.trim();
         this.fold.heldTurns ??= 0;
-        this.apply(held, code === 0 ? null : `${this.label} exited (code ${code}) while a subagent ran${tail ? `: ${tail}` : ""}`);
+        if (code === 0) this.applyResult(held, chat, heldCut);
+        else this.apply(held, `${this.label} exited (code ${code}) while a subagent ran${tail ? `: ${tail}` : ""}`, heldCut);
       }
       ctx.exited({ code, stderr });
     } catch (err) {
@@ -538,6 +552,7 @@ export class ClaudeDriver implements RunDriver {
       // exit, onto a run that already ended
       this.clearGrace();
       this.held = null;
+      this.heldCut = false;
       if (this.proc === proc) this.proc = null;
     }
   }
@@ -549,16 +564,19 @@ export class ClaudeDriver implements RunDriver {
   }
 
   /** Applies a held result once its wait is up with no turn begun: the
-   *  subagents ended and woke nothing, or a steer's turn never came. */
-  private armGrace(running: RpcProc, chat: boolean, cut: boolean): void {
+   *  subagents ended and woke nothing, or a steer's turn never came. One
+   *  that ended a turn a person stopped goes in as that (`heldCut`). */
+  private armGrace(running: RpcProc, chat: boolean): void {
     const held = this.held;
     if (!held || this.grace) return;
     const steer = this.heldFor === "steer";
+    const cut = this.heldCut;
     this.grace = setTimeout(
       () => {
         this.grace = null;
         if (this.held !== held) return;
         this.held = null;
+        this.heldCut = false;
         // a steer the CLI never ran is not waited on again
         if (steer) this.unread = this.unread.filter((k) => k !== "steer");
         // a held result is timed from the start too, as one that outran it is

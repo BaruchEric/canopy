@@ -263,7 +263,7 @@ describe("canopy incubator", () => {
       await run(incubatorCommand, ["resume", "--retry", "sp_0123456789ab", "--backend", b.base]);
       await run(incubatorCommand, ["stop", "sp_0123456789ab", "--backend", b.base]);
       const dismissed = await run(incubatorCommand, ["dismiss", "sp_0123456789ab", "--backend", b.base]);
-      expect(dismissed.out).toEqual(["sp_0123456789ab is off the list; its seed, inputs and vault note stay"]);
+      expect(dismissed.out).toEqual(["sp_0123456789ab is off the list; its seed and vault note stay, and its record and raw inputs are deleted in two weeks"]);
       expect(b.seen.map((r) => [r.method, r.path, r.id, r.json])).toEqual([
         ["POST", "/api/incubator/resume", "sp_0123456789ab", { choice: "continue" }],
         ["POST", "/api/incubator/resume", "sp_0123456789ab", { choice: "retry" }],

@@ -7,7 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DISMISSED_KEEP, LEFTOVER_AGE, sweepLeftovers } from "./leftovers";
 
-const NOW = Date.UTC(2026, 10, 14, 12);
+/** two weeks and an hour ahead of the real clock: utimes sets a folder's
+ *  ctime to the real now, and a dismissed record counts from the newer of
+ *  its mtime and ctime, so only a clock this far on lets a test's mtime decide */
+const NOW = Date.now() + DISMISSED_KEEP + 3600_000;
 const OLD = NOW - LEFTOVER_AGE - 60_000;
 const FRESH = NOW - 60_000;
 const GONE = "sp_aaaaaaaaaaaa";
@@ -110,6 +113,15 @@ describe("sweepLeftovers", () => {
     expect(await sweepLeftovers({ root, store }, sprouts, NOW)).toEqual([]);
     expect(existsSync(dismissed)).toBe(true);
     expect(existsSync(shared)).toBe(true);
+  });
+
+  test("a dismissed record moved before the store set its time is kept two weeks from the move: its ctime, not its last save's mtime", async () => {
+    // saved last a month ago and moved now: utimes sets the ctime to the real now, as the rename did
+    const dismissed = await dir(join(store, ".dismissed", GONE), Date.now() - 2 * DISMISSED_KEEP);
+    expect(await sweepLeftovers({ root, store }, sprouts, Date.now())).toEqual([]);
+    expect(existsSync(dismissed)).toBe(true);
+    expect(await sweepLeftovers({ root, store }, sprouts, Date.now() + DISMISSED_KEEP + 60_000)).toEqual([dismissed]);
+    expect(existsSync(dismissed)).toBe(false);
   });
 
   test("links and names that are not canopy's are left alone", async () => {

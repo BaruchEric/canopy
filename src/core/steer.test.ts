@@ -39,6 +39,25 @@ describe("a choice on a terminal agent's screen", () => {
     const old = "❯ 1. Yes\n" + Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n");
     expect(choiceOnScreen(old)).toBe(false);
   });
+
+  // Claude Code 2.1.325 echoes a prompt sent or queued as `❯ ` and its text,
+  // the glyph its dialogs' cursor uses (`>` where the terminal has no Unicode)
+  const sent = ["❯ 1. fix the failing test", "  2. push", "", "⏺ Running the tests first.", "", "✻ Working… (esc to interrupt)", ""];
+  const rule = "─".repeat(40);
+
+  test("a numbered prompt sent above an empty input box is no choice, the box bare, boxed or showing its placeholder", () => {
+    expect(choiceOnScreen([...sent, rule, "❯ ", rule, "  ? for shortcuts"].join("\n"))).toBe(false);
+    expect(choiceOnScreen([...sent.map((l) => l.replace("❯", ">")), rule, ">", rule].join("\n"))).toBe(false);
+    expect(choiceOnScreen([...sent, "╭────────────╮", "│ >          │", "╰────────────╯"].join("\n"))).toBe(false);
+    expect(choiceOnScreen([...sent, rule, `❯ Try "how does <filepath> work?"`, rule].join("\n"))).toBe(false);
+    // Codex's echo, with its prompt's placeholder under it
+    expect(choiceOnScreen(["› 1. fix the failing test", "  2. push", "", "• Working (3s • esc to interrupt)", "", "› Ask Codex to do anything", "  gpt-6.1-sol default · ~/dev/demo"].join("\n"))).toBe(false);
+  });
+
+  test("a dialog in the input box's place is a choice, with a numbered prompt sent above it", () => {
+    const dialog = ["⏺ Bash(git push origin main)", "", " Do you want to proceed?", " ❯ 1. Yes", "   2. No, and tell Claude what to do differently (esc)"];
+    expect(choiceOnScreen([...sent, ...dialog].join("\n"))).toBe(true);
+  });
 });
 
 describe("Codex's agent list on a shell's screen", () => {

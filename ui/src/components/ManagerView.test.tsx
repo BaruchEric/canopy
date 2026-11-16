@@ -194,6 +194,14 @@ describe("needs you", () => {
     const needs = section(renderCurrent(<ManagerView />), "needs you");
     expect(needs).toContain("the reviewer wants a look");
     expect(buttons(needs)).toEqual(["*accept and finish", "retry this step", "stop here"]);
+    // a gate as first drawn takes an answer; only a choice on its way or a
+    // gate that just moved draws them off (GateButtons.test.tsx)
+    expect(needs).toContain('<div class="mgr-need-acts">');
+    expect(needs).not.toContain("disabled");
+    // a manual step waiting for its go: its start is the gate's own button
+    const manual: Flow = { ...gated, steps: [{ name: "Build", status: "passed", runId: "r1" }, { name: "Deploy", status: "held", reason: "Deploy waits for your go" }] };
+    useStore.setState({ flows: { f1: manual } });
+    expect(buttons(section(renderCurrent(<ManagerView />), "needs you"))).toEqual(["*start Deploy", "retry this step", "stop here"]);
   });
 
   test("a ready branch whose verdict wants Eric offers land and send back; one that needs approval opens the approve sheet's look", () => {

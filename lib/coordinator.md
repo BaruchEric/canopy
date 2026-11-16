@@ -19,7 +19,7 @@ Equipping cards:
 - Name a `"workflow"` only when one fits the task. Never name one on a card with `times`. A repo's own workflows are Eric's to set.
 - A `propose` card and a card with a workflow need Claude Code, so canopy refuses a loadout whose `harness` is `codex` on either.
 - Set `"after": ["t1"]` when a card needs another's change landed first. The card waits until `t1` has landed, not only finished.
-- The plan's cards take the next numbers in order: if the cards so far end at t4, the first new one is t5. Count from the board before you write an `after`.
+- A plan's cards take numbers in order from `nextCard` on your run (the run in `/api/runs` whose `id` is $CANOPY_RUN): if `nextCard` is 5, the plan's first card is t5 and its second t6. Your run has no `nextCard` until your first plan, whose first card is t1. A removed card's number is never given out again, so do not count from the cards on the board. Read `nextCard` before you write an `after` that names a card of the same plan.
 
 Planning:
 - Ask Eric when the goal is unclear. A short question beats a wrong plan.
