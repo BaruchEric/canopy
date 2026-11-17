@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-Status: built and reviewed 2026-11-13 on branch `manager-top`.
+Status: built and reviewed 2026-11-13 on branch `manager-top`; merged into `main` and shipped 2026-11-13 (5d62ec47) to the mini, De Soto and the Mac.
 
 **Goal:** Eric steers one goal from one screen. `?view=manager&run=<coordinator>` shows the goal's cards as rings, every item that waits on him with its answer in place, a lane per worker with its step strip and loadout, and the manager's chat, on a desktop, a tablet and a phone. Every steering action has a route the page and the CLI can call and a coordinator's token cannot.
 
@@ -51,13 +51,13 @@ The two live checks on the mini (2026-11-12) showed both: coordinator 45024cc7 a
 **Interfaces:**
 - Produces: `export function goalRepoLine(repoId: string): string` in `src/core/coordinator.ts`. `coordinatorBrief(repo: Repo): Promise<string>` in `src/server/index.ts` appends it after the brief, before the standing rules.
 
-- [ ] **Step 1: Write the failing tests** in `src/core/coordinator.test.ts`:
+- [x] **Step 1: Write the failing tests** in `src/core/coordinator.test.ts`:
   - `goalRepoLine("playground/canopy-trigger-test")` equals `"Eric started this goal at the repo playground/canopy-trigger-test. Plan its cards there unless the goal names other repos; do not ask which repo."`
   - `lib/coordinator.md` (read with `Bun.file`) does not contain `"run": "<your run id>"`, and does contain `leave "run" out`.
-- [ ] **Step 2: Run** `bun test src/core/coordinator.test.ts -t "goalRepoLine|brief"`. Expected: FAIL.
-- [ ] **Step 3: Implement.** `coordinatorBrief(repo)` returns `withStandingRules(`${brief}\n\n${goalRepoLine(repo.id)}`, rules)`. In `lib/coordinator.md`, drop `"run"` from the instruction and the example, and say: the body is `{"tasks": [...]}`; leave "run" out, canopy fills in your own run. Keep the quoted-heredoc advice.
-- [ ] **Step 4: Run** the same tests. Expected: PASS.
-- [ ] **Step 5: Commit** "Coordinator brief: name the repo the goal started at, and leave run out of the plan body".
+- [x] **Step 2: Run** `bun test src/core/coordinator.test.ts -t "goalRepoLine|brief"`. Expected: FAIL.
+- [x] **Step 3: Implement.** `coordinatorBrief(repo)` returns `withStandingRules(`${brief}\n\n${goalRepoLine(repo.id)}`, rules)`. In `lib/coordinator.md`, drop `"run"` from the instruction and the example, and say: the body is `{"tasks": [...]}`; leave "run" out, canopy fills in your own run. Keep the quoted-heredoc advice.
+- [x] **Step 4: Run** the same tests. Expected: PASS.
+- [x] **Step 5: Commit** "Coordinator brief: name the repo the goal started at, and leave run out of the plan body".
 
 ### Task 2: `POST /api/flows/pickup`
 
@@ -69,15 +69,15 @@ The two live checks on the mini (2026-11-12) showed both: coordinator 45024cc7 a
 **Interfaces:**
 - Produces: `POST /api/flows/pickup {id: string}` answers 200 with the picked-up `Flow`. Errors: 400 when `id` is not a string; 404 `unknown flow: <id>`; 409 for "only a flow on a branch can be picked up" and "the flow is <status>, not stopped" (`Flows.pickUp`'s own words, `src/core/flow.ts` about line 828).
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `src/core/callers.test.ts`: add `["POST", "/api/flows/pickup"]` and `["POST", "/api/landing/followup"]` to the coordinator's `refused` list; add a test that `needs("POST", "/api/flows/pickup")` is `"operate"`.
   - `src/server/callers.test.ts`: add both routes to the "a coordinator at the gate" list; each answers 403.
   - `src/server/flows.test.ts`: a stopped branch flow picked up through the route answers 200 with `status` `"working"`; an unknown id answers 404; a flow that is working answers 409; a flow with no branch answers 409.
   - `src/server/coordrunner.test.ts` "Review Focus 4" (about line 817): replace `s.pickUpFlow(flowId)` with a `POST /api/flows/pickup {id: flowId}` carrying the page token the test already uses; expect 200, then the same settings-file and servers assertions. Remove `pickUpFlow` from the `Up` type.
-- [ ] **Step 2: Run** those four files. Expected: the new tests FAIL.
-- [ ] **Step 3: Implement** the route beside `/api/flows/resume` and the `RULES` entry (`flows/pickup` in the operate row). Map the three `pickUp` errors to their statuses by message. Delete the `pickUpFlow` hook.
-- [ ] **Step 4: Run** the four files. Expected: PASS. `grep -rn pickUpFlow src` finds nothing.
-- [ ] **Step 5: Commit** "Flows: POST /api/flows/pickup picks a stopped branch flow up; the test hook goes".
+- [x] **Step 2: Run** those four files. Expected: the new tests FAIL.
+- [x] **Step 3: Implement** the route beside `/api/flows/resume` and the `RULES` entry (`flows/pickup` in the operate row). Map the three `pickUp` errors to their statuses by message. Delete the `pickUpFlow` hook.
+- [x] **Step 4: Run** the four files. Expected: PASS. `grep -rn pickUpFlow src` finds nothing.
+- [x] **Step 5: Commit** "Flows: POST /api/flows/pickup picks a stopped branch flow up; the test hook goes".
 
 ### Task 3: `POST /api/landing/followup`
 
@@ -90,14 +90,14 @@ The two live checks on the mini (2026-11-12) showed both: coordinator 45024cc7 a
 - Produces: `export function followupRefusal(rec: LandingRun | undefined, entry: LandEntry | undefined, busy: boolean, id: string): { status: 404 | 409; error: string } | null` in `src/core/landing.ts`. `busy` is true when a live run or an active flow works on `rec.id`'s branch. Messages: 404 `"canopy holds no branch <id>; it was dropped or never ran"`; 409 `"a run is working on this branch; say to it instead"`; 409 `"it is in the landing queue (<state>); wait for it, or drop it from the queue first"`; 409 `"it was sent back (<state>); fix it from the landing queue instead"`; 409 `"it has landed"`.
 - Produces: `POST /api/landing/followup {id: string, note?: string}`. `id` is the branch origin (`LandingRun.id`). It calls `startBranchFix(state, rec, reason, label, rec.pr === undefined, { priority: "interactive" })` where `reason` is the trimmed note, or `"Carry on with the task from where you stopped."` when the note is empty or missing, and `label` is `"follow-up"` with a note and `"resume"` without. Answers 201 `{run: Run}`. `startBranchFix`'s own errors pass through.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `src/core/landing.test.ts`, `followupRefusal`: undefined record gives 404; `busy` gives the run message; an entry in each of `queued`, `waiting`, `judge`, `rebasing`, `setup`, `gate`, `scenarios`, `landing` gives the queue message naming the state; `conflict`, `red` and `moved` give the sent-back message; `landed` gives "it has landed"; no entry with `rec.state` `"ready"` or `"stopped"` gives null.
   - `src/server/landing-run.test.ts`: a ready branch run's follow-up with `note: "rename the flag"` answers 201, and the new run's first user message contains "rename the flag" and its `branch.origin` is the record's id; a second follow-up while that run works answers 409; a follow-up on a branch queued for landing answers 409 and starts nothing (count runs before and after); an unknown id answers 404.
   - `src/server/coordrunner.test.ts`: a card whose child settled `ready` gets a follow-up through the route; the card goes back to `running` with the new run as its `run`, the run's `equip.loadout` is the card's loadout, and the card settles again with a new note to the coordinator.
-- [ ] **Step 2: Run** the three files. Expected: the new tests FAIL.
-- [ ] **Step 3: Implement** `followupRefusal`, then the route: read `rec = state.landing.record(id)`, the entry from the landing info, and `busy` from the runner and flows, refuse through `followupRefusal`, then call `startBranchFix`.
-- [ ] **Step 4: Run** the three files. Expected: PASS.
-- [ ] **Step 5: Commit** "Landing: POST /api/landing/followup starts a later run on a settled branch, never beside another writer".
+- [x] **Step 2: Run** the three files. Expected: the new tests FAIL.
+- [x] **Step 3: Implement** `followupRefusal`, then the route: read `rec = state.landing.record(id)`, the entry from the landing info, and `busy` from the runner and flows, refuse through `followupRefusal`, then call `startBranchFix`.
+- [x] **Step 4: Run** the three files. Expected: PASS.
+- [x] **Step 5: Commit** "Landing: POST /api/landing/followup starts a later run on a settled branch, never beside another writer".
 
 ### Task 4: A profile step reports its own model
 
@@ -109,11 +109,11 @@ The two live checks on the mini (2026-11-12) showed both: coordinator 45024cc7 a
 **Interfaces:**
 - Produces: `stepExtras?: (flow: Flow, step: FlowStep) => StepExtras | undefined`. For a step with `profile`, `flowStepExtras` returns `equip` with `model` and `effort` set to the agent that step runs on (the same `select(profile)` agent `startCoordWorkflow` builds); the settings file, MCP config and servers stay the flow's.
 
-- [ ] **Step 1: Write the failing test:** a card flow whose loadout is `quick` (haiku, low) and whose second step names a profile on another model: that step's run has `agentSettings.model` equal to `equip.model`, and the first step's `equip.model` is haiku.
-- [ ] **Step 2: Run** it. Expected: FAIL (`equip.model` reads haiku on the profile step).
-- [ ] **Step 3: Implement.** Pass the step through the hook; resolve the profile's agent once per flow start and keep it where `flowStepExtras` can read it, or resolve it again with the same `agentFor` call.
-- [ ] **Step 4: Run** it and `src/core/flow.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** "Flows: a profile step's run reports the profile's model and effort".
+- [x] **Step 1: Write the failing test:** a card flow whose loadout is `quick` (haiku, low) and whose second step names a profile on another model: that step's run has `agentSettings.model` equal to `equip.model`, and the first step's `equip.model` is haiku.
+- [x] **Step 2: Run** it. Expected: FAIL (`equip.model` reads haiku on the profile step).
+- [x] **Step 3: Implement.** Pass the step through the hook; resolve the profile's agent once per flow start and keep it where `flowStepExtras` can read it, or resolve it again with the same `agentFor` call.
+- [x] **Step 4: Run** it and `src/core/flow.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit** "Flows: a profile step's run reports the profile's model and effort".
 
 ### Task 5: CLI verbs for steering
 
@@ -131,11 +131,11 @@ The two live checks on the mini (2026-11-12) showed both: coordinator 45024cc7 a
 - `canopy run pickup <flow>`: `POST /api/flows/pickup`; prints the flow's id and status.
 - Pure: `export function coordinatorLines(runs: Run[]): string[]` and `export function cardLines(run: Run): string[]` in `src/cli/coordinator.ts`.
 
-- [ ] **Step 1: Write the failing tests:** `coordinatorLines` lists only `action === "coordinate"` runs that are active; `cardLines` prints `t1  queued  playground/x  quick  spec  after t2  sync the spec` for a fixture card (columns padded the way `src/cli/loadouts.ts` pads); the CLI test pattern of `land.test.ts` for `followup` sends `{id, note}` and prints the run id; `run pickup` sends `{id}`. Every new verb has a `verbHelp` line (verbs.test.ts).
-- [ ] **Step 2: Run** the CLI tests. Expected: FAIL.
-- [ ] **Step 3: Implement** with `ask` and `backendTargets` from `src/cli/health.ts`, as `src/cli/loadouts.ts` does.
-- [ ] **Step 4: Run** `bun test src/cli`. Expected: PASS.
-- [ ] **Step 5: Commit** "CLI: canopy coordinator, land followup and run pickup".
+- [x] **Step 1: Write the failing tests:** `coordinatorLines` lists only `action === "coordinate"` runs that are active; `cardLines` prints `t1  queued  playground/x  quick  spec  after t2  sync the spec` for a fixture card (columns padded the way `src/cli/loadouts.ts` pads); the CLI test pattern of `land.test.ts` for `followup` sends `{id, note}` and prints the run id; `run pickup` sends `{id}`. Every new verb has a `verbHelp` line (verbs.test.ts).
+- [x] **Step 2: Run** the CLI tests. Expected: FAIL.
+- [x] **Step 3: Implement** with `ask` and `backendTargets` from `src/cli/health.ts`, as `src/cli/loadouts.ts` does.
+- [x] **Step 4: Run** `bun test src/cli`. Expected: PASS.
+- [x] **Step 5: Commit** "CLI: canopy coordinator, land followup and run pickup".
 
 ### Task 6: What the page needs from the server and the store
 
@@ -152,11 +152,11 @@ The two live checks on the mini (2026-11-12) showed both: coordinator 45024cc7 a
 - Produces in the store: `pickUpFlow(flowId: string): Promise<void>` (writes the flow into `flows` like `resumeFlow`), `followUp(id: string, note?: string): Promise<void>`, `coordAdd(runId: string, task: {...}): Promise<void>`.
 - Produces: `RunPane` takes an optional `onSend?: (text: string) => Promise<void>` and `to?: string` (the composer's placeholder names whom the words go to). Without them it behaves as today.
 
-- [ ] **Step 1: Write the failing tests:** `loadoutsInfo` lists every kit server with `here`; a server the kit keeps off this machine reads `here: false`; the coordinator's `/api/loadouts` answer has no `servers` key.
-- [ ] **Step 2: Run** them. Expected: FAIL.
-- [ ] **Step 3: Implement** the field, the api methods, the store actions and the `RunPane` props.
-- [ ] **Step 4: Run** the two server test files and `bun run typecheck`. Expected: PASS.
-- [ ] **Step 5: Commit** "Manager page plumbing: the kit's server names, pickup, follow-up and plan calls, and a RunPane that sends elsewhere".
+- [x] **Step 1: Write the failing tests:** `loadoutsInfo` lists every kit server with `here`; a server the kit keeps off this machine reads `here: false`; the coordinator's `/api/loadouts` answer has no `servers` key.
+- [x] **Step 2: Run** them. Expected: FAIL.
+- [x] **Step 3: Implement** the field, the api methods, the store actions and the `RunPane` props.
+- [x] **Step 4: Run** the two server test files and `bun run typecheck`. Expected: PASS.
+- [x] **Step 5: Commit** "Manager page plumbing: the kit's server names, pickup, follow-up and plan calls, and a RunPane that sends elsewhere".
 
 ### Task 7: `ui/src/manager.ts`, the view's rows
 
@@ -199,11 +199,11 @@ Rules the tests pin:
 - `goal.text` is the coordinator's first user step's text, else its `note`; `working` counts lanes with an active run or flow; `waiting` is `needs.length`; `ended` is `!isRunActive(coord)`.
 - `liveCoordinators`: active runs with `action === "coordinate"`, newest first.
 
-- [ ] **Step 1: Write the failing tests** for each rule above with fixtures in the style of `ui/src/coord.test.ts` (`run(id, over)`, `card(over)`, a `none: LandingInfo`). Include: a gated flow card whose Fill step's run holds a question prompt gives both a `gate` item and a `prompt` item with that step run's `runId`; a queued card `after: ["t1"]` sits in wave 1; a ready card whose landing review verdict is `land` gives a `landing` item with `canLand`.
-- [ ] **Step 2: Run** `bun test ui/src/manager.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the module. It imports types and pure helpers only.
-- [ ] **Step 4: Run** it. Expected: PASS.
-- [ ] **Step 5: Commit** "Manager: the top view's rows, rings, needs-you list and lanes as a pure helper".
+- [x] **Step 1: Write the failing tests** for each rule above with fixtures in the style of `ui/src/coord.test.ts` (`run(id, over)`, `card(over)`, a `none: LandingInfo`). Include: a gated flow card whose Fill step's run holds a question prompt gives both a `gate` item and a `prompt` item with that step run's `runId`; a queued card `after: ["t1"]` sits in wave 1; a ready card whose landing review verdict is `land` gives a `landing` item with `canLand`.
+- [x] **Step 2: Run** `bun test ui/src/manager.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** the module. It imports types and pure helpers only.
+- [x] **Step 4: Run** it. Expected: PASS.
+- [x] **Step 5: Commit** "Manager: the top view's rows, rings, needs-you list and lanes as a pure helper".
 
 ### Task 8: The top view
 
@@ -225,11 +225,11 @@ What it draws (the mockup's layout, in canopy's tokens):
 - Wide (over 1100 px): rings across the top, then needs-you and workers in a main column beside the chat. Tablet (761 to 1100 px): one column, chat last. Phone: needs-you first, then the rings strip (sideways scroll, `scroll-snap`), then a workers/chat switch like `CoordTasks`'s on a phone; 44 px buttons.
 - Entry points: the agents group's "manager" view (`g` `m`), and a "top view" button in `CoordTasks`'s head that navigates to `?view=manager&run=<encodeURIComponent(run.id)>`.
 
-- [ ] **Step 1: Write the failing tests** in `ManagerView.test.tsx`, store seeded through `useStore.setState` as `GateButtons.test.tsx` does: a store with one coordinator and a gated card renders a `section[aria-label="needs you"]` holding the gate's buttons; a run id the store lacks renders "This goal has ended" and the live coordinators; with `matchMedia` stubbed to phone, "needs you" comes before the rings in the markup and the workers/chat switch shows. `shortcuts.test.ts` keeps passing with the `m` row. `managerHere("?view=manager&run=mini%7Ced71ddfb")` is `"mini|ed71ddfb"`.
-- [ ] **Step 2: Run** the new and touched tests. Expected: FAIL.
-- [ ] **Step 3: Implement** the component, the routing, the entry points and the CSS (classes prefixed `mgr-`).
-- [ ] **Step 4: Run** the tests, `bun run typecheck`, `bun run lint`. Expected: PASS.
-- [ ] **Step 5: Commit** "Manager: the top view at ?view=manager, on desktop, tablet and phone".
+- [x] **Step 1: Write the failing tests** in `ManagerView.test.tsx`, store seeded through `useStore.setState` as `GateButtons.test.tsx` does: a store with one coordinator and a gated card renders a `section[aria-label="needs you"]` holding the gate's buttons; a run id the store lacks renders "This goal has ended" and the live coordinators; with `matchMedia` stubbed to phone, "needs you" comes before the rings in the markup and the workers/chat switch shows. `shortcuts.test.ts` keeps passing with the `m` row. `managerHere("?view=manager&run=mini%7Ced71ddfb")` is `"mini|ed71ddfb"`.
+- [x] **Step 2: Run** the new and touched tests. Expected: FAIL.
+- [x] **Step 3: Implement** the component, the routing, the entry points and the CSS (classes prefixed `mgr-`).
+- [x] **Step 4: Run** the tests, `bun run typecheck`, `bun run lint`. Expected: PASS.
+- [x] **Step 5: Commit** "Manager: the top view at ?view=manager, on desktop, tablet and phone".
 
 ### Task 9: The equip sheet
 
@@ -243,11 +243,11 @@ What it draws (the mockup's layout, in canopy's tokens):
 
 What it draws (the Equip mockup): the loadouts `loadoutsFor(task.action, kit)` offers as buttons; model and effort as segmented picks from `HARNESS[loadout.harness]`'s models and efforts; skills from `api.mentions(task.repo)` filtered to `kind === "skill"` and `harness === "claude"`, with a find box and a count; servers from `LoadoutsInfo.servers`, a server with `here: false` disabled with "not on <backend>"; a summary line; "apply to <id>" (`coordPlanEdit(run.id, task.id, {equip: equipFrom(...)})`) and "cancel". A plugin skill's row says that checking it turns on the whole plugin (plan 1 turns plugins on and off whole). A Codex loadout greys skills and servers with "a Codex worker takes model and effort only". The note under the head says a queued card takes the change when it starts. On a phone the sheet is full height.
 
-- [ ] **Step 1: Write the failing tests:** `equipFrom` with no changes gives `{loadout: "quick"}`; with the model changed gives `{loadout: "quick", model: "sonnet"}`; skills in another order compare equal. The sheet's markup lists the loadouts, disables a server with `here: false`, and greys skills for a codex loadout.
-- [ ] **Step 2: Run** them. Expected: FAIL.
-- [ ] **Step 3: Implement** it, and open it from the lane's equip action in `ManagerView`.
-- [ ] **Step 4: Run** the tests, typecheck and lint. Expected: PASS.
-- [ ] **Step 5: Commit** "Manager: the equip sheet sets a card's loadout and its overrides".
+- [x] **Step 1: Write the failing tests:** `equipFrom` with no changes gives `{loadout: "quick"}`; with the model changed gives `{loadout: "quick", model: "sonnet"}`; skills in another order compare equal. The sheet's markup lists the loadouts, disables a server with `here: false`, and greys skills for a codex loadout.
+- [x] **Step 2: Run** them. Expected: FAIL.
+- [x] **Step 3: Implement** it, and open it from the lane's equip action in `ManagerView`.
+- [x] **Step 4: Run** the tests, typecheck and lint. Expected: PASS.
+- [x] **Step 5: Commit** "Manager: the equip sheet sets a card's loadout and its overrides".
 
 ### Task 10: Browser check, docs and the full gates
 
@@ -255,7 +255,7 @@ What it draws (the Equip mockup): the loadouts `loadoutsFor(task.action, kit)` o
 - Modify: `scripts/browser/check.ts`, `scripts/browser/check.sh`
 - Modify: `README.md`, `SPEC.md`, `docs/architecture.md` (the coordinator section), `FEATURES.md` (FR-065), `lib/coordinator.md` if Task 1 left it short, `docs/superpowers/specs/2026-11-12-manager-design.md`, `docs/superpowers/plans/README.md`, this plan's Status line
 
-- [ ] **Step 1: Browser check.** Add `manager` to the views the check visits. Seed the scratch config with a kept coordinator run holding three cards (one queued `after` another, one with a flow) in the run log's format (`src/core/runlog.ts`), then open `?view=manager&run=<id>` at 1440 px, 900 px and 390 px. Check: at 390 px `document.documentElement.scrollWidth <= 390`, every `.mgr button` is at least 44 px tall, needs-you comes before the rings. Save a screenshot per width.
-- [ ] **Step 2: Docs.** README: the top view and the new CLI verbs. SPEC.md: the two routes and the view. architecture.md: the coordinator section gains the routes, the top view and how a card follows a follow-up. FEATURES.md FR-065: plan 3 shipped. The design doc: replace the `runs/nudge` lines in "What each steering action does" with FR-066's `runs/say`, mark phase 3 built with where it differs, and add a "Known gaps" list holding plan 2's four parked cases (a group card that later fails after "winner picked"; a landed entry pruned past `KEEP_LANDED` reads dropped; a pruned flow's card fails while its ready branch waits; a card waiting for capacity reads failed to its dependants). plans/README.md: a row for this plan, and plans 1 and 2 marked shipped 2026-11-12.
-- [ ] **Step 3: Gates.** `bun run typecheck`, `bun run lint`, `bun test`, `bun run build`. Expected: all pass.
-- [ ] **Step 4: Commit** "FR-065: plan 3, the top view and the steering routes; docs and the browser check".
+- [x] **Step 1: Browser check.** Add `manager` to the views the check visits. Seed the scratch config with a kept coordinator run holding three cards (one queued `after` another, one with a flow) in the run log's format (`src/core/runlog.ts`), then open `?view=manager&run=<id>` at 1440 px, 900 px and 390 px. Check: at 390 px `document.documentElement.scrollWidth <= 390`, every `.mgr button` is at least 44 px tall, needs-you comes before the rings. Save a screenshot per width.
+- [x] **Step 2: Docs.** README: the top view and the new CLI verbs. SPEC.md: the two routes and the view. architecture.md: the coordinator section gains the routes, the top view and how a card follows a follow-up. FEATURES.md FR-065: plan 3 shipped. The design doc: replace the `runs/nudge` lines in "What each steering action does" with FR-066's `runs/say`, mark phase 3 built with where it differs, and add a "Known gaps" list holding plan 2's four parked cases (a group card that later fails after "winner picked"; a landed entry pruned past `KEEP_LANDED` reads dropped; a pruned flow's card fails while its ready branch waits; a card waiting for capacity reads failed to its dependants). plans/README.md: a row for this plan, and plans 1 and 2 marked shipped 2026-11-12.
+- [x] **Step 3: Gates.** `bun run typecheck`, `bun run lint`, `bun test`, `bun run build`. Expected: all pass.
+- [x] **Step 4: Commit** "FR-065: plan 3, the top view and the steering routes; docs and the browser check".

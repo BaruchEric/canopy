@@ -85,7 +85,7 @@ export interface RunEquip {
 - Produces, in `loadout.ts`: `LOADOUT_NAME: RegExp` (`/^[a-z0-9][a-z0-9-]{0,39}$/`), `parseLoadouts(raw: unknown, kit: KitManifest | null): LoadoutsInfo`, `baseCovers(base: readonly string[], skill: string): boolean`, `EMPTY_LOADOUTS: LoadoutsInfo`.
 - Consumes: `takesModel(h, model)` and `takesEffort(h, effort)` from `core/harness.ts`, `isHarness` (or the `Harness` list) from `core/types.ts`.
 
-- [ ] **Step 1: Write the failing tests** in `src/core/loadout.test.ts`. The kit fixture is a `KitManifest` with `mcp` holding `executor` (agents null), `wiki-memory` (agents null), `codex-only` (agents `["codex"]`) and `canopy` (as `withCanopyServer` adds it).
+- [x] **Step 1: Write the failing tests** in `src/core/loadout.test.ts`. The kit fixture is a `KitManifest` with `mcp` holding `executor` (agents null), `wiki-memory` (agents null), `codex-only` (agents `["codex"]`) and `canopy` (as `withCanopyServer` adds it).
 
 ```ts
 test("no loadouts block is no loadouts and no errors", () => {
@@ -140,10 +140,10 @@ test("baseCovers takes a name or a plugin's prefix", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/core/loadout.test.ts`. Expected: FAIL, `parseLoadouts` not found.
-- [ ] **Step 3: Add the types and write `loadout.ts`.** A skill key matches `/^[A-Za-z0-9][\w.-]*(:[A-Za-z0-9][\w.-]*)?$/`; a base entry may also end in `:*`. Fields of a loadout: `note`, `harness`, `model`, `effort`, `skills`, `mcp`, `canopyTools`; any other key is "not a loadout field". Errors keep the order loadouts appear in the object, one per field, and a loadout with any error is left out. Loadouts keep kit.json's order. `EMPTY_LOADOUTS` is `{ base: [], loadouts: [], errors: [] }`.
-- [ ] **Step 4: Run the tests.** Run: `bun test src/core/loadout.test.ts`. Expected: PASS.
-- [ ] **Step 5: Gates and commit.** Run the four gates, then `git add src/core/types.ts src/core/loadout.ts src/core/loadout.test.ts && git commit` with the message "Loadouts: the kit.json block and its parser (FR-065)".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/core/loadout.test.ts`. Expected: FAIL, `parseLoadouts` not found.
+- [x] **Step 3: Add the types and write `loadout.ts`.** A skill key matches `/^[A-Za-z0-9][\w.-]*(:[A-Za-z0-9][\w.-]*)?$/`; a base entry may also end in `:*`. Fields of a loadout: `note`, `harness`, `model`, `effort`, `skills`, `mcp`, `canopyTools`; any other key is "not a loadout field". Errors keep the order loadouts appear in the object, one per field, and a loadout with any error is left out. Loadouts keep kit.json's order. `EMPTY_LOADOUTS` is `{ base: [], loadouts: [], errors: [] }`.
+- [x] **Step 4: Run the tests.** Run: `bun test src/core/loadout.test.ts`. Expected: PASS.
+- [x] **Step 5: Gates and commit.** Run the four gates, then `git add src/core/types.ts src/core/loadout.ts src/core/loadout.test.ts && git commit` with the message "Loadouts: the kit.json block and its parser (FR-065)".
 
 ### Task 2: Planning a loadout start
 
@@ -179,7 +179,7 @@ export function planLoadoutStart(o: {
 export function mergeProviderSettings(provider: Record<string, unknown> | null, overrides: Record<string, "on" | "off">): Record<string, unknown>;
 ```
 
-- [ ] **Step 1: Write the failing tests.** Mentions are built with a helper `m(name, from, kind = "skill", harness = "claude")`.
+- [x] **Step 1: Write the failing tests.** Mentions are built with a helper `m(name, from, kind = "skill", harness = "claude")`.
 
 ```ts
 const skills = [m("ripe", "user"), m("grill-me", "user"), m("homelab:tailchan", "plugin:homelab"), m("homelab:macmini", "plugin:homelab"),
@@ -229,10 +229,10 @@ test("the provider's settings keep everything and take the overrides over their 
 ```
 
   `base` is `{ name: "docs", info, agent: DEFAULT_AGENT, skills, machine: "mini", entryOf: () => ({ entry: { type: "stdio", command: "bash", args: [] } }) }`, where `info` holds `docs` (haiku, low), `homelab-ops` (the spec's, base `["verify-build", "homelab:*"]`), `needs-missing` (skills `["nope:gone"]`) and `codex-fast` (harness codex, model `gpt-5.5`, effort low). Pick a codex model `takesModel("codex", …)` accepts.
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/core/loadout.test.ts`. Expected: FAIL on the new names.
-- [ ] **Step 3: Write the three functions.** `skillOverridesFor` reads only claude skills from `user` and `plugin:*`, skips any name that also appears from `project`, sorts the keys, and counts "off" entries. `planLoadoutStart` checks in this order: the name (the refusal lists the loadouts in kit.json's order, `none` when there are none, then ` (<the first error>)` when `info.errors` is not empty), every loadout skill among `skills` (any source, first missing one in the message), every server through `entryOf`. A codex loadout has no overrides and no servers. When the loadout's harness differs from `agent.harness`, the plan's agent has no `provider` and `extra` is `""`. `canopyTools` is the loadout's.
-- [ ] **Step 4: Run the tests.** Run: `bun test src/core/loadout.test.ts`. Expected: PASS.
-- [ ] **Step 5: Gates and commit.** Message: "Loadouts: plan a start from a loadout, the repo's skills and the kit's servers".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/core/loadout.test.ts`. Expected: FAIL on the new names.
+- [x] **Step 3: Write the three functions.** `skillOverridesFor` reads only claude skills from `user` and `plugin:*`, skips any name that also appears from `project`, sorts the keys, and counts "off" entries. `planLoadoutStart` checks in this order: the name (the refusal lists the loadouts in kit.json's order, `none` when there are none, then ` (<the first error>)` when `info.errors` is not empty), every loadout skill among `skills` (any source, first missing one in the message), every server through `entryOf`. A codex loadout has no overrides and no servers. When the loadout's harness differs from `agent.harness`, the plan's agent has no `provider` and `extra` is `""`. `canopyTools` is the loadout's.
+- [x] **Step 4: Run the tests.** Run: `bun test src/core/loadout.test.ts`. Expected: PASS.
+- [x] **Step 5: Gates and commit.** Message: "Loadouts: plan a start from a loadout, the repo's skills and the kit's servers".
 
 ### Task 3: One settings file and several servers on the command line
 
@@ -247,7 +247,7 @@ test("the provider's settings keep everything and take the overrides over their 
   - `DriveSpec` gains `settings?: string` ("the run's own settings file, passed as the one `--settings`: a loadout's, holding the provider's settings too") and `servers?: readonly string[]` ("servers the run's mcp.json holds besides canopy's: each is allowed by its `mcp__<name>__*` rule and checked at init").
 - Consumes: nothing from Tasks 1 and 2.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
 ```ts
 // core/runtools.test.ts
@@ -283,10 +283,10 @@ test("each loadout server is allowed by its own rule", () => {
 ```
 
   The provider test needs `zai` to be a provider `takesProvider("claude", …)` accepts and a `providersDir()` that resolves; if the fixture cannot make one, assert instead that without `settings` the provider's `--settings` is there and with it only the run's is.
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/core/runtools.test.ts src/server/runtools.test.ts src/core/claudedrive.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Make the changes.** In `cliArgs`, with `spec.settings` set, build the flags from the agent without `withProviderFile` and put `"--settings", spec.settings` among them; the allowed list is `spec.allowedTools`, then `CANOPY_TOOL_RULE` when `spec.mcpConfig` is set (as today), then `mcpRule(s)` for each of `spec.servers`. The `runTools` caller in `server/index.ts` passes `{ canopy: { ...canopyMcpCommand(), env: … } }`.
-- [ ] **Step 4: Run the tests.** Same command. Expected: PASS, and the rest of `claudedrive.test.ts` and `runtools-route.test.ts` still pass.
-- [ ] **Step 5: Gates and commit.** Message: "Run launch: one settings file of its own and an mcp.json of several servers".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/core/runtools.test.ts src/server/runtools.test.ts src/core/claudedrive.test.ts`. Expected: FAIL.
+- [x] **Step 3: Make the changes.** In `cliArgs`, with `spec.settings` set, build the flags from the agent without `withProviderFile` and put `"--settings", spec.settings` among them; the allowed list is `spec.allowedTools`, then `CANOPY_TOOL_RULE` when `spec.mcpConfig` is set (as today), then `mcpRule(s)` for each of `spec.servers`. The `runTools` caller in `server/index.ts` passes `{ canopy: { ...canopyMcpCommand(), env: … } }`.
+- [x] **Step 4: Run the tests.** Same command. Expected: PASS, and the rest of `claudedrive.test.ts` and `runtools-route.test.ts` still pass.
+- [x] **Step 5: Gates and commit.** Message: "Run launch: one settings file of its own and an mcp.json of several servers".
 
 ### Task 4: A loadout server that did not start ends the run
 
@@ -298,7 +298,7 @@ test("each loadout server is allowed by its own rule", () => {
 - Produces: `serversDown(init: Record<string, unknown>, want: readonly string[]): string[]`, exported from `claudedrive.ts`, answering `"<name> (<status>)"` for each wanted server whose `mcp_servers` entry is missing (`"absent"`) or not `"connected"`, in `want`'s order.
 - Consumes: `DriveSpec.servers` (Task 3).
 
-- [ ] **Step 1: Write the failing tests.** `fake-claude.ts` reads `FAKE_CLAUDE_MCP`, a JSON list of `{ name, status }`, and puts it in its init message as `mcp_servers` (absent: no field, as today). The driver harness in `claudedrive.test.ts` takes `opts.spec` (a partial `DriveSpec`) laid over its default spec.
+- [x] **Step 1: Write the failing tests.** `fake-claude.ts` reads `FAKE_CLAUDE_MCP`, a JSON list of `{ name, status }`, and puts it in its init message as `mcp_servers` (absent: no field, as today). The driver harness in `claudedrive.test.ts` takes `opts.spec` (a partial `DriveSpec`) laid over its default spec.
 
 ```ts
 test("serversDown names each wanted server that is not connected", () => {
@@ -318,10 +318,10 @@ test("a run whose loadout servers connected goes on", async () => {
 ```
 
   Use the harness's own name for its start function and its chat mode; the names above are placeholders for that harness's.
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/core/claudedrive.test.ts -t "loadout server|serversDown"`. Expected: FAIL.
-- [ ] **Step 3: Write it.** In the init branch, when `serversDown(m, ctx.spec.servers ?? [])` is not empty, kill the process and throw `new Error(`a loadout server did not start here: ${down.join(", ")}`)`; the drive's catch hands it to `ctx.exited` as `error`.
-- [ ] **Step 4: Run the tests.** Run: `bun test src/core/claudedrive.test.ts`. Expected: PASS.
-- [ ] **Step 5: Gates and commit.** Message: "Run launch: a loadout server that did not start ends the run at init".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/core/claudedrive.test.ts -t "loadout server|serversDown"`. Expected: FAIL.
+- [x] **Step 3: Write it.** In the init branch, when `serversDown(m, ctx.spec.servers ?? [])` is not empty, kill the process and throw `new Error(`a loadout server did not start here: ${down.join(", ")}`)`; the drive's catch hands it to `ctx.exited` as `error`.
+- [x] **Step 4: Run the tests.** Run: `bun test src/core/claudedrive.test.ts`. Expected: PASS.
+- [x] **Step 5: Gates and commit.** Message: "Run launch: a loadout server that did not start ends the run at init".
 
 ### Task 5: The kit carries loadouts, and GET /api/loadouts
 
@@ -337,7 +337,7 @@ test("a run whose loadout servers connected goes on", async () => {
   - `runEntry(server: string): { entry: KitMcpEntry } | { why: string }`, the entry a run on this backend gets: `buildEntry(s, "claude", "claude-json", deps.hostHome ?? homedir(), deps.procEnv ?? process.env)` when `mcpWanted(s, "claude", machine)`.
   - Route `GET /api/loadouts` answering `state.kit.loadouts()`. A GET defaults to the read right, so `core/callers.ts` needs no entry.
 
-- [ ] **Step 1: Write the failing tests** in `src/server/kit.test.ts`, with its `setup()` and a manifest holding `loadouts` and an `mcp` block with `probe` (`command: "~/bin/probe"`, machines `["mac"]`) and `elsewhere` (machines `["gpd"]`), `self` matching the `mac` machine's `backend`, and `hostHome: "/home/eric"`.
+- [x] **Step 1: Write the failing tests** in `src/server/kit.test.ts`, with its `setup()` and a manifest holding `loadouts` and an `mcp` block with `probe` (`command: "~/bin/probe"`, machines `["mac"]`) and `elsewhere` (machines `["gpd"]`), `self` matching the `mac` machine's `backend`, and `hostHome: "/home/eric"`.
 
 ```ts
 test("the scan carries the parsed loadouts", async () => {
@@ -363,10 +363,10 @@ test("runEntry builds the claude entry with the host's home", async () => {
 ```
 
   A backend that is no kit machine answers `{ why: "this backend is not a machine in kit.json" }`; a `buildEntry` refusal answers its `why`. Add a test for each.
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/server/kit.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Write it.** `read()` keeps the raw JSON so `doScan` sets the loadouts from `parseLoadouts(raw, withCanopyServer(kit))`; on a read or parse failure they are `{ ...EMPTY_LOADOUTS, errors: [<the KitError's message>] }`.
-- [ ] **Step 4: Run the tests.** Same command. Expected: PASS.
-- [ ] **Step 5: Gates and commit.** Message: "Kit: loadouts in KitInfo, the run entry for a server, GET /api/loadouts".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/server/kit.test.ts`. Expected: FAIL.
+- [x] **Step 3: Write it.** `read()` keeps the raw JSON so `doScan` sets the loadouts from `parseLoadouts(raw, withCanopyServer(kit))`; on a read or parse failure they are `{ ...EMPTY_LOADOUTS, errors: [<the KitError's message>] }`.
+- [x] **Step 4: Run the tests.** Same command. Expected: PASS.
+- [x] **Step 5: Gates and commit.** Message: "Kit: loadouts in KitInfo, the run entry for a server, GET /api/loadouts".
 
 ### Task 6: Starting a run with a loadout
 
@@ -381,7 +381,7 @@ test("runEntry builds the claude entry with the host's home", async () => {
   - `RunStartHow` gains `loadout?: string`.
   - The run route takes `loadout` (a string); `canopy run` and the page send it (Tasks 7 and 8).
 
-- [ ] **Step 1: Write the failing tests.** The scratch kit.json (set as `CANOPY_KIT` before `startServer`) has one machine whose `backend` is `selfName(null, hostname())` from `core/backends.ts`, a server `probe` (`command: "bash"`, `args: ["-c", "true"]`) and these loadouts: `docs` (model haiku, effort low, skills `["repo-skill"]`), `tools` (skills `["repo-skill"]`, mcp `["probe"]`), `missing` (skills `["nope-xyz"]`). The scratch repo has `.claude/skills/repo-skill/SKILL.md`. Wait for `GET /api/loadouts` to list them before the first start. The `HeldDriver` captures each `DriveCtx`.
+- [x] **Step 1: Write the failing tests.** The scratch kit.json (set as `CANOPY_KIT` before `startServer`) has one machine whose `backend` is `selfName(null, hostname())` from `core/backends.ts`, a server `probe` (`command: "bash"`, `args: ["-c", "true"]`) and these loadouts: `docs` (model haiku, effort low, skills `["repo-skill"]`), `tools` (skills `["repo-skill"]`, mcp `["probe"]`), `missing` (skills `["nope-xyz"]`). The scratch repo has `.claude/skills/repo-skill/SKILL.md`. Wait for `GET /api/loadouts` to list them before the first start. The `HeldDriver` captures each `DriveCtx`.
 
 ```ts
 test("a loadout run starts with its model, effort and one settings file", async () => {
@@ -430,10 +430,10 @@ test("the kept run.json keeps equip", async () => {
 ```
 
   Use the helper names the copied test file already has for posting, waiting and the held driver.
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/server/loadout-route.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Wire the start.** In `startRepoRun`, after the agent is resolved and before `needHarness`: with `how.loadout`, read the skills (`listMentions(repo.path)` for a claude loadout, `[]` otherwise), call `planLoadoutStart` with `machine: state.kit.machineName() ?? hostname()` and `entryOf: (s) => state.kit.runEntry(s)`, throw `HttpError(400, refused)` on a refusal, and go on with the plan's agent. The run's id is chosen up front. The tools decision becomes `how.tools ?? (plan ? plan.canopyTools : agent.canopyTools === true)`. With a plan for claude: read `${providersDir()}/${agent.provider}.json` when the agent names a claude provider (unreadable or not JSON: `HttpError(400, "provider <id>'s settings file <path> cannot be read: <reason>")`), write `mergeProviderSettings(provider, plan.overrides)` with `writeRunSettings`, and write the servers into the run's `mcp.json`: through `runTools` (which takes the extra servers beside canopy's) when tools are on, else `writeMcpConfig(id, plan.servers)` when there are any. The release on a failed start removes both files. The route parses `loadout` (`typeof b.loadout === "string" && LOADOUT_NAME.test(b.loadout)`, else 400 "loadout must be a loadout's name") and refuses it with `times > 1` or `action: "coordinate"`. `dropRunTools` also calls `removeRunSettings`, and the end cleanup runs it when `run.canopyTools || run.equip`. `runlog.ts` keeps `equip` (strings through the redacting `r`, as `agentSettings` does) and `isRun` checks it.
-- [ ] **Step 4: Run the tests.** Run: `bun test src/server/loadout-route.test.ts src/server/runtools-route.test.ts src/core/runner*.test.ts src/core/runlog.test.ts`. Expected: PASS.
-- [ ] **Step 5: Gates and commit.** Message: "Runs: start one with a loadout from kit.json (FR-065 phase 1)".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/server/loadout-route.test.ts`. Expected: FAIL.
+- [x] **Step 3: Wire the start.** In `startRepoRun`, after the agent is resolved and before `needHarness`: with `how.loadout`, read the skills (`listMentions(repo.path)` for a claude loadout, `[]` otherwise), call `planLoadoutStart` with `machine: state.kit.machineName() ?? hostname()` and `entryOf: (s) => state.kit.runEntry(s)`, throw `HttpError(400, refused)` on a refusal, and go on with the plan's agent. The run's id is chosen up front. The tools decision becomes `how.tools ?? (plan ? plan.canopyTools : agent.canopyTools === true)`. With a plan for claude: read `${providersDir()}/${agent.provider}.json` when the agent names a claude provider (unreadable or not JSON: `HttpError(400, "provider <id>'s settings file <path> cannot be read: <reason>")`), write `mergeProviderSettings(provider, plan.overrides)` with `writeRunSettings`, and write the servers into the run's `mcp.json`: through `runTools` (which takes the extra servers beside canopy's) when tools are on, else `writeMcpConfig(id, plan.servers)` when there are any. The release on a failed start removes both files. The route parses `loadout` (`typeof b.loadout === "string" && LOADOUT_NAME.test(b.loadout)`, else 400 "loadout must be a loadout's name") and refuses it with `times > 1` or `action: "coordinate"`. `dropRunTools` also calls `removeRunSettings`, and the end cleanup runs it when `run.canopyTools || run.equip`. `runlog.ts` keeps `equip` (strings through the redacting `r`, as `agentSettings` does) and `isRun` checks it.
+- [x] **Step 4: Run the tests.** Run: `bun test src/server/loadout-route.test.ts src/server/runtools-route.test.ts src/core/runner*.test.ts src/core/runlog.test.ts`. Expected: PASS.
+- [x] **Step 5: Gates and commit.** Message: "Runs: start one with a loadout from kit.json (FR-065 phase 1)".
 
 ### Task 7: canopy loadouts and canopy run --loadout
 
@@ -446,7 +446,7 @@ test("the kept run.json keeps equip", async () => {
 - Consumes: `LoadoutsInfo` (Task 1), `GET /api/loadouts` (Task 5), the route's `loadout` (Task 6).
 - Produces: `RunArgs.loadout?: string`; `loadoutLines(info: LoadoutsInfo): string[]`; `canopy loadouts [--json] [--backend URL | --on NAME]`.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
 
 ```ts
 // run.test.ts
@@ -473,10 +473,10 @@ test("one line per loadout, then the errors", () => {
 ```
 
   Pad the name and agent columns to the longest in the list, as the test shows; a loadout with no servers and no canopy tools prints no server column.
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test src/cli/run.test.ts src/cli/loadouts.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Write it.** A line is its fields joined by two spaces, empty ones left out: the name and the agent (`harness model effort`), each padded to the longest in the list; the skill count (`1 skill`, `n skills`); the servers and then `canopy tools` when on, joined by `, `; the note. Then `always on: <base joined by , >` when the base is not empty, then `error: <line>` per error. The body sends `loadout` when set. `canopy loadouts` asks `GET /api/loadouts` on the selected backend and prints `loadoutLines`, or the JSON with `--json`; with no loadouts and no errors it prints "no loadouts in kit.json". Add both to the usage text beside `canopy run`.
-- [ ] **Step 4: Run the tests.** Same command. Expected: PASS.
-- [ ] **Step 5: Gates and commit.** Message: "CLI: canopy loadouts, and canopy run --loadout".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test src/cli/run.test.ts src/cli/loadouts.test.ts`. Expected: FAIL.
+- [x] **Step 3: Write it.** A line is its fields joined by two spaces, empty ones left out: the name and the agent (`harness model effort`), each padded to the longest in the list; the skill count (`1 skill`, `n skills`); the servers and then `canopy tools` when on, joined by `, `; the note. Then `always on: <base joined by , >` when the base is not empty, then `error: <line>` per error. The body sends `loadout` when set. `canopy loadouts` asks `GET /api/loadouts` on the selected backend and prints `loadoutLines`, or the JSON with `--json`; with no loadouts and no errors it prints "no loadouts in kit.json". Add both to the usage text beside `canopy run`.
+- [x] **Step 4: Run the tests.** Same command. Expected: PASS.
+- [x] **Step 5: Gates and commit.** Message: "CLI: canopy loadouts, and canopy run --loadout".
 
 ### Task 8: Pick a loadout in the plan sheet, see it on the run
 
@@ -488,7 +488,7 @@ test("one line per loadout, then the errors", () => {
 - Consumes: `KitInfo.loadouts` (already in `s.kit[backend]` from the `kit` event and `loadKit`), `Run.equip`, the route's `loadout`.
 - Produces: `loadoutLabel(l: Loadout): string`, `equipTitle(e: RunEquip): string`; `api.run(..., canopyTools?, loadout?)` and `startRun(..., canopyTools?, loadout?)` with `loadout` last.
 
-- [ ] **Step 1: Write the failing tests** in `ui/src/loadouts.test.ts`.
+- [x] **Step 1: Write the failing tests** in `ui/src/loadouts.test.ts`.
 
 ```ts
 test("a label names the model and effort only when they are not the default", () => {
@@ -502,19 +502,19 @@ test("a run's equip as a title, one line each", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to see them fail.** Run: `bun test ui/src/loadouts.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Build the pick and the chip.** `loadoutLabel` is the name, then in parentheses whichever of these apply, joined by `, `: the harness when it is not claude, the model and the effort when not `default`. `equipTitle` is one line each: `loadout <name>`, the model and effort, `skills: …` and `servers: …` when not empty, `<n> skills off`. In `Plan`, read `useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts ?? [])`. When that list is not empty and the run is one plain run (`!coordinate && !workspace && !repo.host && !repo.forge && times === 1`), show a `label.plan-branch` holding "loadout" and a `select` whose first option (value `""`) is "the repo's route" and then one option per loadout, text `loadoutLabel(l)`, title `l.note`. With one picked: the agent fact chip shows `loadoutLabel` in place of `describeAgent(agent)`, `ToolsPreflight` defaults to the loadout's `canopyTools`, and `go()` passes the name to `startRun`. The sheet head shows a `span.branch` with `run.equip.loadout` and `title={equipTitle(run.equip)}` when the run has `equip`; `RunChip`'s title gains a line `loadout <name>`.
-- [ ] **Step 4: Run the tests.** Run: `bun test ui/src/loadouts.test.ts`. Expected: PASS.
-- [ ] **Step 5: Watch it in a browser.** `bun run build`, then start a scratch server on a free port with a short `CANOPY_CONFIG_DIR` (under `/tmp`, since the tmux socket path has a length limit) and `CANOPY_KIT` pointing at a scratch kit.json with two loadouts, over a scratch root holding one git repo. Drive it with Playwright (`playwright-core` and the installed Chromium): open the repo's ask plan sheet at 1440 px and at 390 px, pick each loadout, and screenshot the sheet. Expected: the select lists both loadouts, the agent chip follows the pick, and on the phone the select fits the sheet with no sideways scroll. Look at the screenshots before going on.
-- [ ] **Step 6: Gates and commit.** Message: "Plan sheet: pick a loadout; the run sheet and chip name it".
+- [x] **Step 2: Run them to see them fail.** Run: `bun test ui/src/loadouts.test.ts`. Expected: FAIL.
+- [x] **Step 3: Build the pick and the chip.** `loadoutLabel` is the name, then in parentheses whichever of these apply, joined by `, `: the harness when it is not claude, the model and the effort when not `default`. `equipTitle` is one line each: `loadout <name>`, the model and effort, `skills: …` and `servers: …` when not empty, `<n> skills off`. In `Plan`, read `useStore((s) => s.kit[backendOf(repo.id)]?.loadouts?.loadouts ?? [])`. When that list is not empty and the run is one plain run (`!coordinate && !workspace && !repo.host && !repo.forge && times === 1`), show a `label.plan-branch` holding "loadout" and a `select` whose first option (value `""`) is "the repo's route" and then one option per loadout, text `loadoutLabel(l)`, title `l.note`. With one picked: the agent fact chip shows `loadoutLabel` in place of `describeAgent(agent)`, `ToolsPreflight` defaults to the loadout's `canopyTools`, and `go()` passes the name to `startRun`. The sheet head shows a `span.branch` with `run.equip.loadout` and `title={equipTitle(run.equip)}` when the run has `equip`; `RunChip`'s title gains a line `loadout <name>`.
+- [x] **Step 4: Run the tests.** Run: `bun test ui/src/loadouts.test.ts`. Expected: PASS.
+- [x] **Step 5: Watch it in a browser.** `bun run build`, then start a scratch server on a free port with a short `CANOPY_CONFIG_DIR` (under `/tmp`, since the tmux socket path has a length limit) and `CANOPY_KIT` pointing at a scratch kit.json with two loadouts, over a scratch root holding one git repo. Drive it with Playwright (`playwright-core` and the installed Chromium): open the repo's ask plan sheet at 1440 px and at 390 px, pick each loadout, and screenshot the sheet. Expected: the select lists both loadouts, the agent chip follows the pick, and on the phone the select fits the sheet with no sideways scroll. Look at the screenshots before going on.
+- [x] **Step 6: Gates and commit.** Message: "Plan sheet: pick a loadout; the run sheet and chip name it".
 
 ### Task 9: Docs, a real run, and ship
 
 **Files:**
 - Modify: `docs/architecture.md` (the "## The kit" section: a Loadouts paragraph; find the run start's section with `grep -n '^## ' docs/architecture.md` and add the settings file and the init check), `SPEC.md` ("Data and state": `run-tools/<id>.settings.json`; the stack line on launch flags if it names them), `README.md` (`canopy loadouts`, `canopy run --loadout`, the plan sheet's loadout pick), `FEATURES.md` (FR-065: phase 1 shipped, with the date), `docs/superpowers/specs/2026-11-12-manager-design.md` ("Phases" item 1: shipped, with the commit), `docs/superpowers/plans/README.md` (a row for this plan) and this plan's Status line.
 
-- [ ] **Step 1: Write the docs** above, each true of the code as merged.
-- [ ] **Step 2: A real run.** Add a `docs` loadout to the scratch kit (model haiku, effort low, one user skill) and start a run with the real `claude` on the scratch server: `canopy run <repo> ask --loadout docs -m "Reply with the names of the skills you can use, comma separated"` with `--backend` at the scratch server. Read the run's wire (`canopy run show <id> --wire`): the init message's `skills` holds the loadout's skill and the repo's, and none of the user skills turned off. Then a loadout naming a server that cannot start (`command: "false"`) ends failed with "a loadout server did not start here". Record both outcomes in this plan's Status line.
-- [ ] **Step 3: Gates.** `bun run typecheck && bun run lint && bun test && bun run build`. Expected: all pass.
-- [ ] **Step 4: Commit, merge and push.** Commit the docs ("Loadouts: docs, plan status"), merge the branch into `main` from the main checkout, push, then remove the kept worktree with `canopy worktrees rm canopy manager-loadouts --delete-branch`.
-- [ ] **Step 5: Deploy.** From the main checkout: `bun run build` (the Mac's server serves `dist/web`), then `bun run redeploy` for the mini without `--force`; on exit 4 wait for the live run, flow or landing to end and try again. The Mac's launchd server runs the new server code only after a restart, which locks its secrets key until Eric unlocks it.
+- [x] **Step 1: Write the docs** above, each true of the code as merged.
+- [x] **Step 2: A real run.** Add a `docs` loadout to the scratch kit (model haiku, effort low, one user skill) and start a run with the real `claude` on the scratch server: `canopy run <repo> ask --loadout docs -m "Reply with the names of the skills you can use, comma separated"` with `--backend` at the scratch server. Read the run's wire (`canopy run show <id> --wire`): the init message's `skills` holds the loadout's skill and the repo's, and none of the user skills turned off. Then a loadout naming a server that cannot start (`command: "false"`) ends failed with "a loadout server did not start here". Record both outcomes in this plan's Status line.
+- [x] **Step 3: Gates.** `bun run typecheck && bun run lint && bun test && bun run build`. Expected: all pass.
+- [x] **Step 4: Commit, merge and push.** Commit the docs ("Loadouts: docs, plan status"), merge the branch into `main` from the main checkout, push, then remove the kept worktree with `canopy worktrees rm canopy manager-loadouts --delete-branch`.
+- [x] **Step 5: Deploy.** From the main checkout: `bun run build` (the Mac's server serves `dist/web`), then `bun run redeploy` for the mini without `--force`; on exit 4 wait for the live run, flow or landing to end and try again. The Mac's launchd server runs the new server code only after a restart, which locks its secrets key until Eric unlocks it.

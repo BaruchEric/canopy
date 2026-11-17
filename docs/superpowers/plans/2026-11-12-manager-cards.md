@@ -103,7 +103,7 @@ export function holdNote(held: boolean): string;
 // ChildLanding gains: prMerged?: true
 ```
 
-- [ ] **Step 1: Write the failing tests** in `coordinator.test.ts`, one `test` each:
+- [x] **Step 1: Write the failing tests** in `coordinator.test.ts`, one `test` each:
   - `validatePlan` with `by: "coordinator"` and `equip: { loadout: "quick", model: "opus" }` answers `{ error: "tasks[0].equip: a coordinator names a loadout; its fields are Eric's" }`; with `equip: { loadout: "quick" }` it keeps `equip` as given.
   - An unknown loadout answers `tasks[0].equip.loadout: no loadout nope in kit.json`; overrides with no loadout answer `tasks[0].equip: name a loadout before changing its fields`; a codex loadout with `skills` answers `tasks[0].equip: a codex loadout takes no skills or servers`; a model the loadout's harness does not take answers `tasks[0].equip.model: claude does not take gpt-6-sol`.
   - `workflow: "review"` passes when `ctx.workflows(repo)` lists it, sets `workflowRepo: true` only when the match has `fromRepo`, and answers `tasks[0].workflow: no workflow nope for <repo>` otherwise; `workflow` with `times: 2` answers `tasks[0]: a card with a workflow starts one run`.
@@ -115,13 +115,13 @@ export function holdNote(held: boolean): string;
   - `flowSettled`: a working, waiting or gated flow is null; failed is `{ state: "failed", outcome: "failed" }`; stopped is failed `stopped`; done with branch `nothing` is done `no change`, `uncommitted` failed `uncommitted`, `ready` behaves as `childSettled` does for a ready branch (waits while its entry is in the queue, `landed` once landed, `ready` once overdue).
   - `holdNote(true)` is `canopy: Eric held the goal; no new card starts until he resumes it`; `holdNote(false)` is `canopy: Eric resumed the goal; queued cards start again`; `landedNote` starts `canopy: task t1 (` and ends `) landed; cards that wait for it can start`; `blockedNote(t2, "waits for t1, which failed")` is `canopy: task t2 (<title>) waits for t1, which failed; it stays queued until Eric takes its after off or removes it`.
 
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/core/coordinator.test.ts`. Expected: FAIL on the new names.
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/core/coordinator.test.ts`. Expected: FAIL on the new names.
 
-- [ ] **Step 3: Implement.** Take the branch half of `childOutcome` (from the `b === "working"` line down) into one private helper that `childOutcome` and `flowSettled` share, so a done flow's branch settles exactly as a run's. `flowNote` follows `settleNote`'s lines, with `result:` set to `<workflow> <status>` and, when a step has a `reason` or `summary`, `, <step name>: <that line>`. Update every caller of the old `validatePlan(input, { known, have })` signature so the tree type-checks (the hub's call sites change for real in Task 2; here pass `cards`, `next`, an empty `LoadoutsInfo`, `workflows: () => []` and `by` from the caller).
+- [x] **Step 3: Implement.** Take the branch half of `childOutcome` (from the `b === "working"` line down) into one private helper that `childOutcome` and `flowSettled` share, so a done flow's branch settles exactly as a run's. `flowNote` follows `settleNote`'s lines, with `result:` set to `<workflow> <status>` and, when a step has a `reason` or `summary`, `, <step name>: <that line>`. Update every caller of the old `validatePlan(input, { known, have })` signature so the tree type-checks (the hub's call sites change for real in Task 2; here pass `cards`, `next`, an empty `LoadoutsInfo`, `workflows: () => []` and `by` from the caller).
 
-- [ ] **Step 4: Run the tests and see them pass.** Run: `bun test src/core/coordinator.test.ts src/server/coordinator.test.ts`. Expected: PASS.
+- [x] **Step 4: Run the tests and see them pass.** Run: `bun test src/core/coordinator.test.ts src/server/coordinator.test.ts`. Expected: PASS.
 
-- [ ] **Step 5: Commit** ("Coordinator cards: equip, workflow and after on a card, and their checks").
+- [x] **Step 5: Commit** ("Coordinator cards: equip, workflow and after on a card, and their checks").
 
 ---
 
@@ -146,17 +146,17 @@ branch?: (origin: string) => ChildBranch;
 
 - Produces routes: `POST /api/coordinator/start {run, ids?: string[]}`, `POST /api/coordinator/hold {run, held: boolean}` (operate), and `plan`/`tasks` taking `equip`, `workflow`, `after`. `plan` and `edit` become `async`.
 
-- [ ] **Step 1: Write the failing tests** in `coordinator.test.ts` (its fake deps gain `loadouts`, `workflows`, `branch`):
+- [x] **Step 1: Write the failing tests** in `coordinator.test.ts` (its fake deps gain `loadouts`, `workflows`, `branch`):
   - hold: `POST hold {held: true}` sets `run.held`, a following `start` queues the proposed cards and starts none, the manager's chat gets `holdNote(true)`; `{held: false}` clears it, the queued cards start, and the chat gets `holdNote(false)`. A coordinator's own token answers 403 `a coordinator proposes; holding the goal is Eric's`.
   - start with ids: `{ids: ["t2"]}` queues t2 only and starts it; `{ids: ["t9"]}` answers 404 `no card t9`; a running id answers 409 `t1 is running; only a proposed or queued card starts`; with t1 and t3 queued and room for one, `{ids: ["t3"]}` starts t3 first.
   - a queued card's `after` changes through `tasks`; a queued card is removed through `{remove: true}`.
   - after: t2 after t1 waits with outcome `waits for t1`; t1 settles `landed` and t2 starts.
   - Review Focus 1: t1 settles `ready` (its sort leaves it to Eric), t2 waits; the fake `landing` then answers t1's entry as `landed`, `recheck()` turns t1's outcome to `landed`, the chat gets `landedNote(t1)`, and t2 starts. The same with `prMerged: true` on a card that settled `PR opened`.
   - Review Focus 5: t1 fails; t2 keeps `queued` with outcome `waits for t1, which failed`, and the chat gets `blockedNote` once across two pumps. Removing t1 (a proposed t1 removed before start) gives `which was removed`.
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/server/coordinator.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** In the pump, a held coordinator sets every queued card's outcome to `the goal is held` and starts nothing; each queued card's `afterWait` words become its outcome, and a `blocked` one queues `blockedNote` once per card and words. Keep the `first` ids per coordinator from the last start with ids until those cards started. On a start, set the card's `branch` to the child's `branch.origin`. `recheck()` also looks at `done` cards whose outcome is in `MAY_LAND_LATER`: a card's run (or `deps.branch(card.branch)` when the run is gone), or for a group card the group's state, says landed, the card's outcome becomes `landed`, `landedNote` is queued and the coordinator is pumped. In `index.ts`, the `landing` dep sets `prMerged: true` when `state.prs.info()` has the branch's PR with `state.status === "merged"`, `branch` answers the same by origin, `loadouts` is `state.kit.loadouts()`, and `workflows` lists `loadWorkflows({ path: "", host: "none" })` (and `loadWorkflows(repo)` for `withRepo`) entries that parse and are not `listed: false`, marking `fromRepo` for `source === "repo"`. A plan from a coordinator token passes `by: "coordinator"` and `withRepo` false; a person passes `by: "person"` and `withRepo` true. Add `coordinator/hold` to the operate row in `RULES` and a test in `callers.test.ts` that it needs operate.
-- [ ] **Step 4: Run the tests and see them pass.** Run: `bun test src/server/coordinator.test.ts src/core/callers.test.ts src/server/coordrunner.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** ("Coordinator: hold a goal, start chosen cards, after waits for landed").
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/server/coordinator.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** In the pump, a held coordinator sets every queued card's outcome to `the goal is held` and starts nothing; each queued card's `afterWait` words become its outcome, and a `blocked` one queues `blockedNote` once per card and words. Keep the `first` ids per coordinator from the last start with ids until those cards started. On a start, set the card's `branch` to the child's `branch.origin`. `recheck()` also looks at `done` cards whose outcome is in `MAY_LAND_LATER`: a card's run (or `deps.branch(card.branch)` when the run is gone), or for a group card the group's state, says landed, the card's outcome becomes `landed`, `landedNote` is queued and the coordinator is pumped. In `index.ts`, the `landing` dep sets `prMerged: true` when `state.prs.info()` has the branch's PR with `state.status === "merged"`, `branch` answers the same by origin, `loadouts` is `state.kit.loadouts()`, and `workflows` lists `loadWorkflows({ path: "", host: "none" })` (and `loadWorkflows(repo)` for `withRepo`) entries that parse and are not `listed: false`, marking `fromRepo` for `source === "repo"`. A plan from a coordinator token passes `by: "coordinator"` and `withRepo` false; a person passes `by: "person"` and `withRepo` true. Add `coordinator/hold` to the operate row in `RULES` and a test in `callers.test.ts` that it needs operate.
+- [x] **Step 4: Run the tests and see them pass.** Run: `bun test src/server/coordinator.test.ts src/core/callers.test.ts src/server/coordrunner.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit** ("Coordinator: hold a goal, start chosen cards, after waits for landed").
 
 ---
 
@@ -181,11 +181,11 @@ async function withLoadout(state: ServerState, repo: Repo, loadout: string | Loa
 // GroupStart gains: loadout?: Loadout
 ```
 
-- [ ] **Step 1: Write the failing tests.** In `loadout.test.ts`: `cardLoadout({ loadout: "feature", model: "sonnet", skills: ["unslop"] }, info)` keeps the name `feature`, the harness and effort, takes `sonnet` and `["unslop"]`, and has `canopyTools: false` even when the loadout says true; an unknown name answers `{ refused: "no loadout nope in kit.json" }`. In `coordrunner.test.ts` (scratch `CANOPY_KIT` with a loadout `quick` on haiku), a card with `equip: { loadout: "quick" }` started through "start these" makes a child whose `equip.loadout` is `quick`, whose agent model is `haiku`, which holds no canopy tools, and whose settings file exists while it runs; a card with `times: 2` and the loadout gives both members `equip.loadout` `quick`; a card naming a loadout that is gone from kit.json fails with outcome `no loadout quick in kit.json`.
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/core/loadout.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** `planLoadout` with a `Loadout` object plans it by laying it into the info's list under its own name before `planLoadoutStart`. Take `startRepoRun`'s plan-and-files lines into `withLoadout` and call it from there, so the hand-started path does not change. `startCoordChild` resolves `cardLoadout(task.equip, state.kit.loadouts())` when `task.equip?.loadout` is set (a refusal throws, which fails the card with its words), starts the branch run with `withLoadout(..., false)` extras plus `{ parent: coordId, priority? }`, and releases the files when the start throws. `startGroup` with `GroupStart.loadout` starts each member through `withLoadout` in place of its profile. The hand-started route's refusal of a loadout with `times` above 1 stays.
-- [ ] **Step 4: Run the tests and see them pass.** Run: `bun test src/core/loadout.test.ts src/server/coordrunner.test.ts src/server/loadout-route.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** ("Coordinator cards start with their loadout, groups too").
+- [x] **Step 1: Write the failing tests.** In `loadout.test.ts`: `cardLoadout({ loadout: "feature", model: "sonnet", skills: ["unslop"] }, info)` keeps the name `feature`, the harness and effort, takes `sonnet` and `["unslop"]`, and has `canopyTools: false` even when the loadout says true; an unknown name answers `{ refused: "no loadout nope in kit.json" }`. In `coordrunner.test.ts` (scratch `CANOPY_KIT` with a loadout `quick` on haiku), a card with `equip: { loadout: "quick" }` started through "start these" makes a child whose `equip.loadout` is `quick`, whose agent model is `haiku`, which holds no canopy tools, and whose settings file exists while it runs; a card with `times: 2` and the loadout gives both members `equip.loadout` `quick`; a card naming a loadout that is gone from kit.json fails with outcome `no loadout quick in kit.json`.
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/core/loadout.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** `planLoadout` with a `Loadout` object plans it by laying it into the info's list under its own name before `planLoadoutStart`. Take `startRepoRun`'s plan-and-files lines into `withLoadout` and call it from there, so the hand-started path does not change. `startCoordChild` resolves `cardLoadout(task.equip, state.kit.loadouts())` when `task.equip?.loadout` is set (a refusal throws, which fails the card with its words), starts the branch run with `withLoadout(..., false)` extras plus `{ parent: coordId, priority? }`, and releases the files when the start throws. `startGroup` with `GroupStart.loadout` starts each member through `withLoadout` in place of its profile. The hand-started route's refusal of a loadout with `times` above 1 stays.
+- [x] **Step 4: Run the tests and see them pass.** Run: `bun test src/core/loadout.test.ts src/server/coordrunner.test.ts src/server/loadout-route.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit** ("Coordinator cards start with their loadout, groups too").
 
 ---
 
@@ -207,11 +207,11 @@ export function loadoutOfEquip(equip: RunEquip, harness: Harness): Loadout;
 // SweptChat gains:  equip?: RunEquip
 ```
 
-- [ ] **Step 1: Write the failing tests.** In `loadout.test.ts`: `loadoutOfEquip` keeps name, model, effort, skills and mcp, takes the harness given, `canopyTools: false`, note empty. In `loadout-route.test.ts` (it already starts loadout runs on a scratch server): a branch run started with loadout `docs` and settled ready, then fixed through `POST /api/landing/fix`, starts a run whose `equip.loadout` is `docs` with the same model and a settings file; the same after the loadout was taken out of kit.json; a fork of a loadout run (`POST /api/runs/fork`) carries the same `equip.loadout`.
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/core/loadout.test.ts src/server/loadout-route.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** The landing record copies `run.equip`. `startBranchFix` with `rec.equip` starts through `withLoadout(state, repo, loadoutOfEquip(rec.equip, rec.harness), agent, base, holdsTools)`; its `parent` and `depth` stay as they are, and it never sets `child`. `startForkRun` does the same from `original.equip`, and `startSweptChat` from `c.equip`, which the sweep records from the run it sweeps.
-- [ ] **Step 4: Run the tests and see them pass.** Run: `bun test src/core/loadout.test.ts src/server/loadout-route.test.ts src/server/landing.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** ("A fix, a fork and a swept chat's restart keep the run's loadout").
+- [x] **Step 1: Write the failing tests.** In `loadout.test.ts`: `loadoutOfEquip` keeps name, model, effort, skills and mcp, takes the harness given, `canopyTools: false`, note empty. In `loadout-route.test.ts` (it already starts loadout runs on a scratch server): a branch run started with loadout `docs` and settled ready, then fixed through `POST /api/landing/fix`, starts a run whose `equip.loadout` is `docs` with the same model and a settings file; the same after the loadout was taken out of kit.json; a fork of a loadout run (`POST /api/runs/fork`) carries the same `equip.loadout`.
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/core/loadout.test.ts src/server/loadout-route.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** The landing record copies `run.equip`. `startBranchFix` with `rec.equip` starts through `withLoadout(state, repo, loadoutOfEquip(rec.equip, rec.harness), agent, base, holdsTools)`; its `parent` and `depth` stay as they are, and it never sets `child`. `startForkRun` does the same from `original.equip`, and `startSweptChat` from `c.equip`, which the sweep records from the run it sweeps.
+- [x] **Step 4: Run the tests and see them pass.** Run: `bun test src/core/loadout.test.ts src/server/loadout-route.test.ts src/server/landing.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit** ("A fix, a fork and a swept chat's restart keep the run's loadout").
 
 ---
 
@@ -225,11 +225,11 @@ export function loadoutOfEquip(equip: RunEquip, harness: Harness): Loadout;
 - Consumes: `CoordTask.branch` (Tasks 1 and 2), `cardLanded`.
 - Produces: no new names. A run whose `parent` is a coordinator and whose `branch.origin` equals a card's `branch` becomes that card's `run` when the card has not landed: the card goes back to `running`, its outcome clears, and it settles again with a new note.
 
-- [ ] **Step 1: Write the failing tests.** In `coordinator.test.ts`: t1 settles `ready`; a new run with `parent` the coordinator and the same `branch.origin` arrives through `onRun`; t1 is `running` with that run, then settles again and the chat gets a second settle note. A card that settled `landed` is not reopened. A card t2 after t1 does not start while t1 runs again. In `coordrunner.test.ts`: a card child whose branch is fixed through `POST /api/landing/fix` reopens its card, and the fix run has the card's loadout and no child refusal (Review Focus 3).
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/server/coordinator.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** in `follow`: when no card has `run === child.id`, look for a card of `child.parent` whose `branch` is `child.branch?.origin` and that is not `cardLanded`; adopt the run (keep `limited` as `resumeLimited` left it), then `settle`. Confirm the landing record keeps `parent` for a card's child, so every `startBranchFix` caller (landing fix, PR fix, stall resume, trigger follow-up) carries it.
-- [ ] **Step 4: Run the tests and see them pass.** Run the same command. Expected: PASS.
-- [ ] **Step 5: Commit** ("A coordinator card follows every run on its branch and settles again").
+- [x] **Step 1: Write the failing tests.** In `coordinator.test.ts`: t1 settles `ready`; a new run with `parent` the coordinator and the same `branch.origin` arrives through `onRun`; t1 is `running` with that run, then settles again and the chat gets a second settle note. A card that settled `landed` is not reopened. A card t2 after t1 does not start while t1 runs again. In `coordrunner.test.ts`: a card child whose branch is fixed through `POST /api/landing/fix` reopens its card, and the fix run has the card's loadout and no child refusal (Review Focus 3).
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/server/coordinator.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement** in `follow`: when no card has `run === child.id`, look for a card of `child.parent` whose `branch` is `child.branch?.origin` and that is not `cardLanded`; adopt the run (keep `limited` as `resumeLimited` left it), then `settle`. Confirm the landing record keeps `parent` for a card's child, so every `startBranchFix` caller (landing fix, PR fix, stall resume, trigger follow-up) carries it.
+- [x] **Step 4: Run the tests and see them pass.** Run the same command. Expected: PASS.
+- [x] **Step 5: Commit** ("A coordinator card follows every run on its branch and settles again").
 
 ---
 
@@ -255,20 +255,20 @@ export type ChildStart = { run: Run } | { group: RunGroup } | { flow: Flow } | {
 // CoordinatorDeps gains: flow?: (id: string) => Flow | undefined
 ```
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
   - `trigger.test.ts`: `workflowPlan` of a workflow with an `ask` gate is `{ kind: "flow" }`; `triggerPlan` of the same still answers its refusal; one plain step is `{ kind: "run", ... }`.
   - `flow.test.ts`: a flow started with `equip` keeps it on the flow; with `hooks.stepExtras` answering `{ settings: "/x.json", servers: ["s"], equip }`, every step's runner start gets those extras; after `pickUp` of a stopped branch flow the next step gets them too.
   - `coordinator.test.ts` (fake `flow` dep): a start answering `{ flow }` sets the card's `flow` and `branch`, and the flow counts as one working child; `onFlow` with the flow done and its branch ready waits for the landing entry, then settles `landed` with a `flowNote`; failed settles `failed`; stopped settles `failed` `stopped`; a stopped card flow that turns working again (picked up) puts the card back to `running`.
   - `coordrunner.test.ts` (scratch user workflow `two-steps` with steps `build` and `check`, the second gated `ask`; loadout `quick`): a card with `workflow: "two-steps"` and `equip: { loadout: "quick" }` starts a branch flow, not a run; its first step's run has `equip.loadout` `quick` and a settings file under the flow's own key; that file is still there after the step's run ended; the flow parks at the ask gate and is not marked unattended. A one-plain-step workflow starts a branch run with the step's spec. Review Focus 2: the repo holds `.canopy/workflows/review.md` with a different label, a coordinator card names `review`, and the flow's workflow has `source: "bundled"`. Review Focus 4: stop the card's flow, restart the server on the same config dir, `pickUp` it, and its next step's start has the settings file and servers.
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/core/trigger.test.ts src/core/flow.test.ts src/server/coordinator.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.**
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/core/trigger.test.ts src/core/flow.test.ts src/server/coordinator.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.**
   - `startCoordChild` with `task.workflow` loads it from `loadWorkflows(repo)` when `task.workflowRepo`, else from `loadWorkflows({ path: "", host: "none" })`, applies `withRepoModes`, and takes `workflowPlan`. A string fails the card with it.
   - A run plan starts a branch run with the step's spec, as `triggerSpec`'s run case builds it but without `unattended`, and the loadout as in Task 3.
   - A flow plan cuts the branch under `withBranchStart` and calls `state.flows.start(repo, { ...wf, agentRole: "job" }, task.note, select, { branch, priority, equip })`. `select(profile)` answers the profile's agent for a step that names one, else the loadout's planned agent. A step whose agent is not Claude Code refuses the start: `step <name> of <workflow> runs <harness>; a card's flow needs Claude Code`.
   - The settings file and `mcp.json` are written under the key `flow-<flow id>` (plan 1's `writeRunSettings` and `writeMcpConfig` take any id). `stepExtras` answers their paths, `flow.equip.mcp` as `servers` and `flow.equip` for a flow that has `equip`. The flows' `onChange` removes the two files when a flow ends `done` or `failed`. The boot sweep leaves `flow-*` files alone. Confirm `dropRunTools` at a step's end removes only files keyed by that run's id.
   - In the hub, `working` counts a running card with an active flow as one. `onFlow` settles a card whose `flow` is that flow's id through `flowSettled`, with `deps.branch(flow.branch.origin)` and the overdue clock from `flow.endedAt`. It also puts a card that failed `stopped` back to `running` when its flow is active again. `recheck()` covers running flow cards.
-- [ ] **Step 4: Run the tests and see them pass.** Run the same command plus `bun test src/server/flows.test.ts src/core/flow-runner.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** ("A coordinator card that names a workflow runs it as a flow on its branch").
+- [x] **Step 4: Run the tests and see them pass.** Run the same command plus `bun test src/server/flows.test.ts src/core/flow-runner.test.ts`. Expected: PASS.
+- [x] **Step 5: Commit** ("A coordinator card that names a workflow runs it as a flow on its branch").
 
 ---
 
@@ -291,11 +291,11 @@ export function withStandingRules(brief: string, rules: string | null): string;
 // LANES.coordinator gains "GET /api/loadouts" and "GET /api/coordinator/workflows"
 ```
 
-- [ ] **Step 1: Write the failing tests.** `coordWorkflows` keeps only parsed, listed, bundled and user entries and never carries `file` or a step's `body`; `withStandingRules(brief, "  Prefer the quick loadout.\n")` is `${brief}\n\n## Eric's standing rules\n\nPrefer the quick loadout.`, and with null or blank rules it is the brief. In `callers.test.ts`, the pinned coordinator lane is the old set plus the two GETs; in `callers-route.test.ts`, a coordinator token reads `GET /api/loadouts` and `GET /api/coordinator/workflows` and still gets 403 on `GET /api/repos/workflows`. In `coordrunner.test.ts`, with a scratch HOME holding `.claude/manager.md`, the coordinator's prompt contains `## Eric's standing rules` and the file's text.
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test src/core/coordinator.test.ts src/server/callers.test.ts src/server/callers-route.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement.** The route lists `loadWorkflows({ path: "", host: "none" })` through `coordWorkflows`. `coordinatorBrief` reads `join(homedir(), ".claude", "manager.md")` (a missing file is no rules) and passes the brief through `withStandingRules`. The lane's 403 text names the new reads. In `lib/coordinator.md`: "Seeing the board" lists five reads; a new section "Equipping cards" says to read `/api/loadouts` and `/api/coordinator/workflows`, give each card `"equip": {"loadout": "<name>"}` picked by what the task touches with the reason in one line of the reply, name a `"workflow"` only when one fits and never with `times`, and set `"after": ["t1"]` when a card needs another's change landed first; that the plan's cards take the next numbers in order (if the cards so far end at t4, the first new one is t5); that model, effort, skills and servers are Eric's; and "Hearing back" adds the landed, waits-for and held notes.
-- [ ] **Step 4: Run the tests and see them pass.** Run the same command. Expected: PASS.
-- [ ] **Step 5: Commit** ("Coordinator: reads loadouts and workflows, and its brief carries Eric's standing rules").
+- [x] **Step 1: Write the failing tests.** `coordWorkflows` keeps only parsed, listed, bundled and user entries and never carries `file` or a step's `body`; `withStandingRules(brief, "  Prefer the quick loadout.\n")` is `${brief}\n\n## Eric's standing rules\n\nPrefer the quick loadout.`, and with null or blank rules it is the brief. In `callers.test.ts`, the pinned coordinator lane is the old set plus the two GETs; in `callers-route.test.ts`, a coordinator token reads `GET /api/loadouts` and `GET /api/coordinator/workflows` and still gets 403 on `GET /api/repos/workflows`. In `coordrunner.test.ts`, with a scratch HOME holding `.claude/manager.md`, the coordinator's prompt contains `## Eric's standing rules` and the file's text.
+- [x] **Step 2: Run them and see them fail.** Run: `bun test src/core/coordinator.test.ts src/server/callers.test.ts src/server/callers-route.test.ts src/server/coordrunner.test.ts`. Expected: FAIL.
+- [x] **Step 3: Implement.** The route lists `loadWorkflows({ path: "", host: "none" })` through `coordWorkflows`. `coordinatorBrief` reads `join(homedir(), ".claude", "manager.md")` (a missing file is no rules) and passes the brief through `withStandingRules`. The lane's 403 text names the new reads. In `lib/coordinator.md`: "Seeing the board" lists five reads; a new section "Equipping cards" says to read `/api/loadouts` and `/api/coordinator/workflows`, give each card `"equip": {"loadout": "<name>"}` picked by what the task touches with the reason in one line of the reply, name a `"workflow"` only when one fits and never with `times`, and set `"after": ["t1"]` when a card needs another's change landed first; that the plan's cards take the next numbers in order (if the cards so far end at t4, the first new one is t5); that model, effort, skills and servers are Eric's; and "Hearing back" adds the landed, waits-for and held notes.
+- [x] **Step 4: Run the tests and see them pass.** Run the same command. Expected: PASS.
+- [x] **Step 5: Commit** ("Coordinator: reads loadouts and workflows, and its brief carries Eric's standing rules").
 
 ---
 
@@ -319,11 +319,11 @@ coordHold(runId: string, held: boolean): Promise<...>;
 // store: coordStart(runId, ids?), coordHold(runId, held)
 ```
 
-- [ ] **Step 1: Write the failing tests.** `cardCarries` of a card with `equip: { loadout: "feature" }` gives `loadout.word` `feature`, with `model: "sonnet"` too gives `feature, changed` and a title naming `model sonnet`; `workflow: "review"` gives `review`; `after: ["t1", "t3"]` gives `after t1, t3`. In `CoordTasks.test.tsx`: the facts line shows the three; a held active coordinator's head shows a "resume" button and the words "held", an unheld one a "hold" button; a proposed card has a "start" button that calls `coordStart(run.id, [task.id])`; the card form offers a loadout select (none plus the store's loadouts) and an after field, and saving sends `equip` and `after`.
-- [ ] **Step 2: Run them and see them fail.** Run: `bun test ui/src/coord.test.ts ui/src/components/CoordTasks.test.tsx`. Expected: FAIL.
-- [ ] **Step 3: Implement** with the existing card styles (`facts`, `coord-chip`); a chip's full detail goes in its `title`. The workflow pick in the form lists the repo's workflows from `api.workflows(repoId)` when the form opens. Buttons are at least 44 px tall on a phone.
-- [ ] **Step 4: Run the tests and see them pass**, then the gates: `bun run typecheck`, `bun run lint`. Then watch it on a served build: `bash scripts/browser/check.sh` plus a Playwright script through `scripts/browser/run.sh` (or the Mac's Chrome) against a scratch server whose config dir holds a kept coordinator run with cards carrying a loadout, a workflow and `after`, at 1440 and 390 wide. Save screenshots in the plan's workspace and name them in the report.
-- [ ] **Step 5: Commit** ("Coordinator cards show their loadout, workflow and after; hold and start one card").
+- [x] **Step 1: Write the failing tests.** `cardCarries` of a card with `equip: { loadout: "feature" }` gives `loadout.word` `feature`, with `model: "sonnet"` too gives `feature, changed` and a title naming `model sonnet`; `workflow: "review"` gives `review`; `after: ["t1", "t3"]` gives `after t1, t3`. In `CoordTasks.test.tsx`: the facts line shows the three; a held active coordinator's head shows a "resume" button and the words "held", an unheld one a "hold" button; a proposed card has a "start" button that calls `coordStart(run.id, [task.id])`; the card form offers a loadout select (none plus the store's loadouts) and an after field, and saving sends `equip` and `after`.
+- [x] **Step 2: Run them and see them fail.** Run: `bun test ui/src/coord.test.ts ui/src/components/CoordTasks.test.tsx`. Expected: FAIL.
+- [x] **Step 3: Implement** with the existing card styles (`facts`, `coord-chip`); a chip's full detail goes in its `title`. The workflow pick in the form lists the repo's workflows from `api.workflows(repoId)` when the form opens. Buttons are at least 44 px tall on a phone.
+- [x] **Step 4: Run the tests and see them pass**, then the gates: `bun run typecheck`, `bun run lint`. Then watch it on a served build: `bash scripts/browser/check.sh` plus a Playwright script through `scripts/browser/run.sh` (or the Mac's Chrome) against a scratch server whose config dir holds a kept coordinator run with cards carrying a loadout, a workflow and `after`, at 1440 and 390 wide. Save screenshots in the plan's workspace and name them in the report.
+- [x] **Step 5: Commit** ("Coordinator cards show their loadout, workflow and after; hold and start one card").
 
 ---
 
@@ -332,8 +332,8 @@ coordHold(runId: string, held: boolean): Promise<...>;
 **Files:**
 - Modify: `README.md` (the coordinator bullet), `docs/architecture.md` (the coordinator section and the loadouts paragraph; `grep -n '^## ' docs/architecture.md` to find them), `SPEC.md` (a run's `held`, a card's new fields, flow files under `run-tools`), `FEATURES.md` (FR-065 phase 2), `docs/superpowers/specs/2026-11-12-manager-design.md` (Phases item 2: shipped, and every place this plan differs), `docs/superpowers/plans/README.md`, this plan's Status line
 
-- [ ] **Step 1:** Update each doc above where this plan's change makes it wrong or leaves it silent.
-- [ ] **Step 2:** Run every gate: `bun run typecheck`, `bun run lint`, `bun test`, `bun run build`. Expected: all exit 0.
-- [ ] **Step 3: Commit** ("Manager plan 2 docs: cards carry a loadout, a workflow and after").
+- [x] **Step 1:** Update each doc above where this plan's change makes it wrong or leaves it silent.
+- [x] **Step 2:** Run every gate: `bun run typecheck`, `bun run lint`, `bun test`, `bun run build`. Expected: all exit 0.
+- [x] **Step 3: Commit** ("Manager plan 2 docs: cards carry a loadout, a workflow and after").
 
 The controller merges, pushes, deploys (`bun run redeploy all`), and on the mini starts one small coordinator against a scratch repo with the `quick` loadout to watch a card start, settle and report, and checks the cards in Eric's Chrome.
