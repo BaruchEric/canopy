@@ -138,6 +138,14 @@ describe("a run's own extras", () => {
     expect(spawnEnv({ env: ctxOf(0).env, spawn: bunSpawn, pass: ctxOf(0).pass })).toMatchObject(extra);
   });
 
+  test("a run's process never gets the server's NODE_ENV, unless the run was handed one", () => {
+    const base = { NODE_ENV: "production", PATH: "/bin" };
+    const run = { env: { CANOPY_RUN: "r1" } };
+    expect(spawnEnv(run, base)).toEqual({ PATH: "/bin", CANOPY_RUN: "r1" });
+    expect(spawnEnv({ ...run, stage: true }, base)["NODE_ENV"]).toBeUndefined();
+    expect(spawnEnv({ ...run, pass: { NODE_ENV: "test" } }, base)["NODE_ENV"]).toBe("test");
+  });
+
   test("an id given at the start names the run, and one in use is refused", () => {
     const { runner } = setup();
     expect(runner.start(repo("a"), "ask", ACTIONS.ask, "go", DEFAULT_AGENT, undefined, undefined, undefined, { id: "co123456" }).id).toBe("co123456");

@@ -160,6 +160,16 @@ describe("a seed's check starts without canopy's GitHub login", () => {
     expect(gate.output).toContain("PATH=");
   });
 
+  test("a flow step's check, a stage's or not, runs without the server's NODE_ENV", async () => {
+    saved.set("NODE_ENV", process.env["NODE_ENV"]);
+    process.env["NODE_ENV"] = "production";
+    const dir = await mkdtemp(join(tmpdir(), "canopy-check-nodeenv-"));
+    scratch.push(dir);
+    const line = 'echo "node_env=${NODE_ENV-unset}"';
+    expect((await runCheck({ path: dir }, line, false)).output).toBe("node_env=unset");
+    expect((await runCheck({ path: dir }, line, true)).output).toBe("node_env=unset");
+  });
+
   test("runScenario sees SCENARIO_DIR and none of canopy's settings", async () => {
     const dir = await mkdtemp(join(tmpdir(), "canopy-scenario-"));
     scratch.push(dir);

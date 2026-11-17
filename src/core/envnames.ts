@@ -68,6 +68,14 @@ function keep(env: Readonly<Record<string, string | undefined>>, drops: (name: s
   return out;
 }
 
+/** `env` without the server's own `NODE_ENV`, and without unset entries:
+ *  what a run's process and a flow step's check start from. canopy's
+ *  container sets `NODE_ENV=production` for canopy itself, and work that
+ *  inherited it ran a repo's tests on React's production build, whose test
+ *  utilities have no `act`: every ripe and clms vitest check failed with
+ *  "React.act is not a function" (2026-11-16). A gate drops it as well. */
+export const workEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> => keep(env, (name) => name === "NODE_ENV");
+
 /** `env` without what a stage's process never gets, and without unset entries */
 export const stageEnv = (env: Readonly<Record<string, string | undefined>>): Record<string, string> => keep(env, stageDrops);
 

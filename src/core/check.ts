@@ -5,7 +5,7 @@
  * stages container's home, which every stage can write. Bun-only.
  */
 import { checkEnv } from "./cli";
-import { gateEnv, stageEnv } from "./envnames";
+import { gateEnv, stageEnv, workEnv } from "./envnames";
 import { exec, firstLine, git, onHost, type ExecResult } from "./exec";
 import type { CheckResult } from "./flow";
 import { GATES_FILE, gatesScript, packageGates, parseGatesFile, type Gate, type Gates } from "./gates";
@@ -57,7 +57,9 @@ export async function runCheck(
             cwd: path,
             timeoutMs,
             env: checkEnv(),
-            ...(stage ? { base: stageEnv(process.env) } : {}),
+            // a gate's env keeps canopy's NODE_ENV away from the repo's
+            // lines, and a check that runs the gates must do the same
+            base: workEnv(stage ? stageEnv(process.env) : process.env),
             ...sig,
           })
         : await onHost(host, ["sh", "-lc", `cd ${shellQuote(path)} && ${command}`], { timeoutMs, ...sig });

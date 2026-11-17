@@ -21,7 +21,7 @@ import type { RpcProc, RpcSpawn } from "./codexrpc";
 // a type alone: codexrun imports this module at run time
 import type { ApprovalFacts } from "./codexrun";
 import { isLimitText, type RateLimitInfo } from "./capacity";
-import { stageEnv } from "./envnames";
+import { stageEnv, workEnv } from "./envnames";
 import { EDIT_TOOLS } from "./shellwords";
 import { STAGE_AWAY } from "./stagewire";
 import type { Harness, PermissionAsk, ProposalState, Run, RunAnswer, RunPrompt, RunQuestion, RunResult, RunStatus, RunStep, RunTodo, RunTokens } from "./types";
@@ -199,13 +199,16 @@ export type FoldOut = Pick<DriveCtx, "step" | "changed" | "note" | "todos" | "re
  *  canopy's GitHub login. A stage started through the stage runner gets the
  *  run's own names alone: none of canopy's env crosses the socket, and the
  *  runner builds the child's env from its own. What the run was handed on
- *  purpose (`pass`) goes over either filter. */
+ *  purpose (`pass`) goes over either filter. canopy's own `NODE_ENV` never
+ *  reaches a run (`workEnv`). */
 export function spawnEnv(
   ctx: Pick<DriveCtx, "env" | "stage" | "spawn" | "pass">,
   base: Readonly<Record<string, string | undefined>> = process.env,
 ): Record<string, string | undefined> {
   if (ctx.spawn) return { ...stageEnv(ctx.env), ...ctx.pass };
-  return ctx.stage ? { ...stageEnv(base), ...stageEnv(ctx.env), ...ctx.pass } : { ...base, ...ctx.env, ...ctx.pass };
+  // canopy's own NODE_ENV stays with canopy (`workEnv`)
+  const own = workEnv(base);
+  return ctx.stage ? { ...stageEnv(own), ...stageEnv(ctx.env), ...ctx.pass } : { ...own, ...ctx.env, ...ctx.pass };
 }
 
 /** One run's process and wire. One instance per run. */

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { gateDrops, stageDrops, takeTriggerSecrets, TRIGGER_ENV_PREFIX } from "./envnames";
+import { gateDrops, stageDrops, takeTriggerSecrets, TRIGGER_ENV_PREFIX, workEnv } from "./envnames";
+
+describe("workEnv", () => {
+  test("keeps everything but the server's NODE_ENV and unset names", () => {
+    expect(workEnv({ NODE_ENV: "production", PATH: "/bin", GH_TOKEN: "t", GONE: undefined })).toEqual({ PATH: "/bin", GH_TOKEN: "t" });
+  });
+});
 
 describe("takeTriggerSecrets", () => {
   test("takes every trigger variable out of the env and leaves the rest", () => {
