@@ -93,6 +93,11 @@ describe("goalRepoChoices", () => {
     expect(goalRepoChoices(repos, "mac").map((r) => r.id)).toEqual(["app"]);
     expect(goalRepoChoices(repos, "mini").map((r) => r.id)).toEqual(["mini|api"]);
   });
+  test("drops a kept tree's own card, on home and on another backend, whose source carries its name", () => {
+    const repos = [repo("app"), repo("app ⑂ fix", { source: "trees" }), repo("mini|api"), repo("mini|api ⑂ fix", { source: "mini|trees" })];
+    expect(goalRepoChoices(repos, "mac").map((r) => r.id)).toEqual(["app"]);
+    expect(goalRepoChoices(repos, "mini").map((r) => r.id)).toEqual(["mini|api"]);
+  });
 });
 
 describe("runRepo", () => {

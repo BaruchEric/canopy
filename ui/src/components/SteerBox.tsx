@@ -7,6 +7,16 @@ const errText = (err: unknown) => String(err instanceof Error ? err.message : er
 /** what a send from the box said back */
 type SteerNote = { kind: "sent" | "error"; text: string };
 
+/** What a press of send does with the box's text: send these words, say
+ *  why they cannot go (too long), or nothing (an empty box). The text stays
+ *  in the box whenever it does not go. */
+export function steerPress(text: string): { send: string } | { why: string } | null {
+  const said = steerWords(text);
+  if (said.ok) return { send: said.words };
+  const n = text.trim().length;
+  return n === 0 ? null : { why: `${said.error}; this one is ${n}` };
+}
+
 /** Where a steer box's words go and what it says about them. */
 export interface SteerTarget {
   /** the box's words while nothing is typed */
@@ -54,9 +64,12 @@ export function SteerBox({ target }: { target: SteerTarget }) {
     }
   };
   const send = () => {
-    const said = steerWords(text);
-    if (!said.ok || busy || closed) return;
-    void run(() => target.send(said.words), target.sent, true);
+    if (busy || closed) return;
+    const press = steerPress(text);
+    if (!press) return;
+    // too long: say so, and keep the words to cut down
+    if ("why" in press) setNote({ kind: "error", text: press.why });
+    else void run(() => target.send(press.send), target.sent, true);
   };
   const escape = target.escape;
 

@@ -9,7 +9,7 @@
  *  (to come), a dropped one (rust) and a settled one that waits on Eric. */
 
 import { SEP } from "../../src/core/backendid";
-import { cardLanded, isProjectCard, isProjectWait, projectStep } from "../../src/core/coordinator";
+import { cardLanded, groupNeedsEric, isProjectCard, isProjectWait, projectStep } from "../../src/core/coordinator";
 import type { RunGroup } from "../../src/core/group";
 import { entryRefusal, followupRefusal, pickupRefusal } from "../../src/core/landing";
 import { watchHolds } from "../../src/core/pr";
@@ -35,6 +35,7 @@ import { repoTrees } from "./trees";
 import { stageStrip, type StageMark } from "./sprouts";
 import { cardCarries, cardCounts, cardStatus, childLine, coordTurn, stepLine } from "./coord";
 import { gateWords, STEP_WORD } from "./flows";
+import { groupWaiting } from "./groups";
 import { backLine, inQueue, runLanding, sentBack, stoppedWhole, verdictWord } from "./landing";
 import { equipTitle } from "./loadouts";
 
@@ -43,17 +44,21 @@ export interface Arc { label: string; tone: Tone }
 export interface Ring { id: string; title: string; repo: string | null; word: string; tone: Tone; model: string | null; arcs: Arc[]; at: string | null; wave: number;
   /** a project card's ring: it starts no run, so it names no model */
   project: boolean }
-export type NeedKind = "prompt" | "gate" | "landing" | "cards" | "project";
+export type NeedKind = "prompt" | "gate" | "landing" | "cards" | "project" | "group";
 export interface Need { key: string; kind: NeedKind; card: string | null; who: string; what: string; detail: string; since: number; runId?: string; prompt?: RunPrompt; flowId?: string; landingId?: string; canLand?: boolean;
   /** a project card's sprout, the lane to open in the incubator */
-  sprout?: string }
+  sprout?: string;
+  /** a best-of card's group, whose sheet holds the pick and the land */
+  groupId?: string }
 export type SayTarget = { kind: "steer"; runId: string } | { kind: "followup"; landingId: string } | { kind: "tree"; coordId: string; cardId: string; branch: string } | { kind: "none"; why: string };
 /** The kept tree a card runs in: its branch, the tree's state once the page
  *  holds the trees list, and the tree's own card (a repo id) once there is one. */
 export interface LaneTree { branch: string; state: BranchTreeState | null; cardId: string | null }
 export interface Lane { id: string; title: string; word: string; tone: Tone; repo: string; branch: string | null; startedAt: number | null; live: string | null; steps: Arc[]; loadout: string | null; model: string | null; effort: string | null; skills: number; servers: number; equipTitle: string; files: string | null; runId: string | null;
   /** whether the card makes a new project (it carries no model, skills or servers), and its sprout's id, null before it starts */
-  project: boolean; sprout: string | null; flowId: string | null; landingId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget; tree: LaneTree | null }
+  project: boolean; sprout: string | null; flowId: string | null; landingId: string | null;
+  /** the best-of group the card started, null for any other card */
+  groupId: string | null; canEquip: boolean; canStartNow: boolean; canStop: boolean; canResume: boolean; say: SayTarget; tree: LaneTree | null }
 export interface Goal { text: string; model: string | null; effort: string | null; startedAt: number; working: number; waiting: number; held: boolean; ended: boolean }
 export interface ManagerRows { goal: Goal; rings: Ring[]; needs: Need[]; lanes: Lane[] }
 export interface ManagerInputs { runs: Record<string, Run>; flows: Record<string, Flow>; landing: LandingInfo; prs: readonly PrWatch[]; loadouts: readonly Loadout[];
@@ -121,7 +126,8 @@ export function sayTarget(task: CoordTask, run: Run | undefined, flow: Flow | un
   if (notStarted(task)) return none("it has not started");
   if (cardLanded(task)) return none("it has landed");
   if (flow?.status === "gated") return none("release or stop its gate first");
-  if (run && isRunActive(run)) return run.harness === "codex" ? none("a Codex worker takes no message mid-turn") : { kind: "steer", runId: run.id };
+  // a person's words reach a Codex turn too, through turn/steer (FR-066)
+  if (run && isRunActive(run)) return { kind: "steer", runId: run.id };
   if (task.limited === 0) return none("it carries on after the reset");
   if (flow && isFlowActive(flow)) return none("no step of its flow is at work just now");
   const { origin, rec, entry } = branchOf(task, run, flow, landing);
@@ -146,7 +152,7 @@ export function treeSayTarget(task: CoordTask, run: Run | undefined, coord: Run)
   if (notStarted(task)) return none("it has not started");
   // the server answers 409 for a card with no run or no tree of its own
   if (!task.run || !task.treeRepo) return none("it never ran in its tree");
-  if (run && isRunActive(run)) return run.harness === "codex" ? none("a Codex worker takes no message mid-turn") : { kind: "steer", runId: run.id };
+  if (run && isRunActive(run)) return { kind: "steer", runId: run.id };
   if (task.limited === 0) return none("it carries on after the reset");
   if (!isRunActive(coord)) return none("its goal has ended");
   return { kind: "tree", coordId: coord.id, cardId: task.id, branch: task.tree ?? "" };
@@ -390,6 +396,8 @@ function cardTone(task: CoordTask, asks: boolean, entry: LandEntry | undefined):
     case "queued":
       return "hair";
     case "failed":
+      // a group that needs Eric's pick settles its card failed; it waits on him
+      return asks && groupNeedsEric(task) ? "lichen" : "rust";
     case "dropped":
       return "rust";
     case "running":
@@ -500,14 +508,32 @@ function landingNeed(w: Work, landing: LandingInfo): Need | null {
   return null;
 }
 
+/** A best-of card's group that waits on Eric: it settled with no winner
+ *  it could pick alone, or its picked winner waits for his land. Dated from
+ *  when the last of its members settled, else from the group's start. */
+function groupNeed(w: Work, landing: LandingInfo): Need | null {
+  const g = w.group;
+  if (!g) return null;
+  // a member settles when its run ends and its branch is sorted, whichever is later
+  const settled = g.members.map((m) => {
+    const r = landing.runs.find((x) => x.id === m.origin);
+    return Math.max(r?.endedAt ?? 0, r?.review?.at ?? 0);
+  });
+  const base = { key: `group:${g.id}`, kind: "group" as const, card: w.task.id, who: whoOf(w.task), groupId: g.id, since: Math.max(g.startedAt, ...settled) };
+  if (g.state === "needs-you") return { ...base, what: `Best of ${g.expectedMembers} waits for your pick`, detail: g.reason ?? "" };
+  if (groupWaiting(g, landing)) return { ...base, what: "Its picked winner waits for your land", detail: (g.winner ? g.scores?.[g.winner]?.branch : undefined) ?? "" };
+  return null;
+}
+
 /** Everything of one card that waits on Eric: prompts on its run, its
  *  group's member runs and its flow's step runs, its flow's gate, its
- *  branch's landing. */
+ *  group's pick or land, its branch's landing. */
 function cardNeeds(w: Work, at: ManagerInputs): Need[] {
   const ask = projectAsk(w);
   if (ask !== null) return [{ key: `project:${w.task.id}`, kind: "project", card: w.task.id, who: whoOf(w.task), what: ask, detail: "", since: projectSince(w), ...(w.task.sprout !== undefined ? { sprout: w.task.sprout } : {}) }];
   const out: (Need | null)[] = [promptNeed(w.run, w.task)];
   for (const m of w.group?.members ?? []) out.push(promptNeed(at.runs[m.run], w.task));
+  out.push(groupNeed(w, at.landing));
   if (w.flow) {
     const flowId = w.flow.id;
     for (const s of w.flow.steps) out.push(promptNeed(s.runId ? at.runs[s.runId] : undefined, w.task, flowId));
@@ -599,6 +625,7 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
     sprout: task.sprout ?? null,
     flowId: task.flow ?? null,
     landingId: w.branch.rec?.id ?? null,
+    groupId: task.group ?? null,
     // an ended goal's cards no longer change: no equip, no start
     canEquip: fresh && !isProjectCard(task) && isRunActive(coord),
     canStartNow: fresh && !coord.held && isRunActive(coord),
@@ -614,11 +641,18 @@ function laneOf(w: Work, coord: Run, at: ManagerInputs, look: Look): Lane {
   };
 }
 
+/** a best-of group still at work: its members, their scoring or its review */
+const GROUP_AT_WORK: ReadonlySet<RunGroup["state"]> = new Set(["working", "scoring", "reviewing"]);
+
 /** Whether a card's worker is at work: its run, its flow short of a gate,
- *  or a running project card's sprout. A gate and a project's wait on Eric
- *  count under waiting instead. */
+ *  its best-of group before a pick, or a running project card's sprout. A
+ *  gate, a group's pick and a project's wait on Eric count under waiting
+ *  instead. */
 const atWork = (w: Work): boolean =>
-  (w.run !== undefined && isRunActive(w.run)) || (w.flow !== undefined && isFlowActive(w.flow) && w.flow.status !== "gated") || (isProjectCard(w.task) && w.task.state === "running" && projectAsk(w) === null);
+  (w.run !== undefined && isRunActive(w.run)) ||
+  (w.flow !== undefined && isFlowActive(w.flow) && w.flow.status !== "gated") ||
+  (w.group !== undefined && GROUP_AT_WORK.has(w.group.state)) ||
+  (isProjectCard(w.task) && w.task.state === "running" && projectAsk(w) === null);
 
 /** The manager's own state in a word: ended, held, waiting on Eric, or at work. */
 function managerLook(coord: Run, asks: boolean): { word: string; tone: Tone } {
@@ -690,4 +724,39 @@ export function managerRows(coord: Run, at: ManagerInputs): ManagerRows {
     needs,
     lanes,
   };
+}
+
+/* ---------- end goal's second press ---------- */
+
+/** A second press sooner than this after the first is the rest of a
+ *  double click or a double tap, not a decision. */
+export const CONFIRM_GAP_MS = 500;
+/** How long a first press stays armed. Safari never moves focus off a
+ *  pressed button, so a blur alone would leave it armed. */
+export const CONFIRM_WAIT_MS = 4000;
+
+/** A press on a button that asks twice, such as "end goal": the first
+ *  press arms it (`armedAt`, when), and a second while armed goes. A second
+ *  within `CONFIRM_GAP_MS` does nothing, and an arming older than
+ *  `CONFIRM_WAIT_MS` has lapsed, so that press arms it again. */
+export function confirmPress(armedAt: number | null, now: number): { armedAt: number | null; go: boolean } {
+  if (armedAt === null || now - armedAt >= CONFIRM_WAIT_MS) return { armedAt: now, go: false };
+  if (now - armedAt < CONFIRM_GAP_MS) return { armedAt, go: false };
+  return { armedAt: null, go: true };
+}
+
+/* ---------- the address on a change of view ---------- */
+
+/** The address a change of view goes to from `href`: `view` set (none for
+ *  the git view), and `project`, the top view's goal (`run`) and its new
+ *  goal box (`new`) dropped, since they belong to the view being left. A
+ *  window opened on one run (`keepRun`) keeps its `run`. */
+export function viewAddress(href: string, next: string, keepRun: boolean): string {
+  const url = new URL(href);
+  if (next === "git") url.searchParams.delete("view");
+  else url.searchParams.set("view", next);
+  url.searchParams.delete("project");
+  url.searchParams.delete("new");
+  if (!keepRun) url.searchParams.delete("run");
+  return url.toString();
 }

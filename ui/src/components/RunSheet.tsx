@@ -30,6 +30,7 @@ import { DictateButton } from "./Dictate";
 import { useMentions } from "./Mentions";
 import { CoordTasks, ParentLine } from "./CoordTasks";
 import { coordView, isCoordinator, type CoordView } from "../coord";
+import { confirmPress, CONFIRM_WAIT_MS } from "../manager";
 import { PHONE, useMedia } from "../media";
 import { scopeOffers } from "../inbox";
 import {
@@ -634,6 +635,37 @@ export function Timeline({
 
 /* ---------- the console ---------- */
 
+/**
+ * A button that asks twice, "end goal" here and on the manager's page
+ * (`confirmPress`): `press` arms it and a later press goes, `armed` draws
+ * the armed words, and `disarm` is for a blur. The arming lapses on its own
+ * after `CONFIRM_WAIT_MS`, since Safari never blurs a pressed button, and a
+ * double click's second press is not taken as the confirming one.
+ */
+export function useSecondPress(go: () => void): { armed: boolean; press: () => void; disarm: () => void } {
+  const [armedAt, setArmedAt] = useState<number | null>(null);
+  // read by a press, so two presses before a redraw still see the first
+  const at = useRef<number | null>(null);
+  const set = (next: number | null) => {
+    at.current = next;
+    setArmedAt(next);
+  };
+  useEffect(() => {
+    if (armedAt === null) return;
+    const t = setTimeout(() => {
+      at.current = null;
+      setArmedAt(null);
+    }, CONFIRM_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [armedAt]);
+  const press = () => {
+    const next = confirmPress(at.current, Date.now());
+    set(next.armedAt);
+    if (next.go) go();
+  };
+  return { armed: armedAt !== null, press, disarm: () => set(null) };
+}
+
 export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefined; onClose?: () => void }) {
   // in a shell window's tab (FR-030) the ✕ closes the tab, not the sheet
   const closeSheet = useStore((s) => s.closeSheet);
@@ -650,14 +682,13 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
   const now = useTick(active);
   const elapsed = (run.endedAt ?? now) - run.startedAt;
   const [error, setError] = useState<string | null>(null);
-  // ending a coordinator ends its goal, so it takes a second press, as the
-  // manager page's end goal does
-  const [ending, setEnding] = useState(false);
-
   const act = (fn: () => Promise<void>, propagate = false) => {
     setError(null);
     return run.kept ? Promise.resolve() : runConsoleAction(fn, setError, propagate);
   };
+  // ending a coordinator ends its goal, so it takes a second press, as the
+  // manager page's end goal does
+  const ending = useSecondPress(() => void act(() => stopRun(run.id)));
   const harness = harnessOf(run);
   const name = AGENT_NAME[harness];
 
@@ -772,12 +803,12 @@ export function Console({ run, repo, onClose }: { run: Run; repo: Repo | undefin
         {active && isCoordinator(run) ? (
           <button
             type="button"
-            className={`mini${ending ? " mgr-end" : ""}`}
-            title={ending ? "Stops the coordinator; its cards already running go on" : "Stop the coordinator. A second press ends it"}
-            onClick={() => (ending ? void act(() => stopRun(run.id)) : setEnding(true))}
-            onBlur={() => setEnding(false)}
+            className={`mini${ending.armed ? " mgr-end" : ""}`}
+            title={ending.armed ? "Stops the coordinator; its cards already running go on" : "Stop the coordinator. A second press ends it"}
+            onClick={ending.press}
+            onBlur={ending.disarm}
           >
-            {ending ? "press again to end" : "end goal"}
+            {ending.armed ? "press again to end" : "end goal"}
           </button>
         ) : active ? (
           <button

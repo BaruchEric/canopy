@@ -433,9 +433,12 @@ export interface CardGroup {
   live: number;
 }
 
-/** Cards in groups by machine or by repo, each in `orderCards` order;
- *  groups with more running first, then by name, cards with no repo last. */
-export function groupCards(cards: readonly AgentCard[], by: CardGrouping, chat: IsChat = noChat): CardGroup[] {
+/** Cards in groups by machine or by repo, each group's cards in the order
+ *  given, so the order `splitRecent` gave them with the pulses' statuses
+ *  stands (a sort here would read the card's own status alone); groups
+ *  with more running first, then by name, cards with no repo last. `chat`
+ *  is kept for the callers that pass it. */
+export function groupCards(cards: readonly AgentCard[], by: CardGrouping, _chat: IsChat = noChat): CardGroup[] {
   const groups = new Map<string, CardGroup>();
   for (const c of cards) {
     const key = by === "machine" ? machineOf(c) : (urlKey(c.repo) ?? "");
@@ -446,7 +449,6 @@ export function groupCards(cards: readonly AgentCard[], by: CardGrouping, chat: 
     groups.set(key, g);
   }
   return [...groups.values()]
-    .map((g) => ({ ...g, cards: orderCards(g.cards, chat) }))
     .sort((a, b) => Number(a.key === "") - Number(b.key === "") || b.live - a.live || a.label.localeCompare(b.label));
 }
 

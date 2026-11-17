@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { RunGroup } from "../../../src/core/group";
 import type { CoordTask, Flow, LandEntry, LandingRun, Run, RunBranch, RunReview } from "../../../src/core/types";
 import { NO_ROUTES } from "../agents";
 import type { BackendState } from "../backends";
@@ -220,6 +221,36 @@ describe("needs you", () => {
     expect(buttons(section(renderCurrent(<ManagerView />), "needs you"))).toEqual(["*fix it"]);
     settled({ runs: [rec("b-c2")], entries: [entry("b-c2", "judge", { reason: "a scenario needs a judge" })] });
     expect(buttons(section(renderCurrent(<ManagerView />), "needs you"))).toEqual(["*land anyway"]);
+  });
+
+  test("a best-of card whose group needs a pick offers open the group, and its lane opens it too", () => {
+    screen(false);
+    at("?view=manager&run=k");
+    const group: RunGroup = {
+      id: "g1",
+      repoId: "canopy",
+      repoPath: "/r/canopy",
+      action: "ask",
+      note: "n",
+      expectedMembers: 2,
+      members: [
+        { run: "m1", origin: "b-m1", profile: null },
+        { run: "m2", origin: "b-m2", profile: null },
+      ],
+      state: "needs-you",
+      reason: "the reviewers disagree",
+      autoLand: false,
+      startedAt: 1,
+    };
+    useStore.setState({
+      runs: { k: coord([card("t1", "failed", { outcome: "needs you", times: 2, group: "g1" })]) },
+      landing: { "": { runs: [], entries: [], orphans: [], groups: [group] } },
+    });
+    const html = renderCurrent(<ManagerView />);
+    const needs = section(html, "needs you");
+    expect(needs).toContain("Best of 2 waits for your pick");
+    expect(buttons(needs)).toEqual(["*open the group"]);
+    expect(buttons(section(html, "workers"))).toEqual(["say", "open group"]);
   });
 
   test("proposed cards wait for start these; with nothing waiting, it says so", () => {

@@ -254,6 +254,16 @@ describe("describeEvent", () => {
     const prev = snap({ runs: { r1: run({ chat: true, status: "working" }) } });
     expect(describeEvent({ type: "run", run: idle }, prev, 5).map((l) => l.text)).toEqual(["claude answered, chat idle"]);
   });
+  test("a goal from the top's run says goal and carries no repo for the repo button to open", () => {
+    for (const repoId of ["~goal", "mini|~goal"]) {
+      const coordinator = run({ repoId, action: "coordinate", verb: "Coordinate", chat: true, status: "idle" });
+      const [line] = describeEvent({ type: "run", run: coordinator }, snap(), 5);
+      expect(line).toMatchObject({ repo: "goal", text: "chat opened" });
+      expect(line?.repoId).toBeUndefined();
+      const [gone] = describeEvent({ type: "run-gone", id: "r1" }, snap({ runs: { r1: coordinator } }), 5);
+      expect(gone?.repoId).toBeUndefined();
+    }
+  });
   test("run-gone names the run it knew", () => {
     const lines = describeEvent({ type: "run-gone", id: "r1" }, snap({ runs: { r1: run() } }), 5);
     expect(lines).toEqual([{ at: 5, kind: "run", source: "launch", repoId: "a", repo: "alpha", text: "commit dismissed", quiet: true }]);

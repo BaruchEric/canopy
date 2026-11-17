@@ -3,6 +3,7 @@
 import { GOAL_LIMITS, goalAnchor, isGoalAnchor } from "../../src/core/coordinator";
 import { resolveAgent } from "../../src/core/route";
 import { isSeedId, sizeWord } from "../../src/core/sprout";
+import { isTreeCard } from "../../src/core/treewords";
 import type { AgentEffort, AgentRoutes, Mention, Repo } from "../../src/core/types";
 import { rankWords } from "./mentions";
 import { backendOf, isHome, plainOf } from "./registry";
@@ -44,10 +45,13 @@ export function coordDefaults(routes: AgentRoutes): { model: string; effort: Age
   return { model, effort };
 }
 
-/** the repos a goal can name on one backend: local checkouts, no host, forge
- *  listing, seed or the anchor */
+/** the repos a goal, or a card in its plan, can name on one backend: local
+ *  checkouts, no host, forge listing, seed or the anchor, and no kept tree's
+ *  own card, which the server refuses for a card ("name its repo and put
+ *  the branch in tree"). A tree card's source carries its backend's name
+ *  off the home backend, so the plain source is what is checked. */
 export function goalRepoChoices(repos: readonly Repo[], backend: string): Repo[] {
-  return repos.filter((r) => backendOf(r.id) === backend && !r.host && !r.forge && !isSeedId(r.id) && !isGoalAnchor(r.id));
+  return repos.filter((r) => backendOf(r.id) === backend && !r.host && !r.forge && !isSeedId(r.id) && !isGoalAnchor(r.id) && !isTreeCard({ source: plainOf(r.source) }));
 }
 
 /** the repo a run belongs to, for a line that carries a repo: the anchor,

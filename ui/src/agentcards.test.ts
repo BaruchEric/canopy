@@ -340,15 +340,24 @@ describe("order and groups", () => {
     expect(past).toEqual([lost, ended]);
   });
 
+  test("each group keeps the order it is given, so the order splitRecent read from the pulses stands", () => {
+    const stalled = card({ id: "st", state: "working", node: "mini", startedAt: 1 });
+    const busy = card({ id: "wk", state: "working", node: "mini", startedAt: 5 });
+    const status = (c: AgentCard): AgentStatus => (c.id === "st" ? "stalled" : agentStatus(c));
+    const { live } = splitRecent([busy, stalled], 100, undefined, { status });
+    expect(live).toEqual([stalled, busy]);
+    expect(groupCards(live, "machine")[0]?.cards).toEqual([stalled, busy]);
+  });
+
   test("by machine, the busier first; by repo, no repo last", () => {
-    const byMachine = groupCards([idleNew, working, waiting], "machine");
+    const byMachine = groupCards(orderCards([idleNew, working, waiting]), "machine");
     expect(byMachine.map((g) => [g.label, g.live, g.cards.length])).toEqual([
       ["ericmac", 2, 2],
       ["mini", 1, 1],
     ]);
     // a canopy card is on its backend's name, not the tailnet node's
     expect(groupCards([card({ node: "macmini-2018", where: canopy("mini", "1") })], "machine")[0]?.label).toBe("mini");
-    const byRepo = groupCards([idleNew, working, waiting], "repo");
+    const byRepo = groupCards(orderCards([idleNew, working, waiting]), "repo");
     expect(byRepo.map((g) => [g.label, g.cards])).toEqual([
       ["Me/App", [waiting, working]],
       ["no repo", [idleNew]],
@@ -451,7 +460,7 @@ describe("sessions before runs", () => {
     const { live, past } = splitRecent([job, chatRun, shellIdle, endedSession], 100, chat);
     expect(live).toEqual([chatRun, shellIdle, job]);
     expect(past).toEqual([endedSession]);
-    expect(groupCards([job, chatRun, shellIdle], "repo", chat).map((g) => g.cards)).toEqual([[chatRun, shellIdle, job]]);
+    expect(groupCards(live, "repo", chat).map((g) => g.cards)).toEqual([[chatRun, shellIdle, job]]);
   });
 
   test("the section header stays in order of need whatever the cards' order", () => {

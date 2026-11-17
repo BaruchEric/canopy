@@ -362,6 +362,17 @@ function MarketsSheet({ ops, cols, onClose }: { ops: Ops; cols: PluginColumn[]; 
   );
 }
 
+/** Rescans each backend that reads plugins, every one to its end, so one
+ *  that fails leaves the rest to finish; what failed in words, as the
+ *  view's other errors read ("mini: rescan: ..."), or null. It never
+ *  throws, so a failure is said rather than lost. */
+export async function rescanPlugins(backends: readonly string[], scan: (backend: string) => Promise<unknown>): Promise<string | null> {
+  // async, so a scan that throws at once is a rejection like the rest
+  const got = await Promise.allSettled(backends.map(async (b) => scan(b)));
+  const failed = got.flatMap((r, i) => (r.status === "rejected" ? [`${backends[i] ?? ""}: rescan: ${errorText(r.reason)}`] : []));
+  return failed.length > 0 ? failed.join("; ") : null;
+}
+
 export function PluginsView() {
   const byBackend = useStore((s) => s.kit);
   const ms = useMemo(() => mergePlugins(byBackend), [byBackend]);
@@ -379,7 +390,8 @@ export function PluginsView() {
   async function rescan() {
     setScanning(true);
     try {
-      await Promise.all(Object.entries(byBackend).filter(([, i]) => i.plugins !== undefined).map(([b]) => api.kitScan(b)));
+      const why = await rescanPlugins(Object.entries(byBackend).filter(([, i]) => i.plugins !== undefined).map(([b]) => b), (b) => api.kitScan(b));
+      if (why) setSaid(why);
     } finally {
       setScanning(false);
     }

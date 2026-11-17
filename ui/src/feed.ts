@@ -28,6 +28,7 @@ import type {
 } from "../../src/core/types";
 import { cardName, repoOfCard, repoWord, whereWord } from "./agentcards";
 import { chanLine } from "./chan";
+import { isGoalAnchor } from "../../src/core/coordinator";
 import { runRepo } from "./goals";
 import { askWord, endingWord } from "./inbox";
 import { elsewhereLines } from "./elsewhere";
@@ -135,7 +136,9 @@ export function clip(text: string, max = CLIP): string {
 function about(repo: Repo | undefined, kind: FeedKind, at: number, text: string, quiet = false): FeedLine {
   const line: FeedLine = { at, kind, source: repo?.source ?? "", text, quiet };
   if (repo) {
-    line.repoId = repo.id;
+    // a goal from the top runs at the anchor, which is no repo: its name
+    // goes with the line, but there is no panel for its button to open
+    if (!isGoalAnchor(repo.id)) line.repoId = repo.id;
     line.repo = repo.name;
   }
   return line;

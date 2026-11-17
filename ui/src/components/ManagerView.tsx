@@ -13,9 +13,8 @@
  * workers or the chat.
  */
 import { Fragment, useEffect, useMemo, useState, type MouseEvent } from "react";
-import { runRepoName } from "../goals";
+import { goalRepoChoices, runRepoName } from "../goals";
 import { isGoalAnchor } from "../../../src/core/coordinator";
-import { isSeedId } from "../../../src/core/sprout";
 import type { CoordTask, Loadout, Run, RunCardAction } from "../../../src/core/types";
 import { durationWord } from "../agentcards";
 import { cardCounts } from "../coord";
@@ -30,11 +29,11 @@ import { harnessOf } from "../runs";
 import { connOf, idParts, idText, landingAll, prsAll, recordsIn, useStore, type CanopyState } from "../store";
 import { HoldButton } from "./CoordTasks";
 import { EquipSheet } from "./EquipSheet";
-import { GateChoices, useGateGuard } from "./FlowSheet";
+import { GateChoices, oneAtATime, useGateGuard } from "./FlowSheet";
 import { GoalComposer } from "./GoalComposer";
 import { RunPromptForm } from "./Prompts";
 import { useNow } from "./Registry";
-import { RunPane } from "./RunSheet";
+import { RunPane, useSecondPress } from "./RunSheet";
 
 /** a write from the page: its error shows under the head, and `propagate`
  *  throws it on so a form keeps what was typed */
@@ -282,13 +281,9 @@ function GoalHead({ coord, goal, act }: { coord: Run; goal: Goal; act: Act }) {
   const now = useNow();
   const stopRun = useStore((s) => s.stopRun);
   const [adding, setAdding] = useState(false);
-  const [ending, setEnding] = useState(false);
-  // a second press soon after ends the goal; otherwise the button goes back
-  useEffect(() => {
-    if (!ending) return;
-    const t = setTimeout(() => setEnding(false), 4000);
-    return () => clearTimeout(t);
-  }, [ending]);
+  // a second press ends the goal; the button goes back after a while, and a
+  // double click is one press
+  const ending = useSecondPress(() => void act(() => stopRun(coord.id)));
   const going = !goal.ended;
   return (
     <header className="mgr-head">
@@ -321,12 +316,12 @@ function GoalHead({ coord, goal, act }: { coord: Run; goal: Goal; act: Act }) {
           </a>
           <button
             type="button"
-            className={`mini mgr-end${ending ? " on" : ""}`}
-            title={ending ? "Stops the coordinator; its cards already running go on" : "Stop the coordinator. A second press ends it"}
-            onClick={() => (ending ? void act(() => stopRun(coord.id)) : setEnding(true))}
-            onBlur={() => setEnding(false)}
+            className={`mini mgr-end${ending.armed ? " on" : ""}`}
+            title={ending.armed ? "Stops the coordinator; its cards already running go on" : "Stop the coordinator. A second press ends it"}
+            onClick={ending.press}
+            onBlur={ending.disarm}
           >
-            {ending ? "press again to end" : "end goal"}
+            {ending.armed ? "press again to end" : "end goal"}
           </button>
         </div>
       )}
@@ -351,7 +346,7 @@ function AddTask({ coord, act, onDone }: { coord: Run; act: Act; onDone: () => v
   const coordAdd = useStore((s) => s.coordAdd);
   const repos = useStore((s) => s.repos);
   const backend = backendOf(coord.id);
-  const choices = useMemo(() => repos.filter((r) => backendOf(r.id) === backend && !r.host && !r.forge && !isSeedId(r.id)), [repos, backend]);
+  const choices = useMemo(() => goalRepoChoices(repos, backend), [repos, backend]);
   const [title, setTitle] = useState("");
   const [repo, setRepo] = useState(() => (choices.some((r) => r.id === coord.repoId) ? coord.repoId : (choices[0]?.id ?? "")));
   const [note, setNote] = useState("");
@@ -523,18 +518,47 @@ function Needs({ coord, needs, act }: { coord: Run; needs: readonly Need[]; act:
                     open in incubator
                   </button>
                 </div>
-              ) : (
+              ) : n.kind === "group" ? (
                 <div className="mgr-need-acts">
-                  <button type="button" className="mini strong" title="Every proposed card joins the queue; at most 3 run at once" onClick={() => void act(() => useStore.getState().coordStart(coord.id))}>
-                    start these
+                  <button
+                    type="button"
+                    className="mini strong"
+                    title="Open the group: its members side by side, the pick and the land"
+                    onClick={() => {
+                      if (n.groupId) useStore.getState().showGroup(n.groupId);
+                    }}
+                  >
+                    open the group
                   </button>
                 </div>
+              ) : (
+                <StartThese coord={coord} act={act} />
               )}
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/** One send at a time from a row of buttons, as the gate's (`oneAtATime`):
+ *  a double tap sends once, and the buttons stay off while it goes. */
+function useOnce(): { busy: boolean; once: (send: () => Promise<void>) => void } {
+  const [busy, setBusy] = useState(false);
+  const [send] = useState(() => oneAtATime(setBusy));
+  return { busy, once: (fn) => void send(fn) };
+}
+
+/** The manager's proposed cards, started at once. */
+function StartThese({ coord, act }: { coord: Run; act: Act }) {
+  const { busy, once } = useOnce();
+  return (
+    <div className="mgr-need-acts">
+      <button type="button" className="mini strong" disabled={busy} title="Every proposed card joins the queue; at most 3 run at once" onClick={() => once(() => act(() => useStore.getState().coordStart(coord.id)))}>
+        {busy ? "starting…" : "start these"}
+      </button>
+    </div>
   );
 }
 
@@ -743,6 +767,8 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
   const endedAt = useStore((s) => (lane.flowId ? s.flows[lane.flowId]?.endedAt : lane.runId ? s.runs[lane.runId]?.endedAt : undefined));
   const flowStopped = useStore((s) => (lane.flowId ? s.flows[lane.flowId]?.status === "stopped" : false));
   const [saying, setSaying] = useState(false);
+  // stop, resume and start now one at a time, so a double tap sends once
+  const { busy, once } = useOnce();
   const { runId, flowId } = lane;
   const stop = () => {
     const s = useStore.getState();
@@ -772,6 +798,10 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
     const s = useStore.getState();
     if (flowId) s.showFlow(flowId);
     else if (runId) s.showRun(runId);
+  };
+  // a best-of card has no run of its own: its group's sheet holds the members
+  const openGroup = () => {
+    if (lane.groupId) useStore.getState().showGroup(lane.groupId);
   };
   return (
     <article className={`mgr-lane${on ? " on" : ""}`} id={laneDom(lane.id)} aria-label={`${lane.id}: ${lane.title}`}>
@@ -844,18 +874,23 @@ function LaneRow({ coord, lane, on, equipping, onEquip, onPick, act }: { coord: 
             </button>
           )}
           {lane.canStop && (
-            <button type="button" className="mini" title={flowId ? "Stop its flow; pick it up again later" : "Stop its run; its branch stays"} onClick={() => void act(stop)}>
+            <button type="button" className="mini" disabled={busy} title={flowId ? "Stop its flow; pick it up again later" : "Stop its run; its branch stays"} onClick={() => once(() => act(stop))}>
               stop
             </button>
           )}
           {lane.canResume && (
-            <button type="button" className="mini" title={flowId && flowStopped ? "Pick its flow up where it stopped" : lane.say.kind === "tree" ? "Start a run in its tree where this one stopped" : "Start a run on its branch where this one stopped"} onClick={() => void act(resume)}>
+            <button type="button" className="mini" disabled={busy} title={flowId && flowStopped ? "Pick its flow up where it stopped" : lane.say.kind === "tree" ? "Start a run in its tree where this one stopped" : "Start a run on its branch where this one stopped"} onClick={() => once(() => act(resume))}>
               resume
             </button>
           )}
           {lane.canStartNow && (
-            <button type="button" className="mini" title="Queue this card alone, ahead of the rest" onClick={() => void act(() => useStore.getState().coordStart(coord.id, [lane.id]))}>
+            <button type="button" className="mini" disabled={busy} title="Queue this card alone, ahead of the rest" onClick={() => once(() => act(() => useStore.getState().coordStart(coord.id, [lane.id])))}>
               start now
+            </button>
+          )}
+          {lane.groupId && (
+            <button type="button" className="mini" title="Open the group this card started: its members side by side, the pick and the land" onClick={openGroup}>
+              open group
             </button>
           )}
           {lane.tree?.cardId && (

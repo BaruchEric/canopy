@@ -36,7 +36,7 @@ import { SORT_MODES, type Theme } from "./settings";
 import { SIDEBAR, attentionCount, dockless, landingAll, prsAll, statusOf, useStore, type CanopyState } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { agentsBadge, gitBadge, healthBadge, incubatorBadge, managerBadge, type Badge, type BadgeTone } from "./badges";
-import { liveCoordinators, managerRows, type Goal } from "./manager";
+import { liveCoordinators, managerRows, viewAddress, type Goal } from "./manager";
 import { PickMenu, type PickGroup } from "./components/PickMenu";
 import { WAITING_PANEL } from "./waiting";
 import { bindNavigate } from "./clirun";
@@ -291,15 +291,13 @@ export function App() {
   const [view, setView] = useState(() => new URLSearchParams(location.search).get("view") || "git");
   const [project, setProject] = useState(() => new URLSearchParams(location.search).get("project"));
   const navigate = useCallback((next: string) => {
-    const url = new URL(location.href);
-    if (next === "git") url.searchParams.delete("view");
-    else url.searchParams.set("view", next);
-    url.searchParams.delete("project");
-    // the top view's goal belongs to the top view; a chat's window keeps its own run
-    if (!route.run) url.searchParams.delete("run");
-    history.pushState(null, "", url);
+    // the top view's goal and new goal box belong to the top view; a chat's window keeps its own run
+    history.pushState(null, "", viewAddress(location.href, next, route.run !== null));
     setView(next);
     setProject(null);
+    // the top view reads its goal from the address and follows popstate, so
+    // a switch to it while it shows does not leave it on the old goal
+    dispatchEvent(new PopStateEvent("popstate"));
   }, []);
   useEffect(() => bindNavigate(navigate), [navigate]);
   const showRepo = useCallback((id: string) => {

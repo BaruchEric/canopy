@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { isProjectCard } from "../../../src/core/coordinator";
-import { isSeedId } from "../../../src/core/sprout";
+import { goalRepoChoices } from "../goals";
 import { isRunActive, type CoordTask, type Run } from "../../../src/core/types";
 import { openView } from "../clirun";
 import { canStartCards, cardCarries, cardCounts, cardDraft, cardEdit, cardStatus, parentCard, type CardDraft, type CoordView, chainWords } from "../coord";
@@ -316,7 +316,7 @@ export function CardForm({ run, task, act, onDone }: { run: Run; task: CoordTask
   const backend = backendOf(run.id);
   const repos = useStore((s) => s.repos);
   const kitLoadouts = useStore((s) => s.kit[backend]?.loadouts?.loadouts);
-  const choices = repos.filter((r) => backendOf(r.id) === backend && !r.host && !r.forge && !isSeedId(r.id));
+  const choices = goalRepoChoices(repos, backend);
   const proposed = task.state === "proposed";
   // a project card takes title, note and after; the server refuses the rest
   const project = isProjectCard(task);

@@ -4,7 +4,7 @@ import type { RunGroup } from "../../src/core/group";
 import type { Repo } from "../../src/core/types";
 import type { Sprout } from "../../src/core/types";
 import { stageStrip } from "./sprouts";
-import { chatAim, liveCoordinators, managerRows, sayTarget, waves, type Lane, type ManagerInputs } from "./manager";
+import { chatAim, CONFIRM_GAP_MS, CONFIRM_WAIT_MS, confirmPress, liveCoordinators, managerRows, sayTarget, viewAddress, waves, type Lane, type ManagerInputs } from "./manager";
 
 // a run's branch id is b-<run id>, so a test that mixes up a run's id and
 // its branch's finds nothing
@@ -138,6 +138,25 @@ const flowsOf = (...fs: Flow[]): Record<string, Flow> => Object.fromEntries(fs.m
 const at = (over: Partial<ManagerInputs> = {}): ManagerInputs => ({ runs: {}, flows: {}, landing: none, prs: [], loadouts: [], ...over });
 
 const question: RunPrompt = { id: "p1", kind: "question", questions: [{ question: "Which file?", header: "file", options: [], multiSelect: false }] };
+
+/** a best-of-3 group g1 with members m1 to m3 on branches b-m1 to b-m3 */
+const group = (over: Partial<RunGroup> = {}): RunGroup => ({
+  id: "g1",
+  repoId: "canopy",
+  repoPath: "/r/canopy",
+  action: "ask",
+  note: "n",
+  expectedMembers: 3,
+  members: [
+    { run: "m1", origin: "b-m1", profile: null },
+    { run: "m2", origin: "b-m2", profile: null },
+    { run: "m3", origin: "b-m3", profile: null },
+  ],
+  state: "working",
+  autoLand: false,
+  startedAt: 1,
+  ...over,
+});
 
 describe("the rings", () => {
   test("the manager's ring comes first, one arc per card in card order, each the card's tone", () => {
@@ -389,6 +408,32 @@ describe("needs you", () => {
     expect(rows.rings[1]?.tone).toBe("lichen");
   });
 
+  test("a best-of card's group that needs a pick waits on Eric, and its card reads lichen", () => {
+    const g = group({ state: "needs-you", reason: "the reviewers disagree: run/x-b-m1 or run/x-b-m2" });
+    const task = card({ state: "failed", outcome: "needs you", times: 3, group: "g1" });
+    const settledAt = landing([rec("b-m1", { endedAt: 30 }), rec("b-m2", { endedAt: 50, review: review("land") })]);
+    const rows = managerRows(coord([task]), at({ landing: { ...settledAt, groups: [g] } }));
+    expect(rows.needs).toEqual([
+      expect.objectContaining({ key: "group:g1", kind: "group", card: "t1", groupId: "g1", what: "Best of 3 waits for your pick", detail: "the reviewers disagree: run/x-b-m1 or run/x-b-m2", since: 50 }),
+    ]);
+    expect([rows.rings[1]?.tone, rows.lanes[0]?.tone]).toEqual(["lichen", "lichen"]);
+    expect(rows.goal.waiting).toBe(1);
+  });
+
+  test("a best-of card's picked winner waits for Eric's land until the queue or a PR holds it", () => {
+    const g = group({ state: "picked", winner: "b-m2", scores: { "b-m2": { branch: "run/x-b-m2", base: "b0", state: "ready" } } });
+    const task = card({ state: "done", outcome: "winner picked", times: 3, group: "g1" });
+    const needsOf = (l: LandingInfo) => managerRows(coord([task]), at({ landing: { ...l, groups: [g] } })).needs;
+    expect(needsOf(landing([rec("b-m2")]))).toEqual([expect.objectContaining({ key: "group:g1", kind: "group", groupId: "g1", what: "Its picked winner waits for your land", detail: "run/x-b-m2" })]);
+    expect(needsOf(landing([rec("b-m2")], [entry("b-m2", "queued")]))).toEqual([]);
+    expect(needsOf(landing([rec("b-m2", { pr: 7 })]))).toEqual([]);
+  });
+
+  test("a best-of card's lane opens its group, and a card with no group has none", () => {
+    const rows = managerRows(coord([card({ state: "running", times: 3, group: "g1" }), card({ id: "t2" })]), at({ landing: { ...none, groups: [group()] } }));
+    expect(rows.lanes.map((l) => l.groupId)).toEqual(["g1", null]);
+  });
+
   test("the manager's turn is its proposed cards; prose in a message never counts", () => {
     const k = coord([card(), card({ id: "t2", title: "and the other" }), card({ id: "t3", state: "queued" })], { steps: [step("text", "Shall I start t1?", 9)] });
     expect(managerRows(k, at()).needs).toEqual([
@@ -412,11 +457,15 @@ describe("needs you", () => {
 });
 
 describe("what a lane's say box sends to", () => {
-  test("an active Claude run is steered; a Codex one takes no message mid-turn", () => {
+  test("an active run is steered, a Codex one too, which takes a person's words through turn/steer", () => {
     const task = child("c1");
     expect(sayTarget(task, run("c1", { status: "working" }), undefined, none)).toEqual({ kind: "steer", runId: "c1" });
     expect(sayTarget(task, run("c1", { status: "waiting" }), undefined, none)).toEqual({ kind: "steer", runId: "c1" });
-    expect(sayTarget(task, run("c1", { status: "working", harness: "codex" }), undefined, none)).toEqual({ kind: "none", why: "a Codex worker takes no message mid-turn" });
+    expect(sayTarget(task, run("c1", { status: "working", harness: "codex" }), undefined, none)).toEqual({ kind: "steer", runId: "c1" });
+    // a tree card's Codex worker at work too
+    const tree = child("c2", { tree: "fix/x", treeRepo: "canopy ⑂ fix/x" });
+    const lanes = managerRows(coord([tree]), at({ runs: runsOf(run("c2", { status: "working", harness: "codex" })) })).lanes;
+    expect(lanes[0]?.say).toEqual({ kind: "steer", runId: "c2" });
   });
 
   test("an active flow's step run is steered; a gated flow and a stopped one say what comes first", () => {
@@ -634,6 +683,12 @@ describe("the goal", () => {
     expect(managerRows({ ...k, status: "done", held: undefined }, at({ runs, flows })).goal).toMatchObject({ held: false, ended: true });
   });
 
+  test("a best-of card counts as working while its group works, scores or reviews, and not once it waits on a pick", () => {
+    const working = (state: RunGroup["state"]) => managerRows(coord([card({ state: "running", times: 3, group: "g1" })]), at({ landing: { ...none, groups: [group({ state })] } })).goal.working;
+    expect([working("working"), working("scoring"), working("reviewing")]).toEqual([1, 1, 1]);
+    expect([working("needs-you"), working("picked"), working("landed"), working("dropped")]).toEqual([0, 0, 0, 0]);
+  });
+
   test("a flow parked at its gate waits on Eric and is not counted as working, though it can still be stopped", () => {
     const tasks = [child("c1"), card({ id: "t2", state: "running", flow: "f2" })];
     const gated = flow("f2", [fstep("Build", "passed", { runId: "s1" }), fstep("Check", "gated", { runId: "s2" })], { current: 1, status: "gated" });
@@ -835,5 +890,39 @@ describe("a project card", () => {
     expect(working(proj({ outcome: "the project waits on your yes in the incubator" }))).toBe(0);
     expect(working(proj({ state: "queued", sprout: undefined, outcome: undefined }))).toBe(0);
     expect(working(proj({ state: "done", outcome: "live as shop" }), sprout({ status: "live" }))).toBe(0);
+  });
+});
+
+describe("end goal's second press", () => {
+  test("the first press arms it and a later one goes", () => {
+    expect(confirmPress(null, 1000)).toEqual({ armedAt: 1000, go: false });
+    expect(confirmPress(1000, 1000 + CONFIRM_GAP_MS)).toEqual({ armedAt: null, go: true });
+  });
+
+  test("a double click's second press does not end the goal", () => {
+    expect(confirmPress(1000, 1150)).toEqual({ armedAt: 1000, go: false });
+    // the arming stands, so a deliberate press after it still goes
+    expect(confirmPress(1000, 1900).go).toBe(true);
+  });
+
+  test("an arming lapses after a while, with no blur, and the next press arms it again", () => {
+    expect(confirmPress(1000, 1000 + CONFIRM_WAIT_MS)).toEqual({ armedAt: 1000 + CONFIRM_WAIT_MS, go: false });
+  });
+});
+
+describe("the address on a change of view", () => {
+  test("the top view's goal and new goal box go with it, and so does project", () => {
+    expect(viewAddress("https://c.test/?view=manager&new=1", "git", false)).toBe("https://c.test/");
+    expect(viewAddress("https://c.test/?view=manager&run=k", "agents", false)).toBe("https://c.test/?view=agents");
+    expect(viewAddress("https://c.test/?view=library&project=x", "manager", false)).toBe("https://c.test/?view=manager");
+  });
+
+  test("back to the top view after a new goal box opens the goals, not the box again", () => {
+    const left = viewAddress("https://c.test/?view=manager&new=1", "git", false);
+    expect(new URL(viewAddress(left, "manager", false)).searchParams.has("new")).toBe(false);
+  });
+
+  test("a window opened on one run keeps its run", () => {
+    expect(viewAddress("https://c.test/?run=r1&view=git", "manager", true)).toBe("https://c.test/?run=r1&view=manager");
   });
 });
